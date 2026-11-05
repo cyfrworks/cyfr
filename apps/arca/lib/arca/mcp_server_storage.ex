@@ -15,8 +15,11 @@ defmodule Arca.McpServerStorage do
   The `mcp_servers` table stores:
   - id: Unique server ID (UUID7)
   - name: Server name (e.g., "notion", "github")
-  - transport: `"http"` or `"stdio"`
+  - transport: `"http"` or `"stdio"`; `"pipe"` is not built yet
   - url: MCP server endpoint URL (http); nil for stdio
+  - home, memory_bytes, home_max_bytes, login_command, hosts: a program's
+    settings (`Arca.Schemas.McpServer`); `home` is `"scratch"` until kept
+    homes are built
   - config_json: JSON text with headers, timeout_ms, backends, etc.
   - enabled: Whether the server is active
   - epoch: 1 on insert, one higher after every write to the row
@@ -35,6 +38,10 @@ defmodule Arca.McpServerStorage do
 
   `insert/2` counts the athanor's servers against the caller's cap and
   inserts in one locking transaction under the athanor's row lock.
+
+  A `pipe` transport and a kept home are not built yet: `insert/2` and
+  `update/4` refuse them with `{:error, {:not_built, :pipe}}` and
+  `{:error, {:not_built, :kept_home}}` before touching the store.
   """
 
   import Ecto.Query
@@ -42,6 +49,9 @@ defmodule Arca.McpServerStorage do
 
   alias Arca.Schemas.Athanor
   alias Arca.Schemas.McpServer
+
+  @typedoc "A value whose behaviour is not built yet."
+  @type not_built :: {:not_built, :pipe | :kept_home}
 
   @doc """
   The decoded `config_json` of a stored row — headers, `timeout_ms`,
@@ -141,7 +151,8 @@ defmodule Arca.McpServerStorage do
   counts its servers and inserts, so creates racing for the last place
   leave one row in it. Refused with `:server_cap` at `cap`, `:not_found`
   when the athanor has no row, `:no_athanor` for an actor that names none,
-  `{:validation, errors}` for a missing or malformed cap, and
+  `{:validation, errors}` for a missing or malformed cap, `{:not_built,
+  :pipe | :kept_home}` for a `pipe` transport or a kept home, and
   `:database_error`.
   """
   @spec insert(Prima.Actor.t(), map()) ::
@@ -152,10 +163,12 @@ defmodule Arca.McpServerStorage do
              | :not_found
              | :no_athanor
              | :database_error
+             | not_built()
              | {:validation, %{atom() => [String.t()]}}}
   def insert(%Prima.Actor{athanor_id: athanor_id, user_id: user_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_map(attrs) do
-    with {:ok, cap} <- server_cap(Map.get(attrs, :cap)) do
+    with {:ok, cap} <- server_cap(Map.get(attrs, :cap)),
+         :ok <- built(attrs) do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       row =
@@ -209,27 +222,30 @@ defmodule Arca.McpServerStorage do
   `:enabled`) and raise its epoch, in one statement.
 
   With `expected_epoch`, the write happens only while the row is still at
-  that epoch; a row that moved on answers `{:error, :stale_epoch}`.
+  that epoch; a row that moved on answers `{:error, :stale_epoch}`. A
+  `pipe` transport or a kept home is refused `{:error, {:not_built, _}}`.
   """
   @spec update(Prima.Actor.t(), String.t(), map(), pos_integer() | nil) ::
           {:ok, map()}
-          | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
+          | {:error, :no_athanor | :not_found | :stale_epoch | :database_error | not_built()}
   def update(actor, name, updates, expected_epoch \\ nil)
 
   def update(%Prima.Actor{athanor_id: athanor_id} = actor, name, updates, expected_epoch)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_map(updates) do
-    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.update", fn ->
-      set =
-        updates
-        |> Map.take([:transport, :url, :config_json, :enabled])
-        |> Map.put(:updated_at, now())
-        |> Enum.to_list()
+    with :ok <- built(updates) do
+      Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.update", fn ->
+        set =
+          updates
+          |> Map.take([:transport, :url, :config_json, :enabled])
+          |> Map.put(:updated_at, now())
+          |> Enum.to_list()
 
-      from(s in McpServer, where: s.name == ^name, select: s)
-      |> where_tenant(actor)
-      |> write_epoch(set, expected_epoch, fn -> get(actor, name) end)
-    end)
-    |> Arca.Data.project()
+        from(s in McpServer, where: s.name == ^name, select: s)
+        |> where_tenant(actor)
+        |> write_epoch(set, expected_epoch, fn -> get(actor, name) end)
+      end)
+      |> Arca.Data.project()
+    end
   end
 
   def update(%Prima.Actor{}, _name, _updates, _expected_epoch), do: {:error, :no_athanor}
@@ -363,6 +379,10 @@ defmodule Arca.McpServerStorage do
         end
     end
   end
+
+  defp built(%{transport: "pipe"}), do: {:error, {:not_built, :pipe}}
+  defp built(%{home: "kept"}), do: {:error, {:not_built, :kept_home}}
+  defp built(_attrs), do: :ok
 
   defp server_cap(cap) when is_integer(cap) and cap >= 0, do: {:ok, cap}
   defp server_cap(_cap), do: {:error, {:validation, %{cap: ["must be a non-negative integer"]}}}

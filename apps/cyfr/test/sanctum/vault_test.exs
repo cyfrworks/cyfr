@@ -400,6 +400,41 @@ defmodule Sanctum.VaultTest do
     test "unknown kinds are refused", %{ctx: ctx} do
       assert {:error, {:invalid_kind, _}} = Vault.create(ctx, %{name: "x", kind: "wand"})
     end
+
+    test "a login entry and a program's destination are not built yet, and nothing is written",
+         %{ctx: ctx} do
+      assert {:error, {:not_built, :login}} =
+               Vault.create(ctx, %{
+                 name: "claude",
+                 kind: "login",
+                 destination: %{"program" => "claude"}
+               })
+
+      assert {:error, {:not_built, :login}} =
+               Vault.create(ctx, %{
+                 name: "claude",
+                 kind: "api_key",
+                 fields: %{"K" => "v"},
+                 destination: %{program: "claude"}
+               })
+
+      view = create!(ctx)
+
+      assert {:error, {:not_built, :login}} =
+               Vault.rebind(ctx, %{id: view.id, destination: %{"program" => "claude"}})
+
+      assert row!(ctx, view.id).destination == @destination_text
+      assert {:ok, [_only]} = Vault.list(ctx)
+
+      # A rebind's confirmation reads a program's destination as the program.
+      login = %{destination: ~s({"program":"claude"}), attach_only: true, field_names: "[]"}
+
+      assert Vault.rebind_details(login, login) == %{
+               "program" => "claude",
+               "disclosed" => "no",
+               "field_names" => []
+             }
+    end
   end
 
   describe "what an external server definition may name, read from metadata alone" do

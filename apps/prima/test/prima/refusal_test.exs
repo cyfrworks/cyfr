@@ -170,6 +170,8 @@ defmodule Prima.RefusalTest do
     {{:not_found, {:blob, "sha256:ab12"}}, :not_found},
     {{:invalid_reference, "Invalid reference format: x"}, :invalid_argument},
     {{:invalid_reference, :empty}, :invalid_argument},
+    {{:not_built, :login}, :invalid_argument},
+    {{:not_built, :mount}, :invalid_argument},
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},

@@ -11,6 +11,13 @@ defmodule Arca.Schemas.Message do
   agent's proposal in `payload` and walks
   `pending → running → approved | declined | error`, with the decision in
   `resolution` and the person who made it in `resolved_by`.
+
+  A request to a crew member names it in `addressee` and is `pending` until
+  a reply answers it: then `answered`, with the reply's id in `resolved_by`.
+  A reply or notice names the request in `reply_to` and its `outcome`
+  (`outcomes/0`); `sent_by` is `"person"` or an agent name. Requests,
+  replies and notices are not built yet: `changeset/2` casts none of these
+  columns.
   """
 
   use Ecto.Schema
@@ -22,7 +29,15 @@ defmodule Arca.Schemas.Message do
   # `tool_call`, `tool_result`, `compaction` and `turn_aborted` are the
   # turn's own rows: the loop writes them through `Aqua.Tape`.
   @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted)
-  @statuses ~w(pending running approved declined error expired)
+  @statuses ~w(pending running approved declined error expired answered)
+
+  @doc """
+  A reply's or notice's `outcome` vocabulary, the `messages_outcome_known`
+  check's: `Prima.OutboxRecord.reply_outcomes/0`, which a reply's outbox
+  record carries.
+  """
+  @spec outcomes() :: [String.t()]
+  def outcomes, do: Prima.OutboxRecord.reply_outcomes()
 
   # The two reserved authors are `Prima.Author`'s, where every side of a
   # thread reads them; the two heads below are this table's spelling.
@@ -55,6 +70,10 @@ defmodule Arca.Schemas.Message do
     field :turn_id, :string
     field :approval_id, :string
     field :client_id, :string
+    field :sent_by, :string
+    field :addressee, :string
+    field :reply_to, :string
+    field :outcome, :string
   end
 
   @fields [

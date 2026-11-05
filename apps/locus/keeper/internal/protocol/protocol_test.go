@@ -48,7 +48,9 @@ type vectors struct {
 		SpawnID string          `json:"spawn_id"`
 		Request json.RawMessage `json:"request"`
 	} `json:"invalid_requests"`
-	Replies []json.RawMessage `json:"replies"`
+	Replies          []json.RawMessage `json:"replies"`
+	NotBuiltRequests []json.RawMessage `json:"not_built_requests"`
+	HomeReplies      []json.RawMessage `json:"home_replies"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -124,6 +126,9 @@ func TestSharedRequestBounds(t *testing.T) {
 		"max_socket_path_bytes": MaxSocketPath,
 		"min_memory_bytes":      MinMemoryBytes,
 		"max_memory_bytes":      MaxMemoryBytes,
+		"max_home_path_bytes":   MaxHomePathBytes,
+		"max_uid":               MaxUID,
+		"max_home_bytes":        MaxHomeBytes,
 	}
 	if !reflect.DeepEqual(v.RequestBounds, want) {
 		t.Fatalf("the request bounds are %v, the vectors pin %v", want, v.RequestBounds)
@@ -166,8 +171,123 @@ func TestReservedEnvPrefixesAreTheSharedList(t *testing.T) {
 
 func TestSharedValidRequestsParse(t *testing.T) {
 	for _, raw := range loadVectors(t).ValidRequests {
-		if _, err := ParseRequest(raw); err != nil {
+		req, err := ParseRequest(raw)
+		if err != nil {
 			t.Errorf("%s: refused: %v", raw, err)
+			continue
+		}
+		if req.NotBuilt() {
+			t.Errorf("%s: answered as not built", raw)
+		}
+	}
+}
+
+// The keeper accepts every not-built request as valid and answers it
+// CodeNotBuilt: each of them is one the keeper does not act on yet.
+func TestSharedNotBuiltRequestsParseAndAreNotBuilt(t *testing.T) {
+	requests := loadVectors(t).NotBuiltRequests
+	types := map[string]int{}
+	for _, raw := range requests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Errorf("%s: refused: %v", raw, err)
+			continue
+		}
+		if !req.NotBuilt() {
+			t.Errorf("%s: not answered as not built", raw)
+		}
+		types[req.Type]++
+	}
+	want := map[string]int{TypeSpawn: 2, TypeHomeMake: 1, TypeHomeMeasure: 1, TypeHomeRetire: 1}
+	if !reflect.DeepEqual(types, want) {
+		t.Fatalf("vectors: request types %v, want %v", types, want)
+	}
+}
+
+// A kept spawn's home fields and a spawn's pty are decoded; a spawn that
+// names scratch and no pty is today's spawn.
+func TestHomeFieldsAreDecoded(t *testing.T) {
+	v := loadVectors(t)
+	kept, err := ParseRequest(v.NotBuiltRequests[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.HomeMode != HomeKept || kept.HomePath != "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0" ||
+		kept.HomeUID == nil || *kept.HomeUID != 40001 || kept.HomeMaxBytes == nil || *kept.HomeMaxBytes != 1<<30 || kept.Pty != nil {
+		t.Fatalf("kept spawn decoded to %+v", kept)
+	}
+	pty, err := ParseRequest(v.NotBuiltRequests[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pty.Pty == nil || !*pty.Pty || pty.HomeMode != "" {
+		t.Fatalf("pty spawn decoded to %+v", pty)
+	}
+	home, err := ParseRequest(v.NotBuiltRequests[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home.Type != TypeHomeMake || home.ID != "22" || home.Path != kept.HomePath || home.UID == nil || *home.UID != 40001 {
+		t.Fatalf("home_make decoded to %+v", home)
+	}
+	var scratch int
+	for _, raw := range v.ValidRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.HomeMode == HomeScratch && req.Pty != nil && !*req.Pty {
+			scratch++
+		}
+	}
+	if scratch == 0 {
+		t.Fatal("no valid spawn names home_mode scratch and pty false")
+	}
+}
+
+// The home requests carry only their own members, and their bounds hold
+// at both ends.
+func TestHomeRequestBounds(t *testing.T) {
+	home := `"path":"/var/lib/locus/kept/k"`
+	longPath := `"path":"/` + strings.Repeat("a", MaxHomePathBytes) + `"`
+	for _, c := range []struct {
+		line string
+		ok   bool
+	}{
+		{`{"v":1,"type":"home_retire","id":"1",` + home + `,"uid":1}`, true},
+		{`{"v":1,"type":"home_retire","id":"1",` + home + `,"uid":4294967294}`, true},
+		{`{"v":1,"type":"home_retire","id":"1",` + home + `,"uid":4294967295}`, false},
+		{`{"v":1,"type":"home_retire","id":"1",` + home + `,"uid":1,"pool":"backends"}`, false},
+		{`{"v":1,"type":"home_retire","id":"1",` + home + `,"uid":1,"home_mode":"kept"}`, false},
+		{`{"v":1,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/../k","uid":1}`, false},
+		{`{"v":1,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/k/","uid":1}`, false},
+		{`{"v":1,"type":"home_retire","id":"1",` + longPath + `,"uid":1}`, false},
+		{`{"v":1,"type":"home_retire","id":"1","path":"/` + strings.Repeat("a", MaxHomePathBytes-1) + `","uid":1}`, true},
+		{`{"v":1,"type":"home_make",` + home + `,"uid":1}`, false},
+		{`{"v":1,"type":"pool","id":"1","pool":"backends",` + home + `}`, false},
+		{`{"v":1,"type":"pool","id":"1","pool":"backends","pty":false}`, false},
+	} {
+		req, err := ParseRequest([]byte(c.line))
+		if c.ok != (err == nil) {
+			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
+		}
+	}
+	spawn := `{"v":1,"type":"spawn","id":"1","pool":"backends","argv":["x"],"memory_bytes":16777216,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	for _, c := range []struct {
+		fields string
+		ok     bool
+	}{
+		{``, true},
+		{`,"home_mode":"scratch","pty":false`, true},
+		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":1,"home_max_bytes":1125899906842624`, true},
+		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":1,"home_max_bytes":1125899906842625`, false},
+		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":4294967295`, false},
+		{`,"home_mode":"scratch","home_uid":1`, false},
+		{`,"home_mode":"scratch","home_max_bytes":1`, false},
+	} {
+		req, err := ParseRequest([]byte(spawn + c.fields + "}"))
+		if c.ok != (err == nil) {
+			t.Errorf("spawn with %s: request %+v, refusal %+v", c.fields, req, err)
 		}
 	}
 }
@@ -216,6 +336,31 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		_ = json.Unmarshal(want[i], &expected)
 		if !reflect.DeepEqual(got, expected) {
 			t.Errorf("reply %d = %s, want %s", i, line, want[i])
+		}
+	}
+}
+
+func TestSharedHomeRepliesMatchTheEncoders(t *testing.T) {
+	built := []any{
+		NewHomeMade("22"),
+		NewHomeMeasured("23", 1<<20),
+		NewHomeRetired("24"),
+		NewError("20", "", CodeNotBuilt),
+	}
+	want := loadVectors(t).HomeReplies
+	if len(want) != len(built) {
+		t.Fatalf("%d vectors for %d encoders", len(want), len(built))
+	}
+	for i, reply := range built {
+		line, err := Encode(reply)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got, expected map[string]any
+		_ = json.Unmarshal(line, &got)
+		_ = json.Unmarshal(want[i], &expected)
+		if !reflect.DeepEqual(got, expected) {
+			t.Errorf("home reply %d = %s, want %s", i, line, want[i])
 		}
 	}
 }
@@ -281,7 +426,7 @@ func TestMemoryBoundIsDecodedForEveryPool(t *testing.T) {
 		}
 	}
 	want := map[string][]uint64{
-		"backends": {512 << 20, 512 << 20},
+		"backends": {512 << 20, 512 << 20, 512 << 20},
 		"build":    {1 << 30, MinMemoryBytes, MaxMemoryBytes},
 		"runner":   {384 << 20, 384 << 20, 512 << 20},
 	}
@@ -327,7 +472,7 @@ func TestSpawnRequiresMemoryBound(t *testing.T) {
 			detail  string
 		}{
 			{name: "absent", detail: "memory_bytes is required"},
-			{name: "null", present: true, detail: "memory_bytes is required"},
+			{name: "null", present: true, detail: "memory_bytes must not be null"},
 			{name: "zero", present: true, value: uint64(0), detail: "memory_bytes must be within 16777216..1099511627776"},
 			{name: "below minimum", present: true, value: uint64(MinMemoryBytes - 1), detail: "memory_bytes must be within 16777216..1099511627776"},
 			{name: "above maximum", present: true, value: uint64(MaxMemoryBytes + 1), detail: "memory_bytes must be within 16777216..1099511627776"},

@@ -30,13 +30,25 @@ defmodule Prima.Destination do
   people other than its owner use goes to named methods and paths alone.
   A present `methods` or `paths` is never empty.
 
+  ## A program
+
+      %{"program" => "claude"}
+
+  A login entry's material goes to no host: it is a program's own
+  sign-in, and its destination names that program, the name of an
+  `mcp_servers` row (`^[a-z0-9][a-z0-9-]{0,31}$`). `program` stands alone:
+  beside any other member it is refused `{:program_with, key}`. A program
+  destination admits no request (`matches?/3`), contains only itself
+  (`within?/2`) and admits no sets (`admitted/1` is the host form's).
+
   ## Canonical form
 
   `from_map/1` normalizes: hosts lower-cased, de-duplicated and sorted; the
   scheme lower-cased, `https` when omitted; methods upper-cased,
   de-duplicated and sorted; paths de-duplicated and sorted. `to_map/1`
   answers string keys, `hosts` and `scheme` always and `port`, `methods`
-  and `paths` only when present, so `from_map(to_map(d)) == {:ok, d}`.
+  and `paths` only when present, or `program` alone, so
+  `from_map(to_map(d)) == {:ok, d}`.
   `canonical/1` is the JCS of `to_map/1`, the bytes a binding digest
   covers.
 
@@ -54,14 +66,28 @@ defmodule Prima.Destination do
   """
 
   @enforce_keys [:hosts, :scheme]
-  defstruct [:hosts, :scheme, port: nil, methods: nil, paths: nil]
+  defstruct [:hosts, :scheme, program: nil, port: nil, methods: nil, paths: nil]
 
-  @type t :: %__MODULE__{
+  @type t :: hosts() | program()
+
+  @typedoc "A destination of hosts: where requests carrying the material may go."
+  @type hosts :: %__MODULE__{
           hosts: [String.t(), ...],
           scheme: String.t(),
+          program: nil,
           port: 1..65_535 | nil,
           methods: [String.t(), ...] | nil,
           paths: [String.t(), ...] | nil
+        }
+
+  @typedoc "A program's destination: the program whose own sign-in the material is."
+  @type program :: %__MODULE__{
+          hosts: nil,
+          scheme: nil,
+          program: String.t(),
+          port: nil,
+          methods: nil,
+          paths: nil
         }
 
   @typedoc "Why a destination is refused."
@@ -77,10 +103,13 @@ defmodule Prima.Destination do
           | {:invalid_path, term()}
           | {:empty, String.t()}
           | {:too_many, String.t()}
+          | {:invalid_program, term()}
+          | {:program_with, String.t()}
 
   @type error :: {:invalid_destination, reason()}
 
   @keys ~w(hosts scheme port methods paths)
+  @program ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @schemes ~w(http https)
   @default_ports %{"http" => 80, "https" => 443}
   @methods ~w(DELETE GET HEAD OPTIONS PATCH POST PUT)
@@ -113,6 +142,18 @@ defmodule Prima.Destination do
   is refused.
   """
   @spec from_map(term()) :: {:ok, t()} | {:error, error()}
+  def from_map(%{"program" => program} = map) when not is_struct(map) do
+    case map |> Map.keys() |> List.delete("program") |> Enum.sort() do
+      [key | _rest] ->
+        {:error, {:invalid_destination, {:program_with, key}}}
+
+      [] ->
+        if valid_program?(program),
+          do: {:ok, %__MODULE__{hosts: nil, scheme: nil, program: program}},
+          else: {:error, {:invalid_destination, {:invalid_program, program}}}
+    end
+  end
+
   def from_map(map) when is_map(map) and not is_struct(map) do
     with :ok <- known_keys(map),
          {:ok, hosts} <- hosts(Map.get(map, "hosts")),
@@ -130,6 +171,8 @@ defmodule Prima.Destination do
 
   @doc "The destination as its canonical string-keyed map."
   @spec to_map(t()) :: %{String.t() => term()}
+  def to_map(%__MODULE__{program: program}) when is_binary(program), do: %{"program" => program}
+
   def to_map(%__MODULE__{} = destination) do
     %{"hosts" => destination.hosts, "scheme" => destination.scheme}
     |> put_present("port", destination.port)
@@ -149,9 +192,12 @@ defmodule Prima.Destination do
   the scheme, the effective port, the host against `hosts`, the method
   against `methods` and the path against `paths`. A URI carrying user
   information, a host that is no string, a method outside `methods/0` or
-  a path outside the path grammar never matches.
+  a path outside the path grammar never matches, and no request is inside
+  a program's destination.
   """
   @spec matches?(t(), URI.t(), term()) :: boolean()
+  def matches?(%__MODULE__{program: program}, %URI{}, _method) when is_binary(program), do: false
+
   def matches?(%__MODULE__{} = destination, %URI{} = uri, method) do
     with true <- is_nil(uri.userinfo),
          true <- is_binary(uri.scheme) and String.downcase(uri.scheme) == destination.scheme,
@@ -169,16 +215,17 @@ defmodule Prima.Destination do
   scheme, its effective port (the scheme's default when absent), its
   hosts, its methods (every method `methods/0` names when absent) and its
   path prefixes (`["/"]` when absent). `within?/2` compares these, and a
-  confirmation that shows a destination shows them.
+  confirmation that shows a destination shows them. A program's
+  destination admits no request, so it has none.
   """
-  @spec admitted(t()) :: %{
+  @spec admitted(hosts()) :: %{
           scheme: String.t(),
           port: 1..65_535,
           hosts: [String.t(), ...],
           methods: [String.t(), ...],
           paths: [String.t(), ...]
         }
-  def admitted(%__MODULE__{} = destination) do
+  def admitted(%__MODULE__{program: nil} = destination) do
     %{
       scheme: destination.scheme,
       port: destination_port(destination),
@@ -196,9 +243,15 @@ defmodule Prima.Destination do
   `*.a.example` is within `*.example` and `example` is not; `inner`'s
   methods are a subset of `outer`'s; and every path prefix of `inner` has
   a prefix of `outer` that is a segment prefix of it, so `/v1/models` is
-  within `/v1` and `/v1x` is not.
+  within `/v1` and `/v1x` is not. A program's destination is within the
+  same program's alone, and no destination of hosts is within it or
+  contains it.
   """
   @spec within?(t(), t()) :: boolean()
+  def within?(%__MODULE__{program: inner}, %__MODULE__{program: outer})
+      when is_binary(inner) or is_binary(outer),
+      do: inner == outer
+
   def within?(%__MODULE__{} = inner, %__MODULE__{} = outer) do
     inner = admitted(inner)
     outer = admitted(outer)
@@ -210,6 +263,15 @@ defmodule Prima.Destination do
         Enum.any?(outer.paths, &List.starts_with?(segments(path), segments(&1)))
       end)
   end
+
+  @doc """
+  Whether `program` names a program as a destination does: lowercase
+  letters, digits and hyphens, at most 32, beginning with a letter or a
+  digit. A manifest's login need names its program in the same grammar.
+  """
+  @spec valid_program?(term()) :: boolean()
+  def valid_program?(program) when is_binary(program), do: Regex.match?(@program, program)
+  def valid_program?(_program), do: false
 
   @doc "Whether `host` is a destination host: an exact hostname or `*.` and a hostname."
   @spec valid_host?(term()) :: boolean()

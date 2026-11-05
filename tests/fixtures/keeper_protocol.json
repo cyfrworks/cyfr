@@ -1,10 +1,10 @@
 {
-  "comment": "The vectors binding cyfr-locus (apps/locus/keeper, Go) and its one client (apps/locus/lib/locus/keeper.ex, Elixir), which every Locus role spawns through (the runtime's worker service, the builds service and the backends service), through one codec (apps/prima/lib/prima/keeper_protocol.ex): the keeper accepts every valid request and refuses every invalid one with its code, every side encodes each frame to the bytes given, and the client understands every reply. `reserved_env_prefixes` are the variable name prefixes no spawn may carry in its `env`, CYFR's, Locus's and the keeper's own (its channel variable is KEEPER_CHANNEL): the keeper refuses them, and CYFR and the backends service refuse a backend definition that names one. `frames` are the stdio and attach streams every client carries; `control_frames` are the control stream (4) of a spawn that asked for a control channel with `control: true`, carrying Prima.RunnerControl lines (tests/fixtures/runner_control.json) verbatim between a worker service and its runner's fd 3, and a zero-length one ending the stream. The client refuses a control frame on a spawn that never asked for the channel. `relay_frames` are the relay stream (5) of a spawn of an isolated pool, carrying Prima.RunnerRelay frames (tests/fixtures/runner_relay.json) verbatim between a worker service and its runner's fd 4: the keeper sends nothing on it, its end frame included, until the client has sent on it first, and the client's first frame opens it, a zero-length one included, which ends nothing; after that a zero-length frame ends it. `relay_streams` pin that rule on the relay: a spawn whose client never opens the stream receives no stream-5 frame, and one whose client opens it receives what the command wrote to fd 4 and the stream's end. A spawn of any pool may carry `memory_bytes`, its memory bound, from 16777216 to 1099511627776: zero is not 'no bound', and a bound that is not a whole number of bytes in that range is refused. Every `exited` says whether the kernel killed processes of the spawn at that bound (`memory_exceeded`), and a keeper that cannot enforce a bound refuses the spawn as `memory_unavailable`. A spawn's `isolation` is `netns` or absent: the keeper names its isolated pools on its command line (`--pool runner:30101-30108:netns`), starts every spawn of one in a user and network namespace of its own that maps the pooled uid and gid to themselves, and refuses as `bad_request` a spawn of an isolated pool without `isolation` and one of any other pool with it, a decision of the pool it names and so not a vector here; the runner spawns carry it, and Locus's build and backends spawns, whose pools are not isolated, do not. `bounds` are the largest frame payload each side writes or reads and the longest request or reply line the keeper and its client accept, spelled once per side and pinned here. `reserved_env` are the variable names no spawn may carry in its `env`, `signals` the signals a `signal` request may name, `request_bounds` a request's ceilings (argv entries, env entries, the bytes of one value, of argv and env together and of an attach path, a release's grace and a spawn's memory bound, least and most) and `rlimits` each resource limit a spawn may lower, its least and its most, the most being the keeper's ceiling: each side spells them once, and each side's suite holds its own to these.",
+  "comment": "The vectors binding cyfr-locus (apps/locus/keeper, Go) and its one client (apps/locus/lib/locus/keeper.ex, Elixir), which every Locus role spawns through (the runtime's worker service, the builds service and the backends service), through one codec (apps/prima/lib/prima/keeper_protocol.ex): the keeper accepts every valid request and refuses every invalid one with its code, every side encodes each frame to the bytes given, and the client understands every reply. `reserved_env_prefixes` are the variable name prefixes no spawn may carry in its `env`, CYFR's, Locus's and the keeper's own (its channel variable is KEEPER_CHANNEL): the keeper refuses them, and CYFR and the backends service refuse a backend definition that names one. `frames` are the stdio and attach streams every client carries; `control_frames` are the control stream (4) of a spawn that asked for a control channel with `control: true`, carrying Prima.RunnerControl lines (tests/fixtures/runner_control.json) verbatim between a worker service and its runner's fd 3, and a zero-length one ending the stream. The client refuses a control frame on a spawn that never asked for the channel. `relay_frames` are the relay stream (5) of a spawn of an isolated pool, carrying Prima.RunnerRelay frames (tests/fixtures/runner_relay.json) verbatim between a worker service and its runner's fd 4: the keeper sends nothing on it, its end frame included, until the client has sent on it first, and the client's first frame opens it, a zero-length one included, which ends nothing; after that a zero-length frame ends it. `relay_streams` pin that rule on the relay: a spawn whose client never opens the stream receives no stream-5 frame, and one whose client opens it receives what the command wrote to fd 4 and the stream's end. A spawn of any pool may carry `memory_bytes`, its memory bound, from 16777216 to 1099511627776: zero is not 'no bound', and a bound that is not a whole number of bytes in that range is refused. Every `exited` says whether the kernel killed processes of the spawn at that bound (`memory_exceeded`), and a keeper that cannot enforce a bound refuses the spawn as `memory_unavailable`. A spawn's `isolation` is `netns` or absent: the keeper names its isolated pools on its command line (`--pool runner:30101-30108:netns`), starts every spawn of one in a user and network namespace of its own that maps the pooled uid and gid to themselves, and refuses as `bad_request` a spawn of an isolated pool without `isolation` and one of any other pool with it, a decision of the pool it names and so not a vector here; the runner spawns carry it, and Locus's build and backends spawns, whose pools are not isolated, do not. `bounds` are the largest frame payload each side writes or reads and the longest request or reply line the keeper and its client accept, spelled once per side and pinned here. `reserved_env` are the variable names no spawn may carry in its `env`, `signals` the signals a `signal` request may name, `request_bounds` a request's ceilings (argv entries, env entries, the bytes of one value, of argv and env together and of an attach path, a release's grace and a spawn's memory bound, least and most) and `rlimits` each resource limit a spawn may lower, its least and its most, the most being the keeper's ceiling: each side spells them once, and each side's suite holds its own to these. A spawn may also carry `home_mode` (`scratch`, today's home and the reading of its absence, or `kept`), a kept home's clean absolute `home_path`, its own `home_uid` and an optional `home_max_bytes`, which only a `kept` spawn carries, and `pty`, a boolean whose absence reads as false; `home_make`, `home_measure` and `home_retire` name a kept home by `path` and `uid`, and `request_bounds` holds their bounds too. The keeper validates these and acts on none of them yet: each of `not_built_requests` (a kept spawn, a spawn with `pty` true and the three home requests) is valid and answered as an `error` with code `not_built`, while a spawn naming `scratch` and `pty` false is today's spawn; `home_replies` are the replies the home requests will have, and that `not_built` refusal. A member is judged by its presence, never by a zero value: no member is ever null, a spawn's `home_mode` or `isolation` that is present takes one of its values, the empty string not among them, and a member another type carries is refused on a request whatever its value, `false` and the empty string included.",
   "reserved_env_prefixes": ["CYFR_", "LOCUS_", "KEEPER_"],
   "reserved_env": ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD"],
   "signals": ["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"],
   "bounds": { "max_frame_payload_bytes": 65536, "max_line_bytes": 1048576 },
-  "request_bounds": { "max_args": 256, "max_env": 256, "max_value_bytes": 32768, "max_spec_bytes": 262144, "max_grace_ms": 60000, "max_socket_path_bytes": 107, "min_memory_bytes": 16777216, "max_memory_bytes": 1099511627776 },
+  "request_bounds": { "max_args": 256, "max_env": 256, "max_value_bytes": 32768, "max_spec_bytes": 262144, "max_grace_ms": 60000, "max_socket_path_bytes": 107, "min_memory_bytes": 16777216, "max_memory_bytes": 1099511627776, "max_home_path_bytes": 4095, "max_uid": 4294967294, "max_home_bytes": 1125899906842624 },
   "rlimits": { "core": { "least": 0, "most": 0 }, "fsize": { "least": 1, "most": 268435456 }, "nofile": { "least": 16, "most": 1024 }, "nproc": { "least": 1, "most": 128 } },
   "frames": [
     { "stream": 3, "payload_hex": "30313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566", "encoded_hex": "030000004030313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566" },
@@ -129,7 +129,49 @@
       "env": {},
       "memory_bytes": 1099511627776,
       "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    },
+    {
+      "v": 1,
+      "type": "spawn",
+      "id": "16",
+      "pool": "backends",
+      "argv": ["/usr/local/bin/claude", "mcp", "serve"],
+      "env": {},
+      "memory_bytes": 536870912,
+      "home_mode": "scratch",
+      "pty": false,
+      "attach": { "path": "/run/locus/attach.sock", "token": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" }
     }
+  ],
+  "not_built_requests": [
+    {
+      "v": 1,
+      "type": "spawn",
+      "id": "20",
+      "pool": "backends",
+      "argv": ["/usr/local/bin/claude", "mcp", "serve"],
+      "env": {},
+      "memory_bytes": 536870912,
+      "home_mode": "kept",
+      "home_path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "home_uid": 40001,
+      "home_max_bytes": 1073741824,
+      "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    },
+    {
+      "v": 1,
+      "type": "spawn",
+      "id": "21",
+      "pool": "backends",
+      "argv": ["/usr/local/bin/claude", "auth", "login"],
+      "env": {},
+      "memory_bytes": 536870912,
+      "pty": true,
+      "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    },
+    { "v": 1, "type": "home_make", "id": "22", "path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "uid": 40001 },
+    { "v": 1, "type": "home_measure", "id": "23", "path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "uid": 40001 },
+    { "v": 1, "type": "home_retire", "id": "24", "path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "uid": 40001 }
   ],
   "invalid_requests": [
     { "why": "wrong version", "code": "bad_request", "id": "1", "request": { "v": 2, "type": "pool", "id": "1", "pool": "backends" } },
@@ -167,7 +209,22 @@
     { "why": "isolation that is not a string", "code": "bad_request", "request": { "memory_bytes": 402653184, "v": 1, "type": "spawn", "id": "5", "pool": "runner", "argv": ["/app/bin/locus", "start"], "control": true, "isolation": true, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
     { "why": "isolation on a request that is not a spawn", "code": "bad_request", "id": "5", "request": { "v": 1, "type": "pool", "id": "5", "pool": "runner", "isolation": "netns" } },
     {"why": "absent memory bound", "code": "bad_request", "id": "4", "request": {"v": 1, "type": "spawn", "id": "4", "pool": "build", "argv": ["x"], "attach": {"path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}},
-    {"why": "null memory bound", "code": "bad_request", "id": "4", "request": {"v": 1, "type": "spawn", "id": "4", "pool": "build", "argv": ["x"], "memory_bytes": null, "attach": {"path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}}
+    {"why": "null memory bound", "code": "bad_request", "id": "4", "request": {"v": 1, "type": "spawn", "id": "4", "pool": "build", "argv": ["x"], "memory_bytes": null, "attach": {"path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}},
+    { "why": "kept spawn without a home path", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_mode": "kept", "home_uid": 40001, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "kept spawn without a home uid", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_mode": "kept", "home_path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "home path without a kept home", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "relative home path", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_mode": "kept", "home_path": "var/lib/locus/kept/x", "home_uid": 40001, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "home uid of zero", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_mode": "kept", "home_path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "home_uid": 0, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "home bound of zero", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_mode": "kept", "home_path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "home_uid": 40001, "home_max_bytes": 0, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "home mode other than scratch or kept", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_mode": "shared", "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "pty that is not a boolean", "code": "bad_request", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "pty": "yes", "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "home mode that is empty", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "home_mode": "", "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "pty that is null", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "pty": null, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "isolation that is empty", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "spawn", "id": "6", "pool": "backends", "argv": ["x"], "memory_bytes": 536870912, "isolation": "", "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "spawn member on a pool request", "code": "bad_request", "id": "7", "request": { "v": 1, "type": "pool", "id": "7", "pool": "backends", "home_mode": "" } },
+    { "why": "control false on a request that is not a spawn", "code": "bad_request", "id": "7", "request": { "v": 1, "type": "pool", "id": "7", "pool": "backends", "control": false } },
+    { "why": "home_make with an unknown field", "code": "bad_request", "request": { "v": 1, "type": "home_make", "id": "6", "path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "uid": 40001, "extra": true } },
+    { "why": "home_measure without a uid", "code": "bad_request", "id": "6", "request": { "v": 1, "type": "home_measure", "id": "6", "path": "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0" } }
   ],
   "replies": [
     { "v": 1, "type": "spawned", "id": "7", "spawn_id": "00112233445566778899aabbccddeeff", "uid": 20007, "pid": 41 },
@@ -179,5 +236,11 @@
     { "v": 1, "type": "pool", "id": "9", "pool": "backends", "size": 32, "free": 30, "quarantined": 1 },
     { "v": 1, "type": "exited", "spawn_id": "00112233445566778899aabbccddeeff", "code": null, "signal": "SIGKILL", "memory_exceeded": true },
     { "v": 1, "type": "error", "id": "12", "code": "memory_unavailable" }
+  ],
+  "home_replies": [
+    { "v": 1, "type": "home_made", "id": "22" },
+    { "v": 1, "type": "home_measured", "id": "23", "bytes": 1048576 },
+    { "v": 1, "type": "home_retired", "id": "24" },
+    { "v": 1, "type": "error", "id": "20", "code": "not_built" }
   ]
 }

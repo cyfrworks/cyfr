@@ -255,6 +255,12 @@ defmodule Sanctum.Consent.Plan do
   "corrupt_manifest", missing: dep_ref}` (`closure_rows/3`), never a plan
   with that dependency's needs missing; one not installed leaves it
   unresolved as missing.
+
+  A source whose closure declares a need met by mounting a login entry
+  (`Prima.Manifest.Needs.mount_only?/1`), in its own manifest or a
+  dependency's, is refused `{:not_built, :mount}`
+  as its shape is derived (`Sanctum.Consent.ShapeDerivation.shape_input/3`),
+  before any profile, head or binding is read.
   """
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def plan(%Context{} = ctx, %{ref: ref} = params) when is_binary(ref) do

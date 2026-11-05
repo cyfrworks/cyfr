@@ -540,6 +540,9 @@ defmodule Sanctum.Providers.Vault do
 
   defp fmt(:invalid_disclose), do: "invalid_disclose: disclose is true or false"
 
+  defp fmt({:not_built, :login}),
+    do: "not_built: login entries, and the program destination they name, are not built yet"
+
   defp fmt(:no_binding_changes),
     do: "no_binding_changes: rebind needs at least one field to change"
 

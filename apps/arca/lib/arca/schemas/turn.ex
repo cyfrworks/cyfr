@@ -12,6 +12,10 @@ defmodule Arca.Schemas.Turn do
   is the thread's claim (`threads.active_turn_id`), not a process on some
   node — a running turn whose holder is not local belongs to a peer, not to
   recovery.
+
+  `sent_by` is who opened the turn, `"person"` or an agent name, and
+  `asking_thread_id` with `request_id` the reply address of a turn a crew
+  request opened. Nothing writes them yet.
   """
 
   use Ecto.Schema
@@ -25,6 +29,9 @@ defmodule Arca.Schemas.Turn do
     field :thread_id, :string
     field :agent, :string
     field :requested_by, :string
+    field :sent_by, :string
+    field :asking_thread_id, :string
+    field :request_id, :string
     field :status, :string
     field :error, :string
     field :accepted_at, :utc_datetime_usec

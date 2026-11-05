@@ -52,6 +52,7 @@ defmodule Locus.Runtime.StoreLimitsTest do
           "vault_probe",
           "attached_header_probe",
           "credential_canary",
+          "pipe_probe",
           "trapper",
           "async_lift",
           "sync_lift",

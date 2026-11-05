@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused.",
+  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. A program's pipe (pipe_open, pipe_send, pipe_recv, pipe_close) is not built yet: each pipe call's answer is the not_built refusal, and its body pins the args CYFR reads (need, key and argv; session and lines; session, after and max_wait_ms, at most Prima.HostAPI.max_pipe_wait_ms/0; session). pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused.",
   "version": 1,
   "auth_header": "x-cyfr-auth",
   "routes": {
@@ -18,6 +18,10 @@
     "release_child": "/host/v1/release_child",
     "egress_pin": "/host/v1/egress_pin",
     "attached_fetch": "/host/v1/attached_fetch",
+    "pipe_open": "/host/v1/pipe_open",
+    "pipe_send": "/host/v1/pipe_send",
+    "pipe_recv": "/host/v1/pipe_recv",
+    "pipe_close": "/host/v1/pipe_close",
     "runner_exited": "/host/v1/runner_exited"
   },
   "retries": {
@@ -36,6 +40,10 @@
     "release_child": "idempotent",
     "egress_pin": "idempotent",
     "attached_fetch": "never",
+    "pipe_open": "idempotent",
+    "pipe_send": "never",
+    "pipe_recv": "idempotent",
+    "pipe_close": "idempotent",
     "runner_exited": "idempotent"
   },
   "timeouts_ms": {
@@ -54,6 +62,10 @@
     "release_child": 30000,
     "egress_pin": 30000,
     "attached_fetch": 30000,
+    "pipe_open": 30000,
+    "pipe_send": 30000,
+    "pipe_recv": 30000,
+    "pipe_close": 30000,
     "runner_exited": 30000
   },
   "max_body_bytes": 1048576,
@@ -672,6 +684,154 @@
           "answer_sealed": "oaKjpKWmp6ipqqsGdoKvYXIQ683f1qo9TaDNwwaUVHF7VpdhNz7X9f1OCIvKM5Ox8RF2wVB2ZniTOccQCljTsqmjs5hv94CGVKss69XatrfgIf06tqarbF8pcpeQNHQAkSYjtjRxcjM8yzBBtUEh1AibJoONp4WIzLtzr0qn9Y7kzHCP4OqBpWkVsCjl_n2Jk2ogkCXLSY4zQOxJY_MC",
           "call_id": "EBESExQVFhcYGRobHB0eHw",
           "why": "the share's owner does not stand: the recipient reads that the key is not available, nothing of the owner's account"
+        }
+      ]
+    },
+    {
+      "callback": "pipe_open",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251910,
+        "nonce": "n_host_pipe_open"
+      },
+      "body": "{\"v\":1,\"op\":\"pipe_open\",\"args\":{\"argv\":[\"--session\",\"vector\"],\"key\":\"chat_vector_1\",\"need\":\"coder\"}}",
+      "body_iv_hex": "7889e1db404196500308fdc9",
+      "body_sealed": "eInh20BBllADCP3JFJG_yNVKPFb5f5F4aIxWtCc8Tq2mExGWWRdwzgLI4f37T_s75KDt_kTen_VmwAVz7_MSiLHedDR-VOPdpLWSdrR16nNxTp-5xbi2LSjzxRwmWt50GlTfmBBsc10sp233xB8VocZzYfEfJT0Y52D3fdl9ypg",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251910 nonce=n_host_pipe_open body=5cb33ee3b6cc76e2cd2300e56be5bedccc8738e9f2089bd53dc17ac47084d96e mac=7-sVQcC568Nqp8RfpQgyyzv60wVoviJ5WInSqr0BIt0",
+      "answer": "{\"v\":1,\"error\":\"not_built\"}",
+      "answer_iv_hex": "c29c271a07cdab36db93612f",
+      "answer_sealed": "wpwnGgfNqzbbk2Ev6gW9fyAVvhPsmeOsGivgyraG84k2e9w3IqOWIuoMh_wgLvtwwjGXb0OD_w",
+      "refusals": [
+        {
+          "answer": "{\"v\":1,\"error\":\"not_built\"}",
+          "why": "a program's pipe is not built yet: nothing runs"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"lost\"}",
+          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or the args do not read: the runner stops its work"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
+          "why": "CYFR's store could not answer: retried as the callback's class allows"
+        }
+      ]
+    },
+    {
+      "callback": "pipe_send",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251920,
+        "nonce": "n_host_pipe_send"
+      },
+      "body": "{\"v\":1,\"op\":\"pipe_send\",\"args\":{\"lines\":[\"{\\\"type\\\":\\\"user\\\",\\\"text\\\":\\\"hi\\\"}\",\"second\"],\"session\":\"pipe_vector_1\"}}",
+      "body_iv_hex": "4140a1034ac2c690e2373172",
+      "body_sealed": "QUChA0rCxpDiNzFyRHdP82f4ZwoUoEcsHXGQbtva-7TIBBJ9Q86i7WxZSxEe4_BXJBqxqBgVXW8HH_2RISvK6aV7pqCxdS4dUdecNIZcQsFoRiczOHJp5_aj8Rpm1lqgRMXWl3Egqfn3CXIoK8fo1yu45mdlV9YzqXJR0xfGhDVIDyPURLDJj3AeD40njonN",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251920 nonce=n_host_pipe_send body=f0da7f6f8d6ec9e3ac615061d7f99bee4ee22515a40bc1d3240d3a8aff5cd0f4 mac=Ce4SmX-w5pI01yJCcQQc1BsHn67dz1N-1vwLZ-ISRaE",
+      "answer": "{\"v\":1,\"error\":\"not_built\"}",
+      "answer_iv_hex": "7d5c4b8d48d2b57d801120ef",
+      "answer_sealed": "fVxLjUjStX2AESDvwskc2Y4zEe1ilO80XytRN3Gsd2UzIMsRDybFLI5D7wu0hX_uFcBX6V-6Ow",
+      "refusals": [
+        {
+          "answer": "{\"v\":1,\"error\":\"not_built\"}",
+          "why": "a program's pipe is not built yet: nothing runs"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"lost\"}",
+          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or the args do not read: the runner stops its work"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
+          "why": "CYFR's store could not answer: retried as the callback's class allows"
+        }
+      ]
+    },
+    {
+      "callback": "pipe_recv",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251930,
+        "nonce": "n_host_pipe_recv"
+      },
+      "body": "{\"v\":1,\"op\":\"pipe_recv\",\"args\":{\"after\":41,\"max_wait_ms\":20000,\"session\":\"pipe_vector_1\"}}",
+      "body_iv_hex": "1757e607b002cc52a08ce951",
+      "body_sealed": "F1fmB7ACzFKgjOlRJbOfwAAtMduPR64Sozr4jmxkZE8N1ZNDEsM_7BevlH2MYnXZ_28ZSYfoI_VyECobCizGCV5onVk4YV2zsICUuG-7B6HeDMcAjkUN3pHMbgSW6PI3ahO_nam0-cDJxvfxkj3zoBjVKvEnBg",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251930 nonce=n_host_pipe_recv body=20e025890486c159a6182728a7aed08fec8b57354a87fa1e936f45dd30cdae3a mac=tt8UdsHtFjbxIDdHdASBvyEta9P1Cd0ZbJc2T6PwkcQ",
+      "answer": "{\"v\":1,\"error\":\"not_built\"}",
+      "answer_iv_hex": "e6aee302460f012964bb75b9",
+      "answer_sealed": "5q7jAkYPASlku3W5FvhuoJ_4Jw4sIufzVB8MD78J3JTI970uBR4WDE2wHPFfoAmiUoZSAeKJOw",
+      "refusals": [
+        {
+          "answer": "{\"v\":1,\"error\":\"not_built\"}",
+          "why": "a program's pipe is not built yet: nothing runs"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"lost\"}",
+          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or the args do not read: the runner stops its work"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
+          "why": "CYFR's store could not answer: retried as the callback's class allows"
+        }
+      ]
+    },
+    {
+      "callback": "pipe_close",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251940,
+        "nonce": "n_host_pipe_close"
+      },
+      "body": "{\"v\":1,\"op\":\"pipe_close\",\"args\":{\"session\":\"pipe_vector_1\"}}",
+      "body_iv_hex": "66ea8dfe9d1a3e0a9a19d3a4",
+      "body_sealed": "ZuqN_p0aPgqaGdOkFYaQ5YGXABXkMtDQrkvgYHxhQurxRf9OXuVU-xwdQyZz3cwOay_V5Pcn1JFkFKrlUv1_RYgfSFA-YqqQBdmztk6kLVwMV-xyg8EAnQ",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251940 nonce=n_host_pipe_close body=85aa818be321dd9ee587bb361ed859d47b3d94de5ddc90823b4b85cac0603c56 mac=yDPl5ZBgbXX1v8NTsG9ud5YaUCyB4eC6I7CwH-IVypA",
+      "answer": "{\"v\":1,\"error\":\"not_built\"}",
+      "answer_iv_hex": "83f3814d9e403c1f690153c7",
+      "answer_sealed": "g_OBTZ5APB9pAVPHbdJfvfrMYN4swKbAV1ITCWropKBPjCOflS2cLOncdtCmXhTneeBygG2Xpg",
+      "refusals": [
+        {
+          "answer": "{\"v\":1,\"error\":\"not_built\"}",
+          "why": "a program's pipe is not built yet: nothing runs"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"lost\"}",
+          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or the args do not read: the runner stops its work"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
+          "why": "CYFR's store could not answer: retried as the callback's class allows"
         }
       ]
     }

@@ -545,6 +545,11 @@ func (s *server) serveChannel() {
 			s.send(rerr.Reply())
 			continue
 		}
+		if req.NotBuilt() {
+			s.log.Warn("refused a %s request %s: not built yet", req.Type, req.ID)
+			s.send(protocol.NewError(req.ID, "", protocol.CodeNotBuilt))
+			continue
+		}
 		go s.handle(req)
 	}
 }

@@ -193,6 +193,14 @@ defmodule Sanctum.Consent.ShapeDerivation do
   The `ShapeDigest.compute/1` input derived from live state. An agent
   source's shape also carries its model target (`catalyst#model`): the
   model an agent runs on is what it may do, so changing it re-asks.
+
+  A source whose closure declares a need met by mounting
+  (`Prima.Manifest.Needs.mount_only?/1`), in its own manifest or any
+  dependency's, is refused `{:not_built, :mount}`: no binding meets one
+  yet. The plan,
+  the commit, the grant, the provisioning walk and the live digest all
+  derive the source's shape here before they read a profile or a binding,
+  so each refuses it there.
   """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref), do: shape_input(ctx, source_ref, :latest)
@@ -210,8 +218,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   defp row_shape_input(ctx, source_ref, row, manifest) do
-    with {:ok, releases} <- dependency_releases(ctx, row, source_ref),
+    with {:ok, {graph, manifests}} <- closure(ctx, row, source_ref),
+         releases = releases(graph, source_ref),
          needs = Needs.from_manifest(manifest) || [],
+         :ok <- mount_not_built(needs),
+         :ok <- dependencies_mount_not_built(manifests),
          :ok <- check_vault_projections(needs, source_ref),
          {:ok, tincture_digest} <- tincture_digest(manifest, source_ref),
          {:ok, caps} <- declared_caps(manifest, source_ref) do
@@ -327,22 +338,33 @@ defmodule Sanctum.Consent.ShapeDerivation do
           {:ok, [String.t()]}
           | {:error, {:corrupt, {:manifest, String.t()}} | {:unavailable, String.t()}}
   def dependency_releases(ctx, row, source_ref) do
+    with {:ok, {graph, _manifests}} <- closure(ctx, row, source_ref),
+         do: {:ok, releases(graph, source_ref)}
+  end
+
+  # The activation closure's graph and each node's manifest as the one
+  # resolution read it, both empty for a closure that does not resolve
+  # (`dependency_releases/3` says why).
+  defp closure(ctx, row, source_ref) do
     with {:ok, _manifest} <- manifest(row, source_ref) do
       case Components.resolve(ctx, row) do
-        {:ok, %{graph: graph}} when is_map(graph) ->
-          {:ok,
-           graph
-           |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
-           |> Enum.map(fn {node_key, digest} -> "#{node_key}@#{digest}" end)
-           |> Enum.sort()}
+        {:ok, %{graph: graph, manifests: manifests}} when is_map(graph) and is_map(manifests) ->
+          {:ok, {graph, manifests}}
 
         {:error, reason} when Components.is_outage(reason) ->
           {:error, {:unavailable, "Components"}}
 
         _unresolvable ->
-          {:ok, []}
+          {:ok, {%{}, %{}}}
       end
     end
+  end
+
+  defp releases(graph, source_ref) do
+    graph
+    |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
+    |> Enum.map(fn {node_key, digest} -> "#{node_key}@#{digest}" end)
+    |> Enum.sort()
   end
 
   @doc """
@@ -446,6 +468,28 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
+
+  # No binding meets a need by mounting yet, so a source whose closure
+  # declares one, in its own manifest or a dependency's, is refused before
+  # anything reads a profile or a binding for it.
+  defp mount_not_built(needs) do
+    if Enum.any?(needs, &Needs.mount_only?/1), do: {:error, {:not_built, :mount}}, else: :ok
+  end
+
+  # Each node's manifest as the closure's one resolution read it
+  # (`Sanctum.Consent.Components.resolve/2`), so the guard checks the
+  # closure the graph names and reads nothing again. A resolution the
+  # store cannot answer has already refused as `{:unavailable,
+  # "Components"}` (`closure/3`), and a closure that resolves otherwise at
+  # a later read is refused there as moved.
+  defp dependencies_mount_not_built(manifests) do
+    Enum.find_value(manifests, :ok, fn {_node_key, node_manifest} ->
+      case mount_not_built(Needs.from_manifest(node_manifest) || []) do
+        :ok -> nil
+        refused -> refused
+      end
+    end)
+  end
 
   # A vault need whose projection names nothing would consent to an edge
   # the vault reader refuses as corrupt at dispense; it is refused here

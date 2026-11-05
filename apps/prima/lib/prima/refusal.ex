@@ -387,6 +387,11 @@ defmodule Prima.Refusal do
   defp row({:invalid_argument, message}) when is_binary(message),
     do: {:invalid_argument, message}
 
+  # A part this release declares and does not run yet (a login entry, a
+  # need met by mounting one): refused before anything is read or written.
+  defp row({:not_built, what}) when is_atom(what),
+    do: {:invalid_argument, "This is not built yet."}
+
   defp row({:conflict, message}) when is_binary(message), do: {:conflict, message}
 
   defp row({:unavailable, what}) when is_binary(what),

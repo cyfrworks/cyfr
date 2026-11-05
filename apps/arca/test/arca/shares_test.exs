@@ -209,6 +209,21 @@ defmodule Arca.SharesTest do
     end
   end
 
+  describe "destination_complete?/1" do
+    test "a destination naming methods and paths carries a share, and so does a program's" do
+      assert Shares.destination_complete?(
+               ~s({"hosts":["api.example.com"],"methods":["POST"],"paths":["/v1"],"scheme":"https"})
+             )
+
+      assert Shares.destination_complete?(~s({"program":"claude"}))
+
+      refute Shares.destination_complete?(@incomplete)
+      refute Shares.destination_complete?(~s({"program":"Claude"}))
+      refute Shares.destination_complete?(~s({"hosts":["api.example.com"],"program":"claude"}))
+      refute Shares.destination_complete?(nil)
+    end
+  end
+
   describe "the owner's actor" do
     test "an actor with no athanor or no person is refused before any query",
          %{entry: entry} do

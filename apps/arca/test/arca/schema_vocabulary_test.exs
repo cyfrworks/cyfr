@@ -76,7 +76,10 @@ defmodule Arca.SchemaVocabularyTest do
       {"shared_thread_members", "shared_thread_members_status_known", "status",
        Arca.Schemas.SharedThreadMember.statuses()},
       # How a person was made here (`Arca.Users.mint/4`), written once.
-      {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()}
+      {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()},
+      {"mcp_servers", "mcp_servers_home_known", "home", Arca.Schemas.McpServer.homes()},
+      {"threads", "threads_kind_known", "kind", Arca.Schemas.Thread.kinds()},
+      {"messages", "messages_outcome_known", "outcome", Arca.Schemas.Message.outcomes()}
     ]
   end
 
@@ -97,6 +100,53 @@ defmodule Arca.SchemaVocabularyTest do
       assert Arca.Schemas.Execution.statuses() == Prima.ExecutionState.statuses()
       assert Arca.Execution.statuses() == Prima.ExecutionState.statuses()
       assert Arca.Schemas.Profile.statuses() == Arca.StatusTransitions.statuses(:profiles)
+    end
+
+    test "a message's status takes answered, and a written thread is its person's own" do
+      message = %{
+        id: "msg_vocab",
+        thread_id: "thread_vocab",
+        athanor_id: "ath_vocab",
+        seq: 1,
+        author: "agent",
+        kind: "text",
+        inserted_at: DateTime.utc_now()
+      }
+
+      for status <- ~w(pending answered) do
+        changeset =
+          Arca.Schemas.Message.changeset(
+            %Arca.Schemas.Message{},
+            Map.put(message, :status, status)
+          )
+
+        assert changeset.valid?
+      end
+
+      changeset =
+        Arca.Schemas.Message.changeset(
+          %Arca.Schemas.Message{},
+          Map.put(message, :status, "bogus")
+        )
+
+      refute changeset.valid?
+
+      # Crew threads are not built: the changeset casts no kind, parent or
+      # brain session.
+      changeset =
+        Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, %{
+          id: "thread_vocab",
+          athanor_id: "ath_vocab",
+          created_by: "user_vocab",
+          kind: "crew",
+          parent_id: "thread_room",
+          brain_session: "session"
+        })
+
+      assert changeset.valid?
+
+      assert %{kind: "own", parent_id: nil, brain_session: nil} =
+               Ecto.Changeset.apply_changes(changeset)
     end
   end
 
@@ -185,6 +235,40 @@ defmodule Arca.SchemaVocabularyTest do
       for status <- ~w(bogus needs_consent) do
         refused!("vault_entries", vault_entry(ctx, status), "vault_entries_status_known")
       end
+    end
+
+    test "lands every program home, scratch by default, and refuses any other", ctx do
+      for home <- ~w(scratch kept) do
+        assert {1, _} = insert!("mcp_servers", mcp_server(ctx, %{home: home}))
+      end
+
+      row = mcp_server(ctx, %{})
+      assert {1, _} = insert!("mcp_servers", row)
+      assert column!("mcp_servers", "home", row.id) == "scratch"
+
+      refused!("mcp_servers", mcp_server(ctx, %{home: "bogus"}), "mcp_servers_home_known")
+    end
+
+    test "lands every thread kind, own by default, and refuses any other", ctx do
+      for kind <- ~w(own crew) do
+        assert {1, _} = insert!("threads", thread(ctx, %{kind: kind}))
+      end
+
+      row = thread(ctx, %{})
+      assert {1, _} = insert!("threads", row)
+      assert column!("threads", "kind", row.id) == "own"
+
+      refused!("threads", thread(ctx, %{kind: "bogus"}), "threads_kind_known")
+    end
+
+    test "lands every message outcome and NULL, and refuses any other", ctx do
+      thread_id = thread_row!(ctx)
+
+      for outcome <- ~w(done failed cancelled uncertain needs_you) ++ [nil] do
+        assert {1, _} = insert!("messages", message(ctx, thread_id, outcome))
+      end
+
+      refused!("messages", message(ctx, thread_id, "bogus"), "messages_outcome_known")
     end
   end
 
@@ -656,19 +740,62 @@ defmodule Arca.SchemaVocabularyTest do
     }
   end
 
-  defp thread_row!(%{athanor: athanor}) do
-    id = id("thread")
-
-    {1, _} =
-      insert!("threads", %{
-        id: id,
+  defp thread(%{athanor: athanor}, attrs) do
+    Map.merge(
+      %{
+        id: id("thread"),
         athanor_id: athanor,
         created_by: "user_vocab",
         inserted_at: now(),
         updated_at: now()
-      })
+      },
+      attrs
+    )
+  end
 
-    id
+  defp thread_row!(ctx) do
+    row = thread(ctx, %{})
+    {1, _} = insert!("threads", row)
+    row.id
+  end
+
+  defp message(%{athanor: athanor}, thread_id, outcome) do
+    %{
+      id: id("msg"),
+      thread_id: thread_id,
+      athanor_id: athanor,
+      seq: System.unique_integer([:positive]),
+      author: "agent",
+      outcome: outcome,
+      inserted_at: now()
+    }
+  end
+
+  defp mcp_server(%{athanor: athanor}, attrs) do
+    Map.merge(
+      %{
+        id: id("mcp"),
+        name: id("server"),
+        transport: "stdio",
+        config_json: "{}",
+        epoch: 1,
+        created_by: "user_vocab",
+        athanor_id: athanor,
+        inserted_at: now(),
+        updated_at: now()
+      },
+      attrs
+    )
+  end
+
+  # One column of one row, read past every schema.
+  defp column!(table, column, id) do
+    placeholder = if sqlite?(), do: "?1", else: "$1"
+
+    %{rows: [[value]]} =
+      Arca.Repo.query!("SELECT #{column} FROM #{table} WHERE id = #{placeholder}", [id])
+
+    value
   end
 
   defp turn(%{athanor: athanor}, thread_id, status) do

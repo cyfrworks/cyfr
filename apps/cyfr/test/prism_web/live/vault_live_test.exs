@@ -464,7 +464,13 @@ defmodule PrismWeb.VaultLiveTest do
         "destination_hosts" => "api.example.com"
       }
 
-      for forged <- [%{"kind" => "oauth"}, %{"kind" => "API key"}, %{"kind" => ""}, %{}] do
+      for forged <- [
+            %{"kind" => "oauth"},
+            %{"kind" => "login"},
+            %{"kind" => "API key"},
+            %{"kind" => ""},
+            %{}
+          ] do
         render_click(view, "lv:clear-flash", %{})
         html = render_submit(view, "create", Map.merge(typed, forged))
         assert html =~ @not_a_kind, "#{inspect(forged)} was not refused"

@@ -324,6 +324,8 @@ defmodule Locus.Runtime.Engine do
         %{}
       end
 
+    pipe_imports = if component_type == :catalyst, do: build_pipe_imports(), else: %{}
+
     {formula_imports, formula_tracker_pid} =
       if component_type == :formula do
         Locus.Runtime.FormulaHandler.build_formula_imports(host,
@@ -341,6 +343,7 @@ defmodule Locus.Runtime.Engine do
       |> Map.merge(storage_imports)
       |> Map.merge(oauth_imports)
       |> Map.merge(emit_imports)
+      |> Map.merge(pipe_imports)
       |> Map.merge(formula_imports)
 
     cleanup_refs = %{
@@ -359,6 +362,22 @@ defmodule Locus.Runtime.Engine do
     %{
       "cyfr:emit/events@0.1.0" => %{
         "emit" => {:fn, fn json_event -> emit(host, limits, json_event) end}
+      }
+    }
+  end
+
+  # A catalyst's `cyfr:process/pipe` import. A program's pipe is not built
+  # yet: every call answers `err("not_built")` here, and nothing reaches
+  # the host.
+  defp build_pipe_imports do
+    not_built = {:error, "not_built"}
+
+    %{
+      "cyfr:process/pipe@0.1.0" => %{
+        "open" => {:fn, fn _need, _key, _argv -> not_built end},
+        "send" => {:fn, fn _session, _lines -> not_built end},
+        "recv" => {:fn, fn _session, _after, _max_wait_ms -> not_built end},
+        "close" => {:fn, fn _session -> not_built end}
       }
     }
   end

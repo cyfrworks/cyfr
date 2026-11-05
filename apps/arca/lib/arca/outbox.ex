@@ -35,7 +35,13 @@ defmodule Arca.Outbox do
   alias Arca.Repo.Errors
   alias Arca.Schemas.{ConsumerReceipt, OutboxRecord}
 
-  @consumers %{"schedule_outcome" => ["schedule_notes"]}
+  # `crew_delivery` (`Aqua.Crew`) is not built yet: no source writes a
+  # crew record, and no process works them.
+  @consumers %{
+    "schedule_outcome" => ["schedule_notes"],
+    "crew_request" => ["crew_delivery"],
+    "crew_reply" => ["crew_delivery"]
+  }
 
   # Every kind a record may carry has its consumers declared.
   true = Enum.sort(Map.keys(@consumers)) == Enum.sort(Prima.OutboxRecord.kinds())

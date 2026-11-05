@@ -366,7 +366,7 @@ var Actions = map[string][]string{
 }
 
 // CredentialKinds lists every credential kind a manifest need may name.
-var CredentialKinds = []string{"api_key", "oauth", "bundle"}
+var CredentialKinds = []string{"api_key", "oauth", "bundle", "login"}
 
 // SignInProviders lists every sign-in provider.
 var SignInProviders = []string{"github", "google", "oidcc"}

@@ -16,10 +16,10 @@ defmodule Emissary.External.BackendDefinition do
   `{:error, {:invalid_argument, message}}`:
 
     * a name matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique;
-    * a command is a non-empty string of at most
-      `Prima.LocusBackends.max_command_bytes/0` bytes with no NUL byte and
-      no `vault:` — every process on the service can read a command line,
-      so a credential never goes in one;
+    * a command meets `Prima.LocusBackends.check_command/1`: text beyond
+      whitespace, at most `Prima.LocusBackends.max_command_bytes/0` bytes,
+      no NUL byte and no `vault:` — every process on the service can read
+      a command line, so a credential never goes in one;
     * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of the
       wire's reserved names (`Prima.LocusBackends.reserved_env_names/0`:
       `PATH HOME USER LOGNAME SHELL TMPDIR PWD`), nor prefixed with one of
@@ -171,31 +171,34 @@ defmodule Emissary.External.BackendDefinition do
 
   defp check_name(name), do: invalid("Backend name #{inspect(name)} must be a string")
 
-  defp check_command(name, command) when is_binary(command) do
-    cond do
-      String.trim(command) == "" ->
+  # The command rule is `Prima.LocusBackends.check_command/1`'s; the
+  # sentences are this surface's.
+  defp check_command(name, command) do
+    case LocusBackends.check_command(command) do
+      :ok ->
+        :ok
+
+      {:error, :not_a_string} ->
+        invalid("Backend '#{name}' needs a command string")
+
+      {:error, :empty} ->
         invalid("Backend '#{name}' needs a command")
 
-      byte_size(command) > LocusBackends.max_command_bytes() ->
+      {:error, :too_long} ->
         invalid(
           "Backend '#{name}' has a command longer than #{LocusBackends.max_command_bytes()} bytes"
         )
 
-      String.contains?(command, <<0>>) ->
+      {:error, :nul} ->
         invalid("Backend '#{name}' has a NUL byte in its command")
 
-      String.contains?(String.downcase(command), VaultRef.prefix()) ->
+      {:error, :vault_reference} ->
         invalid(
           "Backend '#{name}' names a vault entry in its command — command lines are " <>
             "visible to every process on the backends service; pass it through env instead"
         )
-
-      true ->
-        :ok
     end
   end
-
-  defp check_command(name, _command), do: invalid("Backend '#{name}' needs a command string")
 
   defp check_env(name, env) when is_map(env) do
     env

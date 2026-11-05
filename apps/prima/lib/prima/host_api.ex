@@ -56,6 +56,16 @@ defmodule Prima.HostAPI do
   stream after it is bounded by the attempt's deadline and the grant's
   `max_response_size`. Its effect is an upstream request, so it is never
   retried.
+
+  ## A program's pipe
+
+  `c:pipe_open/4`, `c:pipe_send/3`, `c:pipe_recv/4` and `c:pipe_close/2`
+  carry a catalyst's session on a program its `login` need is bound to:
+  lines in, sequence-numbered lines out. A `pipe_recv` waits at most
+  `max_pipe_wait_ms/0` for a line past the one it names, less than its
+  request timeout, so a long wait is answered before the client gives the
+  answer up. The pipe is not built yet: CYFR answers every pipe call
+  `:not_built`.
   """
 
   @typedoc """
@@ -112,6 +122,10 @@ defmodule Prima.HostAPI do
     :release_child,
     :egress_pin,
     :attached_fetch,
+    :pipe_open,
+    :pipe_send,
+    :pipe_recv,
+    :pipe_close,
     :runner_exited
   ]
 
@@ -131,8 +145,17 @@ defmodule Prima.HostAPI do
     release_child: :idempotent,
     egress_pin: :idempotent,
     attached_fetch: :never,
+    pipe_open: :idempotent,
+    pipe_send: :never,
+    pipe_recv: :idempotent,
+    pipe_close: :idempotent,
     runner_exited: :idempotent
   }
+
+  # The longest a `pipe_recv` may wait for a line: the header window less
+  # the margin a slow host's answer needs, so the wait ends inside the
+  # call's request timeout.
+  @max_pipe_wait_ms 20_000
 
   @field_denials ["secret_denied", "disclosure_refused"]
 
@@ -143,6 +166,14 @@ defmodule Prima.HostAPI do
   @doc "What a client may do when `callback`'s answer is lost (`t:retry/0`)."
   @spec retry(atom()) :: retry()
   def retry(callback) when is_map_key(@retries, callback), do: Map.fetch!(@retries, callback)
+
+  @doc """
+  The most milliseconds a `c:pipe_recv/4` may ask to wait, #{@max_pipe_wait_ms}:
+  less than `request_timeout_ms(:pipe_recv)`, so the host answers within
+  the time its client waits.
+  """
+  @spec max_pipe_wait_ms() :: pos_integer()
+  def max_pipe_wait_ms, do: @max_pipe_wait_ms
 
   @doc "Whether `key` is a well-formed `t:child_key/0`."
   @spec valid_child_key?(term()) :: boolean()
@@ -177,7 +208,8 @@ defmodule Prima.HostAPI do
   it treats the answer as lost: the host-call header window for every
   call, so a late answer never verifies as fresh. For `attached_fetch` it
   bounds the wait for the answer's beginning, a refusal or the first
-  frame.
+  frame; for `pipe_recv` it exceeds the longest wait a call may ask
+  (`max_pipe_wait_ms/0`).
   """
   @spec request_timeout_ms(atom()) :: pos_integer()
   def request_timeout_ms(callback) when is_map_key(@retries, callback),
@@ -236,6 +268,21 @@ defmodule Prima.HostAPI do
   attached request to its runner, answering `:ok`, or why it could not.
   """
   @type emit :: (binary() -> :ok | {:error, term()})
+
+  @typedoc """
+  One line a program wrote, numbered in its session's sequence.
+  """
+  @type pipe_line :: %{seq: non_neg_integer(), text: String.t()}
+
+  @typedoc """
+  What a `c:pipe_recv/4` answers: the lines past `after`, how many lines
+  the session's buffer dropped, and whether its process still runs.
+  """
+  @type pipe_recv :: %{
+          lines: [pipe_line()],
+          dropped: non_neg_integer(),
+          running: boolean()
+        }
 
   @typedoc """
   One attempt's lease renewal: its new expiry in Unix ms, or its loss. A
@@ -451,6 +498,45 @@ defmodule Prima.HostAPI do
   """
   @callback attached_fetch(caller(), request :: Prima.AttachedRequest.t(), emit()) ::
               :ok | {:error, refusal() | attached_refusal()}
+
+  @doc """
+  Open a session on the program the caller's `login` need `need` is bound
+  to, under the caller's `key` for it, running the program's command with
+  `argv` appended, and answer the session's id. An open with a key whose
+  session still runs attaches to it. Idempotent on the caller's attempt,
+  `need` and `key`. Not built yet: answered `:not_built`.
+  """
+  @callback pipe_open(caller(), need :: String.t(), key :: String.t(), argv :: [String.t()]) ::
+              {:ok, session :: String.t()} | {:error, refusal() | :not_built}
+
+  @doc """
+  Write `lines` to the program of the caller's `session`, in order. Never
+  retried: a repeat could write them twice. Not built yet: answered
+  `:not_built`.
+  """
+  @callback pipe_send(caller(), session :: String.t(), lines :: [String.t()]) ::
+              :ok | {:error, refusal() | :not_built}
+
+  @doc """
+  Answer the lines of the caller's `session` past the sequence number
+  `after_seq` (the wire's `after`), waiting at most `max_wait_ms` (at most
+  `max_pipe_wait_ms/0`) for one when there is none. A line is kept until a
+  later call names a higher `after_seq`, so a repeat answers the same
+  lines. Not built yet:
+  answered `:not_built`.
+  """
+  @callback pipe_recv(
+              caller(),
+              session :: String.t(),
+              after_seq :: non_neg_integer(),
+              max_wait_ms :: non_neg_integer()
+            ) :: {:ok, pipe_recv()} | {:error, refusal() | :not_built}
+
+  @doc """
+  End the caller's `session` and its program. A repeat answers `:ok`. Not
+  built yet: answered `:not_built`.
+  """
+  @callback pipe_close(caller(), session :: String.t()) :: :ok | {:error, refusal() | :not_built}
 
   @doc """
   Report that the runner `runner` of the reporting worker service exited,

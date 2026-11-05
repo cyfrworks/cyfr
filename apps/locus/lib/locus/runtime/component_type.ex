@@ -17,9 +17,12 @@ defmodule Locus.Runtime.ComponentType do
   | `wasi:clocks/wall-clock`      | ✅        | ✅       | ✅       |
   | `wasi:random/random`          | ✅        | ✅       | ✅       |
   | `cyfr:vault/read`           | ✅*       | ❌       | ❌       |
+  | `cyfr:process/pipe`         | ✅‡       | ❌       | ❌       |
 
   *`cyfr:vault/read` resolves fields from the Vault entry a consent edge binds
   †`cyfr:oauth/token` resolves a token from the Vault OAuth entry a consent edge binds
+  ‡`cyfr:process/pipe` is a session on the program a `login` need is bound to; not
+  built yet: every call answers `err("not_built")`
 
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects

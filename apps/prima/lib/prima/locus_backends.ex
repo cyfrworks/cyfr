@@ -95,7 +95,7 @@ defmodule Prima.LocusBackends do
   literal value rather than a credential.
   """
 
-  alias Prima.{KeeperProtocol, MacEnvelope}
+  alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
   alias Prima.MCP.Protocol, as: MCPProtocol
 
   @version 1
@@ -494,6 +494,30 @@ defmodule Prima.LocusBackends do
   @doc "The bytes a backend's command may be."
   @spec max_command_bytes() :: pos_integer()
   def max_command_bytes, do: @max_command_bytes
+
+  @doc """
+  Whether `command` is a command an administrator may give a program: a
+  string with text beyond whitespace, of at most `max_command_bytes/0`
+  bytes, with no NUL byte and no `vault:` in any case, since every process
+  on the service can read a command line, so a credential never goes in
+  one. Refused `:not_a_string`, `:empty`, `:too_long`, `:nul` or
+  `:vault_reference`. A stdio server's backend
+  (`Emissary.External.BackendDefinition`) and the program a manifest's
+  login need suggests (`Prima.Manifest.Needs`) are held to it.
+  """
+  @spec check_command(term()) ::
+          :ok | {:error, :not_a_string | :empty | :too_long | :nul | :vault_reference}
+  def check_command(command) when is_binary(command) do
+    cond do
+      String.trim(command) == "" -> {:error, :empty}
+      byte_size(command) > @max_command_bytes -> {:error, :too_long}
+      String.contains?(command, <<0>>) -> {:error, :nul}
+      String.contains?(String.downcase(command), VaultRef.prefix()) -> {:error, :vault_reference}
+      true -> :ok
+    end
+  end
+
+  def check_command(_command), do: {:error, :not_a_string}
 
   @doc "The nonces one owner's replay cache holds."
   @spec max_nonces() :: pos_integer()

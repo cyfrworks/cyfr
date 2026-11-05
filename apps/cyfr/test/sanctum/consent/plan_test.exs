@@ -255,6 +255,90 @@ defmodule Sanctum.Consent.PlanTest do
       })
   end
 
+  describe "a need met by mounting" do
+    test "is not built yet: the plan and the preview refuse it as the shape is read",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount", "1.0.0", %{
+        "needs" => %{
+          "claude" => %{
+            "type" => "login",
+            "program" => "claude",
+            "reason" => "to run Claude Code on your own plan",
+            "install" => %{"command" => "claude", "login_command" => "claude auth login"}
+          }
+        }
+      })
+
+      ref = "reagent:local.plan-mount"
+
+      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
+      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+
+      # Nothing was staged for it.
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
+
+    test "in a dependency's manifest is refused alike, though the source declares none",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount-dep", "1.0.0", %{
+        "needs" => %{
+          "claude" => %{
+            "type" => "login",
+            "program" => "claude",
+            "reason" => "to run Claude Code on your own plan"
+          }
+        }
+      })
+
+      publish!(ctx, "plan-mount-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-mount-dep"}]}
+      })
+
+      ref = "reagent:local.plan-mount-app"
+
+      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
+      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
+
+    # The guard reads the manifests of the closure's one resolution. A
+    # resolution the store cannot answer refuses; the next one, answered,
+    # still meets the guard: a read that recovers never builds the
+    # dependency's login row.
+    @tag :capture_log
+    test "is refused when the closure's resolution cannot answer, and again once it can",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount-dep", "1.0.0", %{
+        "needs" => %{
+          "claude" => %{
+            "type" => "login",
+            "program" => "claude",
+            "reason" => "to run Claude Code on your own plan"
+          }
+        }
+      })
+
+      publish!(ctx, "plan-mount-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-mount-dep"}]}
+      })
+
+      ref = "reagent:local.plan-mount-app"
+      counter = :atomics.new(1, [])
+      unanswered!([], counted_read: {:resolve, 1, counter})
+
+      assert {:error, {:unavailable, "Components"}} = Plan.plan(ctx, %{ref: ref})
+      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
+
+      :atomics.put(counter, 1, 0)
+
+      assert {:error, {:unavailable, "Components"}} =
+               Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+
+      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
+  end
+
   describe "what the head holds" do
     test "a first grant has no head: no origins of its own and no delta", %{ctx: ctx} do
       publish!(ctx, "plan-first", "1.0.0", %{})

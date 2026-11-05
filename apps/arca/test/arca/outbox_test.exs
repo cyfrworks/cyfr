@@ -142,6 +142,73 @@ defmodule Arca.OutboxTest do
     end
   end
 
+  describe "the consumers" do
+    test "are declared for every kind, the crew kinds read by crew_delivery" do
+      assert Outbox.consumers("schedule_outcome") == ["schedule_notes"]
+      assert Outbox.consumers("crew_request") == ["crew_delivery"]
+      assert Outbox.consumers("crew_reply") == ["crew_delivery"]
+      assert Outbox.consumers("crew_note") == []
+
+      for kind <- Prima.OutboxRecord.kinds(), do: assert(Outbox.consumers(kind) != [], kind)
+
+      assert Enum.sort(Outbox.all_consumers()) == ["crew_delivery", "schedule_notes"]
+    end
+
+    test "of a crew record find it pending until crew_delivery receipts it", %{athanor: athanor} do
+      at = ~U[2026-11-05 12:00:00.000001Z]
+
+      records = [
+        Prima.OutboxRecord.crew_request(%{
+          athanor_id: athanor,
+          request_id: "msg_#{System.unique_integer([:positive])}",
+          inserted_at: at,
+          room_thread_id: "thr_room",
+          member: "reviewer",
+          task: "read the diff",
+          tools: nil,
+          options: %{},
+          person_id: "usr_1",
+          origin: :interactive
+        }),
+        Prima.OutboxRecord.crew_reply(%{
+          athanor_id: athanor,
+          turn_id: "turn_#{System.unique_integer([:positive])}",
+          ended_at: at,
+          asking_thread_id: "thr_room",
+          request_ids: ["msg_1"],
+          member: "reviewer",
+          outcome: "needs_you",
+          text: "which branch?",
+          person_id: "usr_1",
+          origin: :interactive
+        })
+      ]
+
+      for record <- records do
+        assert :ok = Outbox.put!(actor(athanor), record)
+        assert {:ok, [read]} = Outbox.pending(actor(athanor), "crew_delivery", record.kind)
+
+        assert read == %{
+                 record
+                 | snapshot: Map.reject(record.snapshot, fn {_k, v} -> is_nil(v) end)
+               }
+
+        assert {:ok, ^read} =
+                 Outbox.get(actor(athanor), Prima.OutboxRecord.source(record), record.kind)
+
+        assert :ok =
+                 ConsumerReceipts.put!(
+                   actor(athanor),
+                   record
+                   |> Prima.OutboxRecord.source()
+                   |> Map.merge(%{consumer: "crew_delivery", outcome: "applied"})
+                 )
+
+        assert {:ok, []} = Outbox.pending(actor(athanor), "crew_delivery", record.kind)
+      end
+    end
+  end
+
   describe "a receipt" do
     setup %{athanor: athanor} do
       record = record(athanor)

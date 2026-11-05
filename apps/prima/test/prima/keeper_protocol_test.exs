@@ -12,8 +12,9 @@ defmodule Prima.KeeperProtocolTest do
   order and all; every invalid request is refused, naming the member its
   `why` is about; a spawn's memory bound runs over the vectors' range,
   `min_memory_bytes/0` to `max_memory_bytes/0`; every reserved prefix is
-  refused in a spawn's env; and
-  every reply decodes to its typed shape. Beyond the vectors: an
+  refused in a spawn's env; every request the keeper answers `not_built`
+  encodes to its line; and every reply, the home replies among them,
+  decodes to its typed shape. Beyond the vectors: an
   oversized or unknown frame header, an attach frame of the wrong shape, a
   line past the bound, and a reply of another version, type, member or
   exit shape are refused.
@@ -29,9 +30,17 @@ defmodule Prima.KeeperProtocolTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)
+  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies not_built_requests home_replies)
 
-  @request_types %{"spawn" => :spawn, "signal" => :signal, "release" => :release, "pool" => :pool}
+  @request_types %{
+    "spawn" => :spawn,
+    "signal" => :signal,
+    "release" => :release,
+    "pool" => :pool,
+    "home_make" => :home_make,
+    "home_measure" => :home_measure,
+    "home_retire" => :home_retire
+  }
 
   # The member each invalid vector's refusal names.
   @refused_member %{
@@ -70,15 +79,31 @@ defmodule Prima.KeeperProtocolTest do
     "null memory bound" => "memory_bytes",
     "isolation other than netns" => "isolation",
     "isolation that is not a string" => "isolation",
-    "isolation on a request that is not a spawn" => "isolation"
+    "isolation on a request that is not a spawn" => "isolation",
+    "kept spawn without a home path" => "home_path",
+    "kept spawn without a home uid" => "home_uid",
+    "home path without a kept home" => "home_path",
+    "relative home path" => "home_path",
+    "home uid of zero" => "home_uid",
+    "home bound of zero" => "home_max_bytes",
+    "home mode other than scratch or kept" => "home_mode",
+    "pty that is not a boolean" => "pty",
+    "home mode that is empty" => "home_mode",
+    "pty that is null" => "pty",
+    "isolation that is empty" => "isolation",
+    "spawn member on a pool request" => "home_mode",
+    "control false on a request that is not a spawn" => "control",
+    "home_make with an unknown field" => "extra",
+    "home_measure without a uid" => "uid"
   }
 
   # Every member name the vectors' requests carry, at every depth, as the
   # atom `encode/1` takes: a closed table, so a vector names no atom it
   # makes.
   @members Map.new(
-             ~w(argv attach control core env extra fsize grace_ms id isolation memory_bytes
-                nofile nproc path pool rlimits sig spawn_id token type v)a,
+             ~w(argv attach control core env extra fsize grace_ms home_max_bytes home_mode
+                home_path home_uid id isolation memory_bytes nofile nproc path pool pty rlimits
+                sig spawn_id token type uid v)a,
              &{Atom.to_string(&1), &1}
            )
 
@@ -283,6 +308,27 @@ defmodule Prima.KeeperProtocolTest do
       end
     end
 
+    test "every request the keeper answers not_built encodes to its line" do
+      for vector <- @vectors["not_built_requests"] do
+        line = line(request(vector))
+        assert line == encoded_line(vector) <> "\n"
+        assert Jason.decode!(line) == vector
+      end
+
+      assert @vectors["not_built_requests"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
+               ~w(home_make home_measure home_retire spawn spawn)
+
+      spawns = for %{"type" => "spawn"} = spawn <- @vectors["not_built_requests"], do: spawn
+      assert Enum.any?(spawns, &(&1["home_mode"] == "kept" and &1["home_max_bytes"]))
+      assert Enum.any?(spawns, &(&1["pty"] == true))
+
+      # A spawn naming scratch and no pty is today's, among the valid ones.
+      assert Enum.any?(
+               @vectors["valid_requests"],
+               &(&1["home_mode"] == "scratch" and &1["pty"] == false)
+             )
+    end
+
     test "every invalid request is refused, naming the member its why is about" do
       for %{"why" => why, "code" => code, "request" => vector} <- @vectors["invalid_requests"] do
         assert code == "bad_request"
@@ -341,6 +387,19 @@ defmodule Prima.KeeperProtocolTest do
       assert @vectors["replies"] |> Enum.map(& &1["type"]) |> Enum.uniq() |> Enum.sort() ==
                ~w(error exited pool released spawned)
     end
+
+    test "every home reply decodes to its typed shape, and the not_built refusal as an error" do
+      for vector <- @vectors["home_replies"] do
+        assert KeeperProtocol.decode_reply(Jason.encode!(vector) <> "\n") ==
+                 {:ok, expected_reply(vector)}
+      end
+
+      assert @vectors["home_replies"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
+               ~w(error home_made home_measured home_retired)
+
+      assert %{"code" => "not_built"} =
+               Enum.find(@vectors["home_replies"], &(&1["type"] == "error"))
+    end
   end
 
   defp expected_reply(%{"type" => "spawned"} = r),
@@ -358,6 +417,10 @@ defmodule Prima.KeeperProtocolTest do
 
   defp expected_reply(%{"type" => "pool"} = r),
     do: {:pool, r["id"], r["pool"], r["size"], r["free"], r["quarantined"]}
+
+  defp expected_reply(%{"type" => "home_made"} = r), do: {:home_made, r["id"]}
+  defp expected_reply(%{"type" => "home_measured"} = r), do: {:home_measured, r["id"], r["bytes"]}
+  defp expected_reply(%{"type" => "home_retired"} = r), do: {:home_retired, r["id"]}
 
   describe "frames" do
     test "a header over the bound or on an unknown stream is refused as soon as it is in" do
@@ -501,6 +564,55 @@ defmodule Prima.KeeperProtocolTest do
       assert refused(%{id: "1", pool: "p"}) =~ ~r/\Atype /
     end
 
+    test "a kept home's members hold their bounds, and only a kept spawn carries them" do
+      bounds = KeeperProtocol.request_bounds()
+      path = "/var/lib/locus/kept/k"
+      kept = %{home_mode: "kept", home_path: path, home_uid: 1}
+
+      assert %{"home_mode" => "kept", "home_uid" => 1, "home_max_bytes" => max} =
+               Jason.decode!(
+                 line(spawn_request(Map.put(kept, :home_max_bytes, bounds.max_home_bytes)))
+               )
+
+      assert max == 1_125_899_906_842_624
+      assert line(spawn_request(%{kept | home_uid: bounds.max_uid}))
+      assert line(spawn_request(%{kept | home_path: "/" <> String.duplicate("a", 4094)}))
+      assert line(spawn_request(%{home_mode: "scratch", pty: false}))
+
+      for {member, value} <- [
+            home_max_bytes: bounds.max_home_bytes + 1,
+            home_uid: bounds.max_uid + 1,
+            home_uid: -1,
+            home_path: "/" <> String.duplicate("a", 4095),
+            home_path: "/var/lib/locus/kept/../k",
+            home_path: "/var/lib/locus/kept/k/",
+            home_path: nil,
+            home_mode: nil
+          ] do
+        assert refused(spawn_request(Map.put(kept, member, value))) =~
+                 ~r/\A#{member} /
+      end
+
+      for member <- [:home_path, :home_uid, :home_max_bytes] do
+        scratch = spawn_request(%{member => Map.get(kept, member, 1), :home_mode => "scratch"})
+        assert refused(scratch) =~ ~r/\A#{member} /
+      end
+
+      home = %{type: :home_retire, id: "h", path: path, uid: 1}
+
+      assert line(home) ==
+               ~s({"id":"h","path":"#{path}","type":"home_retire","uid":1,"v":1}\n)
+
+      assert line(%{home | uid: bounds.max_uid})
+      assert refused(%{home | uid: bounds.max_uid + 1}) =~ ~r/\Auid /
+      assert refused(%{home | uid: 0}) =~ ~r/\Auid /
+      assert refused(%{home | path: "kept/k"}) =~ ~r/\Apath /
+      assert refused(Map.delete(home, :path)) =~ ~r/\Apath /
+      assert refused(Map.put(home, :pool, "backends")) =~ ~r/\Apool /
+      assert refused(Map.put(home, :home_mode, "kept")) =~ ~r/\Ahome_mode /
+      assert refused(%{type: :pool, id: "1", pool: "p", pty: false}) =~ ~r/\Apty /
+    end
+
     test "are refused when argv and env together pass the keeper's bound" do
       env = Map.new(1..9, &{"V#{&1}", :binary.copy("v", 30_000)})
       assert refused(spawn_request(%{env: env})) =~ ~r/\Aargv /
@@ -555,6 +667,22 @@ defmodule Prima.KeeperProtocolTest do
 
       oversize = :binary.copy(" ", KeeperProtocol.max_line_bytes() + 1)
       assert KeeperProtocol.decode_reply(oversize) == {:error, :oversize_line}
+    end
+
+    test "a home_measured's bytes is a whole number JSON carries exactly" do
+      measured = %{"v" => 1, "type" => "home_measured", "id" => "h"}
+      decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(measured, &1)))
+      most = 9_007_199_254_740_991
+
+      assert decode.(%{"bytes" => 0}) == {:ok, {:home_measured, "h", 0}}
+      assert decode.(%{"bytes" => most}) == {:ok, {:home_measured, "h", most}}
+      assert decode.(%{"bytes" => most + 1}) == {:error, {:invalid_field, "bytes"}}
+      assert decode.(%{"bytes" => -1}) == {:error, {:invalid_field, "bytes"}}
+      assert decode.(%{"bytes" => "1"}) == {:error, {:wrong_type, "bytes"}}
+      assert decode.(%{}) == {:error, {:missing_field, "bytes"}}
+
+      assert KeeperProtocol.decode_reply(~s({"v":1,"type":"home_made","id":"h","bytes":1})) ==
+               {:error, {:unknown_field, "bytes"}}
     end
 
     test "a spawned without its uid or pid is refused" do
