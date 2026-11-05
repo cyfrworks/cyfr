@@ -161,7 +161,12 @@ defmodule Sanctum.Shares do
         operation: "share.create",
         arguments: Map.merge(%{entry_id: entry_id}, Map.merge(audience, caps)),
         resource: entry.name,
-        details: sharing_details(audience, caps)
+        details:
+          Map.put(sharing_details(audience, caps), "warnings", [
+            "You are responsible for following the provider's terms when sharing this entry.",
+            "What recipients send reaches the provider as you.",
+            "Recipients use your provider limits up to the caps you set and never see the credential. You can revoke the share at any time."
+          ])
       }
 
       with :ok <- Authz.check(ctx, :credential_sharing, change),
