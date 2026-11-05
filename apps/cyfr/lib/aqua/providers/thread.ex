@@ -734,8 +734,9 @@ defmodule Aqua.Providers.Thread do
   end
 
   # A thread is deleted whole — its rows and its blobs, and a room's crew
-  # threads with it, their open turns cancelled — and never under a
-  # running turn, nor while a crew thread of the room waits on a card.
+  # threads with it, their open turns cancelled and the runtime still
+  # holding them stopped after — and never under a running turn, nor while
+  # a crew thread of the room waits on a card.
   defp act("delete", ctx, id, _args) do
     cond do
       Runner.turn_running?(ctx, id) ->
@@ -743,9 +744,17 @@ defmodule Aqua.Providers.Thread do
 
       true ->
         case Tape.delete_thread(ctx, id) do
-          :ok -> {:ok, %{deleted: true, thread: id}}
-          {:error, :not_found} -> {:error, {:not_found, "thread", id}}
-          {:error, reason} -> {:error, refusal(reason, id)}
+          # The rows are gone either way; a runner that cannot stop its
+          # work retires with it.
+          {:ok, %{cancelled: cancelled}} ->
+            _ = Runner.stop_cancelled(cancelled)
+            {:ok, %{deleted: true, thread: id}}
+
+          {:error, :not_found} ->
+            {:error, {:not_found, "thread", id}}
+
+          {:error, reason} ->
+            {:error, refusal(reason, id)}
         end
     end
   end
@@ -755,8 +764,8 @@ defmodule Aqua.Providers.Thread do
   # transaction, the runtime still holding them is stopped after, and the
   # next request to the member opens a new one.
   defp act("archive", ctx, id, _args) do
-    with {:ok, archived} <- Tape.archive(ctx, id),
-         :ok <- stopped(Runner.stop_turn(ctx, id)) do
+    with {:ok, %{thread: archived, cancelled: cancelled}} <- Tape.archive(ctx, id),
+         :ok <- Runner.stop_cancelled(cancelled) do
       {:ok, Map.put(render_thread(archived), :archived, true)}
     else
       {:error, :not_crew} ->
@@ -891,10 +900,6 @@ defmodule Aqua.Providers.Thread do
       {:error, reason} -> {:error, reason}
     end
   end
-
-  defp stopped(:ok), do: :ok
-  defp stopped({:error, reason}) when reason in [:archived, :thread_archived], do: :ok
-  defp stopped(other), do: other
 
   defp put_opt(opts, _key, nil), do: opts
   defp put_opt(opts, _key, ""), do: opts

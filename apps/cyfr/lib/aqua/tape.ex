@@ -587,27 +587,31 @@ defmodule Aqua.Tape do
   the same transaction (`Arca.ThreadStorage.archive/3`), under the stamp
   each root's attempt stores: a cancel retires work. Viewers hear the
   turns end and the crew's delivery consumer is woken after the commit;
-  the local runtime is the caller's to stop.
+  the runtime still holding the cancelled turns is the caller's to stop
+  (`Aqua.Runner.stop_cancelled/1`).
   """
-  @spec archive(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  @spec archive(Context.t(), String.t()) ::
+          {:ok, %{thread: map(), cancelled: [map()]}} | {:error, term()}
   def archive(%Context{} = ctx, thread_id) do
-    with {:ok, %{thread: thread, cancelled: cancelled}} <-
+    with {:ok, %{cancelled: cancelled}} = archived <-
            Threads.archive(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring)) do
       if cancelled != [] do
         broadcast(ctx, thread_id, :turn_finished, nil)
         wake_crew(ctx)
       end
 
-      {:ok, thread}
+      archived
     end
   end
 
   @doc """
   Delete a thread, and with a room its crew members' child threads, their
   open turns cancelled in the same transaction (`Arca.ThreadStorage.delete/3`)
-  under the stamp each root's attempt stores.
+  under the stamp each root's attempt stores; the runtime still holding
+  them is the caller's to stop (`Aqua.Runner.stop_cancelled/1`).
   """
-  @spec delete_thread(Context.t(), String.t()) :: :ok | {:error, term()}
+  @spec delete_thread(Context.t(), String.t()) ::
+          {:ok, %{cancelled: [map()]}} | {:error, term()}
   def delete_thread(%Context{} = ctx, thread_id),
     do: Threads.delete(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring))
 

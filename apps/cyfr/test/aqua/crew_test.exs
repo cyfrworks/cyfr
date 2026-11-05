@@ -553,7 +553,7 @@ defmodule Aqua.CrewTest do
     assert {:ok, %{status: "paused", paused_reason: "suspended"}} = Tape.turn(ctx, turn_id)
 
     # The store's write alone, as a crash before the runner's stop leaves it.
-    assert {:ok, %{archived_at: %DateTime{}}} = Tape.archive(ctx, child.id)
+    assert {:ok, %{thread: %{archived_at: %DateTime{}}}} = Tape.archive(ctx, child.id)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
     assert {:ok, []} = Tape.open_turns(ctx, child.id)
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
@@ -561,6 +561,72 @@ defmodule Aqua.CrewTest do
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert %{status: "answered"} = row(ctx, request.id)
+  end
+
+  test "archiving a working member's thread aborts its loop through the runner, the call's independent catalog handler with it",
+       %{ctx: ctx, room: room} do
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, "catalyst:local.http"],
+       script: [
+         call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+         {:probe, self()},
+         reply("never sent")
+       ]}
+    )
+
+    request = soul_request!(ctx, room, "web", "fetch x")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert_receive {:scripted_probe, _call, _}, 60_000
+    child = child!(ctx, room, "web")
+    turn_id = delivered_turn(ctx, child, request.id)
+    runner = Runner.whereis(child.id)
+    %{live: %{task: %Aqua.Loop.Worker.Handle{pid: loop}}} = :sys.get_state(runner)
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    get = Enum.find(steps, &(&1.action == "get"))
+    assert get.dispatch_state == "dispatched"
+    handle = {turn_id, get.id, get.generation}
+    test = self()
+
+    # The handler is independent of the Aqua worker tree, claimed and
+    # registered under the call's handle as a catalog dispatch's is
+    # (`Aqua.RunnerTest`'s restarted-runner case): only the handle's
+    # cancel stops it.
+    claimer =
+      spawn(fn ->
+        :ok = Sanctum.RunningTasks.claim(handle)
+
+        Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
+          :ok = Sanctum.RunningTasks.register_handle(handle, self())
+          send(test, {:handler_registered, self()})
+          Process.sleep(:infinity)
+        end)
+
+        Process.sleep(:infinity)
+      end)
+
+    on_exit(fn ->
+      Process.exit(claimer, :kill)
+      Aqua.Ops.cancel_call(handle)
+      Aqua.Ops.release_call(handle)
+    end)
+
+    assert_receive {:handler_registered, handler}, 5_000
+    handler_ref = Process.monitor(handler)
+    loop_ref = Process.monitor(loop)
+
+    assert {:ok, %{archived: true}} =
+             Aqua.Providers.Thread.handle("thread", ctx, %{
+               "action" => "archive",
+               "thread" => child.id
+             })
+
+    assert_receive {:DOWN, ^handler_ref, :process, ^handler, :cancelled}, 5_000
+    assert_receive {:DOWN, ^loop_ref, :process, ^loop, _}, 5_000
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
+    assert %{running: false} = Runner.state(child.id, ctx.athanor_id)
+    assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
   end
 
   test "a delivered request carries the request's attachments to the member's turn",

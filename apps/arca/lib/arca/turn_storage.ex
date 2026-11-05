@@ -181,14 +181,18 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.locking_transaction(fn ->
-          thread = thread!(athanor_id, thread_id)
-          if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
           steer_id = Map.get(attrs, :steer_turn_id)
           opens = Map.get(attrs, :turn)
 
+          # The steered turn first and the thread after it, the order every
+          # writer of both takes; the thread is read under its lock, so an
+          # archive that committed first is seen.
           steered =
             if is_nil(opens) and steer_id,
-              do: steered!(athanor_id, thread, steer_id, Map.get(attrs, :reply_address))
+              do: steered!(athanor_id, thread_id, steer_id, Map.get(attrs, :reply_address))
+
+          thread = locked_thread!(athanor_id, thread_id)
+          if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
 
           row =
             Arca.ThreadStorage.insert_message!(
@@ -739,47 +743,73 @@ defmodule Arca.TurnStorage do
   @doc """
   Cancel every open turn of `thread_id` — accepted, running, paused and
   suspended alike — inside the caller's locking transaction, the way a
-  retire ends them: each turn's fence is raised first, so no holder writes
-  past it, its dispatched steps settled by `Prima.TurnStep.unresolved/1`,
-  its proposed ones skipped with their cards invalidated, and then ended
-  `cancelled` with `attrs[:error]` by the one terminal write, its reply
-  recorded (`:reply`) or not (`:silent`, for a room that is going).
-  `attrs` carry the root's grant as `finish/4` takes it. The local
-  runtime is the caller's to stop after the commit. Answers the
-  cancelled turns' ids.
+  retire ends them. Every open turn's row is taken first, before anything
+  of the thread, the order the turn's own writers take them in, so a
+  completion that holds its turn is waited on and its turn, ended by
+  then, is left as it ended. Each taken turn's fence is raised, so no
+  holder writes past it, its dispatched steps cancel-marked and settled
+  by `Prima.TurnStep.unresolved/1`, its proposed ones skipped with their
+  cards invalidated, and the turn ended `cancelled` with `attrs[:error]`
+  by the one terminal write, its reply recorded (`:reply`) or not
+  (`:silent`, for a room that is going). `attrs` carry the root's grant
+  as `finish/4` takes it.
+
+  Answers each cancelled turn with the steps that were dispatched: what
+  its holder's runtime cancels after the commit — the loop, an
+  in-process handler, a child execution (`Aqua.Loop.abort_ended/4`).
   """
-  @spec cancel_open!(Prima.Actor.t(), String.t(), map(), :reply | :silent) :: [String.t()]
+  @spec cancel_open!(Prima.Actor.t(), String.t(), map(), :reply | :silent) :: [
+          %{turn_id: String.t(), thread_id: String.t(), steps: [map()]}
+        ]
   # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
   def cancel_open!(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, attrs, reply)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     reason = Map.get(attrs, :error, "cancelled")
+    now = DateTime.utc_now()
 
-    from(t in Turn,
-      where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
-      where: t.status in ^@open,
-      order_by: [asc: t.accepted_at, asc: t.id],
-      select: t.id
-    )
-    |> Arca.Repo.all()
-    |> Enum.map(fn turn_id ->
-      {1, _} =
-        from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-        |> Arca.Repo.update_all(inc: [fence: 1])
+    taken =
+      from(t in Turn,
+        where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
+        where: t.status in ^@open,
+        order_by: [asc: t.accepted_at, asc: t.id],
+        select: t.id
+      )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.all()
 
+    if taken != [] do
+      from(t in Turn, where: t.athanor_id == ^athanor_id and t.id in ^taken)
+      |> Arca.Repo.update_all(inc: [fence: 1])
+    end
+
+    Enum.map(taken, fn turn_id ->
       turn = turn!(athanor_id, turn_id)
 
-      Arca.Repo.all(
-        from(s in TurnStep,
-          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
-          where: s.dispatch_state == "dispatched"
+      dispatched =
+        Arca.Repo.all(
+          from(s in TurnStep,
+            where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+            where: s.dispatch_state == "dispatched"
+          )
         )
-      )
-      |> Enum.each(&settle_unresolved!(actor, athanor_id, turn, &1, reason))
 
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+        where: s.dispatch_state == "dispatched" and is_nil(s.cancel_requested_at)
+      )
+      |> Arca.Repo.update_all(set: [cancel_requested_at: now])
+
+      Enum.each(dispatched, &settle_unresolved!(actor, athanor_id, turn, &1, reason))
       _skipped = skip_proposed!(actor, athanor_id, turn, reason)
       turn = turn!(athanor_id, turn_id)
       grant = granted!(athanor_id, turn, "cancelled", attrs)
-      ended!(athanor_id, turn, "cancelled", grant, attrs, reply).id
+      _ended = ended!(athanor_id, turn, "cancelled", grant, attrs, reply)
+
+      %{
+        turn_id: turn_id,
+        thread_id: thread_id,
+        steps: Enum.map(dispatched, &Map.take(&1, [:id, :generation, :kind, :child_execution_id]))
+      }
     end)
   end
 
@@ -2709,6 +2739,18 @@ defmodule Arca.TurnStorage do
     )
   end
 
+  # The thread's row, held until the caller's transaction ends.
+  # arca:db-raise-ok inside the caller's transaction
+  defp locked_thread!(athanor_id, thread_id) do
+    from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread_id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> Arca.Repo.rollback(:thread_not_found)
+      thread -> thread
+    end
+  end
+
   # arca:db-raise-ok inside the caller's transaction
   defp turn!(athanor_id, turn_id) do
     Arca.Repo.one(from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)) ||
@@ -2817,12 +2859,15 @@ defmodule Arca.TurnStorage do
   # arca:db-raise-ok inside the caller's transaction
   defp claim_thread!(athanor_id, %Turn{} = turn, attrs) do
     thread = thread!(athanor_id, turn.thread_id)
+    if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
     expected = Map.get(attrs, :turn_seq) || thread.turn_seq || 0
 
+    # The statement checks the archive again: an archive that commits
+    # after the read above is seen by the write, which waits on its lock.
     claimed =
       from(c in Thread,
         where: c.id == ^turn.thread_id and c.athanor_id == ^athanor_id,
-        where: c.turn_seq == ^expected,
+        where: c.turn_seq == ^expected and is_nil(c.archived_at),
         where: is_nil(c.active_turn_id) or c.active_turn_id == ^turn.id
       )
       |> Arca.Repo.update_all(set: [active_turn_id: turn.id])
@@ -2836,6 +2881,9 @@ defmodule Arca.TurnStorage do
       # exactly the race the statement is here to lose.
       {0, _} ->
         case thread!(athanor_id, turn.thread_id) do
+          %Thread{archived_at: %DateTime{}} ->
+            Arca.Repo.rollback(:thread_archived)
+
           %Thread{active_turn_id: held} when is_binary(held) ->
             Arca.Repo.rollback({:held_elsewhere, held})
 
@@ -3158,11 +3206,11 @@ defmodule Arca.TurnStorage do
   # reply address yet gives it one, so the turn replies to every request
   # it carries.
   # arca:db-raise-ok inside the caller's transaction
-  defp steered!(athanor_id, thread, turn_id, nil),
-    do: hold_open_turn!(athanor_id, thread, turn_id)
+  defp steered!(athanor_id, thread_id, turn_id, nil),
+    do: hold_open_turn!(athanor_id, thread_id, turn_id)
 
-  defp steered!(athanor_id, thread, turn_id, %{} = address) do
-    case hold_open_turn!(athanor_id, thread, turn_id) do
+  defp steered!(athanor_id, thread_id, turn_id, %{} = address) do
+    case hold_open_turn!(athanor_id, thread_id, turn_id) do
       %Turn{asking_thread_id: nil} ->
         {1, _} =
           from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
@@ -3180,7 +3228,7 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  defp hold_open_turn!(athanor_id, %Thread{id: thread_id}, turn_id) do
+  defp hold_open_turn!(athanor_id, thread_id, turn_id) do
     held =
       from(t in Turn,
         where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.thread_id == ^thread_id,

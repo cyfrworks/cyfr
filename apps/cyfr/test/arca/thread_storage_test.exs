@@ -177,13 +177,14 @@ defmodule Arca.ThreadStorageTest do
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
 
-    :ok = Threads.delete(ctx, thread.id)
+    {:ok, %{cancelled: []}} = Threads.delete(ctx, thread.id)
     assert Threads.messages(ctx, thread.id) == []
     assert {:error, :not_found} = Threads.get(ctx, thread.id)
     refute Arca.exists?(ctx, blob)
   end
 
-  test "delete goes bytes-first: a failed blob delete keeps the rows", %{ctx: ctx} do
+  test "delete commits the rows before the bytes: a failed blob delete leaves them to the sweep",
+       %{ctx: ctx} do
     {:ok, thread} = Threads.create(ctx)
 
     {:ok, msg} =
@@ -192,30 +193,22 @@ defmodule Arca.ThreadStorageTest do
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
 
-    prev = Application.get_env(:arca, :storage_adapter)
+    # The tree refuses after the commit: the deletion stands.
+    assert {:ok, %{cancelled: []}} =
+             Prima.Test.Env.with_app_env(
+               :arca,
+               :storage_adapter,
+               Arca.ThreadStorageTest.FailingDeleteAdapter,
+               fn -> Threads.delete(ctx, thread.id) end
+             )
 
-    Application.put_env(
-      :arca,
-      :storage_adapter,
-      Arca.ThreadStorageTest.FailingDeleteAdapter
-    )
+    assert {:error, :not_found} = Threads.get(ctx, thread.id)
+    assert Threads.messages(ctx, thread.id) == []
+    assert Arca.exists?(ctx, blob)
 
-    on_exit(fn ->
-      if prev,
-        do: Application.put_env(:arca, :storage_adapter, prev),
-        else: Application.delete_env(:arca, :storage_adapter)
-    end)
-
-    # The DB never claims a deletion the tree didn't make.
-    assert {:error, {:storage_delete_failed, :eacces}} =
-             Threads.delete(ctx, thread.id)
-
-    assert {:ok, _} = Threads.get(ctx, thread.id)
-    assert [_] = Threads.messages(ctx, thread.id)
-
-    # Healed adapter: the retry completes rows and bytes together.
-    Application.put_env(:arca, :storage_adapter, prev || Arca.Adapters.Local)
-    assert :ok = Threads.delete(ctx, thread.id)
+    # No row backs the bytes, so the retention sweep reclaims them.
+    assert {:ok, reclaimed} = Threads.sweep_orphaned_blobs(ctx)
+    assert reclaimed >= 1
     refute Arca.exists?(ctx, blob)
   end
 

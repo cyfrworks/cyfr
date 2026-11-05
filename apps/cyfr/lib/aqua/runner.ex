@@ -283,6 +283,30 @@ defmodule Aqua.Runner do
   @spec stop_turn(Context.t(), String.t()) :: :ok | {:error, term()}
   def stop_turn(%Context{} = ctx, thread_id), do: call(ctx, thread_id, {:stop, ctx})
 
+  @doc """
+  Stop what still runs of turns storage cancelled with their thread, as
+  an archive (`Aqua.Tape.archive/2`) or a room's deletion
+  (`Aqua.Tape.delete_thread/2`) answers them: `%{turn_id, thread_id,
+  steps}`. The thread's runner on this boot aborts each through the path
+  a cancel takes for an ended turn — its loop and every worker under it,
+  then each dispatched step's child execution and catalog handler
+  (`Aqua.Loop.abort_ended/4`) — and stops once its thread is gone. A turn
+  a peer member holds was taken from it by the cancellation's fence and
+  released claim, as a takeover takes one.
+  """
+  @spec stop_cancelled([%{turn_id: String.t(), thread_id: String.t(), steps: [map()]}]) ::
+          :ok | {:error, term()}
+  def stop_cancelled(cancelled) when is_list(cancelled) do
+    cancelled
+    |> Enum.group_by(& &1.thread_id)
+    |> Enum.reduce(:ok, fn {thread_id, entries}, result ->
+      stopped =
+        if pid = whereis(thread_id), do: safe_call(pid, {:stop_cancelled, entries}), else: :ok
+
+      if result == :ok, do: stopped, else: result
+    end)
+  end
+
   @doc "Stop auto-approving `{tool, action}` for `agent` in this thread."
   @spec revoke_grant(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
           :ok | {:error, term()}
@@ -585,6 +609,27 @@ defmodule Aqua.Runner do
 
       refusal ->
         {:reply, refusal, state}
+    end
+  end
+
+  # The turns are ended in storage already: what is left is the runtime.
+  defp handle_owned_call({:stop_cancelled, entries}, _from, state) do
+    entries
+    |> Enum.reduce_while({:ok, state}, fn %{turn_id: id, steps: steps}, {:ok, state} ->
+      case stop_ended(state, id, steps) do
+        :ok -> {:cont, {:ok, retire_turn(state, id)}}
+        {:error, reason} -> {:halt, {:error, reason, state}}
+      end
+    end)
+    |> case do
+      {:ok, state} ->
+        case Tape.thread(state.ctx, state.id) do
+          {:error, :not_found} -> {:stop, :normal, :ok, state}
+          _ -> {:reply, :ok, start_next(state)}
+        end
+
+      {:error, reason, state} ->
+        {:stop, :normal, {:error, reason}, retire_runtime(state)}
     end
   end
 
@@ -1358,7 +1403,8 @@ defmodule Aqua.Runner do
     with :ok <- held(),
          {:ok, turn} <- Tape.turn(state.ctx, id) do
       if Tape.terminal?(turn) do
-        Aqua.Loop.Worker.stop(local_holder(state, id) || Aqua.Loop.holder(id))
+        with {:ok, steps} <- Tape.steps(state.ctx, turn),
+             do: stop_ended(state, id, Enum.filter(steps, & &1.cancel_requested_at))
       else
         with {:ok, aborted} <-
                Aqua.Loop.abort(state.ctx, turn, reason, fn ->
@@ -1373,6 +1419,16 @@ defmodule Aqua.Runner do
         end
       end
     end
+  end
+
+  # A turn whose end storage has written, by a cancellation of its thread
+  # or a concurrent completion: its loop and every worker under it, then
+  # the child execution and catalog handler of each step it had dispatched
+  # and storage cancel-marked.
+  defp stop_ended(state, id, steps) do
+    Aqua.Loop.abort_ended(state.ctx, id, steps, fn ->
+      Aqua.Loop.Worker.stop(local_holder(state, id))
+    end)
   end
 
   # A concurrent ordinary completion is already settled. A fence loss is

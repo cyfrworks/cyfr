@@ -297,12 +297,12 @@ defmodule Arca.ThreadStorage do
   transaction that marks it, each with its reply recorded
   (`Arca.TurnStorage.cancel_open!/4`, under the root's grant `attrs`
   carry), so a crash after the commit leaves nothing to recover. Answers
-  the thread and the cancelled turns' ids; archiving one already archived
-  answers it unchanged with none; a thread of the person's own is
-  `{:error, :not_crew}`.
+  the thread and the cancelled turns with the steps their holders'
+  runtime cancels; archiving one already archived answers it unchanged
+  with none; a thread of the person's own is `{:error, :not_crew}`.
   """
   @spec archive(Prima.Actor.t(), String.t(), map()) ::
-          {:ok, %{thread: map(), cancelled: [String.t()]}}
+          {:ok, %{thread: map(), cancelled: [map()]}}
           | {:error, :no_athanor | :not_found | :not_crew | :database_error}
   def archive(actor, id, attrs \\ %{})
 
@@ -311,16 +311,18 @@ defmodule Arca.ThreadStorage do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.archive", fn ->
       Repo.locking_transaction(fn ->
         case thread_row(actor, id) do
-          {:ok, %Thread{kind: "crew", archived_at: nil} = thread} ->
+          # The turns first and the thread after them, the order a turn's
+          # own writers take them in. A turn accepted after the scan is
+          # refused its claim (`Arca.TurnStorage.start/3`).
+          {:ok, %Thread{kind: "crew", archived_at: nil}} ->
+            cancel = Map.put_new(attrs, :error, "the thread was archived")
+            cancelled = Arca.TurnStorage.cancel_open!(actor, id, cancel, :reply)
+            {:ok, thread} = thread_row(actor, id)
+
             archived =
               thread |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
 
-            cancel = Map.put_new(attrs, :error, "the thread was archived")
-
-            %{
-              thread: archived,
-              cancelled: Arca.TurnStorage.cancel_open!(actor, id, cancel, :reply)
-            }
+            %{thread: archived, cancelled: cancelled}
 
           {:ok, %Thread{kind: "crew"} = thread} ->
             %{thread: thread, cancelled: []}
@@ -596,25 +598,27 @@ defmodule Arca.ThreadStorage do
   end
 
   @doc """
-  Delete a thread, its messages and its attachment blobs
-  (`blob_root/1` under the athanor's storage), and with a room its crew
-  members' child threads: their open turns are cancelled in the same
-  transaction, recording no reply since the room they would answer is
-  going (`Arca.TurnStorage.cancel_open!/4`, under the root's grant
-  `attrs` carry). While a child's turn waits on a card the deletion is
-  refused `{:error, {:child_awaits_card, member}}`, so the person decides
-  there first. Bytes go FIRST: a failed blob delete keeps the rows and
-  answers `{:error, {:storage_delete_failed, reason}}`, so the DB can
-  never claim a deletion the tree didn't make — the next attempt (or the
-  orphan sweep) retries.
+  Delete a thread and its messages, and with a room its crew members'
+  child threads, read under the athanor's lock a child's creation takes
+  (`crew_thread/3`), so a child made during the deletion is in it or made
+  after it, when its room is gone. The children's open turns are
+  cancelled in the same transaction, recording no reply since the room
+  they would answer is going (`Arca.TurnStorage.cancel_open!/4`, under the
+  root's grant `attrs` carry). While a child's turn waits on a card the
+  deletion is refused `{:error, {:child_awaits_card, member}}`, so the
+  person decides there first.
+
+  The attachment blobs (`blob_root/1` under the athanor's storage) go
+  after the commit, never before the transaction that decides: a refused
+  deletion keeps every byte, and a crash or a failed blob delete after the
+  commit leaves blobs no row backs, which the retention sweep reclaims
+  (`sweep_orphaned_blobs/1`). Answers the cancelled turns with the steps
+  their holders' runtime cancels.
   """
   @spec delete(Prima.Actor.t(), String.t(), map()) ::
-          :ok
+          {:ok, %{cancelled: [map()]}}
           | {:error,
-             :no_athanor
-             | :not_found
-             | {:child_awaits_card, String.t()}
-             | {:storage_delete_failed, term()}}
+             :no_athanor | :not_found | {:child_awaits_card, String.t()} | :database_error}
   def delete(actor, id, attrs \\ %{})
 
   def delete(%Prima.Actor{athanor_id: athanor_id} = actor, id, attrs)
@@ -625,37 +629,46 @@ defmodule Arca.ThreadStorage do
 
   def delete(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
-  # arca:unscoped-ok thread_row(actor, id) above establishes thread ownership,
-  # and every child id is read from it under the actor.
   defp do_delete(actor, id, attrs) do
+    case Repo.locking_transaction(fn -> delete_rows(actor, id, attrs) end) do
+      {:ok, %{ids: ids, cancelled: cancelled}} ->
+        Enum.each(ids, &delete_blobs_after(actor, &1))
+        {:ok, %{cancelled: cancelled}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # arca:unscoped-ok thread_row(actor, id) establishes the thread's
+  # ownership, and every child id is read from it under the actor.
+  defp delete_rows(actor, id, attrs) do
+    lock_athanor(actor)
+
     with {:ok, thread} <- thread_row(actor, id),
-         ids = [thread.id | child_ids(actor, thread)],
-         :ok <- not_awaiting(Arca.TurnStorage.awaiting_card!(actor, tl(ids))),
-         :ok <- delete_all_blobs(actor, ids) do
-      # Delete its messages and grants. Explicit message deletion
-      # also covers SQLite connections without foreign_keys=ON.
-      Repo.locking_transaction(fn ->
-        with :ok <- not_awaiting(Arca.TurnStorage.awaiting_card!(actor, tl(ids))) do
-          cancel = Map.put_new(attrs, :error, "the room was deleted")
-          Enum.each(tl(ids), &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
-          Repo.delete_all(from(m in Message, where: m.thread_id in ^ids))
-          delete_thread_satellites(ids)
+         children = child_ids(actor, thread),
+         [] <- Arca.TurnStorage.awaiting_card!(actor, children) do
+      cancel = Map.put_new(attrs, :error, "the room was deleted")
 
-          {_, _} =
-            Repo.delete_all(
-              from(c in Thread, where: c.id in ^ids)
-              |> QueryHelpers.where_tenant(actor)
-            )
+      cancelled =
+        Enum.flat_map(children, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
 
-          :ok
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-      |> case do
-        {:ok, :ok} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
+      ids = [thread.id | children]
+
+      # Explicit message deletion also covers SQLite connections without
+      # foreign_keys=ON.
+      Repo.delete_all(from(m in Message, where: m.thread_id in ^ids))
+      delete_thread_satellites(ids)
+
+      {_, _} =
+        from(c in Thread, where: c.id in ^ids)
+        |> QueryHelpers.where_tenant(actor)
+        |> Repo.delete_all()
+
+      %{ids: ids, cancelled: cancelled}
+    else
+      {:error, reason} -> Repo.rollback(reason)
+      [member | _] -> Repo.rollback({:child_awaits_card, member})
     end
   end
 
@@ -667,16 +680,19 @@ defmodule Arca.ThreadStorage do
 
   defp child_ids(_actor, %Thread{}), do: []
 
-  defp not_awaiting([]), do: :ok
-  defp not_awaiting([member | _]), do: {:error, {:child_awaits_card, member}}
+  # What a failed delete leaves no row backs, and the retention sweep
+  # reclaims it.
+  defp delete_blobs_after(actor, thread_id) do
+    case delete_blobs(actor, thread_id) do
+      :ok ->
+        :ok
 
-  defp delete_all_blobs(actor, ids) do
-    Enum.reduce_while(ids, :ok, fn id, :ok ->
-      case delete_blobs(actor, id) do
-        :ok -> {:cont, :ok}
-        error -> {:halt, error}
-      end
-    end)
+      {:error, reason} ->
+        Logger.warning(
+          "[ThreadStorage] the blobs of deleted thread #{thread_id} wait for the sweep: " <>
+            inspect(reason)
+        )
+    end
   end
 
   # What rides with a thread besides its messages: what its person
@@ -746,7 +762,7 @@ defmodule Arca.ThreadStorage do
     end
   end
 
-  # Bytes-first, typed: `:not_found` counts as deleted (nothing stored).
+  # Typed: `:not_found` counts as deleted (nothing stored).
   defp delete_blobs(actor, thread_id) do
     case Arca.delete_tree(actor, blob_root(thread_id)) do
       :ok -> :ok

@@ -322,6 +322,28 @@ defmodule Aqua.Loop do
     end
   end
 
+  @doc """
+  Stop what still runs of a turn storage has already ended, as an archive
+  or a room's deletion ends it (`Arca.TurnStorage.cancel_open!/4`): `stop`
+  and the turn's holder on this boot as `abort/4` stops them, then the
+  child execution and the in-process catalog handler of each step in
+  `steps`, the ones it had dispatched. Storage settled those steps and
+  wrote the end; nothing here writes the turn. The first failure is
+  answered after every step was tried.
+  """
+  @spec abort_ended(Context.t(), String.t(), [map()], (-> term())) :: :ok | {:error, term()}
+  def abort_ended(%Context{} = ctx, turn_id, steps, stop \\ fn -> :ok end)
+      when is_binary(turn_id) and is_list(steps) and is_function(stop, 0) do
+    with :ok <- stop_aborted(stop, holder(turn_id)) do
+      Enum.reduce(steps, :ok, fn step, result ->
+        case cancel_dispatched(ctx, %{id: turn_id}, step) do
+          :ok -> result
+          error -> if result == :ok, do: error, else: result
+        end
+      end)
+    end
+  end
+
   defp stop_aborted(stop, holder) do
     case stop.() do
       {:error, _} = error -> error
@@ -345,8 +367,7 @@ defmodule Aqua.Loop do
     |> Enum.filter(&(&1.dispatch_state == "dispatched"))
     |> Enum.reduce_while(:ok, fn step, :ok ->
       with :ok <- held(),
-           :ok <- cancel_aborted_child(ctx, cancellable(step)) do
-        Aqua.Ops.cancel_call(handle(turn, step))
+           :ok <- cancel_dispatched(ctx, turn, step) do
         guest = Context.enter_guest(ctx)
 
         result =
@@ -372,6 +393,15 @@ defmodule Aqua.Loop do
   # turn's end cancels nothing it started.
   defp cancellable(%{kind: "launch"}), do: nil
   defp cancellable(%{child_execution_id: id}), do: id
+
+  # What runs for a dispatched step outside the turn's own process: its
+  # child execution and its in-process catalog handler.
+  defp cancel_dispatched(ctx, turn, step) do
+    with :ok <- cancel_aborted_child(ctx, cancellable(step)) do
+      Aqua.Ops.cancel_call(handle(turn, step))
+      :ok
+    end
+  end
 
   defp cancel_aborted_child(_ctx, nil), do: :ok
 
