@@ -365,8 +365,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # One brain option set, or taken off (an empty value: the brain's own
   # default). The value is cast to the kind the brain declares — the
-  # declaration the page read, never the wire's word — and the options
-  # are read again NOW and written whole, so the write changes this one.
+  # declaration the page read, never the wire's word — and sent as a
+  # one-option patch the `aqua` door applies under its lock, so an edit of
+  # another option made elsewhere at the same moment is kept.
   def handle_event(
         "editor_set_option",
         %{"name" => name, "option" => option, "value" => value},
@@ -377,10 +378,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       declared = declared_option(socket, name, option)
 
       with {:ok, cast} <- cast_option(declared, value),
-           {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => name}),
-           options = put_option(agent[:options] || %{}, option, cast),
            {:ok, _} <-
-             call_aqua(ctx, %{"action" => "update", "name" => name, "options" => options}) do
+             call_aqua(ctx, %{
+               "action" => "update",
+               "name" => name,
+               "options_patch" => %{option => cast}
+             }) do
         send(self(), {:refresh, :agents})
         {:noreply, socket}
       else
@@ -628,9 +631,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp cast_option(%{"kind" => "string"}, value), do: {:ok, value}
   defp cast_option(_declared, _value), do: {:refused, "That value does not fit the option"}
-
-  defp put_option(options, option, nil), do: Map.delete(options, option)
-  defp put_option(options, option, value), do: Map.put(options, option, value)
 
   defp agent_provider_for_select(agent) do
     detect_provider_from_ref(agent["catalyst_ref"])

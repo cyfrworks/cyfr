@@ -671,6 +671,8 @@ type AquaUpdateArgs struct {
 	Avoid Field[*string] `json:"avoid,omitzero"`
 	// The options this agent's brain is asked with on every request — names and values its describe declares (create/update)
 	Options Field[*map[string]any] `json:"options,omitzero"`
+	// update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options.
+	OptionsPatch Field[map[string]*any] `json:"options_patch,omitzero"`
 	// The soul's per-(tool,action) allowlist, which every crew member runs under too (a crew member has none of its own). Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's.
 	ToolPolicy Field[*map[string]string] `json:"tool_policy,omitzero"`
 	// update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two edits of different keys at once keep both. Not with tool_policy.

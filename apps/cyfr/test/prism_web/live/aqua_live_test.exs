@@ -1050,6 +1050,41 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"options" => %{"budget" => 8}}} = get_agent(ctx, "explorer")
     end
 
+    # Each page sends the one option it changed; neither writes back the
+    # options it read, so two people editing different options of one
+    # brain at once keep both.
+    test "two pages editing different brain options at once keep both",
+         %{conn: conn, ctx: ctx} do
+      declared = [
+        %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]},
+        %{"name" => "budget", "kind" => "integer"}
+      ]
+
+      edits = [{"effort", "high"}, {"budget", "8"}]
+
+      views =
+        for _edit <- edits do
+          {view, _html} = mount_athanor(conn, "/aqua")
+          assert has_element?(view, "#aqua-card-explorer")
+          send_update_agents(view, brain_options: %{"explorer" => declared})
+          view
+        end
+
+      views
+      |> Enum.zip(edits)
+      |> Enum.map(fn {view, {option, value}} ->
+        Task.async(fn ->
+          view
+          |> element("#aqua-card-explorer-option-#{option}")
+          |> render_change(%{"name" => "explorer", "option" => option, "value" => value})
+        end)
+      end)
+      |> Task.await_many(30_000)
+
+      assert {:ok, %{"options" => %{"effort" => "high", "budget" => 8}}} =
+               get_agent(ctx, "explorer")
+    end
+
     test "the capability matrix is the soul's alone: the ask/auto pill and the destructive row",
          %{conn: conn} do
       {view, _html} = mount_athanor(conn, "/aqua")

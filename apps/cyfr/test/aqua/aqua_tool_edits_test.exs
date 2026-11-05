@@ -179,6 +179,47 @@ defmodule Aqua.AquaToolEditsTest do
     refute bytes =~ "tool_policy"
   end
 
+  # A brain-option edit is a patch applied to the options as the write
+  # lands, under the rewrite's lock: edits of different options made at
+  # once all keep, and null takes one off.
+  test "concurrent edits of different brain options all survive", %{ctx: ctx} do
+    options = %{"effort" => "high", "budget" => 8, "thinking" => true, "mode" => "plan"}
+
+    options
+    |> Enum.map(fn {name, value} ->
+      Task.async(fn ->
+        call(ctx, %{"action" => "update", "name" => "scout", "options_patch" => %{name => value}})
+      end)
+    end)
+    |> Task.await_many(30_000)
+    |> Enum.each(&assert({:ok, _} = &1))
+
+    assert {:ok, %{"options" => ^options}} = call(ctx, %{"action" => "get", "name" => "scout"})
+
+    assert {:ok, _} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => "scout",
+               "options_patch" => %{"mode" => nil}
+             })
+
+    want = Map.delete(options, "mode")
+    assert {:ok, %{"options" => ^want}} = call(ctx, %{"action" => "get", "name" => "scout"})
+
+    for bad <- [%{"effort" => %{"level" => "high"}}, %{"" => "x"}] do
+      assert {:error, {:invalid_argument, _}} =
+               call(ctx, %{"action" => "update", "name" => "scout", "options_patch" => bad})
+    end
+
+    assert {:error, {:invalid_argument, "Give options or options_patch, not both"}} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => "scout",
+               "options" => %{},
+               "options_patch" => %{"effort" => "low"}
+             })
+  end
+
   test "a prompt save names the version it edited and is refused over a newer one", %{ctx: ctx} do
     {:ok, %{"content_digest" => digest}} = call(ctx, %{"action" => "get", "name" => "scout"})
     assert digest == Prima.Digest.sha256_hex("")

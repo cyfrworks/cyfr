@@ -203,6 +203,10 @@ defmodule Compendium.Providers.Aqua do
               description:
                 "The options this agent's brain is asked with on every request — names and values its describe declares (create/update)"
             ),
+            Arg.new("options_patch", {:map, Arg.new(nil, :json, nullable: true)},
+              description:
+                "update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options."
+            ),
             Arg.new("tool_policy", {:map, Arg.new(nil, :string, enum: ["ask", "auto"])},
               nullable: true,
               description:
@@ -548,7 +552,8 @@ defmodule Compendium.Providers.Aqua do
            :ok <- check_expected_digest(agent, args["expected_digest"]),
            agent = apply_updates(agent, args),
            {:ok, policy} <- patched_policy(agent.tool_policy, args["tool_policy_patch"]) do
-        {:ok, AquaAgent.serialize(%{agent | tool_policy: policy})}
+        options = patched_options(agent.options, args["options_patch"])
+        {:ok, AquaAgent.serialize(%{agent | tool_policy: policy, options: options})}
       end
     end
 
@@ -557,7 +562,9 @@ defmodule Compendium.Providers.Aqua do
          :ok <- one_policy_argument(args),
          :ok <- validate_tool_policy(args["tool_policy"]),
          :ok <- validate_patch(args["tool_policy_patch"]),
+         :ok <- one_options_argument(args),
          :ok <- validate_options(args["options"]),
+         :ok <- validate_options_patch(args["options_patch"]),
          :ok <-
            Arca.Overlay.update(Sanctum.Context.actor(ctx), AquaPath.agent_file(name), rewrite) do
       resync_index(ctx)
@@ -1145,6 +1152,39 @@ defmodule Compendium.Providers.Aqua do
   end
 
   defp validate_options(_options), do: {:error, {:invalid_argument, "options must be an object"}}
+
+  defp one_options_argument(%{"options" => options, "options_patch" => patch})
+       when not is_nil(options) and not is_nil(patch),
+       do: {:error, {:invalid_argument, "Give options or options_patch, not both"}}
+
+  defp one_options_argument(_args), do: :ok
+
+  # A patch's values are an option's kinds, or null to take one off.
+  defp validate_options_patch(nil), do: :ok
+
+  defp validate_options_patch(patch) when is_map(patch) do
+    {cleared, set} = Enum.split_with(patch, fn {_name, value} -> is_nil(value) end)
+
+    with :ok <- validate_options(Map.new(set)) do
+      if Enum.all?(cleared, fn {name, _} -> is_binary(name) and name != "" end),
+        do: :ok,
+        else: {:error, {:invalid_argument, "options_patch names options by name"}}
+    end
+  end
+
+  defp validate_options_patch(_patch),
+    do: {:error, {:invalid_argument, "options_patch must be an object"}}
+
+  # Applied to the options the file holds as the write lands, under the
+  # rewrite's lock: only the options the patch names change.
+  defp patched_options(options, nil), do: options
+
+  defp patched_options(options, patch) do
+    Enum.reduce(patch, options || %{}, fn
+      {name, nil}, acc -> Map.delete(acc, name)
+      {name, value}, acc -> Map.put(acc, name, value)
+    end)
+  end
 
   defp tool_policy_message({:tool_policy_invalid_value, key, value}),
     do:
