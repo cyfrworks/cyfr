@@ -37,7 +37,8 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   `set(fake, :reset_send, true)` resets the connection of the next `send`
   once it has arrived, before any answer. `hold/2` holds a control or a
-  session message of its type.
+  session message of its type, and `"opened"` holds an open's answer
+  once its session stands.
 
   A `homes` message answers the kept homes the script holds (`homes`, a
   set: each an open names, until its retire; `set(fake, :homes, …)`).
@@ -627,6 +628,8 @@ defmodule Cyfr.Test.ScriptedBackends do
         end
       end)
 
+    # The session stands; its answer may be held (`hold(fake, "opened")`).
+    held(agent, "opened")
     session_answer(conn, Agent.get(agent, & &1), answer)
   end
 

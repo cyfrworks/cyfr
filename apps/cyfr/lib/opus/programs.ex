@@ -373,13 +373,32 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  Record `session` as the calling holder's, on `owner`'s entry in the box:
-  should the holder die, however it dies, the box closes the session and
-  releases the holder's share of the owner (`Opus.Programs.Pipe`).
+  The box's open of a pipe session for the holder `holder` of `owner`
+  (`Opus.Programs.Pipe`), with `params` (`program`, `home_id`, `key`,
+  `argv`): recorded in the box before the backend is asked, so whatever
+  the backend answers under the key is the box's, and answered by
+  `deadline` (Unix milliseconds). Answers the session the box gave the
+  key, `{:error, :deadline}` past it, or the refusal.
   """
-  @spec pipe_session(map(), String.t()) :: :ok | {:error, term()}
-  def pipe_session(owner, session) when is_binary(session),
-    do: call(box_of(owner.athanor_id), {:pipe_session, owner, session}, Box.control_timeout_ms())
+  @spec pipe_box_open(map(), pid(), map(), integer()) ::
+          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
+  def pipe_box_open(owner, holder, params, deadline) do
+    wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+
+    case call(box_of(owner.athanor_id), {:pipe_open, owner, holder, params, deadline}, wait) do
+      {:error, :backends_unavailable} -> {:error, :deadline}
+      answer -> answer
+    end
+  end
+
+  @doc """
+  The calling holder's key's session ends: the box closes it, and owes the
+  close until the backend confirms it.
+  """
+  @spec pipe_box_close(map(), String.t(), String.t()) :: :ok | {:error, term()}
+  def pipe_box_close(owner, home_id, key),
+    do:
+      call(box_of(owner.athanor_id), {:pipe_close, owner, home_id, key}, Box.control_timeout_ms())
 
   @doc """
   Write `lines` to the pipe session `session` of the athanor, for the

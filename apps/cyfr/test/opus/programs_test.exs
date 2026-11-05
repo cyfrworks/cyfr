@@ -1606,9 +1606,12 @@ defmodule Opus.ProgramsTest do
     test "a session no attempt uses for the idle period ends, and its owner is released",
          %{fake: fake, row: row, entry: entry} do
       start_controller(fake, idle_ms: 200)
-      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
-      assert_receive {:session, "close", %{"session" => ^session}, _}, 5_000
+      assert {:ok, %{session: _session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+
+      # The holder's close and its owner's release go out together; the
+      # release alone ends every session of the owner.
       assert_released(row, 1)
+      assert Programs.mounts() == []
     end
 
     test "a login entry's revoke ends every session in its home, and no other",
@@ -1679,7 +1682,7 @@ defmodule Opus.ProgramsTest do
       assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", second, ["still here"])
     end
 
-    test "one deadline covers the owner's acquisition and the open; an open answered late is closed",
+    test "one deadline covers the owner's acquisition and the open; nothing of a late open runs",
          %{fake: fake, row: row, entry: entry} do
       start_controller(fake)
 
@@ -1702,10 +1705,107 @@ defmodule Opus.ProgramsTest do
       assert {:error, :deadline} = Task.await(opening, 5_000)
       assert System.system_time(:millisecond) < deadline + 2_000
 
-      # What the late open started is closed, and no holder keeps it.
-      assert_receive {:session, "close", _message, _fields}, 3_000
+      # No holder keeps it, and the owner is released with it.
       assert_released(row, 1)
       assert Programs.mounts() == []
+    end
+
+    test "a holder killed before it hears the box's answer leaves the box its session to close",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      flush_sessions()
+      Scripted.hold(fake, "opened")
+
+      opening =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1") end)
+
+      # The backend's session stands; its answer is on its way when the
+      # holder that asked is killed.
+      assert_receive {:held, "opened", answer}, 2_000
+      key = {:pipe, row.athanor_id, row.id, row.epoch, entry, "pipe-a"}
+      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
+      Process.exit(holder, :kill)
+      send(answer, :go)
+      assert {:error, _} = Task.await(opening, 5_000)
+
+      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
+      refute closed == sibling
+      refute_receive {:control, "release", _message, _fields}, 300
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"])
+    end
+
+    test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      controller = start_controller(fake)
+      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_1")
+      flush_sessions()
+      Scripted.refuse_once(fake, "close", "unavailable")
+
+      # The holder closes and releases; the box's close is refused.
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      refute_receive {:control, "release", _message, _fields}, 300
+
+      # The sweep sends it again, and the program ends.
+      tick(controller)
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a late first answer never closes the session a second open of the key was given",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_0")
+      flush_sessions()
+
+      # The first open's session stands at the backend, its answer held
+      # past its caller's deadline.
+      Scripted.hold(fake, "opened")
+      deadline = System.system_time(:millisecond) + 1_000
+
+      first =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", deadline) end)
+
+      assert_receive {:held, "opened", answer}, 2_000
+      assert {:error, :deadline} = Task.await(first, 3_000)
+
+      # A second open of the key is given the session.
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_2")
+      flush_sessions()
+
+      # The first answer, late, closes nothing of it.
+      send(answer, :go)
+      refute_receive {:session, "close", %{"session" => ^session}, _}, 1_000
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", session, ["intact"])
+    end
+
+    test "a success queued before the deadline and handled after it is closed, never given",
+         %{fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_0")
+      flush_sessions()
+      box = GenServer.whereis(Programs.via("local"))
+
+      Scripted.hold(fake, "opened")
+      deadline = System.system_time(:millisecond) + 1_500
+
+      opening =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", deadline) end)
+
+      assert_receive {:held, "opened", answer}, 2_000
+
+      # The answer reaches the box before the deadline, and is handled
+      # only after it.
+      :sys.suspend(box)
+      send(answer, :go)
+      Process.sleep(max(deadline - System.system_time(:millisecond), 0) + 300)
+      :sys.resume(box)
+
+      assert {:error, :deadline} = Task.await(opening, 3_000)
+      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
+      refute closed == sibling
     end
 
     test "a row that is disabled stands its sessions down", %{
