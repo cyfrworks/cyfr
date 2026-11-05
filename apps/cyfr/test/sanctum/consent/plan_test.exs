@@ -255,6 +255,30 @@ defmodule Sanctum.Consent.PlanTest do
       })
   end
 
+  describe "a need met by mounting" do
+    test "is not built yet: the plan and the preview refuse it as the shape is read",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount", "1.0.0", %{
+        "needs" => %{
+          "claude" => %{
+            "type" => "login",
+            "program" => "claude",
+            "reason" => "to run Claude Code on your own plan",
+            "install" => %{"command" => "claude", "login_command" => "claude auth login"}
+          }
+        }
+      })
+
+      ref = "reagent:local.plan-mount"
+
+      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
+      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+
+      # Nothing was staged for it.
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
+  end
+
   describe "what the head holds" do
     test "a first grant has no head: no origins of its own and no delta", %{ctx: ctx} do
       publish!(ctx, "plan-first", "1.0.0", %{})

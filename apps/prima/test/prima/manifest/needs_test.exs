@@ -10,7 +10,9 @@ defmodule Prima.Manifest.NeedsTest do
   names no template takes the bearer header; a rule's template holds
   `{value}` once and its header name is a token; a component-typed need
   takes none of the four. `fit/2` reads whether an entry's destination
-  covers what a need declares.
+  covers what a need declares. A login need names a program, is mounted
+  rather than attached or disclosed, and carries the program row it
+  suggests (`install`), held to the backend command rule.
   """
 
   use ExUnit.Case, async: true
@@ -27,6 +29,13 @@ defmodule Prima.Manifest.NeedsTest do
           "reason" => "to call OpenAI",
           "hosts" => ["api.openai.com"]
         },
+        extra
+      )
+
+  defp login(extra \\ %{}),
+    do:
+      Map.merge(
+        %{"type" => "login", "program" => "claude", "reason" => "to run Claude Code"},
         extra
       )
 
@@ -389,6 +398,127 @@ defmodule Prima.Manifest.NeedsTest do
         assert fit(["api.x.ai"], destination) == :exact, inspect(destination)
         assert fit(["api.x.ai"], ["/v1"], destination) == :exact, inspect(destination)
       end
+    end
+  end
+
+  describe "login" do
+    test "is read with its program and install, mounted and never disclosed" do
+      install = %{
+        "command" => "npx -y @anthropic-ai/claude-code",
+        "login_command" => "claude login"
+      }
+
+      read = normalized(login(%{"install" => install, "required" => false}))
+
+      assert read == %{
+               name: "api_key",
+               kind: "login",
+               qualifier: nil,
+               program: "claude",
+               install: %{
+                 command: "npx -y @anthropic-ai/claude-code",
+                 login_command: "claude login"
+               },
+               reason: "to run Claude Code",
+               fields: [],
+               scopes: [],
+               required: false,
+               attach: nil,
+               hosts: [],
+               paths: [],
+               disclose: false
+             }
+
+      assert Needs.mount_only?(read)
+      refute Needs.disclose_only?(read)
+
+      bare = normalized(login())
+      assert bare.install == nil and bare.required
+
+      # Each suggested command is optional.
+      assert normalized(login(%{"install" => %{"command" => "claude"}})).install ==
+               %{command: "claude", login_command: nil}
+
+      assert normalized(login(%{"install" => %{"login_command" => "claude login"}})).install ==
+               %{command: nil, login_command: "claude login"}
+
+      assert normalized(login(%{"install" => %{}})).install ==
+               %{command: nil, login_command: nil}
+
+      # Every other need is attached or disclosed, never mounted.
+      refute Needs.mount_only?(normalized(need()))
+      refute Needs.mount_only?(normalized(%{"type" => "catalyst:local.files", "reason" => "r"}))
+    end
+
+    test "declares no host, path, rule, disclosure, field or scope" do
+      for {key, value} <- [
+            {"hosts", ["api.anthropic.com"]},
+            {"paths", ["/v1"]},
+            {"attach", %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}},
+            {"disclose", false},
+            {"fields", ["TOKEN"]},
+            {"scopes", ["read"]}
+          ] do
+        entry = login(%{key => value})
+        assert {:not_for_login, "api_key", [^key]} = refused(entry), key
+        assert Needs.from_manifest(manifest(entry)) == nil
+      end
+
+      assert {:unknown_keys, "api_key", ["home"]} = refused(login(%{"home" => "kept"}))
+    end
+
+    test "names a program in the destination's grammar" do
+      for program <- [nil, "", "Claude", "-claude", "claude code", String.duplicate("a", 33), 7] do
+        entry =
+          if program, do: login(%{"program" => program}), else: Map.delete(login(), "program")
+
+        assert {:invalid_program, "api_key", ^program} = refused(entry), inspect(program)
+      end
+
+      assert {:reason_required, "api_key"} = refused(login(%{"reason" => " "}))
+      assert {:invalid_required, "api_key", "yes"} = refused(login(%{"required" => "yes"}))
+    end
+
+    test "suggests an install held to the backend command rule" do
+      long = String.duplicate("a", Prima.LocusBackends.max_command_bytes() + 1)
+
+      for {install, reason} <- [
+            {"npx claude", :not_a_map},
+            {%{"command" => nil}, {:command, :not_a_string}},
+            {%{"command" => "  "}, {:command, :empty}},
+            {%{"command" => long}, {:command, :too_long}},
+            {%{"command" => "claude\0"}, {:command, :nul}},
+            {%{"command" => "claude --key VAULT:anthropic"}, {:command, :vault_reference}},
+            {%{"command" => "claude", "login_command" => nil}, {:login_command, :not_a_string}},
+            {%{"command" => "claude", "login_command" => ""}, {:login_command, :empty}},
+            {%{"command" => "claude", "login_command" => "login vault:x"},
+             {:login_command, :vault_reference}},
+            {%{"command" => "claude", "env" => %{}}, {:unknown_keys, ["env"]}}
+          ] do
+        assert {:invalid_install, "api_key", ^reason} =
+                 refused(login(%{"install" => install})),
+               inspect(install)
+      end
+    end
+
+    test "is spelled `login` alone, and its members belong to it alone" do
+      qualified = %{"type" => "login:claude", "reason" => "r"}
+      assert {:invalid_type, "api_key", "login:claude"} = refused(qualified)
+
+      for key <- ["program", "install"] do
+        assert {:unknown_keys, "api_key", [^key]} = refused(need(%{key => "claude"})), key
+      end
+    end
+
+    test "fits the destination naming its program, and nothing else does" do
+      {:ok, claude} = Prima.Destination.from_map(%{"program" => "claude"})
+      {:ok, codex} = Prima.Destination.from_map(%{"program" => "codex"})
+      {:ok, hosts} = Prima.Destination.from_map(%{"hosts" => ["api.anthropic.com"]})
+
+      assert Needs.fit(normalized(login()), claude) == :exact
+      assert Needs.fit(normalized(login()), codex) == :none
+      assert Needs.fit(normalized(login()), hosts) == :none
+      assert Needs.fit(normalized(need(%{"hosts" => ["api.anthropic.com"]})), claude) == :none
     end
   end
 end

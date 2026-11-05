@@ -25,7 +25,8 @@ defmodule Prima.Manifest.Needs do
   The need name is the slot key (`ref|need` in blob edge keys), so the
   edge-key grammar constrains it: lowercase, no `@` prefix, no `|`.
   `type` is `kind:qualifier` — a credential kind (`api_key`, `oauth`,
-  `bundle`) or a component type for component-typed needs; a credential
+  `bundle`) or a component type for component-typed needs — or `login`
+  alone (below); a credential
   type's qualifier is the provider label an entry ranks by, never what
   decides whether it can serve the need. `reason` is
   the prose the operator sees instead of the developer's key names.
@@ -67,6 +68,30 @@ defmodule Prima.Manifest.Needs do
   nothing opts such a need into attachment. A need may both attach and
   disclose. A component-typed need names a dependency, not a credential,
   and refuses all four.
+
+  ## Mounting
+
+  A need of `"type": "login"` is satisfied by mounting: the program it
+  names runs with a login entry's kept home, so its own sign-in is there.
+
+      "needs": {
+        "claude": { "type": "login", "program": "claude",
+                    "reason": "to run Claude Code on your own plan",
+                    "required": true,
+                    "install": { "command": "npx -y @anthropic-ai/claude-code",
+                                 "login_command": "claude auth login" } }
+      }
+
+  `program` names the `mcp_servers` row the need runs, in
+  `Prima.Destination.valid_program?/1`'s grammar; it binds to a login
+  entry whose destination names that program (`fit/2`). `install`, when
+  present, is what the component suggests the row to be: `command` and
+  `login_command`, each optional and each held to
+  `Prima.LocusBackends.check_command/1` as a backend command is. A setup
+  plan shows it and the person decides. A login need declares no `hosts`,
+  `paths`, `attach`, `disclose`, `fields` or `scopes`: each is refused
+  `{:not_for_login, name, keys}`. Nothing is attached to its requests or
+  disclosed to it (`mount_only?/1`).
   """
 
   @name_re ~r/^[a-z][a-z0-9_-]{0,31}$/
@@ -74,9 +99,14 @@ defmodule Prima.Manifest.Needs do
   # Needs accept credential kinds and the executable types defined by
   # Prima.ComponentRef.
   @credential_kinds Prima.CredentialKinds.all()
-  @kinds @credential_kinds ++ Prima.ComponentRef.executable_types()
+  # A login need's type is `login` alone; every other type is
+  # `kind:qualifier`.
+  @login "login"
+  @kinds (@credential_kinds -- [@login]) ++ Prima.ComponentRef.executable_types()
   @credential_only_keys ~w(attach hosts paths disclose)
   @entry_keys ~w(type reason fields scopes required) ++ @credential_only_keys
+  @login_keys ~w(type reason required program install)
+  @install_keys ~w(command login_command)
 
   @attach_ins ~w(header query)
   @placeholder "{value}"
@@ -92,6 +122,12 @@ defmodule Prima.Manifest.Needs do
   and the template it is rendered into, `{value}` exactly once.
   """
   @type attach :: %{in: String.t(), name: String.t(), template: String.t()}
+
+  @typedoc """
+  A login need's suggested program row: its command and the command that
+  signs the program in, nil when the need suggests none.
+  """
+  @type install :: %{command: String.t() | nil, login_command: String.t() | nil}
 
   @type error :: {:invalid_needs, term()}
 
@@ -118,31 +154,37 @@ defmodule Prima.Manifest.Needs do
   `%{name, kind, qualifier, reason, fields, scopes, required, attach,
   hosts, paths, disclose}`, `attach` the need's rule (`t:attach/0`) or
   nil for a disclose-only need, and `hosts` and `paths` de-duplicated
-  and sorted. Returns `nil` when the manifest
-  declares no `needs` block.
+  and sorted. A login need is the same map with `kind: "login"`,
+  `qualifier: nil`, no rule, no field, scope, host or path, `disclose:
+  false`, and beside them `program` and `install` (`t:install/0` or
+  nil). Returns `nil` when the manifest declares no `needs` block.
   """
   @spec from_manifest(map() | nil) :: [map()] | nil
   def from_manifest(%{"needs" => needs} = manifest) when is_map(needs) do
     case validate(manifest) do
       :ok ->
         needs
-        |> Enum.map(fn {name, entry} ->
-          [kind, qualifier] = String.split(entry["type"], ":", parts: 2)
-          {:ok, attach} = attach_of(name, kind, entry)
+        |> Enum.map(fn
+          {name, %{"type" => @login} = entry} ->
+            login_need(name, entry)
 
-          %{
-            name: name,
-            kind: kind,
-            qualifier: qualifier,
-            reason: entry["reason"],
-            fields: Enum.sort(entry["fields"] || []),
-            scopes: Enum.sort(entry["scopes"] || []),
-            required: Map.get(entry, "required", true),
-            attach: attach,
-            hosts: set(entry["hosts"] || []),
-            paths: set(entry["paths"] || []),
-            disclose: Map.get(entry, "disclose", false)
-          }
+          {name, entry} ->
+            [kind, qualifier] = String.split(entry["type"], ":", parts: 2)
+            {:ok, attach} = attach_of(name, kind, entry)
+
+            %{
+              name: name,
+              kind: kind,
+              qualifier: qualifier,
+              reason: entry["reason"],
+              fields: Enum.sort(entry["fields"] || []),
+              scopes: Enum.sort(entry["scopes"] || []),
+              required: Map.get(entry, "required", true),
+              attach: attach,
+              hosts: set(entry["hosts"] || []),
+              paths: set(entry["paths"] || []),
+              disclose: Map.get(entry, "disclose", false)
+            }
         end)
         |> Enum.sort_by(& &1.name)
 
@@ -167,10 +209,18 @@ defmodule Prima.Manifest.Needs do
   so `api.x.ai` fits `*.x.ai` and `x.ai` does not), and every path the
   need declares has an entry path that is a segment prefix of it
   (`Prima.Destination.within?/2`). The entry's own scheme, port, methods
-  and paths still bound every request it is attached to.
+  and paths still bound every request it is attached to. A login need
+  fits `:exact` the destination that names its program and nothing else,
+  and no other need fits a program's destination.
   """
   @spec fit(map(), Prima.Destination.t()) :: :exact | :wildcard | :none
-  def fit(%{hosts: [_ | _] = hosts, paths: paths}, %Prima.Destination{} = outer) do
+  def fit(%{kind: @login, program: program}, %Prima.Destination{program: program})
+      when is_binary(program),
+      do: :exact
+
+  def fit(%{kind: @login}, _outer), do: :none
+
+  def fit(%{hosts: [_ | _] = hosts, paths: paths}, %Prima.Destination{program: nil} = outer) do
     inner = %Prima.Destination{
       hosts: hosts,
       paths: if(paths == [], do: outer.paths, else: paths),
@@ -190,11 +240,22 @@ defmodule Prima.Manifest.Needs do
 
   @doc """
   Whether a normalized need (`from_manifest/1`'s) is disclose-only: it
-  declares no attach rule, so only a disclosed entry satisfies it.
+  declares no attach rule, so only a disclosed entry satisfies it. A
+  login need is mounted, never disclosed.
   """
   @spec disclose_only?(map()) :: boolean()
+  def disclose_only?(%{kind: @login}), do: false
   def disclose_only?(%{attach: nil}), do: true
   def disclose_only?(%{attach: %{}}), do: false
+
+  @doc """
+  Whether a normalized need (`from_manifest/1`'s) is satisfied by
+  mounting alone: a login need, whose entry is neither attached nor
+  disclosed.
+  """
+  @spec mount_only?(map()) :: boolean()
+  def mount_only?(%{kind: @login}), do: true
+  def mount_only?(%{}), do: false
 
   @doc """
   An attach rule from its wire map, `%{"in", "name", "template"}`, every
@@ -234,6 +295,9 @@ defmodule Prima.Manifest.Needs do
       not is_map(entry) ->
         {:error, {:invalid_needs, {:not_a_map, name}}}
 
+      entry["type"] == @login ->
+        validate_login(name, entry)
+
       true ->
         with :ok <- only_keys(entry, name),
              :ok <- validate_type(name, entry["type"]),
@@ -252,6 +316,97 @@ defmodule Prima.Manifest.Needs do
   end
 
   defp kind_of(entry), do: entry["type"] |> String.split(":", parts: 2) |> hd()
+
+  defp login_need(name, entry) do
+    %{
+      name: name,
+      kind: @login,
+      qualifier: nil,
+      program: entry["program"],
+      install: install(entry["install"]),
+      reason: entry["reason"],
+      fields: [],
+      scopes: [],
+      required: Map.get(entry, "required", true),
+      attach: nil,
+      hosts: [],
+      paths: [],
+      disclose: false
+    }
+  end
+
+  defp install(nil), do: nil
+
+  defp install(raw),
+    do: %{command: Map.get(raw, "command"), login_command: Map.get(raw, "login_command")}
+
+  defp validate_login(name, entry) do
+    with :ok <- login_keys(name, entry),
+         :ok <- validate_reason(name, entry["reason"]),
+         :ok <- validate_required(name, entry),
+         :ok <- validate_program(name, entry["program"]) do
+      validate_install(name, entry["install"])
+    end
+  end
+
+  # A login need is mounted: the members that say how a value is attached,
+  # disclosed, projected or where it is sent are refused by name, and any
+  # other member is unknown.
+  defp login_keys(name, entry) do
+    case entry |> Map.keys() |> Kernel.--(@login_keys) |> Enum.sort() do
+      [] ->
+        :ok
+
+      keys ->
+        case Enum.split_with(keys, &(&1 in @entry_keys)) do
+          {[], unknown} -> {:error, {:invalid_needs, {:unknown_keys, name, unknown}}}
+          {refused, _unknown} -> {:error, {:invalid_needs, {:not_for_login, name, refused}}}
+        end
+    end
+  end
+
+  defp validate_program(name, program) do
+    if Prima.Destination.valid_program?(program),
+      do: :ok,
+      else: {:error, {:invalid_needs, {:invalid_program, name, program}}}
+  end
+
+  defp validate_install(_name, nil), do: :ok
+
+  defp validate_install(name, install) when is_map(install) do
+    with :ok <- install_keys(install),
+         :ok <- install_command(install, :command),
+         :ok <- install_command(install, :login_command) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:invalid_needs, {:invalid_install, name, reason}}}
+    end
+  end
+
+  defp validate_install(name, _install),
+    do: {:error, {:invalid_needs, {:invalid_install, name, :not_a_map}}}
+
+  defp install_keys(install) do
+    case Map.keys(install) -- @install_keys do
+      [] -> :ok
+      unknown -> {:error, {:unknown_keys, Enum.sort(unknown)}}
+    end
+  end
+
+  # Each suggested command is optional; one that is present is held to the
+  # backend command rule.
+  defp install_command(install, key) do
+    case Map.fetch(install, Atom.to_string(key)) do
+      :error ->
+        :ok
+
+      {:ok, command} ->
+        case Prima.LocusBackends.check_command(command) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {key, reason}}
+        end
+    end
+  end
 
   # A component-typed need names a dependency to invoke, not a credential:
   # nothing is attached to its requests or disclosed to it.

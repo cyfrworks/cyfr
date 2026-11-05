@@ -296,7 +296,9 @@ defmodule Sanctum.Vault do
   Create an entry holding material (`Sanctum.Vault.Payload`). `params`:
 
     * `:name` (required) — athanor-unique label among living entries
-    * `:kind` (required) — `"api_key" | "oauth" | "bundle"`
+    * `:kind` (required) — `"api_key" | "oauth" | "bundle"`; `"login"`
+      is refused `{:not_built, :login}`, since no program mounts a login
+      entry yet
     * `:fields` — `%{name => value}` material map (default empty)
     * `:oauth` — token bundle map (see `Sanctum.Vault.Payload`)
     * `:provider_hint` — immutable; defaults `""`
@@ -305,7 +307,9 @@ defmodule Sanctum.Vault do
     * `:destination` (required) — where the material may go, a
       `Prima.Destination` map (string or atom keys); absent is
       `:destination_required` and one outside the grammar
-      `{:invalid_destination, reason}`, both before anything is asked
+      `{:invalid_destination, reason}`, both before anything is asked; a
+      program's destination (`{"program": name}`) is a login entry's and is
+      refused `{:not_built, :login}`
     * `:disclose` — `true` to let a component read the fields; `false`
       when absent, so the entry is attach-only unless it says otherwise
 
@@ -625,6 +629,9 @@ defmodule Sanctum.Vault do
   defp binding_shown(binding) do
     destination =
       case read_destination(binding.destination) do
+        {:ok, %Prima.Destination{program: program}} when is_binary(program) ->
+          %{"program" => program}
+
         {:ok, destination} ->
           admitted = Prima.Destination.admitted(destination)
 
@@ -733,6 +740,8 @@ defmodule Sanctum.Vault do
   defp required_name(%{name: name}) when is_binary(name) and name != "", do: {:ok, name}
   defp required_name(_), do: {:error, :name_required}
 
+  # A login entry names a kept home that no program mounts yet.
+  defp required_kind(%{kind: "login"}), do: {:error, {:not_built, :login}}
   defp required_kind(%{kind: kind}) when kind in @kinds, do: {:ok, kind}
   defp required_kind(_), do: {:error, {:invalid_kind, @kinds}}
 
@@ -750,11 +759,19 @@ defmodule Sanctum.Vault do
   # A destination as a caller names it, string or atom keys, held to
   # `Prima.Destination`'s athanor-entry grammar and answered as its
   # canonical text. `Sanctum.Vault.OAuthGrant` holds a new entry's to the
-  # same rule.
+  # same rule. A program's destination is a login entry's, which is not
+  # built yet, so a create and a rebind refuse it alike.
   @spec destination_text(term()) :: {:ok, String.t()} | {:error, term()}
   def destination_text(%{} = destination) when not is_struct(destination) do
-    with {:ok, parsed} <- Prima.Destination.from_map(string_keys(destination)) do
-      {:ok, Prima.Destination.canonical(parsed)}
+    case Prima.Destination.from_map(string_keys(destination)) do
+      {:ok, %Prima.Destination{program: nil} = parsed} ->
+        {:ok, Prima.Destination.canonical(parsed)}
+
+      {:ok, %Prima.Destination{}} ->
+        {:error, {:not_built, :login}}
+
+      {:error, _reason} = refused ->
+        refused
     end
   end
 

@@ -193,6 +193,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
   The `ShapeDigest.compute/1` input derived from live state. An agent
   source's shape also carries its model target (`catalyst#model`): the
   model an agent runs on is what it may do, so changing it re-asks.
+
+  A source declaring a need met by mounting (`Prima.Manifest.Needs.mount_only?/1`)
+  is refused `{:not_built, :mount}`: no binding meets one yet. The plan,
+  the commit, the grant, the provisioning walk and the live digest all
+  derive the source's shape here before they read a profile or a binding,
+  so each refuses it there.
   """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref), do: shape_input(ctx, source_ref, :latest)
@@ -212,6 +218,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   defp row_shape_input(ctx, source_ref, row, manifest) do
     with {:ok, releases} <- dependency_releases(ctx, row, source_ref),
          needs = Needs.from_manifest(manifest) || [],
+         :ok <- mount_not_built(needs),
          :ok <- check_vault_projections(needs, source_ref),
          {:ok, tincture_digest} <- tincture_digest(manifest, source_ref),
          {:ok, caps} <- declared_caps(manifest, source_ref) do
@@ -446,6 +453,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
+
+  # No binding meets a need by mounting yet, so a source declaring one is
+  # refused before anything reads a profile or a binding for it.
+  defp mount_not_built(needs) do
+    if Enum.any?(needs, &Needs.mount_only?/1), do: {:error, {:not_built, :mount}}, else: :ok
+  end
 
   # A vault need whose projection names nothing would consent to an edge
   # the vault reader refuses as corrupt at dispense; it is refused here

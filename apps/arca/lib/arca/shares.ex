@@ -352,16 +352,20 @@ defmodule Arca.Shares do
   @doc """
   Whether an entry's stored destination (its canonical text) may carry a
   share: a shared key goes only where its destination names, so the
-  destination names its methods and paths. `eligible/1` asks it of a new
-  share, and `Arca.VaultStorage` of a binding move while a share is
-  active.
+  destination names its methods and paths; a program's destination names
+  the one program its login runs, so it is complete as it is.
+  `eligible/1` asks it of a new share, and `Arca.VaultStorage` of a
+  binding move while a share is active.
   """
   @spec destination_complete?(String.t() | nil) :: boolean()
   def destination_complete?(text) when is_binary(text) do
     with {:ok, %{} = map} <- Jason.decode(text),
-         {:ok, %Prima.Destination{methods: [_ | _], paths: [_ | _]}} <-
-           Prima.Destination.from_map(map) do
-      true
+         {:ok, destination} <- Prima.Destination.from_map(map) do
+      case destination do
+        %Prima.Destination{program: program} when is_binary(program) -> true
+        %Prima.Destination{methods: [_ | _], paths: [_ | _]} -> true
+        %Prima.Destination{} -> false
+      end
     else
       _ -> false
     end

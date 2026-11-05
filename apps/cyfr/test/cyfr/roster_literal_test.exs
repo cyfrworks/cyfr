@@ -16,17 +16,12 @@ defmodule Cyfr.RosterLiteralTest do
 
   The scan reads every app's `lib/` as code, not text: a `~w` sigil or a
   list of strings naming a roster's whole set, in any order, a string
-  naming its members in a row ("api_key | oauth | bundle"), and a map
-  keyed by every credential kind, whose policy per kind derives from the
-  owner's list. A map keyed by sign-in providers is no roster: it holds
-  each provider's own facts (an issuer, an endpoint), which the module
-  that speaks to that provider keeps. Documentation and comments may name
-  the members.
-
-  One spelling is no roster: the commit's no-scopes policy
-  (`Sanctum.Consent.Commit`'s `check_token_grant/3`), which says that a key
-  or a bundle need grants no scopes. It coincides with the shareable kinds
-  and is its own owner, so it is exempt in that function alone.
+  naming its members in a row ("api_key | oauth | bundle | login"), and a
+  map keyed by every credential kind, whose policy per kind derives from
+  the owner's list. A map keyed by sign-in providers is no roster: it
+  holds each provider's own facts (an issuer, an endpoint), which the
+  module that speaks to that provider keeps. Documentation and comments
+  may name the members.
   """
   use ExUnit.Case, async: true
 
@@ -34,8 +29,8 @@ defmodule Cyfr.RosterLiteralTest do
 
   # The rosters' ordered vocabularies; the first test holds the owners to
   # them.
-  @kinds ~w(api_key oauth bundle)
-  @shareable_kinds ~w(api_key bundle)
+  @kinds ~w(api_key oauth bundle login)
+  @shareable_kinds ~w(api_key bundle login)
   @sign_in ~w(github google oidcc)
   @device_flow ~w(github google)
 
@@ -56,15 +51,6 @@ defmodule Cyfr.RosterLiteralTest do
       "device-flow providers"
     ]
   }
-
-  # `{file, function, roster}`: a spelling that is its own policy, not the
-  # roster it coincides with.
-  @policies [
-    {"apps/sanctum/lib/sanctum/consent/commit.ex", :check_token_grant,
-     "shareable credential kinds"}
-  ]
-
-  @commit "apps/sanctum/lib/sanctum/consent/commit.ex"
 
   test "the owners answer the rosters" do
     assert Prima.CredentialKinds.all() == @kinds
@@ -93,25 +79,25 @@ defmodule Cyfr.RosterLiteralTest do
            #{Enum.join(offenders, "\n")}
            """
 
-    # The scan read the tree the owners and the policy live in.
-    assert @commit in files and Map.keys(@owners) -- files == []
+    # The scan read the tree the owners live in.
+    assert Map.keys(@owners) -- files == []
   end
 
-  test "every roster form is found, and only the named policy is exempt" do
+  test "every roster form is found" do
     planted = [
-      {~S'@k ~w(api_key oauth bundle)', "credential kinds"},
-      {~S'@k ~w(bundle api_key oauth)a', "credential kinds"},
-      {~S'def k, do: ["api_key", "oauth", "bundle"]', "credential kinds"},
-      {~S'def k(x) when x in ~w(api_key bundle), do: x', "shareable credential kinds"},
-      {~S'def k, do: Arg.new("kind", :string, enum: ["api_key", "bundle"])',
+      {~S'@k ~w(api_key oauth bundle login)', "credential kinds"},
+      {~S'@k ~w(bundle login api_key oauth)a', "credential kinds"},
+      {~S'def k, do: ["api_key", "oauth", "bundle", "login"]', "credential kinds"},
+      {~S'def k(x) when x in ~w(api_key bundle login), do: x', "shareable credential kinds"},
+      {~S'def k, do: Arg.new("kind", :string, enum: ["api_key", "bundle", "login"])',
        "shareable credential kinds"},
       {~S'@p ~w(github google oidcc)', "sign-in providers"},
       {~S'def p, do: ["github", "google", "oidcc"]', "sign-in providers"},
       {~S'def p(x) when x in ["github", "google"], do: x', "device-flow providers"},
-      {~S'def m, do: {:error, "create requires name and kind (api_key | oauth | bundle)"}',
+      {~S'def m, do: {:error, "create requires name and kind (api_key | oauth | bundle | login)"}',
        "credential kinds"},
       {~S'def m(x), do: "#{x} takes github or google"', "device-flow providers"},
-      {~S'@m %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes}',
+      {~S'@m %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes, "login" => nil}',
        "credential kinds"}
     ]
 
@@ -124,9 +110,10 @@ defmodule Cyfr.RosterLiteralTest do
 
     for line <- [
           ~S'@k ~w(api_key oauth)',
+          ~S'@k ~w(api_key bundle)',
           ~S'def p, do: ["github"]',
-          ~S'@doc "A kind: api_key | oauth | bundle."',
-          ~S'def m, do: "api_key oauth bundle"',
+          ~S'@doc "A kind: api_key | oauth | bundle | login."',
+          ~S'def m, do: "api_key oauth bundle login"',
           ~S'@i %{"github" => "https://github.com", "google" => "https://accounts.google.com"}'
         ] do
       assert refused("lib/planted.ex", module_with(line)) == [], "#{line} is refused"
@@ -136,7 +123,7 @@ defmodule Cyfr.RosterLiteralTest do
     owner = "apps/prima/lib/prima/sign_in_providers.ex"
     assert refused(owner, module_with(~S'@p ~w(github google oidcc)')) == []
     assert refused(owner, module_with(~S'@d ~w(github google)')) == []
-    assert [_] = refused(owner, module_with(~S'@k ~w(api_key bundle)'))
+    assert [_] = refused(owner, module_with(~S'@k ~w(api_key bundle login)'))
 
     # The identity domain derives its rosters and spells none.
     assert [_] =
@@ -144,28 +131,12 @@ defmodule Cyfr.RosterLiteralTest do
                "apps/sanctum/lib/sanctum/atoms.ex",
                module_with(~S'@p ~w(github google oidcc)')
              )
-
-    # The commit's no-scopes policy is accepted where it is, and the same
-    # spelling anywhere else in the file is a roster.
-    source = Prima.Test.SourceTree.read(Path.join(@root, @commit))
-
-    assert source =~
-             "defp check_token_grant(%{kind: kind}, [_ | _], need) when kind in ~w(api_key bundle)"
-
-    assert refused(@commit, source) == []
-
-    duplicate = "  defp planted_kind(kind) when kind in ~w(api_key bundle), do: kind\n"
-    planted = String.replace(source, ~r/\nend\s*\z/, "\n" <> duplicate <> "end\n")
-    assert planted != source
-
-    assert [finding] = refused(@commit, planted)
-    assert finding =~ "planted_kind" and finding =~ "(shareable credential kinds)"
   end
 
   defp module_with(line), do: "defmodule Planted do\n  @moduledoc false\n  #{line}\nend\n"
 
   # `path:line in function: form (roster)` for each spelling the source holds
-  # that neither its owner nor a named policy may hold.
+  # that its owner does not.
   defp refused(file, source) do
     owned = Map.get(@owners, file, [])
 
@@ -174,9 +145,6 @@ defmodule Cyfr.RosterLiteralTest do
     |> walk(%{function: nil, line: 1}, [])
     |> Enum.reverse()
     |> Enum.reject(fn {_line, _function, _form, roster} -> roster in owned end)
-    |> Enum.reject(fn {_line, function, _form, roster} ->
-      {file, function, roster} in @policies
-    end)
     |> Enum.map(fn {line, function, form, roster} ->
       "#{file}:#{line} in #{function || "the module body"}: #{form} (#{roster})"
     end)
