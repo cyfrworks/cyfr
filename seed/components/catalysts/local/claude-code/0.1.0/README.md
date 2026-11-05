@@ -15,7 +15,9 @@ The manifest declares one need, `claude`, of type `login` for the program `claud
 --strict-mcp-config --permission-prompt-tool stdio
 ```
 
-and the request's options as `--model`, `--effort`, `--permission-mode` and `--tools`. A new process is sent an `initialize` control request carrying the request's `system` as `appendSystemPrompt`, so the harness keeps its own prompt. Each turn then sets CYFR's tools with an `mcp_set_servers` control request naming one stdio server, `cyfr`, run as `cyfr-stub` with one tool per argument (a pipe argument is at most 4096 bytes, so the tool list cannot ride on `--mcp-config`). The harness names those tools `mcp__cyfr__<name>`.
+and the request's options as `--model`, `--effort`, `--permission-mode` and `--tools`. A new process is sent an `initialize` control request carrying the request's `system` as `appendSystemPrompt`, so the harness keeps its own prompt. Each new turn then sets CYFR's tools with an `mcp_set_servers` control request (the answer to a pending ask continues a turn whose tools are set) naming one stdio server, `cyfr`, run as `cyfr-stub` with one tool per argument (a pipe argument is at most 4096 bytes, so the tool list cannot ride on `--mcp-config`). The harness names those tools `mcp__cyfr__<name>`.
+
+This replaces the `--mcp-config <json>` argument the plan first named, as ruled for S3: a pipe argument is at most 4096 bytes (`Prima.LocusBackends`), and the soul's tool list alone is about 20 KB. Two bounds remain. One tool's JSON, as one argument of `cyfr-stub`, is at most 131,071 bytes, the kernel's bound on one argument (`MAX_ARG_STRLEN`, with its NUL). The whole list, as the one `mcp_set_servers` line, is at most 1 MiB, the pipe's bound on a line. A request whose tools pass either bound is refused `invalid_request`, naming the tool or the list's size, before any session is opened. The list is never cut.
 
 The catalyst sends the newest user message and streams the reply's text as `text.delta`. It answers on the first of:
 

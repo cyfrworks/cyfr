@@ -57,6 +57,16 @@ const MEDIA_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/we
 /// How long one read of the pipe waits for a line.
 const RECV_WAIT_MS: u32 = 20_000;
 
+/// The most bytes of one tool's JSON as an argument of `cyfr-stub`: the
+/// kernel's bound on one argument (`MAX_ARG_STRLEN`, 131,072 bytes with its
+/// terminating NUL), which the harness's start of the stub meets.
+pub const MAX_TOOL_ARG_BYTES: usize = 131_071;
+
+/// The most bytes of one line to the program (`Prima.LocusBackends`'s
+/// `max_line_bytes`): the `mcp_set_servers` request carries the whole tool
+/// list in one line.
+pub const MAX_LINE_BYTES: usize = 1_048_576;
+
 /// How long `describe` and `models` wait for the harness's listing: a
 /// first start fetches the program.
 pub const LISTING_BUDGET: Duration = Duration::from_secs(150);
@@ -122,11 +132,9 @@ pub fn invalid(message: impl Into<String>) -> Refusal {
 /// sentence stays with the host; the code says enough to act on.
 pub fn pipe_refusal(code: &str) -> Refusal {
     match code {
-        "denied" => Refusal::new(
-            403,
-            "secret_denied",
-            "No login entry for the claude program is granted to this catalyst; grant one on its setup plan.",
-        ),
+        // `Prima.Refusal`'s sentence for an account not granted, on which
+        // the console offers the grant.
+        "denied" => Refusal::new(403, "secret_denied", "This account is not granted to the component; grant it first."),
         "setup_required" => Refusal::new(
             403,
             "secret_denied",
@@ -672,6 +680,30 @@ fn call_arguments(input: &Value) -> Value {
     Value::Object(arguments)
 }
 
+/// The request's tools as the stub's arguments, or the refusal of a list
+/// the harness cannot be given whole: a tool past one argument's bound, or
+/// a list past one line's. Nothing is cut and nothing is opened then.
+pub fn carried_tools(tools: &[Tool]) -> Result<Vec<String>, Refusal> {
+    let args: Vec<String> = tools
+        .iter()
+        .map(|t| harness::stub_tool(&t.name, &t.description, &t.parameters))
+        .collect();
+    if let Some((tool, arg)) = tools.iter().zip(&args).find(|(_, arg)| arg.len() > MAX_TOOL_ARG_BYTES) {
+        return Err(invalid(format!(
+            "The tool {} is {} bytes as cyfr-stub's argument, past the {MAX_TOOL_ARG_BYTES} one argument carries.",
+            tool.name,
+            arg.len()
+        )));
+    }
+    let line = harness::set_tools(&args).len();
+    if line > MAX_LINE_BYTES {
+        return Err(invalid(format!(
+            "The tools are {line} bytes as one line to the harness, past the {MAX_LINE_BYTES} one line carries."
+        )));
+    }
+    Ok(args)
+}
+
 /// One `chat`: the contract response, or a refusal. `fresh` names a new
 /// session.
 pub fn chat<P: Pipe, S: Sink>(
@@ -681,6 +713,7 @@ pub fn chat<P: Pipe, S: Sink>(
     fresh: String,
     deadline: Instant,
 ) -> Result<Value, Refusal> {
+    let tools = carried_tools(&request.tools)?;
     let id = request.session.clone().unwrap_or(fresh);
     let start = if request.session.is_some() { Start::Resume(&id) } else { Start::New(&id) };
     let opened = pipe
@@ -696,15 +729,16 @@ pub fn chat<P: Pipe, S: Sink>(
         send(pipe, harness::initialize(request.system.as_deref()))?;
         reader.answer(pipe, harness::INIT_ID, deadline)?;
     }
-    let tools: Vec<String> = request
-        .tools
-        .iter()
-        .map(|t| harness::stub_tool(&t.name, &t.description, &t.parameters))
-        .collect();
-    send(pipe, harness::set_tools(&tools))?;
-    let set = reader.answer(pipe, harness::TOOLS_ID, deadline)?;
-    if set["errors"].as_object().is_some_and(|errors| !errors.is_empty()) {
-        return Err(Refusal::new(502, "provider_error", "Claude Code could not start CYFR's tools."));
+    // A turn starts with the request's tools set. The answer to a pending
+    // ask continues a turn whose tools are set, and replacing its server
+    // while the harness holds the call would end the call it answers.
+    let continuing = opened.resumed && matches!(request.input, Input::Answer { .. });
+    if !continuing {
+        send(pipe, harness::set_tools(&tools))?;
+        let set = reader.answer(pipe, harness::TOOLS_ID, deadline)?;
+        if set["errors"].as_object().is_some_and(|errors| !errors.is_empty()) {
+            return Err(Refusal::new(502, "provider_error", "Claude Code could not start CYFR's tools."));
+        }
     }
 
     let line = match &request.input {
@@ -1028,8 +1062,9 @@ mod tests {
         let allow: Value = serde_json::from_str(pipe.sent.last().unwrap()).unwrap();
         assert_eq!(allow["response"]["request_id"], "req-7");
         assert_eq!(allow["response"]["response"]["updatedInput"], json!({"action": "read", "path": "a.txt", "result": "hi"}));
-        // No initialize on a session already running.
-        assert!(!pipe.sent.iter().any(|l| l.contains("\"initialize\"")));
+        // The running session's turn goes on: the allow is the one line sent,
+        // no initialize and no new tools.
+        assert_eq!(pipe.sent.len(), 1, "{:?}", pipe.sent);
     }
 
     #[test]
@@ -1147,6 +1182,28 @@ mod tests {
 
     fn models_answer(listing: &[Value]) -> Value {
         models(listing)
+    }
+
+    #[test]
+    fn a_tool_list_the_harness_cannot_be_given_whole_is_refused_before_anything_opens() {
+        let tool = |name: &str, bytes: usize| Tool {
+            name: name.into(),
+            description: "d".repeat(bytes),
+            parameters: json!({"type": "object"}),
+        };
+        assert!(carried_tools(&[tool("files", 1_000)]).is_ok());
+        let one = carried_tools(&[tool("files", 1_000), tool("huge", MAX_TOOL_ARG_BYTES)]).unwrap_err();
+        assert_eq!(one.kind, "invalid_request");
+        assert!(one.message.contains("huge"), "{}", one.message);
+        let many: Vec<Tool> = (0..10).map(|i| tool(&format!("t{i}"), 120_000)).collect();
+        assert!(carried_tools(&many).unwrap_err().message.contains("one line"));
+
+        let mut pipe = Scripted::new(|_| Vec::new());
+        let mut deltas = Deltas::new(Vec::new());
+        let mut req = request(json!({"model": "haiku", "messages": [{"role": "user", "content": "hi"}]}));
+        req.tools = vec![tool("huge", MAX_TOOL_ARG_BYTES)];
+        assert_eq!(chat(&mut pipe, &mut deltas, &req, ID.into(), far()).unwrap_err().kind, "invalid_request");
+        assert!(pipe.log.is_empty(), "nothing was opened: {:?}", pipe.log);
     }
 
     #[test]

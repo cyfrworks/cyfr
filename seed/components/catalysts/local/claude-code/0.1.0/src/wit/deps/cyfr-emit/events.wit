@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 CYFR Works Inc.
-
 package cyfr:emit@0.1.0;
 
 /// Events a running component pushes to its execution's event stream
