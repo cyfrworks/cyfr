@@ -472,7 +472,7 @@ func TestSpawnRequiresMemoryBound(t *testing.T) {
 			detail  string
 		}{
 			{name: "absent", detail: "memory_bytes is required"},
-			{name: "null", present: true, detail: "memory_bytes is required"},
+			{name: "null", present: true, detail: "memory_bytes must not be null"},
 			{name: "zero", present: true, value: uint64(0), detail: "memory_bytes must be within 16777216..1099511627776"},
 			{name: "below minimum", present: true, value: uint64(MinMemoryBytes - 1), detail: "memory_bytes must be within 16777216..1099511627776"},
 			{name: "above maximum", present: true, value: uint64(MaxMemoryBytes + 1), detail: "memory_bytes must be within 16777216..1099511627776"},

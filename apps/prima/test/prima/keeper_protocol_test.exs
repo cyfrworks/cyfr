@@ -88,6 +88,11 @@ defmodule Prima.KeeperProtocolTest do
     "home bound of zero" => "home_max_bytes",
     "home mode other than scratch or kept" => "home_mode",
     "pty that is not a boolean" => "pty",
+    "home mode that is empty" => "home_mode",
+    "pty that is null" => "pty",
+    "isolation that is empty" => "isolation",
+    "spawn member on a pool request" => "home_mode",
+    "control false on a request that is not a spawn" => "control",
     "home_make with an unknown field" => "extra",
     "home_measure without a uid" => "uid"
   }

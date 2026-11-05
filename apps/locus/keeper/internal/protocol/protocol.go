@@ -312,6 +312,13 @@ type Request struct {
 	// Path and UID name the kept home of a home request.
 	Path string  `json:"path,omitempty"`
 	UID  *uint64 `json:"uid,omitempty"`
+
+	// present names the members the line carried, whatever their values:
+	// a member is judged by its presence, never by a zero value standing
+	// in for absence, so `"home_mode": ""` or `"control": false` on a
+	// request that does not carry them is refused, as CYFR's codec refuses
+	// them (Prima.KeeperProtocol).
+	present map[string]bool
 }
 
 // NotBuilt reports whether the keeper answers r CodeNotBuilt rather than
@@ -354,6 +361,18 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 	if dec.More() {
 		return nil, &RequestError{Code: CodeBadRequest, Detail: "trailing data after the request object"}
 	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(line, &members); err != nil {
+		return nil, &RequestError{Code: CodeBadRequest, Detail: "not a request object: " + scrubJSONError(err)}
+	}
+	req.present = make(map[string]bool, len(members))
+	var null string
+	for name, value := range members {
+		req.present[name] = true
+		if string(bytes.TrimSpace(value)) == "null" && (null == "" || name < null) {
+			null = name
+		}
+	}
 	refuse := func(detail string) *RequestError {
 		e := &RequestError{Code: CodeBadRequest, Detail: detail}
 		if idPattern.MatchString(req.ID) {
@@ -366,6 +385,10 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 	}
 	if req.V != Version {
 		return nil, refuse(fmt.Sprintf("v must be %d", Version))
+	}
+	// No member is ever null: an absent member is left out.
+	if null != "" {
+		return nil, refuse(null + " must not be null")
 	}
 	switch req.Type {
 	case TypeSpawn:
@@ -443,7 +466,7 @@ func validateSpawn(req *Request) error {
 	if m := *req.MemoryBytes; m < MinMemoryBytes || m > MaxMemoryBytes {
 		return fmt.Errorf("memory_bytes must be within %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
 	}
-	if req.Isolation != "" && req.Isolation != IsolationNetns {
+	if req.present["isolation"] && req.Isolation != IsolationNetns {
 		return errors.New("isolation must be " + IsolationNetns)
 	}
 	if req.Attach == nil {
@@ -456,9 +479,13 @@ func validateSpawn(req *Request) error {
 }
 
 func validateHome(req *Request) error {
-	switch req.HomeMode {
-	case "", HomeScratch:
-		if req.HomePath != "" || req.HomeUID != nil || req.HomeMaxBytes != nil {
+	mode := req.HomeMode
+	if !req.present["home_mode"] {
+		mode = HomeScratch
+	}
+	switch mode {
+	case HomeScratch:
+		if req.present["home_path"] || req.present["home_uid"] || req.present["home_max_bytes"] {
 			return errors.New("home_path, home_uid and home_max_bytes need home_mode " + HomeKept)
 		}
 		return nil
@@ -466,7 +493,7 @@ func validateHome(req *Request) error {
 	default:
 		return errors.New("home_mode must be " + HomeScratch + " or " + HomeKept)
 	}
-	if req.HomePath == "" {
+	if !req.present["home_path"] {
 		return errors.New("home_path is required with home_mode " + HomeKept)
 	}
 	if err := validateHomePath("home_path", req.HomePath); err != nil {
@@ -548,34 +575,15 @@ func ValidateEnvName(name string) error {
 	return nil
 }
 
-// only reports whether every field set on r is among the named ones.
+// only reports whether every member the line carried is among the named
+// ones, v and type aside.
 func (r *Request) only(fields ...string) bool {
-	set := map[string]bool{
-		"id":             r.ID != "",
-		"pool":           r.Pool != "",
-		"argv":           r.Argv != nil,
-		"env":            r.Env != nil,
-		"rlimits":        r.Rlimits != nil,
-		"memory_bytes":   r.MemoryBytes != nil,
-		"control":        r.Control,
-		"isolation":      r.Isolation != "",
-		"attach":         r.Attach != nil,
-		"spawn_id":       r.SpawnID != "",
-		"sig":            r.Sig != "",
-		"grace_ms":       r.GraceMs != nil,
-		"home_mode":      r.HomeMode != "",
-		"home_path":      r.HomePath != "",
-		"home_uid":       r.HomeUID != nil,
-		"home_max_bytes": r.HomeMaxBytes != nil,
-		"pty":            r.Pty != nil,
-		"path":           r.Path != "",
-		"uid":            r.UID != nil,
+	allowed := make(map[string]bool, len(fields)+2)
+	for _, f := range append(fields, "v", "type") {
+		allowed[f] = true
 	}
-	for _, f := range fields {
-		delete(set, f)
-	}
-	for _, present := range set {
-		if present {
+	for name := range r.present {
+		if !allowed[name] {
 			return false
 		}
 	}
