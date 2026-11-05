@@ -476,10 +476,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   # Each dependency's manifest at the release the closure resolved
-  # (`Sanctum.Consent.Plan.closure_rows/3`). A closure whose rows do not
-  # read is the incomplete closure `dependency_releases/3` already reads
-  # as contributing nothing; the plan and the commit refuse it on their
-  # own read of the same rows.
+  # (`Sanctum.Consent.Plan.closure_rows/3`). A guard that cannot read a
+  # dependency's row cannot answer, so it refuses, never passes: a later
+  # read that succeeds is not checked again. A store that cannot answer
+  # refuses as the plan and the commit render an unreadable closure,
+  # `{:unavailable, "Components"}`; any other reason the rows do not read
+  # (a closure that moved, a manifest that does not decode) is the
+  # refusal itself.
   defp dependencies_mount_not_built(ctx, row, graph, source_ref) do
     if releases(graph, source_ref) == [] do
       :ok
@@ -496,8 +499,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
             end
           end)
 
-        {:error, _unread} ->
-          :ok
+        {:error, reason} when Components.is_outage(reason) ->
+          {:error, {:unavailable, "Components"}}
+
+        {:error, _reason} = unread ->
+          unread
       end
     end
   end

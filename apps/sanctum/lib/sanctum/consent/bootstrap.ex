@@ -130,6 +130,7 @@ defmodule Sanctum.Consent.Bootstrap do
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
   alias Sanctum.Consent.Components
+  alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
   alias Prima.AgentRef
@@ -375,15 +376,21 @@ defmodule Sanctum.Consent.Bootstrap do
   # configuration, and every other edge carries no vault resource. The
   # source's own ingress binds the newest of the administrator's shares
   # that fits its need, when one does (the moduledoc).
+  # The shape is derived first, before a share or a dependency's profile
+  # is read for the source: a closure the consent paths refuse (a need
+  # met by mounting, `Sanctum.Consent.ShapeDerivation`) mints nothing.
   defp mint({ctx, claim}, component, source_ref, vouched) do
-    with {:ok, activation} <- resolve_activation(ctx, component),
+    with {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),
+         {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, binding} <- first_sign_in_binding(ctx, component, source_ref) do
-      mint = &mint_with({ctx, claim}, component, source_ref, vouched, activation, &1)
+      mint =
+        &mint_with({ctx, claim}, component, source_ref, vouched, {activation, shape_input}, &1)
+
       unbound_if_narrowed(mint, binding)
     end
   end
 
-  defp mint_with({ctx, claim}, component, source_ref, vouched, activation, binding) do
+  defp mint_with({ctx, claim}, component, source_ref, vouched, {activation, shape}, binding) do
     with {:ok, nodes} <-
            BlobBuilder.build(ctx, activation.graph, source_ref, source_vault(source_ref, binding),
              source_row: component,
@@ -391,7 +398,7 @@ defmodule Sanctum.Consent.Bootstrap do
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <-
-           compute_digests(ctx, source_ref, Prima.Digest.sha256(blob_json), List.wrap(binding)),
+           compute_digests(shape, Prima.Digest.sha256(blob_json), List.wrap(binding)),
          {:ok, activation_json} <- JCS.encode(activation.graph) do
       insert(
         {ctx, claim},
@@ -770,7 +777,8 @@ defmodule Sanctum.Consent.Bootstrap do
   # A bootstrap-only head is re-minted when the seed moved its shape (see
   # `revisable/4`).
   defp revise_bootstrap({ctx, claim}, component, source_ref, profile, {head, refs}, vouched) do
-    with {:ok, activation} <- resolve_activation(ctx, component),
+    with {:ok, shape} <- ShapeDerivation.shape_input(ctx, source_ref),
+         {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, binding} <-
            kept_binding(ctx, {profile, head, refs}, component, source_ref) do
       revise =
@@ -780,7 +788,7 @@ defmodule Sanctum.Consent.Bootstrap do
           source_ref,
           {profile, head},
           vouched,
-          activation,
+          {activation, shape},
           &1
         )
 
@@ -794,7 +802,7 @@ defmodule Sanctum.Consent.Bootstrap do
          source_ref,
          {profile, head},
          vouched,
-         activation,
+         {activation, shape},
          binding
        ) do
     with {:ok, nodes} <-
@@ -804,7 +812,7 @@ defmodule Sanctum.Consent.Bootstrap do
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <-
-           compute_digests(ctx, source_ref, Prima.Digest.sha256(blob_json), List.wrap(binding)),
+           compute_digests(shape, Prima.Digest.sha256(blob_json), List.wrap(binding)),
          :ok <- revisable(head, digests, activation.graph, vouched),
          {:ok, activation_json} <- JCS.encode(activation.graph),
          {:ok, _consent} <-
@@ -866,7 +874,7 @@ defmodule Sanctum.Consent.Bootstrap do
   # Digests + insert
   # ---------------------------------------------------------------------------
 
-  defp compute_digests(ctx, source_ref, blob_digest, bindings) do
+  defp compute_digests(input, blob_digest, bindings) do
     # The stored shape and the loader's live shape must be one computation
     # (ShapeDerivation), or a freshly minted consent would flip straight to
     # needs_consent on its first load.
@@ -878,8 +886,7 @@ defmodule Sanctum.Consent.Bootstrap do
     # and never reaches `Commit.persist/6`, so it takes the digest here:
     # a digest taken only there would leave every provisioning mint
     # undigested.
-    with {:ok, input} <- Sanctum.Consent.ShapeDerivation.shape_input(ctx, source_ref),
-         {:ok, shape_digest} <- ShapeDigest.compute(input),
+    with {:ok, shape_digest} <- ShapeDigest.compute(input),
          {:ok, commit_digest} <-
            CommitDigest.compute(%{
              shape_digest: shape_digest,

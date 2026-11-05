@@ -31,20 +31,54 @@ defmodule Sanctum.Consent.BootstrapTest do
     {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
-  defp ship!(ctx, name, type) do
+  defp ship!(ctx, name, type, manifest \\ %{}) do
     {:ok, component} =
       Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, "1.0.0",
-        manifest: %{
-          "name" => name,
-          "type" => type,
-          "version" => "1.0.0",
-          "publisher" => "local",
-          "description" => "bootstrap test"
-        },
+        manifest:
+          Map.merge(
+            %{
+              "name" => name,
+              "type" => type,
+              "version" => "1.0.0",
+              "publisher" => "local",
+              "description" => "bootstrap test"
+            },
+            manifest
+          ),
         wasm: Cyfr.Test.Guests.wasm(type)
       )
 
     component
+  end
+
+  # No binding meets a need by mounting yet: the walk derives the shape
+  # before it reads a share or a dependency's profile, so a closure that
+  # declares one, in the source or a dependency, mints nothing.
+  test "a closure with a need met by mounting is skipped not built, and nothing is minted",
+       %{ctx: ctx} do
+    login = %{
+      "needs" => %{
+        "claude" => %{
+          "type" => "login",
+          "program" => "claude",
+          "reason" => "to run Claude Code on your own plan"
+        }
+      }
+    }
+
+    ship!(ctx, "boot-mount-dep", "reagent", login)
+
+    ship!(ctx, "boot-mount-app", "reagent", %{
+      "dependencies" => %{"static" => [%{"ref" => "reagent:local.boot-mount-dep"}]}
+    })
+
+    assert {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
+
+    for ref <- ~w(reagent:local.boot-mount-dep reagent:local.boot-mount-app) do
+      assert {ref, {:not_built, :mount}} in skipped
+      refute ref in minted
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
   end
 
   test "mints a loadable consent whose blob mirrors effective policy", %{ctx: ctx} do

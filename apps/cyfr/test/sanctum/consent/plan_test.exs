@@ -300,6 +300,39 @@ defmodule Sanctum.Consent.PlanTest do
       assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
     end
+
+    # The guard cannot answer when it cannot read a dependency's row, and a
+    # later read that succeeds is not checked again: it refuses, never passes.
+    @tag :capture_log
+    test "is refused when the guard cannot read a dependency's row, though a later read could",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount-dep", "1.0.0", %{
+        "needs" => %{
+          "claude" => %{
+            "type" => "login",
+            "program" => "claude",
+            "reason" => "to run Claude Code on your own plan"
+          }
+        }
+      })
+
+      publish!(ctx, "plan-mount-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-mount-dep"}]}
+      })
+
+      ref = "reagent:local.plan-mount-app"
+      counter = :atomics.new(1, [])
+      unanswered!([], counted_read: {{:get_component, "plan-mount-dep"}, 1, counter})
+
+      assert {:error, {:unavailable, "Components"}} = Plan.plan(ctx, %{ref: ref})
+
+      :atomics.put(counter, 1, 0)
+
+      assert {:error, {:unavailable, "Components"}} =
+               Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
   end
 
   describe "what the head holds" do
