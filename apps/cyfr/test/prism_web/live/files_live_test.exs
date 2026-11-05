@@ -131,7 +131,7 @@ defmodule PrismWeb.FilesLiveTest do
     {view, html} = mount_athanor(conn, "/files?p=aqua")
     assert html =~ ~r/>\s*shaped\s*</
     assert html =~ "AQUA page"
-    assert html =~ "roles/"
+    assert html =~ "crew/"
     assert html =~ "aqua.md"
 
     html =

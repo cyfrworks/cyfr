@@ -56,7 +56,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/components_live.ex" => {4, ["live/components_live.ex"]},
     "live/builds_live.ex" => {1, ["live/builds_live.ex"]},
     "live/shell_live.ex" => {1, ["live/shell_live.ex"]},
-    "live/aqua_live/agents_component.ex" => {1, ["live/aqua_live.ex"]},
+    # A model catalyst's install, answered to the page, and each ready
+    # brain's options, answered to the agents section itself.
+    "live/aqua_live/agents_component.ex" =>
+      {2, ["live/aqua_live.ex", "live/aqua_live/agents_component.ex"]},
     # The system layer's listener on `confirmation.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, ["live/system_layer.ex"]},
