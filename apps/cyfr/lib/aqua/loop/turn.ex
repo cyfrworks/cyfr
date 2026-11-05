@@ -5,19 +5,18 @@ defmodule Aqua.Loop.Turn do
   @moduledoc """
   What a loop runs, rebuilt from rows: the turn and its thread, the
   agent as the turn pinned it — the revision bytes, whose capability
-  digest must equal the one the turn started under — the roster and the
-  roles the soul may clone into, the effective policy composed with the
-  standing rows, the resolved model catalyst with its capabilities and
-  the request size its consent caps it at (`request_cap`), the
-  system prompt and the sources it read, the tool surface (with the
-  accounts the soul's launches may name, read once here for every
-  request the spec makes, `Aqua.Hands.launch_accounts/1`), the room
-  excerpt the sender attached, and the deadline the authority allows,
-  and the admission decision the turn's root execution was started under
-  (`call_id`), which every call the turn makes names as its parent call.
-
-  A clone's spec is built the same way from the role's definition, under
-  the parent's authority and catalyst.
+  digest must equal the one the turn started under — the roster, the
+  effective policy composed with the standing rows and narrowed to the
+  tools a crew request named (`options["tools"]`), the resolved model
+  catalyst with its capabilities and the request size its consent caps
+  it at (`request_cap`), the brain options a crew request set
+  (`options["brain_options"]`), the system prompt and the sources it
+  read, the tool surface (with the accounts the soul's launches may name,
+  read once here for every request the spec makes,
+  `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
+  and the deadline the authority allows, and the admission decision the
+  turn's root execution was started under (`call_id`), which every call
+  the turn makes names as its parent call.
 
   Every model round of a spec runs on the model it resolved, compaction
   included: nothing chooses another model for a step.
@@ -41,7 +40,6 @@ defmodule Aqua.Loop.Turn do
     :thread,
     :agent,
     :roster,
-    :roles,
     :policy,
     :authority,
     :catalyst,
@@ -53,6 +51,8 @@ defmodule Aqua.Loop.Turn do
     :deadline_ms,
     :approval_ttl_s,
     :options,
+    :brain_options,
+    :narrowed,
     :excerpt,
     :attachments,
     soul?: true,
@@ -62,7 +62,6 @@ defmodule Aqua.Loop.Turn do
   @doc """
   Build the spec for `turn` as `ctx` (the actor's external-plane context).
   `opts`: `:authority` (the turn's pinned authority, required),
-  `:catalyst` and `:model` (a clone's fallbacks, the parent's),
   `:excerpt?` (read the room excerpt the turn's options name).
 
   Refuses an agent that names no model (`:no_model`), a catalyst the
@@ -79,14 +78,23 @@ defmodule Aqua.Loop.Turn do
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, agent} <- agent(ctx, turn),
          soul? = Prima.AgentRef.soul?(agent["name"]),
-         roles = if(soul?, do: roles(roster), else: []),
+         options = decode(turn.options),
          {:ok, grants} <-
            Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
-         policy = Aqua.ToolGrants.resolve(agent["tool_policy"], Map.fetch!(grants, agent["name"])),
-         {:ok, catalyst, model} <- model(ctx, turn, agent, opts),
-         {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn) do
-      options = decode(turn.options)
-      prompt = Aqua.Prompt.compose(ctx, agent: agent, authority: authority)
+         policy =
+           agent["tool_policy"]
+           |> Aqua.ToolGrants.resolve(Map.fetch!(grants, agent["name"]))
+           |> narrowed(options["tools"]),
+         {:ok, catalyst, model} <- model(ctx, turn, agent),
+         {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn),
+         :ok <- brain_options(options["brain_options"], capabilities) do
+      prompt =
+        Aqua.Prompt.compose(ctx,
+          agent: agent,
+          authority: authority,
+          crew: crew(roster, policy),
+          requests: requests(ctx, thread)
+        )
 
       spec = %__MODULE__{
         ctx: ctx,
@@ -96,7 +104,6 @@ defmodule Aqua.Loop.Turn do
         thread: thread,
         agent: agent,
         roster: roster,
-        roles: roles,
         policy: policy,
         authority: authority,
         catalyst: catalyst,
@@ -107,14 +114,14 @@ defmodule Aqua.Loop.Turn do
         sources: prompt.sources,
         tools:
           Request.tool_definitions(policy,
-            roles: roles,
             external: external_tools(policy),
-            soul?: soul?,
             accounts: launch_accounts(ctx, policy, soul?)
           ),
         deadline_ms: deadline_ms(authority),
         approval_ttl_s: Aqua.Approvals.ttl_seconds(ctx),
         options: options,
+        brain_options: options["brain_options"],
+        narrowed: options["tools"],
         excerpt: if(Keyword.get(opts, :excerpt?, true), do: excerpt(ctx, options), else: nil),
         attachments: attachments(ctx, turn),
         soul?: soul?
@@ -140,28 +147,66 @@ defmodule Aqua.Loop.Turn do
   @spec with_turn(t(), Tape.turn()) :: t()
   def with_turn(%__MODULE__{} = spec, turn), do: %{spec | turn: turn}
 
-  @doc "The role names the soul may clone into."
-  @spec role_names(t()) :: [String.t()]
-  def role_names(%__MODULE__{roles: roles}), do: Enum.map(roles, & &1["name"])
+  # The options a crew request set must be ones the brain declares, each
+  # of its kind; a turn whose request set another is refused before it
+  # sends anything.
+  defp brain_options(nil, _capabilities), do: :ok
 
-  @doc "One role's definition from the roster, else `{:error, :no_such_role}`."
-  @spec role(t(), String.t()) :: {:ok, map()} | {:error, :no_such_role}
-  def role(%__MODULE__{roster: roster}, name) do
-    case Enum.find(roster, &(&1["name"] == name and &1["type"] == role_type())) do
-      nil -> {:error, :no_such_role}
-      entry -> {:ok, agent_map(entry)}
+  defp brain_options(options, capabilities) do
+    case Prima.Model.check_chat_request(
+           %{"options" => options},
+           Map.get(capabilities, :options) || []
+         ) do
+      :ok -> :ok
+      {:error, {:invalid, member}} -> {:error, "the brain does not take #{member} as it was set"}
     end
   end
+
+  # A crew request narrows the job to the tools it names: a key stays when
+  # its tool or its `tool.action` is named, so the narrowing only takes
+  # away from what the agent's policy and the ceiling already allow.
+  defp narrowed(policy, [_ | _] = names) do
+    named = MapSet.new(names)
+
+    Map.filter(policy, fn {key, _mode} ->
+      tool = key |> String.split(".", parts: 2) |> hd()
+      MapSet.member?(named, key) or MapSet.member?(named, tool)
+    end)
+  end
+
+  defp narrowed(policy, _all), do: policy
+
+  # The crew members the turn may ask, listed in its prompt when its
+  # policy offers `crew.ask`.
+  defp crew(roster, policy) do
+    if Map.get(policy, "crew.ask") in ["auto", "ask"] do
+      for %{"name" => name} = agent <- roster, Aqua.Runner.Admission.member?(roster, name) do
+        %{"name" => name, "title" => agent["title"], "description" => agent["description"]}
+      end
+    else
+      []
+    end
+  end
+
+  # The room's requests still waiting on a reply, which the prompt lists
+  # with their age; a child thread holds none.
+  defp requests(ctx, %{kind: "own", id: thread_id}) do
+    case Tape.pending_requests(ctx, thread_id) do
+      rows when is_list(rows) -> rows
+      {:error, _} -> []
+    end
+  end
+
+  defp requests(_ctx, _thread), do: []
 
   # ---------------------------------------------------------------------------
   # The agent
   # ---------------------------------------------------------------------------
 
-  # A turn runs the agent it pinned — the soul or a clone's role — from the
-  # revision bytes, parsed, with their capability digest checked against
-  # the pin. Every start and every clone pins both, so a turn that pins
-  # neither, or only one, is refused; a revision the tree no longer holds
-  # is refused too, never replaced.
+  # A turn runs the agent it pinned from the revision bytes, parsed, with
+  # their capability digest checked against the pin. Every start pins
+  # both, so a turn that pins neither, or only one, is refused; a revision
+  # the tree no longer holds is refused too, never replaced.
   defp agent(ctx, %{agent_revision_digest: revision, agent_capability_digest: capability} = turn)
        when is_binary(revision) and is_binary(capability) do
     case Tape.agent_revision(ctx, turn) do
@@ -181,8 +226,6 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  # One shape for a parsed revision and a roster entry
-  # (`Aqua.AgentConfig.roster/1`).
   defp agent_map(%{name: name} = parsed) do
     %{
       "name" => name,
@@ -195,70 +238,38 @@ defmodule Aqua.Loop.Turn do
     }
   end
 
-  defp agent_map(%{"name" => name} = entry) do
-    %{
-      "name" => name,
-      "title" => entry["title"],
-      "description" => entry["description"],
-      "prompt" => entry["content"],
-      "tool_policy" => entry["tool_policy"],
-      "catalyst_ref" => entry["catalyst_ref"],
-      "model" => entry["model"]
-    }
-  end
-
-  defp roles(roster) do
-    role_type = role_type()
-
-    for %{"type" => ^role_type, "name" => name} = entry <- roster do
-      %{"name" => name, "title" => entry["title"], "description" => entry["description"]}
-    end
-  end
-
-  defp role_type, do: Compendium.agent_role_type()
-
   # ---------------------------------------------------------------------------
   # The model
   # ---------------------------------------------------------------------------
 
   # The catalyst release a turn runs on: once its row pins one, exactly
   # that release; before, the agent's catalyst resolved against the working
-  # athanor's listing, a clone falling back to the parent's. It must be
-  # installed and speak `model/chat@1`. A switch of the agent's catalyst
-  # reaches the next turn; what a turn already sent to its provider stays
-  # that provider's.
-  defp model(ctx, turn, agent, opts) do
+  # athanor's listing. It must be installed and speak `model/chat@1`. A
+  # switch of the agent's catalyst reaches the next turn; what a turn
+  # already sent to its provider stays that provider's.
+  defp model(ctx, turn, agent) do
     listing =
       case Aqua.AgentConfig.catalyst_listing(ctx) do
         {:ok, listing} -> listing
         {:error, _} -> []
       end
 
-    with {:ok, catalyst, model} <- catalyst(listing, turn, agent, opts),
+    with {:ok, catalyst, model} <- catalyst(listing, turn, agent),
          :ok <- speaks_chat(listing, catalyst) do
       if is_binary(model), do: {:ok, catalyst, model}, else: {:error, :no_model}
     end
   end
 
-  defp catalyst(listing, %{catalyst_ref: pinned} = turn, agent, _opts) when is_binary(pinned) do
+  defp catalyst(listing, %{catalyst_ref: pinned} = turn, agent) when is_binary(pinned) do
     if Enum.any?(listing, &(&1["component_ref"] == pinned)),
       do: {:ok, pinned, turn.model || agent["model"]},
       else: {:error, {:catalyst_not_in_athanor, pinned}}
   end
 
-  defp catalyst(listing, turn, agent, opts) do
-    model = turn.model || agent["model"]
-
-    case {Aqua.AgentConfig.resolve_catalyst(listing, agent["catalyst_ref"]),
-          Keyword.get(opts, :catalyst)} do
-      {{:ok, catalyst}, _} ->
-        {:ok, catalyst, model}
-
-      {{:error, _}, parent} when is_binary(parent) ->
-        {:ok, parent, model || Keyword.get(opts, :model)}
-
-      {{:error, _}, _} ->
-        {:error, {:catalyst_not_in_athanor, agent["catalyst_ref"]}}
+  defp catalyst(listing, turn, agent) do
+    case Aqua.AgentConfig.resolve_catalyst(listing, agent["catalyst_ref"]) do
+      {:ok, catalyst} -> {:ok, catalyst, turn.model || agent["model"]}
+      {:error, _} -> {:error, {:catalyst_not_in_athanor, agent["catalyst_ref"]}}
     end
   end
 
@@ -326,7 +337,6 @@ defmodule Aqua.Loop.Turn do
 
   # The apps a launch may name an account of, read once for the spec and
   # kept for every request it makes: only when the soul may launch at all.
-  # A role launches nothing.
   defp launch_accounts(ctx, policy, true = _soul?) do
     if Map.get(policy, "execution.run") in ["auto", "ask"],
       do: Aqua.Hands.launch_accounts(ctx),
@@ -371,11 +381,14 @@ defmodule Aqua.Loop.Turn do
   never re-read here.
   """
   @spec current_policy(t()) :: {:ok, map()} | {:error, term()}
-  def current_policy(%__MODULE__{ctx: ctx, turn: turn, agent: agent}) do
+  def current_policy(%__MODULE__{ctx: ctx, turn: turn, agent: agent, options: options}) do
     name = agent["name"]
 
     with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [name]) do
-      {:ok, Aqua.ToolGrants.resolve(agent["tool_policy"], Map.fetch!(grants, name))}
+      {:ok,
+       agent["tool_policy"]
+       |> Aqua.ToolGrants.resolve(Map.fetch!(grants, name))
+       |> narrowed((options || %{})["tools"])}
     end
   end
 
@@ -398,12 +411,13 @@ defmodule Aqua.Loop.Turn do
 
   defp excerpt(_ctx, _options), do: nil
 
-  # The initiating message's attachments as typed blocks.
+  # The initiating message's attachments as typed blocks. A delivered
+  # request's are the request's own, stored under its row in its room.
   defp attachments(ctx, %{message_id: message_id, thread_id: thread_id})
        when is_binary(message_id) do
     case Tape.message(ctx, message_id) do
       {:ok, row} ->
-        refs = Aqua.Attachments.attachments_of([row])
+        {thread_id, refs} = stored_under(row, thread_id, Aqua.Attachments.attachments_of([row]))
 
         ctx
         |> Aqua.Attachments.load(thread_id, refs)
@@ -423,4 +437,15 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp attachments(_ctx, _turn), do: []
+
+  defp stored_under(row, thread_id, refs) do
+    case Tape.payload(row) do
+      %{"request_id" => request_id, "from_thread" => room}
+      when is_binary(request_id) and is_binary(room) ->
+        {room, Enum.map(refs, &%{&1 | message_id: request_id})}
+
+      _ ->
+        {thread_id, refs}
+    end
+  end
 end

@@ -4,11 +4,12 @@
 defmodule Aqua.Roster do
   @moduledoc """
   Who can be addressed on a tape: the athanor's soul first, then its
-  roles — the tree in focus and no other. A room's tape is the room's:
-  `@aqua` reaches the room's soul, and a role mention (`@builder`) runs
-  that role directly for one turn; a person's own assistant lives in
-  their own athanor and rides along in its own panel, never on a shared
-  tape.
+  crew members (its roles) — the tree in focus and no other. A room's
+  tape is the room's: `@aqua` reaches the room's soul, and a member's
+  mention (`@builder`) asks that member, who works in its child thread
+  and replies on the room (`Aqua.Runner.Admission`); a person's own
+  assistant lives in their own athanor and rides along in its own panel,
+  never on a shared tape.
   """
 
   alias Sanctum.Context

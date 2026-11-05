@@ -11,10 +11,10 @@ defmodule Aqua.Loop.Stream do
   execution before the call starts; each `text.delta` the execution streams
   is announced on the thread as `{:delta, delta}`:
 
-    * `turn_id` — the soul's turn; `fence` — that turn's fence, which rises
-      whenever a host transition takes the turn from its holder;
-    * `source` — the turn that streams it (the soul's, or a clone's) and
-      `role` — the clone's role, nil for the soul;
+    * `turn_id` — the turn; `fence` — its fence, which rises whenever a
+      host transition takes the turn from its holder;
+    * `source` — the turn that streams it, and `role` — its agent, nil
+      for the soul;
     * `step_id`, and `ordinal` — the step's place among its source's model
       steps, so a retry's step outranks the one it replaced;
     * `seq` — the event's `{durable, n}` position; `text`.

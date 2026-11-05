@@ -1835,7 +1835,7 @@ defmodule Compendium.ProviderTest do
       assert result.tool_policy["files.delete"] == "ask"
     end
 
-    test "the door refuses what no agent may hold: destructive auto, ask on a role, a UI event at ask",
+    test "the door refuses what no agent may hold: destructive auto, a UI event at ask",
          %{ctx: ctx} do
       # Kind always wins — on the soul as on a role.
       assert {:error, {:invalid_argument, msg}} =
@@ -1857,25 +1857,6 @@ defmodule Compendium.ProviderTest do
 
       assert msg =~ "files.delete"
 
-      # A cloned role has no card to raise.
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "builder",
-                 "tool_policy" => %{"files.write" => "ask"}
-               })
-
-      assert msg =~ "no card"
-
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "create",
-                 "name" => "asker",
-                 "tool_policy" => %{"component.pull" => "ask"}
-               })
-
-      assert msg =~ "no card"
-
       # A UI event is auto or absent.
       assert {:error, {:invalid_argument, msg}} =
                Provider.handle("aqua", ctx, %{
@@ -1886,13 +1867,16 @@ defmodule Compendium.ProviderTest do
 
       assert msg =~ "runs on its own"
 
-      # What a role may hold is written whole.
+      # What a role may hold is written whole, an action at ask among it.
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "builder",
-                 "tool_policy" => %{"files.write" => "auto", "files.read" => "auto"}
+                 "tool_policy" => %{"files.write" => "ask", "files.read" => "auto"}
                })
+
+      assert {:ok, %{tool_policy: %{"files.write" => "ask"}}} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
     end
 
     test "get artisan returns a role prompt", %{ctx: ctx} do
@@ -2306,12 +2290,19 @@ defmodule Compendium.ProviderTest do
     end
 
     test "an athanor-made role deletes outright", %{ctx: ctx} do
-      {:ok, _} =
-        Provider.handle("aqua", ctx, %{
-          "action" => "create",
-          "name" => "my_agent",
-          "content" => "You are mine."
-        })
+      {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+
+      # The create answers what it created, and the soul is left as it was.
+      assert {:ok, %{created: "my_agent", type: "role"} = created} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "create",
+                 "name" => "my_agent",
+                 "content" => "You are mine.",
+                 "tool_policy" => %{"component.pull" => "ask"}
+               })
+
+      assert map_size(created) == 2
+      assert {:ok, ^soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
 
       {:ok, %{deleted: "my_agent"} = result} =
         Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "my_agent"})

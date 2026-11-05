@@ -8,12 +8,11 @@ defmodule Aqua.Loop.Policy do
   beside others.
 
   The policy is `Aqua.ToolGrants.resolve/2`'s guest spelling
-  (`"tool.action" => "auto" | "ask" | "deny"`, `"role.*" => "auto"`),
-  already under the kind ceiling: a destructive or external action, or
-  one declared to take no standing allow at agent scope, is never `auto`,
-  and the others only by the author's `auto` or a standing grant. A hand
-  or catalog call reads its own key; a clone reads its role's glob; the
-  `ui` event runs at once; an external server's tool always asks; a
+  (`"tool.action" => "auto" | "ask" | "deny"`), already under the kind
+  ceiling: a destructive or external action, or one declared to take no
+  standing allow at agent scope, is never `auto`, and the others only by
+  the author's `auto` or a standing grant. A hand or catalog call reads
+  its own key; the `ui` event runs at once; an external server's tool always asks; a
   launch asks, whatever the agent's own policy or a standing answer
   says, since `Aqua.Launch` runs only a launch a person approved on its
   card: it is refused when its reference is no component, and denied
@@ -94,13 +93,45 @@ defmodule Aqua.Loop.Policy do
   """
   @spec decide(Call.t(), map(), keyword()) :: decision()
   def decide(%Call{} = call, policy, opts) do
-    if Keyword.get(opts, :restricted?, false) and not replay_safe?(call),
-      do:
+    cond do
+      not within?(call, Keyword.get(opts, :narrowed)) ->
+        {:deny, outside(call)}
+
+      Keyword.get(opts, :restricted?, false) and not replay_safe?(call) ->
         {:deny,
          "#{key(call)} may not run: an earlier call's outcome is unknown, and until a new turn " <>
-           "starts only replay-safe reads run"},
-      else: decide_open(call, policy, opts)
+           "starts only replay-safe reads run"}
+
+      true ->
+        decide_open(call, policy, opts)
+    end
   end
+
+  @doc """
+  Whether `call` is among the tools a crew request narrowed its job to
+  (`names`, each a tool or a `tool.action`; nil when nothing was
+  narrowed): a bound on every kind of call, hands, catalog actions,
+  external tools and launches alike, judged when the call is decided and
+  again when it dispatches, so an approval never reopens it. The `ui`
+  event and `request_setup` are the console's and are never narrowed away.
+  """
+  @spec within?(Call.t(), [String.t()] | nil) :: boolean()
+  def within?(_call, nil), do: true
+  def within?(%Call{kind: :ui}, _names), do: true
+  def within?(%Call{kind: :hand, tool: "request_setup"}, _names), do: true
+
+  def within?(%Call{kind: :external, tool: tool}, names) when is_list(names),
+    do: tool in names
+
+  def within?(%Call{tool: tool} = call, names) when is_list(names),
+    do: tool in names or key(call) in names
+
+  @doc "The sentence a call outside its job's tools is refused with."
+  @spec outside(Call.t()) :: String.t()
+  def outside(%Call{kind: :external, tool: tool}),
+    do: "#{tool} is outside the tools this job was narrowed to"
+
+  def outside(%Call{} = call), do: "#{key(call)} is outside the tools this job was narrowed to"
 
   @doc """
   Whether `call` is reviewed as safe to run again after an uncertain
@@ -117,12 +148,6 @@ defmodule Aqua.Loop.Policy do
   def replay_safe?(%Call{}), do: false
 
   defp decide_open(%Call{kind: :ui}, _policy, _opts), do: :auto
-
-  defp decide_open(%Call{kind: :clone, target: role}, policy, _opts) do
-    if Map.get(policy, "#{role}.*") == "auto",
-      do: :auto,
-      else: {:deny, "the soul may not clone into #{role}: its policy does not allow it"}
-  end
 
   defp decide_open(%Call{kind: :external}, _policy, _opts), do: :ask
 
@@ -159,9 +184,6 @@ defmodule Aqua.Loop.Policy do
   @spec auto?(Call.t(), map(), keyword()) :: boolean()
   def auto?(%Call{kind: :ui}, _policy, _opts), do: true
   def auto?(%Call{kind: :launch}, _policy, _opts), do: false
-
-  def auto?(%Call{kind: :clone, target: role}, policy, _opts),
-    do: Map.get(policy, "#{role}.*") == "auto"
 
   def auto?(%Call{} = call, policy, opts) do
     case Map.get(policy, key(call)) do
@@ -229,8 +251,7 @@ defmodule Aqua.Loop.Policy do
 
   @doc """
   Whether `call` may run beside other calls of the same batch: only a
-  read does; a write, an execute, a destructive act and a clone run
-  alone.
+  read does; a write, an execute and a destructive act run alone.
   """
   @spec overlap(Call.t()) :: :concurrent | :exclusive
   def overlap(%Call{kind: kind, tool: tool, action: action}) when kind in [:hand, :catalog] do

@@ -372,7 +372,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; roles and scrolls the athanor made are kept unless all=true).",
+        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it hands work to through crew.ask, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; roles and scrolls the athanor made are kept unless all=true).",
       title: "AQUA Agent System"
     )
   end
@@ -409,7 +409,7 @@ defmodule Compendium.Providers.Aqua do
     # file's other reads refuse it (`passthrough_or_unavailable/2`):
     # answering the guides without the agents the store holds would read
     # as an athanor with no assistant. A role that could not be read stays
-    # out of the closet, as one the soul cannot clone into.
+    # out of the closet.
     with {:ok, agents, errors} <- AquaAgent.list(ctx),
          :ok <- soul_read(errors) do
       # The detail flag widens the projection of the already-loaded agents.
@@ -909,9 +909,8 @@ defmodule Compendium.Providers.Aqua do
            if_absent: true
          ) do
       {:ok, _written} ->
-        answer = Map.merge(%{created: name, type: AquaAgent.role_type()}, clone_leave(ctx, name))
         resync_index(ctx)
-        {:ok, answer}
+        {:ok, %{created: name, type: AquaAgent.role_type()}}
 
       {:error, :exists} ->
         {:error, {:invalid_argument, "Role '#{name}' already exists"}}
@@ -927,43 +926,6 @@ defmodule Compendium.Providers.Aqua do
 
       {:error, reason} ->
         passthrough_or_unavailable(reason, "aqua.create #{name}")
-    end
-  end
-
-  # A role no glob on the soul names is a file the runtime never offers,
-  # so the soul's leave to clone into the new role is given in the same
-  # act as the role — one `<name>.*` key on its allowlist. The role stands
-  # either way; an athanor with no soul, or a soul write that fails, is
-  # said in the answer (`cloneable: false` and why), never hidden.
-  defp clone_leave(ctx, name) do
-    soul = AquaPath.soul_name()
-    glob = AquaAgent.clone_glob(name)
-
-    rewrite = fn bytes ->
-      with {:ok, agent} <- AquaAgent.parse(soul, bytes) do
-        policy = Map.put(agent.tool_policy, glob, "auto")
-        {:ok, AquaAgent.serialize(%{agent | tool_policy: policy})}
-      end
-    end
-
-    case Arca.Overlay.update(Sanctum.Context.actor(ctx), AquaPath.agent_file(soul), rewrite) do
-      :ok ->
-        %{cloneable: true}
-
-      {:error, :not_found} ->
-        %{cloneable: false, note: "There is no soul here to clone into it."}
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Compendium.Providers.Aqua] aqua.create #{name}: soul glob failed: #{inspect(reason)}"
-        )
-
-        %{
-          cloneable: false,
-          note:
-            "The soul was not given leave to clone into it: " <>
-              Sanctum.Refusals.render(reason)
-        }
     end
   end
 
@@ -1118,12 +1080,11 @@ defmodule Compendium.Providers.Aqua do
   # One rule at this door, `Compendium.AquaAgent.validate_tool_policy/2`:
   # the grammar the file parser applies, so nothing this door admits can
   # fail to parse back, and then what a person may WRITE — no automatic
-  # destructive or external action on any agent, no `ask` on a role (a
-  # cloned role has no card to raise), no key a role has no use for, no UI
-  # event held at ask. The parser holds a file to the grammar and the
-  # no-effect rule only, so a hand-edited file that says more still loads
-  # and the runtime ceiling demotes what this door would have refused. An
-  # absent argument leaves the policy alone (`apply_updates/2`).
+  # destructive or external action on any agent, no key a role has no use
+  # for, no UI event held at ask. The parser holds a file to the grammar
+  # and the no-effect rule only, so a hand-edited file that says more
+  # still loads and the runtime ceiling demotes what this door would have
+  # refused. An absent argument leaves the policy alone (`apply_updates/2`).
   defp validate_tool_policy(nil, _type), do: :ok
 
   defp validate_tool_policy(policy, type) do

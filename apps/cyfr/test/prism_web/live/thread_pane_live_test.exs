@@ -54,6 +54,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(here), thread.id, %{
         author: user.user_id,
+        sent_by: "person",
         content: "hello"
       })
 
@@ -71,7 +72,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua pin it"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua pin it"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -551,6 +552,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(here), thread.id, %{
         author: user.user_id,
+        sent_by: "person",
         content: "two files",
         payload: %{
           "attachments" => [
@@ -850,6 +852,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(here), thread.id, %{
         author: user.user_id,
+        sent_by: "person",
         content: "and one more thing"
       })
 
@@ -869,6 +872,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       {:ok, _} =
         Threads.append(Sanctum.Context.actor(here), thread.id, %{
           author: "aqua",
+          sent_by: "aqua",
           content: "reply #{n}"
         })
     end
@@ -891,6 +895,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     {:ok, foreign} =
       Threads.append(Sanctum.Context.actor(here), elsewhere.id, %{
         author: user.user_id,
+        sent_by: "person",
         content: "a line of another thread"
       })
 
@@ -1456,5 +1461,183 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     html = consent_required(pane, thread, ref, user.user_id)
     assert html =~ "Open the thread in the chat to give it."
     refute html =~ ~s(data-kind="grant")
+  end
+
+  # Rows as the crew writes them, through the tape, which tells the
+  # thread's viewers: a person's request to `member`, the member's reply
+  # (answering `answers`, its own request first) and its notice.
+  defp request!(here, room, member, task) do
+    {:ok, %{message: row}} =
+      Aqua.Tape.accept(here, room.id, %{
+        message: %{
+          author: here.user_id,
+          sent_by: "person",
+          addressee: member,
+          status: "pending",
+          content: task
+        }
+      })
+
+    row
+  end
+
+  defp reply!(here, room, request, child, text, answers \\ []) do
+    answers = [request.id | answers]
+
+    {:ok, %{message: row}} =
+      Aqua.Tape.accept(here, room.id, %{
+        message: %{
+          author: "aqua",
+          sent_by: request.addressee,
+          addressee: "person",
+          reply_to: request.id,
+          outcome: "done",
+          content: text,
+          payload: %{"from_thread" => child.id, "answers" => answers}
+        },
+        answers: answers
+      })
+
+    row
+  end
+
+  defp notice!(here, room, request, child, text) do
+    {:ok, %{message: row}} =
+      Aqua.Tape.accept(here, room.id, %{
+        message: %{
+          author: "aqua",
+          sent_by: request.addressee,
+          addressee: "person",
+          reply_to: request.id,
+          outcome: "needs_you",
+          content: text,
+          payload: %{"from_thread" => child.id, "approval_id" => "apr_x"}
+        }
+      })
+
+    row
+  end
+
+  defp chat!(conn, athanor, thread) do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(athanor), thread.id))
+    settled_render(view)
+    {view, child!(view, "pane-" <> athanor.id)}
+  end
+
+  defp on_thread(view, pane) do
+    render(view)
+    :sys.get_state(pane.pid).socket.assigns.thread
+  end
+
+  describe "the crew" do
+    test "a room shows a request with the reply under it, by the member's name and its outcome",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "builder")
+      request = request!(here, room, "builder", "Build the site")
+      reply = reply!(here, room, request, child, "Built it")
+
+      pane = open_pane(conn, athanor, room)
+      asked = ~s([id$="-m-#{request.id}"])
+
+      assert has_element?(pane, asked, "You asked builder · answered")
+      assert has_element?(pane, asked, "Build the site")
+      assert has_element?(pane, ~s(#{asked} [id$="-reply-#{reply.id}"]), "builder · done")
+      refute has_element?(pane, ~s([id$="-m-#{reply.id}"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a reply heard on the room marks every request it answers answered, under the one it replies to",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "builder")
+      first = request!(here, room, "builder", "Build the site")
+      second = request!(here, room, "builder", "And test it")
+
+      pane = open_pane(conn, athanor, room)
+      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked builder · pending")
+      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked builder · pending")
+
+      reply = reply!(here, room, first, child, "Built and tested", [second.id])
+      render(pane)
+
+      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked builder · answered")
+      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked builder · answered")
+
+      assert has_element?(
+               pane,
+               ~s([id$="-m-#{first.id}"] [id$="-reply-#{reply.id}"]),
+               "builder · done"
+             )
+
+      refute has_element?(pane, ~s([id$="-m-#{second.id}"] [id$="-reply-#{reply.id}"]))
+      refute has_element?(pane, ~s([id$="-m-#{reply.id}"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a notice says the member needs you and opens the member's thread",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "builder")
+      request = request!(here, room, "builder", "Deploy the site")
+      {view, pane} = chat!(conn, athanor, room)
+
+      notice = notice!(here, room, request, child, "Approve the deploy")
+      shown = ~s([id$="-m-#{notice.id}"])
+      assert has_element?(pane, shown, "builder needs you")
+      assert has_element?(pane, shown, "Approve the deploy")
+
+      pane |> element(~s(#{shown} button[phx-click="open_thread"])) |> render_click()
+      assert_patch(view, PrismWeb.ChatLive.chat_path(route(athanor), child.id))
+      assert %{id: id} = on_thread(view, pane)
+      assert id == child.id
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a room lists its crew threads, and a crew thread leads back to its room and archives through thread.archive",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      {:ok, builder} = Threads.crew_thread(actor, room.id, "builder")
+      {:ok, reviewer} = Threads.crew_thread(actor, room.id, "reviewer")
+      {:ok, _} = Threads.archive(actor, reviewer.id)
+      {view, pane} = chat!(conn, athanor, room)
+
+      assert has_element?(pane, ~s([id$="-crew-#{builder.id}"]), "builder")
+      refute has_element?(pane, ~s([id$="-crew-#{builder.id}"]), "archived")
+      assert has_element?(pane, ~s([id$="-crew-#{reviewer.id}"]), "reviewer · archived")
+      refute has_element?(pane, ~s([id$="-crew-thread"]))
+
+      pane |> element(~s([id$="-crew-#{builder.id}"])) |> render_click()
+      assert_patch(view, PrismWeb.ChatLive.chat_path(route(athanor), builder.id))
+      assert %{id: id} = on_thread(view, pane)
+      assert id == builder.id
+
+      strip = ~s([id$="-crew-thread"])
+      assert has_element?(pane, strip, "builder's thread")
+      assert has_element?(pane, ~s(#{strip} button[phx-click="open_thread"]), "Back to hello")
+      refute has_element?(pane, ~s([id$="-crew-#{builder.id}"]))
+
+      pane |> element(~s(#{strip} button[phx-click="archive"])) |> render_click()
+
+      assert [_] =
+               Arca.Repo.all(
+                 from(l in Arca.Schemas.McpLog,
+                   where: l.tool == "thread" and l.action == "archive",
+                   select: l.input
+                 )
+               )
+
+      assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor, builder.id)
+      assert has_element?(pane, strip, "Archived")
+      refute has_element?(pane, ~s(button[phx-click="archive"]))
+
+      pane |> element(~s(#{strip} button[phx-click="open_thread"])) |> render_click()
+      assert_patch(view, PrismWeb.ChatLive.chat_path(route(athanor), room.id))
+      assert %{id: id} = on_thread(view, pane)
+      assert id == room.id
+      assert has_element?(pane, ~s([id$="-crew-#{builder.id}"]), "builder · archived")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 end

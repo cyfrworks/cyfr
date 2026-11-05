@@ -5,11 +5,10 @@ defmodule Aqua.AquaToolEditsTest do
   @moduledoc """
   The `aqua` tool's edits meet under the lock: a per-key patch keeps a
   concurrent member's toggle, a prompt save names the version it edited,
-  and a new role is one the soul may clone into from the same act.
+  and a new role is its own file and nothing else.
   """
   use ExUnit.Case, async: false
 
-  alias Compendium.AquaAgent
   alias Compendium.AquaPath
 
   setup tags do
@@ -30,7 +29,7 @@ defmodule Aqua.AquaToolEditsTest do
 
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
-    {:ok, %{"cloneable" => true}} = call(ctx, %{"action" => "create", "name" => "scout"})
+    {:ok, %{"created" => "scout"}} = call(ctx, %{"action" => "create", "name" => "scout"})
     %{ctx: ctx}
   end
 
@@ -41,8 +40,17 @@ defmodule Aqua.AquaToolEditsTest do
     policy
   end
 
-  test "a new role is one the soul may clone into, from the same act", %{ctx: ctx} do
-    assert policy(ctx, AquaPath.soul_name())[AquaAgent.clone_glob("scout")] == "auto"
+  test "a new role leaves the soul as it was, and the answer names only what it created",
+       %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, soul} = Arca.get(actor, AquaPath.soul_file())
+
+    assert {:ok, %{"created" => "sentry", "type" => "role"} = created} =
+             call(ctx, %{"action" => "create", "name" => "sentry"})
+
+    assert map_size(created) == 2
+    assert {:ok, ^soul} = Arca.get(actor, AquaPath.soul_file())
+    refute Map.has_key?(policy(ctx, AquaPath.soul_name()), "sentry.*")
   end
 
   # The derived index follows every write to the tree: a created role has a
@@ -111,8 +119,8 @@ defmodule Aqua.AquaToolEditsTest do
   end
 
   test "a patch is judged as the whole it makes", %{ctx: ctx} do
-    # The kind ceiling and the no-ask-on-a-role rule hold for a patched
-    # key exactly as for a replaced map.
+    # The kind ceiling and the no-effect rule hold for a patched key
+    # exactly as for a replaced map.
     assert {:error, {:invalid_argument, _}} =
              call(ctx, %{
                "action" => "update",
@@ -124,7 +132,7 @@ defmodule Aqua.AquaToolEditsTest do
              call(ctx, %{
                "action" => "update",
                "name" => "scout",
-               "tool_policy_patch" => %{"files.read" => "ask"}
+               "tool_policy_patch" => %{"execution.run" => "ask"}
              })
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =

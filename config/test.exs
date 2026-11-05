@@ -187,6 +187,10 @@ config :cyfr, cron_scheduler_enabled: false
 # connection that test lent. Its own tests start one.
 config :cyfr, schedule_notes_enabled: false
 
+# The crew's delivery consumer drains at boot and on a timer too, and for
+# the same reason runs only where a test drains it by hand.
+config :cyfr, crew_delivery_enabled: false
+
 # The projection reconciler starts and attaches nothing: its recovery and
 # its notifications would reconcile from its own process, on a sandbox
 # connection no test owns. Every read's barrier reconciles in the reader,

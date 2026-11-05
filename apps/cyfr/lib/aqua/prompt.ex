@@ -13,11 +13,16 @@ defmodule Aqua.Prompt do
       `"prompt"`, required) and its policy.
     * `authority` — what the consent edge grants. The only source for what
       the prompt may claim the agent can reach.
+    * `crew` — the crew members the agent may ask with `crew.ask`, by
+      name, title and description; none when its policy offers no ask.
+    * `requests` — the thread's requests still waiting on a reply, which
+      are listed with their age.
 
   Orders stable sections before the clock to preserve a reusable prompt
-  prefix: authored prompt, granted capabilities, tool prelude, scroll index
-  and athanor notes. A room excerpt is never part of it: the request
-  carries it as a transient block (`Aqua.Loop.Request`).
+  prefix: authored prompt, granted capabilities, tool prelude, scroll
+  index, athanor notes and the crew; then the open requests, whose ages
+  move. A room excerpt is never part of it: the request carries it as a
+  transient block (`Aqua.Loop.Request`).
 
   ## What the prompt read
 
@@ -38,7 +43,9 @@ defmodule Aqua.Prompt do
 
   @type opts :: [
           agent: map(),
-          authority: term() | nil
+          authority: term() | nil,
+          crew: [map()],
+          requests: [map()]
         ]
 
   @typedoc "A composed prompt: its text and the sources it read."
@@ -66,6 +73,8 @@ defmodule Aqua.Prompt do
         Aqua.Prelude.system_prelude(tool_policy),
         scrolls(ctx),
         notes,
+        crew(Keyword.get(opts, :crew, [])),
+        requests(Keyword.get(opts, :requests, [])),
         clock()
       ])
 
@@ -90,6 +99,79 @@ defmodule Aqua.Prompt do
       ", ",
       Calendar.strftime(now, "%H:%M UTC")
     ]
+  end
+
+  # Who the agent may hand a job to.
+  defp crew([]), do: []
+
+  defp crew(members) do
+    [
+      "\n\n---\n\n## Crew\n\nHand a job to one of these with `crew.ask`. Each works it in a " <>
+        "thread of its own under this one and replies here when it is done, failed or stopped, " <>
+        "or when it needs the person; nothing waits for the reply.\n",
+      Enum.map(members, fn member ->
+        title = member["title"] || member["name"]
+        description = member["description"] || ""
+
+        [
+          "- ",
+          member["name"],
+          " — ",
+          title,
+          if(description == "", do: [], else: [": ", description]),
+          "\n"
+        ]
+      end)
+    ]
+  end
+
+  # The thread's requests still waiting on a reply, oldest first, with
+  # their age: what was asked stays in view however long the thread
+  # grows (`Aqua.Loop.Planner.pinned?/1`).
+  defp requests([]), do: []
+
+  defp requests(rows) do
+    now = DateTime.utc_now()
+
+    [
+      "\n\n---\n\n## Open requests\n\nAsked and not yet answered; each reply arrives here as a " <>
+        "message of its own.\n",
+      Enum.map(rows, fn row ->
+        asker = if row.sent_by == "person", do: "the person", else: row.sent_by
+
+        [
+          "- ",
+          row.id,
+          " to ",
+          row.addressee,
+          ", asked by ",
+          asker,
+          " ",
+          age(row.inserted_at, now),
+          " ago: ",
+          first_line(row.content),
+          "\n"
+        ]
+      end)
+    ]
+  end
+
+  defp age(%DateTime{} = at, now) do
+    seconds = max(DateTime.diff(now, at, :second), 0)
+
+    cond do
+      seconds < 120 -> "#{seconds}s"
+      seconds < 7_200 -> "#{div(seconds, 60)}m"
+      seconds < 172_800 -> "#{div(seconds, 3_600)}h"
+      true -> "#{div(seconds, 86_400)}d"
+    end
+  end
+
+  defp age(_at, _now), do: "a while"
+
+  defp first_line(content) do
+    line = (content || "") |> String.trim() |> String.split("\n", parts: 2) |> hd()
+    if String.length(line) > 160, do: String.slice(line, 0, 160) <> "…", else: line
   end
 
   # Describe only granted scopes, using the names from

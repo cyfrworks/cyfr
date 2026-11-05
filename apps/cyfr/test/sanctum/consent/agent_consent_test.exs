@@ -3,13 +3,14 @@
 
 defmodule Sanctum.Consent.AgentConsentTest do
   @moduledoc """
-  The athanor's agents consent as sources: the fill mints the shipped soul
-  and roles with the soul's edges into its roles and each agent's edge
-  into its model selecting the model's default profile; the shape reads
-  the model target and never the prompt; a role a member authors, and a
-  soul the member edits by authoring it, are not machine-minted — they
-  consent through the walk — and the loaded authority carries the tools
-  the policy names.
+  The athanor's agents consent as sources, each its own: the fill mints
+  the shipped soul and roles with each agent's edge into its model
+  selecting the model's default profile and no edge from one agent into
+  another; the shape reads the model target and never the prompt; a role
+  a member authors is not machine-minted — it consents through the walk
+  and leaves the soul's consent alone — and the loaded authority carries
+  the tools the policy names, never a pattern no catalogued action
+  matches.
   """
 
   use ExUnit.Case, async: false
@@ -58,25 +59,23 @@ defmodule Sanctum.Consent.AgentConsentTest do
     edge
   end
 
-  defp bind_claude!(ctx, opts \\ []) do
+  defp bind_claude!(ctx) do
     {:ok, entry} =
       Sanctum.TestContext.create_vault(ctx, %{
-        name: Keyword.get(opts, :name, "claude key"),
+        name: "claude key",
         kind: "api_key",
         # The provider claude's need names; the shipped claude reads its
         # key itself, so the entry is disclosed.
         provider_hint: "anthropic.com",
-        fields: %{"ANTHROPIC_API_KEY" => Keyword.get(opts, :key, "sk-test")},
+        fields: %{"ANTHROPIC_API_KEY" => "sk-test"},
         destination: %{"hosts" => ["api.anthropic.com"]},
         disclose: true
       })
 
-    label = Keyword.get(opts, :label, "default")
-    {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.claude", label: label})
+    {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.claude"})
 
     decisions = %{
       ref: "catalyst:local.claude",
-      label: label,
       bindings: [%{need: "api_key", entry_id: entry.id}]
     }
 
@@ -107,15 +106,14 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
-  test "the fill mints the shipped soul and roles, roles first, with their edges", %{ctx: ctx} do
+  test "the fill mints the shipped soul and roles after their models, with their edges", %{
+    ctx: ctx
+  } do
     {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
     assert @soul in minted
 
     for role <- ~w(artisan builder explorer planner web),
         do: assert("agent:local.#{role}" in minted)
-
-    assert Enum.find_index(minted, &(&1 == "agent:local.web")) <
-             Enum.find_index(minted, &(&1 == @soul))
 
     assert Enum.find_index(minted, &(&1 == "catalyst:local.claude")) <
              Enum.find_index(minted, &(&1 == "agent:local.web"))
@@ -141,22 +139,23 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert Enum.all?(refs, &(&1.vault_entry_id == nil and &1.share_id == nil))
 
     # The soul's edge into its model selects the model's default profile;
-    # its edge into a role carries no vault; its edges into its hands
-    # carry the hands' own grants.
+    # its edges into its hands carry the hands' own grants; no role is a
+    # node of its graph.
     assert %{via: %{label: "default"}} =
              edge!(head.resolved_policy, @soul, "catalyst:local.claude").vault
 
-    assert edge!(head.resolved_policy, @soul, "agent:local.web").vault == nil
     assert edge!(head.resolved_policy, @soul, "catalyst:local.files").storage.paths == ["data/"]
+
+    assert Jason.decode!(head.resolved_policy)["nodes"]
+           |> Map.keys()
+           |> Enum.filter(&String.starts_with?(&1, "agent:")) == [@soul]
 
     assert "api.anthropic.com" in edge!(head.resolved_policy, @soul, "catalyst:local.claude").egress.domains
 
     # The soul's own ingress carries the catalog actions its policy names,
-    # expanded; a hand's actions and a role's clone glob are edges, not
-    # actions.
+    # expanded; a hand's actions are an edge, not actions.
     ingress = edge!(head.resolved_policy, @soul, "@ingress")
     assert "component.list" in ingress.tools and "aqua.list" in ingress.tools
-    refute Enum.any?(ingress.tools, &String.starts_with?(&1, "artisan."))
     refute Enum.any?(ingress.tools, &String.starts_with?(&1, "files."))
 
     # A role's edge into its own model — the explorer runs on gemini.
@@ -214,25 +213,24 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.web")
     assert input.model_target == "catalyst:local.claude#another-model"
 
-    # A role's retargeting is a moved dependency release for the soul.
+    # A role's retargeting leaves the soul's shape alone: the soul holds
+    # no edge into it.
     {_, soul_head, _} = head!(ctx, @soul)
-    {:ok, soul_live} = ShapeDerivation.live_digest(ctx, @soul)
-    refute soul_live == soul_head.shape_digest
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, soul_head.shape_digest}
   end
 
-  test "a member's role is not machine-minted, and the soul it changed consents through the walk",
+  test "a member's role is not machine-minted, consents through the walk, and leaves the soul alone",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, soul_head, _} = head!(ctx, @soul)
 
-    # Authoring a role through the tool edits the soul too: it may clone
-    # into the new role.
-    {:ok, %{"cloneable" => true}} =
+    {:ok, %{"created" => "scout"}} =
       Cyfr.Test.AquaTool.call(ctx, %{"action" => "create", "name" => "scout"})
 
     {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
     assert {"agent:local.scout", :not_vouched} in skipped
-    assert {@soul, :shape_moved} in skipped
+    assert {@soul, :already_bootstrapped} in skipped
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, soul_head.shape_digest}
 
     assert {:ok, []} =
              Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.scout")
@@ -254,15 +252,23 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, [scout]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.scout")
     assert scout.id == profile_id
 
-    # And the soul, whose closure the member widened: it selects the key
-    # the member bound on claude — a selection needs a bound lender.
+    {_, soul_still, _} = head!(ctx, @soul)
+    assert soul_still.revision == soul_head.revision
+  end
+
+  test "a role's glob left on the soul asks for nothing: no tool, no edge into the role",
+       %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "builder.*", "auto")})
+
+    # The soul consents through the walk: it selects the key the member
+    # bound on claude — a selection needs a bound lender.
     bind_claude!(ctx)
     {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
-    assert plan.expected_consent_revision == soul_head.revision
     decisions = %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]}
     assert {:ok, preview} = Commit.preview(ctx, decisions)
 
-    assert {:ok, %{revision: revision}} =
+    assert {:ok, _} =
              Commit.commit(ctx, %{
                decisions: decisions,
                plan_token: plan.plan_token,
@@ -271,13 +277,11 @@ defmodule Sanctum.Consent.AgentConsentTest do
                expected_consent_revision: plan.expected_consent_revision
              })
 
-    assert revision == soul_head.revision + 1
-    {_, consented, _} = head!(ctx, @soul)
-    assert consented.granted_via != "bootstrap"
-    assert edge!(consented.resolved_policy, @soul, "agent:local.scout").vault == nil
-
-    assert %{via: %{label: "default"}} =
-             edge!(consented.resolved_policy, @soul, "catalyst:local.claude").vault
+    {_, head, _} = head!(ctx, @soul)
+    refute Map.has_key?(Jason.decode!(head.resolved_policy)["nodes"], "agent:local.builder")
+    ingress = edge!(head.resolved_policy, @soul, "@ingress")
+    assert "component.list" in ingress.tools
+    refute Enum.any?(ingress.tools, &String.starts_with?(&1, "builder."))
   end
 
   test "an edited shipped role is not re-minted", %{ctx: ctx} do
@@ -337,54 +341,6 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {_, healed, _} = head!(ctx, @soul)
     assert healed.revision == first.revision + 1
     assert healed.granted_via == "bootstrap"
-  end
-
-  test "two roles on one catalyst carry two keys under the soul", %{ctx: ctx} do
-    {:ok, _} = Bootstrap.run(ctx)
-    home = bind_claude!(ctx)
-    work = bind_claude!(ctx, label: "work", name: "work key", key: "sk-work")
-
-    {_, soul_head, _} = head!(ctx, @soul)
-    {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
-
-    decisions = %{
-      ref: @soul,
-      selections: [
-        %{from: "agent:local.web", dep: "catalyst:local.claude", label: "default"},
-        %{from: "agent:local.artisan", dep: "catalyst:local.claude", label: "work"}
-      ]
-    }
-
-    {:ok, preview} = Commit.preview(ctx, decisions)
-
-    {:ok, %{revision: revision}} =
-      Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
-
-    assert revision == soul_head.revision + 1
-    {_, consented, _} = head!(ctx, @soul)
-
-    assert edge!(consented.resolved_policy, "agent:local.web", "catalyst:local.claude").vault.via.label ==
-             "default"
-
-    assert edge!(consented.resolved_policy, "agent:local.artisan", "catalyst:local.claude").vault.via.label ==
-             "work"
-
-    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
-
-    {:ok, web} =
-      Blob.lookup_edge(authority.policy, "agent:local.web", "catalyst:local.claude", "")
-
-    {:ok, artisan} =
-      Blob.lookup_edge(authority.policy, "agent:local.artisan", "catalyst:local.claude", "")
-
-    assert web.vault.entry_id == home.id
-    assert artisan.vault.entry_id == work.id
   end
 
   test "the soul's authority loads with its tools and its edge into the model", %{ctx: ctx} do

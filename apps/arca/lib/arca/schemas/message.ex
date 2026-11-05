@@ -12,12 +12,14 @@ defmodule Arca.Schemas.Message do
   `pending → running → approved | declined | error`, with the decision in
   `resolution` and the person who made it in `resolved_by`.
 
-  A request to a crew member names it in `addressee` and is `pending` until
-  a reply answers it: then `answered`, with the reply's id in `resolved_by`.
-  A reply or notice names the request in `reply_to` and its `outcome`
-  (`outcomes/0`); `sent_by` is `"person"` or an agent name. Requests,
-  replies and notices are not built yet: `changeset/2` casts none of these
-  columns.
+  `sent_by` is who said it, `"person"` or an agent name, on every row: a
+  turn's own rows carry its agent, so what anyone else wrote into a turn
+  is told apart by it. A request to a crew member names it in `addressee`
+  and is `pending` until a reply answers it: then `answered`, with the
+  reply's id in `resolved_by`. A reply names the request it answers in
+  `reply_to`, its `outcome` (`outcomes/0`) and, in `addressee`, who the
+  request came from; a notice is a reply row whose outcome is
+  `needs_you`, which answers nothing.
   """
 
   use Ecto.Schema
@@ -93,15 +95,29 @@ defmodule Arca.Schemas.Message do
     :inserted_at,
     :turn_id,
     :approval_id,
-    :client_id
+    :client_id,
+    :sent_by,
+    :addressee,
+    :reply_to,
+    :outcome
   ]
 
   def changeset(row, attrs) do
     row
     |> cast(attrs, @fields)
-    |> validate_required([:id, :thread_id, :athanor_id, :seq, :author, :kind, :inserted_at])
+    |> validate_required([
+      :id,
+      :thread_id,
+      :athanor_id,
+      :seq,
+      :author,
+      :sent_by,
+      :kind,
+      :inserted_at
+    ])
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:outcome, outcomes())
     |> unique_constraint([:thread_id, :seq])
     |> unique_constraint([:thread_id, :client_id])
     # The primary key, under the name each adapter reports it by.

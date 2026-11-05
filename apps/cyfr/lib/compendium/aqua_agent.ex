@@ -192,14 +192,6 @@ defmodule Compendium.AquaAgent do
     end
   end
 
-  @doc """
-  The key on a soul's allowlist that gives it leave to clone into the role
-  `name` — the delegation glob the runtime reads (`Aqua.ToolGrants`) and
-  every writer of it spells through here.
-  """
-  @spec clone_glob(String.t()) :: String.t()
-  def clone_glob(name) when is_binary(name), do: name <> ".*"
-
   @soul_type "soul"
   @role_type "role"
 
@@ -310,10 +302,9 @@ defmodule Compendium.AquaAgent do
   top of it. A door refuses what a person must not be able to write: a
   UI event held at anything but `auto`, an automatic destructive or
   external action on any agent, a `tool.*` glob at `auto` whose actions
-  include one of those, an `ask` on a role (a cloned role's answer is
-  a tool result, not a turn — it has no card to raise), and, at any value,
-  a key that has no effect on a role (`{:tool_policy_no_effect, key}`):
-  `execution.run`, because a role launches nothing and every launch asks.
+  include one of those, and, at any value, a key that has no effect on a
+  role (`{:tool_policy_no_effect, key}`): `execution.run`, because a role
+  launches nothing and every launch asks.
 
   The parser holds a file to the grammar and to the no-effect rule only, so
   a hand-edited file that says more than a door would allow still loads;
@@ -337,16 +328,15 @@ defmodule Compendium.AquaAgent do
     with :ok <- check_effect(policy, agent_type),
          :ok <- check_tool_policy(policy),
          :ok <- check_auto_only(policy) do
-      check_authored(policy, agent_type)
+      check_authored(policy)
     end
   end
 
-  # Keys that have no effect on a role at any value. A launch always asks
-  # (the runtime ceiling holds `execution.run` at ask however it is
-  # written) and a cloned role has no card to raise, so a role launches
-  # nothing. Checked ahead of the grammar's value rule and the role's `ask`
-  # rule, so whatever the key is held at, the refusal names why it is there
-  # for nothing rather than how to hold it.
+  # Keys that have no effect on a role at any value: only the soul
+  # launches, and a launch always asks (the runtime ceiling holds
+  # `execution.run` at ask however it is written). Checked ahead of the
+  # grammar's value rule, so whatever the key is held at, the refusal
+  # names why it is there for nothing rather than how to hold it.
   @no_effect_on_roles ["execution.run"]
 
   defp check_effect(policy, @role_type) when is_map(policy) do
@@ -358,22 +348,10 @@ defmodule Compendium.AquaAgent do
 
   defp check_effect(_policy, _agent_type), do: :ok
 
-  defp check_authored(policy, agent_type) do
-    role? = agent_type == @role_type
-
-    Enum.find_value(policy, :ok, fn {key, value} ->
-      cond do
-        role? and value == "ask" ->
-          {:error,
-           "#{key} cannot be held at ask on a role — a cloned role has no card to raise; " <>
-             "grant it (auto) or leave it out"}
-
-        value == "auto" ->
-          auto_refusal(key)
-
-        true ->
-          nil
-      end
+  defp check_authored(policy) do
+    Enum.find_value(policy, :ok, fn
+      {key, "auto"} -> auto_refusal(key)
+      _held -> nil
     end)
   end
 

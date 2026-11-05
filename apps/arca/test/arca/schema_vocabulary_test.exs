@@ -102,13 +102,14 @@ defmodule Arca.SchemaVocabularyTest do
       assert Arca.Schemas.Profile.statuses() == Arca.StatusTransitions.statuses(:profiles)
     end
 
-    test "a message's status takes answered, and a written thread is its person's own" do
+    test "a message's status takes answered, and a thread's kind is its own or a crew member's" do
       message = %{
         id: "msg_vocab",
         thread_id: "thread_vocab",
         athanor_id: "ath_vocab",
         seq: 1,
         author: "agent",
+        sent_by: "aqua",
         kind: "text",
         inserted_at: DateTime.utc_now()
       }
@@ -131,22 +132,24 @@ defmodule Arca.SchemaVocabularyTest do
 
       refute changeset.valid?
 
-      # Crew threads are not built: the changeset casts no kind, parent or
-      # brain session.
-      changeset =
-        Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, %{
-          id: "thread_vocab",
-          athanor_id: "ath_vocab",
-          created_by: "user_vocab",
-          kind: "crew",
-          parent_id: "thread_room",
-          brain_session: "session"
-        })
+      # A child thread names its room; the brain's session is the loop's
+      # to keep, never a changeset's.
+      thread = %{
+        id: "thread_vocab",
+        athanor_id: "ath_vocab",
+        created_by: "user_vocab",
+        kind: "crew",
+        parent_id: "thread_room",
+        brain_session: "session"
+      }
 
+      changeset = Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, thread)
       assert changeset.valid?
 
-      assert %{kind: "own", parent_id: nil, brain_session: nil} =
+      assert %{kind: "crew", parent_id: "thread_room", brain_session: nil} =
                Ecto.Changeset.apply_changes(changeset)
+
+      refute Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, %{thread | kind: "bogus"}).valid?
     end
   end
 

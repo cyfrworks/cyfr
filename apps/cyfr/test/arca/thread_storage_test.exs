@@ -49,7 +49,7 @@ defmodule Arca.ThreadStorageTest do
     assert {:error, :not_found} = Threads.get(other, thread.id)
 
     assert {:error, :not_found} =
-             Threads.append(other, thread.id, %{author: "x", content: "hi"})
+             Threads.append(other, thread.id, %{author: "x", sent_by: "person", content: "hi"})
   end
 
   test "an athanor-less actor is refused before any query, nil and empty alike", %{ctx: ctx} do
@@ -72,11 +72,15 @@ defmodule Arca.ThreadStorageTest do
     {:ok, m1} =
       Threads.append(ctx, thread.id, %{
         author: ctx.user_id,
+        sent_by: "person",
         content: "Plan my week\nplease"
       })
 
-    {:ok, m2} = Threads.append(bob, thread.id, %{author: "aqua", content: "Sure."})
-    {:ok, m3} = Threads.append(bob, thread.id, %{author: bob.user_id, content: "Thanks"})
+    {:ok, m2} =
+      Threads.append(bob, thread.id, %{author: "aqua", sent_by: "aqua", content: "Sure."})
+
+    {:ok, m3} =
+      Threads.append(bob, thread.id, %{author: bob.user_id, sent_by: "person", content: "Thanks"})
 
     assert [m1.seq, m2.seq, m3.seq] == [1, 2, 3]
 
@@ -97,6 +101,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, msg} =
       Threads.append(ctx, thread.id, %{
         author: "aqua",
+        sent_by: "aqua",
         payload: %{"intent" => %{"title" => "t"}}
       })
 
@@ -112,6 +117,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, apr} =
       Threads.append(ctx, thread.id, %{
         author: "aqua",
+        sent_by: "aqua",
         kind: "approval",
         content: "Send it",
         status: "pending"
@@ -166,50 +172,43 @@ defmodule Arca.ThreadStorageTest do
     {:ok, thread} = Threads.create(ctx)
 
     {:ok, msg} =
-      Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+      Threads.append(ctx, thread.id, %{author: "aqua", sent_by: "aqua", content: "x"})
 
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
 
-    :ok = Threads.delete(ctx, thread.id)
+    {:ok, %{cancelled: []}} = Threads.delete(ctx, thread.id)
     assert Threads.messages(ctx, thread.id) == []
     assert {:error, :not_found} = Threads.get(ctx, thread.id)
     refute Arca.exists?(ctx, blob)
   end
 
-  test "delete goes bytes-first: a failed blob delete keeps the rows", %{ctx: ctx} do
+  test "delete commits the rows before the bytes: a failed blob delete leaves them to the sweep",
+       %{ctx: ctx} do
     {:ok, thread} = Threads.create(ctx)
 
     {:ok, msg} =
-      Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+      Threads.append(ctx, thread.id, %{author: "aqua", sent_by: "aqua", content: "x"})
 
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
 
-    prev = Application.get_env(:arca, :storage_adapter)
+    # The tree refuses after the commit: the deletion stands.
+    assert {:ok, %{cancelled: []}} =
+             Prima.Test.Env.with_app_env(
+               :arca,
+               :storage_adapter,
+               Arca.ThreadStorageTest.FailingDeleteAdapter,
+               fn -> Threads.delete(ctx, thread.id) end
+             )
 
-    Application.put_env(
-      :arca,
-      :storage_adapter,
-      Arca.ThreadStorageTest.FailingDeleteAdapter
-    )
+    assert {:error, :not_found} = Threads.get(ctx, thread.id)
+    assert Threads.messages(ctx, thread.id) == []
+    assert Arca.exists?(ctx, blob)
 
-    on_exit(fn ->
-      if prev,
-        do: Application.put_env(:arca, :storage_adapter, prev),
-        else: Application.delete_env(:arca, :storage_adapter)
-    end)
-
-    # The DB never claims a deletion the tree didn't make.
-    assert {:error, {:storage_delete_failed, :eacces}} =
-             Threads.delete(ctx, thread.id)
-
-    assert {:ok, _} = Threads.get(ctx, thread.id)
-    assert [_] = Threads.messages(ctx, thread.id)
-
-    # Healed adapter: the retry completes rows and bytes together.
-    Application.put_env(:arca, :storage_adapter, prev || Arca.Adapters.Local)
-    assert :ok = Threads.delete(ctx, thread.id)
+    # No row backs the bytes, so the retention sweep reclaims them.
+    assert {:ok, reclaimed} = Threads.sweep_orphaned_blobs(ctx)
+    assert reclaimed >= 1
     refute Arca.exists?(ctx, blob)
   end
 
@@ -235,7 +234,7 @@ defmodule Arca.ThreadStorageTest do
     for n <- 1..4,
         do:
           {:ok, _} =
-            Threads.append(ctx, thread.id, %{author: "u", content: "m#{n}"})
+            Threads.append(ctx, thread.id, %{author: "u", sent_by: "person", content: "m#{n}"})
 
     seqs = fn opts ->
       Threads.messages(ctx, thread.id, opts) |> Enum.map(& &1.seq)
@@ -266,6 +265,7 @@ defmodule Arca.ThreadStorageTest do
       {:ok, _} =
         Threads.append(ctx, thread.id, %{
           author: author,
+          sent_by: "aqua",
           kind: "text",
           content: "not a title"
         })
@@ -281,6 +281,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, msg} =
       Threads.append(ctx, thread.id, %{
         author: "u",
+        sent_by: "person",
         content: "@aqua what's the plan?"
       })
 
@@ -296,14 +297,14 @@ defmodule Arca.ThreadStorageTest do
     {:ok, fresh} = Threads.create(ctx)
 
     {:ok, _} =
-      Threads.append(ctx, fresh.id, %{author: "aqua", content: "recent"})
+      Threads.append(ctx, fresh.id, %{author: "aqua", sent_by: "aqua", content: "recent"})
 
     old = DateTime.add(DateTime.utc_now(), -400 * 86_400, :second)
     {:ok, _} = Threads.update(ctx, stale.id, %{last_message_at: old})
 
     {:ok, _} =
       Arca.TurnStorage.accept_message(ctx, running.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 

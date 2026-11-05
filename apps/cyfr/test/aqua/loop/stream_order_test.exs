@@ -180,7 +180,7 @@ defmodule Aqua.Loop.StreamOrderTest do
   defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: text},
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 

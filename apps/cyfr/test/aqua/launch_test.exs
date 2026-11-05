@@ -101,7 +101,7 @@ defmodule Aqua.LaunchTest do
   defp started!(sender, thread, pins) do
     {:ok, %{turn: turn}} =
       Tape.accept(sender, thread.id, %{
-        message: %{author: sender.user_id, content: "@aqua launch it"},
+        message: %{author: sender.user_id, sent_by: "person", content: "@aqua launch it"},
         turn: %{agent: "aqua", requested_by: sender.user_id}
       })
 
@@ -243,7 +243,7 @@ defmodule Aqua.LaunchTest do
   test "a context without an origin writes no turn", %{ctx: ctx, thread: thread} do
     assert {:error, :no_origin} =
              Tape.accept(%{ctx | origin: nil}, thread.id, %{
-               message: %{author: ctx.user_id, content: "@aqua launch it"},
+               message: %{author: ctx.user_id, sent_by: "person", content: "@aqua launch it"},
                turn: %{agent: "aqua", requested_by: ctx.user_id}
              })
   end
@@ -1081,7 +1081,7 @@ defmodule Aqua.LaunchTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(sender, thread.id, %{
-        message: %{author: sender.user_id, content: "@aqua go"},
+        message: %{author: sender.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: sender.user_id, origin: :interactive}
       })
 

@@ -9,9 +9,11 @@ defmodule Aqua do
   - `Aqua.Runner` — one process per thread; every send is admitted
     and accepted through it, and it owns the turns' lifecycle.
   - `Aqua.Loop` — one turn, run by the process that holds its root: the
-    model rounds, the dispatch, the cards, the clones (`Aqua.Loop.Turn`,
+    model rounds, the dispatch, the cards (`Aqua.Loop.Turn`,
     `Aqua.Loop.Binding`, `Aqua.Loop.Request`, `Aqua.Loop.Planner`,
-    `Aqua.Loop.Policy`, `Aqua.Loop.Clone`).
+    `Aqua.Loop.Policy`).
+  - `Aqua.Crew` — the soul's hand-off to a crew member, worked in a child
+    thread of the room, and the delivery of requests and replies.
   - `Aqua.Tape` — the one persistence port of the runner and the loop.
   - `Aqua.Approvals` — a card decided once, from its own rows;
     `Aqua.Standing` — what may stand for later calls; `Aqua.Launch` — an

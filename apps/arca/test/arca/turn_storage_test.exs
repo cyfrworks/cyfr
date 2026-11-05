@@ -6,8 +6,8 @@ defmodule Arca.TurnStorageTest do
   The turn store owns persistence and the transactional guards, not
   policy: its vocabulary is `Prima.TurnState`'s, it keeps no recovery cap
   of its own, and the limit a turn is held to is the one its row stores —
-  written from the caller's policy when the turn starts, carried by a
-  clone, and spent one recovery at a time under the turn's lock, so two
+  written from the caller's policy when the turn starts, and spent one
+  recovery at a time under the turn's lock, so two
   members recovering one turn from the same fence spend one recovery.
   """
 
@@ -40,18 +40,13 @@ defmodule Arca.TurnStorageTest do
       {:ok, actor: actor, thread: thread}
     end
 
-    test "an accepted turn stores none; its start stores the caller's, and a clone carries it",
+    test "an accepted turn stores none; its start stores the caller's",
          %{actor: actor, thread: thread} do
       turn = accept!(actor, thread)
       assert turn.recovery_limit == nil
 
       {:ok, started} = TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 5})
       assert started.recovery_limit == 5
-
-      {:ok, %{turn: clone}} =
-        TurnStorage.open_clone_turn(actor, turn.id, %{role: "helper", fence: started.fence})
-
-      assert clone.recovery_limit == 5
     end
 
     test "each recovery spends one of the stored limit, and the next past it is refused",
@@ -136,7 +131,12 @@ defmodule Arca.TurnStorageTest do
          %{actor: actor, thread: thread} do
       assert {:ok, %{turn: turn}} =
                TurnStorage.accept_message(actor, thread.id, %{
-                 message: %{author: actor.user_id, content: "@aqua go", client_id: "cli_origin"},
+                 message: %{
+                   author: actor.user_id,
+                   sent_by: "person",
+                   content: "@aqua go",
+                   client_id: "cli_origin"
+                 },
                  turn: %{agent: "aqua", requested_by: actor.user_id, origin: :programmatic}
                })
 
@@ -145,13 +145,6 @@ defmodule Arca.TurnStorageTest do
 
       assert {:ok, %{turn: %{origin: "programmatic"}}} =
                TurnStorage.accepted(actor, thread.id, "cli_origin")
-
-      {:ok, started} = TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 1})
-
-      {:ok, %{turn: clone}} =
-        TurnStorage.open_clone_turn(actor, turn.id, %{role: "helper", fence: started.fence})
-
-      assert clone.origin == "programmatic"
     end
 
     test "a turn naming none is refused with nothing written; one outside the enum is refused",
@@ -161,7 +154,7 @@ defmodule Arca.TurnStorageTest do
       for named <- [%{}, %{origin: nil}] do
         assert {:error, :no_origin} =
                  TurnStorage.accept_message(actor, thread.id, %{
-                   message: %{author: actor.user_id, content: "@aqua go"},
+                   message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
                    turn: Map.merge(%{agent: "aqua", requested_by: actor.user_id}, named)
                  })
       end
@@ -172,7 +165,7 @@ defmodule Arca.TurnStorageTest do
 
       assert {:error, {:invalid, %{origin: _}}} =
                TurnStorage.accept_message(actor, thread.id, %{
-                 message: %{author: actor.user_id, content: "@aqua go"},
+                 message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
                  turn: %{agent: "aqua", requested_by: actor.user_id, origin: "batch"}
                })
     end
@@ -181,7 +174,7 @@ defmodule Arca.TurnStorageTest do
   defp accept!(actor, thread) do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: actor.user_id, content: "@aqua go"},
+        message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 

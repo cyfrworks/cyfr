@@ -155,7 +155,7 @@ defmodule Aqua.LoopTest do
   defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: text},
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -912,7 +912,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "actually, never mind"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "actually, never mind"},
         steer_turn_id: turn.id
       })
 
@@ -952,7 +952,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "one more thing"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "one more thing"},
         steer_turn_id: turn.id
       })
 
@@ -976,7 +976,7 @@ defmodule Aqua.LoopTest do
 
     assert {:error, :turn_over} =
              Tape.accept(ctx, elsewhere.id, %{
-               message: %{author: ctx.user_id, content: "wrong room"},
+               message: %{author: ctx.user_id, sent_by: "person", content: "wrong room"},
                steer_turn_id: turn.id
              })
 
@@ -1029,7 +1029,7 @@ defmodule Aqua.LoopTest do
     # write is refused until a new turn starts.
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "carry on, carefully"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "carry on, carefully"},
         steer_turn_id: turn.id
       })
 
@@ -1071,7 +1071,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua what did they say?"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua what did they say?"},
         turn: %{
           agent: "aqua",
           requested_by: ctx.user_id,
@@ -1158,40 +1158,6 @@ defmodule Aqua.LoopTest do
     {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
     left = DateTime.diff(approval.expires_at, DateTime.utc_now(), :second)
     assert left in 3500..3600
-  end
-
-  test "a role's unknown outcome stops the soul", %{ctx: ctx, thread: thread} do
-    turn = accept!(ctx, thread, "@aqua fetch it")
-    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
-
-    ScriptedWorker.script([
-      calls([{"r1", "web", %{"task" => "read the page"}}]),
-      # The clone's own round, and the hand that dies under it.
-      calls([{"w1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
-      {:crash, :before_response}
-    ])
-
-    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
-    {:ok, steps} = Tape.steps(ctx, turn)
-
-    assert %{kind: "clone", dispatch_state: "uncertain"} =
-             clone_step = Enum.find(steps, &(&1.kind == "clone"))
-
-    [clone] = Arca.Repo.all(from(t in Arca.Schemas.Turn, where: t.parent_turn_id == ^turn.id))
-    assert clone.status == "uncertain"
-    {:ok, clone_steps} = Tape.steps(ctx, clone)
-
-    assert %{action: "get", dispatch_state: "uncertain"} =
-             Enum.find(clone_steps, &(&1.action == "get"))
-
-    [row] =
-      Enum.filter(
-        Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-        &(&1.kind == "turn_aborted" and &1.turn_id == turn.id)
-      )
-
-    assert %{"covers" => [%{"step_id" => covered}]} = Threads.payload(row)
-    assert covered == clone_step.id
   end
 
   test "the first unknown outcome stops the group; what still runs is cancelled and covered", %{

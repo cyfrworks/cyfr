@@ -5,9 +5,8 @@ defmodule Aqua.Loop.BindingTest do
   @moduledoc """
   One table from a model-visible call to what runs it: hands on their
   catalysts with the canonical operation, catalog actions in-chain,
-  external servers under their wire name, roles as clones, the `ui`
-  event, and an `execution.run` that is a hand, a refused agent, or a
-  launch.
+  external servers under their wire name, the `ui` event, and an
+  `execution.run` that is a hand, a refused agent, or a launch.
   """
 
   use ExUnit.Case, async: true
@@ -51,7 +50,7 @@ defmodule Aqua.Loop.BindingTest do
     assert {:error, message} =
              Binding.resolve("execution.run", %{"reference" => "agent:local.builder"})
 
-    assert message =~ "cloned as a role"
+    assert message =~ "crew.ask"
 
     assert {:ok,
             %Call{
@@ -76,10 +75,7 @@ defmodule Aqua.Loop.BindingTest do
     assert {:error, "unknown tool: notes"} = Binding.resolve("notes", %{})
   end
 
-  test "roles, the ui event, external servers and catalog actions resolve to their kinds" do
-    assert {:ok, %Call{kind: :clone, target: "builder"}} =
-             Binding.resolve("builder", %{"task" => "x"}, roles: ["builder"])
-
+  test "the ui event, external servers and catalog actions resolve to their kinds" do
     assert {:ok, %Call{kind: :ui, tool: "ui", action: "navigate"}} =
              Binding.resolve("ui", %{"action" => "navigate"})
 
@@ -122,11 +118,11 @@ defmodule Aqua.Loop.BindingTest do
     assert text =~ "truncated: 10 more bytes"
   end
 
-  test "a launch, a clone and the ui event are not dispatched by the table" do
+  test "a launch and the ui event are not dispatched by the table" do
     {:ok, launch} = Binding.resolve("execution.run", %{"reference" => "formula:local.demo:1.0.0"})
     assert {:error, {:not_dispatchable, :launch}} = Binding.dispatch(launch, %{})
-    {:ok, clone} = Binding.resolve("builder", %{}, roles: ["builder"])
-    assert {:error, {:not_dispatchable, :clone}} = Binding.dispatch(clone, %{})
+    {:ok, ui} = Binding.resolve("ui", %{"action" => "navigate"})
+    assert {:error, {:not_dispatchable, :ui}} = Binding.dispatch(ui, %{})
   end
 
   test "the charge identity is the step's key and generation under the turn's attempt" do

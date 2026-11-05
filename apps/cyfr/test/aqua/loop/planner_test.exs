@@ -109,6 +109,23 @@ defmodule Aqua.Loop.PlannerTest do
     assert Planner.readable(rows) == [second, row(5, "text", "c")]
   end
 
+  test "a request still waiting on its reply is pinned through a compaction, and an answered one is not" do
+    waiting = %{row(1, "text", "plan it") | addressee: "planner", status: "pending"}
+    answered = %{row(3, "text", "check it") | addressee: "planner", status: "answered"}
+
+    summary = %{
+      row(4, "compaction", "summary")
+      | payload: Jason.encode!(%{"first_kept_seq" => 5})
+    }
+
+    rows = [waiting, row(2, "text", "b"), answered, summary, row(5, "text", "c")]
+
+    assert Planner.pinned?(waiting)
+    refute Planner.pinned?(answered)
+    refute Planner.pinned?(row(2, "text", "b"))
+    assert Planner.readable(rows) == [summary, waiting, row(5, "text", "c")]
+  end
+
   test "usable is the window less the output ceiling and the margin, never past the input ceiling" do
     combined = 100_000 - 16_384 - 8_000
     assert Planner.usable(@caps, 16_384) == combined

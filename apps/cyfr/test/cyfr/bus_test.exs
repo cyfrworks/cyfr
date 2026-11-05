@@ -99,6 +99,7 @@ defmodule Cyfr.BusTest do
             Bus.platform_notify(),
             Bus.health_check(7),
             Bus.schedule_completions(),
+            Bus.crew_deliveries(),
             Bus.shares(),
             Bus.file_offers("user_1")
           ] do
@@ -119,6 +120,7 @@ defmodule Cyfr.BusTest do
                "platform:notify",
                "health_check:<nonce>",
                "cyfr:schedule_completions",
+               "aqua:crew_deliveries",
                "cyfr:settings_changed",
                "sanctum:shares",
                "arca:file_offers:<user_id>"

@@ -4,7 +4,7 @@
 defmodule PrismWeb.AquaLive do
   @moduledoc """
   The athanor's AQUA, at `/a/<athanor>/aqua`: the soul and the roles it
-  clones into — each with a prompt, a model and a capability allowlist,
+  hands work to — each with a prompt, a model and a capability allowlist,
   the athanor's own (`Compendium.AquaTemplate` seeds them), edited by its
   person through the `aqua` tool — beside the page the soul reads first
   (`about-you`, pinned through the `notes` tool), the notes kept here, and the scrolls it can
@@ -361,7 +361,7 @@ defmodule PrismWeb.AquaLive do
       <div>
         <h3 class="text-sm font-medium text-gray-200">AQUA</h3>
         <p class="text-[11px] text-gray-500 mt-0.5">
-          One assistant — the soul — and the roles it clones into: a stance and a set of hands for one kind of work.
+          One assistant — the soul — and the roles it hands work to: a stance and a set of hands for one kind of work.
         </p>
       </div>
 

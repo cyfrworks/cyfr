@@ -16,7 +16,9 @@ defmodule PrismWeb.ChatLive do
   `PrismWeb.SharedThreadLive`, which no athanor holds. This page governs
   itself through its address: `?a=<route>` names the athanor, `?c=<thread_id>` its thread
   (without it the athanor's most recent, or a fresh one started by the
-  first message), and `?s=<thread>` a shared thread.
+  first message), and `?s=<thread>` a shared thread. The rail lists the
+  athanor's own threads alone; a crew member's thread under one is opened
+  from it, through the pane (`{:open_thread, id}`), at the same address.
 
   A pair opens from the rail: click a person you share a thread with and
   the pair of the two of you is found or made (`shared_thread.pair`) and
@@ -198,7 +200,7 @@ defmodule PrismWeb.ChatLive do
     ctx = socket.assigns.context
     threads = athanor_threads(ctx)
 
-    case pick(threads, thread_id) do
+    case pick(ctx, threads, thread_id) do
       {:ok, target} ->
         {:noreply,
          socket
@@ -264,21 +266,27 @@ defmodule PrismWeb.ChatLive do
   @spec blank() :: String.t()
   def blank, do: @blank
 
-  defp pick(_threads, @blank), do: {:ok, nil}
+  defp pick(_ctx, _threads, @blank), do: {:ok, nil}
 
-  defp pick(threads, id) when is_binary(id) and id != "" do
-    case Enum.find(threads, &(&1.id == id)) do
-      nil -> :unseen
-      thread -> {:ok, thread}
+  # A thread the rail does not list (a crew member's) is read by its id,
+  # under the athanor's actor: another athanor's is not found.
+  defp pick(ctx, threads, id) when is_binary(id) and id != "" do
+    with nil <- Enum.find(threads, &(&1.id == id)),
+         {:ok, thread} <- Threads.get(Sanctum.Context.actor(ctx), id) do
+      {:ok, thread}
+    else
+      %{} = thread -> {:ok, thread}
+      {:error, _} -> :unseen
     end
   end
 
-  defp pick(threads, _id), do: {:ok, List.first(threads)}
+  defp pick(_ctx, threads, _id), do: {:ok, List.first(threads)}
 
-  # A list that could not be read is an empty athanor for the rail's
+  # The athanor's own threads, the rooms its crew threads stand under. A
+  # list that could not be read is an empty athanor for the rail's
   # purposes — the pane says what it could not do.
   defp athanor_threads(focus) do
-    case Threads.list(Sanctum.Context.actor(focus)) do
+    case Threads.list(Sanctum.Context.actor(focus), kind: "own") do
       list when is_list(list) -> list
       _ -> []
     end
@@ -664,13 +672,14 @@ defmodule PrismWeb.ChatLive do
   # Bus fan-in — the lists, and what the pane tells the page
   # ============================================================================
 
-  # A message on the open thread: that row's title and last activity, and
+  # A row on the open thread: that thread's title and last activity, and
   # nothing else — the pane holds the tape.
   @impl true
   def handle_info(
-        %Cyfr.Bus.ThreadEvent{thread_id: id, kind: :message},
+        %Cyfr.Bus.ThreadEvent{thread_id: id, kind: kind},
         %{assigns: %{thread: %{id: id}}} = socket
-      ) do
+      )
+      when kind in [:message, :request, :reply, :notice] do
     case Threads.get(Sanctum.Context.actor(focused(socket)), id) do
       {:ok, thread} -> {:noreply, socket |> put_thread(thread) |> patch_row()}
       _ -> {:noreply, socket}
@@ -699,6 +708,11 @@ defmodule PrismWeb.ChatLive do
   # The pane's first message created the thread: the address is this page's.
   def handle_info({:pane, _pane, {:opened, thread}}, socket) do
     {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route, thread.id))}
+  end
+
+  # A thread the pane opens from its tape: a crew member's, or its room.
+  def handle_info({:pane, _pane, {:open_thread, id}}, socket) do
+    handle_event("open_thread", %{"route" => socket.assigns.athanor_route, "id" => id}, socket)
   end
 
   # A line the pane offers to say aloud: the picker is this page's.
@@ -812,7 +826,10 @@ defmodule PrismWeb.ChatLive do
   end
 
   # The open thread's fresh row, in place and in order; the room is told
-  # again only when its title moved (the first message names a thread).
+  # again only when its title moved (the first message names a thread). A
+  # crew member's thread is reached from its room, never listed.
+  defp put_thread(socket, %{kind: "crew"} = thread), do: assign(socket, :thread, thread)
+
   defp put_thread(socket, thread) do
     threads =
       socket.assigns.threads

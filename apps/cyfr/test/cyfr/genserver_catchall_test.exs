@@ -38,6 +38,7 @@ defmodule Cyfr.GenServerCatchallTest do
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
     Opus.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Aqua.ScheduleNotes => "gated by :schedule_notes_enabled; probed on an instance below",
+    Aqua.Crew => "gated by :crew_delivery_enabled; probed on an instance below",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
     Cyfr.StorageReserve =>
       "started before the gate, which the sandboxed test boot omits; probed on an instance in its own test",
@@ -133,6 +134,30 @@ defmodule Cyfr.GenServerCatchallTest do
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         pid = start_supervised!({Aqua.ScheduleNotes, tick_ms: :timer.hours(1)})
+
+        assert capture_log(fn ->
+                 send(pid, unquote(Macro.escape(message)))
+                 :sys.get_state(pid)
+               end) =~ "unexpected message"
+
+        assert Process.alive?(pid)
+      end
+    end
+  end
+
+  describe "the crew's delivery consumer" do
+    # Off under the suite (`:crew_delivery_enabled`), so it is probed on a
+    # consumer of its own, which drains at its start and so needs the
+    # sandbox connection.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      Prima.Test.Env.put_app_env(:cyfr, :crew_delivery_enabled, true)
+      :ok
+    end
+
+    for message <- [@unexpected_msg, {:random, "payload"}] do
+      test "survives #{inspect(message)} and logs it" do
+        pid = start_supervised!({Aqua.Crew, tick_ms: :timer.hours(1)})
 
         assert capture_log(fn ->
                  send(pid, unquote(Macro.escape(message)))

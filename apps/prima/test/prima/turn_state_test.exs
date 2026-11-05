@@ -36,7 +36,7 @@ defmodule Prima.TurnStateTest do
 
     assert TurnState.open_statuses() == ["accepted", "running", "paused"]
     assert TurnState.terminal_statuses() == ["completed", "failed", "cancelled", "uncertain"]
-    assert TurnState.step_kinds() == ["model", "tool", "ui", "approval", "clone", "launch"]
+    assert TurnState.step_kinds() == ["model", "tool", "ui", "approval", "launch"]
 
     assert TurnState.outcomes() ==
              ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]

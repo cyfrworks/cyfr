@@ -504,10 +504,6 @@ defmodule Compendium do
   @spec agent_capability_digest(AquaAgent.t()) :: {:ok, String.t()} | {:error, term()}
   defdelegate agent_capability_digest(agent), to: AquaAgent, as: :capability_digest
 
-  @doc "The policy glob a clone into `name` is granted by (`Compendium.AquaAgent.clone_glob/1`)."
-  @spec agent_clone_glob(String.t()) :: String.t()
-  defdelegate agent_clone_glob(name), to: AquaAgent, as: :clone_glob
-
   @doc "An agent parsed from its file's bytes (`Compendium.AquaAgent.parse/2`)."
   @spec parse_agent(String.t(), binary()) :: {:ok, AquaAgent.t()} | {:error, term()}
   defdelegate parse_agent(name, binary), to: AquaAgent, as: :parse
@@ -530,13 +526,9 @@ defmodule Compendium do
           | {:error, term()}
   defdelegate agent_snapshot(ctx, name), to: AgentIndex, as: :snapshot
 
-  @doc "The consent row an agent projects under an enabled roster (`Compendium.AgentSource.row/2`)."
-  @spec agent_row(AquaAgent.t(), MapSet.t(String.t())) :: map()
-  defdelegate agent_row(agent, roster), to: AgentSource, as: :row
-
-  @doc "The names of the athanor's enabled agents (`Compendium.AgentSource.enabled_roster/1`)."
-  @spec enabled_agent_roster(Context.t()) :: {:ok, MapSet.t(String.t())} | {:error, term()}
-  defdelegate enabled_agent_roster(ctx), to: AgentSource, as: :enabled_roster
+  @doc "The consent row an agent projects (`Compendium.AgentSource.row/1`)."
+  @spec agent_row(AquaAgent.t()) :: map()
+  defdelegate agent_row(agent), to: AgentSource, as: :row
 
   @doc "The athanor's skills, at most `limit` of them (`Compendium.AquaSkills.index/2`)."
   @spec skills_index(Context.t(), pos_integer() | :all) ::

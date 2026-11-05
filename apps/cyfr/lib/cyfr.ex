@@ -25,6 +25,7 @@ defmodule Cyfr do
       Bus.Build,
       Bus.CallerInvalidated,
       Bus.Components,
+      Bus.CrewPending,
       Bus.Execution,
       Bus.ExecutionEvent,
       Bus.FeedPublished,
