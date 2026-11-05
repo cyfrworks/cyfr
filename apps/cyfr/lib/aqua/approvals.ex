@@ -399,14 +399,15 @@ defmodule Aqua.Approvals do
   # The consent is loaded under the origin the turn's row records, not the
   # approver's: the question is whether the run's own grant still stands,
   # and the run continues under that origin. Whether this approver may
-  # decide is the approval's own check, made before this one.
+  # decide is the approval's own check, made before this one. It is the
+  # consent of the agent the turn runs, the soul's or a crew member's own.
   defp consent_holds(ctx, turn) do
     with {:ok, origin} <- Prima.Origin.from_wire(Map.get(turn, :origin)),
          {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id <-
            Opus.authority_for(
              %{ctx | origin: origin},
              {:id, turn.profile_id},
-             Prima.AgentRef.soul_ref()
+             Prima.AgentRef.ref(turn.agent)
            ) do
       :ok
     else

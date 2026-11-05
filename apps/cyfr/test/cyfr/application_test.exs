@@ -40,6 +40,7 @@ defmodule Cyfr.ApplicationTest do
     Opus.WorkerWatch => 5_000,
     Opus.Host.Egress.Pins => 5_000,
     Aqua.ScheduleNotes => 5_000,
+    Aqua.Crew => 5_000,
     Aqua.Loop.Worker => 5_000,
     Aqua.TaskSupervisor => 30_000,
     Emissary.External.Backends => 5_000,
@@ -274,7 +275,7 @@ defmodule Cyfr.ApplicationTest do
                Opus.Host.Egress.Pins,
                Opus.HostListener
              ]},
-            {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.WorkerTree, Aqua.RunnerTree]},
+            {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.Crew, Aqua.WorkerTree, Aqua.RunnerTree]},
             {Emissary.Supervisor, [Emissary.External.ServerTree, Emissary.TaskSupervisor]}
           ] do
         assert started_ids(supervisor) == children,

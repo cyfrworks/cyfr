@@ -83,6 +83,8 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
              # The four declared resource reads: a resource read is always
              # replay-safe (`Prima.Operation.validate!/1`).
              "component.read_resource",
+             # Who is in the crew, read again, changes nothing.
+             "crew.list",
              "execution.read_resource",
              "notes.list",
              "notes.read",

@@ -76,8 +76,11 @@ defmodule Arca.ThreadStorageTest do
         content: "Plan my week\nplease"
       })
 
-    {:ok, m2} = Threads.append(bob, thread.id, %{author: "aqua", content: "Sure."})
-    {:ok, m3} = Threads.append(bob, thread.id, %{author: bob.user_id, content: "Thanks"})
+    {:ok, m2} =
+      Threads.append(bob, thread.id, %{author: "aqua", sent_by: "aqua", content: "Sure."})
+
+    {:ok, m3} =
+      Threads.append(bob, thread.id, %{author: bob.user_id, sent_by: "person", content: "Thanks"})
 
     assert [m1.seq, m2.seq, m3.seq] == [1, 2, 3]
 
@@ -269,7 +272,7 @@ defmodule Arca.ThreadStorageTest do
       {:ok, _} =
         Threads.append(ctx, thread.id, %{
           author: author,
-          sent_by: "person",
+          sent_by: "aqua",
           kind: "text",
           content: "not a title"
         })

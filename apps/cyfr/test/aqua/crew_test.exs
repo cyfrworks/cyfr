@@ -397,25 +397,47 @@ defmodule Aqua.CrewTest do
 
   test "a busy child thread leaves the request pending, and the next tick delivers it",
        %{ctx: ctx, room: room} do
-    script!([:hang, reply("after the wait")])
-    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
+    # The soul's request holds the member's thread on a card; the
+    # person's requests, another sender's, queue behind it until the queue
+    # is full. Every model call here is a plain answer but the card's.
+    planner_asks!(ctx)
 
-    {:ok, %{admitted: :turn}} = Runner.send_message(ctx, child.id, "hold the floor")
-    wait_until(fn -> match?(%{running: true}, Runner.state(child.id, ctx.athanor_id)) end)
+    script!([
+      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"})
+      | for(n <- 1..16, do: reply("answer #{n}"))
+    ])
 
-    for n <- 1..8 do
-      assert {:ok, %{admitted: :turn}} =
-               Runner.send_message(%{ctx | origin: :programmatic}, child.id, "wait #{n}")
-    end
-
-    request = soul_request!(ctx, room, "planner", "after the queue")
-    assert {:ok, %{"pending" => 1}} = drain(ctx)
-    assert :none = outcome(ctx, "message", request.id)
-    assert delivered_turn(ctx, child, request.id) == nil
-
-    :ok = Runner.stop_turn(ctx, child.id)
+    held = soul_request!(ctx, room, "planner", "hold the floor")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
-    await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
+    child = child!(ctx, room, "planner")
+    held_turn = delivered_turn(ctx, child, held.id)
+    await_status(ctx, held_turn, "paused")
+
+    asks =
+      for n <- 1..9 do
+        {:ok, %{admitted: :request, message_id: id}} =
+          Runner.send_message(ctx, room.id, "@planner wait #{n}")
+
+        id
+      end
+
+    {waiting, [last]} = Enum.split(asks, 8)
+    assert {:ok, %{"pending" => 1}} = drain(ctx)
+    assert %{paused: true, queued: 8} = Runner.state(child.id, ctx.athanor_id)
+    assert :none = outcome(ctx, "message", last)
+    assert delivered_turn(ctx, child, last) == nil
+    for id <- waiting, do: assert({:ok, "applied"} = outcome(ctx, "message", id))
+
+    {:ok, paused} = Tape.turn(ctx, held_turn)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    assert {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    for id <- [held.id | waiting],
+        do: await_status(ctx, delivered_turn(ctx, child, id), "completed")
+
+    assert {:ok, _} = drain(ctx)
+    assert {:ok, "applied"} = outcome(ctx, "message", last)
+    await_status(ctx, delivered_turn(ctx, child, last), "completed")
   end
 
   test "a dead member's claim is taken over once its lease lapsed", %{ctx: ctx, room: room} do
