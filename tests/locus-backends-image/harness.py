@@ -5,25 +5,30 @@
 
 A Stack runs docker-compose.yml's `locus-backends` service behind its
 egress guard, layered with compose.locus-backends.yml, which adds only the
-image under test, the probe backend (probe-backend.mjs), the residue
-canary, the pool's uid range and the per-backend memory bound, on the guard
+image under test, the probe program (probe-backend.mjs, an MCP server), the
+residue canary, the pool's uid range, the kept homes' root and uid range
+(the keeper's `--kept-homes`) and the per-program memory bound, on the guard
 a loopback port and a tools directory first on its PATH, a stand-in for
 cyfr and IPv6 on the backends network, and lets compose name the containers
 after the project. Everything else (the backends key from
 CYFR_LOCUS_BACKENDS_KEY, capabilities, security options, read-only root,
-`ipc: none`, tmpfs mounts, limits, the network, the guard's rules and the
-service's wait for the guard's health) is the shipped stack. The service
+`ipc: none`, tmpfs mounts, the `homes` volume, limits, the network, the
+guard's rules and the service's wait for the guard's health) is the
+shipped stack. The service
 listens in the guard's namespace, so its port is read on the guard, and a
 second instance of it runs in a namespace of its own (`alone`).
 
 A Controller is the control plane's side of the backends wire
 (`Prima.LocusBackends`), reimplemented here from its vector file,
 tests/fixtures/locus_backends.json: control messages signed under the
-control key with a rising sequence, backend environments sealed to the
-owner and the service lifetime `hello` learned, and MCP requests signed
-under each owner's key. Every request can be given its own timestamp,
-nonce, sequence, boot or key, and every signed invoke is kept so it can be
-sent again unchanged. The signing and sealing here must reproduce the vector
+control key with a rising sequence, program environments sealed to the
+owner and the service lifetime `hello` learned, and session messages
+(open, send, recv, close) signed as invokes under each owner's key. Every
+request can be given its own timestamp, nonce, sequence, boot or key, and
+every signed session message is kept so it can be sent again unchanged.
+The wire carries lines, never MCP: an `McpClient` speaks MCP's JSON-RPC
+over a session's lines to the probe program, as CYFR's MCP client does,
+opening the session again and initializing afresh when it has ended. The signing and sealing here must reproduce the vector
 file: `check_vectors` runs when this module is loaded, before any container
 starts, and `python3 tests/locus-backends-image/harness.py --self-check`
 runs it alone, with no Docker.
@@ -93,8 +98,18 @@ PROBE = "node /probe/probe-backend.mjs"
 # cyfr-locus's effective, permitted and bounding sets: SETUID, SETGID and
 # KILL alone.
 KEEPER_CAPS = "00000000000000e0"
-# The MCP revision a signed invoke declares (Prima.MCP.Protocol).
+# The MCP revision cyfr's own /mcp speaks (Prima.MCP.Protocol), which e2e's
+# person declares.
 MCP_VERSION = "2026-07-28"
+# The revision an MCP client initializes a stdio program at, as CYFR's does
+# (Prima.MCP.Protocol.legacy_version/0).
+MCP_LEGACY_VERSION = "2025-03-26"
+# The kept homes: the keeper's `--kept-homes <root>:<first>-<last>`, which
+# the shipped compose entrypoint names and the overlay repeats. A kept
+# home's uid is drawn from this range, outside the pools and the image's
+# users.
+KEPT_ROOT = "/var/lib/locus/kept"
+KEPT_FIRST, KEPT_LAST = 40001, 49999
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_backends.json"), encoding="utf-8") as _vectors:
     WIRE = json.load(_vectors)
@@ -327,8 +342,28 @@ def open_sealed(sealing_key, owner, boot, sealed):
     return aes_gcm_decrypt(sealing_key, data[:12], data[28:], aad, data[12:28])
 
 
+def program_wire(program):
+    """A program as a sync defines it, from {name, command, env} and the optional login command, home and bounds.
+
+    An optional member with no value is absent, never null: the wire refuses a present null.
+    """
+    wire = {
+        "name": program["name"],
+        "command": program["command"],
+        "env_names": sorted((program.get("env") or {}).keys()),
+        "home": program.get("home", "scratch"),
+    }
+    for name in ["login_command", "memory_bytes", "home_max_bytes"]:
+        if program.get(name) is not None:
+            wire[name] = program[name]
+    return wire
+
+
+SESSION_FIELDS = ["athanor", "server", "generation", "epoch", "boot", "ts", "nonce"]
+
+
 def check_vectors():
-    """The keys, control and invoke signatures, bodies and seal here reproduce the vector file's."""
+    """The keys, control and session signatures, bodies and seal here reproduce the vector file's."""
     key = bytes.fromhex(WIRE["key_hex"])
     owner = WIRE["owner"]
     wrong = {}
@@ -342,7 +377,9 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    for kind in ["hello", "reconcile", "sync", "renew", "release", "status"]:
+    compare("version", VERSION, 2)
+    compare("routes", sorted(ROUTES), ["control", "health", "session"])
+    for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
         body = vector["body"].encode()
         fields = vector["fields"]
@@ -352,13 +389,22 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("control", values, body), vector["canonical"])
         compare(f"{kind}.header", control_header(control_key(key), fields, body), vector["header"])
 
-    vector = WIRE["invoke"]
-    body = vector["body"].encode()
-    fields = vector["fields"]
-    signing = owner_key(key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
-    names = ["athanor", "server", "generation", "epoch", "boot", "ts", "nonce"]
-    compare("invoke.canonical", canonical("invoke", [fields[n] for n in names], body), vector["canonical"])
-    compare("invoke.header", invoke_header(signing, fields, body), vector["header"])
+    for kind in ["open", "send", "recv", "close"]:
+        vector = WIRE[kind]
+        body = vector["body"].encode()
+        fields = vector["fields"]
+        signing = owner_key(key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
+        message = json.loads(vector["body"])
+        compare(f"{kind}.body", wire_json(message).decode(), vector["body"])
+        compare(f"{kind}.answer", wire_json(json.loads(vector["answer"])).decode(), vector["answer"])
+        compare(f"{kind}.owner", [message["owner"], message["e"]],
+                [{"athanor": fields["athanor"], "server": fields["server"]}, fields["epoch"]])
+        compare(f"{kind}.canonical", canonical("invoke", [fields[n] for n in SESSION_FIELDS], body), vector["canonical"])
+        compare(f"{kind}.header", invoke_header(signing, fields, body), vector["header"])
+
+    sync_program = json.loads(WIRE["sync"]["body"])["programs"][0]
+    compare("sync.program", program_wire({"name": sync_program["name"], "command": sync_program["command"],
+                                          "env": {name: "" for name in sync_program["env_names"]}}), sync_program)
 
     vector = WIRE["seal"]
     sealed = seal(seal_key(key), owner, vector["boot"], vector["plaintext"].encode(), bytes.fromhex(vector["iv_hex"]))
@@ -405,14 +451,14 @@ def _decode(data):
 
 
 class Request:
-    """One signed invoke, kept so it can be sent again byte for byte."""
+    """One signed session message, kept so it can be sent again byte for byte."""
 
     def __init__(self, url, headers, body):
         self.url, self.headers, self.body = url, headers, body
 
 
 class Controller:
-    """The control plane's side of the wire, signing as `Emissary.External.Backends` and its servers do."""
+    """The control plane's side of the wire, signing as `Opus.Programs` and the owners that speak over its sessions do."""
 
     def __init__(self, base, key, generation=1, cyfr_boot=None):
         self.base = base
@@ -421,6 +467,7 @@ class Controller:
         self.cyfr_boot = cyfr_boot or f"boot_{secrets.token_hex(8)}"
         self.seq = 0
         self.boot = None
+        self._clients = {}
 
     def control(self, message, generation=None, seq=None, boot=None, ts=None, key=None, version=VERSION):
         """Posts a control message at the protocol version: (status, answer, boot)."""
@@ -448,10 +495,10 @@ class Controller:
     def reconcile(self, keep, **options):
         return self.control({"type": "reconcile", "keep": keep}, **options)
 
-    def sync(self, owner, backends, lease_ms=30_000, idle_ms=900_000, sealed=None, **options):
-        """Syncs `owner` ({athanor, server, e}); `backends` are [{name, command, env}], sealed here."""
+    def sync(self, owner, programs, lease_ms=30_000, idle_ms=900_000, sealed=None, **options):
+        """Syncs `owner` ({athanor, server, e}); `programs` are [{name, command, env, ...}], their env sealed here."""
         generation = options.get("generation") or self.generation
-        env = {b["name"]: b.get("env") or {} for b in backends}
+        env = {p["name"]: p.get("env") or {} for p in programs}
         if sealed is None:
             sealed = seal(seal_key(self.key), {"athanor": owner["athanor"], "server": owner["server"],
                                                "generation": generation, "epoch": owner["e"]},
@@ -462,8 +509,7 @@ class Controller:
             "e": owner["e"],
             "lease_ms": lease_ms,
             "idle_ms": idle_ms,
-            "backends": [{"name": b["name"], "command": b["command"], "env_names": sorted((b.get("env") or {}).keys())}
-                         for b in backends],
+            "programs": [program_wire(p) for p in programs],
             "sealed": sealed,
         }, **options)
 
@@ -477,20 +523,18 @@ class Controller:
         return self.control({"type": "status", "owners": [{"athanor": o["athanor"], "server": o["server"]}
                                                           for o in owners]}, **options)
 
-    def running(self, owner, lease_ms=30_000, timeout_s=60):
-        """Renews `owner` until the service reports it running, and answers its renewed entry."""
+    def home(self, athanor, home_id, op, **options):
+        """Resets or retires the kept home `home_id` of `athanor`: (status, answer, boot)."""
+        return self.control({"type": "home", "op": op, "athanor": athanor, "home_id": home_id}, **options)
+
+    def running(self, owner, lease_ms=30_000):
+        """Renews `owner`, which the service runs from its sync on, and answers its renewed entry."""
         ref = {"athanor": owner["athanor"], "server": owner["server"], "e": owner["e"]}
-        deadline = time.monotonic() + timeout_s
-        while True:
-            status, answer, _boot = self.renew([ref], lease_ms)
-            renewed = (answer or {}).get("renewed") if isinstance(answer, dict) else None
-            if status != 200 or not renewed:
-                sys.exit(f"FAIL: the service does not run {ref}: {status} {answer}")
-            if renewed[0]["state"] == "running":
-                return renewed[0]
-            if time.monotonic() > deadline:
-                sys.exit(f"FAIL: {ref} is still {renewed[0]['state']}")
-            time.sleep(0.1)
+        status, answer, _boot = self.renew([ref], lease_ms)
+        renewed = (answer or {}).get("renewed") if isinstance(answer, dict) else None
+        if status != 200 or not renewed or renewed[0]["state"] != "running":
+            sys.exit(f"FAIL: the service does not run {ref}: {status} {answer}")
+        return renewed[0]
 
     def report(self, owner):
         """The service's status report of `owner`, or None when it runs none."""
@@ -498,51 +542,111 @@ class Controller:
         expect(status == 200, "a status is answered", answer)
         return (answer["owners"] or [None])[0]
 
-    def sign_invoke(self, owner, method, params=None, id=1, generation=None, boot=None, ts=None, nonce=None,
-                    key=None, notification=False):
-        """Signs one MCP request for `owner` as a server process does, without sending it."""
-        params = dict(params or {})
-        params["_meta"] = {
-            "io.modelcontextprotocol/protocolVersion": MCP_VERSION,
-            "io.modelcontextprotocol/clientCapabilities": {},
-        }
-        message = {"jsonrpc": "2.0", "method": method, "params": params}
-        if not notification:
-            message["id"] = id
-        body = wire_json(message)
+    def program(self, owner, name=None):
+        """One program's report of `owner`: the first, or the one named `name`."""
+        report = self.report(owner)
+        if report is None:
+            sys.exit(f"FAIL: the service runs no {owner}")
+        programs = [p for p in report["programs"] if name is None or p["name"] == name]
+        if not programs:
+            sys.exit(f"FAIL: {owner} runs no program {name}: {report}")
+        return programs[0]
+
+    # ————— sessions —————
+
+    def sign_session(self, owner, message, generation=None, boot=None, ts=None, nonce=None, key=None,
+                     version=VERSION, header_owner=None):
+        """Signs one session message for `owner` as an owner's process does, without sending it.
+
+        `header_owner` signs the header for another owner version than the
+        body names, so a body that names another owner than its signature
+        can be sent.
+        """
+        body = wire_json({**message, "owner": {"athanor": owner["athanor"], "server": owner["server"]},
+                          "e": owner["e"], "version": version})
+        signer = header_owner or owner
         fields = {
-            "athanor": owner["athanor"],
-            "server": owner["server"],
+            "athanor": signer["athanor"],
+            "server": signer["server"],
             "generation": generation or self.generation,
-            "epoch": owner["e"],
+            "epoch": signer["e"],
             "boot": boot or self.boot,
             "ts": ts or now_ms(),
             "nonce": nonce or f"n_{secrets.token_hex(12)}",
         }
         signing = key or owner_key(self.key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
-        headers = {
-            "content-type": "application/json",
-            "mcp-protocol-version": MCP_VERSION,
-            "mcp-method": method,
-            AUTH_HEADER: invoke_header(signing, fields, body),
-        }
-        if isinstance(params.get("name"), str):
-            headers["mcp-name"] = params["name"]
-        return Request(self.base + ROUTES["mcp"], headers, body)
+        headers = {"content-type": "application/json", AUTH_HEADER: invoke_header(signing, fields, body)}
+        return Request(self.base + ROUTES["session"], headers, body)
 
-    def invoke(self, owner, method, params=None, **options):
-        """Signs and posts one MCP request: (status, answer, boot, request)."""
-        request = self.sign_invoke(owner, method, params, **options)
-        return (*post(request.url, request.headers, request.body), request)
+    def session(self, owner, message, timeout=60, **options):
+        """Signs and posts one session message: (status, answer, boot, request)."""
+        request = self.sign_session(owner, message, **options)
+        return (*post(request.url, request.headers, request.body, timeout), request)
 
     def resend(self, request, base=None):
-        url = base + ROUTES["mcp"] if base else request.url
+        url = base + ROUTES["session"] if base else request.url
         return (*post(url, request.headers, request.body), request)
 
-    def call(self, owner, name, arguments=None):
-        """A tool's result: (status, the JSON-RPC answer)."""
-        status, answer, _boot, _request = self.invoke(owner, "tools/call", {"name": name, "arguments": arguments or {}})
+    def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, **options):
+        """Opens (or attaches to) the session of `key`: (status, answer)."""
+        message = {"type": "open", "program": program, "key": key, "mode": mode, "argv": list(argv or [])}
+        if home_id is not None:
+            message["home_id"] = home_id
+        status, answer, _boot, _request = self.session(owner, message, **options)
         return status, answer
+
+    def send(self, owner, session, lines, **options):
+        status, answer, _boot, _request = self.session(owner, {"type": "send", "session": session,
+                                                               "lines": list(lines)}, **options)
+        return status, answer
+
+    def recv(self, owner, session, after=0, max_wait_ms=5_000, **options):
+        status, answer, _boot, _request = self.session(
+            owner, {"type": "recv", "session": session, "after": after, "max_wait_ms": max_wait_ms},
+            timeout=max_wait_ms / 1000 + 30, **options)
+        return status, answer
+
+    def close(self, owner, session, **options):
+        status, answer, _boot, _request = self.session(owner, {"type": "close", "session": session}, **options)
+        return status, answer
+
+    def lines_until(self, owner, session, found, after=0, timeout_s=20):
+        """Reads the session's lines from `after` until `found(lines)` is truthy or the session ends.
+
+        Answers (every line read, the last sequence number read, whether the
+        process still runs); the suite fails when neither happens in time.
+        """
+        lines = []
+        deadline = time.monotonic() + timeout_s
+        while True:
+            status, answer = self.recv(owner, session, after, 2_000)
+            if status != 200:
+                sys.exit(f"FAIL: a recv of {session} is refused: {status} {answer}")
+            for line in answer["lines"]:
+                lines.append(line["text"])
+                after = line["seq"]
+            if found(lines) or not answer["running"]:
+                return lines, after, answer["running"]
+            if time.monotonic() > deadline:
+                sys.exit(f"FAIL: timed out reading {session}: {lines[-20:]}")
+
+    # ————— MCP over a session —————
+
+    def mcp(self, owner, program, key="mcp", home_id=None):
+        """The MCP client of `owner`'s program `program` over the session of `key`, one per program and key."""
+        name = (owner["athanor"], owner["server"], owner["e"], program, key, home_id)
+        if name not in self._clients:
+            self._clients[name] = McpClient(self, owner, program, key, home_id)
+        return self._clients[name]
+
+    def call(self, owner, name, arguments=None):
+        """A tool of `<program>__<tool>` called over the program's session: (status, the JSON-RPC answer).
+
+        A refused session message is its status and body; a session that ends
+        before it answers is status 200 and an error that says so (`ended`).
+        """
+        program, tool = name.split("__", 1)
+        return self.mcp(owner, program).call(tool, arguments or {})
 
     def tool(self, owner, name, arguments=None):
         """A tool's first text content parsed as JSON; the suite fails on a refusal or a tool error."""
@@ -551,6 +655,94 @@ class Controller:
         if status != 200 or not result or result.get("isError"):
             sys.exit(f"FAIL: {name}: {status} {answer}")
         return json.loads(result["content"][0]["text"])
+
+
+class McpClient:
+    """MCP's JSON-RPC as lines over one session, as CYFR's MCP client speaks to a stdio program.
+
+    The session is opened at the first request, and opened again, with the
+    program initialized afresh, when a `send` finds it ended. A request whose
+    session ends before the program answers it fails, `ended`, and is not
+    sent again. `initializations` counts the handshakes, so a suite can tell
+    a wake from an attach.
+    """
+
+    def __init__(self, controller, owner, program, key, home_id=None):
+        self.c, self.owner, self.program, self.key, self.home_id = controller, owner, program, key, home_id
+        self.session = None
+        self.after = 0
+        self.next_id = 0
+        self.initializations = 0
+        self.resumed = None
+
+    def _open(self):
+        status, answer = self.c.open(self.owner, self.program, key=self.key, home_id=self.home_id)
+        if status != 200:
+            return status, answer
+        self.session, self.after, self.resumed = answer["session"], 0, answer["resumed"]
+        if not answer["resumed"]:
+            status, answer = self._request("initialize", {
+                "protocolVersion": MCP_LEGACY_VERSION, "capabilities": {},
+                "clientInfo": {"name": "locus-backends-image", "version": "0"}})
+            if status != 200 or "result" not in answer:
+                self.session = None
+                return status, answer
+            status, answer = self.c.send(self.owner, self.session, [json.dumps(
+                {"jsonrpc": "2.0", "method": "notifications/initialized"}, separators=(",", ":"))])
+            if status != 200:
+                return status, answer
+            self.initializations += 1
+        return 200, None
+
+    def _request(self, method, params):
+        self.next_id += 1
+        id = self.next_id
+        line = json.dumps({"jsonrpc": "2.0", "id": id, "method": method, "params": params}, separators=(",", ":"))
+        status, answer = self.c.send(self.owner, self.session, [line])
+        if status != 200:
+            return status, answer
+        if answer["status"] == "ended":
+            return 200, {"jsonrpc": "2.0", "id": id, "ended": "before_send",
+                         "error": {"code": -32000, "message": "the session had ended"}}
+        while True:
+            status, answer = self.c.recv(self.owner, self.session, self.after, 25_000)
+            if status != 200:
+                return status, answer
+            for entry in answer["lines"]:
+                self.after = entry["seq"]
+                try:
+                    message = json.loads(entry["text"])
+                except ValueError:
+                    continue
+                if isinstance(message, dict) and message.get("id") == id and ("result" in message or "error" in message):
+                    return 200, message
+            if not answer["running"]:
+                self.session = None
+                return 200, {"jsonrpc": "2.0", "id": id, "ended": "before_answer",
+                             "error": {"code": -32000, "message": "the session ended before the program answered"}}
+
+    def request(self, method, params):
+        """One request answered: (status, the JSON-RPC answer)."""
+        for _ in range(2):
+            if self.session is None:
+                status, answer = self._open()
+                if status != 200:
+                    return status, answer
+            status, answer = self._request(method, params)
+            if status == 200 and answer.get("ended") == "before_send":
+                self.session = None
+                continue
+            return status, answer
+        return status, answer
+
+    def list_tools(self):
+        status, answer = self.request("tools/list", {})
+        if status != 200 or "result" not in answer:
+            sys.exit(f"FAIL: tools/list of {self.program}: {status} {answer}")
+        return answer["result"]["tools"]
+
+    def call(self, tool, arguments):
+        return self.request("tools/call", {"name": tool, "arguments": arguments})
 
 
 # ————— the service under compose —————
@@ -661,6 +853,7 @@ class Stack(imagesuite.Stack):
             "ENDPOINT_ADDRESS": ENDPOINT_ADDRESS,
             "CYFR_LOCUS_BACKENDS_KEY": self.key.hex(),
             "BACKENDS_POOL": self.pool,
+            "KEPT_HOMES": f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
             "LOCUS_BACKENDS_MEMORY_BYTES": str(self.memory_bytes or ""),
             **extra,
         }
@@ -756,6 +949,12 @@ class Stack(imagesuite.Stack):
             args += ["--memory", str(host["Memory"])]
         for bind in host.get("Binds") or []:
             args += ["--volume", bind]
+        # The kept homes' volume: a fresh one of this instance's own, which
+        # Docker fills from the image, so the second instance never shares
+        # the running service's homes.
+        for mount in host.get("Mounts") or []:
+            if mount.get("Type") == "volume":
+                args += ["--mount", f"type=volume,target={mount['Target']}"]
         for entry in config.get("Env") or []:
             args += ["--env", entry]
         entrypoint = config.get("Entrypoint") or []
@@ -803,6 +1002,13 @@ class Stack(imagesuite.Stack):
         return [p for p in self.processes(target) if any(POOL_FIRST <= u <= POOL_LAST for u in p["uids"])]
 
 
+def health(base, version=VERSION):
+    """The health probe at `version`: (status, answer). Unauthenticated, and answered at version 2 alone."""
+    status, answer, _boot = post(base + ROUTES["health"], {"content-type": "application/json"},
+                                 wire_json({"version": version}), 5)
+    return status, answer
+
+
 def wait_healthy(base, logs=lambda: ""):
     body = wire_json({"version": VERSION})
     for _ in range(90):
@@ -832,8 +1038,9 @@ def raw_head(base, route, header, declared):
     return int(head.split(b" ")[1])
 
 
-def probe(name="probe", env=None):
-    return {"name": name, "command": PROBE, "env": env or {}}
+def probe(name="probe", env=None, **program):
+    """The probe program, an MCP server; `program` adds a login command, a home or bounds."""
+    return {"name": name, "command": PROBE, "env": env or {}, **program}
 
 
 def owner_of(label, e=1):
@@ -843,5 +1050,5 @@ def owner_of(label, e=1):
 if __name__ == "__main__":
     if sys.argv[1:] != ["--self-check"]:
         sys.exit("usage: harness.py --self-check")
-    print("ok: harness.py derives the keys, signs every control message and invoke, and seals and opens "
+    print("ok: harness.py derives the keys, signs every control and session message, and seals and opens "
           "the environment as tests/fixtures/locus_backends.json says")
