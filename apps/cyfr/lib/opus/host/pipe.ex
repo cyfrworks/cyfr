@@ -112,7 +112,7 @@ defmodule Opus.Host.Pipe do
   less what the answer needs on its way back.
   """
   @spec deadline(Attempt.caller()) :: integer()
-  def deadline(caller), do: caller.ts + Prima.WorkerAuth.window_ms() - @return_ms
+  def deadline(%{ts: ts}) when is_integer(ts), do: ts + Prima.WorkerAuth.window_ms() - @return_ms
 
   @doc "Write `lines` to the program of the attempt's `session`."
   @spec send(Attempt.caller(), String.t(), [String.t()]) :: :ok | {:error, term()}

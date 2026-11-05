@@ -456,7 +456,15 @@ defmodule Prima.WorkerAuth do
   @spec sealed_bytes(non_neg_integer()) :: non_neg_integer()
   def sealed_bytes(plaintext_bytes) when is_integer(plaintext_bytes) and plaintext_bytes >= 0 do
     raw = 12 + 16 + plaintext_bytes
-    div(raw, 3) * 4 + Enum.at([0, 2, 3], rem(raw, 3))
+
+    tail =
+      case rem(raw, 3) do
+        0 -> 0
+        1 -> 2
+        2 -> 3
+      end
+
+    div(raw, 3) * 4 + tail
   end
 
   @doc """
