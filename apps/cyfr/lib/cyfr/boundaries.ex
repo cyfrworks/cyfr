@@ -459,14 +459,18 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.ExecutionStanding Sanctum.Gate
+        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
-        Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
+        Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.Vault
+        Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
           "admission, the invoke budget, the vault edge a run is attached with, and " <>
-          "the policy record of every admission. `Sanctum` bare is the domain's own " <>
+          "the policy record of every admission. The programs controller " <>
+          "(`Opus.Programs`) posts to the backends service through `Sanctum.Egress` and " <>
+          "checks a program's env templates from the vault's metadata " <>
+          "(`Sanctum.Vault.disclosed?/2`) before it unseals any. `Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
@@ -525,7 +529,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.RunningTasks Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
-        Sanctum.Visibility Sanctum.Webhook
+        Sanctum.Visibility Sanctum.Webhook Sanctum.Mount
       ),
       reason:
         "the auth fabric's own entry point, where a wide roster is the entry point doing " <>
@@ -823,8 +827,7 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/emissary.ex"
       ],
       into: "Opus",
-      allow:
-        ~w(Opus Opus.Programs Opus.Programs.Definition Opus.Programs.Session Opus.Programs.StatusRedaction),
+      allow: ~w(Opus),
       reason:
         "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
           "lease, reports health and reads an athanor's feeds for a canvas's " <>
@@ -846,7 +849,7 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web.ex"
       ],
       into: "Opus",
-      allow: ~w(Opus Opus.Programs),
+      allow: ~w(Opus),
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
@@ -2033,6 +2036,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Handle" => [resolve: 1],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
+    "Sanctum.Mount" => [home_of: 2, login_entries: 1, login_entry: 3],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],

@@ -28,7 +28,7 @@ defmodule Opus.Programs.Session do
   # The wait beyond a recv's own, for the round trip.
   @slack_ms 10_000
   @send_timeout_ms 30_000
-  @open_timeout_ms 60_000
+  @open_timeout_ms 310_000
 
   @type grant :: Opus.Programs.Box.grant()
   @type refusal ::

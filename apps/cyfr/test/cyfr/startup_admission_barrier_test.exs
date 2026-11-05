@@ -908,7 +908,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   defp leaves(shapes),
     do:
       Enum.flat_map(shapes, fn
-        {_id, children} -> leaves(children)
+        {_id, children} when is_list(children) -> leaves(children)
         id -> [id]
       end)
 

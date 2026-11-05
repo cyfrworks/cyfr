@@ -1109,9 +1109,12 @@ defmodule Opus.ProgramsTest do
     row
   end
 
-  defp login_entry(ctx, id, program) do
-    Sanctum.Mount.put_login(ctx.athanor_id, %{id: id, name: id <> "-name", program: program})
-    on_exit(fn -> Sanctum.Mount.clear(ctx.athanor_id) end)
+  # A login entry of the athanor naming `program`; its id is its home's.
+  defp login_entry(ctx, name, program) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{name: name, kind: "login", program: program})
+
+    entry.id
   end
 
   describe "sessions" do
@@ -1203,7 +1206,7 @@ defmodule Opus.ProgramsTest do
           transport: "stdio",
           url: nil,
           home: "kept",
-          login_entry_id: "vlt_gh",
+          login_entry_id: "vlt_missing",
           login_command: "gh auth login",
           config_json:
             Jason.encode!(%{
@@ -1221,10 +1224,23 @@ defmodule Opus.ProgramsTest do
       assert sentence =~ "login entry"
       refute_received {:control, "sync", _sync, _fields}
 
-      login_entry(ctx, "vlt_gh", "gh")
-      Emissary.External.ServerSupervisor.stop("gh", ctx.athanor_id)
+      # Another program's login entry is refused alike.
+      other = login_entry(ctx, "claude-login", "claude")
+
+      {:ok, row} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{login_entry_id: other})
+
+      assert {:error, sentence} = Servers.ensure_started(row, ctx)
+      assert sentence =~ "login entry"
+
+      gh = login_entry(ctx, "gh-login", "gh")
+
+      {:ok, row} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{login_entry_id: gh})
+
       assert {:ok, [%{"name" => "github__search"}]} = Servers.ensure_started(row, ctx)
-      assert_receive {:session, "open", %{"home_id" => "vlt_gh", "mode" => "run"}, _}, 2_000
+      assert_receive {:session, "open", %{"home_id" => ^gh, "mode" => "run"}, _}, 2_000
+      refute_received {:session, "open", %{"home_id" => ^other}, _fields}
     end
   end
 
@@ -1232,22 +1248,22 @@ defmodule Opus.ProgramsTest do
     setup %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       row = pipe_row(ctx, "claude")
-      login_entry(ctx, "vlt_claude", "claude")
+      entry = login_entry(ctx, "claude-login", "claude")
       admin = %{ctx | permissions: MapSet.new([:*])}
-      {:ok, controller: controller, row: row, admin: admin}
+      {:ok, controller: controller, row: row, admin: admin, entry: entry}
     end
 
     test "a sign-in runs the login command in the entry's home and relays its lines both ways",
-         %{ctx: ctx, fake: fake, row: row, admin: admin} do
-      assert {:ok, %{session: token, program: "claude", entry: "vlt_claude"}} =
+         %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
+      assert {:ok, %{session: token, program: "claude", entry: ^entry}} =
                Provider.handle("mcp_servers", admin, %{
                  "action" => "sign_in",
                  "name" => "claude",
-                 "entry" => "vlt_claude"
+                 "entry" => "claude-login"
                })
 
-      assert_receive {:session, "open",
-                      %{"mode" => "sign_in", "home_id" => "vlt_claude", "argv" => []}, _},
+      assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry, "argv" => []},
+                      _},
                      2_000
 
       # A line the program wrote before anyone attached is kept for them.
@@ -1273,17 +1289,18 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a sign-in refuses an entry that is no login entry for the program, and a scratch program",
-         %{ctx: ctx, admin: admin} do
-      login_entry(ctx, "vlt_other", "other")
+         %{ctx: ctx, admin: admin, entry: entry} do
+      login_entry(ctx, "other-login", "other")
 
       assert {:error, {:invalid_argument, refusal}} =
                Provider.handle("mcp_servers", admin, %{
                  "action" => "sign_in",
                  "name" => "claude",
-                 "entry" => "vlt_other"
+                 "entry" => "other-login"
                })
 
       assert refusal =~ "no active login entry"
+      refute_received {:session, "open", _message, _fields}
 
       pipe_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
 
@@ -1291,22 +1308,23 @@ defmodule Opus.ProgramsTest do
                Provider.handle("mcp_servers", admin, %{
                  "action" => "sign_in",
                  "name" => "scratchy",
-                 "entry" => "vlt_claude"
+                 "entry" => entry
                })
 
       assert refusal =~ "no sign-in"
       refute_received {:session, "open", _message, _fields}
     end
 
-    test "reset_home empties the entry's kept home through the box", %{admin: admin} do
-      assert {:ok, %{reset: "vlt_claude"}} =
+    test "reset_home empties the entry's kept home through the box",
+         %{admin: admin, entry: entry} do
+      assert {:ok, %{reset: ^entry}} =
                Provider.handle("mcp_servers", admin, %{
                  "action" => "reset_home",
-                 "entry" => "vlt_claude"
+                 "entry" => entry
                })
 
-      assert_receive {:control, "home",
-                      %{"op" => "reset", "home_id" => "vlt_claude", "athanor" => _}, _},
+      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry, "athanor" => _},
+                      _},
                      2_000
 
       assert {:error, {:not_found, "Login entry", "vlt_none"}} =
@@ -1331,7 +1349,7 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a deleted login entry's home is retired, and so is every one of an archived athanor",
-         %{ctx: ctx} do
+         %{ctx: ctx, entry: entry} do
       Application.put_env(:cyfr, :external_server_reconciler_enabled, true)
       on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
       start_supervised!(Emissary.External.Reconciler)
@@ -1340,16 +1358,15 @@ defmodule Opus.ProgramsTest do
         Cyfr.Bus.vault_changed_global(),
         %Cyfr.Bus.VaultEntryChanged{
           athanor_id: ctx.athanor_id,
-          entry_id: "vlt_claude",
-          name: "vlt_claude-name",
+          entry_id: entry,
+          name: "claude-login",
           kind: :delete
         }
       )
 
-      assert_receive {:control, "home", %{"op" => "retire", "home_id" => "vlt_claude"}, _},
-                     3_000
+      assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^entry}, _}, 3_000
 
-      login_entry(ctx, "vlt_second", "claude")
+      second = login_entry(ctx, "second-login", "claude")
 
       Cyfr.Bus.broadcast_global(
         Cyfr.Bus.athanor_archived_global(),
@@ -1362,7 +1379,7 @@ defmodule Opus.ProgramsTest do
           id
         end
 
-      assert Enum.sort(retired) == ["vlt_claude", "vlt_second"]
+      assert Enum.sort(retired) == Enum.sort([entry, second])
     end
   end
 
