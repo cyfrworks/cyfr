@@ -42,7 +42,7 @@ defmodule Cyfr.ApplicationTest do
     Aqua.ScheduleNotes => 5_000,
     Aqua.Loop.Worker => 5_000,
     Aqua.TaskSupervisor => 30_000,
-    Emissary.External.Backends => 5_000,
+    {Opus.Programs.Box, "local"} => 5_000,
     Emissary.External.Reconciler => 5_000,
     Emissary.TaskSupervisor => 30_000,
     Opus.Schedules.TaskSupervisor => 30_000,
@@ -272,7 +272,8 @@ defmodule Cyfr.ApplicationTest do
                Opus.Sweeper,
                Opus.WorkerWatch,
                Opus.Host.Egress.Pins,
-               Opus.HostListener
+               Opus.HostListener,
+               Opus.Programs
              ]},
             {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.WorkerTree, Aqua.RunnerTree]},
             {Emissary.Supervisor, [Emissary.External.ServerTree, Emissary.TaskSupervisor]}
@@ -423,7 +424,7 @@ defmodule Cyfr.ApplicationTest do
       for {path, id} <- [
             {[], Cyfr.RetentionScheduler},
             {[Opus.Supervisor], Opus.WorkerWatch},
-            {[Emissary.Supervisor, Emissary.External.ServerTree], Emissary.External.Backends}
+            {[Opus.Supervisor, Opus.Programs], {Opus.Programs.Box, "local"}}
           ] do
         supervisor = child_pid(Cyfr.InfraSupervisor, path)
 

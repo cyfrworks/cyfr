@@ -106,22 +106,31 @@ defmodule Locus.Backends.BackendTest do
     assert read(session, 0, 1) == ["kept"]
 
     assert :ok = Backend.close(session)
-    assert %{running: false, lines: [%{text: "kept"}]} = Backend.recv(session, 0, 5_000)
+
+    assert %{running: false, lines: [%{text: "kept"}], exit_code: nil} =
+             Backend.recv(session, 0, 5_000)
+
     assert :ended = Backend.send_lines(session, ["late"])
     assert_receive {Backend, ^session, {:ended, %{crash: false}}}, 5_000
     assert_receive {Backend, ^session, :vacated}, 5_000
   end
 
-  test "an exit of its own is a crash unless its status is 0, and its last lines stay readable",
+  test "an exit of its own is a crash unless its status is 0, its status is answered, and its last lines stay readable",
        %{supervisor: supervisor} do
     crashed = start_session(supervisor, "echo last; exit 3")
     assert_receive {Backend, ^crashed, {:ended, %{crash: true, error: error}}}, 10_000
     assert error =~ "code=3"
-    assert %{running: false, lines: [%{text: "last"}]} = Backend.recv(crashed, 0, 5_000)
+
+    assert %{running: false, lines: [%{text: "last"}], exit_code: 3} =
+             Backend.recv(crashed, 0, 5_000)
 
     clean = start_session(supervisor, "echo done")
     assert_receive {Backend, ^clean, {:ended, %{crash: false, error: nil}}}, 10_000
-    assert %{running: false} = Backend.recv(clean, 0, 0)
+    assert %{running: false, exit_code: 0} = Backend.recv(clean, 0, 0)
+
+    signalled = start_session(supervisor, "kill -TERM $$")
+    assert_receive {Backend, ^signalled, {:ended, %{crash: true}}}, 10_000
+    assert %{running: false, exit_code: nil} = Backend.recv(signalled, 0, 0)
   end
 
   test "a line past its bound kills the process, as a crash", %{supervisor: supervisor} do

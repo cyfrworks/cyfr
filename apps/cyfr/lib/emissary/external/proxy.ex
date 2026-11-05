@@ -181,7 +181,7 @@ defmodule Emissary.External.Proxy do
     case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
         servers
-        |> Enum.filter(& &1.enabled)
+        |> Enum.filter(&(&1.enabled and &1.transport != "pipe"))
         |> Task.async_stream(
           fn server -> {server, Servers.ensure_started(server, ctx)} end,
           max_concurrency: 10,

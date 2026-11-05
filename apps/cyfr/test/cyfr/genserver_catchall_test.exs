@@ -45,8 +45,8 @@ defmodule Cyfr.GenServerCatchallTest do
     Opus.ArchiveWatch => "gated by :execution_archive_watch_enabled",
     Opus.WorkerWatch => "gated by :worker_watch_enabled",
     Emissary.External.Reconciler => "gated by :external_server_reconciler_enabled",
-    Emissary.External.Backends =>
-      "started only when a backends service URL and key are configured",
+    Opus.Programs.Box => "started only when a backends service URL and key are configured",
+    Opus.Programs.SignIn => "started per sign-in, holding a session on the backends service",
     Sanctum.RunningTasks => "probing would race real request tracking",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"

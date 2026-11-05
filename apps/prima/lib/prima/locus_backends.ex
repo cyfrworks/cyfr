@@ -96,7 +96,7 @@ defmodule Prima.LocusBackends do
   |---|---|---|
   | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `argv[]` | `status`, `session`, `resumed`, `pty` |
   | `send` | `owner`, `e`, `session`, `lines[]` | `status` |
-  | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running` |
+  | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running`, `exit_code?` |
   | `close` | `owner`, `e`, `session` | `status` |
 
   An `open` in mode `run` attaches to the session running for its key
@@ -118,7 +118,9 @@ defmodule Prima.LocusBackends do
   `max_wait_ms` (at most `max_recv_wait_ms/0`) for a line past `after` or
   the process's end, and is idempotent: a lost answer is replayed by the
   same `after`. A session whose process ended answers `running: false` on
-  every later `recv`, and the next `open` with its key answers `resumed:
+  every later `recv`, with `exit_code` when its process exited of its own
+  accord with a status (absent for one ended by a signal, by `close`, by
+  idle or by its owners), and the next `open` with its key answers `resumed:
   false`; an owner that speaks a protocol over a session starts it again
   then. A `send` to an ended session answers `status` `ended`, and one to
   a running session `running`. `close` ends the session's process and
@@ -296,6 +298,7 @@ defmodule Prima.LocusBackends do
     close: ~w(version status)
   }
   @session_optional %{open: ~w(home_id)}
+  @session_answer_optional %{recv: ~w(exit_code)}
   @program_fields ~w(name command env_names home)
   @program_optional ~w(login_command memory_bytes home_max_bytes)
   @program_report_fields ~w(name status restarts stderr_tail home over_cap sessions)
@@ -493,7 +496,12 @@ defmodule Prima.LocusBackends do
   @type session_answer ::
           %{status: :running, session: String.t(), resumed: boolean(), pty: boolean()}
           | %{status: session_status()}
-          | %{lines: [line()], dropped: non_neg_integer(), running: boolean()}
+          | %{
+              lines: [line()],
+              dropped: non_neg_integer(),
+              running: boolean(),
+              exit_code: 0..255 | nil
+            }
 
   @type code ::
           :unauthorized
@@ -701,7 +709,7 @@ defmodule Prima.LocusBackends do
   on the service can read a command line, so a credential never goes in
   one. Refused `:not_a_string`, `:empty`, `:too_long`, `:nul` or
   `:vault_reference`. A program's command and login command
-  (`Emissary.External.BackendDefinition`) and the program a manifest's
+  (`Opus.Programs.Definition`) and the program a manifest's
   login need suggests (`Prima.Manifest.Needs`) are held to it.
   """
   @spec check_command(term()) ::
@@ -1491,7 +1499,13 @@ defmodule Prima.LocusBackends do
   def encode_session_answer(type, answer) when type in @session_types and is_map(answer) do
     wire = answer |> wire() |> Map.put("version", @version)
 
-    with :ok <- exact(wire, Map.fetch!(@session_answer_fields, type), ""),
+    with :ok <-
+           exact(
+             wire,
+             Map.fetch!(@session_answer_fields, type),
+             Map.get(@session_answer_optional, type, []),
+             ""
+           ),
          {:ok, _answer} <- read_session_answer_typed(type, wire),
          body = Jason.encode!(wire),
          :ok <- admit(byte_size(body), :session, @max_session_bytes) do
@@ -1506,7 +1520,13 @@ defmodule Prima.LocusBackends do
     with :ok <- admit(byte_size(body), :session, @max_session_bytes),
          {:ok, wire} <- object(body),
          :ok <- current_version(wire),
-         :ok <- exact(wire, Map.fetch!(@session_answer_fields, type), "") do
+         :ok <-
+           exact(
+             wire,
+             Map.fetch!(@session_answer_fields, type),
+             Map.get(@session_answer_optional, type, []),
+             ""
+           ) do
       read_session_answer_typed(type, wire)
     end
   end
@@ -1533,10 +1553,15 @@ defmodule Prima.LocusBackends do
   defp read_session_answer_typed(:recv, wire) do
     with {:ok, lines} <- seq_lines(wire["lines"]),
          {:ok, dropped} <- count(wire, "dropped", ""),
-         {:ok, running} <- boolean(wire, "running", "") do
-      {:ok, %{lines: lines, dropped: dropped, running: running}}
+         {:ok, running} <- boolean(wire, "running", ""),
+         {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)) do
+      {:ok, %{lines: lines, dropped: dropped, running: running, exit_code: exit_code}}
     end
   end
+
+  # An exit status, only of a session that is no longer running.
+  defp exit_code(code, false) when is_integer(code) and code in 0..255, do: {:ok, code}
+  defp exit_code(_code, _running), do: {:error, {:invalid_field, "exit_code"}}
 
   # Lines in rising sequence, each at most a line's bound.
   defp seq_lines(list) when is_list(list) do

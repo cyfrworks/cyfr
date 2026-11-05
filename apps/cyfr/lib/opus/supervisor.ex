@@ -5,7 +5,7 @@ defmodule Opus.Supervisor do
   @moduledoc """
   The execution domain's processes: the slots, the attempt tree, the
   background roots, the watches and sweeper, the node's pin table and the
-  host API listener.
+  host API listener, and the programs controller (`Opus.Programs`).
   `rest_for_one`, because the watches, the sweeper and the listener read
   the attempt registries and the slots before them, and the listener must
   never outlive a fresh attempt tree: a restart of either restarts every
@@ -14,7 +14,9 @@ defmodule Opus.Supervisor do
   Options, given by the composition root, which reads the configuration:
   `slot_caps` (`{max, key_max}`, the execution slots' caps), `bind` and
   `port` (where the host API listener binds), and `drain_ms` (how long
-  the listener lets an open host call finish once it stops accepting).
+  the listener lets an open host call finish once it stops accepting) and
+  `programs` (`Opus.Programs.start_link/1`'s options: the local box's URL
+  and key, and whether this boot runs as a cluster).
   """
 
   use Supervisor
@@ -87,7 +89,11 @@ defmodule Opus.Supervisor do
         {Opus.HostListener,
          bind: Keyword.fetch!(opts, :bind),
          port: Keyword.fetch!(opts, :port),
-         drain_ms: Keyword.fetch!(opts, :drain_ms)}
+         drain_ms: Keyword.fetch!(opts, :drain_ms)},
+        # What the backends service runs: owners, their sessions and kept
+        # homes. Last, and started before Emissary's tree, so Emissary's
+        # servers stop first at shutdown and still release through it.
+        {Opus.Programs, Keyword.get(opts, :programs, [])}
       ],
       strategy: :rest_for_one,
       max_restarts: 10,

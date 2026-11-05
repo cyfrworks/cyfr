@@ -238,6 +238,22 @@ defmodule Prima.LocusBackendsTest do
                LocusBackends.encode_session_answer(:recv, %{answer | lines: [long]})
     end
 
+    test "an ended session's recv names its exit status, and a running one never does" do
+      body = @vectors["recv"]["answer_ended"]
+
+      assert {:ok, %{running: false, exit_code: 0} = ended} =
+               LocusBackends.read_session_answer(:recv, body)
+
+      assert {:ok, ^body} = LocusBackends.encode_session_answer(:recv, ended)
+
+      assert {:error, {:invalid_field, "exit_code"}} =
+               LocusBackends.encode_session_answer(:recv, %{ended | running: true})
+
+      {:ok, running} = LocusBackends.read_session_answer(:recv, @vectors["recv"]["answer"])
+      assert running.exit_code == nil
+      refute @vectors["recv"]["answer"] =~ "exit_code"
+    end
+
     test "a session body is bounded before it is parsed" do
       max = LocusBackends.max_session_bytes()
 

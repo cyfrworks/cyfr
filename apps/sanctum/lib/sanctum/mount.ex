@@ -186,19 +186,63 @@ defmodule Sanctum.Mount do
   status}}`, `{:error, :not_a_login_entry}` and `{:error,
   {:another_program, name}}`; a store that cannot answer is
   `{:error, {:unavailable, "Vault"}}`.
+
+  With `for: :sign_in` an entry a restore left `needs_reauth` is admitted
+  too: signing the program in again is how it comes back (`signed_in/2`).
   """
-  @spec login_entry(Context.t(), String.t(), String.t()) ::
-          {:ok, %{id: String.t(), name: String.t()}} | {:error, term()}
-  def login_entry(%Context{} = ctx, entry, program)
-      when is_binary(entry) and is_binary(program) do
+  @spec login_entry(Context.t(), String.t(), String.t(), keyword()) ::
+          {:ok, %{id: String.t(), name: String.t(), status: String.t()}} | {:error, term()}
+  def login_entry(%Context{} = ctx, entry, program, opts \\ [])
+      when is_binary(entry) and is_binary(program) and is_list(opts) do
     actor = Context.actor(ctx)
 
     with {:ok, row} <- by_id_or_name(actor, entry),
-         :ok <- active(row),
+         :ok <- active(row, Keyword.get(opts, :for)),
          :ok <- login(row),
          {:ok, named} <- entry_program(row) |> program_named(),
          :ok <- if(named == program, do: :ok, else: {:error, {:another_program, named}}) do
-      {:ok, %{id: row.id, name: row.name}}
+      {:ok, %{id: row.id, name: row.name, status: row.status}}
+    end
+  end
+
+  @doc """
+  A sign-in of the login entry `entry_id` whose command exited 0, in the
+  interactive session that opened it: an entry a restore left
+  `needs_reauth` is active again, the person's own deliberate act, as
+  re-authorizing an OAuth entry is. An active entry stays as it is. Only
+  the sign-in relay calls it, and nothing else makes a login entry active
+  again. Answers `:ok`, or `{:error, reason}` for an entry that is not
+  this athanor's login entry or a store that cannot answer.
+  """
+  @spec signed_in(Context.t(), String.t()) :: :ok | {:error, term()}
+  def signed_in(%Context{} = ctx, entry_id) when is_binary(entry_id) do
+    actor = Context.actor(ctx)
+
+    with {:ok, row} <- by_id_or_name(actor, entry_id),
+         :ok <- login(row) do
+      case row.status do
+        "active" ->
+          :ok
+
+        "needs_reauth" ->
+          case Arca.VaultStorage.set_status(actor, row.id, "active") do
+            {:ok, _} ->
+              Sanctum.Telemetry.vault_entry_changed(
+                Context.athanor!(ctx),
+                row.id,
+                :rotate,
+                %{name: row.name}
+              )
+
+              :ok
+
+            {:error, _} = error ->
+              error
+          end
+
+        status ->
+          {:error, {:entry_unavailable, status}}
+      end
     end
   end
 
@@ -218,8 +262,9 @@ defmodule Sanctum.Mount do
     end
   end
 
-  defp active(%{status: "active"}), do: :ok
-  defp active(%{status: status}), do: {:error, {:entry_unavailable, status}}
+  defp active(%{status: "active"}, _for), do: :ok
+  defp active(%{status: "needs_reauth"}, :sign_in), do: :ok
+  defp active(%{status: status}, _for), do: {:error, {:entry_unavailable, status}}
 
   defp login(%{kind: @login}), do: :ok
   defp login(_entry), do: {:error, :not_a_login_entry}
@@ -237,7 +282,7 @@ defmodule Sanctum.Mount do
   @spec home_of(String.t(), String.t()) :: {:ok, home_id()} | :none | {:error, :unavailable}
   def home_of(athanor_id, entry_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(entry_id) do
-    case Arca.VaultStorage.get(%Prima.Actor{athanor_id: athanor_id}, entry_id) do
+    case Arca.VaultStorage.get(Prima.Actor.in_athanor(athanor_id), entry_id) do
       {:ok, %{kind: @login, id: id}} -> {:ok, id}
       {:ok, _another_kind} -> :none
       {:error, :not_found} -> :none
@@ -252,7 +297,7 @@ defmodule Sanctum.Mount do
   """
   @spec login_entries(String.t()) :: {:ok, [home_id()]} | {:error, :unavailable}
   def login_entries(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    case Arca.VaultStorage.list(%Prima.Actor{athanor_id: athanor_id}) do
+    case Arca.VaultStorage.list(Prima.Actor.in_athanor(athanor_id)) do
       {:ok, entries} -> {:ok, for(%{kind: @login, id: id} <- entries, do: id)}
       {:error, _unanswered} -> {:error, :unavailable}
     end
