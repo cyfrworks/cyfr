@@ -12,7 +12,8 @@ signed as CYFR signs them (harness.py):
   chain at the guard returns each of them and refuses the rest, counted on
   that chain's rule. It reaches a listed host and is refused an unlisted
   public address at once; the rules before the list stand for it as for
-  every spawn (Docker's resolver answers it; a metadata address is refused).
+  every spawn (Docker's resolver answers it the stack's own service name; a
+  metadata address is refused).
 - A second owner's program, whose row names no hosts, is unaffected: the
   guard holds no chain for its uid, and it reaches the address the first is
   refused, as today. A kept program's uid, outside the pool, is held to its
@@ -39,8 +40,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    CONNECT_PROBE, KEPT_FIRST, KEPT_LAST, POOL_FIRST, POOL_LAST, REFUSED, STATUSES, VERSION, Stack, eventually,
-    expect, owner_of, probe, require_docker, run,
+    CONNECT_PROBE, KEPT_FIRST, KEPT_LAST, POOL_FIRST, POOL_LAST, REFUSED, SERVICE, STATUSES, VERSION, Stack,
+    eventually, expect, owner_of, probe, require_docker, run,
 )
 
 LISTED, OPEN, KEPT, NOWHERE = (owner_of(name) for name in ("listed", "open", "kept", "nowhere"))
@@ -97,9 +98,12 @@ def held_to_list(stack, c, owner, uid, offline, **session):
     jump = stack.guard_exec(f"iptables -C CYFR_GUARD_HOSTS -m owner --uid-owner {uid} -j CYFR_GUARD_U{uid}")
     expect(jump.returncode == 0, f"the guard's list rule sends uid {uid} to its own chain", jump.stderr)
 
-    resolved = run_in(c, owner, ["getent", "hosts", "cyfr"], **session)
-    expect(resolved["status"] == 0 and "cyfr" in resolved["stdout"],
-           f"uid {uid} still reaches Docker's resolver", resolved)
+    # The stack's own service name, which Docker's resolver answers on the
+    # island's network wherever the suite runs; a name outside the stack
+    # resolves or not by the host's own search domains.
+    resolved = run_in(c, owner, ["getent", "hosts", SERVICE], **session)
+    expect(resolved["status"] == 0 and SERVICE in resolved["stdout"],
+           f"uid {uid} still reaches Docker's resolver, which answers {SERVICE}", resolved)
     before = stack.guard_counters()
     codes = connect(c, owner, [UNLISTED, METADATA] + ([] if offline else [f"{LISTED_HOST}:443"]), **session)
     after = stack.guard_counters()
