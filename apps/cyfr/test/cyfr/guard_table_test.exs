@@ -55,10 +55,21 @@ defmodule Cyfr.GuardTableTest do
                "ip6tables -N CYFR_GUARD",
                "iptables -N CYFR_GUARD_HOSTS",
                "ip6tables -N CYFR_GUARD_HOSTS",
+               "iptables -N CYFR_GUARD_KNOWN",
+               "ip6tables -N CYFR_GUARD_KNOWN",
                "iptables -A OUTPUT -j CYFR_GUARD",
                "ip6tables -A OUTPUT -j CYFR_GUARD",
-               "iptables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j RETURN",
-               "ip6tables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j RETURN"
+               "iptables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j CYFR_GUARD_KNOWN",
+               "ip6tables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j CYFR_GUARD_KNOWN",
+               # A tracked connection's packet: the resolver and the private
+               # hosts pass, a listed uid's is judged by its own chain.
+               "iptables -A CYFR_GUARD_KNOWN -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT",
+               "iptables -A CYFR_GUARD_KNOWN -d 10.9.8.0/24 -j ACCEPT",
+               "ip6tables -A CYFR_GUARD_KNOWN -d fd12:3456::/64 -j ACCEPT",
+               "iptables -A CYFR_GUARD_KNOWN -j CYFR_GUARD_HOSTS",
+               "ip6tables -A CYFR_GUARD_KNOWN -j CYFR_GUARD_HOSTS",
+               "iptables -A CYFR_GUARD_KNOWN -j ACCEPT",
+               "ip6tables -A CYFR_GUARD_KNOWN -j ACCEPT"
              ] ++
                rejects(metadata) ++
                [

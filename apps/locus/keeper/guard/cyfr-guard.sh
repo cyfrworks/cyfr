@@ -15,8 +15,15 @@
 # guard with an error naming it, before the ready file exists, so the
 # island never starts behind a guard that holds fewer rules than these.
 #
-# What the rules refuse, for a new connection, in this order (a reply to a
-# connection cyfr opened to the island is never new). The metadata and
+# A packet of a connection the kernel already tracks, such as a reply to a
+# connection cyfr opened to the island or the rest of one a rule below let
+# through, passes (CYFR_GUARD_KNOWN), but for a uid whose row names its
+# hosts: rule 5's chain judges every packet of such a uid again, with the
+# resolver and the private hosts passing for it there too, since the
+# kernel tracks a connection by its addresses and ports alone and state
+# one uid left would otherwise serve another that reuses them.
+#
+# What the rules refuse, for a new connection, in this order. The metadata and
 # private rows are Prima.Cidr's address table (`Prima.Cidr.address_table/0`),
 # the one the control plane's own outbound calls are held to, written into
 # this script between its BEGIN and END lines by `mix cyfr.gen.guard_table`;
@@ -107,6 +114,7 @@ READY="$READY_DIR/ready"
 LOCK="$READY_DIR/lock"
 CHAIN=CYFR_GUARD
 HOSTS=CYFR_GUARD_HOSTS
+KNOWN=CYFR_GUARD_KNOWN
 # Set by `cyfr-guard rules` alone, never from the environment.
 PRINT_ONLY=
 
@@ -383,6 +391,25 @@ own_v6_subnets() {
   ' /proc/net/ipv6_route | sort -u
 }
 
+# The addresses and CIDRs CYFR_PRIVATE_EGRESS_TARGETS names, one a line,
+# each name resolved now and logged.
+private_targets() {
+  for target in $(printf '%s' "${CYFR_PRIVATE_EGRESS_TARGETS:-}" | tr ',' ' '); do
+    case "$target" in
+      */*) addresses="$target" ;;
+      *) addresses="$(getent ahosts "$target" 2>/dev/null | awk '{print $1}' | sort -u)" ;;
+    esac
+    if [ -z "$addresses" ]; then
+      log "private target $target resolves to nothing here: it opens nothing"
+      continue
+    fi
+    for address in $addresses; do
+      log "private target $target: $address passes"
+      echo "$address"
+    done
+  done
+}
+
 add_rules() {
   ranges="$(spawn_ranges)" || exit 1
   control_plane="${CYFR_GUARD_CONTROL_PLANE:?names the fixed address of cyfr on the default network}"
@@ -392,10 +419,26 @@ add_rules() {
   v6 -N "$CHAIN"
   v4 -N "$HOSTS"
   v6 -N "$HOSTS"
+  v4 -N "$KNOWN"
+  v6 -N "$KNOWN"
   v4 -A OUTPUT -j "$CHAIN"
   v6 -A OUTPUT -j "$CHAIN"
-  v4 -A "$CHAIN" -m conntrack ! --ctstate NEW -j RETURN
-  v6 -A "$CHAIN" -m conntrack ! --ctstate NEW -j RETURN
+  v4 -A "$CHAIN" -m conntrack ! --ctstate NEW -j "$KNOWN"
+  v6 -A "$CHAIN" -m conntrack ! --ctstate NEW -j "$KNOWN"
+
+  # A tracked connection's packet: the resolver and the private hosts
+  # pass, a listed uid's goes through its own chain (rule 5), and every
+  # other passes.
+  targets="$(private_targets)"
+  v4 -A "$KNOWN" -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT
+  for address in $targets; do
+    if [ "$(family "$address")" = 6 ]; then v6 -A "$KNOWN" -d "$address" -j ACCEPT
+    else v4 -A "$KNOWN" -d "$address" -j ACCEPT; fi
+  done
+  v4 -A "$KNOWN" -j "$HOSTS"
+  v6 -A "$KNOWN" -j "$HOSTS"
+  v4 -A "$KNOWN" -j ACCEPT
+  v6 -A "$KNOWN" -j ACCEPT
 
   # 1. metadata
   for range in $METADATA_V4; do v4 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp-admin-prohibited; done
@@ -430,24 +473,9 @@ add_rules() {
   v4 -A "$CHAIN" -o lo $outside -j RETURN
   # shellcheck disable=SC2086
   v6 -A "$CHAIN" -o lo $outside -j RETURN
-  targets="$(printf '%s' "${CYFR_PRIVATE_EGRESS_TARGETS:-}" | tr ',' ' ')"
-  for target in $targets; do
-    case "$target" in
-      */*) addresses="$target" ;;
-      *) addresses="$(getent ahosts "$target" 2>/dev/null | awk '{print $1}' | sort -u)" ;;
-    esac
-    if [ -z "$addresses" ]; then
-      log "private target $target resolves to nothing here: it opens nothing"
-      continue
-    fi
-    for address in $addresses; do
-      log "private target $target: $address passes"
-      if [ "$(family "$address")" = 6 ]; then
-        v6 -A "$CHAIN" -d "$address" -j RETURN
-      else
-        v4 -A "$CHAIN" -d "$address" -j RETURN
-      fi
-    done
+  for address in $targets; do
+    if [ "$(family "$address")" = 6 ]; then v6 -A "$CHAIN" -d "$address" -j RETURN
+    else v4 -A "$CHAIN" -d "$address" -j RETURN; fi
   done
   for range in $PRIVATE_V4; do v4 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp-admin-prohibited; done
   for range in $PRIVATE_V6; do v6 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp6-adm-prohibited; done
