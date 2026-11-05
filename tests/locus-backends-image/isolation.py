@@ -7,19 +7,22 @@ Driven only by requests signed as CYFR signs them (harness.py):
 
 - cyfr-locus holds exactly SETUID, SETGID and KILL and no inet socket; the
   release runs as locus with no capability; the root is read-only, and an
-  unsigned control message or invoke is refused.
-- Each backend runs under its own pooled uid, alone in its group, in a 0700
-  home, with an environment of its sealed block and the keeper's own
-  variables alone, under the keeper's resource limits; one owner's key
-  reaches no other owner's backends.
+  unsigned control or session message is refused.
+- Each program's process runs under its own pooled uid, alone in its
+  group, in a 0700 home, with an environment of its sealed block and the
+  keeper's own variables alone, under the keeper's resource limits; one
+  owner's key reaches no other owner's sessions; the program's own
+  tools/list answers over its session.
 - No backend can read another's home or /proc environ, or the release's
-  (which holds LOCUS_BACKENDS_KEY), nor signal another backend, a relay,
+  (which holds LOCUS_BACKENDS_KEY), nor list the kept homes' root, nor
+  signal another backend, a relay,
   the release or cyfr-locus. Each reads another's command line, the limit
   README.md and integration-guide.md state: the service runs every backend
   in one process namespace with an ordinary /proc.
 - Releasing an owner retires every process of its uid, a detached daemon
-  that ignores SIGTERM included, its relay and its home; a backend that
-  exits is retired and restarts ready in a new home.
+  that ignores SIGTERM included, its relay and its home; a program that
+  exits ends its session, is counted as a crash and retired, and the next
+  call starts it again, initialized afresh, in a new home.
 - The release refuses to start without a valid backends key; when it dies,
   cyfr-locus retires every backend and exits 70; when cyfr-locus is lost,
   the container ends with every backend in it; cyfr-locus refuses Docker's
@@ -54,7 +57,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, MCP_VERSION, NETWORK, POOL_FIRST, POOL_LAST, PORT,
+    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, KEPT_ROOT, NETWORK, POOL_FIRST, POOL_LAST, PORT,
     PROBE, PROJECT_PREFIX, REFUSED, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE,
     Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run,
     image_user_name, wait_healthy, wire_json,
@@ -66,8 +69,9 @@ import imagesuite  # noqa: E402
 ALPHA, BETA = owner_of("alpha"), owner_of("beta")
 ALPHA_SECRET = "alpha-secret-value"
 NO_CAPS = "0000000000000000"
-PROBE_TOOLS = ["probe__echo_env", "probe__exit", "probe__fail", "probe__hog", "probe__read_environ",
-               "probe__read_path", "probe__run", "probe__signal", "probe__spawn_daemon", "probe__whoami"]
+PROBE_TOOLS = ["echo_env", "exit", "fail", "hog", "read_environ", "read_path", "run", "signal", "spawn_daemon",
+               "whoami"]
+OPEN = {"type": "open", "program": "probe", "key": "k", "mode": "run", "argv": []}
 
 
 def home_gone(stack, home):
@@ -84,7 +88,8 @@ def sync_probe(c, owner, env=None):
     expect(status == 200, f"{owner['athanor']} is synced", answer)
     c.running(owner)
     report = c.report(owner)
-    expect([b["status"] for b in report["backends"]] == ["ready"], f"{owner['athanor']}'s backend is ready", report)
+    expect([(p["status"], p["sessions"]) for p in report["programs"]] == [("idle", 0)],
+           f"{owner['athanor']}'s program is defined and nothing of it runs yet", report)
 
 
 def inspect_pid(stack, image, script):
@@ -336,11 +341,10 @@ def main():
 
         write = stack.exec("touch /app/planted 2>&1; echo status=$?")
         expect("Read-only file system" in write.stdout, "the root is read-only", write.stdout)
-        body = wire_json({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
-        for route in ["control", "mcp"]:
-            status, _answer, _ = post(stack.base + ROUTES[route], {"content-type": "application/json",
-                                                                   "mcp-protocol-version": MCP_VERSION,
-                                                                   "mcp-method": "tools/list"}, body)
+        body = wire_json({**OPEN, "owner": {"athanor": ALPHA["athanor"], "server": ALPHA["server"]}, "e": 1,
+                          "version": 2})
+        for route in ["control", "session"]:
+            status, _answer, _ = post(stack.base + ROUTES[route], {"content-type": "application/json"}, body)
             expect(status == 401, f"an unsigned request to the {route} route is refused", status)
 
         # ————— each backend alone —————
@@ -376,10 +380,11 @@ def main():
                "a backend's environment holds no backends key")
 
         beta_key = owner_key(stack.key, BETA["athanor"], BETA["server"], 1, 1)
-        status, _answer, _, _ = c.invoke(ALPHA, "tools/call", {"name": "probe__whoami", "arguments": {}}, key=beta_key)
-        expect(status == 401, "one owner's key reaches no other owner's backends", status)
-        status, listed, _, _ = c.invoke(BETA, "tools/list")
-        expect(sorted(t["name"] for t in listed["result"]["tools"]) == PROBE_TOOLS, "an owner lists its own tools", listed)
+        status, _answer, _, _ = c.session(ALPHA, OPEN, key=beta_key)
+        expect(status == 401, "one owner's key reaches no other owner's sessions", status)
+        listed = c.mcp(BETA, "probe").list_tools()
+        expect(sorted(t["name"] for t in listed) == PROBE_TOOLS, "a program's own tools/list answers over its session",
+               listed)
 
         # ————— no reach across —————
         relays = [p for p in stack.processes() if p["cmd"].startswith("cyfr-locus relay")]
@@ -393,6 +398,7 @@ def main():
             refused("read_path", {"path": other["marker"]}, "EACCES")
             refused("read_path", {"path": other["home"]}, "EACCES")
             refused("read_path", {"path": HOME_ROOT}, "EACCES")
+            refused("read_path", {"path": KEPT_ROOT}, "EACCES")
             refused("read_path", {"path": RUN_DIR}, "EACCES")
             refused("read_environ", {"pid": other["pid"]}, "EACCES")
             refused("read_environ", {"pid": release["pid"]}, "EACCES")
@@ -426,13 +432,18 @@ def main():
         expect(home_gone(stack, alpha["home"]), "alpha's home is gone")
         expect(c.tool(BETA, "probe__whoami")["pid"] == beta["pid"], "releasing alpha disturbed nothing of beta's")
 
+        client = c.mcp(BETA, "probe")
+        initialized = client.initializations
         c.tool(BETA, "probe__exit", {"code": 7})
-        restarted = eventually(lambda: (lambda b: b if b["status"] == "ready" and b["restarts"] == 1 else None)(
-            c.report(BETA)["backends"][0]), "beta to restart ready", timeout_s=30)
+        crashed = eventually(lambda: (lambda p: p if p["sessions"] == 0 and p["restarts"] == 1 else None)(
+            c.program(BETA)), "beta's exit to end its session and count as a crash", timeout_s=30)
+        expect(crashed["status"] == "idle" and "code=7" in (crashed.get("error") or ""),
+               "the exit is reported, its status named, and nothing of beta's runs", crashed)
+        eventually(lambda: home_gone(stack, beta["home"]), "the exited program's home to be scrubbed")
         again = c.tool(BETA, "probe__whoami")
-        expect(restarted["tools"] == len(PROBE_TOOLS) and again["pid"] != beta["pid"] and again["home"] != beta["home"],
-               "a backend that exits restarts ready in a new home", [restarted, again])
-        expect(home_gone(stack, beta["home"]), "the exited backend's home is gone")
+        expect(again["pid"] != beta["pid"] and again["home"] != beta["home"]
+               and client.initializations == initialized + 1 and client.resumed is False,
+               "the next call starts the program again, initialized afresh, in a new home", again)
 
         # ————— the service's lifetime —————
         for key in ["", "not-a-key", "00" * 31]:
@@ -445,7 +456,7 @@ def main():
         # (harness.py `alone`): in the guard's it would meet the running
         # service's listener.
         lost = f"{stack.project}-lost"
-        run("docker", "rm", "--force", lost, check=False)
+        run("docker", "rm", "--force", "--volumes", lost, check=False)
         stack.alone("lost", publish=True)
         try:
             base = "http://" + run("docker", "port", lost, str(PORT)).stdout.strip().splitlines()[0]
@@ -463,7 +474,7 @@ def main():
             expect("client channel lost; every spawn retired" in text and "quarantined" not in text
                    and "did not finish" not in text, "every backend was retired cleanly", text[-3000:])
         finally:
-            run("docker", "rm", "--force", lost, check=False)
+            run("docker", "rm", "--force", "--volumes", lost, check=False)
 
         stack.alone("lost")
         try:
@@ -473,7 +484,7 @@ def main():
             code = run("docker", "wait", lost).stdout.strip()
             expect(code != "0", "losing cyfr-locus ends the container, and every backend in it", code)
         finally:
-            run("docker", "rm", "--force", lost, check=False)
+            run("docker", "rm", "--force", "--volumes", lost, check=False)
 
         defaults = run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}{stack.project}-defaults",
                        "-e", f"LOCUS_BACKENDS_KEY={stack.key.hex()}", "--entrypoint", "cyfr-locus", image,
