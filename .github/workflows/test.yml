@@ -1498,6 +1498,14 @@ jobs:
       - name: Kept homes
         run: python3 tests/locus-backends-image/kept_home.py cyfr-locus:backends
 
+      # A program's pipe: a pipe row's cat in a kept home under the home's
+      # uid, attached to by its key, a read replayed by its after, retired
+      # once idle and started again (resumed: false), its oldest lines
+      # dropped and counted past the buffer, ended with its home; and,
+      # driven by cyfr, a session ended by its login entry's revoke.
+      - name: A program's pipe
+        run: python3 tests/locus-backends-image/pipe.py cyfr-locus:backends
+
       # The Compose proof (tests/compose-proof/run.sh) on the app image
       # built above, as the proof's own build would make it: the shipped
       # docker-compose.yml brought up as a project of its own by the `cyfr`

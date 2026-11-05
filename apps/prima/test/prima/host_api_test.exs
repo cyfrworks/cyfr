@@ -32,7 +32,8 @@ defmodule Prima.HostAPITest do
 
   A program's pipe is opened, read and closed again freely and never sent
   twice; a `pipe_recv` waits at most less than its request timeout; and
-  each pipe call of the vectors pins its args and is answered `not_built`.
+  each pipe call of the vectors pins its args and is answered a success of
+  its shape, refused besides by `denied` and the pipe's guest errors.
   """
 
   use ExUnit.Case, async: true
@@ -146,13 +147,10 @@ defmodule Prima.HostAPITest do
       for call <- @vectors["calls"] do
         assert {_fields, _args, answer} = reproduces(call)
 
-        # An attached request's success is its frames, not one answer, and
-        # a program's pipe is not built yet.
-        cond do
-          call["callback"] == "attached_fetch" -> assert answer == nil
-          call["callback"] in @pipe_calls -> assert answer == {:error, "not_built", %{}}
-          true -> assert match?({:ok, _value}, answer), call["callback"]
-        end
+        # An attached request's success is its frames, not one answer.
+        if call["callback"] == "attached_fetch",
+          do: assert(answer == nil),
+          else: assert(match?({:ok, _value}, answer), call["callback"])
 
         assert call["refusals"] != [], call["callback"]
 
@@ -405,7 +403,9 @@ defmodule Prima.HostAPITest do
   defp refusal_of?("attach", name),
     do: name in ~w(replayed claim_expired bad_mac unknown_version malformed setup_required)
 
-  defp refusal_of?(callback, name) when callback in @pipe_calls, do: name == "not_built"
+  defp refusal_of?(callback, name) when callback in @pipe_calls,
+    do: name in ~w(denied guest_error)
+
   defp refusal_of?("complete", name), do: name == "failed"
   defp refusal_of?("fetch_artifact", name), do: name == "not_found"
 
@@ -625,13 +625,23 @@ defmodule Prima.HostAPITest do
       assert HostAPI.max_pipe_wait_ms() < HostAPI.request_timeout_ms(:pipe_recv)
     end
 
-    test "each call's body pins the args CYFR reads, and each is answered not_built" do
-      args =
-        for call <- @vectors["calls"], call["callback"] in @pipe_calls, into: %{} do
-          {_fields, args, answer} = reproduces(call)
-          assert answer == {:error, "not_built", %{}}, call["callback"]
-          {call["callback"], args}
+    test "each call's body pins the args CYFR reads, and its answer the shape CYFR answers" do
+      {args, answers} =
+        for call <- @vectors["calls"], call["callback"] in @pipe_calls, reduce: {%{}, %{}} do
+          {args, answers} ->
+            {_fields, read, {:ok, answer}} = reproduces(call)
+            {Map.put(args, call["callback"], read), Map.put(answers, call["callback"], answer)}
         end
+
+      assert %{
+               "pipe_open" => %{"session" => opened, "resumed" => resumed},
+               "pipe_send" => true,
+               "pipe_recv" => %{"lines" => [%{"seq" => seq, "text" => text}], "dropped" => 0},
+               "pipe_close" => true
+             } = answers
+
+      assert is_binary(opened) and is_boolean(resumed) and is_binary(text)
+      assert is_integer(seq) and is_boolean(answers["pipe_recv"]["running"])
 
       assert %{
                "pipe_open" => %{"need" => need, "key" => key, "argv" => argv},

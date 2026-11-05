@@ -113,7 +113,7 @@ defmodule Opus.Host.AttachedFetch do
 
   require Logger
 
-  alias Opus.{Admission, Attempt, Keys}
+  alias Opus.{Attempt, Keys}
   alias Opus.Host.Egress
   alias Prima.{AttachedRequest, Authority, PinnedTarget, Refusal, SecretMasker, WorkerAuth}
   alias Prima.Authority.Blob
@@ -199,13 +199,7 @@ defmodule Opus.Host.AttachedFetch do
   # attaches by, and no other credential need shares that rule.
   defp granted(caller, chain, connection, vault) do
     with %{} = rule <- vault_rule(vault),
-         {:ok, _ref, _type, component} <-
-           Admission.inspect_component(chain.ctx, chain.component_ref),
-         digest when is_binary(digest) and digest != "" <-
-           trusted_digest(caller, chain, component),
-         true <- component["release_digest"] == digest,
-         {:ok, manifest} <- Prima.Manifest.decode_strict(component["manifest"]),
-         needs when is_list(needs) <- Needs.from_manifest(manifest),
+         {:ok, needs} <- Opus.Host.node_needs(caller, chain),
          [%{name: ^connection}] <- Enum.filter(needs, &attaches_by?(&1, rule)) do
       {:ok, %{rule: rule}}
     else
@@ -221,20 +215,6 @@ defmodule Opus.Host.AttachedFetch do
     do: Needs.attach_to_map(attach) == Needs.attach_to_map(rule)
 
   defp attaches_by?(_need, _rule), do: false
-
-  # The digest the running node is trusted at: at a root, the one its
-  # consent's activation graph pins for it; at a child, its component's
-  # release digest, which the child's transition was stepped with.
-  defp trusted_digest(caller, %{authority: authority} = chain, component) do
-    if caller.execution_id == chain.root_execution_id do
-      case Authority.current_node(authority) do
-        {:ok, node} -> Map.get(authority.activation, node)
-        :unbound -> nil
-      end
-    else
-      component["release_digest"]
-    end
-  end
 
   # 2. The rule's own header or query key is CYFR's to set.
   defp no_collision(request, _uri, %{in: "header", name: name}) do

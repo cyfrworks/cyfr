@@ -36,6 +36,19 @@ defmodule Opus.Programs do
   drew its uid; CYFR never learns it. A retire is retried until the box
   acknowledges it.
 
+  ## Pipes
+
+  `pipe_open/6` opens, for an attempt of a catalyst whose login need the
+  caller resolved (`Opus.Host.Pipe`), a `run` session of a program row in
+  a login entry's kept home under a key, held by an `Opus.Programs.Pipe`
+  process that belongs to the row, the home and the key, never to the
+  attempt: a later attempt opening the same key attaches to the session
+  while its program runs. `pipe_send/5`, `pipe_recv/6` and `pipe_close/4`
+  carry it for an attempt that opened it, each in the caller's process.
+  A session no attempt uses for the box's idle period ends, and so does
+  every session in a login entry's home when the entry is revoked,
+  suspended or deleted (`end_mounts/2`).
+
   ## Sign-in
 
   `sign_in/3` opens a `sign_in` session of a row's login command in a login
@@ -48,9 +61,17 @@ defmodule Opus.Programs do
 
   use Supervisor
 
-  alias Opus.Programs.{Box, SignIn}
+  alias Opus.Programs.{Box, Pipe, Session, SignIn}
 
   @registry Opus.Programs.Registry
+  # The refusals of a session route that say its owner, and so its
+  # session, is not on the service any more.
+  @stale [:stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
+  @ended %{lines: [], dropped: 0, running: false}
+  # A pipe call's deadline when its caller names none, and the margin an
+  # open's holder needs to answer past the deadline that it passed.
+  @default_wait_ms 25_000
+  @answer_margin_ms 1_000
   @relays Opus.Programs.Relays
   @local "local"
 
@@ -139,9 +160,9 @@ defmodule Opus.Programs do
   than its share of the pool, this member does not hold its slot in the
   cell (`:control_plane_lost`), or the service cannot be reached.
   """
-  @spec hold(owner()) :: {:ok, grant()} | {:error, term()}
-  def hold(owner),
-    do: call(box_of(owner.athanor_id), {:hold, owner, self()}, Box.hold_timeout_ms())
+  @spec hold(owner(), pos_integer()) :: {:ok, grant()} | {:error, term()}
+  def hold(owner, timeout_ms \\ Box.hold_timeout_ms()),
+    do: call(box_of(owner.athanor_id), {:hold, owner, self()}, timeout_ms)
 
   @doc """
   The calling holder holds `owner` no more; the last holder's release
@@ -252,12 +273,14 @@ defmodule Opus.Programs do
     do: relay_call(token, {:send, caller(ctx), line})
 
   @doc """
-  End every running sign-in of the athanor on the login entry `entry_id`:
-  the entry was revoked, suspended or deleted, so nothing runs in its home
-  any more. Answers at once; each relay ends `:entry_ended`.
+  End every running sign-in and pipe session of the athanor in the kept
+  home of the login entry `entry_id`: the entry was revoked, suspended or
+  deleted, so nothing runs in its home any more. Answers at once; each
+  sign-in relay ends `:entry_ended`, and each pipe holder closes its
+  session and releases its owner.
   """
-  @spec end_sign_ins(String.t(), String.t()) :: :ok
-  def end_sign_ins(athanor_id, entry_id) when is_binary(athanor_id) and is_binary(entry_id) do
+  @spec end_mounts(String.t(), String.t()) :: :ok
+  def end_mounts(athanor_id, entry_id) when is_binary(athanor_id) and is_binary(entry_id) do
     if Process.whereis(@relays) do
       for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(@relays),
           is_pid(pid),
@@ -278,6 +301,254 @@ defmodule Opus.Programs do
   end
 
   defp relay_name(token), do: {:via, Registry, {@registry, {:sign_in, token}}}
+
+  # ============================================================================
+  # Pipes
+  # ============================================================================
+
+  @doc """
+  Open, for the attempt `opener`, the `run` session of the program row
+  `row` (a stored `mcp_servers` row, `pipe` or `stdio` with a kept home)
+  in the kept home `home_id` under `key`, starting its program with `argv`
+  appended unless it runs for the key. Answers the session and whether it
+  was running (`resumed`); a repeat by the same opener while the session
+  is the same answers as the first did. Everything, the owner's
+  acquisition and a retry included, fits `deadline` (Unix milliseconds;
+  #{@default_wait_ms} ms from now when nil): past it the open answers
+  `{:error, :deadline}` and leaves nothing it started open. Refused
+  otherwise as `hold/2` and the session route refuse.
+  """
+  @spec pipe_open(map(), String.t(), String.t(), [String.t()], String.t(), integer() | nil) ::
+          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
+  def pipe_open(row, home_id, key, argv, opener, deadline \\ nil)
+      when is_binary(home_id) and is_binary(key) and is_list(argv) and is_binary(opener) do
+    pipe_open(row, home_id, key, argv, opener, deadline || default_deadline(), 1)
+  end
+
+  # A holder that ended as it was found (its idle period ran out) is
+  # started afresh, once. The call is awaited past the deadline by the
+  # margin the holder needs to answer that it passed.
+  defp pipe_open(row, home_id, key, argv, opener, deadline, tries) do
+    with {:ok, pid} <- pipe_holder(row, home_id, key) do
+      wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+      GenServer.call(pid, {:open, opener, argv, deadline}, wait)
+    end
+  catch
+    :exit, {reason, _} when reason in [:noproc, :normal] and tries > 0 ->
+      pipe_open(row, home_id, key, argv, opener, deadline, tries - 1)
+
+    :exit, {:timeout, _} ->
+      {:error, :deadline}
+
+    :exit, _ ->
+      {:error, :backends_unavailable}
+  end
+
+  defp default_deadline, do: System.system_time(:millisecond) + @default_wait_ms
+
+  defp left(deadline), do: max(deadline - System.system_time(:millisecond), 1)
+
+  defp pipe_holder(row, home_id, key) do
+    owner = %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch}
+
+    args = [
+      name:
+        {:via, Registry,
+         {@registry, {:pipe, owner.athanor_id, owner.server_id, owner.epoch, home_id, key}}},
+      owner: owner,
+      program: program_name(row),
+      row_name: row.name,
+      home_id: home_id,
+      key: key
+    ]
+
+    case DynamicSupervisor.start_child(@relays, {Pipe, args}) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, {:shutdown, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    :exit, _ -> {:error, :backends_not_configured}
+  end
+
+  @doc """
+  The box's open of a pipe session for the holder `holder` of `owner`
+  (`Opus.Programs.Pipe`), with `params` (`program`, `home_id`, `key`,
+  `argv`): recorded in the box before the backend is asked, so whatever
+  the backend answers under the key is the box's, and answered by
+  `deadline` (Unix milliseconds). Answers the session the box gave the
+  key, `{:error, :deadline}` past it, or the refusal.
+  """
+  @spec pipe_box_open(map(), pid(), map(), integer()) ::
+          {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
+  def pipe_box_open(owner, holder, params, deadline) do
+    wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
+
+    case call(box_of(owner.athanor_id), {:pipe_open, owner, holder, params, deadline}, wait) do
+      {:error, :backends_unavailable} -> {:error, :deadline}
+      answer -> answer
+    end
+  end
+
+  @doc """
+  The calling holder's key's session ends: the box closes it, and owes the
+  close until the backend confirms it. Answers once the backend has
+  answered the close, or the close window has passed, so the holder's
+  release of the owner after it never outruns it.
+  """
+  @spec pipe_box_close(map(), String.t(), String.t()) :: :ok | {:error, term()}
+  def pipe_box_close(owner, home_id, key),
+    do: call(box_of(owner.athanor_id), {:pipe_close, owner, home_id, key}, Box.close_timeout_ms())
+
+  @doc """
+  Write `lines` to the pipe session `session` of the athanor, for the
+  attempt `opener` that opened it, within `deadline` (as `pipe_open/6`'s).
+  `{:error, :ended}` once its program no longer runs, or when no holder
+  holds the session any more; `{:error, :denied}` for a session the opener
+  did not open; `{:error, :uncertain}` when the box's answer did not come
+  back, since the lines may have reached the program.
+  """
+  @spec pipe_send(String.t(), String.t(), String.t(), [String.t()], integer() | nil) ::
+          :ok | {:error, term()}
+  def pipe_send(athanor_id, opener, session, lines, deadline \\ nil) when is_list(lines) do
+    deadline = deadline || default_deadline()
+
+    case use_pipe(athanor_id, opener, session) do
+      {:ok, grant} ->
+        case Session.send(grant, session, lines, left(deadline)) do
+          {:ok, :running} ->
+            :ok
+
+          {:ok, :ended} ->
+            {:error, :ended}
+
+          {:error, {:refused, code, _boot}} when code in [:unknown_session | @stale] ->
+            {:error, :ended}
+
+          {:error, reason} ->
+            {:error, sent(reason)}
+        end
+
+      :none ->
+        {:error, :ended}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # What a send's failure says of its lines. An answer the box gave
+  # refused them before they were written; one that did not arrive, did
+  # not read, or says the box failed inside, may follow their writing.
+  defp sent(:backends_unavailable), do: :uncertain
+  defp sent({:unreadable, _error}), do: :uncertain
+  defp sent({:refused, :internal, _boot}), do: :uncertain
+  defp sent(reason), do: reason
+
+  @doc """
+  The lines of the pipe session `session` of the athanor past `after_seq`,
+  for the attempt `opener` that opened it, waiting up to `max_wait_ms` and
+  awaiting the answer until `deadline` (as `pipe_open/6`'s). A session no
+  holder holds any more answers no lines and `running: false`, and so does
+  one the service no longer knows.
+  """
+  @spec pipe_recv(
+          String.t(),
+          String.t(),
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          integer() | nil
+        ) ::
+          {:ok,
+           %{lines: [Prima.LocusBackends.line()], dropped: non_neg_integer(), running: boolean()}}
+          | {:error, term()}
+  def pipe_recv(athanor_id, opener, session, after_seq, max_wait_ms, deadline \\ nil) do
+    deadline = deadline || System.system_time(:millisecond) + max_wait_ms + @default_wait_ms
+
+    case use_pipe(athanor_id, opener, session) do
+      {:ok, grant} ->
+        slack = max(left(deadline) - max_wait_ms, 1)
+
+        case Session.recv(grant, session, after_seq, max_wait_ms, slack) do
+          {:ok, answer} ->
+            {:ok, Map.take(answer, [:lines, :dropped, :running])}
+
+          {:error, {:refused, code, _boot}} when code in [:unknown_session | @stale] ->
+            {:ok, @ended}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      :none ->
+        {:ok, @ended}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  End the pipe session `session` of the athanor, for the attempt `opener`
+  that opened it: its program ended and its owner released. A session no
+  holder holds any more answers `:ok`.
+  """
+  @spec pipe_close(String.t(), String.t(), String.t(), integer() | nil) :: :ok | {:error, term()}
+  def pipe_close(athanor_id, opener, session, deadline \\ nil) do
+    deadline = deadline || default_deadline()
+
+    case pipe_pid(session) do
+      nil -> :ok
+      pid -> GenServer.call(pid, {:close, athanor_id, opener, session}, left(deadline))
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
+  @doc """
+  What every pipe session held here mounts: its athanor, its login entry
+  (its kept home) and the program row's name, once each, so a sweep can
+  end those whose entry no longer serves (`end_mounts/2`).
+  """
+  @spec mounts() :: [{String.t(), String.t(), String.t()}]
+  def mounts do
+    if Process.whereis(@relays) do
+      for {_id, pid, _type, [Pipe]} <- DynamicSupervisor.which_children(@relays),
+          is_pid(pid),
+          mount = pipe_mount(pid),
+          mount != nil,
+          uniq: true,
+          do: mount
+    else
+      []
+    end
+  end
+
+  defp pipe_mount(pid) do
+    GenServer.call(pid, :mount, 5_000)
+  catch
+    :exit, _ -> nil
+  end
+
+  defp use_pipe(athanor_id, opener, session) do
+    case pipe_pid(session) do
+      nil -> :none
+      pid -> GenServer.call(pid, {:use, athanor_id, opener, session}, 5_000)
+    end
+  catch
+    :exit, _ -> :none
+  end
+
+  defp pipe_pid(session) when is_binary(session) do
+    if Process.whereis(@registry) do
+      case Registry.lookup(@registry, {:pipe_session, session}) do
+        [{pid, _}] -> pid
+        [] -> nil
+      end
+    end
+  end
 
   # Who asked: the athanor, the person and the credential that admitted them.
   defp caller(%Sanctum.Context{} = ctx),

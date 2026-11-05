@@ -64,12 +64,11 @@ defmodule Opus.Host do
        the attempt before, and the attempt row is held by the header's
        runner under a grant that stands, before the attempt runs it
        (`Opus.Attempt.call/3`); `fail` needs the hold alone.
-       `admit_child`, `tool_call`, `egress_pin` and `attached_fetch` act
-       under what the attempt holds (`Opus.Host.Children`,
-       `Opus.Host.Egress`, `Opus.Host.AttachedFetch`), and need
-       the row live as well: no cancel asked of it and its execution
-       running. A pipe call runs nothing yet: once its args read it is
-       answered `not_built`, with no check of the row.
+       `admit_child`, `tool_call`, `egress_pin`, `attached_fetch` and the
+       pipe calls act under what the attempt holds (`Opus.Host.Children`,
+       `Opus.Host.Egress`, `Opus.Host.AttachedFetch`, `Opus.Host.Pipe`),
+       and need the row live as well: no cancel asked of it and its
+       execution running.
 
   A grant stands while its athanor is active at the generation the run was
   admitted under (`Sanctum.ExecutionStanding.verify/1`). An archive
@@ -100,7 +99,10 @@ defmodule Opus.Host do
       (`Prima.PinnedTarget.read_request/1`), and `denied`, `metadata`,
       `resolution`, `redirect_credentials` or `flow` for a pin CYFR does not grant
       (`Opus.Host.Egress`);
-    * `not_built`, for every pipe call: a program's pipe is not built yet;
+    * `denied`, for a pipe call whose need the running node does not
+      declare as a `login` need, whose binding is not that need's or
+      mounts another program, or whose session its attempt did not open
+      (`Opus.Host.Pipe`);
     * `guest_error` with its `type` and `message`, and a `remediation` for
       a `setup_required` one, a refusal the runner hands its guest; for
       `attached_fetch`, beside them the request's `call_id`, so the runner
@@ -127,15 +129,15 @@ defmodule Opus.Host do
   | `tool_call` | `name`, `args` (object), `guest_fn` (`call` or `spawn`) | the tool's result |
   | `egress_pin` | `url`, `purpose` (`fetch`, `stream` or `redirect`), `from` for a redirect | the pin (`Prima.PinnedTarget`) |
   | `attached_fetch` | `Prima.AttachedRequest`'s members | sealed frames |
-  | `pipe_open` | `need`, `key`, `argv` (strings) | not built |
-  | `pipe_send` | `session`, `lines` (strings) | not built |
-  | `pipe_recv` | `session`, `after` (a sequence number), `max_wait_ms` (at most `Prima.HostAPI.max_pipe_wait_ms/0`) | not built |
-  | `pipe_close` | `session` | not built |
+  | `pipe_open` | `need`, `key`, `argv` (strings) | `session`, `resumed` |
+  | `pipe_send` | `session`, `lines` (strings) | `true` |
+  | `pipe_recv` | `session`, `after` (a sequence number), `max_wait_ms` (at most `Prima.HostAPI.max_pipe_wait_ms/0`) | `lines` (each `seq`, `text`), `dropped`, `running` |
+  | `pipe_close` | `session` | `true` |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Opus.Host.Storage`'s;
   `admit_child`, `tool_call` and `release_child` are
-  `Opus.Host.Children`'s. `admit_child` is keyed: a repeat with
+  `Opus.Host.Children`'s; the pipe calls are `Opus.Host.Pipe`'s. `admit_child` is keyed: a repeat with
   the same `child_key` answers the child already admitted under it, and
   one naming another `connection` than that child was admitted with is
   refused `invalid_request`.
@@ -171,7 +173,7 @@ defmodule Opus.Host do
   alias Prima.{AttachedRequest, Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
   alias Opus.{Attempt, Keys, Lapse}
   alias Prima.Outcome
-  alias Opus.Host.{AttachedFetch, Children, Egress}
+  alias Opus.Host.{AttachedFetch, Children, Egress, Pipe}
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
   @refusals [
@@ -187,8 +189,7 @@ defmodule Opus.Host do
     :metadata,
     :resolution,
     :redirect_credentials,
-    :flow,
-    :not_built
+    :flow
   ]
 
   @doc """
@@ -452,19 +453,54 @@ defmodule Opus.Host do
   def attached_fetch(caller, %AttachedRequest{} = request, emit) when is_function(emit, 1),
     do: AttachedFetch.run(caller, request, emit)
 
-  # A program's pipe is not built yet: a call that reads is refused as such,
-  # and nothing runs.
   @impl HostAPI
-  def pipe_open(_caller, _need, _key, _argv), do: {:error, :not_built}
+  def pipe_open(caller, need, key, argv), do: Pipe.open(caller, need, key, argv)
 
   @impl HostAPI
-  def pipe_send(_caller, _session, _lines), do: {:error, :not_built}
+  def pipe_send(caller, session, lines), do: Pipe.send(caller, session, lines)
 
   @impl HostAPI
-  def pipe_recv(_caller, _session, _after_seq, _max_wait_ms), do: {:error, :not_built}
+  def pipe_recv(caller, session, after_seq, max_wait_ms),
+    do: Pipe.recv(caller, session, after_seq, max_wait_ms)
 
   @impl HostAPI
-  def pipe_close(_caller, _session), do: {:error, :not_built}
+  def pipe_close(caller, session), do: Pipe.close(caller, session)
+
+  @doc """
+  The needs the running node's manifest declares, read through
+  `Opus.Admission.inspect_component/2` at the attempt's pinned reference
+  and held to the node's trusted digest: at a root the digest its
+  consent's activation graph pins for it, at a child its component's
+  release digest, which the child's transition was stepped with. `:error`
+  when the manifest cannot be read at that digest. `chain` is what
+  `Opus.Attempt.call/3` answers `:chain` with for `caller`.
+  """
+  @spec node_needs(Attempt.caller(), Attempt.chain()) ::
+          {:ok, [map()]} | :error
+  def node_needs(caller, chain) do
+    with {:ok, _ref, _type, component} <-
+           Opus.Admission.inspect_component(chain.ctx, chain.component_ref),
+         digest when is_binary(digest) and digest != "" <-
+           trusted_digest(caller, chain, component),
+         true <- component["release_digest"] == digest,
+         {:ok, manifest} <- Prima.Manifest.decode_strict(component["manifest"]),
+         needs when is_list(needs) <- Prima.Manifest.Needs.from_manifest(manifest) do
+      {:ok, needs}
+    else
+      _unreadable -> :error
+    end
+  end
+
+  defp trusted_digest(caller, %{authority: authority} = chain, component) do
+    if caller.execution_id == chain.root_execution_id do
+      case Prima.Authority.current_node(authority) do
+        {:ok, node} -> Map.get(authority.activation, node)
+        :unbound -> nil
+      end
+    else
+      component["release_digest"]
+    end
+  end
 
   # Reached from `runner_exited/2` once the report has verified and names
   # this member: `report` is the verified report header.
