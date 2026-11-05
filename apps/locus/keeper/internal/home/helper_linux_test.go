@@ -62,3 +62,44 @@ func TestMakeAndMeasureAHome(t *testing.T) {
 		t.Fatal("a root path was accepted")
 	}
 }
+
+// A measure that cannot walk the whole home answers an error, never the
+// bytes it counted before it stopped: past its entry bound, or at a
+// directory it cannot read.
+func TestAMeasureThatStopsShortIsAFailure(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "vlt_short")
+	if err := Make(path, os.Getuid()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c", "d"} {
+		if err := os.WriteFile(filepath.Join(path, name), make([]byte, 4096), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saved := maxMeasured
+	maxMeasured = 3
+	t.Cleanup(func() { maxMeasured = saved })
+	if bytes, err := Measure(path); !errors.Is(err, ErrUnmeasured) || bytes != 0 {
+		t.Fatalf("a walk past its bound answered %d, %v", bytes, err)
+	}
+	maxMeasured = saved
+
+	if os.Getuid() == 0 {
+		t.Skip("root reads a 0000 directory; the unreadable case needs another uid")
+	}
+	locked := filepath.Join(path, "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "big"), make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	if bytes, err := Measure(path); err == nil || bytes != 0 {
+		t.Fatalf("a walk at an unreadable directory answered %d, %v", bytes, err)
+	}
+}
