@@ -6,12 +6,14 @@ defmodule Arca.Schemas.McpServer do
   Ecto schema for the `mcp_servers` table (backs `Arca.McpServerStorage`).
 
   `transport` is `"http"` (the server is reached at `url`), `"stdio"` (its
-  backends, in `config_json`, run on the backends service and `url` is nil)
-  or `"pipe"` (a program a catalyst drives; not built yet, and
-  `Arca.McpServerStorage` refuses it). A program's `home` is `"scratch"`,
-  scrubbed at retirement, or `"kept"` (not built yet, refused alike);
-  `memory_bytes`, `home_max_bytes`, `login_command` and `hosts` (a JSON
-  network list) are its program settings, written by nothing yet.
+  backends, in `config_json`, run on the backends service, Emissary speaks
+  MCP to them, and `url` is nil) or `"pipe"` (a program a catalyst
+  drives, its one backend in `config_json`). A program's `home` is
+  `"scratch"`, scrubbed at retirement, or `"kept"`, a home per login entry
+  that survives it; `memory_bytes` and `home_max_bytes` are its bounds
+  (nil: the service's own bound, the homes volume), `login_command` what a
+  sign-in runs, and `login_entry_id` the login entry a kept `stdio` row's
+  sessions run in. `hosts` (a JSON network list) is written by nothing yet.
   `epoch` rises with every change to the row, and so does `revision`, the
   counter a fenced publication compares (`Arca.FencedPublication`).
   `created_by` is the id of the person who created it, set once.
@@ -41,6 +43,7 @@ defmodule Arca.Schemas.McpServer do
     field :memory_bytes, :integer
     field :home_max_bytes, :integer
     field :login_command, :string
+    field :login_entry_id, :string
     field :hosts, :string
     field :url, :string
     field :config_json, :string
