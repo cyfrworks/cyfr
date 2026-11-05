@@ -3,19 +3,19 @@
 
 defmodule Locus.Backends.OwnersTest do
   @moduledoc """
-  The owner table: the version rules of a sync, table-driven; `capacity`
-  and `unavailable` told apart, and a pool read that never answers refused
-  within its bound while the table goes on answering; a retirement seen twice, and a uid freed once; renew and
-  `unknown`; reconcile and release; a lease lapsing and a backend going
-  idle through a driven sweep, on a clock the test moves; a sync answered
-  on admission with readiness through `rev`; the bound on backends per
-  owner and on calls awaiting one backend; a backend's spawn bounded by
-  the backends' configured memory when the owners are given none. Backends
-  run through the test environment's `Locus.DirectLauncher`, and through
-  `Locus.Keeper` to `Locus.Test.FakeKeeper` where the spawn is read; the
-  pool is a stub the test sets.
-  The probe (`fixtures/probe.mjs`) needs `node`; its cases are tagged
-  `:requires_node`.
+  The owner table: the version rules of a sync, table-driven, a sync
+  starting nothing; the uid pool claimed at a scratch open, `capacity` and
+  `unavailable` told apart, a pool read that never answers refused within
+  its bound while the table answers, a uid freed once; sessions opened,
+  attached by their key and started again after their process ended; the
+  shapes an open must have; the open's arguments appended as the
+  command's own; a crash's backoff and a program failed until a new
+  version; the bound on sessions, the oldest ended one forgotten; idleness
+  and leases through a driven sweep; kept homes shared by the sessions of
+  one entry, held to their bound, reset and retired; renew, release,
+  reconcile and status. Sessions run through the test environment's
+  `Locus.DirectLauncher`; the pool and the kept homes the owners read are
+  a stub the test sets, which keeps its homes through the same launcher.
   """
 
   use ExUnit.Case, async: false
@@ -23,54 +23,67 @@ defmodule Locus.Backends.OwnersTest do
   import Prima.Test.Wait
 
   alias Locus.Backends.{Backend, LeaseSweeper, Owners}
-  alias Locus.Test.FakeKeeper
+  alias Prima.LocusBackends
 
-  @probe Path.expand("fixtures/probe.mjs", __DIR__)
   @athanor "ath_owners"
   @idle "exec cat >/dev/null"
+  @home "vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b"
 
-  defmodule Pool do
+  defmodule Stub do
     @moduledoc false
-    # The pool a test sets: an answer, or `:hang` for a launcher that never
-    # answers. Only the owners read the pool; backends launch through the
+    # The pool a test sets (an answer, or `:hang` for a launcher that
+    # never answers) and kept homes under the test's root, through the
     # direct launcher.
     def pool_stats(agent, "backends") do
-      case Agent.get(agent, & &1) do
+      case Agent.get(agent, & &1.pool) do
         :hang -> Process.sleep(:infinity)
         answer -> answer
       end
     end
+
+    def home_ensure(agent, id), do: Locus.DirectLauncher.home_ensure(root(agent), id)
+    def home_measure(agent, id), do: Locus.DirectLauncher.home_measure(root(agent), id)
+    def home_reset(agent, id), do: Locus.DirectLauncher.home_reset(root(agent), id)
+    def home_retire(agent, id), do: Locus.DirectLauncher.home_retire(root(agent), id)
+
+    defp root(agent), do: [kept_root: Agent.get(agent, & &1.kept_root)]
   end
 
   setup do
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
-    pool = start_supervised!({Agent, fn -> pool(4) end}, id: :pool)
+    root = Path.join(System.tmp_dir!(), "locus_kept_#{Prima.Hex.short()}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    stub = start_supervised!({Agent, fn -> %{pool: pool(4), kept_root: root} end}, id: :stub)
     clock = start_supervised!({Agent, fn -> 1_000_000 end}, id: :clock)
-    {:ok, supervisor: supervisor, pool: pool, clock: clock}
+    {:ok, supervisor: supervisor, stub: stub, clock: clock, root: root}
   end
 
   defp pool(size, quarantined \\ 0),
     do: {:ok, %{size: size, free: size - quarantined, quarantined: quarantined}}
 
+  defp set_pool(%{stub: stub}, answer), do: Agent.update(stub, &%{&1 | pool: answer})
+
   defp start_owners(context, opts \\ []) do
-    %{supervisor: supervisor, pool: pool, clock: clock} = context
+    %{supervisor: supervisor, stub: stub, clock: clock, root: root} = context
 
     start_supervised!(
       {Owners,
        Keyword.merge(
          [
            boot: "bb_owners",
-           launcher: Pool,
-           launcher_server: pool,
+           launcher: Stub,
+           launcher_server: stub,
            supervisor: supervisor,
            clock: fn -> Agent.get(clock, & &1) end,
            stop_grace_ms: 200,
            pool_timeout_ms: 500,
-           backend_opts: [
+           memory_bytes: 268_435_456,
+           bounds: [restart_backoff_ms: [300, 600], crash_window_ms: 60_000, max_crashes: 3],
+           session_opts: [
              launcher: Locus.DirectLauncher,
-             launcher_server: [],
-             release_timeout_ms: 5_000,
-             init_timeout_ms: 60_000
+             launcher_server: [kept_root: root],
+             release_timeout_ms: 5_000
            ]
          ],
          opts
@@ -79,17 +92,6 @@ defmodule Locus.Backends.OwnersTest do
   end
 
   defp advance(%{clock: clock}, ms), do: Agent.update(clock, &(&1 + ms))
-
-  defp node! do
-    {path, 0} =
-      System.cmd("node", ["-e", "process.stdout.write(process.execPath)"],
-        env: Locus.Test.ProcessFamily.without_cyfr()
-      )
-
-    path
-  end
-
-  defp probe, do: ~s(exec "#{node!()}" "#{@probe}")
 
   # A control message at the next sequence of generation `g`.
   defp control(owners, g, message, open_env \\ nil) do
@@ -104,54 +106,98 @@ defmodule Locus.Backends.OwnersTest do
     Owners.control(owners, fields, message, open_env)
   end
 
-  # A sync of `server` at `(g, e)` defining `backends`, `{name, command,
-  # env}` each, its environment opened as given.
-  defp sync(owners, server, {g, e}, backends, opts \\ []) do
+  defp program(name, command, opts \\ []) do
+    Map.merge(
+      %{
+        name: name,
+        command: command,
+        login_command: nil,
+        env: %{},
+        home: :scratch,
+        memory_bytes: nil,
+        home_max_bytes: nil
+      },
+      Map.new(opts)
+    )
+  end
+
+  # A sync of `server` at `(g, e)` defining `programs`, their environment
+  # opened as given.
+  defp sync(owners, server, {g, e}, programs, opts \\ []) do
     message = %{
       type: :sync,
       owner: %{athanor: @athanor, server: server},
       e: e,
       lease_ms: Keyword.get(opts, :lease_ms, 30_000),
       idle_ms: Keyword.get(opts, :idle_ms, 600_000),
-      backends:
+      programs:
         for(
-          {name, command, env} <- backends,
-          do: %{name: name, command: command, env_names: Map.keys(env)}
+          p <- programs,
+          do: p |> Map.delete(:env) |> Map.put(:env_names, Map.keys(p.env))
         ),
       sealed: "c2VhbGVk"
     }
 
-    env = Map.new(backends, fn {name, _command, env} -> {name, env} end)
+    env = Map.new(programs, &{&1.name, &1.env})
     control(owners, g, message, fn -> {:ok, env} end)
   end
 
-  defp idle_backends(count),
-    do: for(i <- 1..count, do: {"b#{i}", @idle, %{}})
+  defp idle_programs(count), do: for(i <- 1..count, do: program("b#{i}", @idle))
 
   defp invoke(server, {g, e}),
     do: %{athanor: @athanor, server: server, generation: g, epoch: e}
 
-  defp held(owners), do: :sys.get_state(owners).owners
+  defp open(owners, server, version, program, opts \\ []) do
+    message = %{
+      type: :open,
+      owner: %{athanor: @athanor, server: server},
+      e: elem(version, 1),
+      program: program,
+      home_id: Keyword.get(opts, :home_id),
+      key: Keyword.get(opts, :key, "k"),
+      mode: Keyword.get(opts, :mode, :run),
+      argv: Keyword.get(opts, :argv, [])
+    }
 
-  defp backend_pid(owners, server, version, name) do
-    {:ok, %{backends: backends}} = Owners.admit(owners, invoke(server, version))
-    {^name, pid} = List.keyfind(backends, name, 0)
+    Owners.open(owners, invoke(server, version), message)
+  end
+
+  defp session_pid(owners, server, version, id) do
+    {:ok, pid, _secrets} = Owners.session(owners, invoke(server, version), id)
     pid
   end
 
+  defp lines(pid, after_seq \\ 0, n) do
+    wait_until(
+      fn -> length(Backend.recv(pid, after_seq, 1_000).lines) >= n end,
+      10_000
+    )
+
+    Enum.map(Backend.recv(pid, after_seq, 0).lines, & &1.text)
+  end
+
+  defp held(owners), do: :sys.get_state(owners).owners
+
+  defp status(owners, server) do
+    {:ok, %{owners: [owner]}} =
+      control(owners, 1, %{type: :status, owners: [%{athanor: @athanor, server: server}]})
+
+    owner
+  end
+
   describe "the version rules" do
-    test "a sync lower, equal or higher than the held version, by the version rules",
+    test "a sync lower, equal or higher than the held version, by the version rules; nothing starts",
          ctx do
       owners = start_owners(ctx)
-      a = [{"alpha", @idle, %{"TOKEN" => "secret-token-a"}}]
-      b = [{"beta", @idle, %{}}]
+      a = [program("alpha", @idle, env: %{"TOKEN" => "secret-token-a"})]
+      b = [program("beta", @idle)]
 
-      assert {:ok, %{status: :starting, rev: 0, backends: [%{name: "alpha"}]}} =
+      assert {:ok, %{status: :running, programs: [%{name: "alpha", status: :idle}]}} =
                sync(owners, "srv", {2, 5}, a)
 
-      # A lower generation never reaches the table: its control message is
-      # below the high-water mark (`stale_control`).
-      for {version, backends, expected} <- [
+      assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
+
+      for {version, programs, expected} <- [
             {{2, 4}, a, {:error, :stale_epoch}},
             {{2, 1}, b, {:error, :stale_epoch}},
             {{2, 5}, b, {:error, :conflict}},
@@ -159,49 +205,49 @@ defmodule Locus.Backends.OwnersTest do
           ] do
         case expected do
           :held ->
-            assert {:ok, %{status: :starting, backends: [%{name: "alpha"}]}} =
-                     sync(owners, "srv", version, backends)
+            assert {:ok, %{status: :running, programs: [%{name: "alpha"}]}} =
+                     sync(owners, "srv", version, programs)
 
           refusal ->
-            assert refusal == sync(owners, "srv", version, backends), inspect(version)
+            assert refusal == sync(owners, "srv", version, programs), inspect(version)
         end
       end
 
-      # The equal sync extended the lease and set the idle period.
       [%{idle_ms: 600_000}] = Map.values(held(owners))
 
-      # Higher: the held version retired, then the new one admitted.
-      assert {:ok, %{status: :starting, rev: 0, backends: [%{name: "beta"}]}} =
-               sync(owners, "srv", {2, 6}, b)
-
+      assert {:ok, %{programs: [%{name: "beta"}]}} = sync(owners, "srv", {2, 6}, b)
       assert {:error, :stale_epoch} = Owners.admit(owners, invoke("srv", {2, 5}))
-      assert {:ok, %{backends: [{"beta", _}]}} = Owners.admit(owners, invoke("srv", {2, 6}))
+      assert :ok = Owners.admit(owners, invoke("srv", {2, 6}))
       assert {:error, :epoch_ahead} = Owners.admit(owners, invoke("srv", {2, 7}))
       assert {:error, :epoch_ahead} = Owners.admit(owners, invoke("srv", {3, 1}))
       assert {:error, :unknown_owner} = Owners.admit(owners, invoke("other", {2, 6}))
 
-      # A higher generation replaces it again; the retired versions are gone
-      # once their backends stop.
       assert {:ok, _} = sync(owners, "srv", {3, 1}, a)
       wait_until(fn -> map_size(held(owners)) == 1 end, 5_000)
     end
 
-    test "an equal sync while the owner drains is lapsed", ctx do
-      owners = start_owners(ctx)
-      a = [{"alpha", @idle, %{}}]
+    test "an equal sync while the owner drains is lapsed; with nothing left it is admitted anew",
+         ctx do
+      owners = start_owners(ctx, stop_grace_ms: 3_000)
+      # A session that outlives its term signal holds the drain for its grace.
+      a = [program("alpha", "trap '' TERM; while :; do sleep 1; done")]
 
       assert {:ok, _} = sync(owners, "srv", {1, 1}, a, lease_ms: 1_000)
+      assert {:ok, _} = open(owners, "srv", {1, 1}, "alpha")
       advance(ctx, 1_000)
       :ok = LeaseSweeper.sweep(owners)
 
       assert {:error, :lapsed} = sync(owners, "srv", {1, 1}, a)
       assert {:error, :lapsed} = Owners.admit(owners, invoke("srv", {1, 1}))
+
+      wait_until(fn -> held(owners) == %{} end, 10_000)
+      assert {:ok, _} = sync(owners, "srv", {1, 1}, a)
     end
 
     test "an environment that is not the definitions' is refused before anything is retired",
          ctx do
       owners = start_owners(ctx)
-      assert {:ok, _} = sync(owners, "srv", {1, 1}, [{"alpha", @idle, %{"A" => "x"}}])
+      assert {:ok, _} = sync(owners, "srv", {1, 1}, [program("alpha", @idle, env: %{"A" => "x"})])
 
       message = %{
         type: :sync,
@@ -209,7 +255,9 @@ defmodule Locus.Backends.OwnersTest do
         e: 2,
         lease_ms: 30_000,
         idle_ms: 60_000,
-        backends: [%{name: "alpha", command: @idle, env_names: ["A"]}],
+        programs: [
+          program("alpha", @idle) |> Map.delete(:env) |> Map.put(:env_names, ["A"])
+        ],
         sealed: "c2VhbGVk"
       }
 
@@ -223,7 +271,7 @@ defmodule Locus.Backends.OwnersTest do
         assert {:error, :bad_request} = control(owners, 1, message, opened)
       end
 
-      assert {:ok, _} = Owners.admit(owners, invoke("srv", {1, 1}))
+      assert :ok = Owners.admit(owners, invoke("srv", {1, 1}))
     end
 
     test "a control message at or below the high-water mark is stale", ctx do
@@ -236,107 +284,356 @@ defmodule Locus.Backends.OwnersTest do
       assert {:error, :stale_control} = Owners.fresh(owners, fields)
       assert {:error, :stale_control} = Owners.control(owners, fields, renew)
       assert {:error, :stale_control} = Owners.control(owners, %{fields | seq: 6}, renew)
-      assert {:error, :stale_control} = Owners.control(owners, %{fields | generation: 3}, renew)
       assert {:ok, _} = Owners.control(owners, %{fields | generation: 5, seq: 0}, renew)
     end
 
-    test "the backends one sync may define are bounded", ctx do
+    test "the programs one sync may define are bounded", ctx do
       owners = start_owners(ctx)
-      Agent.update(ctx.pool, fn _ -> pool(64) end)
-      max = Prima.LocusBackends.max_backends()
+      max = LocusBackends.max_programs()
 
-      assert {:error, :bad_request} = sync(owners, "srv", {1, 1}, idle_backends(max + 1))
-      assert {:ok, %{backends: backends}} = sync(owners, "srv", {1, 2}, idle_backends(max))
-      assert length(backends) == max
+      assert {:error, :bad_request} = sync(owners, "srv", {1, 1}, idle_programs(max + 1))
+      assert {:ok, %{programs: programs}} = sync(owners, "srv", {1, 2}, idle_programs(max))
+      assert length(programs) == max
     end
   end
 
   describe "the uid pool" do
-    test "a claim past the pool is capacity, a pool not answered unavailable, never confused",
-         ctx do
+    test "a scratch open past the pool is capacity, a pool not answered unavailable", ctx do
       owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
 
-      Agent.update(ctx.pool, fn _ -> pool(2) end)
-      assert {:error, :capacity} = sync(owners, "a", {1, 1}, idle_backends(3))
+      set_pool(ctx, pool(1))
+      assert {:ok, %{resumed: false}} = open(owners, "a", {1, 1}, "b1", key: "one")
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
 
       # The quarantined uids are no uids to hold.
-      Agent.update(ctx.pool, fn _ -> pool(3, 1) end)
-      assert {:error, :capacity} = sync(owners, "a", {1, 2}, idle_backends(3))
+      set_pool(ctx, pool(2, 1))
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
 
-      Agent.update(ctx.pool, fn _ -> {:error, {:launcher_unavailable, :timeout}} end)
-      assert {:error, :unavailable} = sync(owners, "a", {1, 3}, idle_backends(1))
+      set_pool(ctx, {:error, {:launcher_unavailable, :timeout}})
+      assert {:error, :unavailable} = open(owners, "a", {1, 1}, "b1", key: "two")
 
       assert {:error, :unavailable} =
                control(owners, 1, %{type: :hello, g: 1, cyfr_boot: "boot_test"})
 
-      Agent.update(ctx.pool, fn _ -> {:error, {:refused, "unknown_pool"}} end)
-      assert {:error, :unavailable} = sync(owners, "a", {1, 4}, idle_backends(1))
+      set_pool(ctx, pool(2))
+      assert {:ok, %{resumed: false}} = open(owners, "a", {1, 1}, "b1", key: "two")
 
-      Agent.update(ctx.pool, fn _ -> pool(3) end)
-      assert {:ok, _} = sync(owners, "a", {1, 5}, idle_backends(3))
-      assert {:error, :capacity} = sync(owners, "b", {1, 1}, idle_backends(1))
-
-      assert {:ok, %{boot: "bb_owners", pool: %{size: 3, free: 3}}} =
+      assert {:ok, %{boot: "bb_owners", pool: %{size: 2, free: 2}}} =
                control(owners, 1, %{type: :hello, g: 1, cyfr_boot: "boot_test"})
     end
 
     test "a pool read that never answers is unavailable within its bound, and the table answers meanwhile",
          ctx do
       owners = start_owners(ctx)
-      Agent.update(ctx.pool, fn _ -> :hang end)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      set_pool(ctx, :hang)
 
-      pending = Task.async(fn -> sync(owners, "a", {1, 1}, idle_backends(1)) end)
-
-      # The sync waits on the pool; the table does not.
-      wait_until(fn -> :sys.get_state(owners).busy != nil end, 5_000)
+      pending = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
+      wait_until(fn -> map_size(:sys.get_state(owners).pending) == 1 end, 5_000)
       assert Owners.boot(owners) == "bb_owners"
-      assert {:error, :unknown_owner} = Owners.admit(owners, invoke("a", {1, 1}))
+      assert :ok = Owners.admit(owners, invoke("a", {1, 1}))
       assert :ok = Owners.sweep(owners)
 
       assert {:error, :unavailable} = Task.await(pending)
-      assert :sys.get_state(owners).busy == nil
     end
 
-    test "a replacing version counts the uids its predecessor is about to free", ctx do
+    test "a retired owner holds its uids until its sessions stop, and frees each once", ctx do
       owners = start_owners(ctx)
-      Agent.update(ctx.pool, fn _ -> pool(2) end)
+      set_pool(ctx, pool(1))
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, _} = open(owners, "a", {1, 1}, "b1")
 
-      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_backends(2))
-      assert {:ok, _} = sync(owners, "a", {1, 2}, idle_backends(2))
-
-      # Until the first version's backends stop, the pool is full.
-      assert {:error, :capacity} = sync(owners, "b", {1, 1}, idle_backends(1))
-    end
-
-    test "a retirement seen twice retires once, and frees each uid once", ctx do
-      owners = start_owners(ctx)
-      Agent.update(ctx.pool, fn _ -> pool(2) end)
-
-      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_backends(2))
       release = %{type: :release, owners: [%{athanor: @athanor, server: "a", e: 1}]}
-
       assert {:ok, %{released: [%{server: "a", g: 1, e: 1}]}} = control(owners, 1, release)
       assert {:ok, %{released: []}} = control(owners, 1, release)
-      assert {:ok, %{released: []}} = control(owners, 1, %{type: :reconcile, keep: []})
-      assert {:error, :unknown_owner} = Owners.admit(owners, invoke("a", {1, 1}))
 
-      # Retired, the owner holds its uids until its backends stop.
-      assert {:error, :capacity} = sync(owners, "b", {1, 1}, idle_backends(1))
-      wait_until(fn -> held(owners) == %{} end, 5_000)
+      assert {:ok, _} = sync(owners, "b", {1, 1}, idle_programs(1))
+      wait_until(fn -> map_size(held(owners)) == 1 end, 5_000)
 
-      # Then both uids are free, and no more than both.
-      assert {:ok, _} = sync(owners, "b", {1, 1}, idle_backends(2))
-      assert {:error, :capacity} = sync(owners, "c", {1, 1}, idle_backends(1))
-      assert DynamicSupervisor.count_children(ctx.supervisor).active == 2
+      assert {:ok, _} = open(owners, "b", {1, 1}, "b1", key: "one")
+      assert {:error, :capacity} = open(owners, "b", {1, 1}, "b1", key: "two")
     end
   end
 
-  describe "renew, release and reconcile" do
+  describe "sessions" do
+    test "an open attaches by its key while the process runs, and starts it again once it ended",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("cat", "exec cat")])
+
+      assert {:ok, %{status: :running, session: first, resumed: false, pty: false}} =
+               open(owners, "a", {1, 1}, "cat")
+
+      assert {:ok, %{session: ^first, resumed: true}} = open(owners, "a", {1, 1}, "cat")
+      assert {:ok, %{session: other, resumed: false}} = open(owners, "a", {1, 1}, "cat", key: "b")
+      assert other != first
+
+      pid = session_pid(owners, "a", {1, 1}, first)
+      :ok = Backend.close(pid)
+      assert %{running: false} = Backend.recv(pid, 0, 0)
+
+      assert {:ok, %{session: again, resumed: false}} = open(owners, "a", {1, 1}, "cat")
+      assert again != first
+
+      # The ended session is still answered, as ended.
+      assert {:ok, ^pid, _} = Owners.session(owners, invoke("a", {1, 1}), first)
+
+      assert {:error, :unknown_session} =
+               Owners.session(owners, invoke("a", {1, 1}), "ss_" <> String.duplicate("f", 32))
+
+      assert {:error, :unknown_program} = open(owners, "a", {1, 1}, "nope")
+    end
+
+    test "an open's arguments are the command's own, whatever they hold", ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("args", ~s(printf '%s\\n'))])
+
+      assert {:ok, %{session: id}} =
+               open(owners, "a", {1, 1}, "args", argv: ["a b", "$HOME", "'quoted'"])
+
+      assert lines(session_pid(owners, "a", {1, 1}, id), 3) == ["a b", "$HOME", "'quoted'"]
+    end
+
+    test "an open must have its program's shape", ctx do
+      owners = start_owners(ctx)
+
+      programs = [
+        program("scratch", @idle, login_command: "echo login"),
+        program("kept", @idle, home: :kept),
+        program("signs", @idle, home: :kept, login_command: "echo login")
+      ]
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, programs)
+      v = {1, 1}
+
+      for {name, opts} <- [
+            {"kept", []},
+            {"scratch", [home_id: @home]},
+            {"scratch", [mode: :sign_in]},
+            {"kept", [home_id: @home, mode: :sign_in]},
+            {"signs", [home_id: @home, mode: :sign_in, argv: ["--x"]]}
+          ] do
+        assert {:error, :bad_request} = open(owners, "a", v, name, opts), inspect({name, opts})
+      end
+
+      assert {:ok, %{pty: true, resumed: false}} =
+               open(owners, "a", v, "signs", home_id: @home, mode: :sign_in)
+    end
+
+    test "a crash holds the next start back by its backoff, and the last crash fails the program until a new version",
+         ctx do
+      owners = start_owners(ctx)
+      crash = [program("crash", "exit 1")]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, crash)
+
+      crash_once = fn ->
+        assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "crash")
+        pid = session_pid(owners, "a", {1, 1}, id)
+        wait_until(fn -> Backend.recv(pid, 0, 0).running == false end, 10_000)
+        wait_until(fn -> hd(Map.values(held(owners))).programs["crash"].restarts > 0 end, 5_000)
+      end
+
+      crash_once.()
+
+      # Within the backoff, the open waits it out before the process starts.
+      started = System.monotonic_time(:millisecond)
+      assert {:ok, _} = open(owners, "a", {1, 1}, "crash")
+      assert System.monotonic_time(:millisecond) - started >= 250
+
+      wait_until(fn -> hd(Map.values(held(owners))).programs["crash"].restarts == 2 end, 10_000)
+      advance(ctx, 1_000)
+      crash_once.()
+
+      assert {:error, :program_failed} = open(owners, "a", {1, 1}, "crash")
+
+      assert [%{name: "crash", status: :failed, restarts: 3, error: error}] =
+               status(owners, "a").programs
+
+      assert error =~ "code=1"
+
+      assert {:ok, %{programs: [%{status: :idle}]}} = sync(owners, "a", {1, 2}, crash)
+    end
+
+    test "an owner holds its bound of sessions: the oldest ended one forgotten, capacity with all running",
+         ctx do
+      owners = start_owners(ctx)
+      set_pool(ctx, pool(64))
+      max = LocusBackends.max_sessions()
+
+      assert {:ok, _} =
+               sync(owners, "a", {1, 1}, [program("echo", "echo hi"), program("cat", @idle)])
+
+      ids =
+        for i <- 1..max do
+          {:ok, %{session: id}} = open(owners, "a", {1, 1}, "echo", key: "k#{i}")
+          id
+        end
+
+      [first | _] = ids
+
+      wait_until(
+        fn ->
+          Enum.all?(hd(Map.values(held(owners))).sessions, fn {_id, s} ->
+            not s.running and not s.slot
+          end)
+        end,
+        10_000
+      )
+
+      assert {:ok, %{session: _}} = open(owners, "a", {1, 1}, "cat", key: "new")
+      assert {:error, :unknown_session} = Owners.session(owners, invoke("a", {1, 1}), first)
+
+      assert {:ok, _} = sync(owners, "b", {1, 1}, [program("cat", @idle)])
+
+      for i <- 1..max,
+          do: assert({:ok, _} = open(owners, "b", {1, 1}, "cat", key: "k#{i}"))
+
+      assert {:error, :capacity} = open(owners, "b", {1, 1}, "cat", key: "one-more")
+    end
+  end
+
+  describe "leases and idleness, through a driven sweep" do
+    test "a lease that passes lapses the owner: lapsed while it retires, its sessions ended, then gone",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1), lease_ms: 1_000)
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      pid = session_pid(owners, "a", {1, 1}, id)
+
+      advance(ctx, 999)
+      :ok = LeaseSweeper.sweep(owners)
+      assert :ok = Owners.admit(owners, invoke("a", {1, 1}))
+
+      advance(ctx, 1)
+      :ok = LeaseSweeper.sweep(owners)
+      assert {:error, :lapsed} = Owners.admit(owners, invoke("a", {1, 1}))
+      assert {:error, :lapsed} = open(owners, "a", {1, 1}, "b1")
+
+      wait_until(
+        fn -> Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner} end,
+        5_000
+      )
+
+      refute Process.alive?(pid)
+      assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
+    end
+
+    test "a session no send and no recv used within the idle period ends; the next open starts it again",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1), idle_ms: 1_000)
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      pid = session_pid(owners, "a", {1, 1}, id)
+
+      advance(ctx, 999)
+      :ok = LeaseSweeper.sweep(owners)
+      assert %{running: true} = Backend.recv(pid, 0, 0)
+
+      # The recv was a use: a full period from it.
+      advance(ctx, 999)
+      :ok = LeaseSweeper.sweep(owners)
+      assert %{running: true} = Backend.recv(pid, 0, 0)
+
+      advance(ctx, 1_000)
+      :ok = LeaseSweeper.sweep(owners)
+      wait_until(fn -> Backend.recv(pid, 0, 0).running == false end, 5_000)
+
+      assert {:ok, %{session: again, resumed: false}} = open(owners, "a", {1, 1}, "b1")
+      assert again != id
+      assert [%{restarts: 0, error: nil}] = status(owners, "a").programs
+    end
+  end
+
+  describe "kept homes" do
+    test "the sessions of one entry share its home, and take no uid of the pool", ctx do
+      owners = start_owners(ctx)
+      set_pool(ctx, pool(0))
+      kept = [program("kept", ~s(echo "$HOME"; exec cat), home: :kept)]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+
+      assert {:ok, %{session: one}} = open(owners, "a", {1, 1}, "kept", home_id: @home, key: "1")
+      assert {:ok, %{session: two}} = open(owners, "a", {1, 1}, "kept", home_id: @home, key: "2")
+
+      home = Path.join(ctx.root, @home)
+      assert lines(session_pid(owners, "a", {1, 1}, one), 1) == [home]
+      assert lines(session_pid(owners, "a", {1, 1}, two), 1) == [home]
+
+      # A file one session writes outlives it.
+      File.write!(Path.join(home, "kept.txt"), "kept")
+
+      assert [%{home: :kept, sessions: 2, over_cap: false}] = status(owners, "a").programs
+    end
+
+    test "a home at its bound ends its sessions and refuses opens until a reset", ctx do
+      owners = start_owners(ctx, measure_interval_ms: 10_000)
+      fill = ~s(head -c 4096 /dev/zero > "$HOME/fill"; echo filled; exec cat)
+      kept = [program("kept", fill, home: :kept, home_max_bytes: 1_024)]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+      pid = session_pid(owners, "a", {1, 1}, id)
+      assert lines(pid, 1) == ["filled"]
+
+      :ok = LeaseSweeper.sweep(owners)
+      wait_until(fn -> Backend.recv(pid, 1, 0).running == false end, 10_000)
+
+      assert {:error, :home_over_cap} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+
+      assert [%{over_cap: true, home_bytes: bytes, restarts: 0}] = status(owners, "a").programs
+      assert bytes >= 4_096
+
+      reset = %{type: :home, op: :reset, athanor: @athanor, home_id: @home}
+      assert {:ok, %{home_id: @home, state: :empty}} = control(owners, 1, reset)
+      assert File.ls!(Path.join(ctx.root, @home)) == ["tmp"]
+
+      assert {:ok, %{resumed: false}} =
+               open(owners, "a", {1, 1}, "kept", home_id: @home, key: "after")
+    end
+
+    test "a home already past its bound refuses the open before anything starts", ctx do
+      owners = start_owners(ctx)
+      home = Path.join(ctx.root, @home)
+      File.mkdir_p!(Path.join(home, "tmp"))
+      File.write!(Path.join(home, "big"), :binary.copy("x", 2_048))
+
+      kept = [program("kept", @idle, home: :kept, home_max_bytes: 1_024)]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+      assert {:error, :home_over_cap} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+      assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
+    end
+
+    test "a home's retirement ends its sessions and removes it", ctx do
+      owners = start_owners(ctx)
+      kept = [program("kept", @idle, home: :kept)]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+      pid = session_pid(owners, "a", {1, 1}, id)
+
+      retire = %{type: :home, op: :retire, athanor: @athanor, home_id: @home}
+      assert {:ok, %{home_id: @home, state: :absent}} = control(owners, 1, retire)
+      assert %{running: false} = Backend.recv(pid, 0, 0)
+      refute File.exists?(Path.join(ctx.root, @home))
+    end
+
+    test "a home the launcher cannot keep is unavailable", ctx do
+      owners = start_owners(ctx)
+      Agent.update(ctx.stub, &%{&1 | kept_root: nil})
+      kept = [program("kept", @idle, home: :kept)]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+      assert {:error, :unavailable} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+
+      reset = %{type: :home, op: :reset, athanor: @athanor, home_id: @home}
+      assert {:error, :unavailable} = control(owners, 1, reset)
+    end
+  end
+
+  describe "renew, release, reconcile and status" do
     test "renew extends an owner at exactly (g, e) with a live lease; every other is unknown",
          ctx do
       owners = start_owners(ctx)
-      assert {:ok, _} = sync(owners, "a", {3, 1}, idle_backends(1), lease_ms: 1_000)
-      assert {:ok, _} = sync(owners, "b", {3, 2}, idle_backends(1), lease_ms: 1_000)
+      assert {:ok, _} = sync(owners, "a", {3, 1}, idle_programs(1), lease_ms: 1_000)
+      assert {:ok, _} = sync(owners, "b", {3, 2}, idle_programs(1), lease_ms: 1_000)
 
       renew = fn g, entries ->
         control(owners, g, %{
@@ -346,289 +643,91 @@ defmodule Locus.Backends.OwnersTest do
         })
       end
 
-      assert {:ok, %{renewed: [%{server: "a", e: 1, state: :starting, rev: 0}], unknown: unknown}} =
+      assert {:ok, %{renewed: [%{server: "a", e: 1, state: :running}], unknown: unknown}} =
                renew.(3, [{"a", 1}, {"b", 1}, {"c", 1}])
 
       assert Enum.map(unknown, &{&1.server, &1.e}) == [{"b", 1}, {"c", 1}]
 
-      # "a" was renewed for 5 s and "b" was not: past 1 s, "b" is lapsed.
       advance(ctx, 1_000)
 
       assert {:ok, %{renewed: [%{server: "a"}], unknown: [%{server: "b"}]}} =
                renew.(3, [{"a", 1}, {"b", 2}])
 
-      # At another generation no owner is running.
       assert {:ok, %{renewed: [], unknown: [_]}} = renew.(4, [{"a", 1}])
     end
 
     test "release retires each owner at or below (g, e); reconcile each not at g and its kept e",
          ctx do
       owners = start_owners(ctx)
-      Agent.update(ctx.pool, fn _ -> pool(8) end)
 
-      assert {:ok, _} = sync(owners, "z", {2, 1}, idle_backends(1))
-      assert {:ok, _} = sync(owners, "x", {3, 1}, idle_backends(1))
-      assert {:ok, _} = sync(owners, "y", {3, 2}, idle_backends(1))
-      assert {:ok, _} = sync(owners, "w", {3, 5}, idle_backends(1))
+      assert {:ok, _} = sync(owners, "z", {2, 1}, idle_programs(1))
+      assert {:ok, _} = sync(owners, "x", {3, 1}, idle_programs(1))
+      assert {:ok, _} = sync(owners, "y", {3, 2}, idle_programs(1))
+      assert {:ok, _} = sync(owners, "w", {3, 5}, idle_programs(1))
 
       entry = fn server, e -> %{athanor: @athanor, server: server, e: e} end
 
-      # y at (3, 2) is above (3, 1); w at (3, 5) is at or below (3, 5).
       assert {:ok, %{released: released}} =
                control(owners, 3, %{type: :release, owners: [entry.("y", 1), entry.("w", 5)]})
 
       assert Enum.map(released, &{&1.server, &1.g, &1.e}) == [{"w", 3, 5}]
 
-      # x is kept at (3, 1); y's kept epoch is another; z is another generation.
       assert {:ok, %{released: released}} =
                control(owners, 3, %{type: :reconcile, keep: [entry.("x", 1), entry.("y", 9)]})
 
       assert released |> Enum.map(&{&1.server, &1.g, &1.e}) |> Enum.sort() ==
                [{"y", 3, 2}, {"z", 2, 1}]
 
-      assert {:ok, _} = Owners.admit(owners, invoke("x", {3, 1}))
+      assert :ok = Owners.admit(owners, invoke("x", {3, 1}))
 
       for {server, version} <- [{"y", {3, 2}}, {"z", {2, 1}}, {"w", {3, 5}}],
           do: assert({:error, :unknown_owner} = Owners.admit(owners, invoke(server, version)))
     end
 
-    test "status reports each named owner present, a retired one absent", ctx do
+    test "status reports each named owner present, its programs as their sessions do", ctx do
       owners = start_owners(ctx)
-      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_backends(2), lease_ms: 10_000)
+
+      programs = [
+        program("cat", ~s(echo "noise secret-token-x" >&2; exec cat),
+          env: %{"TOKEN" => "secret-token-x"}
+        ),
+        program("kept", @idle, home: :kept)
+      ]
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, programs, lease_ms: 10_000)
+      assert {:ok, _} = open(owners, "a", {1, 1}, "cat")
       advance(ctx, 2_500)
 
-      status = %{
-        type: :status,
-        owners: [%{athanor: @athanor, server: "a"}, %{athanor: @athanor, server: "nope"}]
-      }
-
-      assert {:ok, %{owners: [owner]}} = control(owners, 1, status)
-
-      assert %{server: "a", g: 1, e: 1, state: :starting, rev: 0, lease_ms_left: 7_500} =
-               owner
-
-      assert [%{name: "b1", error: nil, restarts: 0}, %{name: "b2"}] = owner.backends
-      assert Enum.all?(owner.backends, &(&1.status in [:spawning, :initializing]))
-      assert {:ok, _body} = Prima.LocusBackends.encode_answer(:status, %{owners: [owner]})
-    end
-  end
-
-  describe "leases and idleness, through a driven sweep" do
-    test "a lease that passes lapses the owner: lapsed while it retires, then gone", ctx do
-      owners = start_owners(ctx)
-      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_backends(1), lease_ms: 1_000)
-
-      advance(ctx, 999)
-      :ok = LeaseSweeper.sweep(owners)
-      assert {:ok, _} = Owners.admit(owners, invoke("a", {1, 1}))
-
-      advance(ctx, 1)
-      :ok = LeaseSweeper.sweep(owners)
-      assert {:error, :lapsed} = Owners.admit(owners, invoke("a", {1, 1}))
-
-      status = %{type: :status, owners: [%{athanor: @athanor, server: "a"}]}
-
-      assert {:ok, %{owners: [%{state: :draining, lease_ms_left: 0}]}} =
-               control(owners, 1, status)
-
       wait_until(
-        fn -> Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner} end,
-        5_000
-      )
-
-      assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
-    end
-
-    test "an invoke past the lease lapses the owner without waiting for the sweep", ctx do
-      owners = start_owners(ctx)
-      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_backends(1), lease_ms: 1_000)
-      advance(ctx, 1_000)
-      assert {:error, :lapsed} = Owners.admit(owners, invoke("a", {1, 1}))
-      assert [%{state: :draining}] = Map.values(held(owners))
-    end
-
-    @tag :requires_node
-    test "a ready backend unused for the idle period retires, frees its uid, and wakes for a call",
-         ctx do
-      owners = start_owners(ctx)
-      Agent.update(ctx.pool, fn _ -> pool(1) end)
-      probe = [{"probe", probe(), %{"PROBE_TOKEN" => "tok-0123456789abcdef"}}]
-
-      assert {:ok, _} = sync(owners, "a", {1, 1}, probe, idle_ms: 1_000)
-      pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid, 5_000).status == :ready end, 5_000)
-
-      # Used within the period: kept.
-      advance(ctx, 999)
-      :ok = LeaseSweeper.sweep(owners)
-      assert %{status: :ready} = Backend.status(pid, 5_000)
-
-      advance(ctx, 1)
-      :ok = LeaseSweeper.sweep(owners)
-      wait_until(fn -> Backend.status(pid, 5_000).status == :idle end, 5_000)
-      assert %{tools: 2} = Backend.status(pid, 5_000)
-
-      # Its uid is free once its process is retired: another owner takes it.
-      [owner] = Map.values(held(owners))
-      wait_until(fn -> not held(owners)[owner.id].backends["probe"].slot end, 5_000)
-      assert {:ok, _} = sync(owners, "b", {1, 1}, [{"other", @idle, %{}}])
-
-      # With no uid free, the call cannot wake it.
-      assert {:error, {:tool_error, text}} = Backend.call_tool(pid, "echo", %{})
-      assert text == "backend 'probe' is idle and no uid of the pool is free to start it"
-
-      # Once one is, the call wakes it and is answered.
-      release = %{type: :release, owners: [%{athanor: @athanor, server: "b", e: 1}]}
-      assert {:ok, _} = control(owners, 1, release)
-      wait_until(fn -> map_size(held(owners)) == 1 end, 5_000)
-
-      assert {:ok, %{"content" => [%{"text" => ~s({"said":"again"})}]}} =
-               Backend.call_tool(pid, "echo", %{"said" => "again"})
-
-      assert %{status: :ready} = Backend.status(pid, 5_000)
-      assert held(owners)[owner.id].backends["probe"].slot
-    end
-  end
-
-  describe "readiness and calls" do
-    @tag :requires_node
-    test "a sync is answered on admission, and rev says when its backends are ready", ctx do
-      owners = start_owners(ctx)
-      probe = [{"probe", probe(), %{"PROBE_TOKEN" => "tok-0123456789abcdef"}}]
-
-      assert {:ok,
-              %{
-                status: :starting,
-                rev: 0,
-                backends: [%{name: "probe", status: :spawning, tools: 0}]
-              }} =
-               sync(owners, "a", {1, 1}, probe)
-
-      renew = %{type: :renew, lease_ms: 30_000, owners: [%{athanor: @athanor, server: "a", e: 1}]}
-
-      # Ready with its tools listed (the catalogue changed), then running.
-      wait_until(
-        fn ->
-          match?({:ok, %{renewed: [%{state: :running}]}}, control(owners, 1, renew))
-        end,
-        5_000
-      )
-
-      assert {:ok, %{renewed: [%{state: :running, rev: 2}]}} = control(owners, 1, renew)
-
-      status = %{type: :status, owners: [%{athanor: @athanor, server: "a"}]}
-
-      assert {:ok, %{owners: [%{state: :running, rev: 2, backends: [backend]}]}} =
-               control(owners, 1, status)
-
-      assert %{name: "probe", status: :ready, tools: 2, restarts: 0, error: nil} = backend
-      assert backend.stderr_tail =~ "probe started"
-
-      # An equal sync answers the backends as they are.
-      assert {:ok, %{status: :running, rev: 2, backends: [%{status: :ready, tools: 2}]}} =
-               sync(owners, "a", {1, 1}, probe)
-    end
-
-    @tag :requires_node
-    test "a crash withdraws the tools and raises rev; the status names the crash", ctx do
-      owners =
-        start_owners(ctx,
-          backend_opts: [
-            launcher: Locus.DirectLauncher,
-            launcher_server: [],
-            bounds: [restart_backoff_ms: [60_000]],
-            release_timeout_ms: 5_000
-          ]
-        )
-
-      probe = [{"probe", probe(), %{}}]
-      assert {:ok, _} = sync(owners, "a", {1, 1}, probe)
-      pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid, 5_000).status == :ready end, 5_000)
-
-      assert {:error, {:tool_error, _}} = Backend.call_tool(pid, "crash", %{})
-      status = %{type: :status, owners: [%{athanor: @athanor, server: "a"}]}
-
-      wait_until(
-        fn ->
-          match?({:ok, %{owners: [%{rev: 3}]}}, control(owners, 1, status))
-        end,
-        5_000
-      )
-
-      assert {:ok, %{owners: [%{backends: [backend]}]}} = control(owners, 1, status)
-      assert %{status: :crashed, tools: 0} = backend
-      assert backend.error =~ "exited code=3"
-    end
-
-    @tag :requires_node
-    test "the calls awaiting one backend are bounded by the configured in-flight bound", ctx do
-      owners = start_owners(ctx, max_in_flight: 1)
-      probe = [{"probe", probe(), %{}}]
-      assert {:ok, _} = sync(owners, "a", {1, 1}, probe)
-      pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid, 5_000).status == :ready end, 5_000)
-
-      # A line that is no answer: the call awaits one until it is stopped.
-      waiting = Task.async(fn -> Backend.call_tool(pid, "flood", %{"bytes" => 8}) end)
-
-      wait_until(
-        fn ->
-          Locus.Backends.Relay.pending_count(:sys.get_state(pid).relay) == 1
-        end,
-        5_000
-      )
-
-      assert {:error, {:tool_error, "backend busy: 1 calls in flight"}} =
-               Backend.call_tool(pid, "echo", %{})
-
-      release = %{type: :release, owners: [%{athanor: @athanor, server: "a", e: 1}]}
-      assert {:ok, _} = control(owners, 1, release)
-      assert {:error, {:tool_error, _stopped}} = Task.await(waiting)
-    end
-  end
-
-  describe "a backend's spawn through the keeper's client" do
-    setup do
-      {fake, channel} = FakeKeeper.start()
-      attach_dir = FakeKeeper.short_tmp_dir()
-
-      {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
-
-      Process.unlink(client)
-      :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
-
-      on_exit(fn ->
-        Process.exit(client, :kill)
-        Process.exit(fake, :kill)
-        File.rm_rf!(attach_dir)
-      end)
-
-      {:ok, fake: fake, keeper: client}
-    end
-
-    test "carries the backends' configured memory bound when the owners are given none", ctx do
-      owners =
-        start_owners(ctx,
-          backend_opts: [
-            launcher: Locus.Keeper,
-            launcher_server: ctx.keeper,
-            release_timeout_ms: 5_000,
-            init_timeout_ms: 60_000
-          ]
-        )
-
-      assert {:ok, _} = sync(owners, "mem", {1, 1}, idle_backends(1))
-
-      wait_until(
-        fn -> Enum.any?(FakeKeeper.requests(ctx.fake), &(&1["type"] == "spawn")) end,
+        fn -> hd(status(owners, "a").programs).stderr_tail =~ "noise" end,
         10_000
       )
 
-      [spawn] = Enum.filter(FakeKeeper.requests(ctx.fake), &(&1["type"] == "spawn"))
-      assert spawn["pool"] == "backends"
-      assert spawn["memory_bytes"] == Locus.Config.backends_memory_bytes()
-      assert spawn["memory_bytes"] == 536_870_912
+      assert {:ok, %{owners: [owner]}} =
+               control(owners, 1, %{
+                 type: :status,
+                 owners: [%{athanor: @athanor, server: "a"}, %{athanor: @athanor, server: "no"}]
+               })
+
+      assert %{server: "a", g: 1, e: 1, state: :running, lease_ms_left: 7_500} = owner
+
+      assert [
+               %{
+                 name: "cat",
+                 status: :running,
+                 restarts: 0,
+                 error: nil,
+                 home: :scratch,
+                 home_bytes: nil,
+                 over_cap: false,
+                 sessions: 1,
+                 stderr_tail: tail
+               },
+               %{name: "kept", status: :idle, home: :kept, home_bytes: nil, sessions: 0}
+             ] = owner.programs
+
+      assert tail =~ "noise [REDACTED]"
+      assert {:ok, _body} = LocusBackends.encode_answer(:status, %{owners: [owner]})
     end
   end
 end
