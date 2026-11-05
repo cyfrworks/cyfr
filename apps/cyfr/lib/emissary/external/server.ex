@@ -1541,16 +1541,11 @@ defmodule Emissary.External.Server do
       |> Enum.concat(protocol_headers(body, state.era, state.tools))
       |> merge_headers(state.headers)
 
-    with {:ok, json_body} <- Jason.encode(body),
-         {:ok, headers} <- sign(state, headers, json_body) do
-      post_encoded(state, body, headers, json_body)
-    else
-      {:error, {:invalid_field, _}} -> {:error, "Request signing failed"}
+    case Jason.encode(body) do
+      {:ok, json_body} -> post_encoded(state, body, headers, json_body)
       {:error, _reason} -> {:error, "Request encoding failed"}
     end
   end
-
-  defp sign(_state, headers, _json_body), do: {:ok, headers}
 
   defp post_encoded(state, body, headers, json_body) do
     # Pin to the validated IP on EVERY request (not just at init), with the
