@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule PrismWeb.SignInTerminalComponent do
+  @moduledoc """
+  A program's sign-in, in a bounded terminal frame: the row's login command
+  runs on a pseudo-terminal in a login entry's kept home, and its lines and
+  the person's input go both ways.
+
+  On its first update it asks `mcp_servers.sign_in` for the row and the
+  entry, which opens the session and starts a relay bound to the person's
+  session, and attaches the page's process to it
+  (`Opus.Programs.sign_in_attach/3`). The page forwards each relay message,
+  `{Opus.Programs, token, {:lines, lines}}` or `{:ended, reason}`, here as
+  the `relay` assign. The frame keeps the last #{500} lines, each with its
+  terminal control sequences removed; a line the person types goes to the
+  program with `Opus.Programs.sign_in_send/3`. Close ends the session
+  (`Opus.Programs.sign_in_close/2`) and tells the page
+  `{PrismWeb.SignInTerminalComponent, :closed}`. CYFR stores nothing of
+  what passes: the program keeps its own sign-in in its home.
+  """
+
+  use PrismWeb, :live_component
+
+  @max_lines 500
+
+  # CSI and OSC sequences, character-set designations, keypad and cursor
+  # save modes, and carriage returns: what a terminal draws with and a
+  # frame of text does not.
+  @control ~r/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)|\e[()][0-9A-Za-z]|\e[=>78]|\r/
+
+  @doc "A line of a terminal as text: its control sequences removed."
+  @spec text(String.t()) :: String.t()
+  def text(line) when is_binary(line), do: String.replace(line, @control, "")
+
+  @doc "The most lines the frame keeps."
+  @spec max_lines() :: pos_integer()
+  def max_lines, do: @max_lines
+
+  @impl true
+  def mount(socket) do
+    {:ok,
+     socket
+     |> assign(:token, nil)
+     |> assign(:lines, [])
+     |> assign(:state, :starting)
+     |> assign(:reason, nil)
+     |> assign(:sent, 0)}
+  end
+
+  @impl true
+  def update(%{relay: {token, event}}, %{assigns: %{token: token}} = socket),
+    do: {:ok, relay(socket, event)}
+
+  def update(%{relay: _other}, socket), do: {:ok, socket}
+
+  def update(assigns, socket) do
+    socket = assign(socket, Map.take(assigns, [:id, :context, :row, :entry]))
+    {:ok, if(socket.assigns.token, do: socket, else: start(socket))}
+  end
+
+  @impl true
+  def handle_event("send", %{"line" => line}, %{assigns: %{state: :running}} = socket) do
+    case Opus.Programs.sign_in_send(socket.assigns.context, socket.assigns.token, line) do
+      :ok -> {:noreply, update(socket, :sent, &(&1 + 1))}
+      {:error, reason} -> {:noreply, ended(socket, reason)}
+    end
+  end
+
+  def handle_event("send", _params, socket), do: {:noreply, socket}
+
+  def handle_event("close", _params, socket) do
+    if socket.assigns.token,
+      do: Opus.Programs.sign_in_close(socket.assigns.context, socket.assigns.token)
+
+    send(self(), {__MODULE__, :closed})
+    {:noreply, socket}
+  end
+
+  defp start(socket) do
+    args = %{"name" => socket.assigns.row, "entry" => socket.assigns.entry}
+
+    with {:ok, result} <- call_tool(socket.assigns.context, "mcp_servers/sign_in", args),
+         token when is_binary(token) <- result[:session] || result["session"],
+         :ok <- Opus.Programs.sign_in_attach(socket.assigns.context, token, self()) do
+      socket |> assign(:token, token) |> assign(:state, :running)
+    else
+      {:error, reason} -> ended(socket, reason)
+      _ -> ended(socket, "the sign-in did not start")
+    end
+  end
+
+  defp relay(socket, {:lines, lines}) when is_list(lines) do
+    kept = (socket.assigns.lines ++ Enum.map(lines, &text/1)) |> Enum.take(-@max_lines)
+    assign(socket, :lines, kept)
+  end
+
+  defp relay(socket, {:ended, reason}), do: ended(socket, reason)
+  defp relay(socket, _event), do: socket
+
+  defp ended(socket, reason),
+    do: socket |> assign(:state, :ended) |> assign(:reason, sentence(reason))
+
+  defp sentence(:normal), do: "The sign-in command ended."
+  defp sentence(:exited), do: "The sign-in command ended."
+  defp sentence(text) when is_binary(text), do: text
+  defp sentence(reason), do: "The sign-in ended: #{error_message(reason)}"
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <div id={@id} class="rounded-lg border border-gray-700 bg-gray-950" data-test="sign-in-terminal">
+      <div class="flex items-center justify-between border-b border-gray-800 px-4 py-2">
+        <span class="text-sm text-gray-300">
+          Sign in <span class="font-mono text-blue-400">{@row}</span>
+        </span>
+        <.button variant="ghost" phx-click="close" phx-target={@myself}>Close</.button>
+      </div>
+      <pre
+        id={"#{@id}-lines"}
+        phx-hook="ScrollBottom"
+        class="max-h-96 min-h-32 overflow-y-auto whitespace-pre-wrap break-all px-4 py-3 font-mono text-xs text-gray-200"
+        data-test="terminal-lines"
+      ><%= for line <- @lines do %><%= line %>
+    <% end %></pre>
+      <p :if={@state == :starting} class="px-4 pb-2 text-xs text-gray-500">Starting…</p>
+      <p :if={@state == :ended} class="px-4 pb-2 text-xs text-amber-400" data-test="terminal-ended">
+        {@reason}
+      </p>
+      <form
+        :if={@state == :running}
+        phx-submit="send"
+        phx-target={@myself}
+        class="flex gap-2 border-t border-gray-800 px-4 py-2"
+        id={"#{@id}-input"}
+      >
+        <.input
+          id={"#{@id}-line-#{@sent}"}
+          name="line"
+          value=""
+          placeholder="type an answer and press Enter"
+          class="font-mono"
+        />
+        <.button type="submit" variant="ghost">Send</.button>
+      </form>
+    </div>
+    """
+  end
+end

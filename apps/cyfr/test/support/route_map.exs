@@ -641,11 +641,11 @@
         },
         %{
           verb: "GET",
-          path: "/a/:athanor/mcp-servers",
+          path: "/a/:athanor/programs",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
           auth: "browser_authenticated",
-          live_view: "PrismWeb.McpServersLive",
+          live_view: "PrismWeb.ProgramsLive",
           pipe_through: ["browser"]
         },
         %{

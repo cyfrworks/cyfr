@@ -108,7 +108,7 @@ defmodule Aqua.Intents do
 
   def validate(%{"kind" => "ui.mcp_server.focus"} = obj) do
     with {:ok, name} <- string_field(obj, "name") do
-      {:ok, %{kind: "navigate", to: "/mcp-servers?name=#{URI.encode_www_form(name)}"}}
+      {:ok, %{kind: "navigate", to: "/programs?name=#{URI.encode_www_form(name)}"}}
     end
   end
 

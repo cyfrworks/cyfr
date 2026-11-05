@@ -10,7 +10,7 @@ defmodule PrismWeb.NavTest do
     keys = Enum.map(Nav.items("lite"), & &1.key)
 
     assert keys ==
-             ~w(chat aqua files vault schedules webhooks mcp_servers settings legal)
+             ~w(chat aqua files vault schedules webhooks programs settings legal)
 
     refute "executions" in keys
     refute "api_keys" in keys
@@ -46,7 +46,7 @@ defmodule PrismWeb.NavTest do
   test "an unknown mode is the default, lite, and ids keep the sidebar's spelling" do
     assert Nav.items(nil) == Nav.items("lite")
     assert Nav.dom_id("nav", "api_keys") == "nav-api-keys"
-    assert Nav.dom_id("drawer-nav", "mcp_servers") == "drawer-nav-mcp-servers"
+    assert Nav.dom_id("drawer-nav", "programs") == "drawer-nav-programs"
   end
 
   test "every nav destination is a routed page" do

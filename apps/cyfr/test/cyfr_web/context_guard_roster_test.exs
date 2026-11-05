@@ -24,7 +24,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     RootRedirectLive ChatRedirectLive ChatLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
     MyReportsLive BuildsLive VaultLive ApiKeysLive WebhooksLive
-    SchedulesLive SettingsLive McpServersLive ShellLive LegalLive CarryLive DeviceAddLive
+    SchedulesLive SettingsLive ProgramsLive ShellLive LegalLive CarryLive DeviceAddLive
     HomeConfirmLive
   )
 
