@@ -1150,8 +1150,13 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(socket, :error, "This athanor is not yours.")
 
       :archived ->
-        what = if match?(%{kind: "crew"}, socket.assigns.thread), do: "thread", else: "athanor"
-        put_flash(socket, :error, "This #{what} has been archived.")
+        put_flash(socket, :error, "This athanor has been archived.")
+
+      :thread_archived ->
+        put_flash(socket, :error, "This thread has been archived.")
+
+      :not_addressable ->
+        put_flash(socket, :error, "Only this thread's crew member can be addressed here.")
 
       :no_agent ->
         put_flash(socket, :error, "This athanor has no assistant — see AQUA.")

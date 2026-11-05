@@ -2930,8 +2930,16 @@ defmodule Arca.TurnStorage do
         end
       end)
 
-    {:ok, origin} = Prima.Origin.from_wire(turn.origin)
+    case Prima.Origin.from_wire(turn.origin) do
+      {:ok, origin} -> reply!(athanor_id, turn, outcome, at, text, requests, origin)
+      # A row whose stored origin is outside the vocabulary names nobody
+      # a reply could be delivered as; the runner ends such a turn.
+      {:error, _damaged} -> :ok
+    end
+  end
 
+  # arca:db-raise-ok inside the caller's transaction
+  defp reply!(athanor_id, %Turn{} = turn, outcome, at, text, requests, origin) do
     record =
       Prima.OutboxRecord.crew_reply(%{
         athanor_id: athanor_id,
