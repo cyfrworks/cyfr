@@ -454,9 +454,20 @@ def cyfr_controller(image):
         status, answer = served()
         expect(status == 200, "the dead controller's owner is still served inside its lease", answer)
 
-        eventually(lambda: not stack.pool_processes(), "the service to release the dead controller's owner",
+        # Released is the service's word, never an emptied pool: the open just
+        # served ends at cyfr's idle period (CYFR_IDLE_MS), which can come
+        # before the lease runs out. The test's controller asks the status
+        # above every sequence the dead controller used.
+        controller.seq = 10**12
+
+        def released():
+            report = controller.report(owner)
+            return report is None or report["state"] == "draining"
+
+        eventually(released, "the service to release the dead controller's owner",
                    timeout_s=LEASE_MS / 1000 + 10)
         released_after = time.monotonic() - killed_at
+        eventually(lambda: not stack.pool_processes(), "no process of the released owner left", timeout_s=10)
         # The lease runs from the last renewal, before the kill; the
         # service's sweep ticks every second and retires the backend after.
         expect(released_after <= LEASE_MS / 1000 + 3,

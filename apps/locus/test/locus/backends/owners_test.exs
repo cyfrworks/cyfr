@@ -544,6 +544,55 @@ defmodule Locus.Backends.OwnersTest do
 
       refute Process.alive?(pid)
       assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
+
+      # Forgotten, the owner is not made again by an open: it is unknown,
+      # and nothing starts.
+      assert {:error, :unknown_owner} = open(owners, "a", {1, 1}, "b2")
+      assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
+    end
+
+    test "a released owner serves no open: lapsed while it retires, unknown once gone, nothing started",
+         ctx do
+      owners = start_owners(ctx)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      pid = session_pid(owners, "a", {1, 1}, id)
+
+      release = %{type: :release, owners: [%{athanor: @athanor, server: "a", e: 1}]}
+      assert {:ok, %{released: [%{server: "a"}]}} = control(owners, 1, release)
+
+      assert open(owners, "a", {1, 1}, "b2") in [{:error, :lapsed}, {:error, :unknown_owner}]
+
+      wait_until(
+        fn -> Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner} end,
+        5_000
+      )
+
+      assert {:error, :unknown_owner} = open(owners, "a", {1, 1}, "b3")
+      # A release unroutes the owner at once and stops its sessions after.
+      wait_until(fn -> not Process.alive?(pid) end, 5_000)
+      assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
+    end
+
+    test "a session ended by idle leaves its owner held: an open inside the lease is served",
+         ctx do
+      # An emptied pool is not a released owner: the image suite's release
+      # is the service's word for it, never the absence of processes.
+      owners = start_owners(ctx)
+
+      assert {:ok, _} =
+               sync(owners, "a", {1, 1}, idle_programs(1), idle_ms: 1_000, lease_ms: 5_000)
+
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
+      pid = session_pid(owners, "a", {1, 1}, id)
+
+      advance(ctx, 1_000)
+      :ok = LeaseSweeper.sweep(owners)
+      # Its session has ended (its record stays readable as a tombstone).
+      wait_until(fn -> match?(%{running: false}, Backend.recv(pid, 0, 0)) end, 5_000)
+
+      assert :ok = Owners.admit(owners, invoke("a", {1, 1}))
+      assert {:ok, %{session: _, resumed: false}} = open(owners, "a", {1, 1}, "b1")
     end
 
     test "a session no send and no recv used within the idle period ends; the next open starts it again",
