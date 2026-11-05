@@ -99,9 +99,12 @@ func (s *server) setEgress(uid int, e egress) error {
 	return s.guard.Clear(uid)
 }
 
-// clearEgress returns a retired uid to the island's rule, once no process
-// of it remains and before another spawn may take it. A clear that fails is
-// logged: the uid's next spawn sets its rules again before it starts.
+// clearEgress returns a uid to the island's rule on each of its exit
+// paths, once no process of it remains and before another spawn may take
+// it: a clean retirement, a quarantine's sweep that finds it clean, its
+// kept home's retirement, and a spawn refused because the guard did not
+// confirm what it may have applied. A clear that fails is logged: the
+// uid's next spawn sets its rules again before it starts.
 func (s *server) clearEgress(uid int) {
 	if s.guard == nil {
 		return

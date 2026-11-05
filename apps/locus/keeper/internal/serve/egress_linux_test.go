@@ -9,12 +9,16 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -81,6 +85,9 @@ type recordingGuard struct {
 	mu    sync.Mutex
 	calls []guardCall
 	fail  bool
+	// failAdmit fails every admit after recording it, as a guard that
+	// applied an admission and lost its confirmation does; clears pass.
+	failAdmit bool
 }
 
 type guardCall struct {
@@ -95,10 +102,33 @@ func (g *recordingGuard) record(op string, uid int, addrs []netip.Addr) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, guardCall{op: op, uid: uid, addrs: addrs, live: c.Total()})
-	if g.fail {
+	if g.fail || (g.failAdmit && op == "admit") {
 		return errors.New("forced failure")
 	}
 	return nil
+}
+
+// ops is what the guard was asked for uid, in order.
+func (g *recordingGuard) ops(uid int) []string {
+	var out []string
+	for _, c := range g.taken() {
+		if c.uid == uid {
+			out = append(out, c.op)
+		}
+	}
+	return out
+}
+
+// waitOps waits for the guard to have been asked want for uid.
+func (g *recordingGuard) waitOps(t *testing.T, uid int, want []string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for !reflect.DeepEqual(g.ops(uid), want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("uid %d: the guard was asked %v, want %v", uid, g.ops(uid), want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func (g *recordingGuard) Admit(uid int, addrs []netip.Addr) error {
@@ -222,4 +252,110 @@ func (k *keeper) started(t *testing.T, req *protocol.Request) (string, int) {
 		t.Fatal(err)
 	}
 	return spawned["spawn_id"].(string), uid
+}
+
+// An admission the guard may have applied without confirming it is cleared
+// before the spawn is refused: a pooled uid's by its retirement, before the
+// pool gives the uid to another spawn.
+func TestAPooledAdmissionTheGuardDidNotConfirmIsCleared(t *testing.T) {
+	fakeResolver(t, map[string][]string{"api.example.com": {"203.0.113.7"}})
+	k := boundedKeeper(t)
+	g := &recordingGuard{failAdmit: true}
+	k.s.guard = g
+	req := spawnRequest(t, k.attach, "p", "sleep 60", map[string]string{}, false, 64<<20)
+	req.Hosts = []string{"api.example.com"}
+	k.s.handleSpawn(req)
+	if r := k.reply(t); r["code"] != protocol.CodeGuardUnavailable {
+		t.Fatalf("answered %v", r)
+	}
+	g.waitOps(t, testPoolFirst, []string{"admit", "clear"})
+}
+
+// A kept uid's unconfirmed admission is cleared before the refusal is sent,
+// no other session of the uid running.
+func TestAKeptAdmissionTheGuardDidNotConfirmIsCleared(t *testing.T) {
+	fakeResolver(t, map[string][]string{"api.example.com": {"203.0.113.7"}})
+	k := keptKeeper(t)
+	g := &recordingGuard{failAdmit: true}
+	k.s.guard = g
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-unconfirmed")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	req := keptRequest(t, k.attach, "k", "sleep 60", path, testKeptFirst, nil, false)
+	req.Hosts = []string{"api.example.com"}
+	k.s.handleSpawn(req)
+	if r := k.reply(t); r["code"] != protocol.CodeGuardUnavailable {
+		t.Fatalf("answered %v", r)
+	}
+	if got := g.ops(testKeptFirst); !reflect.DeepEqual(got, []string{"admit", "clear"}) {
+		t.Fatalf("the kept uid's guard was asked %v before the refusal, want an admit and its clear", got)
+	}
+}
+
+// quarantined spawns script under the keeper's uid (kept or pooled), lets
+// it leave a file the uid then cannot remove, and releases it: the uid is
+// quarantined. It answers the uid and the folder to open again.
+func (k *keeper) quarantined(t *testing.T, kept bool) (int, string) {
+	t.Helper()
+	pinned := filepath.Join(k.s.roots.Dirs[0], "pinned")
+	if err := os.Mkdir(pinned, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(pinned, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	script := `echo x > ` + pinned + `/left; echo wrote; sleep 600`
+	var spawnID string
+	var uid int
+	var rc *relayConn
+	if kept {
+		uid = testKeptFirst
+		path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-swept")
+		if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+			t.Fatalf("home_make: %v", made)
+		}
+		spawnID, rc = k.spawnKept(t, "left", script, path, uid)
+	} else {
+		spawnID, uid, rc = k.spawn(t, "left", script, map[string]string{}, false)
+	}
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "wrote\n") })
+	if err := os.Chmod(pinned, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	k.release(t, spawnID)
+	k.releasedPair(t, spawnID)
+	return uid, pinned
+}
+
+// A uid that left something behind is quarantined with its rules
+// standing; the sweep that finds it clean clears it before the uid is free
+// again.
+func TestAQuarantinedPooledUIDIsClearedWhenItsSweepFindsItClean(t *testing.T) {
+	k := boundedKeeper(t)
+	g := &recordingGuard{}
+	k.s.guard = g
+	assertSweepClears(t, k, g, false)
+}
+
+func TestAQuarantinedKeptUIDIsClearedWhenItsSweepFindsItClean(t *testing.T) {
+	k := keptKeeper(t)
+	g := &recordingGuard{}
+	k.s.guard = g
+	assertSweepClears(t, k, g, true)
+}
+
+func assertSweepClears(t *testing.T, k *keeper, g *recordingGuard, kept bool) {
+	t.Helper()
+	uid, pinned := k.quarantined(t, kept)
+	if got := g.ops(uid); !reflect.DeepEqual(got, []string{"clear"}) {
+		t.Fatalf("a quarantined uid's rules were touched: %v, want only its spawn's clear", got)
+	}
+	if err := os.Chmod(pinned, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	k.s.sweep()
+	if got := g.ops(uid); !reflect.DeepEqual(got, []string{"clear", "clear"}) {
+		t.Fatalf("after the sweep found the uid clean the guard was asked %v, want its clear", got)
+	}
 }

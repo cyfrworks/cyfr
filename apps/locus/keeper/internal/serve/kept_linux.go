@@ -95,6 +95,8 @@ func (s *server) sweepKept() {
 		lock.Lock()
 		clean := s.scrub(KeptAccount(uid), 0, nil, path)
 		if clean {
+			// Its rules stood while anything of it remained.
+			s.clearEgress(uid)
 			s.mu.Lock()
 			delete(s.keptQuarantined, uid)
 			s.mu.Unlock()
@@ -191,6 +193,16 @@ func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 		}
 	}
 	if err := s.setEgress(uid, reach); err != nil {
+		// The guard may have applied what it did not confirm: the uid is
+		// cleared when no other session of it runs. One that runs keeps
+		// what the guard holds, which a failed change leaves refused every
+		// public address, since a clear would open that session.
+		s.mu.Lock()
+		siblings := s.keptLive[uid]
+		s.mu.Unlock()
+		if siblings == 0 {
+			s.clearEgress(uid)
+		}
 		lock.Unlock()
 		s.log.Error("spawn %s on kept uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
 		s.send(protocol.NewError(req.ID, "", protocol.CodeGuardUnavailable))
@@ -347,6 +359,7 @@ func (s *server) handleHome(req *protocol.Request) {
 			s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
 			return
 		}
+		s.clearEgress(uid)
 		s.mu.Lock()
 		s.keptMaps()
 		delete(s.keptQuarantined, uid)
