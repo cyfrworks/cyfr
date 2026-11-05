@@ -46,6 +46,7 @@ defmodule Prima.LocusBackends do
   | `release` | `owners[{athanor, server, e}]` | `released[{athanor, server, g, e}]` |
   | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, lease_ms_left, programs[]}]` |
   | `home` | `op`, `athanor`, `home_id` | `home_id`, `state` |
+  | `homes` | none | `homes[]` |
 
   A sync's program is `{name, command, login_command?, env_names, home,
   memory_bytes?, home_max_bytes?}`: a `name` of lowercase letters, digits
@@ -61,14 +62,21 @@ defmodule Prima.LocusBackends do
   to the owner and the service's lifetime.
 
   A status reports each program as `{name, status, restarts, error?,
-  stderr_tail, home, home_bytes?, over_cap, sessions}`: its status
-  (`program_statuses/0`: `idle` with no process running, `running` with
-  one, `failed` once `max_crashes/0` processes crashed within
-  `crash_window_ms/0`), the processes that crashed since its sync, the
-  last crash (absent before one), the masked tail of its stderr, its home
-  mode, the bytes its kept homes last measured (absent for a scratch home
+  stderr_tail?, stderr_bytes?, home, home_bytes?, over_cap, sessions}`:
+  its status (`program_statuses/0`: `idle` with no process running,
+  `running` with one, `failed` once `max_crashes/0` processes of one
+  session key crashed within `crash_window_ms/0`), the processes that
+  crashed since its sync, the last crash (absent before one), for a
+  scratch program the masked tail of its stderr (`stderr_tail`) and for a
+  kept one only how many bytes of stderr it kept (`stderr_bytes`), since a
+  kept home's contents are the person's and its stderr may carry them; its
+  home mode, the bytes its kept homes last measured (absent for a scratch home
   or one never measured), whether one of them is over its cap, and its running
   sessions.
+
+  A `homes` message names nothing and is answered with the id of every
+  kept home the box holds (`homes[]`), so the controller can retire the
+  homes whose login entry no longer exists.
 
   A `home` message acts on one kept home of one athanor: `op` `reset` ends
   every session in the home `home_id` names and makes it again empty under
@@ -112,7 +120,9 @@ defmodule Prima.LocusBackends do
   A line is at most `max_line_bytes/0` bytes; a process that writes a
   longer one is killed. The buffer keeps every line until a later `recv`
   names an `after` at or above its sequence number, and at most
-  `max_buffer_bytes/0` bytes: past that the oldest lines are dropped and
+  `max_buffer_bytes/0` bytes, each line charged its text and
+  `line_charge_bytes/0` of framing, and at most `max_buffer_lines/0`
+  lines: past either the oldest lines are dropped and
   counted, and a `recv` answers in `dropped` how many lines between its
   `after` and its first line were dropped. A `recv` waits up to
   `max_wait_ms` (at most `max_recv_wait_ms/0`) for a line past `after` or
@@ -187,6 +197,8 @@ defmodule Prima.LocusBackends do
   @max_control_bytes 1_048_576
   @max_line_bytes 1_048_576
   @max_buffer_bytes 8_388_608
+  @max_buffer_lines 65_536
+  @line_charge_bytes 32
   @max_session_bytes 16_777_216
   @max_recv_wait_ms 30_000
   @max_status_owners 64
@@ -211,6 +223,8 @@ defmodule Prima.LocusBackends do
     max_control_bytes: @max_control_bytes,
     max_line_bytes: @max_line_bytes,
     max_buffer_bytes: @max_buffer_bytes,
+    max_buffer_lines: @max_buffer_lines,
+    line_charge_bytes: @line_charge_bytes,
     max_session_bytes: @max_session_bytes,
     max_recv_wait_ms: @max_recv_wait_ms,
     max_status_owners: @max_status_owners,
@@ -258,7 +272,7 @@ defmodule Prima.LocusBackends do
   }
   @classes Map.keys(@statuses) |> Enum.sort()
 
-  @control_types [:hello, :reconcile, :sync, :renew, :release, :status, :home]
+  @control_types [:hello, :reconcile, :sync, :renew, :release, :status, :home, :homes]
   @session_types [:open, :send, :recv, :close]
   @owner_states [:running, :draining]
   @program_statuses [:idle, :running, :failed]
@@ -274,7 +288,8 @@ defmodule Prima.LocusBackends do
     renew: ~w(version type lease_ms owners),
     release: ~w(version type owners),
     status: ~w(version type owners),
-    home: ~w(version type op athanor home_id)
+    home: ~w(version type op athanor home_id),
+    homes: ~w(version type)
   }
   @answer_fields %{
     hello: ~w(version boot pool),
@@ -283,7 +298,8 @@ defmodule Prima.LocusBackends do
     renew: ~w(version renewed unknown),
     release: ~w(version released),
     status: ~w(version owners),
-    home: ~w(version home_id state)
+    home: ~w(version home_id state),
+    homes: ~w(version homes)
   }
   @session_fields %{
     open: ~w(version type owner e program key mode argv),
@@ -301,8 +317,8 @@ defmodule Prima.LocusBackends do
   @session_answer_optional %{recv: ~w(exit_code)}
   @program_fields ~w(name command env_names home)
   @program_optional ~w(login_command memory_bytes home_max_bytes)
-  @program_report_fields ~w(name status restarts stderr_tail home over_cap sessions)
-  @program_report_optional ~w(error home_bytes)
+  @program_report_fields ~w(name status restarts home over_cap sessions)
+  @program_report_optional ~w(error stderr_tail stderr_bytes home_bytes)
   @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @session_id ~r/\Ass_[0-9a-f]{32}\z/
@@ -341,7 +357,8 @@ defmodule Prima.LocusBackends do
 
   @type operation :: :health | :control | :session
   @type kind :: :invoke | :control
-  @type control_type :: :hello | :reconcile | :sync | :renew | :release | :status | :home
+  @type control_type ::
+          :hello | :reconcile | :sync | :renew | :release | :status | :home | :homes
   @type session_type :: :open | :send | :recv | :close
   @type owner_state :: :running | :draining
   @type program_status :: :idle | :running | :failed
@@ -421,6 +438,7 @@ defmodule Prima.LocusBackends do
           | %{type: :release, owners: [owner_epoch()]}
           | %{type: :status, owners: [owner_ref()]}
           | %{type: :home, op: home_op(), athanor: String.t(), home_id: String.t()}
+          | %{type: :homes}
 
   @typedoc "A program as a status answer reports it."
   @type program_report :: %{
@@ -428,7 +446,8 @@ defmodule Prima.LocusBackends do
           status: program_status(),
           restarts: non_neg_integer(),
           error: String.t() | nil,
-          stderr_tail: String.t(),
+          stderr_tail: String.t() | nil,
+          stderr_bytes: non_neg_integer() | nil,
           home: home(),
           home_bytes: non_neg_integer() | nil,
           over_cap: boolean(),
@@ -459,6 +478,7 @@ defmodule Prima.LocusBackends do
             }
           | %{owners: [owner_report()]}
           | %{home_id: String.t(), state: home_state()}
+          | %{homes: [String.t()]}
 
   @typedoc "A session message by its `type`."
   @type session_message ::
@@ -665,6 +685,14 @@ defmodule Prima.LocusBackends do
   @doc "The bytes of lines a session's buffer holds before it drops the oldest."
   @spec max_buffer_bytes() :: pos_integer()
   def max_buffer_bytes, do: @max_buffer_bytes
+
+  @doc "The lines a session's buffer holds before it drops the oldest, whatever their bytes."
+  @spec max_buffer_lines() :: pos_integer()
+  def max_buffer_lines, do: @max_buffer_lines
+
+  @doc "The bytes a buffered line is charged beyond its text: its sequence number and framing."
+  @spec line_charge_bytes() :: pos_integer()
+  def line_charge_bytes, do: @line_charge_bytes
 
   @doc "The bytes a session body or a session answer may be."
   @spec max_session_bytes() :: pos_integer()
@@ -1033,6 +1061,8 @@ defmodule Prima.LocusBackends do
          do: {:ok, %{type: :status, owners: owners}}
   end
 
+  defp read_control_typed(:homes, _wire), do: {:ok, %{type: :homes}}
+
   defp read_control_typed(:home, wire) do
     with {:ok, op} <- roster(wire, "op", @home_ops, ""),
          {:ok, athanor} <- field_text(wire, "athanor", ""),
@@ -1241,6 +1271,24 @@ defmodule Prima.LocusBackends do
          do: {:ok, %{owners: owners}}
   end
 
+  defp read_answer_typed(:homes, wire) do
+    case wire["homes"] do
+      list when is_list(list) ->
+        list
+        |> Enum.with_index()
+        |> reduce_ok(nil, fn {id, index}, nil ->
+          if home_id?(id), do: {:ok, id, nil}, else: {:error, {:invalid_field, "homes[#{index}]"}}
+        end)
+        |> case do
+          {:ok, homes} -> {:ok, %{homes: homes}}
+          error -> error
+        end
+
+      _ ->
+        {:error, {:invalid_field, "homes"}}
+    end
+  end
+
   defp read_answer_typed(:home, wire) do
     with {:ok, home_id} <- home_id_member(wire, "home_id", ""),
          {:ok, state} <- roster(wire, "state", @home_states, "") do
@@ -1276,8 +1324,8 @@ defmodule Prima.LocusBackends do
          {:ok, status} <- roster(wire, "status", @program_statuses, p),
          {:ok, restarts} <- count(wire, "restarts", p),
          {:ok, error} <- optional(wire, "error", &text_value(&1, p <> "error")),
-         {:ok, stderr_tail} <- text(wire, "stderr_tail", p),
          {:ok, home} <- roster(wire, "home", @homes, p),
+         {:ok, stderr_tail, stderr_bytes} <- stderr(wire, home, p),
          {:ok, home_bytes} <- optional(wire, "home_bytes", &count_value(&1, p <> "home_bytes")),
          {:ok, over_cap} <- boolean(wire, "over_cap", p),
          {:ok, sessions} <- count(wire, "sessions", p) do
@@ -1288,6 +1336,7 @@ defmodule Prima.LocusBackends do
          restarts: restarts,
          error: error,
          stderr_tail: stderr_tail,
+         stderr_bytes: stderr_bytes,
          home: home,
          home_bytes: home_bytes,
          over_cap: over_cap,
@@ -1297,6 +1346,22 @@ defmodule Prima.LocusBackends do
   end
 
   defp program_report(_wire, at), do: {:error, {:invalid_field, at}}
+
+  # A scratch program reports its stderr's masked tail; a kept one only how
+  # many bytes of it there are, never their text.
+  defp stderr(wire, :scratch, p) do
+    with false <-
+           is_map_key(wire, "stderr_bytes") && {:error, {:unknown_field, p <> "stderr_bytes"}},
+         {:ok, tail} <- text(wire, "stderr_tail", p),
+         do: {:ok, tail, nil}
+  end
+
+  defp stderr(wire, :kept, p) do
+    with false <-
+           is_map_key(wire, "stderr_tail") && {:error, {:unknown_field, p <> "stderr_tail"}},
+         {:ok, bytes} <- count(wire, "stderr_bytes", p),
+         do: {:ok, nil, bytes}
+  end
 
   # ————— owners —————
 

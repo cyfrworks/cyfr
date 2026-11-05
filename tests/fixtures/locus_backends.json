@@ -165,8 +165,10 @@
   "boot_header": "x-cyfr-boot",
   "bounds": {
     "crash_window_ms": 600000,
+    "line_charge_bytes": 32,
     "max_argv": 64,
     "max_buffer_bytes": 8388608,
+    "max_buffer_lines": 65536,
     "max_command_bytes": 4096,
     "max_control_bytes": 1048576,
     "max_crashes": 5,
@@ -999,6 +1001,21 @@
     "mac": "jb7LW9Q-VN_ZOdJipwb0WoWTUDwo_ImIp5ivUNON_CU",
     "ts": 1789305249707
   },
+  "homes": {
+    "answer": "{\"homes\":[\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"vlt_01a09fee-3d4e-7f50-9b6c-7d8e9f0a1b2c\"],\"version\":2}",
+    "body": "{\"type\":\"homes\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n8\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249708\nd3450c5b019e8a48d1cb930eb795dcc235dd3f392553e2ca974b87a72ea38931",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 8,
+      "ts": 1789305249708
+    },
+    "header": "v1 kind=control gen=3 seq=8 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249708 body=d3450c5b019e8a48d1cb930eb795dcc235dd3f392553e2ca974b87a72ea38931 mac=-iKNJiZlzYO2u15bzJkRZwS_UOktrsWyOZBwb-jpVqU",
+    "mac": "-iKNJiZlzYO2u15bzJkRZwS_UOktrsWyOZBwb-jpVqU",
+    "ts": 1789305249708
+  },
   "invalid_fields": [
     {
       "field": "athanor",
@@ -1618,6 +1635,7 @@
   "service": "backends",
   "status": {
     "answer": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"lease_ms_left\":28500,\"programs\":[{\"error\":\"exited code=1 signal=null\",\"home\":\"scratch\",\"name\":\"fetch\",\"over_cap\":false,\"restarts\":1,\"sessions\":1,\"status\":\"running\",\"stderr_tail\":\"token [REDACTED] accepted\\n\"}],\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"version\":2}",
+    "answer_kept": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"lease_ms_left\":28500,\"programs\":[{\"error\":\"exited code=1 signal=null\",\"home\":\"kept\",\"home_bytes\":1048576,\"name\":\"kept\",\"over_cap\":false,\"restarts\":1,\"sessions\":1,\"status\":\"running\",\"stderr_bytes\":26}],\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"version\":2}",
     "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
     "canonical": "cyfr-locus/v1/backends/control\n3\n6\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249706\na42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3",
     "fields": {

@@ -26,7 +26,7 @@ defmodule Prima.LocusBackendsTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @control_types ~w(hello reconcile sync renew release status home)
+  @control_types ~w(hello reconcile sync renew release status home homes)
   @session_types ~w(open send recv close)
 
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
@@ -614,6 +614,37 @@ defmodule Prima.LocusBackendsTest do
 
       assert {:error, {:unknown_field, "extra"}} =
                LocusBackends.encode_control(Map.put(message, :extra, 1))
+    end
+
+    test "a kept program's report names its stderr's length and never its text" do
+      body = @vectors["status"]["answer_kept"]
+
+      assert {:ok, %{owners: [%{programs: [kept]}]} = answer} =
+               LocusBackends.read_answer(:status, body)
+
+      assert %{home: :kept, stderr_bytes: 26, stderr_tail: nil} = kept
+      assert {:ok, ^body} = LocusBackends.encode_answer(:status, answer)
+
+      [owner] = answer.owners
+      with_tail = %{owner | programs: [%{kept | stderr_tail: "a secret line"}]}
+
+      assert {:error, {:unknown_field, "owners[0].programs[0].stderr_tail"}} =
+               LocusBackends.encode_answer(:status, %{owners: [with_tail]})
+
+      {:ok, %{owners: [%{programs: [scratch]} = scratch_owner]}} =
+        LocusBackends.read_answer(:status, @vectors["status"]["answer"])
+
+      assert %{home: :scratch, stderr_bytes: nil} = scratch
+      counted = %{scratch_owner | programs: [%{scratch | stderr_bytes: 3}]}
+
+      assert {:error, {:unknown_field, "owners[0].programs[0].stderr_bytes"}} =
+               LocusBackends.encode_answer(:status, %{owners: [counted]})
+    end
+
+    test "the buffer is bounded by lines as well as bytes, each line charged its framing" do
+      assert LocusBackends.max_buffer_lines() == @vectors["bounds"]["max_buffer_lines"]
+      assert LocusBackends.line_charge_bytes() == @vectors["bounds"]["line_charge_bytes"]
+      assert LocusBackends.line_charge_bytes() > 0
     end
 
     test "a sign-in takes no arguments of the opener's, and a disk bound is a kept home's alone" do
