@@ -46,7 +46,7 @@ defmodule PrismWeb.SystemLayer.Share do
         <p>You are responsible for following the provider's terms when sharing this entry.</p>
         <p>What recipients send reaches the provider as you.</p>
         <p>
-          Recipients use your provider limits up to the caps you set and never see your key or other secrets. You can revoke the share at any time.
+          Recipients use your provider limits up to the caps you set and never see the credential. You can revoke the share at any time.
         </p>
       </div>
       <fieldset class="space-y-1" data-test="share-audience">
