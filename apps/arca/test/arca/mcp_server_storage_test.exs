@@ -100,6 +100,59 @@ defmodule Arca.McpServerStorageTest do
       assert {:ok, []} = McpServerStorage.list(actor)
     end
 
+    test "a row is a program with a scratch home and no program settings", %{actor: actor} do
+      assert {:ok, server} =
+               McpServerStorage.insert(actor, %{cap: 0, name: "plain", url: "https://x.com/mcp"})
+
+      assert %{
+               home: "scratch",
+               memory_bytes: nil,
+               home_max_bytes: nil,
+               login_command: nil,
+               hosts: nil
+             } = server
+
+      assert {:ok, ^server} = McpServerStorage.get(actor, "plain")
+    end
+
+    test "a pipe transport and a kept home are not built, and nothing is written",
+         %{actor: actor} do
+      assert {:error, {:not_built, :pipe}} =
+               McpServerStorage.insert(actor, %{
+                 cap: 0,
+                 name: "piped",
+                 transport: "pipe",
+                 url: nil
+               })
+
+      assert {:error, {:not_built, :kept_home}} =
+               McpServerStorage.insert(actor, %{
+                 cap: 0,
+                 name: "kept",
+                 transport: "stdio",
+                 url: nil,
+                 home: "kept"
+               })
+
+      assert {:ok, []} = McpServerStorage.list(actor)
+
+      assert {:ok, %{epoch: 1} = stored} =
+               McpServerStorage.insert(actor, %{
+                 cap: 0,
+                 name: "program",
+                 transport: "stdio",
+                 url: nil
+               })
+
+      assert {:error, {:not_built, :pipe}} =
+               McpServerStorage.update(actor, "program", %{transport: "pipe"})
+
+      assert {:error, {:not_built, :kept_home}} =
+               McpServerStorage.update(actor, "program", %{home: "kept"})
+
+      assert {:ok, ^stored} = McpServerStorage.get(actor, "program")
+    end
+
     test "the athanor's servers stop at the caller's cap, counting no other athanor's",
          %{actor: actor} do
       other = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")

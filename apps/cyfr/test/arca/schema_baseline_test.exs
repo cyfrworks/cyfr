@@ -277,9 +277,15 @@ defmodule Arca.SchemaBaselineTest do
     refute columns["url"].not_null?
 
     assert :ok = insert_server("stdio", nil)
+    assert :ok = insert_server("pipe", nil)
     assert :ok = insert_server("http", "https://example.test/mcp")
 
-    for {transport, url} <- [{"http", nil}, {"stdio", "https://example.test/mcp"}, {"sse", nil}] do
+    for {transport, url} <- [
+          {"http", nil},
+          {"stdio", "https://example.test/mcp"},
+          {"pipe", "https://example.test/mcp"},
+          {"sse", nil}
+        ] do
       assert :refused = insert_server(transport, url),
              "#{transport} with url #{inspect(url)} was accepted"
     end
@@ -414,7 +420,7 @@ defmodule Arca.SchemaBaselineTest do
              })
   end
 
-  test "the storage-unit, claim and write-intent schemas carry exactly their tables' columns",
+  test "the storage, claim, server and thread schemas carry exactly their tables' columns",
        %{declared: declared} do
     for schema <- [
           Arca.Schemas.StorageUnit,
@@ -425,7 +431,11 @@ defmodule Arca.SchemaBaselineTest do
           Arca.Schemas.ObjectGeneration,
           Arca.Schemas.CellLease,
           Arca.Schemas.JobClaim,
-          Arca.Schemas.RateWindow
+          Arca.Schemas.RateWindow,
+          Arca.Schemas.McpServer,
+          Arca.Schemas.Thread,
+          Arca.Schemas.Turn,
+          Arca.Schemas.Message
         ] do
       table = schema.__schema__(:source)
       fields = schema.__schema__(:fields) |> Enum.map(&Atom.to_string/1) |> Enum.sort()

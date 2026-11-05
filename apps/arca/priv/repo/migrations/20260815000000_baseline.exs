@@ -2509,15 +2509,20 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp registrations do
-    # An `http` server has a url; a `stdio` server has none and runs its
-    # backends (`config_json.backends`) on the backends service. `epoch` is 1 on
+    # An `http` server has a url; a `stdio` or `pipe` server (a program) has
+    # none and runs on the backends service. `epoch` is 1 on
     # insert and rises in the same statement as every change to the row.
     # SQLite takes a check only inside CREATE TABLE and Postgres only as a
     # table constraint, so the one rule is spelled once per adapter.
     transport_check = %{
       name: "mcp_servers_transport_url",
-      expr: "(transport = 'http' AND url IS NOT NULL) OR (transport = 'stdio' AND url IS NULL)"
+      expr:
+        "(transport = 'http' AND url IS NOT NULL) OR " <>
+          "(transport IN ('stdio', 'pipe') AND url IS NULL)"
     }
+
+    # `Arca.Schemas.McpServer.homes/0`.
+    home_known = known("mcp_servers_home_known", "home", ~w(scratch kept))
 
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
@@ -2525,6 +2530,17 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :id, :string, primary_key: true, null: false
       add :name, :string, null: false
       add :transport, :string, null: false, check: if(sqlite?, do: transport_check)
+      # A program's home: `scratch` is scrubbed at retirement, `kept`
+      # survives it under a uid of its own.
+      add :home, :string, null: false, default: "scratch", check: if(sqlite?, do: home_known)
+      # A program's memory bound; null means the backends service's total.
+      add :memory_bytes, :bigint
+      # A kept home's size cap.
+      add :home_max_bytes, :bigint
+      # The command a sign-in session runs on a pseudo-terminal.
+      add :login_command, :text
+      # A program's network list (JSON).
+      add :hosts, :text
       add :url, :string
       add :config_json, :text, null: false
       add :enabled, :boolean, default: true
@@ -2544,6 +2560,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       create constraint(:mcp_servers, transport_check.name, check: transport_check.expr)
     end
 
+    checked(sqlite?, :mcp_servers, [home_known])
     create unique_index(:mcp_servers, [:athanor_id, :name])
 
     create table(:webhooks, primary_key: false) do
@@ -2812,9 +2829,25 @@ defmodule Arca.Repo.Migrations.Baseline do
   # A thread belongs to the athanor, and so to its person.
   # Rows are the shared, durable record — no browser session owns a turn.
   defp threads do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # `Arca.Schemas.Thread.kinds/0`.
+    thread_kind = known("threads_kind_known", "kind", ~w(own crew))
+
+    # `Arca.Schemas.Message.outcomes/0`.
+    message_outcome =
+      known("messages_outcome_known", "outcome", ~w(done failed cancelled uncertain needs_you))
+
     create table(:threads, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
+      # `own` is a person's thread; `crew` a child thread a crew member
+      # works in, under the room thread `parent_id` names.
+      add :kind, :string, null: false, default: "own", check: if(sqlite?, do: thread_kind)
+      # A plain string, like `active_turn_id`: this table references nothing.
+      add :parent_id, :string
+      # The brain's own session for the thread, opaque.
+      add :brain_session, :text
       add :title, :string, null: false, default: "New thread"
       # Attribution: the person who opened it. The athanor owns it.
       add :created_by, :string, null: false
@@ -2835,8 +2868,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
+    checked(sqlite?, :threads, [thread_kind])
     create unique_index(:threads, [:id, :athanor_id])
     create index(:threads, [:athanor_id, :last_message_at])
+    create index(:threads, [:athanor_id, :parent_id])
 
     # One turn holds at most one thread. Partial, so the null of a thread
     # nobody is working costs nothing and does not collide.
@@ -2864,8 +2899,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # source.
       add :payload, :text
       # Approvals: pending | running | approved | declined | expired | error |
-      # invalidated.
+      # invalidated. A request to a crew member: pending | answered.
       add :status, :string
+      # A request's `resolved_by` is the id of the reply that answered it.
       add :resolved_by, :string
       add :resolved_at, :utc_datetime_usec
       # Approvals: the decision's reason/result summary/scope, JSON.
@@ -2875,13 +2911,23 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :approval_id, :string
       # The sender's retry identity.
       add :client_id, :string
+      # Who sent it: `person` or an agent name.
+      add :sent_by, :string
+      # The crew member a request names.
+      add :addressee, :string
+      # The request a reply or notice answers.
+      add :reply_to, :string
+      # A reply's or notice's outcome.
+      add :outcome, :string, check: if(sqlite?, do: message_outcome)
       add :inserted_at, :utc_datetime_usec, null: false
     end
 
+    checked(sqlite?, :messages, [message_outcome])
     create unique_index(:messages, [:thread_id, :seq])
     create unique_index(:messages, [:thread_id, :client_id], where: "client_id IS NOT NULL")
     create index(:messages, [:athanor_id, :inserted_at])
     create index(:messages, [:athanor_id, :turn_id])
+    create index(:messages, [:athanor_id, :reply_to])
     create index(:messages, [:thread_id, :status])
   end
 
@@ -2920,6 +2966,12 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :agent, :string
       add :requested_by, :string
+      # Who opened the turn: `person` or an agent name.
+      add :sent_by, :string
+      # The reply address of a turn a crew request opened: the asking
+      # thread and the request.
+      add :asking_thread_id, :string
+      add :request_id, :string
       add :status, :string, null: false, check: if(sqlite?, do: turn_status)
       add :error, :text
       add :accepted_at, :utc_datetime_usec, null: false

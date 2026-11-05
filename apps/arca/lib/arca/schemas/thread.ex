@@ -15,6 +15,12 @@ defmodule Arca.Schemas.Thread do
   read, so of two members reading the same thread at the same moment only
   one claim lands. The claim is the authority; a runner process on some
   node is a lookup, never evidence of ownership.
+
+  `kind` is `"own"`, a person's thread, or `"crew"`, a child thread a crew
+  member works in under the room thread `parent_id` names; `brain_session`
+  is the brain's own opaque session for the thread. Crew threads are not
+  built yet: `changeset/2` casts none of the three, so every thread it
+  writes is `own`.
   """
 
   use Ecto.Schema
@@ -24,8 +30,17 @@ defmodule Arca.Schemas.Thread do
 
   @type t :: %__MODULE__{}
 
+  @kinds ~w(own crew)
+
+  @doc "The `kind` vocabulary, the `threads_kind_known` check's."
+  @spec kinds() :: [String.t()]
+  def kinds, do: @kinds
+
   schema "threads" do
     field :athanor_id, :string
+    field :kind, :string, default: "own"
+    field :parent_id, :string
+    field :brain_session, :string
     field :title, :string, default: "New thread"
     field :created_by, :string
     field :agent, :string
