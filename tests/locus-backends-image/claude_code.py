@@ -35,7 +35,7 @@ CYFR's tools as the harness starts an MCP server.
   through `cyfr-stub` returns that result, which its reply quotes.
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the harness again with `--resume`,
-  which finds the conversation in the kept folder.
+  which finds the session in the kept folder.
 - A pipe refusal answers the contract's refusal type; and nothing the
   harness writes to its stderr or its folder reaches any answer or event.
 
@@ -303,7 +303,7 @@ def main():
                "the next chat starts the harness again resuming its session", argv)
         expect(output["data"]["content"] == [{"type": "text", "text": "Your first message was: say hello"}]
                and output["data"]["session"] == session,
-               "the resumed harness finds the conversation in its kept folder", output)
+               "the resumed harness finds the session in its kept folder", output)
 
         # ————— a refusal of the pipe —————
         bridge.refuse_next_open = "setup_required"

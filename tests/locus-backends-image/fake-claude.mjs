@@ -56,7 +56,7 @@ const transcriptFile = path.join(store, `${sessionId}.json`);
 let transcript = [];
 if (resume) {
   if (!fs.existsSync(transcriptFile)) {
-    process.stderr.write(`No conversation found with session ID: ${resume}\n`);
+    process.stderr.write(`fake-claude: no session ${resume} in this folder\n`);
     process.exit(1);
   }
   transcript = JSON.parse(fs.readFileSync(transcriptFile, 'utf8'));

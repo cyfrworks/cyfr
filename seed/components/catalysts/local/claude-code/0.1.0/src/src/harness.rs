@@ -41,7 +41,7 @@ pub const STUB: &str = "cyfr-stub";
 pub const INIT_ID: &str = "cyfr-initialize";
 pub const TOOLS_ID: &str = "cyfr-tools";
 
-/// How a session starts: as a new conversation under an id this catalyst
+/// How a session starts: as a new session under an id this catalyst
 /// chose, or resuming one the harness keeps in its folder.
 pub enum Start<'a> {
     New(&'a str),
@@ -152,9 +152,9 @@ pub fn unanswered(request_id: &str, subtype: &str) -> String {
 /// One line of the harness's output, as far as a turn reads it.
 #[derive(Debug, PartialEq)]
 pub enum Event {
-    /// A text fragment of the main conversation's reply as it streams.
+    /// A text fragment of the main session's reply as it streams.
     TextDelta(String),
-    /// A whole assistant message of the main conversation: its text, and
+    /// A whole assistant message of the main session: its text, and
     /// the error the harness typed it with, if any.
     Assistant { text: String, error: Option<String> },
     /// The harness asks whether it may run a tool.
