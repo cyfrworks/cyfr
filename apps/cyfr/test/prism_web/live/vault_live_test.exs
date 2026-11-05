@@ -932,6 +932,11 @@ defmodule PrismWeb.VaultLiveTest do
   # ---------------------------------------------------------------------------
 
   describe "sharing a key" do
+    @share_warning [
+      "You are responsible for following the provider's terms when sharing this entry.",
+      "What recipients send reaches the provider as you.",
+      "Recipients use your provider limits up to the caps you set and never see your key or other secrets. You can revoke the share at any time."
+    ]
     @market %{
       "hosts" => ["api.market.example"],
       "methods" => ["GET"],
@@ -1033,6 +1038,8 @@ defmodule PrismWeb.VaultLiveTest do
 
       sheet = ~s(#system-layer-dialog [data-kind="share"] form#system-layer-share)
       assert has_element?(view, sheet)
+      assert texts(view, sheet <> ~s( [data-test="share-warning"] p)) == @share_warning
+      refute has_element?(view, sheet <> ~s( input[name="audience"][checked]))
       assert has_element?(view, "#system-layer-title", "Share market key")
       assert has_element?(view, sheet <> ~s( input[name="audience"][value="everyone"]))
 
@@ -1081,6 +1088,13 @@ defmodule PrismWeb.VaultLiveTest do
                )
 
       assert shares_of(terry) == []
+
+      preview =
+        ~s([data-test="confirmation"][data-ref="#{ref}"] [data-test="confirmation-preview"])
+
+      wait_until(fn -> has_element?(view, preview) end, 2_000, "the share confirmation preview")
+
+      for line <- @share_warning, do: assert(has_element?(view, preview, line))
 
       Sanctum.TestContext.prove!(terry.ctx, ref)
 

@@ -610,6 +610,7 @@ async function shareKey(page, vault, entryId, spec) {
     return {
       audiences: text('[data-test="share-audience"] label'),
       caps: [...form.querySelectorAll('input[type="number"]')].map((el) => [el.name, el.value]),
+      warnings: text('[data-test="share-warning"] p'),
       meaning: text('[data-test="share-caps-meaning"]'),
       uncapped: text('[data-test="share-uncapped"]'),
       secret_inputs: form.querySelectorAll('input[type="password"], textarea').length,
@@ -761,6 +762,11 @@ async function main() {
     const sheetOpened = (made) => made.asked && same(made.shown, {
       audiences: ["Everyone on this CYFR"],
       caps: [["person_daily", ""], ["total_daily", ""]],
+      warnings: [
+        "You are responsible for following the provider's terms when sharing this entry.",
+        "What recipients send reaches the provider as you.",
+        "Recipients use your provider limits up to the caps you set and never see your key or other secrets. You can revoke the share at any time."
+      ],
       meaning: [CAPS_MEANING],
       uncapped: [UNCAPPED],
       secret_inputs: 0,
@@ -780,7 +786,8 @@ async function main() {
         sheetOpened(sharedAi) && sheetOpened(sharedMail) && sharedAi.shared && sharedMail.shared &&
         !sharedAi.key_on_page && !sharedMail.key_on_page && same(madeShares, linesMade) && made.held,
       "Company AI and Company Mail made on the Vault page, each key typed in its form and proven with the passkey, " +
-        "each shared with everyone through the sheet, which opens with its caps empty and says what they mean, " +
+        "each shared with everyone through the sheet, which warns about the provider's terms, requests as you, " +
+        "your provider limits and secrets before a choice, opens with its caps empty and says what they mean, " +
         "proven with the passkey; Shared by you reads both; the whole state is the two entries and two shares " +
         "their forms requested",
       { passkey, entries: shownIds, sheets: [sharedAi.shown, sharedMail.shown], shared_by_you: madeShares,

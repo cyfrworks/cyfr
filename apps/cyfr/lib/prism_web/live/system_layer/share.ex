@@ -42,6 +42,13 @@ defmodule PrismWeb.SystemLayer.Share do
       data-test="share-sheet"
     >
       <input type="hidden" name="prompt_id" value={@prompt.id} />
+      <div class="space-y-1 text-xs text-gray-300" data-test="share-warning">
+        <p>You are responsible for following the provider's terms when sharing this entry.</p>
+        <p>What recipients send reaches the provider as you.</p>
+        <p>
+          Recipients use your provider limits up to the caps you set and never see your key or other secrets. You can revoke the share at any time.
+        </p>
+      </div>
       <fieldset class="space-y-1" data-test="share-audience">
         <legend class="text-sm font-medium">Share {@prompt.subject.name} with</legend>
         <label class="flex items-center gap-2 text-sm">
@@ -100,9 +107,6 @@ defmodule PrismWeb.SystemLayer.Share do
           {uncapped(@administrator)}
         </p>
       </fieldset>
-      <p class="text-xs text-gray-400">
-        No one sees the key: CYFR attaches it to their requests bound for the entry's destination. You can revoke the share at any time.
-      </p>
     </form>
     """
   end

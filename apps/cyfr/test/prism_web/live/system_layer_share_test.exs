@@ -19,11 +19,11 @@ defmodule PrismWeb.SystemLayerShareTest do
   @subject %{entry_id: "vlt_1", name: "market key", threads: @threads}
   @prompt %{id: "share-vlt_1", kind: :share, action: :credential_sharing, subject: @subject}
 
-  defp sheet(administrator),
+  defp sheet(administrator, prompt \\ @prompt),
     do:
       render_component(&Share.sheet/1,
         id: "system-layer",
-        prompt: @prompt,
+        prompt: prompt,
         administrator: administrator,
         myself: nil
       )
@@ -51,6 +51,22 @@ defmodule PrismWeb.SystemLayerShareTest do
       assert values == ["everyone", "shared_thread:sth_traders", "shared_thread:sth_pair"]
       refute html =~ ~s(type="checkbox")
       refute html =~ "checked"
+    end
+
+    test "warns before any audience is chosen, including for an entry holding no key" do
+      for name <- ["market key", "Claude Code sign-in"], administrator <- [true, false] do
+        prompt = put_in(@prompt, [:subject, :name], name)
+        html = sheet(administrator, prompt)
+
+        assert text(html, ~s([data-test="share-warning"] p)) == [
+                 "You are responsible for following the provider's terms when sharing this entry.",
+                 "What recipients send reaches the provider as you.",
+                 "Recipients use your provider limits up to the caps you set and never see your key or other secrets. You can revoke the share at any time."
+               ]
+
+        refute html =~ "checked"
+        refute html =~ "CYFR attaches it"
+      end
     end
 
     test "starts with both caps empty and says what empty, 0 and a number mean" do
