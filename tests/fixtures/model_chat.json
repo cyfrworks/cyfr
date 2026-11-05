@@ -1,0 +1,172 @@
+{
+  "comment": "The vectors pinning what model/chat@1 lets a caller set per brain (Prima.Model): the options describe declares, a chat request's session and options, and a chat response's session. option_kinds are the kinds an option may be. valid_describes are describe answers whose options read as they are (absent reads as none); invalid_describes are refused naming member, the first member that breaks the option shape (options[i] for the entry, options[i].<member> for one of its members, an unknown member by its own name). valid_chat_requests and invalid_chat_requests are requests checked against declared, the options a describe declared; a request's other members are the catalyst's to read and are not checked here. valid_chat_responses answer session (null for none); invalid_chat_responses are refused naming member. Read by apps/prima/test/prima/model_test.exs; a model catalyst's own tests read the same file.",
+  "option_kinds": ["enum", "string", "integer", "boolean"],
+  "valid_describes": [
+    {
+      "why": "no options member declares none",
+      "describe": {"contracts": ["model/chat@1"], "provider": "p", "streaming": true},
+      "options": []
+    },
+    {
+      "why": "an empty list declares none",
+      "describe": {"provider": "p", "options": []},
+      "options": []
+    },
+    {
+      "why": "every kind, with and without a default",
+      "describe": {
+        "provider": "p",
+        "options": [
+          {"name": "effort", "kind": "enum", "values": ["low", "medium", "high"], "default": "medium"},
+          {"name": "permission_mode", "kind": "enum", "values": ["ask", "auto"]},
+          {"name": "system_prefix", "kind": "string", "default": ""},
+          {"name": "thinking_budget", "kind": "integer", "default": 0},
+          {"name": "verbose", "kind": "boolean", "default": false},
+          {"name": "label", "kind": "string"}
+        ]
+      },
+      "options": [
+        {"name": "effort", "kind": "enum", "values": ["low", "medium", "high"], "default": "medium"},
+        {"name": "permission_mode", "kind": "enum", "values": ["ask", "auto"]},
+        {"name": "system_prefix", "kind": "string", "default": ""},
+        {"name": "thinking_budget", "kind": "integer", "default": 0},
+        {"name": "verbose", "kind": "boolean", "default": false},
+        {"name": "label", "kind": "string"}
+      ]
+    }
+  ],
+  "invalid_describes": [
+    {"why": "options that is not a list", "describe": {"options": {"effort": "low"}}, "member": "options"},
+    {"why": "options that is null", "describe": {"options": null}, "member": "options"},
+    {"why": "an entry that is not an object", "describe": {"options": ["effort"]}, "member": "options[0]"},
+    {"why": "an entry with no name", "describe": {"options": [{"kind": "string"}]}, "member": "options[0].name"},
+    {"why": "an empty name", "describe": {"options": [{"name": "", "kind": "string"}]}, "member": "options[0].name"},
+    {"why": "a name that is not a string", "describe": {"options": [{"name": 1, "kind": "string"}]}, "member": "options[0].name"},
+    {
+      "why": "a name declared twice",
+      "describe": {"options": [{"name": "a", "kind": "string"}, {"name": "a", "kind": "boolean"}]},
+      "member": "options[1].name"
+    },
+    {"why": "an entry with no kind", "describe": {"options": [{"name": "a"}]}, "member": "options[0].kind"},
+    {"why": "an unknown kind", "describe": {"options": [{"name": "a", "kind": "number"}]}, "member": "options[0].kind"},
+    {"why": "an enum with no values", "describe": {"options": [{"name": "a", "kind": "enum"}]}, "member": "options[0].values"},
+    {"why": "an enum with empty values", "describe": {"options": [{"name": "a", "kind": "enum", "values": []}]}, "member": "options[0].values"},
+    {"why": "an enum value that is not a string", "describe": {"options": [{"name": "a", "kind": "enum", "values": ["x", 2]}]}, "member": "options[0].values"},
+    {"why": "an empty enum value", "describe": {"options": [{"name": "a", "kind": "enum", "values": [""]}]}, "member": "options[0].values"},
+    {"why": "an enum value listed twice", "describe": {"options": [{"name": "a", "kind": "enum", "values": ["x", "x"]}]}, "member": "options[0].values"},
+    {"why": "values on a kind that is not an enum", "describe": {"options": [{"name": "a", "kind": "string", "values": ["x"]}]}, "member": "options[0].values"},
+    {"why": "an enum default outside its values", "describe": {"options": [{"name": "a", "kind": "enum", "values": ["x"], "default": "y"}]}, "member": "options[0].default"},
+    {"why": "a string default that is not a string", "describe": {"options": [{"name": "a", "kind": "string", "default": 1}]}, "member": "options[0].default"},
+    {"why": "an integer default that is fractional", "describe": {"options": [{"name": "a", "kind": "integer", "default": 1.5}]}, "member": "options[0].default"},
+    {"why": "an integer default that is a string", "describe": {"options": [{"name": "a", "kind": "integer", "default": "1"}]}, "member": "options[0].default"},
+    {"why": "a boolean default that is not a boolean", "describe": {"options": [{"name": "a", "kind": "boolean", "default": "true"}]}, "member": "options[0].default"},
+    {"why": "a null default", "describe": {"options": [{"name": "a", "kind": "string", "default": null}]}, "member": "options[0].default"},
+    {"why": "an unknown member", "describe": {"options": [{"name": "a", "kind": "string", "label": "A"}]}, "member": "options[0].label"}
+  ],
+  "valid_chat_requests": [
+    {
+      "why": "neither session nor options",
+      "declared": [],
+      "request": {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+    },
+    {
+      "why": "a session",
+      "declared": [],
+      "request": {"model": "m", "messages": [], "session": "4f7c2a9e-session"}
+    },
+    {
+      "why": "an empty options object",
+      "declared": [],
+      "request": {"model": "m", "messages": [], "options": {}}
+    },
+    {
+      "why": "every kind set, with a session",
+      "declared": [
+        {"name": "effort", "kind": "enum", "values": ["low", "high"], "default": "low"},
+        {"name": "prefix", "kind": "string"},
+        {"name": "budget", "kind": "integer"},
+        {"name": "verbose", "kind": "boolean"}
+      ],
+      "request": {
+        "model": "m",
+        "messages": [],
+        "session": "s1",
+        "options": {"effort": "high", "prefix": "", "budget": -1, "verbose": true}
+      }
+    },
+    {
+      "why": "a subset of the declared options",
+      "declared": [
+        {"name": "effort", "kind": "enum", "values": ["low", "high"]},
+        {"name": "verbose", "kind": "boolean"}
+      ],
+      "request": {"model": "m", "messages": [], "options": {"verbose": false}}
+    }
+  ],
+  "invalid_chat_requests": [
+    {"why": "an empty session", "declared": [], "request": {"model": "m", "messages": [], "session": ""}, "member": "session"},
+    {"why": "a session that is not a string", "declared": [], "request": {"model": "m", "messages": [], "session": 7}, "member": "session"},
+    {"why": "a null session", "declared": [], "request": {"model": "m", "messages": [], "session": null}, "member": "session"},
+    {"why": "options that is not an object", "declared": [], "request": {"model": "m", "messages": [], "options": ["effort"]}, "member": "options"},
+    {"why": "a null options", "declared": [], "request": {"model": "m", "messages": [], "options": null}, "member": "options"},
+    {
+      "why": "an option the brain does not declare",
+      "declared": [{"name": "effort", "kind": "enum", "values": ["low"]}],
+      "request": {"model": "m", "messages": [], "options": {"temperature_mode": "x"}},
+      "member": "options.temperature_mode"
+    },
+    {
+      "why": "an enum value outside its values",
+      "declared": [{"name": "effort", "kind": "enum", "values": ["low"]}],
+      "request": {"model": "m", "messages": [], "options": {"effort": "max"}},
+      "member": "options.effort"
+    },
+    {
+      "why": "a string option that is not a string",
+      "declared": [{"name": "prefix", "kind": "string"}],
+      "request": {"model": "m", "messages": [], "options": {"prefix": 1}},
+      "member": "options.prefix"
+    },
+    {
+      "why": "an integer option that is fractional",
+      "declared": [{"name": "budget", "kind": "integer"}],
+      "request": {"model": "m", "messages": [], "options": {"budget": 2.5}},
+      "member": "options.budget"
+    },
+    {
+      "why": "a boolean option that is not a boolean",
+      "declared": [{"name": "verbose", "kind": "boolean"}],
+      "request": {"model": "m", "messages": [], "options": {"verbose": 1}},
+      "member": "options.verbose"
+    },
+    {
+      "why": "a null option value",
+      "declared": [{"name": "prefix", "kind": "string"}],
+      "request": {"model": "m", "messages": [], "options": {"prefix": null}},
+      "member": "options.prefix"
+    },
+    {
+      "why": "an invalid session is named before an invalid option",
+      "declared": [],
+      "request": {"model": "m", "messages": [], "session": "", "options": {"x": 1}},
+      "member": "session"
+    }
+  ],
+  "valid_chat_responses": [
+    {
+      "why": "no session",
+      "response": {"model": "m", "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}},
+      "session": null
+    },
+    {
+      "why": "a session",
+      "response": {"model": "m", "content": [], "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 0}, "session": "4f7c2a9e-session"},
+      "session": "4f7c2a9e-session"
+    }
+  ],
+  "invalid_chat_responses": [
+    {"why": "an empty session", "response": {"model": "m", "content": [], "session": ""}, "member": "session"},
+    {"why": "a session that is not a string", "response": {"model": "m", "content": [], "session": ["s"]}, "member": "session"},
+    {"why": "a null session", "response": {"model": "m", "content": [], "session": null}, "member": "session"}
+  ]
+}

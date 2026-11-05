@@ -325,6 +325,21 @@ defmodule Aqua.Loop.RequestTest do
     assert Request.build(model: "m", messages: [])["max_tokens"] == 16_384
   end
 
+  test "a session or options for the brain is refused, never sent or dropped: not built yet" do
+    for {key, value} <- [session: "s1", options: %{"effort" => "high"}] do
+      error =
+        assert_raise ArgumentError, fn ->
+          Request.build([{:model, "m"}, {:messages, []}, {key, value}])
+        end
+
+      assert error.message =~ inspect(key)
+    end
+
+    request = Request.build(model: "m", messages: [])
+    refute Map.has_key?(request, "session")
+    refute Map.has_key?(request, "options")
+  end
+
   # The excerpt block is what `attach/3` places last; `without_excerpt/1`
   # takes it back in both shapes and nothing else.
   describe "without_excerpt/1" do

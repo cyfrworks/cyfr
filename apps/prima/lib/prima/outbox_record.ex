@@ -36,14 +36,36 @@ defmodule Prima.OutboxRecord do
     * `note_revision_read` — the revision of the schedule's note as the
       run read it (0 for no note), or `"absent"` for a run that read none.
 
+  `crew_request` is a hand-off to a crew member (`crew_request/1`): its
+  source is the request row (`message`), its revision the row's
+  insertion instant, and its snapshot holds `room_thread_id` (the thread
+  that asks), `request_id` (the request row), `member` (the crew member
+  asked), `task`, `tools` (the tool names the hand-off narrows the job
+  to; absent for the whole arsenal), `options` (the brain options set
+  for the job, an object), `person_id` and `origin` (whose request it is
+  and how it started, `Prima.Origin`'s spelling).
+
+  `crew_reply` is the answer of a crew member's turn (`crew_reply/1`):
+  its source is the child turn (`turn`), its revision the turn's
+  terminal instant, and its snapshot holds `asking_thread_id`,
+  `request_ids` (the opening request and every request steered into the
+  turn), `member`, `outcome` (one of `reply_outcomes/0`), `text` (the
+  final text, cut to `max_reply_bytes/0` on a character boundary with
+  `truncated` set; the rest stays on the turn), `person_id` and `origin`.
+
   A record's snapshot is canonical JSON text (`Prima.JCS`): the record
   as stored is the record as recorded, byte for byte. A field with no
   value is left out of the text and reads back as nil.
   """
 
-  @kinds ~w(schedule_outcome)
-  @source_kinds ~w(schedule_occurrence)
+  @kinds ~w(schedule_outcome crew_request crew_reply)
+  @source_kinds ~w(schedule_occurrence message turn)
   @max_output_bytes 64 * 1024
+  # A reply is delivered as a message to the asking thread, so it is cut
+  # to the one bound every message passes (`Aqua.Runner.Admission`).
+  @max_reply_bytes 32 * 1024
+  @reply_outcomes ~w(done failed cancelled uncertain needs_you)
+  @origins Prima.Origin.values()
 
   @enforce_keys [:source_kind, :source_id, :source_revision, :athanor_id, :kind, :snapshot]
   defstruct [:source_kind, :source_id, :source_revision, :athanor_id, :kind, :snapshot]
@@ -75,6 +97,14 @@ defmodule Prima.OutboxRecord do
   @doc "The cap on a `schedule_outcome` snapshot's `output`, in bytes."
   @spec max_output_bytes() :: pos_integer()
   def max_output_bytes, do: @max_output_bytes
+
+  @doc "The cap on a `crew_reply` snapshot's `text`, in bytes."
+  @spec max_reply_bytes() :: pos_integer()
+  def max_reply_bytes, do: @max_reply_bytes
+
+  @doc "The outcomes a `crew_reply` may carry, a closed roster."
+  @spec reply_outcomes() :: [String.t()]
+  def reply_outcomes, do: @reply_outcomes
 
   @doc """
   The record of a completed schedule occurrence, from what the finish
@@ -122,6 +152,104 @@ defmodule Prima.OutboxRecord do
         "note_revision_read" => revision_read(Map.get(occurrence, :note_revision_read))
       }
     }
+  end
+
+  @doc """
+  The record of a hand-off to a crew member, from what the request's
+  transaction wrote: `athanor_id`, the request row's `request_id` and
+  `inserted_at`, `room_thread_id`, `member`, `task`, `tools` (nil for
+  the whole arsenal), `options`, `person_id` and `origin`.
+  """
+  @spec crew_request(map()) :: t()
+  def crew_request(%{
+        athanor_id: athanor_id,
+        request_id: request_id,
+        inserted_at: %DateTime{} = inserted_at,
+        room_thread_id: room_thread_id,
+        member: member,
+        task: task,
+        tools: tools,
+        options: options,
+        person_id: person_id,
+        origin: origin
+      })
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(request_id) and
+             request_id != "" and is_binary(room_thread_id) and room_thread_id != "" and
+             is_binary(member) and member != "" and is_binary(task) and task != "" and
+             (is_nil(tools) or is_list(tools)) and is_map(options) and is_binary(person_id) and
+             person_id != "" and origin in @origins do
+    names!(tools || [], "tools")
+
+    %__MODULE__{
+      source_kind: "message",
+      source_id: request_id,
+      source_revision: instant(inserted_at),
+      athanor_id: athanor_id,
+      kind: "crew_request",
+      snapshot: %{
+        "room_thread_id" => room_thread_id,
+        "request_id" => request_id,
+        "member" => member,
+        "task" => task,
+        "tools" => tools,
+        "options" => options,
+        "person_id" => person_id,
+        "origin" => Prima.Origin.to_wire(origin)
+      }
+    }
+  end
+
+  @doc """
+  The record of a crew member's turn ending, from what its terminal
+  transaction read: `athanor_id`, the turn's `turn_id` and `ended_at`,
+  its reply address (`asking_thread_id`, `request_ids`), `member`,
+  `outcome` (one of `reply_outcomes/0`), the final `text`, `person_id`
+  and `origin`.
+  """
+  @spec crew_reply(map()) :: t()
+  def crew_reply(%{
+        athanor_id: athanor_id,
+        turn_id: turn_id,
+        ended_at: %DateTime{} = ended_at,
+        asking_thread_id: asking_thread_id,
+        request_ids: [_ | _] = request_ids,
+        member: member,
+        outcome: outcome,
+        text: text,
+        person_id: person_id,
+        origin: origin
+      })
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and turn_id != "" and
+             is_binary(asking_thread_id) and asking_thread_id != "" and is_binary(member) and
+             member != "" and outcome in @reply_outcomes and is_binary(text) and
+             is_binary(person_id) and person_id != "" and origin in @origins do
+    names!(request_ids, "request_ids")
+    {text, truncated?} = cap(text, @max_reply_bytes)
+
+    %__MODULE__{
+      source_kind: "turn",
+      source_id: turn_id,
+      source_revision: instant(ended_at),
+      athanor_id: athanor_id,
+      kind: "crew_reply",
+      snapshot: %{
+        "asking_thread_id" => asking_thread_id,
+        "request_ids" => request_ids,
+        "member" => member,
+        "outcome" => outcome,
+        "text" => text,
+        "truncated" => truncated?,
+        "person_id" => person_id,
+        "origin" => Prima.Origin.to_wire(origin)
+      }
+    }
+  end
+
+  defp names!(names, member) do
+    unless Enum.all?(names, &(is_binary(&1) and &1 != "")),
+      do: raise(ArgumentError, "a crew record's #{member} are non-empty strings")
+
+    :ok
   end
 
   @doc """
@@ -246,11 +374,11 @@ defmodule Prima.OutboxRecord do
   defp instant(%DateTime{} = at), do: DateTime.to_iso8601(at)
 
   defp output(nil), do: {nil, false}
-  defp output(text) when is_binary(text), do: cap(text)
-  defp output(value), do: value |> Prima.Json.safe_encode() |> cap()
+  defp output(text) when is_binary(text), do: cap(text, @max_output_bytes)
+  defp output(value), do: value |> Prima.Json.safe_encode() |> cap(@max_output_bytes)
 
-  defp cap(text) when byte_size(text) <= @max_output_bytes, do: {text, false}
-  defp cap(text), do: {whole(binary_part(text, 0, @max_output_bytes)), true}
+  defp cap(text, max) when byte_size(text) <= max, do: {text, false}
+  defp cap(text, max), do: {whole(binary_part(text, 0, max)), true}
 
   defp whole(bin) do
     if String.valid?(bin), do: bin, else: whole(binary_part(bin, 0, byte_size(bin) - 1))

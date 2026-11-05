@@ -7,7 +7,9 @@ defmodule Aqua.ModelCapabilitiesTest do
   window, the output ceiling and the input ceiling come from the answer,
   a malformed ceiling reads as absent, a model the catalyst does not know
   and a describe that fails are errors, an answer with no window is an
-  error whatever else it carries, a describe that outruns its deadline is
+  error whatever else it carries, the options it declares are the
+  model's (none when it declares none, an error when they break the
+  contract), a describe that outruns its deadline is
   stopped, and only a reading that succeeded is cached, under the key it
   ran with.
   """
@@ -62,7 +64,8 @@ defmodule Aqua.ModelCapabilitiesTest do
               provider_tools: ["web_search"],
               media_types: ["image/png"],
               streaming: true,
-              default_max_tokens: 8192
+              default_max_tokens: 8192,
+              options: []
             }} = Models.capabilities(ctx, @ref, "claude-x", "sha256:a", run: run)
 
     assert {:ok, %{context_window: 500_000}} =
@@ -129,6 +132,45 @@ defmodule Aqua.ModelCapabilitiesTest do
       assert {:ok, %{context_window: 500_000, max_input_tokens: ^expected}} =
                Models.capabilities(ctx, @ref, "m", digest, run: run)
     end
+  end
+
+  test "the options describe declares are the model's; none declared is none; broken ones refuse",
+       %{ctx: ctx} do
+    declared = [
+      %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"], "default" => "low"},
+      %{"name" => "verbose", "kind" => "boolean"}
+    ]
+
+    with_options = fn _ ->
+      {:ok, envelope(%{"model" => "m", "context_window" => 8_000, "options" => declared})}
+    end
+
+    assert {:ok, %{options: ^declared}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:opts", run: with_options)
+
+    without = fn _ -> {:ok, envelope(%{"model" => "m", "context_window" => 8_000})} end
+
+    assert {:ok, %{options: []}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:no-opts", run: without)
+
+    {broken, runs} =
+      counted(fn _ ->
+        {:ok,
+         envelope(%{
+           "model" => "m",
+           "context_window" => 8_000,
+           "options" => [%{"name" => "effort", "kind" => "enum"}]
+         })}
+      end)
+
+    assert {:error, {:invalid_options, "m", "options[0].values"}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:bad-opts", run: broken)
+
+    # The refusal is not cached: the next reading runs the catalyst again.
+    assert {:error, {:invalid_options, "m", _}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:bad-opts", run: broken)
+
+    assert runs.() == 2
   end
 
   test "an input ceiling never stands in for the window: a model with one and no window refuses",

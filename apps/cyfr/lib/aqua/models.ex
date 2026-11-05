@@ -6,8 +6,9 @@ defmodule Aqua.Models do
   The assistant's model work over `model/chat@1` (`Prima.Model`, which
   names the contract and reads its envelope):
 
-    * `capabilities/5` — what one model can do, read from its catalyst's
-      `describe` and cached under the key the reading ran with;
+    * `capabilities/5` — what one model can do and the options it lets a
+      caller set, read from its catalyst's `describe` and cached under the
+      key the reading ran with;
     * `catalogue/1` — the listing the console's pickers show, every
       installed catalyst that speaks the contract asked for its models;
     * `model_status/2` — whether each agent's model has a key the
@@ -65,8 +66,11 @@ defmodule Aqua.Models do
   model; `{:model_refused, error}` for any other typed refusal (the
   error map, e.g. `secret_denied` when describing the model takes a key
   that is not bound); `{:no_context_window, model}` when the answer
-  names no window; `{:describe_failed, reason}` when the run failed,
-  `reason` `:timeout` when it outran `:timeout`. No error is cached.
+  names no window; `{:invalid_options, model, member}` when the options
+  it declares break the contract (`Prima.Model.options/1`; an answer
+  without options declares none); `{:describe_failed, reason}` when the
+  run failed, `reason` `:timeout` when it outran `:timeout`. No error is
+  cached.
   """
   @spec capabilities(Context.t(), String.t(), String.t(), String.t() | nil, keyword()) ::
           {:ok, Prima.Model.capabilities()} | {:error, term()}
@@ -107,7 +111,8 @@ defmodule Aqua.Models do
   defp describe_model(model, run) do
     with {:ok, result} <- ran(run.(%{"operation" => "describe", "params" => %{"model" => model}})),
          {:ok, described} <- described(Prima.Model.decode_envelope(result), model),
-         {:ok, window} <- window(described, model) do
+         {:ok, window} <- window(described, model),
+         {:ok, options} <- options(described, model) do
       {:ok,
        %{
          context_window: window,
@@ -116,8 +121,16 @@ defmodule Aqua.Models do
          provider_tools: list_of_strings(described["provider_tools"]),
          media_types: list_of_strings(described["media_types"]),
          streaming: described["streaming"] == true,
-         default_max_tokens: positive(get_in(described, ["defaults", "max_tokens"]))
+         default_max_tokens: positive(get_in(described, ["defaults", "max_tokens"])),
+         options: options
        }}
+    end
+  end
+
+  defp options(described, model) do
+    case Prima.Model.options(described) do
+      {:ok, options} -> {:ok, options}
+      {:error, {:invalid, member}} -> {:error, {:invalid_options, model, member}}
     end
   end
 

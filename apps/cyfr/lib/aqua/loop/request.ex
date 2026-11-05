@@ -280,10 +280,24 @@ defmodule Aqua.Loop.Request do
   The request: `model`, `system`, `messages`, `tools`, `provider_tools`
   and `max_tokens`. `opts`: `:model`, `:system`, `:tools`, `:messages`,
   `:capabilities` (for the output ceiling and the provider tools),
-  `:native_search?` (the policy grants `native_search: auto`).
+  `:native_search?` (the policy grants `native_search: auto`),
+  `:max_tokens`. Any other option raises: a request's `session` and
+  `options` (`Prima.Model`) are not built yet, and one given here is
+  refused rather than sent or dropped.
   """
   @spec build(keyword()) :: map()
   def build(opts) do
+    opts =
+      Keyword.validate!(opts, [
+        :model,
+        :system,
+        :messages,
+        :tools,
+        :capabilities,
+        :native_search?,
+        :max_tokens
+      ])
+
     caps = Keyword.get(opts, :capabilities, %{})
     max_tokens = max_tokens(caps, Keyword.get(opts, :max_tokens))
 
