@@ -25,8 +25,11 @@ signed as CYFR signs them (harness.py):
   row's hosts alike.
 - An open whose hosts resolve to no address is refused `hosts_unresolved`
   and starts nothing.
-- The guard's health check proves the uid's rules too: one changed behind
-  the guard's back fails it, and restored passes it again.
+- The guard's health check proves what the guard admitted, not a snapshot
+  of what is installed: a uid's rule changed behind the guard's back fails
+  it and restored passes it again, and a uid's chain removed behind its
+  back still fails it after a legitimate change to another uid (an admit
+  and a clear), until the guard admits the uid again.
 - Retiring a listed program's process clears its uid at the guard; losing
   the keeper leaves every uid it admitted refused every public address.
 
@@ -239,12 +242,38 @@ def main():
                "an open whose hosts resolve to no address is refused hosts_unresolved", [status, answer])
         expect(c.program(NOWHERE)["sessions"] == 0, "and nothing of it runs")
 
-        # ————— the guard's check proves the uid's rules —————
+        # ————— the guard's check proves what it admitted —————
         expect(stack.guard_exec("cyfr-guard check").returncode == 0, "the guard is healthy with the uids' rules in")
+
+        # A legitimate change after a uid's chain was removed behind the
+        # guard's back records nothing of that removal: the kept uid's jump
+        # and chains go, then the guard admits and clears a spare pool uid
+        # no program runs under, and the check still fails.
+        spare = POOL_LAST
+        kept_addresses = [m.group(1) for tool in ("iptables", "ip6tables") for rule in uid_chain(stack, kept_uid, tool) or []
+                          for m in [re.search(r"-d (\S+)/\d+ -j RETURN", rule)] if m]
+        expect(kept_addresses, f"uid {kept_uid}'s chains return the addresses its keeper admitted", kept_addresses)
+        tampered = stack.guard_exec(" && ".join(
+            f"{tool} -D CYFR_GUARD_HOSTS -m owner --uid-owner {kept_uid} -j CYFR_GUARD_U{kept_uid} && "
+            f"{tool} -F CYFR_GUARD_U{kept_uid} && {tool} -X CYFR_GUARD_U{kept_uid}" for tool in ("iptables", "ip6tables")))
+        expect(tampered.returncode == 0, f"uid {kept_uid}'s jump and chains are removed behind the guard's back",
+               tampered.stderr)
+        changed = stack.guard_exec(f"cyfr-guard admit {spare} 203.0.113.9 && cyfr-guard clear {spare}")
+        expect(changed.returncode == 0, f"the guard admits and clears uid {spare}", changed.stdout + changed.stderr)
+        stale = stack.guard_exec("cyfr-guard check")
+        expect(stale.returncode != 0 and "not the ones the guard admitted" in stale.stderr,
+               f"the check still fails for uid {kept_uid}'s missing chain after another uid's changes",
+               stale.stdout + stale.stderr)
+        readmitted = stack.guard_exec(f"cyfr-guard admit {kept_uid} {' '.join(kept_addresses)} && cyfr-guard check")
+        expect(readmitted.returncode == 0, f"uid {kept_uid} admitted again as it was, the check passes",
+               readmitted.stdout + readmitted.stderr)
+
+        # One rule of an admission changed behind the guard's back fails the
+        # check; restored where it stood, the check passes.
         returned = next(rule for rule in chain if rule.endswith("-j RETURN"))
         address = re.search(r"-d (\S+) -j RETURN", returned).group(1)
         removed = stack.guard_exec(f"iptables -D CYFR_GUARD_U{listed_uid} -d {address} -j RETURN && cyfr-guard check")
-        expect(removed.returncode != 0 and "not the ones recorded" in removed.stderr,
+        expect(removed.returncode != 0 and f"uid {listed_uid}'s admission is not installed" in removed.stderr,
                "a uid's rule changed behind the guard's back fails its health check", removed.stdout + removed.stderr)
         restored = stack.guard_exec(f"iptables -I CYFR_GUARD_U{listed_uid} 1 -d {address} -j RETURN && cyfr-guard check")
         expect(restored.returncode == 0, "the rule restored where it stood, the check passes again",

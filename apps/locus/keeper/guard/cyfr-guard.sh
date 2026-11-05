@@ -9,9 +9,10 @@
 # container's network namespace (`network_mode: service:`), so every packet
 # a build or a backend sends is judged by the rules installed here, in the
 # OUTPUT chain of both address families, and the island starts only once
-# this container is healthy: healthy means the ready file is present and
-# the rules it records are still installed, and the ready file is written
-# only once every rule is in. A rule that cannot be installed ends the
+# this container is healthy: healthy means the ready file is present, the
+# static rules it records are still installed and every admission the
+# guard holds is too, and the ready file is written only once every rule
+# is in. A rule that cannot be installed ends the
 # guard with an error naming it, before the ready file exists, so the
 # island never starts behind a guard that holds fewer rules than these.
 #
@@ -79,14 +80,20 @@
 #                      the control's: give the spawn uid exactly these
 #                      addresses under rule 5, replacing what it held (no
 #                      address refuses it every public one), and record the
-#                      rules; a change that fails leaves the uid refused
-#                      every public address and exits 1
+#                      admission (ADMITTED/<uid>, its addresses one a line);
+#                      a change that fails leaves the uid refused every
+#                      public address, recorded so, and exits 1
 #   cyfr-guard clear <uid>
 #                      the control's: return the uid to the island's rule
+#                      and drop its record
 #   cyfr-guard check   the health probe: the ready file is present, both
-#                      rule tables can be read, the rules they hold are the
-#                      ones the file records, and every spawn range has its
-#                      rules among them
+#                      rule tables can be read, their static rules are the
+#                      ones the file recorded when they were installed (no
+#                      admission records them again), every spawn range has
+#                      its rules among them, and every admission the guard
+#                      recorded is installed exactly, its uid's chain and
+#                      the jump to it in both families, with no chain or
+#                      jump of a uid it did not admit
 #   cyfr-guard rules   print the rules it would install, one command a line,
 #                      and install none
 #
@@ -103,18 +110,20 @@
 #                                the island takes no list and no uid is
 #                                ever admitted
 #
-# The rules change only under the lock on LOCK, which `admit` and `clear`
-# take whole and `check` takes shared, and every change records the rules
-# again in the ready file before it answers, so the probe always compares
-# the rules installed with the ones the guard last recorded.
+# The admissions change only under the lock on LOCK, which `admit` and
+# `clear` take whole and `check` takes shared, and each change writes its
+# record before it answers, so the probe compares the chains installed
+# with what the guard admitted, never with a snapshot a later change took.
 set -eu
 
 READY_DIR=/run/cyfr-guard
 READY="$READY_DIR/ready"
 LOCK="$READY_DIR/lock"
+ADMITTED="$READY_DIR/admitted"
 CHAIN=CYFR_GUARD
 HOSTS=CYFR_GUARD_HOSTS
 KNOWN=CYFR_GUARD_KNOWN
+UID_CHAIN=CYFR_GUARD_U
 # Set by `cyfr-guard rules` alone, never from the environment.
 PRINT_ONLY=
 
@@ -280,17 +289,19 @@ ff00::/8
 
 log() { echo "[cyfr-guard] $*" >&2; }
 
-# The filter tables of both families, digested: what the ready file
-# records and the health probe compares. Each table is read on its own and
-# a read that fails answers nothing, with status 1, so neither the ready
-# file nor the probe ever holds a digest of a table that could not be
-# read. The dump's timestamps and the packet counters it prints beside each
-# built-in chain's policy are left out, since both move while the rules
-# stand.
+# The static rules of both families' filter tables, digested: what the
+# ready file records and the health probe compares. Each table is read on
+# its own and a read that fails answers nothing, with status 1, so neither
+# the ready file nor the probe ever holds a digest of a table that could
+# not be read. The dump's timestamps and the packet counters it prints
+# beside each built-in chain's policy are left out, since both move while
+# the rules stand, and so are the admissions (the uids' chains and the
+# jumps to them), which `admissions_installed` holds to the guard's record.
 digest() {
   v4="$(iptables-save -t filter)" || { log "error: iptables-save failed"; return 1; }
   v6="$(ip6tables-save -t filter)" || { log "error: ip6tables-save failed"; return 1; }
-  sum="$(printf '%s\n%s\n' "$v4" "$v6" | sed -E -e '/^#/d' -e 's/ \[[0-9]+:[0-9]+\]$//' | sha256sum | cut -d' ' -f1)"
+  sum="$(printf '%s\n%s\n' "$v4" "$v6" | sed -E -e '/^#/d' -e 's/ \[[0-9]+:[0-9]+\]$//' \
+    -e "/^:${UID_CHAIN}[0-9]+ /d" -e "/^-A ${UID_CHAIN}[0-9]+ /d" -e "/^-A ${HOSTS} /d" | sha256sum | cut -d' ' -f1)"
   case "$sum" in
     ????????????????????????????????????????????????????????????????) printf '%s\n' "$sum" ;;
     *) log "error: no digest of the rules"; return 1 ;;
@@ -313,6 +324,46 @@ check() {
       *"--uid-owner $range -m addrtype --dst-type LOCAL -j REJECT"*) ;;
       *) log "not ready: no rule holds spawns $range off this namespace"; exit 1 ;;
     esac
+  done
+  admissions_installed || exit 1
+}
+
+# The uids the guard admitted, one a line, from their records.
+admitted_uids() {
+  [ -d "$ADMITTED" ] || return 0
+  for record in "$ADMITTED"/*; do
+    [ -f "$record" ] && basename "$record"
+  done | sort -n
+}
+
+# Whether every admission the guard recorded is installed exactly, in both
+# families, and no uid it did not admit has a chain or a jump: answers 1,
+# naming what differs, otherwise.
+admissions_installed() {
+  uids="$(admitted_uids)"
+  for family in 4 6; do
+    if [ "$family" = 4 ]; then tool=iptables reject=icmp-admin-prohibited bits=32
+    else tool=ip6tables reject=icmp6-adm-prohibited bits=128; fi
+    listed="$("$tool" -w 5 -S)" || { log "not ready: the $tool rules could not be read"; return 1; }
+    chains="$(printf '%s\n' "$listed" | sed -n "s/^-N \(${UID_CHAIN}[0-9][0-9]*\)$/\1/p" | sort)"
+    want_chains="$(for uid in $uids; do echo "$UID_CHAIN$uid"; done | sort)"
+    [ "$chains" = "$want_chains" ] || { log "not ready: the $tool chains of uids are not the ones the guard admitted"; return 1; }
+    jumps="$(printf '%s\n' "$listed" | grep "^-A $HOSTS " | sort)"
+    want_jumps="$(for uid in $uids; do echo "-A $HOSTS -m owner --uid-owner $uid -j $UID_CHAIN$uid"; done | sort)"
+    [ "$jumps" = "$want_jumps" ] || { log "not ready: the $tool jumps to uids' chains are not the ones the guard admitted"; return 1; }
+    for uid in $uids; do
+      chain="$UID_CHAIN$uid"
+      want="$(echo "-N $chain"
+        while IFS= read -r address; do
+          case "$address" in
+            *:*) [ "$family" = 6 ] && echo "-A $chain -d $address/$bits -j RETURN" ;;
+            ?*) [ "$family" = 4 ] && echo "-A $chain -d $address/$bits -j RETURN" ;;
+          esac
+        done < "$ADMITTED/$uid"
+        echo "-A $chain -j REJECT --reject-with $reject")"
+      have="$(printf '%s\n' "$listed" | grep -e "^-N $chain\$" -e "^-A $chain ")"
+      [ "$have" = "$want" ] || { log "not ready: uid $uid's admission is not installed as the guard admitted it ($tool)"; return 1; }
+    done
   done
 }
 
@@ -485,7 +536,8 @@ add_rules() {
   v6 -A "$CHAIN" -j "$HOSTS"
 }
 
-# Records the rules now installed in the ready file, as install_rules does.
+# Records the static rules now installed in the ready file, once, as the
+# rules are installed.
 record() {
   recorded="$(digest)" || { log "error: a rule table could not be read, so the guard is not ready"; return 1; }
   printf '%s\n' "$recorded" > "$READY.tmp"
@@ -557,14 +609,29 @@ admit() {
   flock 9
   # shellcheck disable=SC2086 # one argument per address
   if uid_chain 4 "$uid" $v4list && uid_chain 6 "$uid" $v6list; then
-    record || exit 1
+    remember "$uid" "$@" || exit 1
     log "uid $uid admitted to$v4list$v6list"
     return 0
   fi
-  uid_chain 4 "$uid" || log "error: uid $uid could not be refused every IPv4 address"
-  uid_chain 6 "$uid" || log "error: uid $uid could not be refused every IPv6 address"
-  record || true
+  refuse_all "$uid"
   exit 1
+}
+
+# Leaves uid refused every public address, recorded so.
+refuse_all() {
+  uid_chain 4 "$1" || log "error: uid $1 could not be refused every IPv4 address"
+  uid_chain 6 "$1" || log "error: uid $1 could not be refused every IPv6 address"
+  remember "$1" || true
+}
+
+# Records uid's admission: the addresses it may reach, one a line, none
+# for a uid refused every public address.
+remember() {
+  uid="$1"
+  shift
+  mkdir -p "$ADMITTED" || { log "error: the admissions' record could not be made"; return 1; }
+  printf '%s\n' "$@" | sed '/^$/d' > "$ADMITTED/$uid.tmp" && mv "$ADMITTED/$uid.tmp" "$ADMITTED/$uid" \
+    || { log "error: uid $uid's admission could not be recorded"; return 1; }
 }
 
 clear_uid() {
@@ -576,19 +643,18 @@ clear_uid() {
   uid_unchain 4 "$uid" || failed=1
   uid_unchain 6 "$uid" || failed=1
   if [ -n "$failed" ]; then
-    uid_chain 4 "$uid" || true
-    uid_chain 6 "$uid" || true
-    record || true
+    refuse_all "$uid"
     exit 1
   fi
-  record || exit 1
+  rm -f "$ADMITTED/$uid" || { log "error: uid $uid's record could not be dropped"; exit 1; }
   log "uid $uid cleared"
 }
 
 install_rules() {
   rm -f "$READY"
+  rm -rf "$ADMITTED"
   add_rules
-  mkdir -p "$READY_DIR"
+  mkdir -p "$READY_DIR" "$ADMITTED"
   record || exit 1
   log "ready: every rule installed for spawns $(printf '%s' "$ranges" | tr '\n' ' ' | sed 's/ $//')"
 }
