@@ -63,6 +63,12 @@ impl<S: Sink> Deltas<S> {
         }
     }
 
+    /// Let go of the text held and not yet sent.
+    pub fn discard(&mut self) {
+        self.held_since = None;
+        self.text.clear();
+    }
+
     pub fn flush(&mut self) {
         self.held_since = None;
         if !self.text.is_empty() {

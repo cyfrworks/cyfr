@@ -803,15 +803,21 @@ fn turn<P: Pipe, S: Sink>(
                     deltas.text(&delta);
                     streamed = true;
                 }
-                Event::Assistant { text: whole, error: typed } => {
+                // An errored message is the harness's own words about its
+                // account or its provider (a sign-in prompt among them):
+                // read first, and none of its text, streamed or whole, is
+                // passed on.
+                Event::Assistant { error: Some(typed), .. } => {
+                    deltas.discard();
+                    streamed = false;
+                    error = Some(typed);
+                }
+                Event::Assistant { text: whole, error: None } => {
                     if !streamed {
                         deltas.text(&whole);
                     }
                     streamed = false;
                     text.push_str(&whole);
-                    if typed.is_some() {
-                        error = typed;
-                    }
                 }
                 Event::Init { model: Some(running) } => model = running,
                 Event::Ask { request_id, tool, input, tool_use_id } => {
@@ -1125,6 +1131,29 @@ mod tests {
         let refusal = chat(&mut pipe, &mut deltas, &req, ID.into(), far()).unwrap_err();
         assert_eq!(refusal.kind, "authentication");
         assert!(!refusal.message.contains("API key"));
+        // The run's stream closes with the refusal, as lib.rs closes it:
+        // the errored message's text never reaches it, nor a delta of it.
+        stream::error(&mut deltas, refusal.kind, &refusal.message);
+        let events = deltas.into_sink();
+        assert!(!events.iter().any(|e| e.to_string().contains("API key")), "{events:?}");
+        assert!(!events.iter().any(|e| e["type"] == "text.delta"), "{events:?}");
+        assert_eq!(events.last().unwrap()["error"]["type"], "authentication");
+    }
+
+    #[test]
+    fn deltas_streamed_ahead_of_an_errored_message_are_let_go() {
+        let turn = vec![
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Please run /login"}},"parent_tool_use_id":null}"#.into(),
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Please run /login"}]},"parent_tool_use_id":null,"error":"authentication_failed"}"#.into(),
+            r#"{"type":"result","subtype":"success","is_error":true}"#.into(),
+        ];
+        let mut pipe = Scripted::new(harness_answers(turn));
+        let mut deltas = Deltas::new(Vec::new());
+        let req = request(json!({"model": "haiku", "messages": [{"role": "user", "content": "hi"}]}));
+        let refusal = chat(&mut pipe, &mut deltas, &req, ID.into(), far()).unwrap_err();
+        stream::error(&mut deltas, refusal.kind, &refusal.message);
+        let events = deltas.into_sink();
+        assert!(!events.iter().any(|e| e.to_string().contains("/login")), "{events:?}");
     }
 
     #[test]
