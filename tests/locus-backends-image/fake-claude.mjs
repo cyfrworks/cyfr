@@ -20,7 +20,8 @@
 //   `read` makes an `assistant` `tool_use` of `mcp__cyfr__files`, asks
 //   `can_use_tool` and holds until the driver's `control_response`, calls
 //   the stub with the allow's `updatedInput` and replies with what it
-//   answered; `first message` replies with the session's first message,
+//   answered (an allow carrying the result `RATE-LIMIT` ends the turn with
+//   the provider's rate limit instead, as the harness reports one); `first message` replies with the session's first message,
 //   from its folder. Each reply streams as `stream_event` text deltas, then
 //   the whole `assistant` message, then `result` with usage.
 // - It writes a canary to its stderr and to its folder, which the driver
@@ -162,6 +163,12 @@ async function turn(message) {
     out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'Reading it.' }, { type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: 'mcp__cyfr__files', input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });
     const { decision, toolUseId } = await ask('mcp__cyfr__files', input);
     let said;
+    if (decision.behavior === 'allow' && decision.updatedInput.result === 'RATE-LIMIT') {
+      // The provider's rate limit, as the harness reports it: the turn ends.
+      out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'API Error: rate limited' }] }, parent_tool_use_id: null, session_id: sessionId, error: 'rate_limit' });
+      out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: rate limited', session_id: sessionId });
+      return;
+    }
     if (decision.behavior === 'allow') {
       const called = await servers.get('cyfr').request('tools/call', { name: 'files', arguments: decision.updatedInput, _meta: { 'claudecode/toolUseId': toolUseId } });
       const result = called.result;

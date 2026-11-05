@@ -36,6 +36,9 @@ CYFR's tools as the harness starts an MCP server.
   chat, carrying the `tool_result`, attaches to that session and sends only
   the ask's allow, with the result in its input, and the harness's call
   through `cyfr-stub` returns that result, which its reply quotes.
+- A rate limit the harness reports after an allow answers provider_error
+  (which the loop does not retry) naming it, closes nothing, and the next
+  message goes on in the session with no allow sent again.
 - An interruption: when the read after the next ask's allow is answered
   unavailable, the chat answers provider_error (which the loop does not
   retry) saying the session was interrupted, closes the session with its
@@ -328,6 +331,37 @@ def main():
                "the ask is allowed with CYFR's result in its input", allow)
         expect(data["stop_reason"] == "end_turn" and data["content"] == [{"type": "text", "text": f"The file says: {body}"}],
                "the harness's call through cyfr-stub returned the result, which its reply quotes", data)
+
+        # ————— a rate limit the harness reports after the allow —————
+        output, events = run_catalyst(rt, plane, wasm, "chat", {**ask, "messages": history[:-1] + [
+            {"role": "user", "content": "read notes.txt once more"}]}, "a chat that calls the tool once more")
+        answers.append((output, events))
+        limited = output["data"]["content"][-1]
+        expect(output["data"]["stop_reason"] == "tool_call", "the harness asks for CYFR's tool once more", output)
+        bridge.calls.clear()
+        rate_limited = {**ask, "messages": history + [
+            {"role": "assistant", "content": output["data"]["content"]},
+            {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": limited["id"], "name": "files",
+                                          "content": "RATE-LIMIT"}]},
+        ]}
+        output, events = run_catalyst(rt, plane, wasm, "chat", rate_limited, "a chat whose turn the harness ends rate limited")
+        answers.append((output, events))
+        expect(output["status"] == 502 and output["error"]["type"] == "provider_error"
+               and "rate limit" in output["error"]["message"] and "again later" in output["error"]["message"],
+               "a rate limit the harness reports after the allow answers provider_error, which the loop does not "
+               "retry, naming the reason", output)
+        expect(not any(op == "close" for op, _ in bridge.calls) and len(fakes(backends)) == 1,
+               "the session is left as the harness left it: nothing closed", bridge.calls)
+        bridge.calls.clear()
+        output, events = run_catalyst(rt, plane, wasm, "chat", {**ask, "messages": [
+            {"role": "user", "content": "what was my first message?"}]}, "the next message after the rate limit")
+        answers.append((output, events))
+        sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
+        expect(output["status"] == 200 and output["data"]["stop_reason"] == "end_turn"
+               and not any(line.get("type") == "control_response"
+                           and line["response"]["request_id"] == limited["provider_data"]["request_id"] for line in sent)
+               and not any(op == "close" for op, _ in bridge.calls),
+               "the next message goes on in the same session, and no allow is sent again", [output, sent])
 
         # ————— a pipe that fails after the allow interrupts the session —————
         output, events = run_catalyst(rt, plane, wasm, "chat", {**ask, "messages": history[:-1] + [

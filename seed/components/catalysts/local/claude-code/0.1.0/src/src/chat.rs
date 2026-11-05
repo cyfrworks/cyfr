@@ -159,14 +159,20 @@ pub fn pipe_refusal(code: &str) -> Refusal {
     Refusal { code: Some(code.to_string()), ..refusal }
 }
 
+/// The refusal for an error the harness ended its turn with. It answers
+/// only after this run sent something, so it is never a type the loop
+/// retries: the same request made again would send the same message or
+/// allow twice. A rate limit or an overload is `provider_error` naming the
+/// harness's reason; the turn ended on the harness's side, the session is
+/// left as it is, and the next message goes on in it.
 fn harness_error(kind: &'static str) -> Refusal {
-    let (status, message) = match kind {
-        "authentication" => (401, "Claude Code is not signed in, or its account cannot serve this; sign in again from the Programs page."),
-        "rate_limited" => (429, "Claude Code's account is past its rate limit."),
-        "overloaded" => (529, "Claude Code's provider is overloaded."),
-        "invalid_request" => (400, "Claude Code refused the request."),
-        "unknown_model" => (404, "Claude Code does not know the model."),
-        _ => (502, "Claude Code failed to finish its turn."),
+    let (status, kind, message) = match kind {
+        "authentication" => (401, kind, "Claude Code is not signed in, or its account cannot serve this; sign in again from the Programs page."),
+        "rate_limited" => (502, "provider_error", "Claude Code's account is past its rate limit, and its turn ended; send the message again later."),
+        "overloaded" => (502, "provider_error", "Claude Code's provider is overloaded, and its turn ended; send the message again later."),
+        "invalid_request" => (400, kind, "Claude Code refused the request."),
+        "unknown_model" => (404, kind, "Claude Code does not know the model."),
+        _ => (502, "provider_error", "Claude Code failed to finish its turn."),
     };
     Refusal::new(status, kind, message)
 }
@@ -1192,6 +1198,37 @@ mod tests {
         let mut deltas = Deltas::new(Vec::new());
         let refusal = chat(&mut pipe, &mut deltas, &continuation(&session), "unused".into(), soon()).unwrap_err();
         resumes_after_interruption(&mut pipe, refusal, &session);
+    }
+
+    #[test]
+    fn a_rate_limit_the_harness_reports_after_the_allow_is_not_retried_and_nothing_is_sent_twice() {
+        let limited = vec![
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"API Error: rate limited"}]},"parent_tool_use_id":null,"error":"rate_limit"}"#.to_string(),
+            r#"{"type":"result","subtype":"success","is_error":true,"result":"API Error: rate limited"}"#.into(),
+        ];
+        let mut limited = Some(limited);
+        let mut pipe = Scripted::new(move |line| {
+            let v: Value = serde_json::from_str(line).unwrap();
+            match v["type"].as_str() {
+                Some("control_request") => vec![json!({"type": "control_response", "response": {"subtype": "success",
+                    "request_id": v["request_id"], "response": {"errors": {}}}}).to_string()],
+                Some("control_response") => limited.take().unwrap_or_default(),
+                Some("user") => vec![result_line()],
+                _ => Vec::new(),
+            }
+        });
+        pipe.resumed = true;
+        let session = started(&Flags::default());
+        let mut deltas = Deltas::new(Vec::new());
+        let refusal = chat(&mut pipe, &mut deltas, &continuation(&session), "unused".into(), soon()).unwrap_err();
+        assert_eq!(refusal.kind, "provider_error", "never a type the loop retries: {refusal:?}");
+        assert!(refusal.message.contains("rate limit") && refusal.message.contains("again later"), "{}", refusal.message);
+        assert!(!pipe.log.iter().any(|l| l.starts_with("close")), "the session is left as the harness left it: {:?}", pipe.log);
+
+        let next = request(json!({"model": "default", "session": session, "messages": [{"role": "user", "content": "go on"}]}));
+        assert!(chat(&mut pipe, &mut deltas, &next, "unused".into(), soon()).is_ok());
+        assert_eq!(sent_count(&pipe, "\"behavior\":\"allow\""), 1, "no allow sent again: {:?}", pipe.sent);
+        assert!(!pipe.log.iter().any(|l| l.starts_with("close")));
     }
 
     #[test]
