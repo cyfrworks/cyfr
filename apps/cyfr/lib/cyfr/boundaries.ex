@@ -850,13 +850,13 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web.ex"
       ],
       into: "Opus",
-      allow: ~w(Opus),
+      allow: ~w(Opus Opus.Programs),
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
-          "relays a sign-in's terminal through the programs controller under the " <>
-          "context that started it (`Opus.Programs.sign_in_attach/3`), and " <>
-          "names none of its internals. " <>
+          "relays a sign-in's terminal through the programs controller's facade " <>
+          "(`Opus.Programs.sign_in_attach/3`, `sign_in_send/3`, `sign_in_close/2`) " <>
+          "under the context that started it, and names none of either's internals. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>

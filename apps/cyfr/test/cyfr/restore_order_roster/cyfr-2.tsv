@@ -39,7 +39,6 @@ apps/cyfr/test/compendium/scaffold_test.exs	2	pending
 apps/cyfr/test/compendium/tincture_test.exs	1	pending
 apps/cyfr/test/compendium/tincture_validator_test.exs	1	pending
 apps/cyfr/test/emissary/auth_chain_integration_test.exs	1	pending
-apps/cyfr/test/emissary/external/backends_test.exs	4	pending
 apps/cyfr/test/emissary/external/proxy_test.exs	4	pending
 apps/cyfr/test/emissary/external/reconciler_test.exs	1	pending
 apps/cyfr/test/emissary/external/server_test.exs	3	pending

@@ -473,7 +473,7 @@ defmodule Opus.ProgramsTest do
       assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
       before = claim_row(ctx, row)
 
-      :persistent_term.put(@generation_key, 2)
+      Prima.Test.Env.put_persistent_term(@generation_key, 2)
       tick(controller)
 
       assert_receive {:control, "hello", %{"g" => 2}, %{generation: 2}}, 2_000
@@ -560,8 +560,7 @@ defmodule Opus.ProgramsTest do
     end
 
     test "a vault change raises the epoch after releasing in memory", %{ctx: ctx, row: row} do
-      Application.put_env(:cyfr, :external_server_reconciler_enabled, true)
-      on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
       start_supervised!(Emissary.External.Reconciler)
 
       {:ok, entry} = Arca.VaultStorage.get_by_name(Sanctum.Context.actor(ctx), "gh-token")
@@ -575,8 +574,7 @@ defmodule Opus.ProgramsTest do
     end
 
     test "an archived athanor", %{ctx: ctx, row: row} do
-      Application.put_env(:cyfr, :external_server_reconciler_enabled, true)
-      on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
       start_supervised!(Emissary.External.Reconciler)
 
       Cyfr.Bus.broadcast_global(
@@ -667,7 +665,7 @@ defmodule Opus.ProgramsTest do
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
 
-    :persistent_term.put(@generation_key, 2)
+    Prima.Test.Env.put_persistent_term(@generation_key, 2)
     tick(controller)
 
     assert_receive {:control, "hello", %{"g" => 2}, %{generation: 2}}, 2_000
@@ -1385,8 +1383,7 @@ defmodule Opus.ProgramsTest do
 
     test "a deleted login entry's home is retired, and so is every one of an archived athanor",
          %{ctx: ctx, entry: entry} do
-      Application.put_env(:cyfr, :external_server_reconciler_enabled, true)
-      on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
       start_supervised!(Emissary.External.Reconciler)
 
       Cyfr.Bus.broadcast_global(
