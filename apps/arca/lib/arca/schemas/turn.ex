@@ -13,9 +13,10 @@ defmodule Arca.Schemas.Turn do
   node — a running turn whose holder is not local belongs to a peer, not to
   recovery.
 
-  `sent_by` is who opened the turn, `"person"` or an agent name, and
-  `asking_thread_id` with `request_id` the reply address of a turn a crew
-  request opened. Nothing writes them yet.
+  `sent_by` is who opened the turn, `"person"` or an agent name, the one
+  a later send must match to steer it; `asking_thread_id` with
+  `request_id` is the reply address of a turn a crew request opened, and
+  the turn's terminal write records its reply for that address.
   """
 
   use Ecto.Schema
@@ -36,7 +37,6 @@ defmodule Arca.Schemas.Turn do
     field :error, :string
     field :accepted_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
-    field :parent_turn_id, :string
     field :message_id, :string
     field :root_execution_id, :string
     field :attempt, :string
@@ -58,7 +58,7 @@ defmodule Arca.Schemas.Turn do
     field :paused_reason, :string
     field :launch_step_id, :string
     # How the turn was started (`Prima.Origin`'s wire spelling), written
-    # when it is accepted; a clone carries its parent's.
+    # when it is accepted.
     field :origin, :string
     field :sources, :string, default: "[]"
   end

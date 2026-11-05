@@ -23,6 +23,11 @@ defmodule Aqua.Loop.Planner do
   What is measured is `readable/1`, not every row given: the projection
   keeps what a compaction already summarized, and only the request drops
   it, so measuring the whole of it would compact again every turn.
+
+  A request to a crew member still waiting on its reply is pinned
+  (`pinned?/1`): like the newest rows `prune/1`
+  keeps whole, it is never summarized away, and a compaction's boundary
+  leaves it in the readable rows until its reply lands.
   """
 
   @margin_tokens 8_000
@@ -267,8 +272,9 @@ defmodule Aqua.Loop.Planner do
 
   @doc """
   The rows the model reads: everything from the latest compaction's
-  boundary, with that compaction standing in for what came before it. The
-  summary row is kept, because it is sent and it costs tokens.
+  boundary, with that compaction standing in for what came before it,
+  and the pinned requests before it. The summary row is kept, because it
+  is sent and it costs tokens.
   """
   @spec readable([Aqua.Tape.row()]) :: [Aqua.Tape.row()]
   def readable(rows) do
@@ -278,9 +284,19 @@ defmodule Aqua.Loop.Planner do
 
       latest ->
         first = first_kept_seq(latest)
-        [latest | Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))]
+
+        [latest | Enum.filter(rows, &(&1.seq < first and pinned?(&1)))] ++
+          Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))
     end
   end
+
+  @doc """
+  Whether a row is pinned in the projection: a request to a crew member
+  still waiting on its reply.
+  """
+  @spec pinned?(Aqua.Tape.row()) :: boolean()
+  def pinned?(row),
+    do: row[:kind] == "text" and is_binary(row[:addressee]) and row[:status] == "pending"
 
   defp first_kept_seq(%{payload: json}) when is_binary(json) do
     case Jason.decode(json) do

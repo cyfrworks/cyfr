@@ -48,6 +48,7 @@ defmodule Cyfr.Bus do
     CallerInvalidated,
     Components,
     Confirmation,
+    CrewPending,
     Execution,
     ExecutionEvent,
     FeedPublished,
@@ -425,6 +426,18 @@ defmodule Cyfr.Bus do
           "subscriber acts, so a peer's delivery writes nothing twice"
     },
     %{
+      key: :crew_deliveries,
+      scope: :global,
+      struct: CrewPending,
+      match: {:exact, "aqua:crew_deliveries"},
+      template: "aqua:crew_deliveries",
+      producers: ["Aqua.Tape"],
+      consumers: ["Aqua.Crew"],
+      reason:
+        "a committed crew record heard on every member; it only wakes the consumer, " <>
+          "whose job claim lets one member deliver it"
+    },
+    %{
       key: :settings_changed,
       scope: :global,
       struct: SettingsChanged,
@@ -721,6 +734,10 @@ defmodule Cyfr.Bus do
   @doc "A committed schedule completion (`Cyfr.Bus.ScheduleCompleted`)."
   @spec schedule_completions() :: String.t()
   def schedule_completions, do: "cyfr:schedule_completions"
+
+  @doc "A committed crew record (`Cyfr.Bus.CrewPending`)."
+  @spec crew_deliveries() :: String.t()
+  def crew_deliveries, do: "aqua:crew_deliveries"
 
   @doc """
   A committed platform-settings write, or a member's observed store

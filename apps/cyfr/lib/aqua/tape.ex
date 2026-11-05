@@ -51,9 +51,13 @@ defmodule Aqua.Tape do
 
   @doc """
   Accept a message atomically with the work it opens. `attrs`:
-  `:message` (`:author`, `:content`, `:payload`, optional `:id`,
-  `:client_id`), and one of `:turn` (`%{agent, requested_by,
-  model, options}`) or `:steer_turn_id`, or neither for room content.
+  `:message` (`:author`, `:sent_by`, `:content`, `:payload`, optional
+  `:id`, `:client_id`, `:addressee`, `:reply_to`, `:outcome`, `:status`),
+  and one of `:turn` (`%{agent, requested_by, model, options}`) or
+  `:steer_turn_id`, or neither for room content; and the crew members of
+  `TurnStorage.accept_message/3` as they stand: `:reply_address`,
+  `:request`, `:answers`, `:receipt`. A request recorded wakes the crew's
+  delivery consumer (`Cyfr.Bus.crew_deliveries/0`) after the commit.
 
   A turn opened here is recorded with the origin `ctx` carries
   (`Prima.Origin`), which the admission entry that built the context
@@ -76,7 +80,8 @@ defmodule Aqua.Tape do
 
     case TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread_id, attrs) do
       {:ok, %{message: message, turn: turn}} ->
-        broadcast(ctx, thread_id, :message, message)
+        broadcast(ctx, thread_id, row_kind(message), message)
+        if Map.get(attrs, :request), do: wake_crew(ctx)
         {:ok, %{message: message, turn: turn, replayed: false}}
 
       {:error, reason} when reason in [:duplicate_client_id, :message_id_reused] ->
@@ -131,7 +136,10 @@ defmodule Aqua.Tape do
   def accepted(%Context{} = ctx, thread_id, client_id) when is_binary(client_id),
     do: TurnStorage.accepted(Sanctum.Context.actor(ctx), thread_id, client_id)
 
-  @doc "Append one row outside a turn's step machinery (a system note, a compaction, an aborted mark)."
+  @doc """
+  Append one row outside a turn's step machinery (a system note, a
+  compaction, an aborted mark). `attrs` name `:sent_by` as every row does.
+  """
   @spec append(Context.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
   def append(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
     with {:ok, row} <- Threads.append(Sanctum.Context.actor(ctx), thread_id, attrs) do
@@ -275,7 +283,9 @@ defmodule Aqua.Tape do
   End a turn: the one terminal transaction (`TurnStorage.finish/4`),
   under the grant its root's attempt stores. A completion needs that
   grant to stand; a turn that fails, is cancelled or ends uncertain
-  retires work and needs only the stored stamp.
+  retires work and needs only the stored stamp. A turn with a reply
+  address recorded its reply there, and the crew's delivery consumer is
+  woken after the commit.
   """
   @spec finish(Context.t(), turn(), String.t(), map()) :: {:ok, turn()} | {:error, term()}
   def finish(%Context{} = ctx, turn, status, attrs \\ %{}) do
@@ -289,6 +299,7 @@ defmodule Aqua.Tape do
              |> standing(if(status == "completed", do: :current, else: :retiring))
            ) do
       broadcast(ctx, turn.thread_id, :turn_finished, nil)
+      if finished.asking_thread_id, do: wake_crew(ctx)
       {:ok, finished}
     end
   end
@@ -513,6 +524,7 @@ defmodule Aqua.Tape do
         approval_id: approval.id
       })
 
+      if turn.asking_thread_id, do: wake_crew(ctx)
       {:ok, opened}
     end
   end
@@ -557,40 +569,28 @@ defmodule Aqua.Tape do
   end
 
   # ---------------------------------------------------------------------------
-  # Clones
+  # The crew
   # ---------------------------------------------------------------------------
 
-  @doc "Open a clone turn under a running parent; the task row is broadcast."
-  @spec open_clone_turn(Context.t(), turn(), map()) ::
-          {:ok, %{turn: turn(), step: step(), task: row()}} | {:error, term()}
-  def open_clone_turn(%Context{} = ctx, parent, attrs) when is_map(attrs) do
-    with {:ok, %{task: task} = opened} <-
-           TurnStorage.open_clone_turn(
-             Sanctum.Context.actor(ctx),
-             parent.id,
-             Map.put_new(attrs, :fence, parent.fence)
-           ) do
-      broadcast(ctx, parent.thread_id, :message, task)
-      {:ok, opened}
-    end
-  end
+  @doc "The child thread `member` works in under `room_id`, made when none stands (`Arca.ThreadStorage.crew_thread/3`)."
+  @spec crew_thread(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def crew_thread(%Context{} = ctx, room_id, member),
+    do: Threads.crew_thread(Sanctum.Context.actor(ctx), room_id, member)
 
-  @doc "The open clone turns under `turn`, oldest first."
-  @spec open_clones(Context.t(), turn()) :: {:ok, [turn()]} | {:error, term()}
-  def open_clones(%Context{} = ctx, turn),
-    do: TurnStorage.open_clones(Sanctum.Context.actor(ctx), turn.id)
+  @doc "The child threads of a room, archived ones included."
+  @spec children(Context.t(), String.t()) :: [map()] | {:error, term()}
+  def children(%Context{} = ctx, room_id),
+    do: Threads.children(Sanctum.Context.actor(ctx), room_id)
 
-  @doc "End a clone turn."
-  @spec close_clone_turn(Context.t(), turn(), String.t(), map()) ::
-          {:ok, turn()} | {:error, term()}
-  def close_clone_turn(%Context{} = ctx, clone, status, attrs \\ %{}),
-    do:
-      TurnStorage.close_clone_turn(
-        Sanctum.Context.actor(ctx),
-        clone.id,
-        status,
-        Map.put_new(attrs, :fence, clone.fence)
-      )
+  @doc "Retire a child thread (`Arca.ThreadStorage.archive/2`)."
+  @spec archive(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def archive(%Context{} = ctx, thread_id),
+    do: Threads.archive(Sanctum.Context.actor(ctx), thread_id)
+
+  @doc "The requests of a thread still waiting on a crew member's reply, oldest first."
+  @spec pending_requests(Context.t(), String.t()) :: [row()] | {:error, term()}
+  def pending_requests(%Context{} = ctx, thread_id),
+    do: Threads.pending_requests(Sanctum.Context.actor(ctx), thread_id: thread_id)
 
   # ---------------------------------------------------------------------------
   # Reads
@@ -685,6 +685,31 @@ defmodule Aqua.Tape do
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
+
+  # What a row is to a viewer: a request to a crew member, a reply or a
+  # notice answering one, or any other row.
+  defp row_kind(%{reply_to: reply_to, outcome: "needs_you"}) when is_binary(reply_to),
+    do: :notice
+
+  defp row_kind(%{reply_to: reply_to}) when is_binary(reply_to), do: :reply
+
+  defp row_kind(%{addressee: addressee, status: status})
+       when is_binary(addressee) and status in ["pending", "answered"],
+       do: :request
+
+  defp row_kind(_row), do: :message
+
+  # A wake-up for the delivery consumer, after the commit that recorded
+  # its work; a lost one is delivered by its tick.
+  defp wake_crew(ctx) do
+    _ =
+      Cyfr.Bus.broadcast_global(
+        Cyfr.Bus.crew_deliveries(),
+        Cyfr.Bus.CrewPending.new(Sanctum.Context.actor(ctx))
+      )
+
+    :ok
+  end
 
   # Durable rows reach viewers only after their transaction committed. A
   # row is plain data already (`Arca.TurnStorage` answers maps); a

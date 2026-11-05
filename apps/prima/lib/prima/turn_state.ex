@@ -20,7 +20,7 @@ defmodule Prima.TurnState do
   @statuses ["accepted", "running", "paused", "completed", "failed", "cancelled", "uncertain"]
   @open ["accepted", "running", "paused"]
   @terminal ["completed", "failed", "cancelled", "uncertain"]
-  @step_kinds ["model", "tool", "ui", "approval", "clone", "launch"]
+  @step_kinds ["model", "tool", "ui", "approval", "launch"]
   @outcomes ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
   @decisions ["approved", "declined", "expired", "error"]
   @invalidated "invalidated"

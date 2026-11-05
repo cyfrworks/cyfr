@@ -18,14 +18,20 @@ defmodule Aqua.Runner do
   ## Admission
 
   A send is held to, in order: the text and its size; the sender's
-  standing; the addressing (`Aqua.Runner.Admission`); then, for a turn,
+  standing; the addressing (`Aqua.Runner.Admission`), which makes it a
+  turn, a request to a crew member, or room content; then, for a turn,
   the athanor being filled (`:not_provisioned`, nothing written), the
   engine being up (`:execution_unavailable`), and the queue having room
   (`:busy`). Only then is the message accepted, atomically with the
-  turn — or attached to the running turn as a steer when its own sender
-  writes again under the origin the turn records, or queued behind it as
-  a turn of its own. A `client_id` the thread already accepted answers
-  the same identity.
+  turn — or attached to the running or paused turn as a steer when its
+  user, sender, agent and origin are the turn's (`steer?/2`), or queued
+  behind it as a turn of its own. A request is accepted with the outbox
+  record that delivers it (`Aqua.Crew`), and room content opens nothing.
+  A `client_id` the thread already accepted answers the same identity.
+
+  A send the crew's delivery consumer makes carries its receipt, which
+  lands in the acceptance's own transaction, and a reply the requests it
+  answers (`Aqua.Tape.accept/3`).
 
   ## Turns
 
@@ -112,7 +118,7 @@ defmodule Aqua.Runner do
           seq: non_neg_integer(),
           turn_id: String.t() | nil,
           replayed: boolean(),
-          admitted: :turn | :steer
+          admitted: :turn | :steer | :request | :content
         }
 
   # ---------------------------------------------------------------------------
@@ -256,6 +262,13 @@ defmodule Aqua.Runner do
   `:agent` (a pick; an `@name` in the text wins), `:room` (the
   room the sender had open, `%{"athanor_id", "thread_id", ...}`),
   `:agents` (the roster, read here when absent).
+
+  The crew's delivery consumer (`Aqua.Crew`) sends with `:sent_by` (the
+  sender's name; `"person"` when absent), `:request` (the request row a
+  delivery carries into its member's child thread) with `:crew`
+  (`%{tools, options}` for the turn it opens), `:reply` (`%{request,
+  outcome, answers}` for a member's reply), `:payload` (merged into the
+  row's) and `:receipt` (its receipt, written in the acceptance).
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
@@ -504,6 +517,8 @@ defmodule Aqua.Runner do
           id: thread.id,
           athanor_id: athanor_id,
           ctx: ctx,
+          # What admission reads of the thread: its kind, room and member.
+          thread: Map.take(thread, [:id, :kind, :parent_id, :agent]),
           # The running loop: its turn, task, sender and agent.
           live: nil,
           # A turn paused on a card or around a launch, waiting here.
@@ -545,12 +560,18 @@ defmodule Aqua.Runner do
   defp handle_owned_call({:send, ctx, text, opts}, _from, state) do
     opts = Keyword.put(opts, :last, state.agent)
 
-    case Admission.check(ctx, state.athanor_id, text, opts) do
+    case Admission.check(ctx, state.athanor_id, state.thread, text, opts) do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
 
       {:ok, {:turn, name}, text} ->
         admit_turn(state, ctx, name, text, opts)
+
+      {:ok, {:request, member}, text} ->
+        accept_request(state, ctx, member, text, opts)
+
+      {:ok, :content, text} ->
+        accept_content(state, ctx, text, opts)
     end
   end
 
@@ -644,7 +665,7 @@ defmodule Aqua.Runner do
       opened_before?(state, ctx, opts) ->
         accept_turn(state, ctx, name, text, opts)
 
-      steer?(state, ctx, name) ->
+      steer?(state, ctx, name, opts) ->
         steer(state, ctx, name, text, opts)
 
       Sanctum.Provisioning.ready(ctx) != :ok ->
@@ -677,42 +698,65 @@ defmodule Aqua.Runner do
     end
   end
 
-  # The turn's own sender writing again to the same agent, under the
-  # origin the turn's row records, steers it — while it runs, or while it
-  # is paused (the row waits on the tape and is drained on resume). A line
-  # to another agent, from another member, or admitted under another
-  # origin is a turn of its own, judged by its own grant: an API key's
-  # `programmatic` line never acts inside an `interactive` turn.
-  defp steer?(
-         %{live: %{user_id: user_id, agent: name} = live},
-         %Context{user_id: user_id} = ctx,
-         name
-       ),
-       do: same_origin?(ctx, live)
+  defp steer?(%{live: %{} = live}, ctx, name, opts), do: steer?(live, send_of(ctx, name, opts))
 
-  defp steer?(
-         %{live: nil, paused: %{user_id: user_id, agent: name} = paused},
-         %Context{user_id: user_id} = ctx,
-         name
-       ),
-       do: same_origin?(ctx, paused)
+  defp steer?(%{live: nil, paused: %{} = paused}, ctx, name, opts),
+    do: steer?(paused, send_of(ctx, name, opts))
 
-  defp steer?(_state, _ctx, _name), do: false
+  defp steer?(_state, _ctx, _name, _opts), do: false
+
+  defp send_of(%Context{} = ctx, name, opts) do
+    %{
+      user_id: ctx.user_id,
+      sent_by: Keyword.get(opts, :sent_by, Admission.person()),
+      agent: name,
+      origin: ctx.origin
+    }
+  end
+
+  @doc """
+  Whether a send steers `turn`, the running or paused turn as the runner
+  holds it from its row: only when the send's user, sender (`sent_by`),
+  agent and origin all equal the turn's (`turns.requested_by`,
+  `turns.sent_by`, `turns.agent`, `turns.origin`), so a paused or
+  recovered turn steers by the same rule as a running one. Any other send
+  is a turn of its own, judged by its own grant: an API key's
+  `programmatic` line never acts inside an `interactive` turn, and a
+  request from the soul never joins one a person opened.
+  """
+  @spec steer?(map(), %{
+          user_id: String.t(),
+          sent_by: String.t(),
+          agent: String.t(),
+          origin: atom()
+        }) ::
+          boolean()
+  def steer?(
+        %{user_id: user_id, sent_by: sent_by, agent: agent} = turn,
+        %{user_id: user_id, sent_by: sent_by, agent: agent, origin: origin}
+      )
+      when is_binary(sent_by),
+      do: same_origin?(origin, turn)
+
+  def steer?(_turn, _send), do: false
 
   # Whether a line's admission origin is the one the turn's row records
   # (its wire spelling). A context with no origin drives nothing.
-  defp same_origin?(%Context{origin: origin}, %{origin: stored}) when is_binary(stored),
+  defp same_origin?(%Context{origin: origin}, turn), do: same_origin?(origin, turn)
+
+  defp same_origin?(origin, %{origin: stored}) when is_binary(stored),
     do: Prima.Origin.origin?(origin) and Prima.Origin.to_wire(origin) == stored
 
-  defp same_origin?(_ctx, _turn), do: false
+  defp same_origin?(_origin, _turn), do: false
 
   defp busy?(%{live: nil, paused: nil, held: held}) when map_size(held) == 0, do: false
   defp busy?(_state), do: true
 
   defp steer(state, ctx, name, text, opts) do
     %{turn_id: turn_id} = state.live || state.paused
+    attrs = crew_attrs(%{message: message(ctx, text, opts, name), steer_turn_id: turn_id}, opts)
 
-    case Tape.accept(ctx, state.id, %{message: message(ctx, text, opts), steer_turn_id: turn_id}) do
+    case Tape.accept(ctx, state.id, attrs) do
       {:ok, %{message: row, replayed: replayed}} ->
         {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state, ctx))}
 
@@ -746,18 +790,22 @@ defmodule Aqua.Runner do
   defp acknowledge(state, _ctx), do: state
 
   defp entry_of(paused),
-    do: paused |> Map.take([:turn_id, :user_id, :agent, :origin]) |> Map.put(:ctx, nil)
+    do: paused |> Map.take([:turn_id, :user_id, :sent_by, :agent, :origin]) |> Map.put(:ctx, nil)
 
   defp accept_turn(state, ctx, name, text, opts) do
-    attrs = %{
-      message: message(ctx, text, opts),
-      turn: %{
-        agent: name,
-        requested_by: ctx.user_id,
-        model: Keyword.get(opts, :model),
-        options: options(name, opts)
-      }
-    }
+    attrs =
+      crew_attrs(
+        %{
+          message: message(ctx, text, opts, name),
+          turn: %{
+            agent: name,
+            requested_by: ctx.user_id,
+            model: Keyword.get(opts, :model),
+            options: options(name, opts)
+          }
+        },
+        opts
+      )
 
     case Tape.accept(ctx, state.id, attrs) do
       {:ok, %{message: row, turn: turn, replayed: true}} ->
@@ -767,6 +815,7 @@ defmodule Aqua.Runner do
         entry = %{
           turn_id: turn.id,
           user_id: ctx.user_id,
+          sent_by: turn.sent_by,
           ctx: ctx,
           agent: name,
           # What a continuation of this turn resumes under: the origin its
@@ -792,24 +841,113 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp message(ctx, text, opts) do
+  # A request to a crew member: the row with the outbox record that
+  # delivers it, and no turn here.
+  defp accept_request(state, ctx, member, text, opts) do
+    attrs =
+      crew_attrs(
+        %{
+          message: Map.put(message(ctx, text, opts, member), :status, "pending"),
+          request: %{
+            member: member,
+            task: text,
+            tools: nil,
+            options: %{},
+            person_id: ctx.user_id,
+            origin: ctx.origin
+          }
+        },
+        opts
+      )
+
+    case Tape.accept(ctx, state.id, attrs) do
+      {:ok, %{message: row, replayed: replayed}} ->
+        {:reply, {:ok, result(row, nil, replayed, :request)}, touch(state)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  # Room content: a reply addressed to the person, which wakes nothing.
+  defp accept_content(state, ctx, text, opts) do
+    attrs = crew_attrs(%{message: message(ctx, text, opts, Admission.person())}, opts)
+
+    case Tape.accept(ctx, state.id, attrs) do
+      {:ok, %{message: row, replayed: replayed}} ->
+        {:reply, {:ok, result(row, nil, replayed, :content)}, touch(state)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  # A person's line is theirs; anything an agent sends is the agent's.
+  defp message(ctx, text, opts, addressee) do
+    sent_by = Keyword.get(opts, :sent_by, Admission.person())
+    reply = Keyword.get(opts, :reply)
+
     %{
-      author: ctx.user_id,
+      author: if(sent_by == Admission.person(), do: ctx.user_id, else: Prima.Author.agent()),
+      sent_by: sent_by,
+      addressee: addressee,
+      reply_to: reply && reply.request.id,
+      outcome: reply && reply.outcome,
       content: text,
       id: Keyword.get(opts, :id),
       client_id: Keyword.get(opts, :client_id),
-      payload:
-        case Keyword.get(opts, :attachments, []) do
-          [] -> nil
-          refs -> %{"attachments" => refs}
-        end
+      payload: payload(opts)
     }
   end
 
+  defp payload(opts) do
+    attachments =
+      case Keyword.get(opts, :attachments, []) do
+        [] -> %{}
+        refs -> %{"attachments" => refs}
+      end
+
+    case Map.merge(attachments, Keyword.get(opts, :payload, %{})) do
+      empty when map_size(empty) == 0 -> nil
+      payload -> payload
+    end
+  end
+
+  # What a crew delivery adds to an acceptance: the reply address of the
+  # turn a delivered request opens, the requests a reply answers, and the
+  # consumer's receipt.
+  defp crew_attrs(attrs, opts) do
+    attrs
+    |> put_present(:receipt, Keyword.get(opts, :receipt))
+    |> put_present(:answers, opts |> Keyword.get(:reply) |> answers())
+    |> put_present(:reply_address, opts |> Keyword.get(:request) |> reply_address())
+  end
+
+  defp answers(%{answers: [_ | _] = ids}), do: ids
+  defp answers(_reply), do: nil
+
+  defp reply_address(%{id: request_id, thread_id: room}),
+    do: %{asking_thread_id: room, request_id: request_id}
+
+  defp reply_address(_request), do: nil
+
+  defp put_present(attrs, _key, nil), do: attrs
+  defp put_present(attrs, key, value), do: Map.put(attrs, key, value)
+
+  # The turn's options: its agent, the room the sender had open, and for a
+  # delivered request the tools it narrows the job to and the brain
+  # options it sets.
   defp options(name, opts) do
-    %{"agent" => name, "room" => Keyword.get(opts, :room)}
+    crew = Keyword.get(opts, :crew, %{})
+
+    %{
+      "agent" => name,
+      "room" => Keyword.get(opts, :room),
+      "tools" => Map.get(crew, :tools),
+      "brain_options" => Map.get(crew, :options)
+    }
     |> Aqua.AgentConfig.stringify_deep()
-    |> Map.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.reject(fn {_k, v} -> is_nil(v) or v == %{} end)
   end
 
   defp result(row, turn_id, replayed?, admitted) do
@@ -1052,6 +1190,7 @@ defmodule Aqua.Runner do
           | paused: %{
               turn_id: live.turn_id,
               user_id: live.user_id,
+              sent_by: live.sent_by,
               agent: live.agent,
               origin: live.origin,
               reason: reason,
@@ -1091,6 +1230,7 @@ defmodule Aqua.Runner do
         paused = %{
           turn_id: live.turn_id,
           user_id: live.user_id,
+          sent_by: live.sent_by,
           agent: live.agent,
           origin: turn.origin,
           reason: pause_reason(turn),
@@ -1367,6 +1507,7 @@ defmodule Aqua.Runner do
         entry = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
+          sent_by: turn.sent_by,
           ctx: nil,
           agent: turn.agent,
           origin: turn.origin
@@ -1378,6 +1519,7 @@ defmodule Aqua.Runner do
         paused = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
+          sent_by: turn.sent_by,
           agent: turn.agent,
           origin: turn.origin,
           reason: pause_reason(turn),
@@ -1390,6 +1532,7 @@ defmodule Aqua.Runner do
         entry = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
+          sent_by: turn.sent_by,
           ctx: nil,
           agent: turn.agent,
           origin: turn.origin
@@ -1403,6 +1546,7 @@ defmodule Aqua.Runner do
         entry = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
+          sent_by: turn.sent_by,
           ctx: nil,
           agent: turn.agent,
           origin: turn.origin

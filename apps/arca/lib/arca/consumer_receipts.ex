@@ -117,21 +117,7 @@ defmodule Arca.ConsumerReceipts do
   def record(%Prima.Actor{athanor_id: athanor_id} = actor, %{} = claim, slot, %{} = receipt)
       when is_binary(athanor_id) and athanor_id != "" do
     Errors.with_db_rescue("Arca.ConsumerReceipts.record", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        # The claim is asked again after the lease row's lock is won: a
-        # claim that ran out while this waited on the member's lease is
-        # judged on the clock read after the wait, and writes nothing.
-        with {:ok, _held} <- Arca.JobClaims.hold(claim),
-             :ok <- Arca.ControlPlane.verify_held(slot),
-             {:ok, _still} <- Arca.JobClaims.hold(claim),
-             :ok <- put!(actor, receipt) do
-          :ok
-        else
-          lost when lost in [:taken, :lapsed] -> Arca.Repo.rollback(lost)
-          :lost -> Arca.Repo.rollback(:not_owner)
-          {:error, :receipted} -> Arca.Repo.rollback(:receipted)
-        end
-      end)
+      Arca.Repo.locking_transaction(fn -> record!(actor, claim, slot, receipt) end)
       |> case do
         {:ok, :ok} -> :ok
         {:error, lost} when lost in [:taken, :lapsed] -> lost
@@ -141,6 +127,35 @@ defmodule Arca.ConsumerReceipts do
   end
 
   def record(%Prima.Actor{}, _claim, _slot, _receipt), do: {:error, :no_athanor}
+
+  @doc """
+  `record/4` as a step of the caller's locking transaction, the one that
+  does the consumer's work: the same holds in the same order, and a
+  claim lost, a slot lost or a receipt already written rolls the whole
+  transaction back with `:taken`, `:lapsed`, `:not_owner` or
+  `:receipted`.
+  """
+  @spec record!(Prima.Actor.t(), Arca.JobClaims.held(), map() | :none, receipt()) :: :ok
+  # arca:db-raise-ok a step inside the consumer's transaction; a refusal rolls it back.
+  def record!(%Prima.Actor{athanor_id: athanor_id} = actor, %{} = claim, slot, %{} = receipt)
+      when is_binary(athanor_id) and athanor_id != "" do
+    # The claim is asked again after the lease row's lock is won: a
+    # claim that ran out while this waited on the member's lease is
+    # judged on the clock read after the wait, and writes nothing.
+    with {:ok, _held} <- Arca.JobClaims.hold(claim),
+         :ok <- Arca.ControlPlane.verify_held(slot),
+         {:ok, _still} <- Arca.JobClaims.hold(claim),
+         :ok <- put!(actor, receipt) do
+      :ok
+    else
+      lost when lost in [:taken, :lapsed] -> Arca.Repo.rollback(lost)
+      :lost -> Arca.Repo.rollback(:not_owner)
+      {:error, :receipted} -> Arca.Repo.rollback(:receipted)
+    end
+  end
+
+  def record!(%Prima.Actor{}, _claim, _slot, _receipt),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ConsumerReceipts.record!/4")
 
   @doc """
   The outcome `consumer` recorded for `source` in the actor's athanor, or

@@ -57,7 +57,11 @@ defmodule Arca.ThreadStorage do
   # Threads
   # ---------------------------------------------------------------------------
 
-  @doc "The athanor's threads, most recently active first."
+  @doc """
+  The athanor's threads, most recently active first. `opts`: `:limit`
+  (200 by default) and `:kind` (`"own"` or `"crew"`; every kind when
+  absent).
+  """
   @spec list(Prima.Actor.t(), keyword()) :: [map()] | {:error, :no_athanor | :database_error}
   def list(actor, opts \\ [])
 
@@ -66,10 +70,19 @@ defmodule Arca.ThreadStorage do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.list", fn ->
       limit = Keyword.get(opts, :limit, 200)
 
-      from(c in Thread,
-        order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
-        limit: ^limit
-      )
+      query =
+        from(c in Thread,
+          order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
+          limit: ^limit
+        )
+
+      query =
+        case Keyword.get(opts, :kind) do
+          nil -> query
+          kind -> from(c in query, where: c.kind == ^kind)
+        end
+
+      query
       |> QueryHelpers.where_tenant(actor)
       |> Repo.all()
     end)
@@ -151,6 +164,9 @@ defmodule Arca.ThreadStorage do
            |> Thread.changeset(%{
              id: attrs[:id] || Prima.UUID7.generate_id("thread"),
              athanor_id: actor.athanor_id,
+             kind: attrs[:kind] || "own",
+             parent_id: attrs[:parent_id],
+             agent: attrs[:agent],
              title: attrs[:title] || @default_title,
              created_by: actor.user_id || @system_author
            })
@@ -197,6 +213,140 @@ defmodule Arca.ThreadStorage do
   end
 
   def update(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
+
+  # ---------------------------------------------------------------------------
+  # Child threads
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  The child thread `member` works in under the room `room_id`: the one
+  that stands (not archived), made when there is none, titled by the
+  member and counted against the athanor's thread ceiling as `create/2`
+  counts. One locking transaction takes the athanor's row before it
+  looks, so two callers never make two. `{:error, :not_found}` when the
+  room is not a thread of the athanor, `{:error, :not_a_room}` when it is
+  itself a child thread.
+  """
+  @spec crew_thread(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, map()}
+          | {:error,
+             :no_athanor
+             | :not_found
+             | :not_a_room
+             | {:limit_reached, :max_threads_per_athanor, pos_integer()}
+             | {:cap_unverifiable, :max_threads_per_athanor}
+             | :database_error}
+  def crew_thread(%Prima.Actor{athanor_id: athanor_id} = actor, room_id, member)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(room_id) and
+             is_binary(member) and member != "" do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.crew_thread", fn ->
+      Repo.locking_transaction(fn ->
+        lock_athanor(actor)
+
+        with {:ok, %Thread{kind: "own"} = room} <- thread_row(actor, room_id),
+             nil <- standing_child(actor, room.id, member) do
+          insert_thread(actor, %{
+            kind: "crew",
+            parent_id: room.id,
+            agent: member,
+            title: member
+          })
+        else
+          {:ok, %Thread{}} -> Repo.rollback(:not_a_room)
+          %Thread{} = child -> child
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def crew_thread(%Prima.Actor{}, _room_id, _member), do: {:error, :no_athanor}
+
+  defp standing_child(actor, room_id, member) do
+    from(c in Thread,
+      where: c.kind == "crew" and c.parent_id == ^room_id and c.agent == ^member,
+      where: is_nil(c.archived_at),
+      limit: 1
+    )
+    |> QueryHelpers.where_tenant(actor)
+    |> Repo.one()
+  end
+
+  @doc "The child threads of the room `room_id`, archived ones included, oldest first."
+  @spec children(Prima.Actor.t(), String.t()) :: [map()] | {:error, :no_athanor | :database_error}
+  def children(%Prima.Actor{athanor_id: athanor_id} = actor, room_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(room_id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.children", fn ->
+      from(c in Thread,
+        where: c.kind == "crew" and c.parent_id == ^room_id,
+        order_by: [asc: c.inserted_at, asc: c.id]
+      )
+      |> QueryHelpers.where_tenant(actor)
+      |> Repo.all()
+    end)
+    |> Arca.Data.project()
+  end
+
+  def children(%Prima.Actor{}, _room_id), do: {:error, :no_athanor}
+
+  @doc """
+  Retire the child thread `id`: from now on it admits nothing, and the
+  next request to its member opens a new one. Archiving one already
+  archived answers it unchanged; a thread of the person's own is
+  `{:error, :not_crew}`.
+  """
+  @spec archive(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :not_crew | :database_error}
+  def archive(%Prima.Actor{athanor_id: athanor_id} = actor, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.archive", fn ->
+      case thread_row(actor, id) do
+        {:ok, %Thread{kind: "crew", archived_at: nil} = thread} ->
+          thread |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update()
+
+        {:ok, %Thread{kind: "crew"} = thread} ->
+          {:ok, thread}
+
+        {:ok, %Thread{}} ->
+          {:error, :not_crew}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def archive(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  @doc """
+  The requests still waiting on a crew member's reply, oldest first: of
+  the thread `opts[:thread_id]` names, else of the whole athanor.
+  """
+  @spec pending_requests(Prima.Actor.t(), keyword()) ::
+          [map()] | {:error, :no_athanor | :database_error}
+  def pending_requests(%Prima.Actor{athanor_id: athanor_id} = actor, opts \\ [])
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.pending_requests", fn ->
+      query =
+        from(m in Message,
+          where: not is_nil(m.addressee) and m.status == "pending" and m.kind == "text",
+          order_by: [asc: m.inserted_at, asc: m.seq]
+        )
+
+      query =
+        case Keyword.get(opts, :thread_id) do
+          nil -> query
+          thread_id -> from(m in query, where: m.thread_id == ^thread_id)
+        end
+
+      query
+      |> QueryHelpers.where_tenant(actor)
+      |> Repo.all()
+    end)
+    |> Arca.Data.project()
+  end
 
   # ---------------------------------------------------------------------------
   # The thread claim
@@ -654,8 +804,9 @@ defmodule Arca.ThreadStorage do
   @doc """
   Append one message to a thread.
 
-  `attrs`: `:author` (required), `:kind` (default `"text"`), `:content`,
-  `:payload` (a map, stored as JSON), `:status`, `:execution_id`. The next
+  `attrs`: `:author` and `:sent_by` (required), `:kind` (default
+  `"text"`), `:content`, `:payload` (a map, stored as JSON), `:status`,
+  `:execution_id`. The next
   `seq` is taken inside a transaction; a concurrent appender losing the race
   on the unique index retries. The first user text message titles a
   thread that still carries the default title.
@@ -704,25 +855,7 @@ defmodule Arca.ThreadStorage do
         )
       ) + 1
 
-    msg =
-      Repo.insert!(
-        Message.changeset(%Message{}, %{
-          id: attrs[:id] || Prima.UUID7.generate_id("msg"),
-          thread_id: thread.id,
-          athanor_id: actor.athanor_id,
-          seq: seq,
-          author: attrs[:author],
-          kind: attrs[:kind] || "text",
-          content: attrs[:content] || "",
-          payload: encode_json(attrs[:payload]),
-          status: attrs[:status],
-          execution_id: attrs[:execution_id],
-          turn_id: attrs[:turn_id],
-          approval_id: attrs[:approval_id],
-          client_id: attrs[:client_id],
-          inserted_at: now
-        })
-      )
+    msg = Repo.insert!(Message.changeset(%Message{}, row(actor, thread, attrs, seq, now)))
 
     thread
     |> Thread.changeset(%{last_message_at: now, title: title_after(thread, msg)})
@@ -771,23 +904,7 @@ defmodule Arca.ThreadStorage do
             )
           ) + 1
 
-        changeset =
-          Message.changeset(%Message{}, %{
-            id: attrs[:id] || Prima.UUID7.generate_id("msg"),
-            thread_id: thread.id,
-            athanor_id: actor.athanor_id,
-            seq: seq,
-            author: attrs[:author],
-            kind: attrs[:kind] || "text",
-            content: attrs[:content] || "",
-            payload: encode_json(attrs[:payload]),
-            status: attrs[:status],
-            execution_id: attrs[:execution_id],
-            turn_id: attrs[:turn_id],
-            approval_id: attrs[:approval_id],
-            client_id: attrs[:client_id],
-            inserted_at: now
-          })
+        changeset = Message.changeset(%Message{}, row(actor, thread, attrs, seq, now))
 
         case Repo.insert(changeset) do
           {:ok, msg} ->
@@ -822,6 +939,31 @@ defmodule Arca.ThreadStorage do
             {:error, changeset}
         end
     end
+  end
+
+  # The columns of one message row. `sent_by` is required on every row
+  # (`Arca.Schemas.Message`): a writer that names none is refused.
+  defp row(actor, thread, attrs, seq, now) do
+    %{
+      id: attrs[:id] || Prima.UUID7.generate_id("msg"),
+      thread_id: thread.id,
+      athanor_id: actor.athanor_id,
+      seq: seq,
+      author: attrs[:author],
+      sent_by: attrs[:sent_by],
+      addressee: attrs[:addressee],
+      reply_to: attrs[:reply_to],
+      outcome: attrs[:outcome],
+      kind: attrs[:kind] || "text",
+      content: attrs[:content] || "",
+      payload: encode_json(attrs[:payload]),
+      status: attrs[:status],
+      execution_id: attrs[:execution_id],
+      turn_id: attrs[:turn_id],
+      approval_id: attrs[:approval_id],
+      client_id: attrs[:client_id],
+      inserted_at: now
+    }
   end
 
   # A thread is named by its first user text; later renames are the

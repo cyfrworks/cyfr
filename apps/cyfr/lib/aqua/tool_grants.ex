@@ -105,10 +105,9 @@ defmodule Aqua.ToolGrants do
   Three classes of key. A catalogued tool action — the virtual catalog's
   or the registry's — is decided exactly: a `tool.*` glob is expanded to
   the tool's actions and the glob itself dropped, so no glob can answer
-  for a pair a person decided. A role delegation key (`name`, `name.*`)
-  and the `native_search` gate are not tool actions; they pass through
-  untouched. A key for a tool nobody catalogues passes through too — the
-  guest offers no such tool.
+  for a pair a person decided. The `native_search` gate is not a tool
+  action; it passes through untouched. A key for a tool nobody
+  catalogues passes through too — the guest offers no such tool.
 
   Then the decisions: an allow keeps its bounds on its pair, as
   `{:auto, {:bounded, bounds}}`, unless the author already made the pair
@@ -176,7 +175,7 @@ defmodule Aqua.ToolGrants do
       case String.split(key, ".", parts: 2) do
         [tool, "*"] ->
           case Aqua.Kinds.actions_of(tool) do
-            # A role's glob, or a tool nobody catalogues: not a tool action.
+            # A tool nobody catalogues: not a tool action.
             [] ->
               Map.put(acc, key, authored_decision(value))
 
@@ -261,10 +260,9 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  `for_thread/3` for every agent of a roster at once — one read of
-  the thread's rows, split by agent name — so a turn composes the soul
-  AND each role it may clone into from the standing decisions made for
-  that agent, with no read per role. Fails closed like it.
+  `for_thread/3` for several agents at once — one read of the thread's
+  rows, split by agent name, with no read per agent. Fails closed like
+  it.
   """
   @spec for_agents(Context.t(), String.t(), [String.t()]) ::
           {:ok, %{String.t() => [grant()]}} | {:error, unavailable()}

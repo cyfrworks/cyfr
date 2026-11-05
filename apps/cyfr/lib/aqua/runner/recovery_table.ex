@@ -64,7 +64,7 @@ defmodule Aqua.Runner.RecoveryTable do
     with {:ok, turns} <- Tape.open_turns(ctx, thread_id) do
       {:ok,
        turns
-       |> Enum.filter(&(is_nil(&1.parent_turn_id) and wanted?.(&1)))
+       |> Enum.filter(wanted?)
        |> Enum.flat_map(&List.wrap(action(ctx, &1)))}
     end
   end
