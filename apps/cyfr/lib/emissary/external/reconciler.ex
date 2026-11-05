@@ -52,9 +52,13 @@ defmodule Emissary.External.Reconciler do
   and a store that cannot answer retires nothing.
 
   A kept stdio row runs its sessions in the home of the login entry it
-  names (`login_entry_id`), and a sign-in runs in one: a change to that
-  entry stops the rows that mount it as a change to a referenced
-  credential does, and ends its sign-ins (`Opus.Programs.end_sign_ins/2`).
+  names (`login_entry_id`), and a sign-in and a catalyst's pipe session run
+  in one: a change to that entry stops the rows that mount it as a change
+  to a referenced credential does, and ends its sign-ins and pipe sessions
+  (`Opus.Programs.end_mounts/2`). The periodic sweep also ends every pipe
+  session held here whose login entry is no longer an active login entry
+  for its program (`Opus.Programs.mounts/0`), so a lost signal leaves one
+  running for a sweep at most.
 
   Reconcile failures are **not** swallowed: a raise or transient storage error
   emits `[:cyfr, :emissary, :external_server, :reconcile_failed]` telemetry and is
@@ -185,6 +189,9 @@ defmodule Emissary.External.Reconciler do
     # And the kept homes the box holds that no login entry holds any more.
     _ = while_held(&sweep_homes/0)
 
+    # And the pipe sessions whose login entry no longer serves.
+    _ = while_held(&sweep_mounts/0)
+
     schedule_sweep()
     {:noreply, state}
   end
@@ -251,7 +258,7 @@ defmodule Emissary.External.Reconciler do
     names = changed_names(meta)
 
     _released = Opus.Programs.release_referencing(athanor_id, names)
-    if is_binary(entry_id), do: Opus.Programs.end_sign_ins(athanor_id, entry_id)
+    if is_binary(entry_id), do: Opus.Programs.end_mounts(athanor_id, entry_id)
 
     with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       stop_affected(servers, names, athanor_id, entry_id, ctx)
@@ -336,6 +343,23 @@ defmodule Emissary.External.Reconciler do
     end
 
     :ok
+  end
+
+  # Every pipe session held here whose login entry is no longer an active
+  # login entry for its program ends, as a signal of its change would have
+  # ended it. A store that cannot answer ends nothing this sweep.
+  @doc false
+  @spec sweep_mounts() :: :ok
+  def sweep_mounts do
+    Enum.each(Opus.Programs.mounts(), fn {athanor_id, entry_id, program} ->
+      ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+
+      case Sanctum.Mount.login_entry(ctx, entry_id, program) do
+        {:ok, _entry} -> :ok
+        {:error, {:unavailable, _store}} -> :ok
+        {:error, _no_longer_serves} -> Opus.Programs.end_mounts(athanor_id, entry_id)
+      end
+    end)
   end
 
   # The revision pass, one athanor at a time. A server that is not

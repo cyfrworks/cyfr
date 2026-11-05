@@ -1521,6 +1521,137 @@ defmodule Opus.ProgramsTest do
     end
   end
 
+  describe "pipes" do
+    setup %{ctx: ctx} do
+      row = pipe_row(ctx, "claude")
+      entry = login_entry(ctx, "claude-login", "claude")
+      {:ok, row: row, entry: entry}
+    end
+
+    test "a session is the row's and the key's: opened for one attempt, attached to by the next, started again once ended",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+
+      assert {:ok, %{session: first, resumed: false}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1")
+
+      assert_receive {:session, "open",
+                      %{
+                        "mode" => "run",
+                        "home_id" => ^entry,
+                        "key" => "pipe-k1",
+                        "argv" => ["--resume", "s1"]
+                      }, _},
+                     2_000
+
+      # A repeat by the same attempt answers as the first did, though the
+      # box now attaches to the running session.
+      assert {:ok, %{session: ^first, resumed: false}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1")
+
+      assert {:ok, %{session: ^first, resumed: true}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2")
+
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", first, ["hello"])
+      assert_receive {:session, "send", %{"lines" => ["hello"], "session" => ^first}, _}, 2_000
+      Scripted.write(fake, row.id, "world")
+
+      assert {:ok, %{lines: [%{text: "world"} = line], dropped: 0, running: true}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_2", first, 0, 1_000)
+
+      # Read again by the same `after`, the same line.
+      assert {:ok, %{lines: [^line]}} = Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0)
+
+      # Only an attempt that opened the session uses it, and only in its
+      # own athanor.
+      flush_sessions()
+      assert {:error, :denied} = Programs.pipe_send(ctx.athanor_id, "att_3", first, ["x"])
+      assert {:error, :denied} = Programs.pipe_recv(ctx.athanor_id, "att_3", first, 0, 0)
+      assert {:error, :denied} = Programs.pipe_close(ctx.athanor_id, "att_3", first)
+      assert {:error, :denied} = Programs.pipe_send("ath_other", "att_1", first, ["x"])
+      refute_received {:session, _type, _message, _fields}
+
+      # Its program ends: a read says so, and the next open starts it again.
+      Scripted.end_sessions(fake, row.id)
+
+      assert {:ok, %{running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_2", first, line.seq, 0)
+
+      assert {:ok, %{session: second, resumed: false}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2")
+
+      refute second == first
+
+      # The ended session is no one's any more: no lines, not running.
+      assert {:ok, %{lines: [], dropped: 0, running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0)
+
+      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", first, ["x"])
+    end
+
+    test "a close ends the session and releases the owner; a repeat is harmless",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert_released(row, 1)
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+
+      assert {:ok, %{lines: [], running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0)
+    end
+
+    test "a session no attempt uses for the idle period ends, and its owner is released",
+         %{fake: fake, row: row, entry: entry} do
+      start_controller(fake, idle_ms: 200)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 5_000
+      assert_released(row, 1)
+    end
+
+    test "a login entry's revoke ends every session in its home, and no other",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
+      start_supervised!(Emissary.External.Reconciler)
+      start_controller(fake)
+      other = login_entry(ctx, "claude-second", "claude")
+
+      assert {:ok, %{session: mine}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert {:ok, %{session: kept}} = Programs.pipe_open(row, other, "pipe-k", [], "att_1")
+      flush_sessions()
+
+      assert {:ok, _} = Sanctum.Vault.revoke(ctx, entry)
+      assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
+      refute_received {:session, "close", %{"session" => ^kept}, _}
+
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", kept, ["still here"])
+      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", mine, ["gone"])
+    end
+
+    test "a row that is disabled stands its sessions down", %{
+      ctx: ctx,
+      fake: fake,
+      row: row,
+      entry: entry
+    } do
+      controller = start_controller(fake)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, session})
+      monitor = Process.monitor(pid)
+
+      {:ok, _} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "claude", %{enabled: false})
+
+      tick(controller)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 3_000
+
+      assert {:ok, %{lines: [], running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0)
+    end
+  end
+
   describe "status" do
     test "is nil for an owner the service runs nothing for, its entry for one it runs, and names no more owners than the service's bound",
          %{ctx: ctx, fake: fake} do

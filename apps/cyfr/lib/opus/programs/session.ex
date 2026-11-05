@@ -41,13 +41,16 @@ defmodule Opus.Programs.Session do
   Open a session of `program` for `key`: mode `:run` attaches to the key's
   running session or starts the program with `argv`; mode `:sign_in` runs
   its login command on a pseudo-terminal in the kept home `home_id`.
+  `:timeout_ms` bounds the wait for the answer (default
+  #{@open_timeout_ms}).
   """
   @spec open(grant(), %{
           required(:program) => String.t(),
           required(:key) => String.t(),
           optional(:home_id) => String.t() | nil,
           optional(:mode) => :run | :sign_in,
-          optional(:argv) => [String.t()]
+          optional(:argv) => [String.t()],
+          optional(:timeout_ms) => pos_integer()
         }) ::
           {:ok, %{session: String.t(), resumed: boolean(), pty: boolean()}}
           | {:error, refusal()}
@@ -61,7 +64,7 @@ defmodule Opus.Programs.Session do
         argv: Map.get(params, :argv, [])
       })
 
-    with {:ok, answer} <- post(grant, message, @open_timeout_ms) do
+    with {:ok, answer} <- post(grant, message, Map.get(params, :timeout_ms, @open_timeout_ms)) do
       {:ok, Map.take(answer, [:session, :resumed, :pty])}
     end
   end
@@ -80,9 +83,10 @@ defmodule Opus.Programs.Session do
   The lines past `after`, waiting up to `max_wait_ms` for one or the
   process's end; idempotent, so a lost answer is asked for again by the
   same `after`. An ended session's `exit_code` is its process's status when
-  it exited of its own accord, nil otherwise.
+  it exited of its own accord, nil otherwise. The answer is awaited for
+  the wait and `slack_ms` beyond it (default #{@slack_ms}).
   """
-  @spec recv(grant(), String.t(), non_neg_integer(), non_neg_integer()) ::
+  @spec recv(grant(), String.t(), non_neg_integer(), non_neg_integer(), pos_integer()) ::
           {:ok,
            %{
              lines: [LocusBackends.line()],
@@ -91,7 +95,7 @@ defmodule Opus.Programs.Session do
              exit_code: 0..255 | nil
            }}
           | {:error, refusal()}
-  def recv(grant, session, after_seq, max_wait_ms) do
+  def recv(grant, session, after_seq, max_wait_ms, slack_ms \\ @slack_ms) do
     max_wait_ms = min(max_wait_ms, LocusBackends.max_recv_wait_ms())
 
     message =
@@ -101,7 +105,7 @@ defmodule Opus.Programs.Session do
         max_wait_ms: max_wait_ms
       })
 
-    post(grant, message, max_wait_ms + @slack_ms)
+    post(grant, message, max_wait_ms + slack_ms)
   end
 
   @doc "End the session's process."

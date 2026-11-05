@@ -96,7 +96,8 @@ defmodule Opus.Programs.Box do
   ## Grants
 
   A holder receives a **grant** for its owner — the service's session route,
-  the owner, its generation and epoch, the service boot id and the owner key
+  the owner, its generation and epoch, the service boot id, the idle period
+  the service ends a session after, and the owner key
   (`Prima.LocusBackends.owner_key/2`) it signs its session messages with —
   as the answer to `Opus.Programs.hold/1` once the service admitted the
   sync. A re-sync the controller starts itself sends every holder
@@ -144,6 +145,7 @@ defmodule Opus.Programs.Box do
           generation: pos_integer(),
           epoch: pos_integer(),
           boot: String.t(),
+          idle_ms: pos_integer(),
           owner_key: binary()
         }
 
@@ -1628,6 +1630,7 @@ defmodule Opus.Programs.Box do
       generation: entry.generation,
       epoch: entry.epoch,
       boot: state.boot,
+      idle_ms: state.idle_ms,
       owner_key: owner_key
     }
   end
