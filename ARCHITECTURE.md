@@ -34,9 +34,9 @@ CYFR is a home for a person's work with AI, and a place to talk with other peopl
 ## 2. Layers
 
 ```
-L4  Trust island    Locus (untrusted things: the WASM runtime, builds, stdio MCP backends, perception bodies), under its keeper cyfr-locus
+L4  Trust island    Locus (untrusted things: the WASM runtime, builds, programs, perception bodies), under its keeper cyfr-locus
                     depends on Prima only; reaches L1/L2 over signed, versioned protocols
-                    runners and bodies have no network of their own; builds and backends have their service's
+                    runners and bodies have no network of their own; builds and programs have their service's
 
 L3  Surfaces        Emissary (external protocols)   Prism (the screen)   Codex (CLI)
                     adapters over Sanctum's gate and Sanctum.Caller; a surface never names another surface
@@ -100,10 +100,11 @@ The order describes dependencies, not a request's path. Only Host's composition 
 - Admission of executions, attempts and accounting, schedules and feeds.
 - The HostAPI server and listener and the WorkerAPI client.
 - Guest storage, guest egress (§5.6), the attached request (§5.5) and output masking.
+- The programs controller: what the backends service runs, its sessions and kept homes, one owner table and lease per box.
 
 ### Emissary: external application protocols
 
-- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves.
+- MCP in both directions, the HTTP API, webhooks and the OAuth callback, carrying declared operations through the gate but at the entries that admit for themselves. An external MCP server is reached over HTTP, or, for a `stdio` server, driven over a program's session.
 - Tinctures' files and data routes (§7), the device channel (§9.3), and the directory's and restore's endpoints (§9.1).
 
 ### Prism: the screen
@@ -123,6 +124,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Locus: where untrusted things run
 
 - The runtime's OS runners, with no network of their own, and the build and backend services, each signed with its own key.
+- The backends service runs programs, each a process whose lines go to and from one owner; a program's home is scratch, scrubbed at retirement, or kept, one folder per login entry under a uid of its own that no other owner is ever given and no backup carries.
 - The keeper, `cyfr-locus`, which runs every child under a uid and bounds of its own and scrubs it on release.
 - Perception bodies on a device. *Not built yet:* perception bodies.
 - Opus, Compendium and Emissary decide what runs; Locus only runs it.
@@ -203,7 +205,7 @@ A consent binds to the exact action and resources its preview showed, and a vers
 
 ### 5.5 Credentials
 
-CYFR attaches a credential to the request it is bound to, which goes once to its pinned address, and the component never holds it unless its consent names that disclosure. Each entry is bound to its destination, and material that must never leave the vault is used only through Sanctum's signing. A credential lives in one vault entry, and a share is the only way it reaches another athanor (§5.1). A shared entry is used attach-only, to its own destination, under the share's audience and caps, and only while its owner stands and the entry stands at the digest the recipient approved. Masking and log redaction are defence in depth, not the bound. *Not built yet:* Sanctum signing with a vault-held key.
+An entry has five uses: attach, dispense, disclose, mount and sign. CYFR attaches a credential to the request it is bound to, which goes once to its pinned address, and the component never holds it unless its consent names that disclosure. A login entry holds no material: its one use is to mount, running the program its destination names in the entry's kept home. Each entry is bound to its destination, and material that must never leave the vault is used only through Sanctum's signing. A credential lives in one vault entry, and a share is the only way it reaches another athanor (§5.1). A shared entry is used attach-only, to its own destination, under the share's audience and caps, and only while its owner stands and the entry stands at the digest the recipient approved. Masking and log redaction are defence in depth, not the bound. *Not built yet:* Sanctum signing with a vault-held key; a recipient's use of a shared login entry.
 
 ### 5.6 Egress
 
@@ -211,7 +213,7 @@ Guest egress is a HostAPI operation: Opus decides it under the attempt's authori
 
 ### 5.7 Isolation of untrusted processes
 
-Untrusted processes run apart from the control plane and from each other, with restricted privileges, bounded resources and full cleanup before reuse; a runner holds no route, and its traffic with the control plane is signed and versioned. *Not built yet:* perception bodies.
+Untrusted processes run apart from the control plane and from each other, with restricted privileges, bounded resources and full cleanup before reuse; a runner holds no route, and its traffic with the control plane is signed and versioned. A kept home's uid is never given to another owner: no pool holds it, and only the processes of that home's own sessions run under it. *Not built yet:* perception bodies.
 
 ### 5.8 Separate meanings
 
