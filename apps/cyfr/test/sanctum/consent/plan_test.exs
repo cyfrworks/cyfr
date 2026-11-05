@@ -301,10 +301,12 @@ defmodule Sanctum.Consent.PlanTest do
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
     end
 
-    # The guard cannot answer when it cannot read a dependency's row, and a
-    # later read that succeeds is not checked again: it refuses, never passes.
+    # The guard reads the manifests of the closure's one resolution. A
+    # resolution the store cannot answer refuses; the next one, answered,
+    # still meets the guard: a read that recovers never builds the
+    # dependency's login row.
     @tag :capture_log
-    test "is refused when the guard cannot read a dependency's row, though a later read could",
+    test "is refused when the closure's resolution cannot answer, and again once it can",
          %{ctx: ctx} do
       publish!(ctx, "plan-mount-dep", "1.0.0", %{
         "needs" => %{
@@ -322,15 +324,17 @@ defmodule Sanctum.Consent.PlanTest do
 
       ref = "reagent:local.plan-mount-app"
       counter = :atomics.new(1, [])
-      unanswered!([], counted_read: {{:get_component, "plan-mount-dep"}, 1, counter})
+      unanswered!([], counted_read: {:resolve, 1, counter})
 
       assert {:error, {:unavailable, "Components"}} = Plan.plan(ctx, %{ref: ref})
+      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
 
       :atomics.put(counter, 1, 0)
 
       assert {:error, {:unavailable, "Components"}} =
                Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
 
+      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
     end
   end

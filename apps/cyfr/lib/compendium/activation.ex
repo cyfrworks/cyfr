@@ -58,7 +58,12 @@ defmodule Compendium.Activation do
   @max_depth 10
 
   @type graph :: %{String.t() => String.t()}
-  @type t :: %{digest: String.t(), graph: graph()}
+  @typedoc """
+  A resolved closure: its `digest`, its `graph` (node key to release
+  digest) and `manifests`, each node's decoded manifest by node key, the
+  root's among them, as the walk read it to find the node's dependencies.
+  """
+  @type t :: %{digest: String.t(), graph: graph(), manifests: %{String.t() => map()}}
 
   @type error ::
           {:incomplete,
@@ -81,7 +86,8 @@ defmodule Compendium.Activation do
   @doc """
   Resolve the activation of a component row and its static closure.
 
-  Returns `{:ok, %{digest: digest, graph: graph}}` or `{:error, reason}`.
+  Returns `{:ok, %{digest: digest, graph: graph, manifests: manifests}}`
+  (`t:t/0`) or `{:error, reason}`.
   A warm root answers from `Arca.Cache` without a walk; the telemetry
   event `[:cyfr, :compendium, :activation, :resolve]` says which.
   """
@@ -100,7 +106,7 @@ defmodule Compendium.Activation do
         epoch = Arca.Cache.Epoch.current(epoch_key(ctx))
 
         case Arca.Cache.Epoch.get(key, epoch) do
-          {:ok, %{digest: _, graph: _} = activation} ->
+          {:ok, %{digest: _, graph: _, manifests: _} = activation} ->
             emit_resolve(ctx, component, true)
             {:ok, activation}
 
@@ -121,7 +127,13 @@ defmodule Compendium.Activation do
          graph = graph_from_rows(rows),
          {:ok, digest} <- hash_graph(graph) do
       emit_resolve(ctx, component, false)
-      {:ok, %{digest: digest, graph: graph}}
+
+      {:ok,
+       %{
+         digest: digest,
+         graph: graph,
+         manifests: Map.new(rows, fn {key, {_row, manifest}} -> {key, manifest} end)
+       }}
     end
   end
 
