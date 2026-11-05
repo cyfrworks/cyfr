@@ -7,10 +7,13 @@
 //
 // Client to keeper:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…}}
+//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":true}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
+//	{"v":1,"type":"home_make","id":…,"path":…,"uid":…}
+//	{"v":1,"type":"home_measure","id":…,"path":…,"uid":…}
+//	{"v":1,"type":"home_retire","id":…,"path":…,"uid":…}
 //
 // Keeper to client:
 //
@@ -19,6 +22,9 @@
 //	{"v":1,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory_exceeded":…}
 //	{"v":1,"type":"released","spawn_id":…}
 //	{"v":1,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":1,"type":"home_made","id":…}
+//	{"v":1,"type":"home_measured","id":…,"bytes":…}
+//	{"v":1,"type":"home_retired","id":…}
 //
 // `exited` is sent once, when a spawn's leader process is reaped. `released`
 // is sent once, when the spawn's uid has been retired, whether retirement
@@ -66,6 +72,20 @@
 // descriptor it inherited is its only way out. It holds no capability in
 // any of the five sets and runs with no_new_privs.
 //
+// A spawn's `home_mode` is HomeScratch, today's home scrubbed at
+// retirement, or HomeKept, a home that outlives the spawn: absent reads as
+// HomeScratch. A kept spawn names its home's clean absolute `home_path`
+// and the home's own `home_uid`, and may bound it by `home_max_bytes`;
+// those three are refused without HomeKept. A spawn's `pty` asks for a
+// pseudo-terminal; absent reads as false. The `home_make`, `home_measure`
+// and `home_retire` requests name a kept home by `path` and `uid`.
+//
+// The keeper validates all of these and acts on none of them yet: a home
+// request, and a spawn whose `home_mode` is HomeKept or whose `pty` is
+// true (Request.NotBuilt), is answered CodeNotBuilt. The `home_made`,
+// `home_measured` and `home_retired` replies are defined for the client
+// that will hear them.
+//
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
 // runtime opens descriptors of its own before it can inspect fd 3 tells the
@@ -91,19 +111,31 @@ const Version = 1
 // network namespace of the spawn's own.
 const IsolationNetns = "netns"
 
+// A spawn's `home_mode` values.
+const (
+	HomeScratch = "scratch"
+	HomeKept    = "kept"
+)
+
 // ChannelEnv is the client environment variable naming the channel socket.
 const ChannelEnv = "KEEPER_CHANNEL"
 
 // Message types.
 const (
-	TypeSpawn    = "spawn"
-	TypeSignal   = "signal"
-	TypeRelease  = "release"
-	TypePool     = "pool"
-	TypeSpawned  = "spawned"
-	TypeError    = "error"
-	TypeExited   = "exited"
-	TypeReleased = "released"
+	TypeSpawn        = "spawn"
+	TypeSignal       = "signal"
+	TypeRelease      = "release"
+	TypePool         = "pool"
+	TypeHomeMake     = "home_make"
+	TypeHomeMeasure  = "home_measure"
+	TypeHomeRetire   = "home_retire"
+	TypeSpawned      = "spawned"
+	TypeError        = "error"
+	TypeExited       = "exited"
+	TypeReleased     = "released"
+	TypeHomeMade     = "home_made"
+	TypeHomeMeasured = "home_measured"
+	TypeHomeRetired  = "home_retired"
 )
 
 // Error codes carried by an `error` reply.
@@ -118,6 +150,9 @@ const (
 	// CodeMemoryUnavailable refuses a spawn whose memory bound the keeper
 	// cannot enforce where it runs.
 	CodeMemoryUnavailable = "memory_unavailable"
+	// CodeNotBuilt answers a valid request the keeper does not act on yet
+	// (Request.NotBuilt).
+	CodeNotBuilt = "not_built"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors
@@ -137,6 +172,14 @@ const (
 	// MaxMemoryBytes is the most a spawn's memory bound may be, a number
 	// every client's JSON carries exactly.
 	MaxMemoryBytes = 1 << 40
+	// MaxHomePathBytes is the longest a kept home's path may be, PATH_MAX
+	// less its NUL.
+	MaxHomePathBytes = 4095
+	// MaxUID is the highest uid a kept home may own: (uid_t)-1 is no uid.
+	MaxUID = 4294967294
+	// MaxHomeBytes is the most a kept home's bound may be, a number every
+	// client's JSON carries exactly.
+	MaxHomeBytes = 1 << 50
 )
 
 // Signals a `signal` request may name.
@@ -259,6 +302,29 @@ type Request struct {
 	SpawnID   string  `json:"spawn_id,omitempty"`
 	Sig       string  `json:"sig,omitempty"`
 	GraceMs   *int64  `json:"grace_ms,omitempty"`
+	// HomeMode is HomeScratch, HomeKept or empty (HomeScratch); HomePath,
+	// HomeUID and HomeMaxBytes are set only on a HomeKept spawn.
+	HomeMode     string  `json:"home_mode,omitempty"`
+	HomePath     string  `json:"home_path,omitempty"`
+	HomeUID      *uint64 `json:"home_uid,omitempty"`
+	HomeMaxBytes *uint64 `json:"home_max_bytes,omitempty"`
+	Pty          *bool   `json:"pty,omitempty"`
+	// Path and UID name the kept home of a home request.
+	Path string  `json:"path,omitempty"`
+	UID  *uint64 `json:"uid,omitempty"`
+}
+
+// NotBuilt reports whether the keeper answers r CodeNotBuilt rather than
+// acting on it: a home request, or a spawn of a kept home or with a
+// pseudo-terminal.
+func (r *Request) NotBuilt() bool {
+	switch r.Type {
+	case TypeHomeMake, TypeHomeMeasure, TypeHomeRetire:
+		return true
+	case TypeSpawn:
+		return r.HomeMode == HomeKept || (r.Pty != nil && *r.Pty)
+	}
+	return false
 }
 
 // RequestError is a refused request: the code to reply with, the request's
@@ -336,6 +402,19 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 		if !poolPattern.MatchString(req.Pool) {
 			return nil, refuse("pool must match " + poolPattern.String())
 		}
+	case TypeHomeMake, TypeHomeMeasure, TypeHomeRetire:
+		if !req.only("id", "path", "uid") {
+			return nil, refuse(req.Type + " carries only id, path and uid")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
+		}
+		if err := validateHomePath("path", req.Path); err != nil {
+			return nil, refuse(err.Error())
+		}
+		if err := validateUID("uid", req.UID); err != nil {
+			return nil, refuse(err.Error())
+		}
 	default:
 		return nil, refuse("unknown type")
 	}
@@ -343,8 +422,8 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "isolation", "attach") {
-		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control, isolation and attach")
+	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty") {
+		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes and pty")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -370,7 +449,52 @@ func validateSpawn(req *Request) error {
 	if req.Attach == nil {
 		return errors.New("attach is required")
 	}
-	return ValidateAttach(*req.Attach)
+	if err := ValidateAttach(*req.Attach); err != nil {
+		return err
+	}
+	return validateHome(req)
+}
+
+func validateHome(req *Request) error {
+	switch req.HomeMode {
+	case "", HomeScratch:
+		if req.HomePath != "" || req.HomeUID != nil || req.HomeMaxBytes != nil {
+			return errors.New("home_path, home_uid and home_max_bytes need home_mode " + HomeKept)
+		}
+		return nil
+	case HomeKept:
+	default:
+		return errors.New("home_mode must be " + HomeScratch + " or " + HomeKept)
+	}
+	if req.HomePath == "" {
+		return errors.New("home_path is required with home_mode " + HomeKept)
+	}
+	if err := validateHomePath("home_path", req.HomePath); err != nil {
+		return err
+	}
+	if err := validateUID("home_uid", req.HomeUID); err != nil {
+		return err
+	}
+	if b := req.HomeMaxBytes; b != nil && (*b < 1 || *b > MaxHomeBytes) {
+		return fmt.Errorf("home_max_bytes must be within 1..%d", uint64(MaxHomeBytes))
+	}
+	return nil
+}
+
+// validateHomePath checks a kept home's path: absolute and clean, as
+// filepath.Clean leaves it, with no NUL and at most MaxHomePathBytes.
+func validateHomePath(field, p string) error {
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p || len(p) > MaxHomePathBytes || strings.ContainsRune(p, 0) {
+		return fmt.Errorf("%s must be a clean absolute path of at most %d bytes", field, MaxHomePathBytes)
+	}
+	return nil
+}
+
+func validateUID(field string, uid *uint64) error {
+	if uid == nil || *uid < 1 || *uid > MaxUID {
+		return fmt.Errorf("%s must be within 1..%d", field, uint64(MaxUID))
+	}
+	return nil
 }
 
 // ValidateCommand checks an argv and environment block: 1..MaxArgs
@@ -427,18 +551,25 @@ func ValidateEnvName(name string) error {
 // only reports whether every field set on r is among the named ones.
 func (r *Request) only(fields ...string) bool {
 	set := map[string]bool{
-		"id":           r.ID != "",
-		"pool":         r.Pool != "",
-		"argv":         r.Argv != nil,
-		"env":          r.Env != nil,
-		"rlimits":      r.Rlimits != nil,
-		"memory_bytes": r.MemoryBytes != nil,
-		"control":      r.Control,
-		"isolation":    r.Isolation != "",
-		"attach":       r.Attach != nil,
-		"spawn_id":     r.SpawnID != "",
-		"sig":          r.Sig != "",
-		"grace_ms":     r.GraceMs != nil,
+		"id":             r.ID != "",
+		"pool":           r.Pool != "",
+		"argv":           r.Argv != nil,
+		"env":            r.Env != nil,
+		"rlimits":        r.Rlimits != nil,
+		"memory_bytes":   r.MemoryBytes != nil,
+		"control":        r.Control,
+		"isolation":      r.Isolation != "",
+		"attach":         r.Attach != nil,
+		"spawn_id":       r.SpawnID != "",
+		"sig":            r.Sig != "",
+		"grace_ms":       r.GraceMs != nil,
+		"home_mode":      r.HomeMode != "",
+		"home_path":      r.HomePath != "",
+		"home_uid":       r.HomeUID != nil,
+		"home_max_bytes": r.HomeMaxBytes != nil,
+		"pty":            r.Pty != nil,
+		"path":           r.Path != "",
+		"uid":            r.UID != nil,
 	}
 	for _, f := range fields {
 		delete(set, f)
@@ -494,7 +625,7 @@ func NewSpawned(id, spawnID string, uid, pid int) Spawned {
 	return Spawned{V: Version, Type: TypeSpawned, ID: id, SpawnID: spawnID, UID: uid, PID: pid}
 }
 
-// ErrorReply refuses the request named by ID (spawn, pool) or SpawnID
+// ErrorReply refuses the request named by ID (spawn, pool, home) or SpawnID
 // (signal, release).
 type ErrorReply struct {
 	V       int    `json:"v"`
@@ -551,6 +682,43 @@ type PoolReply struct {
 // NewPoolReply builds a `pool` reply.
 func NewPoolReply(id, pool string, size, free, quarantined int) PoolReply {
 	return PoolReply{V: Version, Type: TypePool, ID: id, Pool: pool, Size: size, Free: free, Quarantined: quarantined}
+}
+
+// HomeMade acknowledges a `home_make`.
+type HomeMade struct {
+	V    int    `json:"v"`
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// NewHomeMade builds a `home_made` reply.
+func NewHomeMade(id string) HomeMade {
+	return HomeMade{V: Version, Type: TypeHomeMade, ID: id}
+}
+
+// HomeMeasured answers a `home_measure` with the bytes the home holds.
+type HomeMeasured struct {
+	V     int    `json:"v"`
+	Type  string `json:"type"`
+	ID    string `json:"id"`
+	Bytes uint64 `json:"bytes"`
+}
+
+// NewHomeMeasured builds a `home_measured` reply.
+func NewHomeMeasured(id string, bytes uint64) HomeMeasured {
+	return HomeMeasured{V: Version, Type: TypeHomeMeasured, ID: id, Bytes: bytes}
+}
+
+// HomeRetired acknowledges a `home_retire`.
+type HomeRetired struct {
+	V    int    `json:"v"`
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// NewHomeRetired builds a `home_retired` reply.
+func NewHomeRetired(id string) HomeRetired {
+	return HomeRetired{V: Version, Type: TypeHomeRetired, ID: id}
 }
 
 // Encode renders a reply as one line.

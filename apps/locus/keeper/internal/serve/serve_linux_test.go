@@ -6,6 +6,7 @@
 package serve
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -557,6 +558,81 @@ func TestIsolationMustMatchThePool(t *testing.T) {
 		if st := s.pools["runner"].Stats(); st.Free != st.Size {
 			t.Fatalf("%s: a uid was allocated: %+v", c.name, st)
 		}
+	}
+}
+
+// A request the keeper parses but does not act on yet is answered
+// not_built on the channel and logged, and never reaches a handler: the
+// server has no pool, so a handled spawn or home request would be answered
+// otherwise. A request after them is still handled.
+func TestNotBuiltRequestsAreAnsweredNotBuilt(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		NotBuilt []json.RawMessage `json:"not_built_requests"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil || len(v.NotBuilt) == 0 {
+		t.Fatalf("not_built_requests: %d, %v", len(v.NotBuilt), err)
+	}
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours, theirs := os.NewFile(uintptr(fds[0]), "channel"), os.NewFile(uintptr(fds[1]), "client-channel")
+	defer theirs.Close()
+	var logged strings.Builder
+	s := &server{
+		log:     logx.NewWriter(&logged, "cyfr-locus", false),
+		pools:   map[string]*pool.Pool{},
+		spawns:  map[string]*spawn{},
+		waiters: map[int]*child{},
+		channel: ours,
+	}
+	done := make(chan struct{})
+	go func() { s.serveChannel(); close(done) }()
+
+	var ids []string
+	for _, raw := range v.NotBuilt {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, req.ID)
+		var line bytes.Buffer
+		if err := json.Compact(&line, raw); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := theirs.Write(append(line.Bytes(), '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := theirs.Write([]byte(`{"v":1,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	lr := protocol.NewLineReader(theirs)
+	for _, id := range append(ids, "after") {
+		line, _, err := lr.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := protocol.NewError(id, "", protocol.CodeNotBuilt)
+		if id == "after" {
+			want = protocol.NewError(id, "", protocol.CodeUnknownPool)
+		}
+		var got protocol.ErrorReply
+		if err := json.Unmarshal(line, &got); err != nil || got != want {
+			t.Fatalf("request %s answered %s, want %+v", id, line, want)
+		}
+	}
+	theirs.Close()
+	<-done
+	ours.Close()
+	if n := strings.Count(logged.String(), "not built yet"); n != len(ids) {
+		t.Fatalf("logged %d not-built refusals, want %d: %q", n, len(ids), logged.String())
 	}
 }
 

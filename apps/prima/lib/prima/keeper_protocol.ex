@@ -14,15 +14,18 @@ defmodule Prima.KeeperProtocol do
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
   carrying `"v": 1` and a `type`, at most `max_line_bytes/0` bytes before
-  its newline. A client sends `spawn`, `signal`, `release` and `pool`; the
-  keeper answers `spawned`, `error`, `exited`, `released` and `pool`.
+  its newline. A client sends `spawn`, `signal`, `release`, `pool`,
+  `home_make`, `home_measure` and `home_retire`; the keeper answers
+  `spawned`, `error`, `exited`, `released`, `pool`, `home_made`,
+  `home_measured` and `home_retired`.
 
   `encode/1` writes a request's members in name order, `v` and `type`
   among them, and refuses by raising `ArgumentError` what the keeper
   refuses as `bad_request`: a member the type does not carry, a required
   one absent, and a value outside its bound, as the keeper's
   `ParseRequest` reads them (a spawn's `memory_bytes` lies from
-  `min_memory_bytes/0` to `max_memory_bytes/0`). A refusal names the
+  `min_memory_bytes/0` to `max_memory_bytes/0`; a kept home's members
+  follow the rules under Homes). A refusal names the
   member at fault by its path (`argv`, `attach.token`, `rlimits.nofile`)
   and never quotes a value, since an environment value may be a
   credential.
@@ -33,7 +36,24 @@ defmodule Prima.KeeperProtocol do
   member, in the order the type lists them, `{:missing_field, name}`,
   `{:wrong_type, name}` or `{:invalid_field, name}`; and last, for an
   `exited`, `:ambiguous_exit` when it carries both a `code` and a
-  `signal`, or neither.
+  `signal`, or neither. A `home_measured` reply's `bytes` is a whole
+  number up to 2^53 - 1, the largest every JSON reader carries exactly.
+
+  ## Homes
+
+  A spawn's `home_mode` is `"scratch"`, today's home scrubbed at
+  retirement and the reading of its absence, or `"kept"`, a home that
+  outlives the spawn. A kept spawn requires `home_path`, the home's clean
+  absolute path of at most 4095 bytes, and `home_uid`, the home's own uid
+  from 1 to 4294967294, and may carry `home_max_bytes`, from 1 to 2^50;
+  those three are refused without `"kept"`. A spawn's `pty` is a boolean
+  whose absence reads as `false`. `home_make`, `home_measure` and
+  `home_retire` carry exactly `id`, `path` and `uid`, under the same rules,
+  and are answered `home_made`, `home_measured` (with the home's `bytes`)
+  and `home_retired`. The keeper validates all of these and acts on none
+  of them yet: it answers a home request, and a spawn whose `home_mode`
+  is `"kept"` or whose `pty` is `true`, with an `error` whose code is
+  `not_built`.
 
   ## Frames
 
@@ -95,6 +115,10 @@ defmodule Prima.KeeperProtocol do
   @max_socket_path 107
   @min_memory_bytes 16 * 1024 * 1024
   @max_memory_bytes 1024 * 1024 * 1024 * 1024
+  @max_home_path_bytes 4095
+  @max_uid 4_294_967_294
+  @max_home_bytes 1024 * 1024 * 1024 * 1024 * 1024
+  @home_modes ~w(scratch kept)
   @isolations ~w(netns)
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
   @reserved_env ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD)
@@ -109,6 +133,8 @@ defmodule Prima.KeeperProtocol do
 
   # The integers a reply carries: uids, pids and pool counts.
   @max_count 4_294_967_295
+  # A measured home's bytes: the largest integer JSON carries exactly.
+  @max_measured_bytes 9_007_199_254_740_991
 
   @id ~r/\A[A-Za-z0-9._:-]{1,64}\z/
   @pool ~r/\A[a-z][a-z0-9-]{0,31}\z/
@@ -131,12 +157,21 @@ defmodule Prima.KeeperProtocol do
          memory_bytes: :required,
          control: :optional,
          isolation: :optional,
-         attach: :required
+         attach: :required,
+         home_mode: :optional,
+         home_path: :optional,
+         home_uid: :optional,
+         home_max_bytes: :optional,
+         pty: :optional
        ]},
     signal: {"signal", [spawn_id: :required, sig: :required]},
     release: {"release", [spawn_id: :required, grace_ms: :required]},
-    pool: {"pool", [id: :required, pool: :required]}
+    pool: {"pool", [id: :required, pool: :required]},
+    home_make: {"home_make", [id: :required, path: :required, uid: :required]},
+    home_measure: {"home_measure", [id: :required, path: :required, uid: :required]},
+    home_retire: {"home_retire", [id: :required, path: :required, uid: :required]}
   }
+  @home_requests [:home_make, :home_measure, :home_retire]
 
   # Every reply type and its members in the order they are read.
   @replies %{
@@ -151,7 +186,10 @@ defmodule Prima.KeeperProtocol do
          memory_exceeded: :boolean
        ]},
     "released" => {:released, [spawn_id: :spawn_id]},
-    "pool" => {:pool, [id: :id, pool: :pool, size: :count, free: :count, quarantined: :count]}
+    "pool" => {:pool, [id: :id, pool: :pool, size: :count, free: :count, quarantined: :count]},
+    "home_made" => {:home_made, [id: :id]},
+    "home_measured" => {:home_measured, [id: :id, bytes: :measured_bytes]},
+    "home_retired" => {:home_retired, [id: :id]}
   }
 
   # An `error` names its request by `id` or `spawn_id`, and a request the
@@ -169,7 +207,11 @@ defmodule Prima.KeeperProtocol do
   keys but for `env`'s names. `spawn` requires `id`, `pool`, `argv`,
   `memory_bytes` and `attach` (`%{path: path, token: token}`); `env`
   (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
-  `control` and `isolation` (`"netns"`) are optional.
+  `control`, `isolation` (`"netns"`), `home_mode` (`"scratch"` or
+  `"kept"`), `home_path`, `home_uid`, `home_max_bytes` and `pty` are
+  optional, the home's three carried exactly when `home_mode` is
+  `"kept"`, `home_max_bytes` among them optional. A home request carries
+  `id`, `path` and `uid`.
   """
   @type request ::
           %{
@@ -182,19 +224,30 @@ defmodule Prima.KeeperProtocol do
             required(:memory_bytes) => pos_integer(),
             optional(:control) => boolean(),
             optional(:isolation) => String.t(),
-            required(:attach) => %{path: String.t(), token: String.t()}
+            required(:attach) => %{path: String.t(), token: String.t()},
+            optional(:home_mode) => String.t(),
+            optional(:home_path) => String.t(),
+            optional(:home_uid) => pos_integer(),
+            optional(:home_max_bytes) => pos_integer(),
+            optional(:pty) => boolean()
           }
           | %{type: :signal, spawn_id: String.t(), sig: signal()}
           | %{type: :release, spawn_id: String.t(), grace_ms: non_neg_integer()}
           | %{type: :pool, id: String.t(), pool: String.t()}
+          | %{
+              type: :home_make | :home_measure | :home_retire,
+              id: String.t(),
+              path: String.t(),
+              uid: pos_integer()
+            }
 
   @typedoc "How a spawn's leader ended: its exit status or the signal that ended it."
   @type exit_status :: {:status, integer()} | {:signal, String.t()}
 
   @typedoc """
-  A reply. An `error` names the request it refuses by `id` (a spawn or a
-  pool request) or `spawn_id` (a signal or a release); a request the
-  keeper could not read is named by neither.
+  A reply. An `error` names the request it refuses by `id` (a spawn, a
+  pool or a home request) or `spawn_id` (a signal or a release); a
+  request the keeper could not read is named by neither.
   """
   @type reply ::
           {:spawned, id :: String.t(), spawn_id :: String.t(), uid :: non_neg_integer(),
@@ -204,6 +257,9 @@ defmodule Prima.KeeperProtocol do
           | {:released, spawn_id :: String.t()}
           | {:pool, id :: String.t(), pool :: String.t(), size :: non_neg_integer(),
              free :: non_neg_integer(), quarantined :: non_neg_integer()}
+          | {:home_made, id :: String.t()}
+          | {:home_measured, id :: String.t(), bytes :: non_neg_integer()}
+          | {:home_retired, id :: String.t()}
 
   @typedoc "Why a line is not a reply (see the module's decoding order)."
   @type reason ::
@@ -248,8 +304,9 @@ defmodule Prima.KeeperProtocol do
   @doc """
   A request's ceilings: the most argv and env entries, the most bytes of
   one value, of argv and env together and of an attach path, the longest
-  grace a release may ask for, and the least and most of a spawn's
-  `memory_bytes`.
+  grace a release may ask for, the least and most of a spawn's
+  `memory_bytes`, the most bytes of a kept home's path, the highest uid a
+  kept home may own and the most a kept home's `home_max_bytes` may be.
   """
   @spec request_bounds() :: %{atom() => non_neg_integer()}
   def request_bounds do
@@ -261,7 +318,10 @@ defmodule Prima.KeeperProtocol do
       max_grace_ms: @max_grace_ms,
       max_socket_path_bytes: @max_socket_path,
       min_memory_bytes: @min_memory_bytes,
-      max_memory_bytes: @max_memory_bytes
+      max_memory_bytes: @max_memory_bytes,
+      max_home_path_bytes: @max_home_path_bytes,
+      max_uid: @max_uid,
+      max_home_bytes: @max_home_bytes
     }
   end
 
@@ -403,7 +463,11 @@ defmodule Prima.KeeperProtocol do
 
     check_members(fields, members, name)
     written = fields |> Enum.sort_by(&to_string(elem(&1, 0))) |> Enum.map(&write(type, &1))
-    if type == :spawn, do: check_spec(fields)
+
+    if type == :spawn do
+      check_spec(fields)
+      check_home(fields)
+    end
 
     line =
       [{"type", name}, {"v", @version} | written]
@@ -475,6 +539,21 @@ defmodule Prima.KeeperProtocol do
   defp write(:spawn, {:isolation, isolation}) when isolation in @isolations,
     do: {"isolation", isolation}
 
+  defp write(:spawn, {:home_mode, mode}) when mode in @home_modes, do: {"home_mode", mode}
+  defp write(:spawn, {:home_path, path}), do: {"home_path", home_path!("home_path", path)}
+  defp write(:spawn, {:home_uid, uid}) when uid in 1..@max_uid//1, do: {"home_uid", uid}
+
+  defp write(:spawn, {:home_max_bytes, bytes}) when bytes in 1..@max_home_bytes//1,
+    do: {"home_max_bytes", bytes}
+
+  defp write(:spawn, {:pty, pty}) when is_boolean(pty), do: {"pty", pty}
+
+  defp write(type, {:path, path}) when type in @home_requests,
+    do: {"path", home_path!("path", path)}
+
+  defp write(type, {:uid, uid}) when type in @home_requests and uid in 1..@max_uid//1,
+    do: {"uid", uid}
+
   defp write(:signal, {:sig, sig}) when sig in @signals, do: {"sig", sig}
 
   defp write(:release, {:grace_ms, grace})
@@ -534,14 +613,37 @@ defmodule Prima.KeeperProtocol do
 
   defp attach!(_attach), do: invalid!("attach")
 
+  defp clean_socket_path?(path), do: clean_path?(path, @max_socket_path)
+
+  defp home_path!(member, path) do
+    if clean_path?(path, @max_home_path_bytes), do: path, else: invalid!(member)
+  end
+
   # An absolute path as the keeper's `filepath.Clean` leaves it: no empty,
-  # `.` or `..` segment and no trailing slash, short enough for a unix
-  # socket's address.
-  defp clean_socket_path?(path) do
-    text?(path) and byte_size(path) <= @max_socket_path and not String.contains?(path, <<0>>) and
+  # `.` or `..` segment and no trailing slash, of at most `max` bytes.
+  defp clean_path?(path, max) do
+    text?(path) and byte_size(path) <= max and not String.contains?(path, <<0>>) and
       String.starts_with?(path, "/") and
       (path == "/" or
          path |> String.split("/") |> tl() |> Enum.all?(&(&1 not in ["", ".", ".."])))
+  end
+
+  # A kept spawn names its home's path and uid; any other carries neither,
+  # nor a home bound.
+  defp check_home(%{home_mode: "kept"} = fields) do
+    for member <- [:home_path, :home_uid],
+        not Map.has_key?(fields, member),
+        do: raise(ArgumentError, "#{member} is missing from a kept spawn")
+
+    :ok
+  end
+
+  defp check_home(fields) do
+    for member <- [:home_max_bytes, :home_path, :home_uid],
+        Map.has_key?(fields, member),
+        do: raise(ArgumentError, "#{member} is carried only by a kept spawn")
+
+    :ok
   end
 
   # The keeper's bound on a spawn's argv and env together, as it counts it.
@@ -638,6 +740,14 @@ defmodule Prima.KeeperProtocol do
     do: {:ok, value}
 
   defp read(:count, name, value) when is_integer(value), do: {:error, {:invalid_field, name}}
+
+  defp read(:measured_bytes, _name, value)
+       when is_integer(value) and value >= 0 and value <= @max_measured_bytes,
+       do: {:ok, value}
+
+  defp read(:measured_bytes, name, value) when is_integer(value),
+    do: {:error, {:invalid_field, name}}
+
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
   defp read(_kind, name, _value), do: {:error, {:wrong_type, name}}
 
@@ -665,4 +775,8 @@ defmodule Prima.KeeperProtocol do
 
   defp reply(:pool, %{id: id, pool: pool, size: size, free: free, quarantined: quarantined}),
     do: {:ok, {:pool, id, pool, size, free, quarantined}}
+
+  defp reply(:home_made, %{id: id}), do: {:ok, {:home_made, id}}
+  defp reply(:home_measured, %{id: id, bytes: bytes}), do: {:ok, {:home_measured, id, bytes}}
+  defp reply(:home_retired, %{id: id}), do: {:ok, {:home_retired, id}}
 end
