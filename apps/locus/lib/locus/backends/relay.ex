@@ -19,16 +19,19 @@ defmodule Locus.Backends.Relay do
 
   Each line is numbered from 1. The buffer keeps a line until `take/4`
   names an `after` at or above its number, and holds at most
-  `Prima.LocusBackends.max_buffer_bytes/0` bytes of lines: past that the
-  oldest are dropped and counted. `take/4` answers the lines past `after`
+  `Prima.LocusBackends.max_buffer_bytes/0` bytes of lines, each line
+  charged its text and `line_charge_bytes/0` of framing, and at most
+  `max_buffer_lines/0` lines: past either the oldest are dropped and
+  counted, so empty lines cannot grow it without end. `take/4` answers the lines past `after`
   that fit its byte budget (one at least) and how many lines between
   `after` and the first it answers were dropped; asked twice with the same
   `after`, it answers the same lines, so a lost answer is replayed.
 
   Stderr is never parsed: the last `Prima.LocusBackends.stderr_tail_bytes/0`
-  bytes are what a status reports, and `stderr_tail_slack_bytes/0` more
-  are kept so a credential split by the cut is masked before the cut is
-  taken (`stderr_tail/2`).
+  bytes are what a status reports for a scratch program, and
+  `stderr_tail_slack_bytes/0` more are kept so a credential split by the
+  cut is masked before the cut is taken (`stderr_tail/2`). Every byte is
+  counted (`stderr_bytes/1`), which is all a kept program's status names.
   """
 
   alias Prima.LocusBackends
@@ -37,24 +40,32 @@ defmodule Locus.Backends.Relay do
   # holds one.
   defstruct partial: "",
             lines: nil,
+            count: 0,
             bytes: 0,
             next_seq: 1,
             dropped: 0,
             stderr: "",
+            stderr_bytes: 0,
             max_line_bytes: nil,
             max_buffer_bytes: nil,
+            max_buffer_lines: nil,
+            charge: nil,
             tail_bytes: nil,
             slack_bytes: nil
 
   @type t :: %__MODULE__{
           partial: binary(),
           lines: :queue.queue({pos_integer(), String.t()}),
+          count: non_neg_integer(),
           bytes: non_neg_integer(),
           next_seq: pos_integer(),
           dropped: non_neg_integer(),
           stderr: binary(),
+          stderr_bytes: non_neg_integer(),
           max_line_bytes: pos_integer(),
           max_buffer_bytes: pos_integer(),
+          max_buffer_lines: pos_integer(),
+          charge: pos_integer(),
           tail_bytes: pos_integer(),
           slack_bytes: non_neg_integer()
         }
@@ -66,7 +77,8 @@ defmodule Locus.Backends.Relay do
   @doc """
   A relay with no bytes seen. Options, each defaulting to
   `Prima.LocusBackends`' bound of the same name: `:max_line_bytes`,
-  `:max_buffer_bytes`, `:stderr_tail_bytes`, `:stderr_tail_slack_bytes`.
+  `:max_buffer_bytes`, `:max_buffer_lines`, `:line_charge_bytes`,
+  `:stderr_tail_bytes`, `:stderr_tail_slack_bytes`.
   """
   @spec new(keyword() | map()) :: t()
   def new(opts \\ []) do
@@ -76,6 +88,8 @@ defmodule Locus.Backends.Relay do
       lines: :queue.new(),
       max_line_bytes: Map.get(opts, :max_line_bytes, LocusBackends.max_line_bytes()),
       max_buffer_bytes: Map.get(opts, :max_buffer_bytes, LocusBackends.max_buffer_bytes()),
+      max_buffer_lines: Map.get(opts, :max_buffer_lines, LocusBackends.max_buffer_lines()),
+      charge: Map.get(opts, :line_charge_bytes, LocusBackends.line_charge_bytes()),
       tail_bytes: Map.get(opts, :stderr_tail_bytes, LocusBackends.stderr_tail_bytes()),
       slack_bytes:
         Map.get(opts, :stderr_tail_slack_bytes, LocusBackends.stderr_tail_slack_bytes())
@@ -116,14 +130,20 @@ defmodule Locus.Backends.Relay do
     %{
       relay
       | lines: :queue.in({seq, text}, relay.lines),
-        bytes: relay.bytes + byte_size(text),
+        count: relay.count + 1,
+        bytes: relay.bytes + charge(relay, text),
         next_seq: seq + 1
     }
     |> bound()
   end
 
-  # The oldest lines go, counted, until the buffer is within its bound.
-  defp bound(%{bytes: bytes, max_buffer_bytes: max} = relay) when bytes <= max, do: relay
+  # What a line costs the buffer: its text and its framing.
+  defp charge(relay, text), do: byte_size(text) + relay.charge
+
+  # The oldest lines go, counted, until the buffer is within both bounds.
+  defp bound(%{bytes: bytes, count: count} = relay)
+       when bytes <= relay.max_buffer_bytes and count <= relay.max_buffer_lines,
+       do: relay
 
   defp bound(relay) do
     {{:value, {_seq, text}}, lines} = :queue.out(relay.lines)
@@ -131,7 +151,8 @@ defmodule Locus.Backends.Relay do
     bound(%{
       relay
       | lines: lines,
-        bytes: relay.bytes - byte_size(text),
+        count: relay.count - 1,
+        bytes: relay.bytes - charge(relay, text),
         dropped: relay.dropped + 1
     })
   end
@@ -173,7 +194,11 @@ defmodule Locus.Backends.Relay do
     case :queue.peek(relay.lines) do
       {:value, {seq, text}} when seq <= after_seq ->
         relay
-        |> Map.merge(%{lines: :queue.drop(relay.lines), bytes: relay.bytes - byte_size(text)})
+        |> Map.merge(%{
+          lines: :queue.drop(relay.lines),
+          count: relay.count - 1,
+          bytes: relay.bytes - charge(relay, text)
+        })
         |> acknowledge(after_seq)
 
       _ ->
@@ -198,11 +223,16 @@ defmodule Locus.Backends.Relay do
   def stderr(%__MODULE__{} = relay, data) when is_binary(data) do
     kept = relay.stderr <> data
     keep = relay.tail_bytes + relay.slack_bytes
+    relay = %{relay | stderr_bytes: relay.stderr_bytes + byte_size(data)}
 
     if byte_size(kept) > keep,
       do: %{relay | stderr: binary_part(kept, byte_size(kept) - keep, keep)},
       else: %{relay | stderr: kept}
   end
+
+  @doc "How many bytes of stderr the process wrote, all a kept program's status names."
+  @spec stderr_bytes(t()) :: non_neg_integer()
+  def stderr_bytes(%__MODULE__{stderr_bytes: bytes}), do: bytes
 
   @doc """
   The stderr a status reports: what is kept, masked with `secrets` as

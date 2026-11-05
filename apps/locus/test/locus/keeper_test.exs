@@ -923,8 +923,13 @@ defmodule Locus.KeeperTest do
       [root: root, uid: uid]
     end
 
-    defp kept_client(root, first, last),
-      do: FakeKeeper.start_client!(kept_homes: "#{root}:#{first}-#{last}")
+    # The fake makes every home as the test's own uid, which its own
+    # processes hold too: the client reads an empty /proc of its own.
+    defp kept_client(root, first, last) do
+      proc = FakeKeeper.short_tmp_dir()
+      ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(proc) end)
+      FakeKeeper.start_client!(kept_homes: "#{root}:#{first}-#{last}", proc_root: proc)
+    end
 
     defp home_requests(fake),
       do: for(%{"type" => "home_" <> _} = request <- FakeKeeper.requests(fake), do: request)
@@ -952,6 +957,53 @@ defmodule Locus.KeeperTest do
       # A range every uid of which a home owns draws none.
       %{name: full} = kept_client(root, uid, uid)
       assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(full, "vlt_c")
+    end
+
+    test "a uid a live process holds is no free uid, even with no home folder; home_list names the homes",
+         %{root: root, uid: uid} do
+      proc = FakeKeeper.short_tmp_dir()
+      on_exit(fn -> File.rm_rf!(proc) end)
+      # A process of the first uid outlives its home's folder, as one that
+      # removed its own home would.
+      File.mkdir_p!(Path.join(proc, "4242"))
+
+      File.write!(
+        Path.join([proc, "4242", "status"]),
+        "Name:\tsleep\nUid:\t#{uid}\t#{uid}\t#{uid}\t#{uid}\nGid:\t1\t1\t1\t1\n"
+      )
+
+      File.mkdir_p!(Path.join(proc, "self"))
+
+      %{name: name} =
+        FakeKeeper.start_client!(kept_homes: "#{root}:#{uid}-#{uid + 1}", proc_root: proc)
+
+      assert {:ok, next} = Keeper.home_ensure(name, "vlt_b")
+      assert next == uid + 1
+
+      # With every uid held by a process, none is drawn.
+      File.mkdir_p!(Path.join(proc, "4243"))
+
+      File.write!(
+        Path.join([proc, "4243", "status"]),
+        "Uid:\t1\t#{uid + 1}\t1\t1\n"
+      )
+
+      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(name, "vlt_c")
+
+      # A /proc that cannot be read draws no uid at all.
+      %{name: blind} =
+        FakeKeeper.start_client!(
+          kept_homes: "#{root}:#{uid}-#{uid + 1}",
+          proc_root: Path.join(proc, "absent")
+        )
+
+      assert {:error, {:refused, "unavailable"}} = Keeper.home_ensure(blind, "vlt_d")
+
+      File.write!(Path.join(root, "not-a-home.txt"), "x")
+      assert {:ok, ["vlt_b"]} = Keeper.home_list(name)
+
+      assert {:error, {:refused, "unavailable"}} =
+               Keeper.home_list(FakeKeeper.start_client!().name)
     end
 
     test "home_measure, home_reset and home_retire act on a made home as its uid",

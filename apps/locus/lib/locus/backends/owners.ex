@@ -68,11 +68,14 @@ defmodule Locus.Backends.Owners do
   ## Crashes
 
   A session whose process crashed (`Locus.Backends.Backend`) counts
-  against its program within `crash_window_ms/0`: the next open starts its
-  process only once the backoff's wait for that many crashes
-  (`restart_backoff_ms/0`) has passed since the last, and the
-  `max_crashes/0`-th marks the program `failed` until a sync at a new
-  version.
+  against its session key, `(program, home_id, key, mode)`, within
+  `crash_window_ms/0`: the next open of that key starts its process only
+  once the backoff's wait for that many crashes (`restart_backoff_ms/0`)
+  has passed since the last, and the `max_crashes/0`-th fails that key,
+  refusing its opens `program_failed` until a sync at a new version. One
+  key's crashes never fail another's open: one home's sign-ins, or one
+  caller's crashing session, leave every other key's process alone. A
+  status reports the program `failed` while any of its keys is.
 
   ## Kept homes and their bound
 
@@ -81,6 +84,15 @@ defmodule Locus.Backends.Owners do
   and, while one of its sessions runs, every `:measure_interval_ms`
   (10 s): a home at or past the bound has every session in it ended and is
   over its cap, refusing every open `home_over_cap` until a `home` reset.
+  A measure fails closed: one that fails, or that the launcher could not
+  take over the whole home, ends the home's sessions and leaves it
+  unmeasurable, refused `home_over_cap` alike until a reset.
+
+  Every running kept home is also checked on the same interval against the
+  homes the launcher lists (`Locus.Launcher.home_list/1`): a session whose
+  home's folder is gone is ended, never left running under a uid the
+  launcher may give another home. A `homes` control message is answered
+  with that list.
 
   ## Sleeping on nothing
 
@@ -224,6 +236,7 @@ defmodule Locus.Backends.Owners do
          routes: %{},
          pids: %{},
          homes: %{},
+         homes_checked_at: nil,
          queue: :queue.new(),
          busy: nil,
          pending: %{},
@@ -504,6 +517,15 @@ defmodule Locus.Backends.Owners do
     end
   end
 
+  defp apply_control(state, from, _fields, %{type: :homes}, _open_env) do
+    %{launcher: launcher, launcher_server: server} = state
+
+    {ref, state} =
+      run(state, {:homes, from}, @home_timeout_ms, fn -> home_list(launcher, server) end)
+
+    {:wait, ref, state}
+  end
+
   defp apply_control(state, from, _fields, %{type: :home} = message, _open_env) do
     pids =
       for {_id, owner} <- state.owners,
@@ -644,6 +666,37 @@ defmodule Locus.Backends.Owners do
 
   defp continue(state, {:measured, home_id}, result), do: measured(state, home_id, result)
 
+  defp continue(state, {:homes, from}, result) do
+    reply =
+      case result do
+        {:ok, ids} when is_list(ids) -> {:ok, %{homes: Enum.sort(ids)}}
+        _failed -> {:error, :unavailable}
+      end
+
+    GenServer.reply(from, reply)
+    control_done(state)
+  end
+
+  defp continue(state, {:present, running}, {:ok, ids}) when is_list(ids) do
+    listed = MapSet.new(ids)
+
+    Enum.reduce(running, state, fn home_id, state ->
+      if MapSet.member?(listed, home_id) do
+        state
+      else
+        Logger.warning(
+          "[Locus.Backends.Owners] a kept home's folder is gone; ending its sessions"
+        )
+
+        end_home(state, home_id, "home_absent")
+      end
+    end)
+  end
+
+  # A list that did not answer tells nothing of any home: the next interval
+  # asks again.
+  defp continue(state, {:present, _running}, _failed), do: state
+
   defp pool({:ok, %{size: size, free: free, quarantined: quarantined} = pool})
        when is_integer(size) and size >= 0 and is_integer(free) and free >= 0 and
               is_integer(quarantined) and quarantined >= 0,
@@ -674,7 +727,7 @@ defmodule Locus.Backends.Owners do
     }
 
     with :ok <- shape(program, message),
-         :ok <- not_failed(owner, program),
+         :ok <- not_failed(owner, program, ask.key),
          :error <- running(owner, ask.key),
          :ok <- home_open(state, message.home_id),
          {:ok, owner} <- room(state, owner) do
@@ -719,8 +772,10 @@ defmodule Locus.Backends.Owners do
   defp shape(_program, %{mode: :sign_in, argv: [_ | _]}), do: {:error, :bad_request}
   defp shape(_program, _message), do: :ok
 
-  defp not_failed(owner, program) do
-    if owner.programs[program.name].failed, do: {:error, :program_failed}, else: :ok
+  defp not_failed(owner, program, key) do
+    if MapSet.member?(owner.programs[program.name].failed_keys, key),
+      do: {:error, :program_failed},
+      else: :ok
   end
 
   defp running(owner, key) do
@@ -866,7 +921,7 @@ defmodule Locus.Backends.Owners do
         launcher: state.launcher,
         launcher_server: state.launcher_server,
         notify: self(),
-        delay_ms: backoff(state, record),
+        delay_ms: backoff(state, Map.get(record.crashes, ask.key, [])),
         stop_grace_ms: state.stop_grace_ms,
         clock: state.clock
       ]
@@ -879,6 +934,7 @@ defmodule Locus.Backends.Owners do
         session = %{
           pid: pid,
           program: program.name,
+          key: ask.key,
           home_id: ask.home_id,
           mode: ask.mode,
           running: true,
@@ -941,9 +997,9 @@ defmodule Locus.Backends.Owners do
 
   # The wait before a program's next process after its crashes: the
   # backoff's wait for their count, less the time since the last.
-  defp backoff(_state, %{crashes: []}), do: 0
+  defp backoff(_state, []), do: 0
 
-  defp backoff(state, %{crashes: [last | _] = crashes}) do
+  defp backoff(state, [last | _] = crashes) do
     waits = state.bounds.restart_backoff_ms
     wait = Enum.at(waits, min(length(crashes), length(waits)) - 1)
     max(wait - (state.clock.() - last), 0)
@@ -980,7 +1036,7 @@ defmodule Locus.Backends.Owners do
     session = %{session | running: false, waiting: []}
     state = put_session(state, owner, session_id, session)
     owner = Map.fetch!(state.owners, owner.id)
-    if ended.crash, do: crashed(state, owner, session.program, ended.error), else: state
+    if ended.crash, do: crashed(state, owner, session, ended.error), else: state
   end
 
   defp session_event(state, owner, session_id, session, :vacated),
@@ -992,28 +1048,30 @@ defmodule Locus.Backends.Owners do
   defp spawn_refusal(%{error: "spawn refused: capacity"}), do: :capacity
   defp spawn_refusal(_ended), do: :unavailable
 
-  # A crash counts against its program within the window; the window's
-  # last crash fails it.
-  defp crashed(state, owner, name, error) do
+  # A crash counts against its session's key within the window; the
+  # window's last crash fails that key alone.
+  defp crashed(state, owner, %{program: name, key: key}, error) do
     now = state.clock.()
     window = state.bounds.crash_window_ms
     record = owner.programs[name]
-    crashes = [now | Enum.filter(record.crashes, &(now - &1 < window))]
+    crashes = [now | Enum.filter(Map.get(record.crashes, key, []), &(now - &1 < window))]
     failed? = length(crashes) >= state.bounds.max_crashes
 
     if failed?,
       do:
         Logger.error(
           "[Locus.Backends.Owners] #{owner.athanor}/#{owner.server} #{name}: " <>
-            "failed after #{length(crashes)} crashes"
+            "a session key failed after #{length(crashes)} crashes"
         )
+
+    failed_keys = if failed?, do: MapSet.put(record.failed_keys, key), else: record.failed_keys
 
     record = %{
       record
-      | crashes: crashes,
+      | crashes: Map.put(record.crashes, key, crashes),
         restarts: record.restarts + 1,
         error: LocusBackends.mask(error, owner.secrets),
-        failed: record.failed or failed?
+        failed_keys: failed_keys
     }
 
     put_owner(state, %{owner | programs: Map.put(owner.programs, name, record)})
@@ -1035,7 +1093,7 @@ defmodule Locus.Backends.Owners do
             state = put_session(state, owner, session_id, session)
 
             if running? and owner.state != :draining,
-              do: crashed(state, Map.fetch!(state.owners, id), session.program, "session ended"),
+              do: crashed(state, Map.fetch!(state.owners, id), session, "session ended"),
               else: state
 
           :error ->
@@ -1069,7 +1127,7 @@ defmodule Locus.Backends.Owners do
           name: program.name,
           status:
             cond do
-              record.failed -> :failed
+              MapSet.size(record.failed_keys) > 0 -> :failed
               sessions != [] -> :running
               true -> :idle
             end,
@@ -1103,31 +1161,40 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  # The stderr tail of each program's last session, asked at once, each
-  # within the status bound; one that does not answer reports none.
+  # The stderr of each program's last session, asked at once, each within
+  # the status bound; one that does not answer reports none. A scratch
+  # program reports its masked tail; a kept one only its length, since a
+  # kept session's stderr may carry its home's contents.
   defp report(snapshot, timeout) do
     programs =
       snapshot.programs
-      |> Enum.map(fn program -> {program, Task.async(fn -> tail(program.last, timeout) end)} end)
+      |> Enum.map(fn program ->
+        {program, Task.async(fn -> stderr(program.last, timeout) end)}
+      end)
       |> Enum.map(fn {program, task} ->
-        tail =
+        stderr =
           case Task.yield(task, timeout + 100) || Task.shutdown(task, :brutal_kill) do
-            {:ok, tail} -> tail
-            _ -> ""
+            {:ok, stderr} -> stderr
+            _ -> %{stderr_tail: "", stderr_bytes: 0}
           end
 
-        program |> Map.delete(:last) |> Map.put(:stderr_tail, tail)
+        program |> Map.delete(:last) |> Map.merge(stderr_of(program.home, stderr))
       end)
 
     %{snapshot | programs: programs}
   end
 
-  defp tail(nil, _timeout), do: ""
+  defp stderr_of(:scratch, stderr),
+    do: %{stderr_tail: stderr.stderr_tail || "", stderr_bytes: nil}
 
-  defp tail(pid, timeout) do
-    Backend.status(pid, timeout).stderr_tail
+  defp stderr_of(:kept, stderr), do: %{stderr_tail: nil, stderr_bytes: stderr.stderr_bytes}
+
+  defp stderr(nil, _timeout), do: %{stderr_tail: "", stderr_bytes: 0}
+
+  defp stderr(pid, timeout) do
+    Map.take(Backend.status(pid, timeout), [:stderr_tail, :stderr_bytes])
   catch
-    :exit, _reason -> ""
+    :exit, _reason -> %{stderr_tail: "", stderr_bytes: 0}
   end
 
   # ————— work of its own, in processes of its own —————
@@ -1168,7 +1235,14 @@ defmodule Locus.Backends.Owners do
       programs:
         Map.new(definition, fn program ->
           {program.name,
-           %{crashes: [], restarts: 0, error: nil, failed: false, last: nil, homes: MapSet.new()}}
+           %{
+             crashes: %{},
+             restarts: 0,
+             error: nil,
+             failed_keys: MapSet.new(),
+             last: nil,
+             homes: MapSet.new()
+           }}
         end),
       sessions: %{},
       keys: %{},
@@ -1193,7 +1267,11 @@ defmodule Locus.Backends.Owners do
       status: owner.state,
       programs:
         Enum.map(owner.definition, fn %{name: name} ->
-          %{name: name, status: if(owner.programs[name].failed, do: :failed, else: :idle)}
+          %{
+            name: name,
+            status:
+              if(MapSet.size(owner.programs[name].failed_keys) > 0, do: :failed, else: :idle)
+          }
         end)
     }
   end
@@ -1248,7 +1326,8 @@ defmodule Locus.Backends.Owners do
       bytes: nil,
       busy: false,
       measuring: false,
-      measured_at: nil
+      measured_at: nil,
+      unmeasurable: false
     }
 
   defp put_home(state, home_id, fun),
@@ -1290,6 +1369,42 @@ defmodule Locus.Backends.Owners do
     end)
   end
 
+  defp home_list(launcher, server) do
+    if Code.ensure_loaded?(launcher) and function_exported?(launcher, :home_list, 1),
+      do: launcher.home_list(server),
+      else: {:error, :unavailable}
+  end
+
+  # Every running kept home, checked once an interval against the homes
+  # the launcher lists, so a home whose folder vanished under its sessions
+  # ends them.
+  defp check_homes(state) do
+    now = state.clock.()
+
+    running =
+      for {_id, owner} <- state.owners,
+          owner.state == :running,
+          {_sid, %{running: true, home_id: home_id}} <- owner.sessions,
+          home_id != nil,
+          uniq: true,
+          do: home_id
+
+    due? =
+      state.homes_checked_at == nil or now - state.homes_checked_at >= state.measure_interval_ms
+
+    if running != [] and due? do
+      %{launcher: launcher, launcher_server: server} = state
+      state = %{state | homes_checked_at: now}
+
+      {_ref, state} =
+        run(state, {:present, running}, @home_timeout_ms, fn -> home_list(launcher, server) end)
+
+      state
+    else
+      state
+    end
+  end
+
   defp measured(state, home_id, result) do
     home = %{
       Map.get(state.homes, home_id, new_home())
@@ -1313,8 +1428,27 @@ defmodule Locus.Backends.Owners do
       {:ok, bytes} ->
         %{state | homes: Map.put(state.homes, home_id, %{home | bytes: bytes})}
 
+      :absent ->
+        Logger.warning(
+          "[Locus.Backends.Owners] a kept home's folder is gone; ending its sessions"
+        )
+
+        state = %{state | homes: Map.put(state.homes, home_id, home)}
+        end_home(state, home_id, "home_absent")
+
+      # A home that cannot be measured whole is held to its cap all the
+      # same: its sessions end and it is refused until a reset.
       _failed ->
-        %{state | homes: Map.put(state.homes, home_id, home)}
+        Logger.warning(
+          "[Locus.Backends.Owners] a capped kept home could not be measured; ending its sessions"
+        )
+
+        state = %{
+          state
+          | homes: Map.put(state.homes, home_id, %{home | over_cap: true, unmeasurable: true})
+        }
+
+        end_home(state, home_id, "home_unmeasurable")
     end
   end
 
@@ -1433,7 +1567,7 @@ defmodule Locus.Backends.Owners do
         end
       end)
 
-    measure_homes(state)
+    state |> measure_homes() |> check_homes()
   end
 
   # A lapsed owner answers `lapsed` while it retires, then is gone.
