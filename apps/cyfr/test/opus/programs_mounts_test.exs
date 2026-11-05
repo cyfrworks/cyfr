@@ -227,6 +227,48 @@ defmodule Opus.ProgramsMountsTest do
     end
   end
 
+  describe "a sign-in recovering a needs_reauth entry" do
+    test "renewal keeps the owner for the sign-in alone, which completes, while the row's MCP session stands down",
+         %{ctx: ctx, fake: fake, controller: controller} do
+      entry = login_entry(ctx, "gh-login", "gh")
+      row = kept_stdio_row(ctx, entry)
+      assert {:ok, _tools} = Servers.ensure_started(row, ctx)
+      server = server_pid(ctx, row)
+      server_ref = Process.monitor(server)
+
+      # A restore leaves the entry needs_reauth; the person signs the row in
+      # again, as #561 rules.
+      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry, "needs_reauth")
+      admin = %{ctx | permissions: MapSet.new([:*])}
+
+      assert {:ok, %{session: token}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "sign_in",
+                 "name" => row.name,
+                 "entry" => entry
+               })
+
+      :ok = Programs.sign_in_attach(admin, token, self())
+      [{relay, _}] = Registry.lookup(Opus.Programs.Registry, {:sign_in, token})
+      relay_ref = Process.monitor(relay)
+
+      # A tick while the sign-in runs: the MCP holder of the row stands down,
+      # the sign-in's owner is kept, renewed and never released.
+      tick(controller)
+      assert_receive {:DOWN, ^server_ref, :process, ^server, _reason}, 3_000
+      refute_receive {:control, "release", %{"owners" => [%{"server" => _}]}, _}, 300
+      refute_received {:DOWN, ^relay_ref, :process, _, _}
+      refute_received {Programs, ^token, {:ended, _}}
+
+      # Its command exits 0: the sign-in completes and the entry is active.
+      Scripted.end_sessions(fake, row.id, 0)
+      assert_receive {Programs, ^token, {:ended, :signed_in}}, 5_000
+
+      assert {:ok, %{status: "active"}} =
+               Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry)
+    end
+  end
+
   describe "a kept row's status" do
     test "names its stderr's length and never its text", %{ctx: ctx, fake: fake} do
       entry = login_entry(ctx, "gh-login", "gh")
