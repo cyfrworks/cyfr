@@ -35,6 +35,10 @@ defmodule Cyfr.Test.ScriptedBackends do
   false`, and the next `open` of its key starts it afresh (`resumed:
   false`). A session's key is Locus's: its program, home, key and mode.
 
+  `set(fake, :reset_send, true)` resets the connection of the next `send`
+  once it has arrived, before any answer. `hold/2` holds a control or a
+  session message of its type.
+
   A `homes` message answers the kept homes the script holds (`homes`, a
   set: each an open names, until its retire; `set(fake, :homes, …)`).
 
@@ -71,7 +75,8 @@ defmodule Cyfr.Test.ScriptedBackends do
              idle_ms: nil,
              silent: [],
              answer_version: LocusBackends.version(),
-             refuse: %{}
+             refuse: %{},
+             reset_send: false
            }
          end},
         id: :scripted_backends
@@ -521,9 +526,17 @@ defmodule Cyfr.Test.ScriptedBackends do
 
       true ->
         expire_idle(agent)
+        held(agent, wire["type"])
         send(st.test, {:session, wire["type"], wire, fields})
 
         case pop_refusal(agent, wire["type"]) || send_refusal(agent, message) do
+          nil when message.type == :send and st.reset_send ->
+            # The send arrived (the test was told), and the connection is
+            # reset before any answer: what its sender cannot tell from a
+            # send that never left.
+            Agent.update(agent, &%{&1 | reset_send: false})
+            Process.exit(self(), :kill)
+
           nil ->
             handle_session(conn, agent, fields, message)
 

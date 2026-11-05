@@ -1649,6 +1649,65 @@ defmodule Opus.ProgramsTest do
       assert [{_athanor, ^other, "claude"}] = Programs.mounts()
     end
 
+    test "a send whose connection is reset after it arrived is uncertain, never safe to repeat",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      flush_sessions()
+      Scripted.set(fake, :reset_send, true)
+
+      assert {:error, :uncertain} =
+               Programs.pipe_send(ctx.athanor_id, "att_1", session, ["once"])
+
+      # It reached the box.
+      assert_received {:session, "send", %{"lines" => ["once"]}, _}
+    end
+
+    test "a holder killed has its session closed by the box, its row's other holder untouched",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: first}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_1")
+      assert {:ok, %{session: second}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, first})
+      flush_sessions()
+
+      # Killed, it runs no terminate/2: well before the idle period, the box
+      # closes its program all the same, and keeps the owner for the other.
+      Process.exit(pid, :kill)
+      assert_receive {:session, "close", %{"session" => ^first}, _}, 2_000
+      refute_receive {:control, "release", _message, _fields}, 300
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", second, ["still here"])
+    end
+
+    test "one deadline covers the owner's acquisition and the open; an open answered late is closed",
+         %{fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+
+      # Scaled from a 15 s acquisition and a 17 s open against a 30 s window:
+      # each fits alone, together they do not.
+      deadline = System.system_time(:millisecond) + 3_000
+      Scripted.hold(fake, "sync")
+      Scripted.hold(fake, "open")
+
+      opening =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-k", [], "att_1", deadline) end)
+
+      assert_receive {:held, "sync", sync}, 2_000
+      Process.sleep(1_500)
+      send(sync, :go)
+      assert_receive {:held, "open", open}, 2_000
+      Process.sleep(1_700)
+      send(open, :go)
+
+      assert {:error, :deadline} = Task.await(opening, 5_000)
+      assert System.system_time(:millisecond) < deadline + 2_000
+
+      # What the late open started is closed, and no holder keeps it.
+      assert_receive {:session, "close", _message, _fields}, 3_000
+      assert_released(row, 1)
+      assert Programs.mounts() == []
+    end
+
     test "a row that is disabled stands its sessions down", %{
       ctx: ctx,
       fake: fake,

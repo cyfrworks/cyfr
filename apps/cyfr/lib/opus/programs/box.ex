@@ -12,7 +12,9 @@ defmodule Opus.Programs.Box do
   An **owner** is one `mcp_servers` row of one athanor whose transport is
   `stdio` or `pipe` — the pair `(athanor_id, mcp_servers.id)` — held by one
   or more **holders**: the processes that speak over its sessions (an
-  `Emissary.External.Server` for a stdio row, a sign-in relay). The service
+  `Emissary.External.Server` for a stdio row, a sign-in relay, a pipe
+  holder, `Opus.Programs.Pipe`, whose session the box records and closes
+  should the holder die). The service
   runs an owner's programs at a version `(g, e)`: `g` is this member's
   control-plane generation (`Arca.ControlPlane.generation/0`; a member that
   holds no claim speaks generation 1) and `e` is the row's epoch. An owner
@@ -289,6 +291,21 @@ defmodule Opus.Programs.Box do
     end
   end
 
+  # A pipe holder's session, recorded as the holder's on its owner's entry:
+  # should the holder die, the box closes it (`handle_info/2`'s `:DOWN`).
+  def handle_call({:pipe_session, owner, session}, {pid, _tag}, state) do
+    key = {owner.athanor_id, owner.server_id}
+
+    case state.owners[key] do
+      %{holders: %{^pid => _ref}} = entry ->
+        sessions = Map.put(Map.get(entry, :sessions, %{}), pid, session)
+        {:reply, :ok, put_owner(state, key, Map.put(entry, :sessions, sessions))}
+
+      _not_held ->
+        {:reply, {:error, :not_held}, state}
+    end
+  end
+
   # A holder is stopping: it holds the owner no more, and once no holder
   # does, this member stops running it — the owner is released and the
   # claim given up with it, so the next member may take it.
@@ -406,11 +423,14 @@ defmodule Opus.Programs.Box do
     {:noreply, %{state | inflight: nil} |> settle(job, spec, result) |> dispatch()}
   end
 
-  # A holder that exits, however it exits, holds its owner no more; the last
-  # one's exit releases the owner and gives up this member's claim.
+  # A holder that exits, however it exits, holds its owner no more: the
+  # session it recorded is closed here, since a holder killed never closed
+  # it, and the last one's exit releases the owner and gives up this
+  # member's claim.
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     case Enum.find(state.owners, fn {_key, entry} -> entry.holders[pid] == ref end) do
       {key, entry} ->
+        close_left(state, key, entry, pid)
         entry = remove_holder(entry, pid)
 
         if entry.holders == %{} do
@@ -469,6 +489,7 @@ defmodule Opus.Programs.Box do
 
         put_owner(state, key, %{
           holders: %{pid => Process.monitor(pid)},
+          sessions: %{},
           sign_ins: if(sign_in?(owner), do: MapSet.new([pid]), else: MapSet.new()),
           epoch: epoch,
           generation: nil,
@@ -501,7 +522,25 @@ defmodule Opus.Programs.Box do
 
       {ref, holders} ->
         Process.demonitor(ref, [:flush])
-        %{entry | holders: holders, sign_ins: MapSet.delete(entry.sign_ins, pid)}
+
+        entry
+        |> Map.put(:sessions, Map.delete(Map.get(entry, :sessions, %{}), pid))
+        |> Map.merge(%{holders: holders, sign_ins: MapSet.delete(entry.sign_ins, pid)})
+    end
+  end
+
+  # The session a dead holder recorded, closed under the owner's grant by a
+  # process of its own, so the control channel waits on nothing. An owner
+  # never synced runs no session.
+  defp close_left(state, key, entry, pid) do
+    case Map.get(entry, :sessions, %{}) do
+      %{^pid => session} when entry.generation != nil ->
+        grant = grant(state, key, entry)
+        {:ok, _task} = Task.start(fn -> Opus.Programs.Session.close(grant, session, 10_000) end)
+        :ok
+
+      _none ->
+        :ok
     end
   end
 

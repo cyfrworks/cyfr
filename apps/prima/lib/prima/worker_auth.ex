@@ -448,6 +448,18 @@ defmodule Prima.WorkerAuth do
   end
 
   @doc """
+  The bytes `seal_call/5` writes for a plaintext of `plaintext_bytes`
+  bytes: its IV, its tag and its ciphertext, base64url without padding.
+  What crosses the wire for an answer is this many bytes, so a bound on
+  what crosses is a bound on this.
+  """
+  @spec sealed_bytes(non_neg_integer()) :: non_neg_integer()
+  def sealed_bytes(plaintext_bytes) when is_integer(plaintext_bytes) and plaintext_bytes >= 0 do
+    raw = 12 + 16 + plaintext_bytes
+    div(raw, 3) * 4 + Enum.at([0, 2, 3], rem(raw, 3))
+  end
+
+  @doc """
   Seal one half of a host call — the runner's `:body` or CYFR's `:answer`
   — with the attempt's seal key, bound to the call's header fields. `iv`
   is 12 random bytes unless given.

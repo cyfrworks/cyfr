@@ -69,13 +69,16 @@ defmodule Opus.Programs.Session do
     end
   end
 
-  @doc "Write `lines` to the session's process; `:ended` once it no longer runs."
-  @spec send(grant(), String.t(), [String.t()]) ::
+  @doc """
+  Write `lines` to the session's process; `:ended` once it no longer runs.
+  The answer is awaited `timeout_ms` (default #{@send_timeout_ms}).
+  """
+  @spec send(grant(), String.t(), [String.t()], pos_integer()) ::
           {:ok, :running | :ended} | {:error, refusal()}
-  def send(grant, session, lines) when is_list(lines) do
+  def send(grant, session, lines, timeout_ms \\ @send_timeout_ms) when is_list(lines) do
     message = Map.merge(base(:send, grant), %{session: session, lines: lines})
 
-    with {:ok, %{status: status}} <- post(grant, message, @send_timeout_ms),
+    with {:ok, %{status: status}} <- post(grant, message, timeout_ms),
          do: {:ok, status}
   end
 
@@ -108,12 +111,12 @@ defmodule Opus.Programs.Session do
     post(grant, message, max_wait_ms + slack_ms)
   end
 
-  @doc "End the session's process."
-  @spec close(grant(), String.t()) :: :ok | {:error, refusal()}
-  def close(grant, session) do
+  @doc "End the session's process, its answer awaited `timeout_ms` (default #{@send_timeout_ms})."
+  @spec close(grant(), String.t(), pos_integer()) :: :ok | {:error, refusal()}
+  def close(grant, session, timeout_ms \\ @send_timeout_ms) do
     message = Map.put(base(:close, grant), :session, session)
 
-    with {:ok, _closed} <- post(grant, message, @send_timeout_ms), do: :ok
+    with {:ok, _closed} <- post(grant, message, timeout_ms), do: :ok
   end
 
   defp base(type, grant),

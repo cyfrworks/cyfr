@@ -968,7 +968,7 @@ A catalyst drives a program its `login` need names (see [`needs` Section](#needs
 | `close(session) -> result<_, string>` | nothing |
 
 - **`open`** names the login need (its key in the manifest, never an entry) and `key`, the catalyst's name for the session: a chat request's `session`, or a fresh id. `argv` is appended to the program's command, as the admin defined it on the Programs page; it shapes only what runs inside the box. A session belongs to the program and the key, not to one run: a later run opening the same key attaches to it while its program runs (`resumed: true`). When the program had ended (it exits, or no line went either way for the program's idle period) the open starts it again with this `argv` and answers `resumed: false`: a catalyst that speaks a protocol over the session starts that protocol again, and passes in `argv` what resumes its work. A repeat open by the same run answers as the first did. Keys are the component's own: another component bound to the same program never reaches its sessions. Each run opens before it sends, reads or closes.
-- **`send`** writes each line, in order, with its newline. A line has no newline or NUL, is at most 1 MiB, and one call's lines fit the component's `max_request_size`. A send is never repeated by the host: an answer lost on the way is `lost`.
+- **`send`** writes each line, in order, with its newline. A line has no newline or NUL, is at most 1 MiB, and one call's lines fit the component's `max_request_size`. A send is never repeated by the host: one whose answer was lost, between the runner and CYFR or between CYFR and the program's box, is `lost`, and its lines may have arrived.
 - **`recv`** answers the lines past `after` (0 for the first read), waiting at most `max-wait-ms` (at most 20 000) for one when there is none. A line is kept until a later call names an `after` at or past it, so asking again with the same `after` answers the same lines; an answer carries as many lines as fit, and the next read names the last `seq` it got. A reader that falls behind loses the oldest lines past the session's buffer (8 MiB), counted in `dropped`. `running: false` says the program ended; a session no longer held answers no lines and `running: false`.
 - **`close`** ends the session and its program; a repeat is harmless.
 
@@ -984,8 +984,8 @@ An error is a code:
 | `ended` | A send to a session whose program ended: open the key again |
 | `invalid_request` | A key over 256 bytes, an argument or line the pipe refuses |
 | `too_large` | A line no answer can carry, or lines past `max_request_size` |
-| `unavailable` | CYFR or the box could not answer; asking again later is safe |
-| `lost` | The run is no longer current, or a send's answer was lost and its effect is unknown |
+| `unavailable` | CYFR or the box could not answer, and nothing was done; asking again later is safe |
+| `lost` | The run is no longer current; or a send's answer was lost on its way back, so its lines may have reached the program: read what the program wrote before sending them again, never send them again blind |
 
 ### `cyfr:formula/invoke` — Sub-Component Orchestration
 

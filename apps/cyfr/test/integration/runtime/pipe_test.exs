@@ -249,6 +249,61 @@ defmodule Locus.Runtime.PipeTest do
     assert Opus.Programs.mounts() == []
   end
 
+  test "an open that does not read consumes no once binding", %{ctx: ctx} do
+    row!(ctx)
+    entry = login!(ctx)
+    ref = publish_probe!(ctx, %{"coder" => login_need(@program)})
+    consent!(ctx, ref, [%{need: "coder", entry_id: entry.id, lifetime: %{kind: "once"}}])
+
+    # The probe is held at its own open; meanwhile its attempt asks again
+    # with a key past the bound.
+    wire = TwoServices.watch!()
+
+    TwoServices.Wire.hold(wire, &(&1.callback == :pipe_open),
+      holder: self(),
+      once: true,
+      notify: fn call, conn -> {:held_open, call, conn} end
+    )
+
+    id = Prima.UUID7.execution_id()
+
+    running =
+      Task.async(fn ->
+        Opus.run_root(ctx, :default, ref <> ":1.0.0", %{"line" => "x"}, execution_id: id)
+      end)
+
+    assert_receive {:held_open, %{fields: fields}, conn}, 30_000
+
+    caller = %{fields | nonce: "n_pipe_long_key"}
+    long = String.duplicate("k", 257)
+
+    assert {:error, {:guest_error, "invalid_request", _}} =
+             Opus.Host.Pipe.open(caller, "coder", long, [])
+
+    assert %{consumed_by_root: nil, lifetime_kind: "once"} = binding_row!(entry)
+
+    # The binding stands: the probe's own open, let go, mounts it.
+    TwoServices.release!(conn)
+    assert {:ok, _} = Task.await(running, 60_000)
+    TwoServices.settled!()
+
+    assert [%{args: %{"outcome" => %{"output" => %{"data" => %{"open" => "ok"}}}}}] =
+             TwoServices.calls(:complete, id)
+
+    assert %{consumed_by_root: root} = binding_row!(entry)
+    assert is_binary(root)
+  end
+
+  # The consent's binding row of `entry`.
+  defp binding_row!(entry) do
+    import Ecto.Query
+
+    [row] =
+      Arca.Repo.all(from r in Arca.Schemas.ConsentVaultRef, where: r.vault_entry_id == ^entry.id)
+
+    row
+  end
+
   test "once the login entry is revoked, an open is refused setup_required and opens nothing",
        %{ctx: ctx} do
     row!(ctx)
