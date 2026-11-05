@@ -202,23 +202,18 @@ defmodule Compendium.AquaAgentTest do
       assert :ok = AquaAgent.validate_tool_policy(%{"files.*" => "ask"}, AquaAgent.soul_type())
     end
 
-    test "a role holds nothing at ask — it has no card to raise" do
-      assert {:error, msg} =
-               AquaAgent.validate_tool_policy(%{"files.write" => "ask"}, AquaAgent.role_type())
-
-      assert msg =~ "no card"
-
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{"files.write" => "auto"}, AquaAgent.role_type())
-
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{"files.write" => "ask"}, AquaAgent.soul_type())
+    test "a role holds an action at ask as the soul does" do
+      for type <- [AquaAgent.role_type(), AquaAgent.soul_type()] do
+        assert :ok = AquaAgent.validate_tool_policy(%{"files.write" => "ask"}, type)
+        assert :ok = AquaAgent.validate_tool_policy(%{"files.delete" => "ask"}, type)
+        assert :ok = AquaAgent.validate_tool_policy(%{"files.write" => "auto"}, type)
+      end
     end
 
     test "a role holds no execution.run at any value — a role launches nothing" do
-      # Every launch asks, and a role has no card to raise, so the key is
-      # what has no effect, whatever it is held at; the refusal says so
-      # ahead of the role's `ask` rule and the grammar's value rule.
+      # Only the soul launches, so on a role the key is what has no
+      # effect, whatever it is held at; the refusal says so ahead of the
+      # grammar's value rule.
       for mode <- ["auto", "ask", "never"] do
         assert {:error, {:tool_policy_no_effect, "execution.run"}} =
                  AquaAgent.validate_tool_policy(
@@ -249,7 +244,7 @@ defmodule Compendium.AquaAgentTest do
                AquaAgent.parse("aqua", with_policy("  execution.run: auto\n"))
     end
 
-    test "a role's delegation glob and the search gate pass" do
+    test "a glob of a tool no table holds, and the search gate, pass" do
       assert :ok =
                AquaAgent.validate_tool_policy(
                  %{"builder.*" => "auto", "native_search" => "auto"},

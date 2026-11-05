@@ -83,10 +83,9 @@ defmodule Compendium.FacadeTest do
     acknowledged_projection_epoch: 3,
     agent: 2,
     agent_capability_digest: 1,
-    agent_clone_glob: 1,
     agent_file_path: 1,
     agent_role_type: 0,
-    agent_row: 2,
+    agent_row: 1,
     agent_snapshot: 2,
     agent_soul_type: 0,
     agent_source_refs: 1,
@@ -94,7 +93,6 @@ defmodule Compendium.FacadeTest do
     agents: 1,
     canvas_versions: 2,
     discover_components: 1,
-    enabled_agent_roster: 1,
     encode_activation_graph: 1,
     get_blob: 2,
     group_by_component: 1,
@@ -193,7 +191,6 @@ defmodule Compendium.FacadeTest do
     } do
       assert Compendium.agent_role_type() == Compendium.AquaAgent.role_type()
       assert Compendium.agent_soul_type() == Compendium.AquaAgent.soul_type()
-      assert Compendium.agent_clone_glob("scout") == "scout.*"
       assert Compendium.skills_index_limit() == Compendium.AquaSkills.index_limit()
 
       assert Compendium.parse_agent_frontmatter("no frontmatter") ==

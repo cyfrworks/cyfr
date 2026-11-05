@@ -128,8 +128,8 @@ defmodule Opus.AgentAuthorityTest do
                child_opts
              )
 
-    # A role the soul may clone into loads as a source of its own, with its
-    # edge into the http hand carrying the hand's egress.
+    # A role loads as a source of its own, with its edge into the http hand
+    # carrying the hand's egress.
     {:ok, web} = Admission.authority_for(ctx, :default, "agent:local.web")
     assert web.source_ref == "agent:local.web"
 
@@ -169,7 +169,7 @@ defmodule Opus.AgentAuthorityTest do
              {:error, {:corrupt, {:component_graph, @soul}}}
   end
 
-  test "two roles on the soul run one catalyst with two keys", %{ctx: ctx} do
+  test "two roles run one catalyst with two keys, each under its own consent", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
 
     home =
@@ -182,47 +182,32 @@ defmodule Opus.AgentAuthorityTest do
         fields: %{"ANTHROPIC_API_KEY" => "sk-work"}
       )
 
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
+    for {role, label} <- [{"agent:local.web", "default"}, {"agent:local.artisan", "work"}] do
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: role})
+      decisions = %{ref: role, selections: [%{dep: "catalyst:local.claude", label: label}]}
+      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
-    decisions = %{
-      ref: @soul,
-      selections: [
-        %{from: "agent:local.web", dep: "catalyst:local.claude", label: "default"},
-        %{from: "agent:local.artisan", dep: "catalyst:local.claude", label: "work"}
-      ]
-    }
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(ctx, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+    end
 
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+    edge = fn role ->
+      {:ok, authority} = Admission.authority_for(ctx, :default, role)
 
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
+      {:ok, edge} =
+        Prima.Authority.Blob.lookup_edge(authority.policy, role, "catalyst:local.claude", "")
 
-    {:ok, soul} = Admission.authority_for(ctx, :default, @soul)
+      edge
+    end
 
-    {:ok, web_edge} =
-      Prima.Authority.Blob.lookup_edge(
-        soul.policy,
-        "agent:local.web",
-        "catalyst:local.claude",
-        ""
-      )
-
-    {:ok, artisan_edge} =
-      Prima.Authority.Blob.lookup_edge(
-        soul.policy,
-        "agent:local.artisan",
-        "catalyst:local.claude",
-        ""
-      )
-
-    assert web_edge.vault.entry_id == home.id
-    assert artisan_edge.vault.entry_id == work.id
+    assert edge.("agent:local.web").vault.entry_id == home.id
+    assert edge.("agent:local.artisan").vault.entry_id == work.id
   end
 
   defp bind_claude!(ctx, opts) do
