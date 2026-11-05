@@ -168,8 +168,10 @@ defmodule Cyfr.StackShapeTest do
 
   # An island's egress guard as compose runs it, whole: the Locus image
   # running cyfr-guard, NET_ADMIN alone, the ready file's tmpfs its only
-  # writable surface, the island's spawn uids and cyfr's fixed endpoint
-  # address in its environment with the private hosts the deployment names,
+  # writable surface, every uid range the island's keeper spawns under (its
+  # pool, and the kept folders' uids where it keeps them) and cyfr's fixed
+  # endpoint address in its environment with the private hosts the
+  # deployment names,
   # the island's service name as its alias on the island's network, and the
   # guard's own health probe. Its profile is the island's.
   defp guard_service(release, role, backends) do
@@ -187,7 +189,7 @@ defmodule Cyfr.StackShapeTest do
       "ipc" => "none",
       "tmpfs" => ["/run/cyfr-guard:mode=0755,size=1m"],
       "environment" => [
-        "CYFR_GUARD_POOL=#{role.uids.first}-#{role.uids.last}",
+        "CYFR_GUARD_POOL=#{spawn_ranges(role)}",
         "CYFR_GUARD_CONTROL_PLANE=#{release.endpoint_address}",
         "CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-#{backends.service}}"
       ],
@@ -205,6 +207,11 @@ defmodule Cyfr.StackShapeTest do
     }
 
     if role.profile, do: Map.put(guard, "profiles", [role.profile]), else: guard
+  end
+
+  defp spawn_ranges(role) do
+    [role.uids | if(role.kept_uids, do: [role.kept_uids], else: [])]
+    |> Enum.map_join(",", &"#{&1.first}-#{&1.last}")
   end
 
   # The `{service, key}` pairs, sorted, where a guard of a compose text

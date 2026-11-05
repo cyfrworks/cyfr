@@ -27,7 +27,9 @@
 #      (CYFR_GUARD_CONTROL_PLANE) and every subnet of this namespace's own
 #      interfaces, which hold cyfr's address on the island's network, the
 #      island's gateway and the island itself;
-#   3. from the island's spawn uids (CYFR_GUARD_POOL), every address of this
+#   3. from the island's spawn uids (CYFR_GUARD_POOL: every range its
+#      keeper runs a spawn under, its pool and, on the backends island, the
+#      kept folders' uids, one rule per range), every address of this
 #      namespace, so a spawn reaches no listener of another spawn on the
 #      shared loopback, nor the island's service, except Docker's resolver
 #      at 127.0.0.11:53;
@@ -49,13 +51,16 @@
 #
 #   cyfr-guard         install the rules, write the ready file and sleep
 #   cyfr-guard check   the health probe: the ready file is present, both
-#                      rule tables can be read, and the rules they hold are
-#                      the ones the file records
+#                      rule tables can be read, the rules they hold are the
+#                      ones the file records, and every spawn range has its
+#                      rules among them
 #   cyfr-guard rules   print the rules it would install, one command a line,
 #                      and install none
 #
 # Environment:
-#   CYFR_GUARD_POOL              the island's spawn uids, `<first>-<last>`
+#   CYFR_GUARD_POOL              the island's spawn uids: every range its
+#                                keeper runs a spawn under, `<first>-<last>`,
+#                                comma-separated
 #   CYFR_GUARD_CONTROL_PLANE     cyfr's fixed address on the default network
 #   CYFR_PRIVATE_EGRESS_TARGETS  the private hosts, addresses or CIDRs the
 #                                deployment's own outbound calls may reach,
@@ -252,6 +257,33 @@ check() {
   recorded="$(cat "$READY")"
   installed="$(digest)" || { log "not ready: a rule table could not be read"; exit 1; }
   [ "$recorded" = "$installed" ] || { log "not ready: the rules installed are not the ones recorded"; exit 1; }
+  # The digest proves the rules unchanged since they were recorded; this
+  # proves they are the ones for every range the island spawns under.
+  ranges="$(spawn_ranges)" || exit 1
+  v4rules="$(iptables -w 5 -S "$CHAIN")" || { log "not ready: the IPv4 rules could not be read"; exit 1; }
+  for range in $ranges; do
+    case "$v4rules" in
+      *"--uid-owner $range -m addrtype --dst-type LOCAL -j REJECT"*) ;;
+      *) log "not ready: no rule holds spawns $range off this namespace"; exit 1 ;;
+    esac
+  done
+}
+
+# The island's spawn uid ranges, CYFR_GUARD_POOL's comma-separated
+# `<first>-<last>` entries, one a line; a malformed or empty list ends the
+# guard naming it.
+spawn_ranges() {
+  list="${CYFR_GUARD_POOL:?names the island spawn uids as <first>-<last>, comma-separated}"
+  ranges="$(printf '%s' "$list" | tr ',' ' ')"
+  [ -n "$ranges" ] || { log "error: CYFR_GUARD_POOL names no range"; return 1; }
+  for range in $ranges; do
+    case "$range" in
+      *[!0-9-]* | -* | *- | *-*-* | [!0-9]*) log "error: CYFR_GUARD_POOL holds '$range', not <first>-<last>"; return 1 ;;
+      *-*) ;;
+      *) log "error: CYFR_GUARD_POOL holds '$range', not <first>-<last>"; return 1 ;;
+    esac
+    echo "$range"
+  done
 }
 
 # A rule of one family, or the guard ends naming it; under `rules`, the
@@ -313,12 +345,8 @@ own_v6_subnets() {
 }
 
 add_rules() {
-  pool="${CYFR_GUARD_POOL:?names the island spawn uids as <first>-<last>}"
+  ranges="$(spawn_ranges)" || exit 1
   control_plane="${CYFR_GUARD_CONTROL_PLANE:?names the fixed address of cyfr on the default network}"
-  case "$pool" in
-    [0-9]*-[0-9]*) ;;
-    *) log "error: CYFR_GUARD_POOL is '$pool', not <first>-<last>"; exit 1 ;;
-  esac
   [ "$(family "$control_plane")" = 4 ] || { log "error: CYFR_GUARD_CONTROL_PLANE is '$control_plane', not an IPv4 address"; exit 1; }
 
   v4 -N "$CHAIN"
@@ -344,15 +372,23 @@ add_rules() {
     v6 -A "$CHAIN" -d "$subnet" -j REJECT --reject-with icmp6-adm-prohibited
   done
 
-  # 3. the spawns' reach into this namespace: the resolver alone
-  v4 -A "$CHAIN" -m owner --uid-owner "$pool" -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j RETURN
-  v4 -A "$CHAIN" -m owner --uid-owner "$pool" -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp-admin-prohibited
-  v6 -A "$CHAIN" -m owner --uid-owner "$pool" -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp6-adm-prohibited
+  # 3. the spawns' reach into this namespace: the resolver alone, for
+  # every range
+  for range in $ranges; do
+    v4 -A "$CHAIN" -m owner --uid-owner "$range" -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j RETURN
+    v4 -A "$CHAIN" -m owner --uid-owner "$range" -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp-admin-prohibited
+    v6 -A "$CHAIN" -m owner --uid-owner "$range" -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp6-adm-prohibited
+  done
 
-  # 4. the service's own loopback (rule 3 has refused the spawns theirs)
-  # and the deployment's private hosts, then every other private address
-  v4 -A "$CHAIN" -o lo -m owner ! --uid-owner "$pool" -j RETURN
-  v6 -A "$CHAIN" -o lo -m owner ! --uid-owner "$pool" -j RETURN
+  # 4. the service's own loopback, for a uid of no spawn range (rule 3 has
+  # refused the spawns theirs), and the deployment's private hosts, then
+  # every other private address
+  outside=""
+  for range in $ranges; do outside="$outside -m owner ! --uid-owner $range"; done
+  # shellcheck disable=SC2086 # one match per range, word-split on purpose
+  v4 -A "$CHAIN" -o lo $outside -j RETURN
+  # shellcheck disable=SC2086
+  v6 -A "$CHAIN" -o lo $outside -j RETURN
   targets="$(printf '%s' "${CYFR_PRIVATE_EGRESS_TARGETS:-}" | tr ',' ' ')"
   for target in $targets; do
     case "$target" in
@@ -383,7 +419,7 @@ install_rules() {
   recorded="$(digest)" || { log "error: a rule table could not be read, so the guard is not ready"; exit 1; }
   printf '%s\n' "$recorded" > "$READY.tmp"
   mv "$READY.tmp" "$READY"
-  log "ready: every rule installed for spawns $pool"
+  log "ready: every rule installed for spawns $(printf '%s' "$ranges" | tr '\n' ' ' | sed 's/ $//')"
 }
 
 case "${1:-}" in

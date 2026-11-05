@@ -559,7 +559,9 @@ services:
     tmpfs:
       - /run/cyfr-guard:mode=0755,size=1m
     environment:
-      - CYFR_GUARD_POOL=20001-20032
+      # Every uid the backends keeper runs a program under: its pool and
+      # the kept folders' uids (its --pool and --kept-homes ranges).
+      - CYFR_GUARD_POOL=20001-20032,40001-49999
       - CYFR_GUARD_CONTROL_PLANE=172.16.230.2
       - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
     networks:

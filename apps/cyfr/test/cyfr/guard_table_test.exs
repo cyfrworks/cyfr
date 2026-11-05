@@ -15,7 +15,8 @@ defmodule Cyfr.GuardTableTest do
 
   alias Mix.Tasks.Cyfr.Gen.GuardTable
 
-  @pool "61000-61009"
+  # Two spawn ranges, as the backends island's pool and kept folders.
+  @ranges ["61000-61009", "62001-62999"]
   @control_plane "172.16.230.2"
   @targets ["10.9.8.0/24", "fd12:3456::/64"]
 
@@ -30,7 +31,7 @@ defmodule Cyfr.GuardTableTest do
     {output, 0} =
       System.cmd("sh", [GuardTable.path(), "rules"],
         env: [
-          {"CYFR_GUARD_POOL", @pool},
+          {"CYFR_GUARD_POOL", Enum.join(@ranges, ",")},
           {"CYFR_GUARD_CONTROL_PLANE", @control_plane},
           {"CYFR_PRIVATE_EGRESS_TARGETS", Enum.join(@targets, ",")}
         ],
@@ -62,12 +63,16 @@ defmodule Cyfr.GuardTableTest do
                ] ++
                rejects(Enum.reject(subnets, &v6?/1)) ++
                rejects(Enum.filter(subnets, &v6?/1)) ++
+               Enum.flat_map(@ranges, fn range ->
+                 [
+                   "iptables -A CYFR_GUARD -m owner --uid-owner #{range} -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j RETURN",
+                   "iptables -A CYFR_GUARD -m owner --uid-owner #{range} -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp-admin-prohibited",
+                   "ip6tables -A CYFR_GUARD -m owner --uid-owner #{range} -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp6-adm-prohibited"
+                 ]
+               end) ++
                [
-                 "iptables -A CYFR_GUARD -m owner --uid-owner #{@pool} -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j RETURN",
-                 "iptables -A CYFR_GUARD -m owner --uid-owner #{@pool} -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp-admin-prohibited",
-                 "ip6tables -A CYFR_GUARD -m owner --uid-owner #{@pool} -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp6-adm-prohibited",
-                 "iptables -A CYFR_GUARD -o lo -m owner ! --uid-owner #{@pool} -j RETURN",
-                 "ip6tables -A CYFR_GUARD -o lo -m owner ! --uid-owner #{@pool} -j RETURN",
+                 "iptables -A CYFR_GUARD -o lo #{outside()} -j RETURN",
+                 "ip6tables -A CYFR_GUARD -o lo #{outside()} -j RETURN",
                  "iptables -A CYFR_GUARD -d 10.9.8.0/24 -j RETURN",
                  "ip6tables -A CYFR_GUARD -d fd12:3456::/64 -j RETURN"
                ] ++
@@ -106,4 +111,8 @@ defmodule Cyfr.GuardTableTest do
   end
 
   defp v6?(range), do: String.contains?(range, ":")
+
+  # The service's own loopback is a uid's of no spawn range: one negated
+  # owner match per range.
+  defp outside, do: Enum.map_join(@ranges, " ", &"-m owner ! --uid-owner #{&1}")
 end
