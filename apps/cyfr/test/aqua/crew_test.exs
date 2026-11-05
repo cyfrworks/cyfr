@@ -192,16 +192,18 @@ defmodule Aqua.CrewTest do
     assert status["claude-code"] == {:missing, "catalyst:local.claude-code"}
     assert {:needs_key, _} = status["explorer"]
 
-    assert Crew.index(ctx, roster) == [
-             %{
-               "name" => "planner",
-               "brain" => "claude (claude-sonnet-5-5)",
-               "description" => "Plans.",
-               "avoid" => "Building."
-             }
-           ]
+    assert Crew.index(ctx, roster) ==
+             {:ok,
+              [
+                %{
+                  "name" => "planner",
+                  "brain" => "claude (claude-sonnet-5-5)",
+                  "description" => "Plans.",
+                  "avoid" => "Building."
+                }
+              ]}
 
-    # Bound, the explorer joins, and crew.list answers the same index.
+    # Bound, the explorer joins.
     Sanctum.Test.ConsentFixtures.bind_key!(
       ctx,
       "catalyst:local.gemini",
@@ -209,11 +211,64 @@ defmodule Aqua.CrewTest do
       origins: [:interactive, :programmatic]
     )
 
-    assert Crew.index(ctx, roster) |> Enum.map(& &1["name"]) == ~w(explorer planner)
+    assert {:ok, index} = Crew.index(ctx, roster)
+    assert Enum.map(index, & &1["name"]) == ~w(explorer planner)
 
-    assert {:ok, %{count: 2, members: [explorer, _planner]}} = Crew.list(ctx)
-    assert %{name: "explorer", brain: "gemini (gemini-pro-latest)", good_at: good_at} = explorer
-    assert good_at =~ "web research"
+    # A context whose catalyst reads are refused lists nobody silently: the
+    # index refuses.
+    assert {:error, {:unavailable, _}} = Crew.index(Sanctum.Context.enter_guest(ctx), roster)
+  end
+
+  # crew.list is a chain's call: it reads readiness as the person behind
+  # the calling turn, as crew.ask does and as the prompt's index reads it,
+  # so a ready member is listed from inside the soul's turn.
+  test "the soul's crew.list names the ready members, read as the person behind its turn",
+       %{ctx: ctx, room: room} do
+    script!([call("c1", "crew", %{"action" => "list"}), reply("The planner can take it.")])
+
+    {:ok, %{turn_id: soul}} = Runner.send_message(ctx, room.id, "who can help?")
+    await_status(ctx, soul, "completed")
+
+    {:ok, steps} = Tape.steps(ctx, elem(Tape.turn(ctx, soul), 1))
+    assert %{outcome: "ok"} = Enum.find(steps, &(&1.tool == "crew" and &1.action == "list"))
+
+    # The tool's answer, as the soul's next model round carries it.
+    [_ask, answered] =
+      Enum.filter(
+        ScriptedWorker.calls(),
+        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.aqua")
+      )
+
+    # The result rides the messages as JSON text inside the request's own.
+    sent = Jason.encode!(answered.input["params"]["messages"])
+    assert sent =~ ~r/good_at\\*":\s*\\*"Plans\./
+    assert sent =~ ~r/name\\*":\s*\\*"planner/
+    assert sent =~ ~r/count\\*":\s*1\b/
+  end
+
+  test "a person's line in a member's own thread is held to its readiness before it is written",
+       %{ctx: ctx, room: room} do
+    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
+
+    # The planner's brain leaves the athanor after its thread was made.
+    {:ok, planner} = Compendium.AquaAgent.get(ctx, "planner")
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("planner"),
+        Compendium.AquaAgent.serialize(%{planner | catalyst_ref: "catalyst:local.nowhere"})
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    for text <- ["@planner continue", "continue"] do
+      assert {:error, {:crew_unready, "planner", :not_installed}} =
+               Runner.send_message(ctx, child.id, text)
+    end
+
+    assert rows(ctx, child.id) == []
+    assert {:ok, []} = Tape.open_turns(ctx, child.id)
   end
 
   # Readiness holds at every way a job reaches a member, not only in the

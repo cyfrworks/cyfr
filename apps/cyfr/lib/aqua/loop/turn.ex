@@ -24,6 +24,8 @@ defmodule Aqua.Loop.Turn do
   included: nothing chooses another model for a step.
   """
 
+  require Logger
+
   alias Aqua.Loop.Request
   alias Aqua.Tape
   alias Prima.Authority
@@ -180,11 +182,21 @@ defmodule Aqua.Loop.Turn do
   defp narrowed(policy, _all), do: policy
 
   # The crew index, listed in the soul's prompt when its policy offers
-  # `crew.ask`; only the soul hands a job on (`Aqua.Runner.Admission`).
+  # `crew.ask`; only the soul hands a job on (`Aqua.Runner.Admission`). An
+  # index that cannot be read lists no crew this turn, and says so in the
+  # log.
   defp crew(ctx, roster, policy, true = _soul?) do
-    if Map.get(policy, "crew.ask") in ["auto", "ask"],
-      do: Aqua.Crew.index(ctx, roster),
-      else: []
+    with true <- Map.get(policy, "crew.ask") in ["auto", "ask"],
+         {:ok, index} <- Aqua.Crew.index(ctx, roster) do
+      index
+    else
+      false ->
+        []
+
+      {:error, reason} ->
+        Logger.warning("[Aqua.Loop.Turn] the crew index could not be read: #{inspect(reason)}")
+        []
+    end
   end
 
   defp crew(_ctx, _roster, _policy, false = _soul?), do: []

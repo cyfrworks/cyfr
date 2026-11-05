@@ -532,7 +532,9 @@ defmodule Aqua.Providers.Thread do
   def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle("turn", %Context{} = ctx, args), do: turn(ctx, args)
   def handle("crew", %Context{} = ctx, %{"action" => "ask"} = args), do: Aqua.Crew.ask(ctx, args)
-  def handle("crew", %Context{} = ctx, %{"action" => "list"}), do: Aqua.Crew.list(ctx)
+
+  def handle("crew", %Context{} = ctx, %{"action" => "list"} = args),
+    do: Aqua.Crew.list(ctx, args)
 
   def handle("crew", _ctx, _args),
     do: {:error, {:invalid_argument, "crew takes the action ask or list"}}

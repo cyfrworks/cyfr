@@ -584,18 +584,15 @@ defmodule Aqua.Runner do
   defp handle_owned_call({:send, ctx, text, opts}, _from, state) do
     opts = Keyword.put(opts, :last, state.agent)
 
-    case Admission.check(ctx, state.athanor_id, state.thread, text, opts) do
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-
-      {:ok, {:turn, name}, text} ->
-        admit_turn(state, ctx, name, text, opts)
-
-      {:ok, {:request, member}, text} ->
-        accept_request(state, ctx, member, text, opts)
-
-      {:ok, :content, text} ->
-        accept_content(state, ctx, text, opts)
+    with {:ok, decision, text} <- Admission.check(ctx, state.athanor_id, state.thread, text, opts),
+         :ok <- crew_ready(ctx, decision, opts) do
+      case decision do
+        {:turn, name} -> admit_turn(state, ctx, name, text, opts)
+        {:request, member} -> accept_request(state, ctx, member, text, opts)
+        :content -> accept_content(state, ctx, text, opts)
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -916,16 +913,22 @@ defmodule Aqua.Runner do
 
   # A request to a crew member: the row with the outbox record that
   # delivers it, and no turn here.
-  # A person's ask of a crew member is held to the member's readiness
-  # (`Aqua.Crew.ready/2`) before anything is written.
-  defp accept_request(state, ctx, member, text, opts) do
-    case Aqua.Crew.ready(ctx, member) do
-      :ok -> write_request(state, ctx, member, text, opts)
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
+  # A person's line that addresses a crew member — a request to it from a
+  # room, or a turn of it in its own thread — is held to the member's
+  # readiness (`Aqua.Crew.ready/2`) before anything is written. A request
+  # delivered into the thread was held to it by its delivery, before its
+  # thread was made; the soul and room content are no member's.
+  defp crew_ready(ctx, {:request, member}, _opts), do: Aqua.Crew.ready(ctx, member)
+
+  defp crew_ready(ctx, {:turn, name}, opts) do
+    if Prima.AgentRef.soul?(name) or Keyword.has_key?(opts, :request),
+      do: :ok,
+      else: Aqua.Crew.ready(ctx, name)
   end
 
-  defp write_request(state, ctx, member, text, opts) do
+  defp crew_ready(_ctx, :content, _opts), do: :ok
+
+  defp accept_request(state, ctx, member, text, opts) do
     attrs =
       crew_attrs(
         %{

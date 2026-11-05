@@ -171,12 +171,21 @@ defmodule Aqua.Crew do
   def ask(_ctx, _args),
     do: {:error, {:invalid_argument, "crew.ask takes a 'member' and a 'task'"}}
 
-  @doc "`crew.list`: the crew index (`index/2`), the members a turn may hand a job to."
-  @spec list(Context.t()) :: {:ok, map()} | {:error, term()}
-  def list(%Context{} = ctx) do
-    with {:ok, roster} <- Aqua.AgentConfig.roster(ctx) do
+  @doc """
+  `crew.list`: the crew index (`index/2`), the members the calling turn
+  may hand a job to. A chain's call reads readiness as the person behind
+  its turn, as `crew.ask` does and the soul's prompt index reads it; a call
+  with no open turn behind it lists nobody (`:not_addressable`), and
+  readiness that cannot be read is refused, never an empty list.
+  """
+  @spec list(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def list(%Context{} = ctx, args) do
+    with {:ok, turn} <- calling_turn(ctx, args),
+         {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
+         {:ok, person} <- asker(ctx, turn),
+         {:ok, index} <- index(person, roster) do
       members =
-        for member <- index(ctx, roster) do
+        for member <- index do
           %{
             name: member["name"],
             brain: member["brain"],
@@ -193,22 +202,30 @@ defmodule Aqua.Crew do
   The crew index of `roster`: every crew member whose brain reads ready
   (`Aqua.Models.model_status/2`), by name, as `%{"name", "brain",
   "description", "avoid"}` — the brain its catalyst and model, what it is
-  good at and what to avoid — in the roster's order.
+  good at and what to avoid — in the roster's order. `ctx` reads the
+  athanor's catalysts on its own plane; a listing it cannot read is
+  `{:error, {:unavailable, _}}`, never an index with nobody in it.
   """
-  @spec index(Context.t(), [map()]) :: [map()]
+  @spec index(Context.t(), [map()]) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
   def index(%Context{} = ctx, roster) when is_list(roster) do
-    members = Enum.filter(roster, &Admission.member?(roster, &1["name"]))
-    status = Aqua.Models.model_status(ctx, members)
+    with {:ok, _listing} <- readable(Aqua.AgentConfig.catalyst_listing(ctx)) do
+      members = Enum.filter(roster, &Admission.member?(roster, &1["name"]))
+      status = Aqua.Models.model_status(ctx, members)
 
-    for %{"name" => name} = member <- members, match?({:ready, _}, status[name]) do
-      %{
-        "name" => name,
-        "brain" => brain(member),
-        "description" => member["description"] || "",
-        "avoid" => member["avoid"] || ""
-      }
+      {:ok,
+       for %{"name" => name} = member <- members, match?({:ready, _}, status[name]) do
+         %{
+           "name" => name,
+           "brain" => brain(member),
+           "description" => member["description"] || "",
+           "avoid" => member["avoid"] || ""
+         }
+       end}
     end
   end
+
+  defp readable({:ok, _} = listed), do: listed
+  defp readable({:error, _unread}), do: {:error, {:unavailable, "The crew's readiness"}}
 
   @typedoc """
   Why a crew member cannot take a job: no brain named, its catalyst not
@@ -231,17 +248,18 @@ defmodule Aqua.Crew do
     with {:ok, roster} <- Aqua.AgentConfig.roster(ctx), do: ready(ctx, roster, member)
   end
 
-  # A chain's ask runs on the guest plane, where the component reads
-  # readiness needs are not served: the member's readiness is read as the
-  # person behind the turn, on their own plane, as the soul's prompt index
-  # reads it (`Aqua.Loop.Turn`), and only decides whether the ask is
-  # refused; nothing is written under that context.
   defp asker_ready(ctx, turn, roster, member) do
-    with {:ok, person} <-
-           Sanctum.Tenancy.continuation(turn.requested_by, Context.athanor!(ctx), turn.origin) do
-      ready(person, roster, member)
-    end
+    with {:ok, person} <- asker(ctx, turn), do: ready(person, roster, member)
   end
+
+  # A chain's call runs on the guest plane, where the component reads
+  # readiness needs are not served: a member's readiness is read as the
+  # person behind the calling turn, on their own plane, as the soul's
+  # prompt index reads it (`Aqua.Loop.Turn`), and only decides whom an
+  # ask reaches and whom a list names; nothing is written under that
+  # context.
+  defp asker(ctx, turn),
+    do: Sanctum.Tenancy.continuation(turn.requested_by, Context.athanor!(ctx), turn.origin)
 
   defp ready(ctx, roster, member) do
     if Admission.member?(roster, member) do
