@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.McpServersLiveTest do
+defmodule PrismWeb.ProgramsLiveTest do
   @moduledoc """
-  The MCP servers page adds a stdio server through its form, sends its env
+  The Programs page adds a stdio server through its form, sends its env
   lines as the backend's env, says why a server was not added, says why
   a server it added or tested could not connect, shows the warnings a
   server it added carries in the flash and on its row, and offers Restart
-  for a stdio server only.
+  for a stdio server only. It prefills the program form from a
+  component's login need, and its sign-in terminal shows a program's lines
+  as text, bounded.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -66,7 +68,7 @@ defmodule PrismWeb.McpServersLiveTest do
     assert_receive {:control, "reconcile", _reconcile, _fields}, 2_000
     entry!(user, athanor, "gh", %{"hosts" => ["api.github.com"]}, true)
 
-    {view, _html} = mount_athanor(conn, "/mcp-servers", athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("button", "Add stdio server") |> render_click()
 
     view
@@ -84,7 +86,7 @@ defmodule PrismWeb.McpServersLiveTest do
         "other athanors' backends included, can read it; the safe route is to let the " <>
         "program read it from its environment."
 
-    assert flash(view, "info") == "Server 'github' added (ready)."
+    assert flash(view, "info") == "'github' added (ready)."
     assert flash(view, "warning") == warning
     assert_received {:control, "sync", _sync, _fields}
 
@@ -97,7 +99,7 @@ defmodule PrismWeb.McpServersLiveTest do
     # The entry the env names, disclosed: an environment hands it on.
     entry!(user, athanor, "gh", %{"hosts" => ["api.github.com"]}, true)
 
-    {view, html} = mount_athanor(conn, "/mcp-servers", athanor)
+    {view, html} = mount_athanor(conn, "/programs", athanor)
     assert html =~ "Add stdio server"
 
     view |> element("button", "Add stdio server") |> render_click()
@@ -131,7 +133,7 @@ defmodule PrismWeb.McpServersLiveTest do
   test "a header naming an entry that may not go to the server's URL is refused in the form",
        %{conn: conn, athanor: athanor, user: user} do
     entry!(user, athanor, "openai-key", %{"hosts" => ["api.openai.com"]})
-    {view, _html} = mount_athanor(conn, "/mcp-servers", athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("button", "Add server") |> render_click()
 
     config =
@@ -174,7 +176,7 @@ defmodule PrismWeb.McpServersLiveTest do
           })
       })
 
-    {view, _html} = mount_athanor(conn, "/mcp-servers", athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
     view |> element("button", "Add server") |> render_click()
 
     # Admitted, and then refused by the upstream itself: nothing listens there.
@@ -189,7 +191,7 @@ defmodule PrismWeb.McpServersLiveTest do
     |> render_submit()
 
     assert {:ok, _} = Arca.McpServerStorage.get(ctx(athanor), "local")
-    assert flash(view, "error") =~ "Server 'local' added — "
+    assert flash(view, "error") =~ "'local' added — "
 
     # The edited row's Test says why, in the refusal's own words.
     view |> element("tr[phx-value-name=edited]") |> render_click()
@@ -229,7 +231,7 @@ defmodule PrismWeb.McpServersLiveTest do
 
       on_exit(fn -> Emissary.External.ServerSupervisor.stop("echo", athanor.id) end)
 
-      {view, _html} = mount_athanor(conn, "/mcp-servers", athanor)
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
       view |> element("button", "Add server") |> render_click()
 
       config =
@@ -243,7 +245,7 @@ defmodule PrismWeb.McpServersLiveTest do
         |> form("form[phx-submit=add_server]", %{"name" => "echo", "config" => config})
         |> render_submit()
 
-      assert flash(view, "error") == "Server 'echo' added — rejected credential [REDACTED]"
+      assert flash(view, "error") == "'echo' added — rejected credential [REDACTED]"
       refute added =~ @echoed
 
       view |> element("tr[phx-value-name=echo]") |> render_click()
@@ -310,7 +312,7 @@ defmodule PrismWeb.McpServersLiveTest do
         enabled: false
       })
 
-    {view, html} = mount_athanor(conn, "/mcp-servers", athanor)
+    {view, html} = mount_athanor(conn, "/programs", athanor)
     assert html =~ "stdio (backends service)"
 
     html = view |> element("tr[phx-value-name=piped]") |> render_click()
@@ -319,5 +321,85 @@ defmodule PrismWeb.McpServersLiveTest do
     view |> element("tr[phx-value-name=piped]") |> render_click()
     html = view |> element("tr[phx-value-name=webby]") |> render_click()
     refute html =~ ~s(phx-click="restart")
+  end
+
+  # A catalyst that runs a program with the person's own sign-in.
+  defp harness!(athanor) do
+    ctx = Sanctum.Context.internal(user_id: "_test", athanor_id: athanor.id, scope: :athanor)
+
+    manifest = %{
+      "name" => "harness",
+      "type" => "catalyst",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "needs" => %{
+        "claude" => %{
+          "type" => "login",
+          "program" => "claude",
+          "reason" => "to run Claude Code on your own plan",
+          "install" => %{
+            "command" => "npx -y @anthropic-ai/claude-code@2.1.316",
+            "login_command" => "claude auth login"
+          }
+        }
+      }
+    }
+
+    {:ok, _} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "harness", "1.0.0",
+        manifest: manifest,
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+      )
+
+    "catalyst:local.harness:1.0.0"
+  end
+
+  test "an install opens the program form prefilled from the component's login need",
+       %{conn: conn, athanor: athanor} do
+    ref = harness!(athanor)
+    query = URI.encode_query(%{"install" => ref, "need" => "claude"})
+    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
+    html = render(view)
+
+    assert has_element?(
+             view,
+             ~s([data-test="install-from"]),
+             "to run Claude Code on your own plan"
+           )
+
+    assert has_element?(view, ~s(form#add-pipe input[name="name"][value="claude"]))
+
+    assert has_element?(
+             view,
+             ~s(form#add-pipe input[name="command"][value="npx -y @anthropic-ai/claude-code@2.1.316"])
+           )
+
+    assert has_element?(
+             view,
+             ~s(form#add-pipe input[name="login_command"][value="claude auth login"])
+           )
+
+    assert html =~ "Install"
+  end
+
+  test "an install naming no login need of the component says so", %{conn: conn, athanor: athanor} do
+    ref = harness!(athanor)
+    query = URI.encode_query(%{"install" => ref, "need" => "codex"})
+    {view, _html} = mount_athanor(conn, "/programs?" <> query, athanor)
+    render(view)
+
+    assert flash(view, "error") == "#{ref} declares no login need named 'codex' to install from."
+    refute has_element?(view, "form#add-pipe")
+  end
+
+  test "the terminal shows a program's lines as text, without its control sequences" do
+    alias PrismWeb.SignInTerminalComponent, as: Terminal
+
+    assert Terminal.text("\e[1;32mOpen this URL:\e[0m https://x.example/a\r") ==
+             "Open this URL: https://x.example/a"
+
+    assert Terminal.text("\e]0;title\aPaste code: ") == "Paste code: "
+    assert Terminal.text("\e[?25lplain\e(B") == "plain"
+    assert Terminal.max_lines() == 500
   end
 end

@@ -55,26 +55,36 @@ defmodule PrismWeb.SignInTerminalComponent do
   def update(%{relay: _other}, socket), do: {:ok, socket}
 
   def update(assigns, socket) do
-    socket = assign(socket, Map.take(assigns, [:id, :context, :row, :entry]))
-    {:ok, if(socket.assigns.token, do: socket, else: start(socket))}
+    socket = assign(socket, Map.drop(assigns, [:relay, :flash, :myself]))
+
+    if socket.assigns.token do
+      {:ok, socket}
+    else
+      {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, start(&1)})
+      {:ok, socket}
+    end
   end
 
   @impl true
   def handle_event("send", %{"line" => line}, %{assigns: %{state: :running}} = socket) do
-    case Opus.Programs.sign_in_send(socket.assigns.context, socket.assigns.token, line) do
-      :ok -> {:noreply, update(socket, :sent, &(&1 + 1))}
-      {:error, reason} -> {:noreply, ended(socket, reason)}
-    end
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case Opus.Programs.sign_in_send(socket.assigns.context, socket.assigns.token, line) do
+        :ok -> {:noreply, update(socket, :sent, &(&1 + 1))}
+        {:error, reason} -> {:noreply, ended(socket, reason)}
+      end
+    end)
   end
 
   def handle_event("send", _params, socket), do: {:noreply, socket}
 
   def handle_event("close", _params, socket) do
-    if socket.assigns.token,
-      do: Opus.Programs.sign_in_close(socket.assigns.context, socket.assigns.token)
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      if socket.assigns.token,
+        do: Opus.Programs.sign_in_close(socket.assigns.context, socket.assigns.token)
 
-    send(self(), {__MODULE__, :closed})
-    {:noreply, socket}
+      send(self(), {__MODULE__, :closed})
+      {:noreply, socket}
+    end)
   end
 
   defp start(socket) do
