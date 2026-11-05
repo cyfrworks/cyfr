@@ -1293,7 +1293,7 @@ defmodule Opus.ProgramsTest do
                       }, _fields},
                      2_000
 
-      assert {:error, sentence} = Servers.ensure_started(row, ctx)
+      assert {:error, {:invalid_argument, sentence}} = Servers.ensure_started(row, ctx)
       assert sentence =~ "pipe program"
       Programs.release(owner)
       assert_released(row, 1)

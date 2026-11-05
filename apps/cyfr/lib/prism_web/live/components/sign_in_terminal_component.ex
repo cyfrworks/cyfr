@@ -51,7 +51,7 @@ defmodule PrismWeb.SignInTerminalComponent do
     @spec text(t()) :: String.t()
     def text(%__MODULE__{lines: lines}), do: Enum.map_join(lines, &(&1 <> "\n"))
 
-    defimpl Inspect do
+    defimpl Inspect, for: PrismWeb.SignInTerminalComponent.Lines do
       use Boundary, classify_to: PrismWeb
 
       def inspect(%{lines: lines}, _opts),

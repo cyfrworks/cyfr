@@ -822,7 +822,7 @@ defmodule Locus.Keeper do
           {:reply, {:ok, uid}, state}
 
         :absent ->
-          draw_home(state, kept, path, from, MapSet.new())
+          draw_home(state, kept, path, from, [])
 
         :error ->
           {:reply, {:error, {:refused, "bad_request"}}, state}
@@ -1308,7 +1308,9 @@ defmodule Locus.Keeper do
             do: uid
 
       making = for {_id, %{uid: uid}} <- state.homes, into: MapSet.new(), do: uid
-      taken = owned |> MapSet.union(making) |> MapSet.union(live) |> MapSet.union(busy)
+
+      taken =
+        owned |> MapSet.union(making) |> MapSet.union(live) |> MapSet.union(MapSet.new(busy))
 
       case Enum.find(kept.first..kept.last, &(not MapSet.member?(taken, &1))) do
         nil -> :error
@@ -1415,7 +1417,7 @@ defmodule Locus.Keeper do
          %{pending: {:ensure, from, uid, busy}, path: path},
          {:refused, "uid_busy"}
        ) do
-    case draw_home(state, state.kept, path, from, MapSet.put(busy, uid)) do
+    case draw_home(state, state.kept, path, from, [uid | busy]) do
       {:noreply, state} ->
         state
 
