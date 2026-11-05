@@ -64,8 +64,11 @@ defmodule Prima.HostAPI do
   lines in, sequence-numbered lines out. A `pipe_recv` waits at most
   `max_pipe_wait_ms/0` for a line past the one it names, less than its
   request timeout, so a long wait is answered before the client gives the
-  answer up. The pipe is not built yet: CYFR answers every pipe call
-  `:not_built`.
+  answer up. A session belongs to the program row and the catalyst's key,
+  not to the attempt that opened it: a later attempt opening the same key
+  attaches to it while its program runs. Each attempt opens before it
+  sends, reads or closes, and a session its attempt did not open is
+  refused `:denied` (`t:pipe_refusal/0`).
   """
 
   @typedoc """
@@ -285,6 +288,27 @@ defmodule Prima.HostAPI do
         }
 
   @typedoc """
+  What a `c:pipe_open/4` answers: the session's id, and whether its program
+  was already running for the key (`resumed: true`) or was started for
+  this open (`resumed: false`), so a catalyst that speaks a protocol over
+  the session starts that protocol again.
+  """
+  @type pipe_opened :: %{session: String.t(), resumed: boolean()}
+
+  @typedoc """
+  How a pipe call is refused besides `t:refusal/0`. `:denied`: the
+  caller's manifest declares no `login` need of that name, the run's
+  binding is not that need's or mounts another program, or the session is
+  not one the caller's attempt opened. A guest error whose type is
+  `setup_required` (the binding, its login entry or its program row no
+  longer serves, or the program's folder is past its cap), `busy` (the
+  box runs as many programs as it may), `ended` (a send to a session whose
+  program ended), `invalid_request` (a key, argument or line the pipe
+  refuses) or `too_large` (a line the answer bound cannot carry).
+  """
+  @type pipe_refusal :: :denied | guest_error()
+
+  @typedoc """
   One attempt's lease renewal: its new expiry in Unix ms, or its loss. A
   cancel is a terminal write on the row, so a cancelled attempt renews as
   lost.
@@ -502,41 +526,43 @@ defmodule Prima.HostAPI do
   @doc """
   Open a session on the program the caller's `login` need `need` is bound
   to, under the caller's `key` for it, running the program's command with
-  `argv` appended, and answer the session's id. An open with a key whose
-  session still runs attaches to it. Idempotent on the caller's attempt,
-  `need` and `key`. Not built yet: answered `:not_built`.
+  `argv` appended, and answer the session (`t:pipe_opened/0`). An open
+  with a key whose session still runs attaches to it. Idempotent on the
+  caller's attempt, `need` and `key`: a repeat while the session runs
+  answers as the first did.
   """
   @callback pipe_open(caller(), need :: String.t(), key :: String.t(), argv :: [String.t()]) ::
-              {:ok, session :: String.t()} | {:error, refusal() | :not_built}
+              {:ok, pipe_opened()} | {:error, refusal() | pipe_refusal()}
 
   @doc """
   Write `lines` to the program of the caller's `session`, in order. Never
-  retried: a repeat could write them twice. Not built yet: answered
-  `:not_built`.
+  retried: a repeat could write them twice.
   """
   @callback pipe_send(caller(), session :: String.t(), lines :: [String.t()]) ::
-              :ok | {:error, refusal() | :not_built}
+              :ok | {:error, refusal() | pipe_refusal()}
 
   @doc """
   Answer the lines of the caller's `session` past the sequence number
   `after_seq` (the wire's `after`), waiting at most `max_wait_ms` (at most
   `max_pipe_wait_ms/0`) for one when there is none. A line is kept until a
   later call names a higher `after_seq`, so a repeat answers the same
-  lines. Not built yet:
-  answered `:not_built`.
+  lines; an answer carries as many of them as fit
+  `max_answer_bytes/0`, and the next call names the last one it got. A
+  session CYFR no longer holds answers no lines and `running: false`.
   """
   @callback pipe_recv(
               caller(),
               session :: String.t(),
               after_seq :: non_neg_integer(),
               max_wait_ms :: non_neg_integer()
-            ) :: {:ok, pipe_recv()} | {:error, refusal() | :not_built}
+            ) :: {:ok, pipe_recv()} | {:error, refusal() | pipe_refusal()}
 
   @doc """
-  End the caller's `session` and its program. A repeat answers `:ok`. Not
-  built yet: answered `:not_built`.
+  End the caller's `session` and its program. A repeat, or a session CYFR
+  no longer holds, answers `:ok`.
   """
-  @callback pipe_close(caller(), session :: String.t()) :: :ok | {:error, refusal() | :not_built}
+  @callback pipe_close(caller(), session :: String.t()) ::
+              :ok | {:error, refusal() | pipe_refusal()}
 
   @doc """
   Report that the runner `runner` of the reporting worker service exited,

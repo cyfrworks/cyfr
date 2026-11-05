@@ -25,7 +25,7 @@ defmodule Opus.Programs.SignIn do
   (`:unattended`), when the box tells it to stand down or issues a new
   grant (`:stand_down`, `:owner_moved`), or when the session cannot be read
   (`:lost`), or when its login entry is revoked, suspended or deleted
-  (`:entry_ended`, `Opus.Programs.end_sign_ins/2`). CYFR stores nothing
+  (`:entry_ended`, `Opus.Programs.end_mounts/2`). CYFR stores nothing
   of what passes through, and nothing of it shows in `:sys.get_status/1`
   or a crash report: a sign-in's lines and what the person types are
   credentials, shown only as counts.

@@ -1521,6 +1521,326 @@ defmodule Opus.ProgramsTest do
     end
   end
 
+  # The session's close reaches the service, and only then its owner's
+  # release: whichever of the two came first is the one received first.
+  defp assert_closed_then_released(row, session, wait \\ 3_000) do
+    first =
+      receive do
+        {:session, "close", %{"session" => ^session}, _fields} -> :close
+        {:control, "release", _message, _fields} -> :release
+      after
+        wait -> flunk("neither the session's close nor its owner's release arrived")
+      end
+
+    assert first == :close, "the owner's release outran the session's close"
+    assert_released(row, 1)
+  end
+
+  describe "pipes" do
+    setup %{ctx: ctx} do
+      row = pipe_row(ctx, "claude")
+      entry = login_entry(ctx, "claude-login", "claude")
+      {:ok, row: row, entry: entry}
+    end
+
+    test "a session is the row's and the key's: opened for one attempt, attached to by the next, started again once ended",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+
+      assert {:ok, %{session: first, resumed: false}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1")
+
+      assert_receive {:session, "open",
+                      %{
+                        "mode" => "run",
+                        "home_id" => ^entry,
+                        "key" => "pipe-k1",
+                        "argv" => ["--resume", "s1"]
+                      }, _},
+                     2_000
+
+      # A repeat by the same attempt answers as the first did, though the
+      # box now attaches to the running session.
+      assert {:ok, %{session: ^first, resumed: false}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_1")
+
+      assert {:ok, %{session: ^first, resumed: true}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2")
+
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", first, ["hello"])
+      assert_receive {:session, "send", %{"lines" => ["hello"], "session" => ^first}, _}, 2_000
+      Scripted.write(fake, row.id, "world")
+
+      assert {:ok, %{lines: [%{text: "world"} = line], dropped: 0, running: true}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_2", first, 0, 1_000)
+
+      # Read again by the same `after`, the same line.
+      assert {:ok, %{lines: [^line]}} = Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0)
+
+      # Only an attempt that opened the session uses it, and only in its
+      # own athanor.
+      flush_sessions()
+      assert {:error, :denied} = Programs.pipe_send(ctx.athanor_id, "att_3", first, ["x"])
+      assert {:error, :denied} = Programs.pipe_recv(ctx.athanor_id, "att_3", first, 0, 0)
+      assert {:error, :denied} = Programs.pipe_close(ctx.athanor_id, "att_3", first)
+      assert {:error, :denied} = Programs.pipe_send("ath_other", "att_1", first, ["x"])
+      refute_received {:session, _type, _message, _fields}
+
+      # Its program ends: a read says so, and the next open starts it again.
+      Scripted.end_sessions(fake, row.id)
+
+      assert {:ok, %{running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_2", first, line.seq, 0)
+
+      assert {:ok, %{session: second, resumed: false}} =
+               Programs.pipe_open(row, entry, "pipe-k1", ["--resume", "s1"], "att_2")
+
+      refute second == first
+
+      # The ended session is no one's any more: no lines, not running.
+      assert {:ok, %{lines: [], dropped: 0, running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_1", first, 0, 0)
+
+      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", first, ["x"])
+    end
+
+    test "a close ends the session and releases the owner; a repeat is harmless",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+      assert_closed_then_released(row, session)
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+
+      assert {:ok, %{lines: [], running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0)
+    end
+
+    test "a session no attempt uses for the idle period ends, and its owner is released",
+         %{fake: fake, row: row, entry: entry} do
+      start_controller(fake, idle_ms: 200)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert_closed_then_released(row, session, 5_000)
+      assert Programs.mounts() == []
+    end
+
+    test "a login entry's revoke ends every session in its home, and no other",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
+      start_supervised!(Emissary.External.Reconciler)
+      start_controller(fake)
+      other = login_entry(ctx, "claude-second", "claude")
+
+      assert {:ok, %{session: mine}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert {:ok, %{session: kept}} = Programs.pipe_open(row, other, "pipe-k", [], "att_1")
+      flush_sessions()
+
+      assert {:ok, _} = Sanctum.Vault.revoke(ctx, entry)
+      assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
+      refute_received {:session, "close", %{"session" => ^kept}, _}
+
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", kept, ["still here"])
+      assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", mine, ["gone"])
+    end
+
+    test "a sweep ends a session whose entry changed with no signal said, and no other",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      other = login_entry(ctx, "claude-second", "claude")
+      assert {:ok, %{session: mine}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert {:ok, %{session: kept}} = Programs.pipe_open(row, other, "pipe-k", [], "att_1")
+
+      assert [{ctx.athanor_id, entry, "claude"}, {ctx.athanor_id, other, "claude"}] |> Enum.sort() ==
+               Enum.sort(Programs.mounts())
+
+      flush_sessions()
+      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry, "needs_reauth")
+      assert :ok = Emissary.External.Reconciler.sweep_mounts()
+
+      assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
+      refute_received {:session, "close", %{"session" => ^kept}, _}
+      assert [{_athanor, ^other, "claude"}] = Programs.mounts()
+    end
+
+    test "a send whose connection is reset after it arrived is uncertain, never safe to repeat",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      flush_sessions()
+      Scripted.set(fake, :reset_send, true)
+
+      assert {:error, :uncertain} =
+               Programs.pipe_send(ctx.athanor_id, "att_1", session, ["once"])
+
+      # It reached the box.
+      assert_received {:session, "send", %{"lines" => ["once"]}, _}
+    end
+
+    test "a holder killed has its session closed by the box, its row's other holder untouched",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: first}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_1")
+      assert {:ok, %{session: second}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, first})
+      flush_sessions()
+
+      # Killed, it runs no terminate/2: well before the idle period, the box
+      # closes its program all the same, and keeps the owner for the other.
+      Process.exit(pid, :kill)
+      assert_receive {:session, "close", %{"session" => ^first}, _}, 2_000
+      refute_receive {:control, "release", _message, _fields}, 300
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", second, ["still here"])
+    end
+
+    test "one deadline covers the owner's acquisition and the open; nothing of a late open runs",
+         %{fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+
+      # Scaled from a 15 s acquisition and a 17 s open against a 30 s window:
+      # each fits alone, together they do not.
+      deadline = System.system_time(:millisecond) + 3_000
+      Scripted.hold(fake, "sync")
+      Scripted.hold(fake, "open")
+
+      opening =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-k", [], "att_1", deadline) end)
+
+      assert_receive {:held, "sync", sync}, 2_000
+      Process.sleep(1_500)
+      send(sync, :go)
+      assert_receive {:held, "open", open}, 2_000
+      Process.sleep(1_700)
+      send(open, :go)
+
+      assert {:error, :deadline} = Task.await(opening, 5_000)
+      assert System.system_time(:millisecond) < deadline + 2_000
+
+      # No holder keeps it, and the owner is released with it.
+      assert_released(row, 1)
+      assert Programs.mounts() == []
+    end
+
+    test "a holder killed before it hears the box's answer leaves the box its session to close",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      flush_sessions()
+      Scripted.hold(fake, "opened")
+
+      opening =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1") end)
+
+      # The backend's session stands; its answer is on its way when the
+      # holder that asked is killed.
+      assert_receive {:held, "opened", answer}, 2_000
+      key = {:pipe, row.athanor_id, row.id, row.epoch, entry, "pipe-a"}
+      [{holder, _}] = Registry.lookup(Opus.Programs.Registry, key)
+      Process.exit(holder, :kill)
+      send(answer, :go)
+      assert {:error, _} = Task.await(opening, 5_000)
+
+      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
+      refute closed == sibling
+      refute_receive {:control, "release", _message, _fields}, 300
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_1", sibling, ["still here"])
+    end
+
+    test "a close refused once is owed by the box past its holder's release, and lands on the sweep",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      controller = start_controller(fake)
+      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_1")
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_1")
+      flush_sessions()
+      Scripted.refuse_once(fake, "close", "unavailable")
+
+      # The holder closes and releases; the box's close is refused.
+      assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      refute_receive {:control, "release", _message, _fields}, 300
+
+      # The sweep sends it again, and the program ends.
+      tick(controller)
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+      assert %{^session => %{running: false}} = Scripted.sessions(fake, row.id)
+    end
+
+    test "a late first answer never closes the session a second open of the key was given",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: _sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_0")
+      flush_sessions()
+
+      # The first open's session stands at the backend, its answer held
+      # past its caller's deadline.
+      Scripted.hold(fake, "opened")
+      deadline = System.system_time(:millisecond) + 1_000
+
+      first =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", deadline) end)
+
+      assert_receive {:held, "opened", answer}, 2_000
+      assert {:error, :deadline} = Task.await(first, 3_000)
+
+      # A second open of the key is given the session.
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-a", [], "att_2")
+      flush_sessions()
+
+      # The first answer, late, closes nothing of it.
+      send(answer, :go)
+      refute_receive {:session, "close", %{"session" => ^session}, _}, 1_000
+      assert :ok = Programs.pipe_send(ctx.athanor_id, "att_2", session, ["intact"])
+    end
+
+    test "a success queued before the deadline and handled after it is closed, never given",
+         %{fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      assert {:ok, %{session: sibling}} = Programs.pipe_open(row, entry, "pipe-b", [], "att_0")
+      flush_sessions()
+      box = GenServer.whereis(Programs.via("local"))
+
+      Scripted.hold(fake, "opened")
+      deadline = System.system_time(:millisecond) + 1_500
+
+      opening =
+        Task.async(fn -> Programs.pipe_open(row, entry, "pipe-a", [], "att_1", deadline) end)
+
+      assert_receive {:held, "opened", answer}, 2_000
+
+      # The answer reaches the box before the deadline, and is handled
+      # only after it.
+      :sys.suspend(box)
+      send(answer, :go)
+      Process.sleep(max(deadline - System.system_time(:millisecond), 0) + 300)
+      :sys.resume(box)
+
+      assert {:error, :deadline} = Task.await(opening, 3_000)
+      assert_receive {:session, "close", %{"session" => closed}, _}, 3_000
+      refute closed == sibling
+    end
+
+    test "a row that is disabled stands its sessions down", %{
+      ctx: ctx,
+      fake: fake,
+      row: row,
+      entry: entry
+    } do
+      controller = start_controller(fake)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      [{pid, _}] = Registry.lookup(Opus.Programs.Registry, {:pipe_session, session})
+      monitor = Process.monitor(pid)
+
+      {:ok, _} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "claude", %{enabled: false})
+
+      tick(controller)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 3_000
+
+      assert {:ok, %{lines: [], running: false}} =
+               Programs.pipe_recv(ctx.athanor_id, "att_1", session, 0, 0)
+    end
+  end
+
   describe "status" do
     test "is nil for an owner the service runs nothing for, its entry for one it runs, and names no more owners than the service's bound",
          %{ctx: ctx, fake: fake} do

@@ -471,7 +471,9 @@ defmodule Cyfr.Boundaries do
           "(`Opus.Programs`) posts to the backends service through `Sanctum.Egress` and " <>
           "checks a program's env templates from the vault's metadata " <>
           "(`Sanctum.Vault.disclosed?/2`) before it unseals any, and a sign-in whose " <>
-          "command exited 0 makes its login entry active again (`Sanctum.Mount.signed_in/2`). `Sanctum` bare is the domain's own " <>
+          "command exited 0 makes its login entry active again (`Sanctum.Mount.signed_in/2`); a " <>
+          "catalyst's pipe mounts its login need through `Sanctum.Mount.resolve/4` " <>
+          "(`Opus.Host.Pipe`). `Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
@@ -2043,6 +2045,7 @@ defmodule Cyfr.Boundaries do
       login_entry: 3,
       login_entry: 4,
       orphaned_homes: 1,
+      resolve: 4,
       signed_in: 2
     ],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],

@@ -306,4 +306,35 @@ defmodule Locus.Runtime.EdgeGuardTest do
       assert message == "Response body (101 bytes) exceeds limit (100 bytes)"
     end
   end
+
+  describe "check_pipe_lines/2 and check_pipe_argv/1" do
+    test "lines the backends wire takes pass; a newline, a NUL or an overlong line is invalid_request" do
+      l = limits(max_request_size: 4 * 1_048_576)
+      max_line = Prima.LocusBackends.max_line_bytes()
+
+      assert :ok = EdgeGuard.check_pipe_lines(l, ["one", "", String.duplicate("x", max_line)])
+
+      for line <- ["two\nlines", "nul" <> <<0>>, String.duplicate("x", max_line + 1)] do
+        assert {:error, "invalid_request", _message} = EdgeGuard.check_pipe_lines(l, [line])
+      end
+    end
+
+    test "lines past the node's max_request_size, as encoded, are too_large" do
+      l = limits(max_request_size: 10)
+
+      assert :ok = EdgeGuard.check_pipe_lines(l, ["abcdef"])
+      assert {:error, "too_large", _message} = EdgeGuard.check_pipe_lines(l, ["abcdefg"])
+    end
+
+    test "at most max_argv arguments, none holding a NUL" do
+      max = Prima.LocusBackends.max_argv()
+
+      assert :ok = EdgeGuard.check_pipe_argv(List.duplicate("--a", max))
+
+      assert {:error, "invalid_request", _} =
+               EdgeGuard.check_pipe_argv(List.duplicate("a", max + 1))
+
+      assert {:error, "invalid_request", _} = EdgeGuard.check_pipe_argv(["a" <> <<0>>])
+    end
+  end
 end
