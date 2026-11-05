@@ -412,8 +412,8 @@ defmodule Aqua.Tape do
 
   @doc """
   Mark a dispatched step whose effect cannot be known, under the turn's
-  fence and the step's generation: a clone's own step, or a sibling a
-  root turn's pause already covers.
+  fence and the step's generation: a sibling the turn's pause already
+  covers.
   """
   @spec mark_uncertain(Context.t(), turn(), step(), String.t() | nil) ::
           {:ok, step()} | {:error, term()}

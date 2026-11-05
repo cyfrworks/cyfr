@@ -483,7 +483,7 @@ defmodule Aqua.Loop.Request do
     me = Keyword.get(opts, :me)
 
     cond do
-      is_binary(row[:reply_to]) -> said(reply_text(row), row, acc)
+      is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
       request?(row) and own?(row, me) -> acc
       request?(row) -> said(request_text(row, opts), row, acc)
       own?(row, me) -> spoken(row, acc)
@@ -580,7 +580,7 @@ defmodule Aqua.Loop.Request do
   defp agent?(_row), do: false
 
   defp request?(row),
-    do: is_binary(row[:addressee]) and row[:status] in ["pending", "answered"]
+    do: is_binary(Map.get(row, :addressee)) and Map.get(row, :status) in ["pending", "answered"]
 
   defp request_text(row, opts) do
     asker = if row.sent_by == "person", do: display(row.author, opts), else: row.sent_by

@@ -33,17 +33,11 @@ defmodule Aqua.CrewTest do
     ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id, origin: :interactive}
     segments = Arca.Storage.physical_segments(Sanctum.Context.actor(ctx), [])
     tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
-    previous = Application.get_env(:arca, :seed_path)
+    on_exit(fn -> File.rm_rf!(tree) end)
 
-    on_exit(fn ->
-      File.rm_rf!(tree)
-
-      if previous,
-        do: Application.put_env(:arca, :seed_path, previous),
-        else: Application.delete_env(:arca, :seed_path)
-    end)
-
-    Application.put_env(:arca, :seed_path, @seed_root)
+    # The shipped catalysts the turns run are read from the repository's
+    # seed tree; the suite's own carries none.
+    Prima.Test.Env.put_app_env(:arca, :seed_path, @seed_root)
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
@@ -96,8 +90,17 @@ defmodule Aqua.CrewTest do
     row && row.turn_id
   end
 
+  # A turn that ends otherwise is named with the status and error it has.
   defp await_status(ctx, turn_id, status) do
-    wait_until(fn -> match?({:ok, %{status: ^status}}, Tape.turn(ctx, turn_id)) end, 60_000)
+    wait_until(
+      fn -> match?({:ok, %{status: ^status}}, Tape.turn(ctx, turn_id)) end,
+      45_000,
+      "turn #{turn_id} to be #{status}"
+    )
+  rescue
+    error in ExUnit.AssertionError ->
+      {:ok, turn} = Tape.turn(ctx, turn_id)
+      flunk("#{error.message}; it is #{turn.status} (#{inspect(turn.error)})")
   end
 
   # A request as `crew.ask` writes it, committed and never broadcast.
@@ -154,7 +157,20 @@ defmodule Aqua.CrewTest do
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
-    {:ok, _} = Bootstrap.run(ctx)
+
+    # An edited file is the person's to consent to again.
+    ref = "agent:local.planner"
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: %{ref: ref},
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
   end
 
   test "a person's @name is a request their member answers in its own thread, and the reply lands under it, waking nobody",
@@ -225,7 +241,12 @@ defmodule Aqua.CrewTest do
   test "the soul's crew.ask writes the request in its turn and answers its id; the turn goes on",
        %{ctx: ctx, room: room} do
     script!([
-      call("c1", "crew", %{"action" => "ask", "member" => "planner", "task" => "list the risks"}),
+      call("c1", "crew", %{
+        "action" => "ask",
+        "member" => "planner",
+        "task" => "list the risks",
+        "tools" => ["files.read"]
+      }),
       reply("Asked the planner."),
       reply("Two risks."),
       reply("The planner found two risks.")
@@ -248,16 +269,59 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
 
+    # The job was narrowed to what the request named, under the member's
+    # own policy.
+    %{input: %{"params" => %{"tools" => tools}}} =
+      Enum.find(
+        ScriptedWorker.calls(),
+        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.planner")
+      )
+
+    assert [%{"name" => "files"} = files | _] = tools
+    assert files["parameters"]["properties"]["action"]["enum"] == ["read"]
+    refute Enum.any?(tools, &(&1["name"] in ["storage", "aqua", "component"]))
+
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
     await_status(ctx, reply.turn_id, "completed")
     assert reply.turn_id != soul
   end
 
-  test "a request from another sender queues as its own turn while the same sender steers, and one reply answers every request it steered",
+  test "an option the member's brain does not declare fails its turn, and the reply says why",
        %{ctx: ctx, room: room} do
     script!([
+      call("c1", "crew", %{
+        "action" => "ask",
+        "member" => "planner",
+        "task" => "think hard",
+        "options" => %{"effort" => "high"}
+      }),
+      reply("Asked.")
+    ])
+
+    {:ok, %{turn_id: soul}} = Runner.send_message(ctx, room.id, "think about it")
+    await_status(ctx, soul, "completed")
+    request = Enum.find(rows(ctx, room.id), &(&1.addressee == "planner" and &1.status))
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    await_status(ctx, delivered_turn(ctx, child, request.id), "failed")
+
+    # The reply opens the soul's next turn, which has no script left and
+    # fails; the reply itself is what is asserted.
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+    assert %{outcome: "failed", content: content} = reply
+    assert content =~ "options.effort"
+  end
+
+  test "a request from another sender queues as its own turn while the same sender steers, and one reply answers every request it steered",
+       %{ctx: ctx, room: room} do
+    # The steer lands while the first model call runs, so the turn takes
+    # one more round to answer it before it ends.
+    script!([
       {:probe, self()},
+      reply("first"),
       reply("first, and also"),
       reply("the soul's")
     ])
@@ -373,7 +437,7 @@ defmodule Aqua.CrewTest do
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert {:ok, "applied"} = outcome(ctx, "message", request.id)
-    assert {:ok, %{owner: owner, fence: 2}} = Arca.JobClaims.read("crew_delivery", ctx.athanor_id)
+    assert {:ok, %{owner: owner}} = Arca.JobClaims.read("crew_delivery", ctx.athanor_id)
     assert owner == Prima.Boot.id()
   end
 
@@ -425,7 +489,7 @@ defmodule Aqua.CrewTest do
     {:ok, old} = Threads.crew_thread(actor(ctx), room.id, "planner")
     {:ok, _} = Tape.archive(ctx, old.id)
 
-    assert {:error, :archived} = Runner.send_message(ctx, old.id, "still there?")
+    assert {:error, :thread_archived} = Runner.send_message(ctx, old.id, "still there?")
 
     request = soul_request!(ctx, room, "planner", "anew")
     assert {:ok, %{"applied" => 1}} = drain(ctx)

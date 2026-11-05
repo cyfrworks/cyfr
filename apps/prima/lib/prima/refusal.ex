@@ -591,6 +591,16 @@ defmodule Prima.Refusal do
   defp row(:no_agent),
     do: {:setup_required, "This athanor has no assistant to address — reset its AQUA tree"}
 
+  # Who may post where (`Aqua.Runner.Admission`), and a crew member's
+  # retired thread.
+  defp row(:not_addressable),
+    do:
+      {:forbidden,
+       "That cannot be addressed from here — a crew member answers only the thread that asked it"}
+
+  defp row(:thread_archived),
+    do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
+
   # A shared thread's rules (`Sanctum.SharedThreads`).
   defp row({:shared_thread, :archived}),
     do: {:forbidden, "This thread is archived — reopen it to talk or add people"}

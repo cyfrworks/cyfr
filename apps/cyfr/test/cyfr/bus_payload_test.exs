@@ -34,6 +34,7 @@ defmodule Cyfr.BusPayloadTest do
     Request,
     RoomInView,
     ScheduleCompleted,
+    CrewPending,
     ScheduleRun,
     Schedules,
     Session,
@@ -110,7 +111,8 @@ defmodule Cyfr.BusPayloadTest do
       Notify.new(@actor, :approval_pending, %{thread_id: "t", approval_id: "a"}),
       Ping.new(1),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
-      ScheduleCompleted.new(@actor)
+      ScheduleCompleted.new(@actor),
+      CrewPending.new(@actor)
     ]
   end
 

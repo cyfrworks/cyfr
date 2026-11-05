@@ -282,6 +282,7 @@ const (
 	SystemStatus             = "status"
 	ThreadAloud              = "aloud"
 	ThreadApprove            = "approve"
+	ThreadArchive            = "archive"
 	ThreadAttach             = "attach"
 	ThreadCreate             = "create"
 	ThreadDecline            = "decline"
@@ -356,7 +357,7 @@ var Actions = map[string][]string{
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
 	"system":              {"notify", "status"},
-	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop"},
+	"thread":              {"aloud", "approve", "archive", "attach", "create", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop"},
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
@@ -5008,6 +5009,21 @@ func (args ThreadApproveArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadApprove, fields: fields(args)})
+}
+
+// ThreadArchiveArgs carries arguments for thread.archive.
+type ThreadArchiveArgs struct {
+	// Thread id (all actions except create and list)
+	Thread string `json:"thread"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ThreadArchiveArgs) MarshalJSON() ([]byte, error) {
+	type fields ThreadArchiveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ThreadArchive, fields: fields(args)})
 }
 
 // ThreadAttachArgs carries arguments for thread.attach.

@@ -296,7 +296,9 @@ defmodule Aqua.Loop.Planner do
   """
   @spec pinned?(Aqua.Tape.row()) :: boolean()
   def pinned?(row),
-    do: row[:kind] == "text" and is_binary(row[:addressee]) and row[:status] == "pending"
+    do:
+      Map.get(row, :kind) == "text" and is_binary(Map.get(row, :addressee)) and
+        Map.get(row, :status) == "pending"
 
   defp first_kept_seq(%{payload: json}) when is_binary(json) do
     case Jason.decode(json) do

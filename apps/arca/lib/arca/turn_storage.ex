@@ -158,7 +158,7 @@ defmodule Arca.TurnStorage do
     or `{:error, :lapsed}` and a receipt already written
     `{:error, :receipted}`, with nothing written.
 
-  An archived thread admits nothing (`{:error, :archived}`).
+  An archived thread admits nothing (`{:error, :thread_archived}`).
 
   Answers `{:ok, %{message: row, turn: row | nil}}`. A `client_id` this
   thread already accepted answers `{:error, :duplicate_client_id}`,
@@ -176,7 +176,7 @@ defmodule Arca.TurnStorage do
       with_seq_retry(fn ->
         Arca.Repo.locking_transaction(fn ->
           thread = thread!(athanor_id, thread_id)
-          if thread.archived_at, do: Arca.Repo.rollback(:archived)
+          if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
           steer_id = Map.get(attrs, :steer_turn_id)
           opens = Map.get(attrs, :turn)
 
@@ -316,6 +316,8 @@ defmodule Arca.TurnStorage do
   defp requested!(_actor, _thread, _row, nil), do: :ok
 
   defp requested!(actor, %Thread{} = thread, %Message{} = row, %{} = request) do
+    unless Prima.Origin.origin?(Map.get(request, :origin)), do: Arca.Repo.rollback(:no_origin)
+
     record =
       Prima.OutboxRecord.crew_request(%{
         athanor_id: actor.athanor_id,

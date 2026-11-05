@@ -12,7 +12,6 @@ apps/cyfr/test/aqua/hands_test.exs	1	pending
 apps/cyfr/test/aqua/launch_test.exs	2	pending
 apps/cyfr/test/aqua/loop/agent_wide_auto_policy_test.exs	1	pending
 apps/cyfr/test/aqua/loop/catalog_sources_test.exs	2	pending
-apps/cyfr/test/aqua/loop/clone_test.exs	2	pending
 apps/cyfr/test/aqua/loop/files_hand_host_roots_test.exs	1	pending
 apps/cyfr/test/aqua/loop/flush_test.exs	2	pending
 apps/cyfr/test/aqua/loop/loop_test.exs	1	pending

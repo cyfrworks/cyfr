@@ -13,8 +13,8 @@ defmodule Aqua.Loop.PolicyTest do
 
   alias Aqua.Loop.{Binding, Policy}
 
-  defp resolve!(name, args, opts \\ []) do
-    {:ok, call} = Binding.resolve(name, args, opts)
+  defp resolve!(name, args) do
+    {:ok, call} = Binding.resolve(name, args)
     call
   end
 
@@ -22,7 +22,6 @@ defmodule Aqua.Loop.PolicyTest do
     "files.read" => "auto",
     "files.write" => "ask",
     "notes.read" => "auto",
-    "builder.*" => "auto",
     "execution.run" => "auto"
   }
 
@@ -38,12 +37,6 @@ defmodule Aqua.Loop.PolicyTest do
 
     assert text =~ "files.delete"
     assert :auto = Policy.decide(resolve!("ui", %{"kind" => "ui.navigate"}), @policy, [])
-
-    assert :auto =
-             Policy.decide(resolve!("builder", %{"task" => "x"}, roles: ["builder"]), @policy, [])
-
-    assert {:deny, _} =
-             Policy.decide(resolve!("web", %{"task" => "x"}, roles: ["web"]), @policy, [])
 
     assert :ask = Policy.decide(resolve!("github__search", %{}), @policy, [])
   end
@@ -172,7 +165,6 @@ defmodule Aqua.Loop.PolicyTest do
     assert :concurrent = Policy.overlap(resolve!("files", %{"action" => "read"}))
     assert :concurrent = Policy.overlap(resolve!("notes", %{"action" => "read"}))
     assert :exclusive = Policy.overlap(resolve!("files", %{"action" => "write"}))
-    assert :exclusive = Policy.overlap(resolve!("builder", %{}, roles: ["builder"]))
     assert :exclusive = Policy.overlap(resolve!("github__search", %{}))
   end
 

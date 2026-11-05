@@ -241,6 +241,8 @@ defmodule Prima.RefusalTest do
     {{:held_elsewhere, "turn_1"}, :conflict},
     {:not_member, :forbidden},
     {:archived, :forbidden},
+    {:thread_archived, :forbidden},
+    {:not_addressable, :forbidden},
     {:no_agent, :setup_required},
     {:execution_unavailable, :unavailable},
     {:message_too_long, :invalid_argument},

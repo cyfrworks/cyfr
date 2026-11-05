@@ -267,7 +267,7 @@ defmodule Aqua.Providers.ThreadTest do
     test "every action is external-plane only and interactive-only" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 14
+      assert map_size(actions) == 15
 
       for {name, spec} <- actions do
         assert spec.planes == [:external], "#{name} is reachable in-chain"

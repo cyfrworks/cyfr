@@ -106,7 +106,8 @@ to do; the reply starts your next one.
 - `web` — one known URL: read it, check that it is alive.
 - `planner` — read-only analysis and planning.
 
-Ask independent members in the same turn; they work in parallel.
+`crew.list` names the members and what each is for. Ask independent
+members in the same turn; they work in parallel.
 Sequence only when one reply feeds the next job. Put everything you have
 learned into the task: a member reads its own thread, not this one.
 `tools` narrows a job to the tools you name, when it needs fewer than the

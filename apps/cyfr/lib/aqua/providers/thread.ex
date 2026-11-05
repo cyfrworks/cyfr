@@ -891,7 +891,7 @@ defmodule Aqua.Providers.Thread do
   end
 
   defp stopped(:ok), do: :ok
-  defp stopped({:error, :archived}), do: :ok
+  defp stopped({:error, reason}) when reason in [:archived, :thread_archived], do: :ok
   defp stopped(other), do: other
 
   defp put_opt(opts, _key, nil), do: opts

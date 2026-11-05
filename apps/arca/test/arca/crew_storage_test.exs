@@ -146,7 +146,7 @@ defmodule Arca.CrewStorageTest do
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
       {:ok, _} = Threads.archive(actor, child.id)
 
-      assert {:error, :archived} =
+      assert {:error, :thread_archived} =
                TurnStorage.accept_message(actor, child.id, %{
                  message: %{author: actor.user_id, sent_by: "person", content: "late"}
                })

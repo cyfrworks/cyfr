@@ -1160,40 +1160,6 @@ defmodule Aqua.LoopTest do
     assert left in 3500..3600
   end
 
-  test "a role's unknown outcome stops the soul", %{ctx: ctx, thread: thread} do
-    turn = accept!(ctx, thread, "@aqua fetch it")
-    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
-
-    ScriptedWorker.script([
-      calls([{"r1", "web", %{"task" => "read the page"}}]),
-      # The clone's own round, and the hand that dies under it.
-      calls([{"w1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
-      {:crash, :before_response}
-    ])
-
-    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
-    {:ok, steps} = Tape.steps(ctx, turn)
-
-    assert %{kind: "clone", dispatch_state: "uncertain"} =
-             clone_step = Enum.find(steps, &(&1.kind == "clone"))
-
-    [clone] = Arca.Repo.all(from(t in Arca.Schemas.Turn, where: t.parent_turn_id == ^turn.id))
-    assert clone.status == "uncertain"
-    {:ok, clone_steps} = Tape.steps(ctx, clone)
-
-    assert %{action: "get", dispatch_state: "uncertain"} =
-             Enum.find(clone_steps, &(&1.action == "get"))
-
-    [row] =
-      Enum.filter(
-        Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-        &(&1.kind == "turn_aborted" and &1.turn_id == turn.id)
-      )
-
-    assert %{"covers" => [%{"step_id" => covered}]} = Threads.payload(row)
-    assert covered == clone_step.id
-  end
-
   test "the first unknown outcome stops the group; what still runs is cancelled and covered", %{
     ctx: ctx,
     thread: thread

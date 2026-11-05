@@ -395,7 +395,7 @@ defmodule Aqua.Loop do
              envelope: %{"turn" => turn.id}
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
-           :ok <- consented_release(ctx, claim.authority, turn, snapshot),
+           :ok <- consented_release(claim.authority, turn, snapshot),
            {:ok, started} <-
              Tape.start_turn(ctx, turn, %{
                root_execution_id: claim.execution_id,
@@ -469,15 +469,12 @@ defmodule Aqua.Loop do
   # The file the turn pins must be the release the loaded consent names
   # for its own node; a file edited past its consent is refused, never
   # run under the old grant.
-  defp consented_release(ctx, %{activation: activation}, turn, %{agent: agent}) do
-    with {:ok, roster} <- Compendium.enabled_agent_roster(ctx) do
-      consented = Map.get(activation, source_ref(turn))
-      projected = Compendium.agent_row(agent, roster).release_digest
+  defp consented_release(%{activation: activation}, turn, %{agent: agent}) do
+    consented = Map.get(activation, source_ref(turn))
 
-      if is_binary(consented) and consented == projected,
-        do: :ok,
-        else: {:error, :agent_changed}
-    end
+    if is_binary(consented) and consented == Compendium.agent_row(agent).release_digest,
+      do: :ok,
+      else: {:error, :agent_changed}
   end
 
   # ---------------------------------------------------------------------------
