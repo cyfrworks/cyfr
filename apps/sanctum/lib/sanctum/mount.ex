@@ -175,8 +175,6 @@ defmodule Sanctum.Mount do
     end
   end
 
-  defp entry_program(_entry), do: :error
-
   @doc """
   The active login entry of the context's athanor that `entry` names, by
   id or by name, whose destination names `program`: what a person picks

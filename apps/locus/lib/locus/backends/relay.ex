@@ -33,8 +33,10 @@ defmodule Locus.Backends.Relay do
 
   alias Prima.LocusBackends
 
+  # `lines` is made by `new/1`: a queue is opaque, so no struct literal
+  # holds one.
   defstruct partial: "",
-            lines: :queue.new(),
+            lines: nil,
             bytes: 0,
             next_seq: 1,
             dropped: 0,
@@ -71,6 +73,7 @@ defmodule Locus.Backends.Relay do
     opts = Map.new(opts)
 
     %__MODULE__{
+      lines: :queue.new(),
       max_line_bytes: Map.get(opts, :max_line_bytes, LocusBackends.max_line_bytes()),
       max_buffer_bytes: Map.get(opts, :max_buffer_bytes, LocusBackends.max_buffer_bytes()),
       tail_bytes: Map.get(opts, :stderr_tail_bytes, LocusBackends.stderr_tail_bytes()),
