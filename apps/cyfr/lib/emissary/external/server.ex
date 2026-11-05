@@ -434,7 +434,7 @@ defmodule Emissary.External.Server do
             end
 
           :error ->
-            {:reply, {:error, "Server #{state.name} has no tool #{tool_name}"}, state}
+            {:reply, {:error, {:not_found, "Tool", tool_name}}, state}
         end
 
       true ->
@@ -939,12 +939,12 @@ defmodule Emissary.External.Server do
   defp stdio_connect(state, attempt) do
     with :ok <- login_entry(state),
          {:ok, grant} <- Opus.Programs.hold(owner(state)),
-         {:ok, tools, state} <- list_all_tools(%{state | grant: grant}) do
+         {:ok, tools, listed} <- list_all_tools(%{state | grant: grant}) do
       Logger.info(
-        "[Emissary.External.Server] Connected to #{state.name}: #{length(tools)} tools discovered"
+        "[Emissary.External.Server] Connected to #{listed.name}: #{length(tools)} tools discovered"
       )
 
-      {:ok, %{state | status: :ready, tools: tools, error: nil}}
+      {:ok, %{listed | status: :ready, tools: tools, error: nil}}
     else
       {:error, {:refused, code, _boot}, state} when code in @retried_refusals and attempt == 0 ->
         stdio_connect(drop_sessions(%{state | grant: nil}, :refused), 1)
@@ -970,6 +970,11 @@ defmodule Emissary.External.Server do
       {:error, reason} -> {:error, {:login_entry, reason}}
     end
   end
+
+  # A backend's session ended under a call: the call fails with that
+  # sentence, and the session is dropped so the next call opens it again.
+  defp backend_ended(state, backend),
+    do: {:error, "#{backend} ended", session_ended(state, backend, :ended)}
 
   defp list_all_tools(state) do
     Enum.reduce_while(state.backends, {:ok, [], state}, fn backend, {:ok, acc, state} ->
@@ -1083,7 +1088,7 @@ defmodule Emissary.External.Server do
         reopen(state, backend, &request(&1, backend, method, params, true))
 
       {:ok, :ended} ->
-        {:error, "#{backend} ended", session_ended(state, backend, :ended)}
+        backend_ended(state, backend)
 
       {:error, reason} ->
         {:error, reason, session_ended(state, backend, :refused)}
@@ -1132,7 +1137,7 @@ defmodule Emissary.External.Server do
 
     case Opus.Programs.Session.send(state.grant, session, [line]) do
       {:ok, :running} -> {:ok, state}
-      {:ok, :ended} -> {:error, "#{backend} ended", session_ended(state, backend, :ended)}
+      {:ok, :ended} -> backend_ended(state, backend)
       {:error, reason} -> {:error, reason, session_ended(state, backend, :refused)}
     end
   end

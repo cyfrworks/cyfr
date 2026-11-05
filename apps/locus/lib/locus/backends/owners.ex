@@ -730,14 +730,14 @@ defmodule Locus.Backends.Owners do
          :ok <- not_failed(owner, program, ask.key),
          :error <- running(owner, ask.key),
          :ok <- home_open(state, message.home_id),
-         {:ok, owner} <- room(state, owner) do
-      state = put_owner(state, owner)
+         {:ok, admitted} <- room(state, owner) do
+      state = put_owner(state, admitted)
       %{launcher: launcher, launcher_server: server} = state
 
       case program.home do
         :kept ->
           cap = program.home_max_bytes
-          state = put_home(state, message.home_id, &%{&1 | athanor: owner.athanor, cap: cap})
+          state = put_home(state, message.home_id, &%{&1 | athanor: admitted.athanor, cap: cap})
 
           {_ref, state} =
             run(state, {:open, from, ask}, @home_timeout_ms * 2, fn ->

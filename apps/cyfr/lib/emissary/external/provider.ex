@@ -763,6 +763,18 @@ defmodule Emissary.External.Provider do
     )
   end
 
+  # What the programs controller refused, in the refusal vocabulary: its
+  # own refusal as it is, anything else as the act being unavailable, with
+  # the reason's shape in the log and never its value.
+  defp programs_refusal(reason, act) do
+    if Sanctum.Refusals.known?(reason) do
+      reason
+    else
+      Prima.LoggerContext.unexpected(__MODULE__, reason)
+      {:unavailable, act}
+    end
+  end
+
   # A server's own sentence as it wrote it; any other reason as the
   # table's sentence — a start failure can carry the row's configuration,
   # and a term is never spelled back.
@@ -843,7 +855,7 @@ defmodule Emissary.External.Provider do
          {:ok, %{id: entry_id}} <- sign_in_entry(ctx, server, entry) do
       case Opus.Programs.sign_in(ctx, server, entry_id) do
         {:ok, token} -> {:ok, %{session: token, program: name, entry: entry_id}}
-        {:error, reason} -> {:error, "Sign-in to #{name} did not start: #{error_text(reason)}"}
+        {:error, reason} -> {:error, programs_refusal(reason, "Sign-in to #{name}")}
       end
     end
   end
@@ -856,7 +868,7 @@ defmodule Emissary.External.Provider do
         {:ok, home_id} ->
           case Opus.Programs.home(ctx.athanor_id, home_id, :reset) do
             :ok -> {:ok, %{reset: entry}}
-            {:error, reason} -> {:error, "The home was not reset: #{error_text(reason)}"}
+            {:error, reason} -> {:error, programs_refusal(reason, "The folder reset")}
           end
 
         :none ->

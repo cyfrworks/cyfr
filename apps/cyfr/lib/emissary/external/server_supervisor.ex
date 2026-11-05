@@ -26,7 +26,10 @@ defmodule Emissary.External.ServerSupervisor do
   """
   def ensure_started(config) do
     if config[:transport] == :pipe,
-      do: {:error, "Server '#{config[:name]}' is a pipe program: a catalyst drives it, not MCP"},
+      do:
+        {:error,
+         {:invalid_argument,
+          "Server '#{config[:name]}' is a pipe program: a catalyst drives it, not MCP"}},
       else: ensure_mcp_started(config)
   end
 

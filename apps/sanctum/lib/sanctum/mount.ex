@@ -146,7 +146,7 @@ defmodule Sanctum.Mount do
   # The program the entry names must be the one the consent approved, and
   # its row must stand as a program with a kept home.
   defp program_row(ctx, entry, %{destination: %Prima.Destination{program: approved}}) do
-    with {:ok, ^approved} <- entry_program(entry),
+    with {:ok, named} when named == approved <- entry_program(entry),
          {:ok, row} <- Arca.McpServerStorage.get(Context.actor(ctx), approved),
          true <- mountable_row?(row) do
       {:ok, row}
