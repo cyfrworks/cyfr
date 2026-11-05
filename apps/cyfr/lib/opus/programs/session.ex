@@ -79,10 +79,17 @@ defmodule Opus.Programs.Session do
   @doc """
   The lines past `after`, waiting up to `max_wait_ms` for one or the
   process's end; idempotent, so a lost answer is asked for again by the
-  same `after`.
+  same `after`. An ended session's `exit_code` is its process's status when
+  it exited of its own accord, nil otherwise.
   """
   @spec recv(grant(), String.t(), non_neg_integer(), non_neg_integer()) ::
-          {:ok, %{lines: [LocusBackends.line()], dropped: non_neg_integer(), running: boolean()}}
+          {:ok,
+           %{
+             lines: [LocusBackends.line()],
+             dropped: non_neg_integer(),
+             running: boolean(),
+             exit_code: 0..255 | nil
+           }}
           | {:error, refusal()}
   def recv(grant, session, after_seq, max_wait_ms) do
     max_wait_ms = min(max_wait_ms, LocusBackends.max_recv_wait_ms())

@@ -459,7 +459,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate
+        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Mount
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
         Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.Vault
         Sanctum.VaultReader
@@ -470,7 +470,8 @@ defmodule Cyfr.Boundaries do
           "the policy record of every admission. The programs controller " <>
           "(`Opus.Programs`) posts to the backends service through `Sanctum.Egress` and " <>
           "checks a program's env templates from the vault's metadata " <>
-          "(`Sanctum.Vault.disclosed?/2`) before it unseals any. `Sanctum` bare is the domain's own " <>
+          "(`Sanctum.Vault.disclosed?/2`) before it unseals any, and a sign-in whose " <>
+          "command exited 0 makes its login entry active again (`Sanctum.Mount.signed_in/2`). `Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
@@ -827,7 +828,7 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/emissary.ex"
       ],
       into: "Opus",
-      allow: ~w(Opus),
+      allow: ~w(Opus Opus.Programs),
       reason:
         "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
           "lease, reports health and reads an athanor's feeds for a canvas's " <>
@@ -2036,7 +2037,13 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Handle" => [resolve: 1],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
-    "Sanctum.Mount" => [home_of: 2, login_entries: 1, login_entry: 3],
+    "Sanctum.Mount" => [
+      home_of: 2,
+      login_entries: 1,
+      login_entry: 3,
+      login_entry: 4,
+      signed_in: 2
+    ],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],

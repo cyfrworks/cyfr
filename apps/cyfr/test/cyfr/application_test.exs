@@ -272,7 +272,8 @@ defmodule Cyfr.ApplicationTest do
                Opus.Sweeper,
                Opus.WorkerWatch,
                Opus.Host.Egress.Pins,
-               Opus.HostListener
+               Opus.HostListener,
+               Opus.Programs
              ]},
             {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.WorkerTree, Aqua.RunnerTree]},
             {Emissary.Supervisor, [Emissary.External.ServerTree, Emissary.TaskSupervisor]}

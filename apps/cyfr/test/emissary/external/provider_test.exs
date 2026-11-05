@@ -573,7 +573,7 @@ defmodule Emissary.External.ProviderTest do
         config_json: Jason.encode!(@stdio_config)
       })
 
-      assert {:error, {:invalid_argument, "Only a stdio server restarts" <> _}} =
+      assert {:error, {:invalid_argument, "Only a program restarts" <> _}} =
                Provider.handle("mcp_servers", ctx, %{
                  "action" => "restart",
                  "name" => "webby"

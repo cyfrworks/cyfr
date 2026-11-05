@@ -116,12 +116,18 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
 
-  @doc "End every session of `server`'s owner, as an idle period or a crash would."
-  def end_sessions(%{agent: agent}, server) do
+  @doc """
+  End every session of `server`'s owner, as an idle period or a crash
+  would; with `exit_code`, as its process exiting with that status, which
+  a `recv` of it answers.
+  """
+  def end_sessions(%{agent: agent}, server, exit_code \\ nil) do
     Agent.update(agent, fn st ->
       sessions =
         Map.new(st.sessions, fn {id, s} ->
-          if elem(s.owner, 1) == server, do: {id, %{s | running: false}}, else: {id, s}
+          if elem(s.owner, 1) == server,
+            do: {id, %{s | running: false, exit_code: exit_code}},
+            else: {id, s}
         end)
 
       %{st | sessions: sessions}
@@ -506,6 +512,7 @@ defmodule Cyfr.Test.ScriptedBackends do
               lines: [],
               seq: 0,
               running: true,
+              exit_code: nil,
               active: System.monotonic_time(:millisecond)
             }
 
@@ -578,7 +585,14 @@ defmodule Cyfr.Test.ScriptedBackends do
 
         if lines != [] or not s.running or now() >= deadline do
           Agent.update(agent, &touch(&1, id))
-          session_answer(conn, st, %{"lines" => lines, "dropped" => 0, "running" => s.running})
+          answer = %{"lines" => lines, "dropped" => 0, "running" => s.running}
+
+          answer =
+            if s.exit_code != nil and not s.running,
+              do: Map.put(answer, "exit_code", s.exit_code),
+              else: answer
+
+          session_answer(conn, st, answer)
         else
           Process.sleep(10)
           recv(conn, agent, id, after_seq, deadline)

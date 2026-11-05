@@ -14,7 +14,13 @@ defmodule Opus.Programs.SignIn do
   sends each batch as `{Opus.Programs, token, {:lines, lines}}`; a line the
   subscriber sends is written to the terminal. It ends — `{Opus.Programs,
   token, {:ended, reason}}` to the subscriber, the session closed and the
-  owner released — when the command ends (`:exited`), when the subscriber
+  owner released — when the command ends (`:signed_in` when it exited 0
+  and its login entry is active, which makes an entry a restore left
+  `needs_reauth` active again through `Sanctum.Mount.signed_in/2` under the
+  interactive context that opened it; `{:exited, code}` for any other end
+  of the command, `code` nil for one ended by a signal, the entry left as
+  it is; `{:not_signed_in, reason}` when it exited 0 but the entry could not
+  be made active), when the subscriber
   exits or asks it to (`:closed`), when no subscriber attaches within 30 s
   (`:unattended`), when the box tells it to stand down or issues a new
   grant (`:stand_down`, `:owner_moved`), or when the session cannot be read
@@ -53,6 +59,8 @@ defmodule Opus.Programs.SignIn do
        %{
          token: Keyword.fetch!(args, :token),
          binding: Keyword.fetch!(args, :binding),
+         ctx: Keyword.fetch!(args, :ctx),
+         entry_id: Keyword.fetch!(args, :home_id),
          owner: owner,
          grant: grant,
          session: session,
@@ -95,12 +103,12 @@ defmodule Opus.Programs.SignIn do
   def handle_call(_request, _from, state), do: {:reply, {:error, :not_yours}, state}
 
   @impl true
-  def handle_info({:read, lines, running}, state) do
+  def handle_info({:read, lines, running, exit_code}, state) do
     state = relay(state, lines)
 
     if running,
       do: {:noreply, state},
-      else: {:stop, :normal, ended(state, :exited)}
+      else: {:stop, :normal, ended(state, exited(state, exit_code))}
   end
 
   def handle_info({:read_failed, _reason}, state), do: {:stop, :normal, ended(state, :lost)}
@@ -142,6 +150,17 @@ defmodule Opus.Programs.SignIn do
   @impl true
   def format_status(status), do: Opus.Programs.StatusRedaction.format_status(status)
 
+  # Only a command that exited 0 signed the program in; the entry is made
+  # active again then, and left as it is on any other end.
+  defp exited(state, 0) do
+    case Sanctum.Mount.signed_in(state.ctx, state.entry_id) do
+      :ok -> :signed_in
+      {:error, reason} -> {:not_signed_in, reason}
+    end
+  end
+
+  defp exited(_state, code), do: {:exited, code}
+
   defp relay(%{subscriber: nil} = state, lines) do
     kept = Enum.reverse(lines, state.kept) |> Enum.take(@kept_lines)
     %{state | kept: kept}
@@ -166,10 +185,10 @@ defmodule Opus.Programs.SignIn do
   # answered, so a lost answer is replayed.
   defp read(relay, grant, session, after_seq) do
     case Session.recv(grant, session, after_seq, @recv_wait_ms) do
-      {:ok, %{lines: lines, running: running}} ->
+      {:ok, %{lines: lines, running: running} = answer} ->
         texts = Enum.map(lines, & &1.text)
         last = if lines == [], do: after_seq, else: List.last(lines).seq
-        send(relay, {:read, texts, running})
+        send(relay, {:read, texts, running, answer.exit_code})
         if running, do: read(relay, grant, session, last)
 
       {:error, reason} ->

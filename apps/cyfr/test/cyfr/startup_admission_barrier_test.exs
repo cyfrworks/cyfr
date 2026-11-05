@@ -798,14 +798,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
   end
 
-  # The next stand-ins to stop are `ids`, in this order.
-  defp next_stopped!(ids) do
-    for id <- ids do
-      assert_receive {:stopped, stopped}, 5_000
-      assert stopped == id
-    end
-  end
-
   defp quiet!, do: refute_receive({:started, _}, 200)
 
   # Every stand-in stopped so far, in the order they stopped, with

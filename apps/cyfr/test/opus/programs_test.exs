@@ -1281,11 +1281,46 @@ defmodule Opus.ProgramsTest do
       assert :ok = Programs.sign_in_send(admin, token, "code-1234")
       assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
 
-      # The command ends: the subscriber is told, and the owner released.
+      # The command ends by a signal: the subscriber is told, and the owner
+      # released.
       Scripted.end_sessions(fake, row.id)
-      assert_receive {Opus.Programs, ^token, {:ended, :exited}}, 3_000
+      assert_receive {Opus.Programs, ^token, {:ended, {:exited, nil}}}, 3_000
       assert_released(row, 1)
       refute ctx == nil
+    end
+
+    test "a needs_reauth entry signed in with an exit 0 is active again, and with exit 1 stays as it is",
+         %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = Arca.VaultStorage.set_status(actor, entry, "needs_reauth")
+
+      sign_in = fn ->
+        assert {:ok, %{session: token}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "sign_in",
+                   "name" => "claude",
+                   "entry" => entry
+                 })
+
+        assert :ok = Programs.sign_in_attach(admin, token, self())
+        token
+      end
+
+      token = sign_in.()
+      Scripted.end_sessions(fake, row.id, 1)
+      assert_receive {Opus.Programs, ^token, {:ended, {:exited, 1}}}, 3_000
+      assert_released(row, 1)
+      assert {:ok, %{status: "needs_reauth"}} = Arca.VaultStorage.get(actor, entry)
+
+      # A mount still refuses it meanwhile: only a sign-in admits it.
+      assert {:error, {:entry_unavailable, "needs_reauth"}} =
+               Sanctum.Mount.login_entry(ctx, entry, "claude")
+
+      token = sign_in.()
+      Scripted.end_sessions(fake, row.id, 0)
+      assert_receive {Opus.Programs, ^token, {:ended, :signed_in}}, 3_000
+      assert_released(row, 1)
+      assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(actor, entry)
     end
 
     test "a sign-in refuses an entry that is no login entry for the program, and a scratch program",

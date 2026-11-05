@@ -223,6 +223,7 @@ defmodule Opus.Programs do
       name: relay_name(token),
       token: token,
       binding: binding,
+      ctx: ctx,
       owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
       program: program_name(row),
       home_id: home_id,

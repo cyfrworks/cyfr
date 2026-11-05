@@ -892,7 +892,9 @@ defmodule Emissary.External.Provider do
         "'#{name}' has no sign-in: a program with a kept home and a login command signs in"}}
 
   defp sign_in_entry(ctx, server, entry) do
-    case Sanctum.Mount.login_entry(ctx, entry, server.name) do
+    # A sign-in is how an entry a restore left needs_reauth comes back, so it
+    # is admitted here, and only here.
+    case Sanctum.Mount.login_entry(ctx, entry, server.name, for: :sign_in) do
       {:ok, %{id: id}} = found when server.transport == "pipe" or id == server.login_entry_id ->
         found
 
