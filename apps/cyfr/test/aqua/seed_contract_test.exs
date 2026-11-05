@@ -6,7 +6,7 @@ defmodule Aqua.SeedContractTest do
   The shipped seed, the agents' manifests and the registry agree about
   what a chat may call.
 
-  Three lists describe one surface. The soul and each role name what the
+  Three lists describe one surface. The soul names what the
   model may call (`tool_policy`); each agent's manifest names what the
   consent edge grants (`caps.tools`, derived from that policy by
   `Compendium.AgentSource`), which the chain authority checks by exact
@@ -64,7 +64,7 @@ defmodule Aqua.SeedContractTest do
 
   test "nothing shipped is automatic where the kind ceiling says it asks" do
     # Kind always wins: a destructive or external action is never `auto`
-    # on any agent — the soul asks for it, and a role never holds it.
+    # on any agent — the soul asks for it, and a crew member holds only the soul's.
     # `Aqua.Kinds.auto_permitted?/2` is the one rule every door reads.
     automatic =
       for {name, key, "auto"} <- seed_policy(),
@@ -74,42 +74,22 @@ defmodule Aqua.SeedContractTest do
           do: "#{name}: #{key}"
 
     assert automatic == [], Enum.join(automatic, "\n")
-
-    destructive_on_roles =
-      for {name, key, _mode} <- seed_policy(),
-          name != Compendium.AquaPath.soul_name(),
-          {tool, action} <- exact(key),
-          Aqua.Kinds.kind_for(tool, action) in [:destructive, :external],
-          do: "#{name}: #{key}"
-
-    assert destructive_on_roles == [], Enum.join(destructive_on_roles, "\n")
   end
 
-  test "no shipped role declares execution.run — a role launches nothing" do
-    # A role launches nothing, so the key has no effect on a role at any
-    # value, and the `aqua` door refuses it
-    # (`Compendium.AquaAgent.validate_tool_policy/2`). The shipped soul's
-    # own `execution.run` is what lets it launch, and stays.
-    roles = for agent <- seed_agents(), agent.name != Compendium.AquaPath.soul_name(), do: agent
+  test "the shipped crew holds no policy: every member runs under the soul's" do
+    # A crew member's file names its brain and what it is good at; the
+    # tools it holds are the soul's (`Compendium.AquaAgent.under_soul/2`),
+    # so a key in a crew file refuses the file.
+    crew = for agent <- seed_agents(), agent.name != Compendium.AquaPath.soul_name(), do: agent
 
-    names = Enum.map(roles, & &1.name)
-    assert "artisan" in names and "builder" in names
+    assert Enum.map(crew, & &1.name) |> Enum.sort() == ~w(claude-code explorer)
 
-    declaring = for role <- roles, Map.has_key?(role.tool_policy, "execution.run"), do: role.name
-    assert declaring == [], "roles declaring execution.run: #{Enum.join(declaring, ", ")}"
-
-    refused =
-      for role <- roles,
-          {:error, {:tool_policy_no_effect, key}} <-
-            [
-              Compendium.AquaAgent.validate_tool_policy(
-                role.tool_policy,
-                Compendium.AquaAgent.role_type()
-              )
-            ],
-          do: "#{role.name}: #{key}"
-
-    assert refused == [], Enum.join(refused, "\n")
+    for member <- crew do
+      assert member.tool_policy == %{}, member.name
+      assert is_binary(member.catalyst_ref) and is_binary(member.model), member.name
+      assert member.description != "" and member.avoid != "", member.name
+      refute File.read!(seed_file(member.name)) =~ "tool_policy", member.name
+    end
   end
 
   test "a UI event is auto or absent, never ask" do
@@ -124,8 +104,8 @@ defmodule Aqua.SeedContractTest do
   end
 
   test "the shipped soul asks its crew on its own, and the search gate survives composition" do
-    # The soul hands work to a role with `crew.ask` and reads who there is
-    # with `crew.list`, both without a card; no role glob stands in for
+    # The soul hands a job to a crew member with `crew.ask` and reads who
+    # there is with `crew.list`, both without a card; no glob stands in for
     # them. `native_search` is not a tool action and passes through
     # `Aqua.ToolGrants.effective/2` untouched.
     {:ok, soul} =
@@ -152,15 +132,20 @@ defmodule Aqua.SeedContractTest do
     "schedule.list" => "reflex table",
     # `aqua.get` serves the guides the capability-acquisition scroll cites.
     "aqua.get" => "guides read by the scroll",
-    "aqua.list" => "the roster the soul may read to describe its roles",
+    "aqua.list" => "the roster the soul may read to describe its crew",
     "aqua.skill_get" => "taught as `aqua.skill_get`",
     "aqua.skill_list" => "the scroll index the prompt carries",
-    "build.toolchains" => "the builder checks toolchains before compiling",
+    "build.toolchains" => "the builder scroll checks toolchains before compiling",
     "component.inspect" => "read a component before building on it",
-    "component.setup_plan" => "readiness check the roles run after a pull",
-    "system.status" => "status checks the planner answers",
-    # The soul's Capability Acquisition teaches these and hands a role the
-    # components it found; a role reads no scroll of its own.
+    "component.setup_plan" => "readiness check the builder and artisan scrolls run after a pull",
+    "system.status" => "status checks the planner scroll answers",
+    # A component's source is read as the builder and artisan scrolls
+    # teach it, with `source(action: ...)` beside the soul's own reads.
+    "source.read" => "taught by the builder and artisan scrolls",
+    "source.tree" => "taught by the builder and artisan scrolls",
+    "source.grep" => "taught by the builder and artisan scrolls",
+    # The soul's Capability Acquisition teaches these and the builder
+    # scroll builds what it does not find.
     "component.list" => "capability acquisition, taught by the soul",
     "component.search" => "capability acquisition, taught by the soul",
     "component.pull" => "capability acquisition, taught by the soul"
@@ -192,13 +177,6 @@ defmodule Aqua.SeedContractTest do
              "canvas.write" => "ask"
            }
 
-    roles =
-      for {name, key, _mode} <- seed_policy(),
-          name != Compendium.AquaPath.soul_name(),
-          String.starts_with?(key, "canvas."),
-          do: "#{name}: #{key}"
-
-    assert roles == []
     refute Map.has_key?(soul.tool_policy, "canvas.activate")
     refute Map.has_key?(soul.tool_policy, "canvas.restore")
 
@@ -218,11 +196,12 @@ defmodule Aqua.SeedContractTest do
     for taught <- ["canvas.catalog", "feed.list", "layout.edit"], do: assert(body =~ taught)
   end
 
-  # The soul's policy, its prompt, the scroll and the Artisan role say one
-  # thing: the soul writes a canvas as a page's files once the person says
-  # yes, on a card naming the streams; no role writes one, and nothing
-  # teaches the module, tree or toolkit a canvas no longer has.
-  test "the policy, the prompt, the scroll and the Artisan role agree on writing a canvas" do
+  # The soul's policy, its prompt, the canvas scroll and the artisan scroll
+  # say one thing: the soul writes a canvas as a page's files once the
+  # person says yes, on a card naming the streams; the artisan scroll
+  # teaches no canvas write, and nothing teaches the module, tree or
+  # toolkit a canvas no longer has.
+  test "the policy, the prompt, the canvas scroll and the artisan scroll agree on writing a canvas" do
     soul = File.read!(Path.join(@seed, "aqua.md"))
     [_, section] = Regex.run(~r/^## Canvases\n(.*?)\n---/ms, soul)
     canvases = String.replace(section, ~r/\s+/, " ")
@@ -234,7 +213,7 @@ defmodule Aqua.SeedContractTest do
     assert body =~ "`canvas.write` asks the person first"
     assert body =~ "its card names the streams the version reads"
 
-    artisan = File.read!(Path.join([@seed, "roles", "artisan.md"]))
+    artisan = File.read!(Path.join([@seed, "skills", "artisan", "SKILL.md"]))
     refute artisan =~ "| `canvas` |"
     refute artisan =~ ~r/canvas\.(write|catalog|versions)/
 
@@ -337,14 +316,6 @@ defmodule Aqua.SeedContractTest do
     assert Aqua.Kinds.kind_for("feed", "bind") == :external
     refute Aqua.Kinds.auto_permitted?("feed", "bind")
 
-    roles =
-      for {name, key, _mode} <- seed_policy(),
-          name != Compendium.AquaPath.soul_name(),
-          String.starts_with?(key, "feed."),
-          do: "#{name}: #{key}"
-
-    assert roles == []
-
     # The soul's grant names each exactly, which is the only way a grant
     # holds a feed write.
     assert ~w(feed.bind feed.list feed.remove) -- granted() == []
@@ -354,7 +325,7 @@ defmodule Aqua.SeedContractTest do
   # The layout is the person's arrangement: the soul reads it on its own
   # and asks before it edits it, since an edit rearranges the person's
   # screen. The layout's write is an agent's alone and only by its exact
-  # name, so the soul's own grant names both, and no role names either.
+  # name, so the soul's own grant names both.
   test "the soul reads the layout on its own and asks to edit it" do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
 
@@ -362,14 +333,6 @@ defmodule Aqua.SeedContractTest do
              "layout.get" => "auto",
              "layout.edit" => "ask"
            }
-
-    roles =
-      for {name, key, _mode} <- seed_policy(),
-          name != Compendium.AquaPath.soul_name(),
-          String.starts_with?(key, "layout."),
-          do: "#{name}: #{key}"
-
-    assert roles == []
 
     soul_tools =
       soul
@@ -414,11 +377,13 @@ defmodule Aqua.SeedContractTest do
     |> Enum.reject(fn key -> key |> split() |> elem(0) |> Hands.hand?() end)
   end
 
+  # Each shipped file as it is written: the soul's policy, and the crew's
+  # none.
   defp seed_agents do
-    roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
+    crew = Path.join(@seed, Compendium.AquaPath.crew_dirname())
 
     files =
-      [Path.join(@seed, "aqua.md") | Prima.Test.SourceTree.files!(Path.join(roles, "*.md"))]
+      [Path.join(@seed, "aqua.md") | Prima.Test.SourceTree.files!(Path.join(crew, "*.md"))]
 
     for path <- files,
         name = Path.basename(path, ".md"),
@@ -448,7 +413,7 @@ defmodule Aqua.SeedContractTest do
   defp seed_file(name) do
     if name == Compendium.AquaPath.soul_name(),
       do: Path.join(@seed, "aqua.md"),
-      else: Path.join([@seed, Compendium.AquaPath.roles_dirname(), name <> ".md"])
+      else: Path.join([@seed, Compendium.AquaPath.crew_dirname(), name <> ".md"])
   end
 
   defp seed_body(name) do

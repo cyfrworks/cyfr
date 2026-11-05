@@ -3,7 +3,7 @@
 
 defmodule Compendium.AgentSource do
   @moduledoc """
-  An AQUA agent — the soul or a role — as a consent source node.
+  An AQUA agent — the soul or a crew member — as a consent source node.
 
   `agent:local.<name>` is a source ref like any component's: it plans,
   consents, activates and loads through the same machinery, which reads
@@ -16,9 +16,12 @@ defmodule Compendium.AgentSource do
 
     * The artifact digest is the agent's **capability** digest
       (`Compendium.AquaAgent.capability_digest/1`): type, catalyst, model,
-      tool policy, disabled. The prompt is not in it, so editing what an
-      agent says never moves a consent; the file's bytes are its
-      **revision**, kept by `Arca.AgentRevisions` for a turn to pin.
+      options, tool policy, disabled. A crew member's tool policy is the
+      soul's (`Compendium.AquaAgent.under_soul/2`), so an edit of the
+      soul's policy moves every member's consent with the soul's. The
+      prompt is not in it, so editing what an agent says never moves a
+      consent; the file's bytes are its **revision**, kept by
+      `Arca.AgentRevisions` for a turn to pin.
     * `caps.tools` are the policy keys that name tool actions
       (`tool.action`, `tool.*`), which consent expands against the live
       catalog: a key no catalogued action matches expands to nothing
@@ -26,8 +29,9 @@ defmodule Compendium.AgentSource do
       not a catalog action.
     * `dependencies.static` are the model catalyst the agent runs on and
       the catalysts behind the tool families it names — its hands. An
-      agent has no edge into another agent: a role consents and runs as
-      its own source.
+      agent has no edge into another agent: a crew member consents and
+      runs as its own source, so a member whose brain is not installed
+      leaves the soul's consent whole.
     * `agent` is the model target and the policy modes (`auto` / `ask`
       sets), which the shape digest reads. The flat `"model"` key is not
       written.
@@ -35,7 +39,7 @@ defmodule Compendium.AgentSource do
   A disabled agent has no row: it is out of the roster.
   """
 
-  alias Compendium.{AquaAgent, AquaPath}
+  alias Compendium.AquaAgent
   alias Sanctum.Context
 
   # The ref vocabulary — the type segment, the publisher and the soul's
@@ -112,11 +116,7 @@ defmodule Compendium.AgentSource do
     }
   end
 
-  @doc "The overlay unit an agent's file is: what `Arca.Overlay.unit_status/2` classifies."
-  @spec unit(String.t()) :: Arca.Storage.path()
-  def unit(name) when is_binary(name), do: AquaPath.agent_file(name)
-
-  @doc "The consent row of an agent file — the soul or a role."
+  @doc "The consent row of an agent file — the soul or a crew member."
   @spec row(AquaAgent.t()) :: map()
   def row(%{name: _} = agent) do
     manifest = manifest(agent)
@@ -137,13 +137,16 @@ defmodule Compendium.AgentSource do
   end
 
   @doc """
-  The consent row the seed file projects. A prose-only edit of the
-  athanor's copy does not change this row; a policy, model or catalyst
-  edit of the seed file does. A disabled seed agent has no row.
+  The consent row the seed's agent `name` projects, a crew member under
+  the seed soul's policy (`Compendium.AquaTemplate.shipped_agent/1`). A
+  prose-only edit of the athanor's copy does not change this row; a
+  policy, model, options or catalyst edit of the seed file does, and so
+  does an edit of the seed soul's policy for every crew member. A
+  disabled seed agent has no row.
   """
-  @spec shipped_row(String.t(), binary()) :: {:ok, map()} | {:error, term()}
-  def shipped_row(name, bytes) when is_binary(name) and is_binary(bytes) do
-    with {:ok, agent} <- AquaAgent.parse(name, bytes) do
+  @spec shipped_row(String.t()) :: {:ok, map()} | {:error, term()}
+  def shipped_row(name) when is_binary(name) do
+    with {:ok, agent} <- Compendium.AquaTemplate.shipped_agent(name) do
       if agent.disabled, do: {:error, :disabled}, else: {:ok, row(agent)}
     end
   end

@@ -44,18 +44,12 @@ defmodule Prism.AquaTemplatePolicyTest do
     refute Map.has_key?(catalog, "member")
   end
 
-  # The soul at the root, then every role in the closet.
+  # The one policy the tree holds: the soul's, which the crew runs under.
   defp policies do
-    roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
+    {:ok, soul} =
+      Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
 
-    files =
-      [Path.join(@seed, "aqua.md") | Prima.Test.SourceTree.files!(Path.join(roles, "*.md"))]
-
-    for path <- files,
-        name = Path.basename(path, ".md"),
-        {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(path)),
-        map_size(agent.tool_policy) > 0,
-        do: {agent.name, agent.tool_policy}
+    [{soul.name, soul.tool_policy}]
   end
 
   # `native_search` is a bare exclusivity gate, not a tool; a `tool.*` glob

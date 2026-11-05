@@ -416,7 +416,7 @@ defmodule Compendium.ActivationTest do
 
       # A roster that cannot be read says nothing about whether the agent
       # is there.
-      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "roles"], "not a directory")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "crew"], "not a directory")
       Registry.invalidate_executor_caches(ctx)
 
       assert {:error, :enotdir} = Activation.resolve(ctx, root)

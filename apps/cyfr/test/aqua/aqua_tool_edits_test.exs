@@ -3,9 +3,10 @@
 
 defmodule Aqua.AquaToolEditsTest do
   @moduledoc """
-  The `aqua` tool's edits meet under the lock: a per-key patch keeps a
-  concurrent member's toggle, a prompt save names the version it edited,
-  and a new role is its own file and nothing else.
+  The `aqua` tool's edits meet under the lock: a per-key patch of the
+  soul's policy keeps a concurrent member's toggle, a prompt save names
+  the version it edited, a crew member holds no policy to edit, and a new
+  crew member is its own file and nothing else.
   """
   use ExUnit.Case, async: false
 
@@ -40,12 +41,14 @@ defmodule Aqua.AquaToolEditsTest do
     policy
   end
 
-  test "a new role leaves the soul as it was, and the answer names only what it created",
+  @soul "aqua"
+
+  test "a new crew member leaves the soul as it was, and the answer names only what it created",
        %{ctx: ctx} do
     actor = Sanctum.Context.actor(ctx)
     {:ok, soul} = Arca.get(actor, AquaPath.soul_file())
 
-    assert {:ok, %{"created" => "sentry", "type" => "role"} = created} =
+    assert {:ok, %{"created" => "sentry", "type" => "crew"} = created} =
              call(ctx, %{"action" => "create", "name" => "sentry"})
 
     assert map_size(created) == 2
@@ -53,33 +56,43 @@ defmodule Aqua.AquaToolEditsTest do
     refute Map.has_key?(policy(ctx, AquaPath.soul_name()), "sentry.*")
   end
 
-  # The derived index follows every write to the tree: a created role has a
-  # row with its two digests, an edit moves them, a delete removes the row.
+  # The derived index follows every write to the tree: a created member has
+  # a row with its two digests, an edit moves them, a delete removes the row.
   test "the agent index follows the tree", %{ctx: ctx} do
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
-    assert %{kind: "role", disabled: false} = scout = Enum.find(rows, &(&1.name == "scout"))
+    assert %{kind: "crew", disabled: false} = scout = Enum.find(rows, &(&1.name == "scout"))
     assert String.starts_with?(scout.revision_digest, "sha256:")
     assert scout.capability_digest =~ "sha256:"
 
     assert {:ok, _} =
-             call(ctx, %{
-               "action" => "update",
-               "name" => "scout",
-               "tool_policy_patch" => %{"files.read" => "auto"}
-             })
+             call(ctx, %{"action" => "update", "name" => "scout", "model" => "another-model"})
 
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     edited = Enum.find(rows, &(&1.name == "scout"))
     refute edited.revision_digest == scout.revision_digest
     refute edited.capability_digest == scout.capability_digest
 
+    # The member runs under the soul's policy: an edit of the soul moves
+    # the member's capability, never its file.
+    assert {:ok, _} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => @soul,
+               "tool_policy_patch" => %{"storage.write" => "ask"}
+             })
+
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    under = Enum.find(rows, &(&1.name == "scout"))
+    assert under.revision_digest == edited.revision_digest
+    refute under.capability_digest == edited.capability_digest
+
     assert {:ok, _} = call(ctx, %{"action" => "delete", "name" => "scout"})
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     refute Enum.any?(rows, &(&1.name == "scout"))
   end
 
-  # A reset reverts the tree to what ships, and the index follows: a role a
-  # member created does not outlive its file as a row.
+  # A reset reverts the tree to what ships, and the index follows: a crew
+  # member the athanor created does not outlive its file as a row.
   test "the agent index follows a reset", %{ctx: ctx} do
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     assert Enum.any?(rows, &(&1.name == "scout"))
@@ -91,66 +104,120 @@ defmodule Aqua.AquaToolEditsTest do
     assert Enum.any?(rows, &(&1.name == AquaPath.soul_name()))
   end
 
-  test "two members toggling different keys keep both", %{ctx: ctx} do
+  test "two members toggling different keys of the soul's policy keep both", %{ctx: ctx} do
+    before = policy(ctx, @soul)
+    refute Map.has_key?(before, "storage.write") or Map.has_key?(before, "custom.thing")
+
     assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
-               "name" => "scout",
-               "tool_policy_patch" => %{"files.read" => "auto"}
+               "name" => @soul,
+               "tool_policy_patch" => %{"storage.write" => "ask"}
              })
 
     assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
-               "name" => "scout",
-               "tool_policy_patch" => %{"http.get" => "auto"}
+               "name" => @soul,
+               "tool_policy_patch" => %{"custom.thing" => "auto"}
              })
 
-    assert policy(ctx, "scout") == %{"files.read" => "auto", "http.get" => "auto"}
+    assert policy(ctx, @soul) ==
+             Map.merge(before, %{"storage.write" => "ask", "custom.thing" => "auto"})
 
     assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
-               "name" => "scout",
-               "tool_policy_patch" => %{"files.read" => nil}
+               "name" => @soul,
+               "tool_policy_patch" => %{"storage.write" => nil}
              })
 
-    assert policy(ctx, "scout") == %{"http.get" => "auto"}
+    assert policy(ctx, @soul) == Map.put(before, "custom.thing", "auto")
+
+    # The crew runs under it.
+    assert policy(ctx, "scout") == policy(ctx, @soul)
   end
 
-  test "a patch is judged as the whole it makes", %{ctx: ctx} do
-    # The kind ceiling and the no-effect rule hold for a patched key
-    # exactly as for a replaced map.
-    assert {:error, {:invalid_argument, _}} =
-             call(ctx, %{
-               "action" => "update",
-               "name" => "scout",
-               "tool_policy_patch" => %{"files.delete" => "auto"}
-             })
+  test "a patch is judged as the whole it makes, and a crew member holds none", %{ctx: ctx} do
+    before = policy(ctx, @soul)
 
-    assert {:error, {:invalid_argument, _}} =
-             call(ctx, %{
-               "action" => "update",
-               "name" => "scout",
-               "tool_policy_patch" => %{"execution.run" => "ask"}
-             })
+    # The kind ceiling holds for a patched key exactly as for a replaced map.
+    for key <- ["files.delete", "execution.run"] do
+      assert {:error, {:invalid_argument, _}} =
+               call(ctx, %{
+                 "action" => "update",
+                 "name" => @soul,
+                 "tool_policy_patch" => %{key => "auto"}
+               })
+    end
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
              call(ctx, %{
                "action" => "update",
-               "name" => "scout",
+               "name" => @soul,
                "tool_policy_patch" => %{"files.read" => "maybe"}
              })
 
     assert {:error, {:invalid_argument, _}} =
              call(ctx, %{
                "action" => "update",
-               "name" => "scout",
+               "name" => @soul,
                "tool_policy" => %{},
                "tool_policy_patch" => %{"files.read" => "auto"}
              })
 
-    assert policy(ctx, "scout") == %{}
+    # A crew member runs under the soul's policy and holds none to write.
+    for args <- [%{"tool_policy_patch" => %{"files.read" => "auto"}}, %{"tool_policy" => %{}}] do
+      assert {:error, {:invalid_argument, message}} =
+               call(ctx, Map.merge(%{"action" => "update", "name" => "scout"}, args))
+
+      assert message =~ "runs under the soul's tool policy"
+    end
+
+    assert policy(ctx, @soul) == before
+    {:ok, bytes} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.crew_file("scout"))
+    refute bytes =~ "tool_policy"
+  end
+
+  # A brain-option edit is a patch applied to the options as the write
+  # lands, under the rewrite's lock: edits of different options made at
+  # once all keep, and null takes one off.
+  test "concurrent edits of different brain options all survive", %{ctx: ctx} do
+    options = %{"effort" => "high", "budget" => 8, "thinking" => true, "mode" => "plan"}
+
+    options
+    |> Enum.map(fn {name, value} ->
+      Task.async(fn ->
+        call(ctx, %{"action" => "update", "name" => "scout", "options_patch" => %{name => value}})
+      end)
+    end)
+    |> Task.await_many(30_000)
+    |> Enum.each(&assert({:ok, _} = &1))
+
+    assert {:ok, %{"options" => ^options}} = call(ctx, %{"action" => "get", "name" => "scout"})
+
+    assert {:ok, _} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => "scout",
+               "options_patch" => %{"mode" => nil}
+             })
+
+    want = Map.delete(options, "mode")
+    assert {:ok, %{"options" => ^want}} = call(ctx, %{"action" => "get", "name" => "scout"})
+
+    for bad <- [%{"effort" => %{"level" => "high"}}, %{"" => "x"}] do
+      assert {:error, {:invalid_argument, _}} =
+               call(ctx, %{"action" => "update", "name" => "scout", "options_patch" => bad})
+    end
+
+    assert {:error, {:invalid_argument, "Give options or options_patch, not both"}} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => "scout",
+               "options" => %{},
+               "options_patch" => %{"effort" => "low"}
+             })
   end
 
   test "a prompt save names the version it edited and is refused over a newer one", %{ctx: ctx} do
@@ -179,10 +246,10 @@ defmodule Aqua.AquaToolEditsTest do
   end
 
   @tag :capture_log
-  test "a role whose writer died after its commit is published, and the index names it once the repair releases it",
+  test "a crew member whose writer died after its commit is published, and the index names it once the repair releases it",
        %{ctx: ctx} do
     actor = Sanctum.Context.actor(ctx)
-    role = AquaPath.role_file("tracker")
+    role = AquaPath.crew_file("tracker")
     {root, key} = Arca.Storage.UnitLocator.unit_key(role)
     handler = {__MODULE__, make_ref()}
     on_exit(fn -> :telemetry.detach(handler) end)
@@ -212,19 +279,19 @@ defmodule Aqua.AquaToolEditsTest do
     {pid, ref} = spawn_monitor(fn -> call(ctx, %{"action" => "create", "name" => "tracker"}) end)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
 
-    # Published: the row, the journal, and the role reads already.
+    # Published: the row, the journal, and the member reads already.
     assert {:ok, %{state: "committed"}} = Arca.StorageUnits.current(actor, root, key)
     assert {:ok, [_one_commit]} = Arca.Test.StorageJournal.journal(actor, root, key)
     assert Arca.exists?(actor, role)
 
-    # The commit stamped the role pending and its release never came: the
+    # The commit stamped the member pending and its release never came: the
     # index is behind the tree, and says so rather than answer the rows it
-    # held before the role was published.
+    # held before the member was published.
     assert {:error, :projection_unavailable} = Compendium.AgentIndex.list(ctx)
 
     # Once the dead writer's draft has outlived its lifetime, the
     # reconciler's repair releases it at a newer, ready generation, and
-    # the next read of the index derives the role with nothing else asked.
+    # the next read of the index derives the member with nothing else asked.
     long_ago =
       DateTime.add(DateTime.utc_now(), -2 * Arca.StorageUnits.draft_ttl_ms(), :millisecond)
 

@@ -51,7 +51,7 @@ defmodule PrismWeb.ThreadPaneLive do
   the turn's context (`Aqua.RoomExcerpt` — under the person's own seat,
   never kept), and offers to paste a line onto it (`thread.aloud`). The panel's
   own header names AQUA and the thread, so there the pane draws no name
-  or thread label of its own, and its model override, soul or role and
+  or thread label of its own, and its model override, soul or crew member and
   token counts sit in a menu (`<dom>-menu`, which the panel's header
   opens). Its status line appears only while it has something to say
   (still being prepared, no assistant, messages queued, standing answers,
@@ -108,7 +108,7 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # Everything the pane knows of its athanor, from its own context: the
-  # athanor row, the roster (the athanor's soul and roles), the members and
+  # athanor row, the roster (the athanor's soul and crew), the members and
   # the models — read once, however many threads the pane is turned to.
   # The thread named at mount is opened last, the way any thread is.
   defp open(socket, ctx, session) do
@@ -1367,16 +1367,21 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # The athanor's agents with their type and model, read through the
-  # `aqua` tool's list with detail, as the AQUA page's agents panel reads
-  # them: the roster names who can be addressed and carries neither, so a
-  # model's status read from it would always be none. Each agent is put in
-  # the roster's string-keyed projection, which `Aqua.model_status/2`
-  # reads. A list that cannot be read is `:unread`, never no agents.
+  # The athanor's soul with its model, read through the `aqua` tool's list
+  # with detail, as the AQUA page's agents panel reads it: the roster names
+  # who can be addressed and carries no model, so a model's status read
+  # from it would always be none. Whether AQUA can answer is the soul's to
+  # say, so the crew is left out. The soul is put in the roster's
+  # string-keyed projection, which `Aqua.model_status/2` reads. A list
+  # that cannot be read is `:unread`, never no agents.
   defp agents(ctx) do
+    soul = Compendium.agent_soul_type()
+
     case PrismWeb.Ops.call_tool(ctx, "aqua", %{"action" => "list", "detail" => true}) do
       {:ok, %{guides: guides}} when is_list(guides) ->
-        Enum.map(guides, &%{"type" => &1.type, "catalyst_ref" => &1[:catalyst_ref]})
+        for %{type: ^soul} = guide <- guides do
+          %{"name" => guide.name, "type" => guide.type, "catalyst_ref" => guide[:catalyst_ref]}
+        end
 
       _unread ->
         :unread
@@ -1403,7 +1408,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp athanor_label(_none, _ctx), do: "this athanor"
 
-  # What a message would address, and what to call it: the soul or role
+  # What a message would address, and what to call it: the soul or crew member
   # the thread is on, or the roster's first — the athanor's soul — before
   # any turn has run.
   defp assistant_handle(%{"name" => name} = o, _athanor) when is_binary(name) and name != "",
@@ -1573,7 +1578,7 @@ defmodule PrismWeb.ThreadPaneLive do
           <span
             :if={@roster != [] and not @panel?}
             class="text-xs text-gray-400 max-w-[14rem] truncate"
-            title="The soul or role this thread is on"
+            title="The soul or crew member this thread is on"
           >
             {assistant_label(current_assistant(@assistant, @roster))}
           </span>
@@ -1624,7 +1629,7 @@ defmodule PrismWeb.ThreadPaneLive do
       </header>
 
       <%!-- In the panel, what the chat page's header shows lives here: the
-            model override, the soul or role and the thread's usage. The
+            model override, the soul or crew member and the thread's usage. The
             panel's hook shows and hides it from the panel's header, so its
             `hidden` is the browser's to keep. --%>
       <div
@@ -1654,8 +1659,8 @@ defmodule PrismWeb.ThreadPaneLive do
               <span>Reading the models…</span>
           <% end %>
         </div>
-        <div class="aqua-panel-menu-row" title="The soul or role this thread is on">
-          <span>Soul or role</span>
+        <div class="aqua-panel-menu-row" title="The soul or crew member this thread is on">
+          <span>Soul or crew member</span>
           <span class="truncate">
             {if @roster == [],
               do: "No assistant here",

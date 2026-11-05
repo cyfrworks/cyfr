@@ -488,13 +488,13 @@ defmodule Compendium do
   @spec agent(Context.t(), String.t()) :: {:ok, AquaAgent.t()} | {:error, term()}
   defdelegate agent(ctx, name), to: AquaAgent, as: :get
 
-  @doc "An agent's type: the soul's or a role's (`Compendium.AquaAgent.type_of/1`)."
+  @doc "An agent's type: the soul's or a crew member's (`Compendium.AquaAgent.type_of/1`)."
   @spec agent_type_of(AquaAgent.t()) :: String.t()
   defdelegate agent_type_of(agent), to: AquaAgent, as: :type_of
 
-  @doc "The type a role agent carries (`Compendium.AquaAgent.role_type/0`)."
-  @spec agent_role_type() :: String.t()
-  defdelegate agent_role_type(), to: AquaAgent, as: :role_type
+  @doc "The type a crew member carries (`Compendium.AquaAgent.crew_type/0`)."
+  @spec agent_crew_type() :: String.t()
+  defdelegate agent_crew_type(), to: AquaAgent, as: :crew_type
 
   @doc "The type the soul carries (`Compendium.AquaAgent.soul_type/0`)."
   @spec agent_soul_type() :: String.t()
@@ -504,9 +504,13 @@ defmodule Compendium do
   @spec agent_capability_digest(AquaAgent.t()) :: {:ok, String.t()} | {:error, term()}
   defdelegate agent_capability_digest(agent), to: AquaAgent, as: :capability_digest
 
-  @doc "An agent parsed from its file's bytes (`Compendium.AquaAgent.parse/2`)."
-  @spec parse_agent(String.t(), binary()) :: {:ok, AquaAgent.t()} | {:error, term()}
-  defdelegate parse_agent(name, binary), to: AquaAgent, as: :parse
+  @doc """
+  An agent as it runs from its file's bytes: parsed, a crew member under
+  the soul's policy (`Compendium.AquaAgent.resolve/3`).
+  """
+  @spec resolve_agent(Context.t(), String.t(), binary()) ::
+          {:ok, AquaAgent.t()} | {:error, term()}
+  defdelegate resolve_agent(ctx, name, binary), to: AquaAgent, as: :resolve
 
   @doc "An agent file's frontmatter and body (`Compendium.AquaAgent.parse_frontmatter/1`)."
   @spec parse_agent_frontmatter(binary()) :: {:ok, map(), String.t()} | {:error, term()}

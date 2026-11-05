@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# A store that cannot give the AQUA roles listing; every other read is the
+# A store that cannot give the AQUA crew listing; every other read is the
 # local adapter's.
-defmodule PrismWeb.ThreadPaneLiveTest.UnreadableRoles do
+defmodule PrismWeb.ThreadPaneLiveTest.UnreadableCrew do
   @moduledoc false
   use Arca.Storage.TestDouble
 
-  @roles Compendium.AquaPath.roles_root()
+  @crew Compendium.AquaPath.crew_root()
 
-  def list_typed(_actor, @roles), do: {:error, :eacces}
+  def list_typed(_actor, @crew), do: {:error, :eacces}
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
@@ -500,7 +500,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     thread: thread
   } do
     html = render(open_pane(conn, athanor, thread))
-    assert html =~ "The soul or role this thread is on"
+    assert html =~ "The soul or crew member this thread is on"
     refute html =~ "autofocus"
     refute html =~ ~r/\bagent\b/
     refute html =~ "A.Q.U.A."
@@ -1137,12 +1137,19 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute render(pane) =~ "anything."
     refute has_element?(pane, "a", "Connect a model")
 
+    # The soul's card: each crew member's card says its own brain's state.
     {panel, _html} = mount_athanor(conn, "/aqua", athanor)
     assert has_element?(panel, "#aqua-card-aqua span", sentence)
-    refute render(panel) =~ "Model connected"
-    refute render(panel) =~ "the model has no key yet"
-    refute has_element?(panel, "button[phx-click=open_consent]", "Connect a model")
-    refute has_element?(panel, "button[phx-click=open_consent]", "Change the key")
+    refute has_element?(panel, "#aqua-card-aqua", "Model connected")
+    refute has_element?(panel, "#aqua-card-aqua", "the model has no key yet")
+
+    refute has_element?(
+             panel,
+             "#aqua-card-aqua button[phx-click=open_consent]",
+             "Connect a model"
+           )
+
+    refute has_element?(panel, "#aqua-card-aqua button[phx-click=open_consent]", "Change the key")
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -1269,13 +1276,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # The AQUA page's agents panel over the same: no model to install, no
-  # key to connect or change.
+  # key to connect or change, on the soul's card.
   defp panel_reads_unread!(conn, athanor) do
     {panel, _html} = mount_athanor(conn, "/aqua", athanor)
     assert has_element?(panel, "#aqua-card-aqua span", @model_unread)
-    refute render(panel) =~ "not installed here yet"
-    refute has_element?(panel, "button[phx-click=install_catalyst]")
-    refute has_element?(panel, "button[phx-click=open_consent]")
+    refute has_element?(panel, "#aqua-card-aqua", "not installed here yet")
+    refute has_element?(panel, "#aqua-card-aqua button[phx-click=install_catalyst]")
+    refute has_element?(panel, "#aqua-card-aqua button[phx-click=open_consent]")
   end
 
   # Runs `inject` each time the gate admits a `component.setup_plan`
@@ -1374,9 +1381,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       {^n, _} = named.("claude-gone", "claude")
       {panel, _html} = mount_athanor(conn, "/aqua", athanor)
       assert_received {:gone, {^n, _}}
-      assert render(panel) =~ "not installed here yet"
-      assert has_element?(panel, "button[phx-click=install_catalyst]", "Install")
-      refute render(panel) =~ @model_unread
+      assert has_element?(panel, "#aqua-card-aqua", "not installed here yet")
+      assert has_element?(panel, "#aqua-card-aqua button[phx-click=install_catalyst]", "Install")
+      refute has_element?(panel, "#aqua-card-aqua", @model_unread)
       Cyfr.Test.Sandbox.end_views()
     end
   end
@@ -1405,7 +1412,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     @tag :capture_log
     test "reads unread, never no model, with no link", %{conn: conn, athanor: athanor} do
-      storage!(PrismWeb.ThreadPaneLiveTest.UnreadableRoles)
+      storage!(PrismWeb.ThreadPaneLiveTest.UnreadableCrew)
       pane = empty_pane(conn, athanor)
 
       assert has_element?(
@@ -1429,7 +1436,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                  Arca.delete_tree(Sanctum.Context.actor(here), ["aqua"])
                end)
 
-      # The athanor's list reads, and holds the guides alone: no soul, no role.
+      # The athanor's list reads, and holds the guides alone: no soul, no crew.
       assert {:ok, %{guides: guides}} =
                Aqua.Ops.call_tool("aqua", here, %{"action" => "list", "detail" => true})
 
@@ -1532,16 +1539,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   describe "the crew" do
     test "a room shows a request with the reply under it, by the member's name and its outcome",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
-      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "builder")
-      request = request!(here, room, "builder", "Build the site")
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      request = request!(here, room, "explorer", "Build the site")
       reply = reply!(here, room, request, child, "Built it")
 
       pane = open_pane(conn, athanor, room)
       asked = ~s([id$="-m-#{request.id}"])
 
-      assert has_element?(pane, asked, "You asked builder · answered")
+      assert has_element?(pane, asked, "You asked explorer · answered")
       assert has_element?(pane, asked, "Build the site")
-      assert has_element?(pane, ~s(#{asked} [id$="-reply-#{reply.id}"]), "builder · done")
+      assert has_element?(pane, ~s(#{asked} [id$="-reply-#{reply.id}"]), "explorer · done")
       refute has_element?(pane, ~s([id$="-m-#{reply.id}"]))
 
       Cyfr.Test.Sandbox.end_views()
@@ -1549,24 +1556,24 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     test "a reply heard on the room marks every request it answers answered, under the one it replies to",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
-      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "builder")
-      first = request!(here, room, "builder", "Build the site")
-      second = request!(here, room, "builder", "And test it")
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      first = request!(here, room, "explorer", "Build the site")
+      second = request!(here, room, "explorer", "And test it")
 
       pane = open_pane(conn, athanor, room)
-      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked builder · pending")
-      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked builder · pending")
+      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked explorer · pending")
+      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked explorer · pending")
 
       reply = reply!(here, room, first, child, "Built and tested", [second.id])
       render(pane)
 
-      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked builder · answered")
-      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked builder · answered")
+      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked explorer · answered")
+      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked explorer · answered")
 
       assert has_element?(
                pane,
                ~s([id$="-m-#{first.id}"] [id$="-reply-#{reply.id}"]),
-               "builder · done"
+               "explorer · done"
              )
 
       refute has_element?(pane, ~s([id$="-m-#{second.id}"] [id$="-reply-#{reply.id}"]))
@@ -1577,13 +1584,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     test "a notice says the member needs you and opens the member's thread",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
-      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "builder")
-      request = request!(here, room, "builder", "Deploy the site")
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      request = request!(here, room, "explorer", "Deploy the site")
       {view, pane} = chat!(conn, athanor, room)
 
       notice = notice!(here, room, request, child, "Approve the deploy")
       shown = ~s([id$="-m-#{notice.id}"])
-      assert has_element?(pane, shown, "builder needs you")
+      assert has_element?(pane, shown, "explorer needs you")
       assert has_element?(pane, shown, "Approve the deploy")
 
       pane |> element(~s(#{shown} button[phx-click="open_thread"])) |> render_click()
@@ -1597,25 +1604,25 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     test "a room lists its crew threads, and a crew thread leads back to its room and archives through thread.archive",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
       actor = Sanctum.Context.actor(here)
-      {:ok, builder} = Threads.crew_thread(actor, room.id, "builder")
+      {:ok, explorer} = Threads.crew_thread(actor, room.id, "explorer")
       {:ok, reviewer} = Threads.crew_thread(actor, room.id, "reviewer")
       {:ok, _} = Threads.archive(actor, reviewer.id)
       {view, pane} = chat!(conn, athanor, room)
 
-      assert has_element?(pane, ~s([id$="-crew-#{builder.id}"]), "builder")
-      refute has_element?(pane, ~s([id$="-crew-#{builder.id}"]), "archived")
+      assert has_element?(pane, ~s([id$="-crew-#{explorer.id}"]), "explorer")
+      refute has_element?(pane, ~s([id$="-crew-#{explorer.id}"]), "archived")
       assert has_element?(pane, ~s([id$="-crew-#{reviewer.id}"]), "reviewer · archived")
       refute has_element?(pane, ~s([id$="-crew-thread"]))
 
-      pane |> element(~s([id$="-crew-#{builder.id}"])) |> render_click()
-      assert_patch(view, PrismWeb.ChatLive.chat_path(route(athanor), builder.id))
+      pane |> element(~s([id$="-crew-#{explorer.id}"])) |> render_click()
+      assert_patch(view, PrismWeb.ChatLive.chat_path(route(athanor), explorer.id))
       assert %{id: id} = on_thread(view, pane)
-      assert id == builder.id
+      assert id == explorer.id
 
       strip = ~s([id$="-crew-thread"])
-      assert has_element?(pane, strip, "builder's thread")
+      assert has_element?(pane, strip, "explorer's thread")
       assert has_element?(pane, ~s(#{strip} button[phx-click="open_thread"]), "Back to hello")
-      refute has_element?(pane, ~s([id$="-crew-#{builder.id}"]))
+      refute has_element?(pane, ~s([id$="-crew-#{explorer.id}"]))
 
       pane |> element(~s(#{strip} button[phx-click="archive"])) |> render_click()
 
@@ -1627,7 +1634,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                  )
                )
 
-      assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor, builder.id)
+      assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor, explorer.id)
       assert has_element?(pane, strip, "Archived")
       refute has_element?(pane, ~s(button[phx-click="archive"]))
 
@@ -1635,7 +1642,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert_patch(view, PrismWeb.ChatLive.chat_path(route(athanor), room.id))
       assert %{id: id} = on_thread(view, pane)
       assert id == room.id
-      assert has_element?(pane, ~s([id$="-crew-#{builder.id}"]), "builder · archived")
+      assert has_element?(pane, ~s([id$="-crew-#{explorer.id}"]), "explorer · archived")
 
       Cyfr.Test.Sandbox.end_views()
     end

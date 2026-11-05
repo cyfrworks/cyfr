@@ -5,8 +5,24 @@ defmodule Aqua.Crew do
   @moduledoc """
   The crew: the soul hands a job to a crew member, the member works it in
   a child thread of the room, and its answer comes back to the room as a
-  reply row. Until crew files exist, the crew members are the athanor's
-  roles (every agent of the roster but the soul).
+  reply row. A crew member is a file under `aqua/crew/` (every agent of
+  the roster but the soul): who does a job, on a brain of its own, with
+  what it is good at and what to avoid; how a job is done is a skill any
+  of them reads. Every member runs under the soul's tool policy, which a
+  request may narrow for its one job.
+
+  ## The index
+
+  `index/2` is the crew the soul is told of, in its prompt and by
+  `crew.list`: each member whose brain is ready (`Aqua.Models.model_status/2`),
+  by name, brain, what it is good at and what to avoid. A member whose
+  brain is not installed, has no key bound or whose program is not signed
+  in is left out, and every way a job reaches a member holds it to the
+  same readiness (`ready/2`): `crew.ask` and a person's `@name` are
+  refused `{:crew_unready, member, reason}` before anything is written,
+  and a request whose member became unready while it waited is answered
+  `failed` with that reason when its delivery comes (an outage of the
+  reads waits for the next drain instead).
 
   ## The hand-off
 
@@ -121,6 +137,7 @@ defmodule Aqua.Crew do
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          :ok <- Admission.request(thread, turn.agent, member, roster),
+         :ok <- asker_ready(ctx, turn, roster, member),
          {:ok, origin} <- Prima.Origin.from_wire(turn.origin),
          {:ok, %{message: row}} <-
            Tape.accept(ctx, thread.id, %{
@@ -154,17 +171,125 @@ defmodule Aqua.Crew do
   def ask(_ctx, _args),
     do: {:error, {:invalid_argument, "crew.ask takes a 'member' and a 'task'"}}
 
-  @doc "`crew.list`: the crew members a turn may ask, with what each is for."
-  @spec list(Context.t()) :: {:ok, map()} | {:error, term()}
-  def list(%Context{} = ctx) do
-    with {:ok, roster} <- Aqua.AgentConfig.roster(ctx) do
+  @doc """
+  `crew.list`: the crew index (`index/2`), the members the calling turn
+  may hand a job to. A chain's call reads readiness as the person behind
+  its turn, as `crew.ask` does and the soul's prompt index reads it; a call
+  with no open turn behind it lists nobody (`:not_addressable`), and
+  readiness that cannot be read is refused, never an empty list.
+  """
+  @spec list(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def list(%Context{} = ctx, args) do
+    with {:ok, turn} <- calling_turn(ctx, args),
+         {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
+         {:ok, person} <- asker(ctx, turn),
+         {:ok, index} <- index(person, roster) do
       members =
-        for %{"name" => name} = agent <- roster, Admission.member?(roster, name) do
-          %{name: name, title: agent["title"], description: agent["description"]}
+        for member <- index do
+          %{
+            name: member["name"],
+            brain: member["brain"],
+            good_at: member["description"],
+            avoid: member["avoid"]
+          }
         end
 
       {:ok, %{members: members, count: length(members)}}
     end
+  end
+
+  @doc """
+  The crew index of `roster`: every crew member whose brain reads ready
+  (`Aqua.Models.model_status/2`), by name, as `%{"name", "brain",
+  "description", "avoid"}` — the brain its catalyst and model, what it is
+  good at and what to avoid — in the roster's order. `ctx` reads the
+  athanor's catalysts on its own plane; a listing it cannot read is
+  `{:error, {:unavailable, _}}`, never an index with nobody in it.
+  """
+  @spec index(Context.t(), [map()]) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
+  def index(%Context{} = ctx, roster) when is_list(roster) do
+    with {:ok, _listing} <- readable(Aqua.AgentConfig.catalyst_listing(ctx)) do
+      members = Enum.filter(roster, &Admission.member?(roster, &1["name"]))
+      status = Aqua.Models.model_status(ctx, members)
+
+      {:ok,
+       for %{"name" => name} = member <- members, match?({:ready, _}, status[name]) do
+         %{
+           "name" => name,
+           "brain" => brain(member),
+           "description" => member["description"] || "",
+           "avoid" => member["avoid"] || ""
+         }
+       end}
+    end
+  end
+
+  defp readable({:ok, _} = listed), do: listed
+  defp readable({:error, _unread}), do: {:error, {:unavailable, "The crew's readiness"}}
+
+  @typedoc """
+  Why a crew member cannot take a job: no brain named, its catalyst not
+  installed, no key bound, its program not signed in, a consent it runs
+  under damaged, or the reads that would tell unavailable.
+  """
+  @type unready ::
+          :no_brain | :not_installed | :no_key | :not_signed_in | :consent_damaged | :unavailable
+
+  @doc """
+  Whether crew member `member` can take a job now: `:ok` when its brain
+  reads ready (`Aqua.Models.model_status/2`), else `{:error,
+  {:crew_unready, member, t:unready/0}}`, the refusal the person reads
+  (`Prima.Refusal`); `:not_addressable` for a name that is no crew
+  member. The one readiness rule a hand-off, a mention and a delivery all
+  apply, and the index's.
+  """
+  @spec ready(Context.t(), String.t()) :: :ok | {:error, term()}
+  def ready(%Context{} = ctx, member) when is_binary(member) do
+    with {:ok, roster} <- Aqua.AgentConfig.roster(ctx), do: ready(ctx, roster, member)
+  end
+
+  defp asker_ready(ctx, turn, roster, member) do
+    with {:ok, person} <- asker(ctx, turn), do: ready(person, roster, member)
+  end
+
+  # A chain's call runs on the guest plane, where the component reads
+  # readiness needs are not served: a member's readiness is read as the
+  # person behind the calling turn, on their own plane, as the soul's
+  # prompt index reads it (`Aqua.Loop.Turn`), and only decides whom an
+  # ask reaches and whom a list names; nothing is written under that
+  # context.
+  defp asker(ctx, turn),
+    do: Sanctum.Tenancy.continuation(turn.requested_by, Context.athanor!(ctx), turn.origin)
+
+  defp ready(ctx, roster, member) do
+    if Admission.member?(roster, member) do
+      entry = Enum.find(roster, &(&1["name"] == member))
+
+      case Aqua.Models.model_status(ctx, [entry])[member] do
+        {:ready, _} -> :ok
+        status -> {:error, {:crew_unready, member, unready(status)}}
+      end
+    else
+      {:error, :not_addressable}
+    end
+  end
+
+  defp unready(nil), do: :no_brain
+  defp unready({:missing, _}), do: :not_installed
+  defp unready({:needs_key, _}), do: :no_key
+  defp unready({:needs_sign_in, _}), do: :not_signed_in
+  defp unready({:consent_damaged, _}), do: :consent_damaged
+  defp unready({_unread, _}), do: :unavailable
+
+  # A brain as a reader names it: the catalyst's name and the model.
+  defp brain(%{"catalyst_ref" => ref, "model" => model}) do
+    catalyst =
+      case Prima.ComponentRef.parse(ref || "") do
+        {:ok, %{name: name}} -> name
+        _ -> ref
+      end
+
+    if is_binary(model) and model != "", do: "#{catalyst} (#{model})", else: catalyst
   end
 
   defp task(""), do: {:error, {:invalid_argument, "crew.ask requires a non-empty 'task'"}}
@@ -406,19 +531,22 @@ defmodule Aqua.Crew do
   defp work(%Prima.OutboxRecord{kind: "crew_request", snapshot: snapshot} = record, held) do
     with {:ok, ctx} <- continuation(record),
          {:ok, request} <- request_row(ctx, snapshot["request_id"]) do
-      case Tape.crew_thread(ctx, snapshot["room_thread_id"], snapshot["member"]) do
-        {:ok, child} ->
-          ctx
-          |> Runner.send_message(child.id, request.content,
-            sent_by: request.sent_by,
-            request: request,
-            crew: %{tools: snapshot["tools"], options: snapshot["options"]},
-            attachments: Tape.payload(request)["attachments"] || [],
-            payload: delivered_payload(request),
-            receipt: receipt(record, held, "applied")
-          )
-          |> delivered("applied", fn reason -> failed(ctx, record, request, reason, held) end)
-
+      # The member is held to readiness again: one that became unready
+      # while the request waited answers it failed, before any child
+      # thread or turn is made for it.
+      with :ok <- ready(ctx, snapshot["member"]),
+           {:ok, child} <- Tape.crew_thread(ctx, snapshot["room_thread_id"], snapshot["member"]) do
+        ctx
+        |> Runner.send_message(child.id, request.content,
+          sent_by: request.sent_by,
+          request: request,
+          crew: %{tools: snapshot["tools"], options: snapshot["options"]},
+          attachments: Tape.payload(request)["attachments"] || [],
+          payload: delivered_payload(request),
+          receipt: receipt(record, held, "applied")
+        )
+        |> delivered("applied", fn reason -> failed(ctx, record, request, reason, held) end)
+      else
         {:error, reason} ->
           if undeliverable?(reason),
             do: failed(ctx, record, request, reason, held),
@@ -506,6 +634,10 @@ defmodule Aqua.Crew do
 
   defp undeliverable?(reason) when reason in @undeliverable, do: true
   defp undeliverable?({:limit_reached, _cap, _value}), do: true
+
+  # An unready member cannot take the job until a person acts; the reads
+  # that would tell are an outage that may pass.
+  defp undeliverable?({:crew_unready, _member, reason}), do: reason != :unavailable
   defp undeliverable?(_reason), do: false
 
   defp continuation(%Prima.OutboxRecord{athanor_id: athanor_id, snapshot: snapshot}),

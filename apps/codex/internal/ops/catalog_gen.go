@@ -455,18 +455,20 @@ func (args *ApprovalResolveArgsSourcesItem) UnmarshalJSON(data []byte) error {
 
 // AquaCreateArgs carries arguments for aqua.create.
 type AquaCreateArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
 	// Human-readable title (for create/update actions)
 	Title Field[string] `json:"title,omitzero"`
-	// Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)
+	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description Field[string] `json:"description,omitzero"`
 	// Versionless catalyst reference (for create/update actions)
 	CatalystRef Field[string] `json:"catalyst_ref,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[string] `json:"model,omitzero"`
-	// Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's.
-	ToolPolicy Field[map[string]string] `json:"tool_policy,omitzero"`
+	// What the soul should never hand a crew member (create/update; crew members only)
+	Avoid Field[string] `json:"avoid,omitzero"`
+	// The options this agent's brain is asked with on every request — names and values its describe declares (create/update)
+	Options Field[map[string]any] `json:"options,omitzero"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
 }
@@ -482,7 +484,7 @@ func (args AquaCreateArgs) MarshalJSON() ([]byte, error) {
 
 // AquaDeleteArgs carries arguments for aqua.delete.
 type AquaDeleteArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -497,7 +499,7 @@ func (args AquaDeleteArgs) MarshalJSON() ([]byte, error) {
 
 // AquaGetArgs carries arguments for aqua.get.
 type AquaGetArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -512,9 +514,9 @@ func (args AquaGetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaListArgs carries arguments for aqua.list.
 type AquaListArgs struct {
-	// For list: include each agent's full fields (model, tool_policy, catalyst_ref, content, disabled) — one call instead of a get per agent
+	// For list: include each agent's full fields (model, catalyst_ref, options, avoid, tool_policy, content, disabled) — one call instead of a get per agent
 	Detail Field[bool] `json:"detail,omitzero"`
-	// For list: include roles set aside with disabled: true, which the roster otherwise leaves out
+	// For list: include crew members set aside with disabled: true, which the roster otherwise leaves out
 	IncludeDisabled Field[bool] `json:"include_disabled,omitzero"`
 }
 
@@ -529,9 +531,9 @@ func (args AquaListArgs) MarshalJSON() ([]byte, error) {
 
 // AquaResetArgs carries arguments for aqua.reset.
 type AquaResetArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name Field[string] `json:"name,omitzero"`
-	// For reset: also DELETE the roles and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)
+	// For reset: also DELETE the crew members and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)
 	All Field[bool] `json:"all,omitzero"`
 }
 
@@ -546,9 +548,9 @@ func (args AquaResetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillCreateArgs carries arguments for aqua.skill_create.
 type AquaSkillCreateArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
-	// Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)
+	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description string `json:"description"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
 	Content string `json:"content"`
@@ -565,7 +567,7 @@ func (args AquaSkillCreateArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillDeleteArgs carries arguments for aqua.skill_delete.
 type AquaSkillDeleteArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -580,7 +582,7 @@ func (args AquaSkillDeleteArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillGetArgs carries arguments for aqua.skill_get.
 type AquaSkillGetArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -608,7 +610,7 @@ func (args AquaSkillListArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillResetArgs carries arguments for aqua.skill_reset.
 type AquaSkillResetArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -623,9 +625,9 @@ func (args AquaSkillResetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillUpdateArgs carries arguments for aqua.skill_update.
 type AquaSkillUpdateArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
-	// Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)
+	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description Field[string] `json:"description,omitzero"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
@@ -655,23 +657,29 @@ func (args AquaStatusArgs) MarshalJSON() ([]byte, error) {
 
 // AquaUpdateArgs carries arguments for aqua.update.
 type AquaUpdateArgs struct {
-	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name string `json:"name"`
 	// Human-readable title (for create/update actions)
 	Title Field[*string] `json:"title,omitzero"`
-	// Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)
+	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description Field[*string] `json:"description,omitzero"`
 	// Versionless catalyst reference (for create/update actions)
 	CatalystRef Field[*string] `json:"catalyst_ref,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[*string] `json:"model,omitzero"`
-	// Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's.
+	// What the soul should never hand a crew member (create/update; crew members only)
+	Avoid Field[*string] `json:"avoid,omitzero"`
+	// The options this agent's brain is asked with on every request — names and values its describe declares (create/update)
+	Options Field[*map[string]any] `json:"options,omitzero"`
+	// update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options.
+	OptionsPatch Field[map[string]*any] `json:"options_patch,omitzero"`
+	// The soul's per-(tool,action) allowlist, which every crew member runs under too (a crew member has none of its own). Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's.
 	ToolPolicy Field[*map[string]string] `json:"tool_policy,omitzero"`
 	// update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two edits of different keys at once keep both. Not with tool_policy.
 	ToolPolicyPatch Field[map[string]*string] `json:"tool_policy_patch,omitzero"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
-	// Take a role out of the closet without deleting its file (for update; shipped roles cannot be deleted — disable them instead)
+	// Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)
 	Disabled Field[*bool] `json:"disabled,omitzero"`
 	// update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another.
 	ExpectedDigest Field[string] `json:"expected_digest,omitzero"`

@@ -4,14 +4,16 @@
 defmodule Aqua.Loop.Turn do
   @moduledoc """
   What a loop runs, rebuilt from rows: the turn and its thread, the
-  agent as the turn pinned it — the revision bytes, whose capability
-  digest must equal the one the turn started under — the roster, the
-  effective policy composed with the standing rows and narrowed to the
-  tools a crew request named (`options["tools"]`), the resolved model
-  catalyst with its capabilities and the request size its consent caps
-  it at (`request_cap`), the brain options a crew request set
-  (`options["brain_options"]`), the system prompt and the sources it
-  read, the tool surface (with the accounts the soul's launches may name,
+  agent as the turn pinned it — the revision bytes, resolved as the agent
+  runs (a crew member under the soul's policy,
+  `Compendium.resolve_agent/3`), whose capability digest must equal the
+  one the turn started under — the roster, the effective policy composed
+  with the standing rows and narrowed to the tools a crew request named
+  (`options["tools"]`), the resolved model catalyst with its capabilities
+  and the request size its consent caps it at (`request_cap`), the brain
+  options — the agent file's own, over which a crew request's
+  (`options["brain_options"]`) set theirs — the system prompt and the
+  sources it read, the tool surface (with the accounts its launches may name,
   read once here for every request the spec makes,
   `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
   and the deadline the authority allows, and the admission decision the
@@ -21,6 +23,8 @@ defmodule Aqua.Loop.Turn do
   Every model round of a spec runs on the model it resolved, compaction
   included: nothing chooses another model for a step.
   """
+
+  require Logger
 
   alias Aqua.Loop.Request
   alias Aqua.Tape
@@ -79,6 +83,7 @@ defmodule Aqua.Loop.Turn do
          {:ok, agent} <- agent(ctx, turn),
          soul? = Prima.AgentRef.soul?(agent["name"]),
          options = decode(turn.options),
+         brain_options = Map.merge(agent["options"] || %{}, options["brain_options"] || %{}),
          {:ok, grants} <-
            Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
          policy =
@@ -87,12 +92,12 @@ defmodule Aqua.Loop.Turn do
            |> narrowed(options["tools"]),
          {:ok, catalyst, model} <- model(ctx, turn, agent),
          {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn),
-         :ok <- brain_options(options["brain_options"], capabilities) do
+         :ok <- brain_options(brain_options, capabilities) do
       prompt =
         Aqua.Prompt.compose(ctx,
           agent: agent,
           authority: authority,
-          crew: crew(roster, policy),
+          crew: crew(ctx, roster, policy, soul?),
           requests: requests(ctx, thread)
         )
 
@@ -115,12 +120,12 @@ defmodule Aqua.Loop.Turn do
         tools:
           Request.tool_definitions(policy,
             external: external_tools(policy),
-            accounts: launch_accounts(ctx, policy, soul?)
+            accounts: launch_accounts(ctx, policy)
           ),
         deadline_ms: deadline_ms(authority),
         approval_ttl_s: Aqua.Approvals.ttl_seconds(ctx),
         options: options,
-        brain_options: options["brain_options"],
+        brain_options: brain_options,
         narrowed: options["tools"],
         excerpt: if(Keyword.get(opts, :excerpt?, true), do: excerpt(ctx, options), else: nil),
         attachments: attachments(ctx, turn),
@@ -147,10 +152,10 @@ defmodule Aqua.Loop.Turn do
   @spec with_turn(t(), Tape.turn()) :: t()
   def with_turn(%__MODULE__{} = spec, turn), do: %{spec | turn: turn}
 
-  # The options a crew request set must be ones the brain declares, each
-  # of its kind; a turn whose request set another is refused before it
-  # sends anything.
-  defp brain_options(nil, _capabilities), do: :ok
+  # The options the agent's file and a crew request set must be ones the
+  # brain declares, each of its kind; a turn that sets another is refused
+  # before it sends anything.
+  defp brain_options(options, _capabilities) when options == %{}, do: :ok
 
   defp brain_options(options, capabilities) do
     case Prima.Model.check_chat_request(
@@ -176,17 +181,25 @@ defmodule Aqua.Loop.Turn do
 
   defp narrowed(policy, _all), do: policy
 
-  # The crew members the turn may ask, listed in its prompt when its
-  # policy offers `crew.ask`.
-  defp crew(roster, policy) do
-    if Map.get(policy, "crew.ask") in ["auto", "ask"] do
-      for %{"name" => name} = agent <- roster, Aqua.Runner.Admission.member?(roster, name) do
-        %{"name" => name, "title" => agent["title"], "description" => agent["description"]}
-      end
+  # The crew index, listed in the soul's prompt when its policy offers
+  # `crew.ask`; only the soul hands a job on (`Aqua.Runner.Admission`). An
+  # index that cannot be read lists no crew this turn, and says so in the
+  # log.
+  defp crew(ctx, roster, policy, true = _soul?) do
+    with true <- Map.get(policy, "crew.ask") in ["auto", "ask"],
+         {:ok, index} <- Aqua.Crew.index(ctx, roster) do
+      index
     else
-      []
+      false ->
+        []
+
+      {:error, reason} ->
+        Logger.warning("[Aqua.Loop.Turn] the crew index could not be read: #{inspect(reason)}")
+        []
     end
   end
+
+  defp crew(_ctx, _roster, _policy, false = _soul?), do: []
 
   # The room's requests still waiting on a reply, which the prompt lists
   # with their age; a child thread holds none.
@@ -207,18 +220,21 @@ defmodule Aqua.Loop.Turn do
   # their capability digest checked against the pin. Every start pins
   # both, so a turn that pins neither, or only one, is refused; a revision
   # the tree no longer holds is refused too, never replaced.
+  # A crew member's bytes resolve under the soul's policy as it stands, so
+  # a soul whose policy moved since the turn started moves the digest and
+  # refuses the turn, as an edit of the member's own file does.
   defp agent(ctx, %{agent_revision_digest: revision, agent_capability_digest: capability} = turn)
        when is_binary(revision) and is_binary(capability) do
     case Tape.agent_revision(ctx, turn) do
-      {:ok, bytes} -> pinned_agent(turn, bytes)
+      {:ok, bytes} -> pinned_agent(ctx, turn, bytes)
       {:error, reason} -> {:error, {:agent_unavailable, reason}}
     end
   end
 
   defp agent(_ctx, _turn), do: {:error, :no_pin}
 
-  defp pinned_agent(turn, bytes) do
-    with {:ok, parsed} <- Compendium.parse_agent(turn.agent, bytes),
+  defp pinned_agent(ctx, turn, bytes) do
+    with {:ok, parsed} <- Compendium.resolve_agent(ctx, turn.agent, bytes),
          {:ok, digest} <- Compendium.agent_capability_digest(parsed) do
       if digest == turn.agent_capability_digest,
         do: {:ok, agent_map(parsed)},
@@ -231,10 +247,12 @@ defmodule Aqua.Loop.Turn do
       "name" => name,
       "title" => parsed.title,
       "description" => parsed.description,
+      "avoid" => parsed.avoid,
       "prompt" => parsed.prompt,
       "tool_policy" => parsed.tool_policy,
       "catalyst_ref" => parsed.catalyst_ref,
-      "model" => parsed.model
+      "model" => parsed.model,
+      "options" => parsed.options
     }
   end
 
@@ -336,14 +354,13 @@ defmodule Aqua.Loop.Turn do
   end
 
   # The apps a launch may name an account of, read once for the spec and
-  # kept for every request it makes: only when the soul may launch at all.
-  defp launch_accounts(ctx, policy, true = _soul?) do
+  # kept for every request it makes: only when the agent may launch at
+  # all. A crew member holds the soul's policy, so it may as the soul may.
+  defp launch_accounts(ctx, policy) do
     if Map.get(policy, "execution.run") in ["auto", "ask"],
       do: Aqua.Hands.launch_accounts(ctx),
       else: nil
   end
-
-  defp launch_accounts(_ctx, _policy, false = _soul?), do: nil
 
   # An external server's tools the policy names (`server:tool`), as the
   # catalog knows them.

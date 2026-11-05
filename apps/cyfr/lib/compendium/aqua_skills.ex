@@ -5,7 +5,9 @@ defmodule Compendium.AquaSkills do
   @moduledoc """
   The athanor's scrolls — procedures kept as Agent Skills under
   `aqua/skills/<name>/SKILL.md` (`Compendium.AquaPath`), served through the
-  seed overlay like the soul and the roles.
+  seed overlay like the soul and the crew. A skill is how a job is done,
+  for whichever agent does it: the soul and every crew member read the
+  same index.
 
   Shared by the `aqua` tool's `skill_list` and the turn's prompt index.
   Reads the scroll index and individual scroll manifests.

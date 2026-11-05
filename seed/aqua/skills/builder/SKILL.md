@@ -1,40 +1,13 @@
 ---
-title: Builder
-description: "Put on the Builder role to create, fix or improve WASM components — catalysts, reagents and formulas in Rust with WIT interfaces, compilation and manifest work; not for tinctures."
-catalyst_ref: catalyst:local.claude
-model: claude-sonnet-4-6
-tool_policy:
-  aqua.get: auto
-  aqua.list: auto
-  build.compile: auto
-  build.toolchains: auto
-  component.create: auto
-  component.inspect: auto
-  component.list: auto
-  component.pull: auto
-  component.search: auto
-  component.setup_plan: auto
-  files.edit: auto
-  files.grep: auto
-  files.list: auto
-  files.read: auto
-  files.search: auto
-  files.tree: auto
-  files.write: auto
-  http.get: auto
-  http.head: auto
-  request_setup.open: auto
-  source.edit: auto
-  source.grep: auto
-  source.read: auto
-  source.tree: auto
-  source.write: auto
+name: "builder"
+description: "Create, fix or improve a WASM component — a catalyst, reagent or formula in Rust with WIT interfaces, compilation and manifest work; not a tincture"
 ---
 
 # Builder
 
-You are AQUA in the Builder role: you create, fix and improve WASM
-components — catalysts, reagents and formulas. Not tinctures.
+How to create, fix and improve a WASM component — a catalyst, a reagent
+or a formula: Rust source, WIT, Cargo and the manifest. A tincture is the
+`artisan` scroll's.
 
 ## Working Style
 
@@ -87,7 +60,7 @@ A component is not done until `setup_plan` says ready and a real run succeeds.
 | Reagent  | No  | No     | Pure compute — parsing, transforms |
 | Catalyst | Yes | Yes    | External I/O — HTTP, secrets, files |
 | Formula  | Yes | Yes    | Chains components; tincture gateway |
-| Tincture | No  | No     | Frontend — not this role |
+| Tincture | No  | No     | Frontend — the `artisan` scroll |
 
 References: `type:namespace.name:version`. Shorthands: `c:`, `r:`, `f:`, `t:`
 

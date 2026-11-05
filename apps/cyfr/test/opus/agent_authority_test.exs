@@ -128,13 +128,18 @@ defmodule Opus.AgentAuthorityTest do
                child_opts
              )
 
-    # A role loads as a source of its own, with its edge into the http hand
-    # carrying the hand's egress.
-    {:ok, web} = Admission.authority_for(ctx, :default, "agent:local.web")
-    assert web.source_ref == "agent:local.web"
+    # A crew member loads as a source of its own, under the soul's policy:
+    # its edge into the http hand the soul holds carries the hand's egress.
+    {:ok, explorer} = Admission.authority_for(ctx, :default, "agent:local.explorer")
+    assert explorer.source_ref == "agent:local.explorer"
 
     {:ok, http_edge} =
-      Prima.Authority.Blob.lookup_edge(web.policy, "agent:local.web", "catalyst:local.http", "")
+      Prima.Authority.Blob.lookup_edge(
+        explorer.policy,
+        "agent:local.explorer",
+        "catalyst:local.http",
+        ""
+      )
 
     assert http_edge.egress.domains != []
   end
@@ -169,8 +174,22 @@ defmodule Opus.AgentAuthorityTest do
              {:error, {:corrupt, {:component_graph, @soul}}}
   end
 
-  test "two roles run one catalyst with two keys, each under its own consent", %{ctx: ctx} do
+  test "two crew members run one catalyst with two keys, each under its own consent", %{
+    ctx: ctx
+  } do
     {:ok, _} = Bootstrap.run(ctx)
+
+    # Two members the athanor made, both on claude.
+    for name <- ~w(scout scribe) do
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.crew_file(name),
+          "---\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n\n#{name}\n"
+        )
+    end
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
     home =
       bind_claude!(ctx, name: "home key", fields: %{"ANTHROPIC_API_KEY" => "sk-home"})
@@ -182,9 +201,9 @@ defmodule Opus.AgentAuthorityTest do
         fields: %{"ANTHROPIC_API_KEY" => "sk-work"}
       )
 
-    for {role, label} <- [{"agent:local.web", "default"}, {"agent:local.artisan", "work"}] do
-      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: role})
-      decisions = %{ref: role, selections: [%{dep: "catalyst:local.claude", label: label}]}
+    for {member, label} <- [{"agent:local.scout", "default"}, {"agent:local.scribe", "work"}] do
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: member})
+      decisions = %{ref: member, selections: [%{dep: "catalyst:local.claude", label: label}]}
       {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
       {:ok, _} =
@@ -197,17 +216,17 @@ defmodule Opus.AgentAuthorityTest do
         })
     end
 
-    edge = fn role ->
-      {:ok, authority} = Admission.authority_for(ctx, :default, role)
+    edge = fn member ->
+      {:ok, authority} = Admission.authority_for(ctx, :default, member)
 
       {:ok, edge} =
-        Prima.Authority.Blob.lookup_edge(authority.policy, role, "catalyst:local.claude", "")
+        Prima.Authority.Blob.lookup_edge(authority.policy, member, "catalyst:local.claude", "")
 
       edge
     end
 
-    assert edge.("agent:local.web").vault.entry_id == home.id
-    assert edge.("agent:local.artisan").vault.entry_id == work.id
+    assert edge.("agent:local.scout").vault.entry_id == home.id
+    assert edge.("agent:local.scribe").vault.entry_id == work.id
   end
 
   defp bind_claude!(ctx, opts) do

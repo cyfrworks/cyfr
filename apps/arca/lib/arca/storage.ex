@@ -298,7 +298,7 @@ defmodule Arca.Storage do
     `data/system/`
   - `shared` — a shared thread's attachments under `data/shared/{thread_id}/`
 
-  The AQUA soul, roles and scrolls (`aqua/aqua.md`, `aqua/roles/*.md`,
+  The AQUA soul, crew and scrolls (`aqua/aqua.md`, `aqua/crew/*.md`,
   `aqua/skills/*/SKILL.md`) are the athanor's own — an ordinary tenant
   path, served through the seed overlay like `components/`: the shipped
   template shows through until a file is edited.
