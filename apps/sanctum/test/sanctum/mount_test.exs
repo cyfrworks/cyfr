@@ -316,6 +316,44 @@ defmodule Sanctum.MountTest do
       assert {:error, :not_found} = Mount.login_entry(ctx, entry.id, "claude")
     end
 
+    test "a sign-in admits an entry a restore left needs_reauth, and its exit 0 makes it active",
+         %{ctx: ctx} do
+      entry = login!(ctx, "claude", "after-restore")
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = Arca.VaultStorage.set_status(actor, entry.id, "needs_reauth")
+
+      # Nothing but a sign-in reaches it: a mount and a plain pick refuse it.
+      assert {:error, {:entry_unavailable, "needs_reauth"}} =
+               Mount.login_entry(ctx, entry.id, "claude")
+
+      assert {:ok, %{id: id, status: "needs_reauth"}} =
+               Mount.login_entry(ctx, entry.id, "claude", for: :sign_in)
+
+      assert id == entry.id
+
+      assert :ok = Mount.signed_in(ctx, entry.id)
+      assert {:ok, %{status: "active"}} = Mount.login_entry(ctx, entry.id, "claude")
+
+      # An active entry stays active, a revoked one is never brought back, and
+      # an entry of another kind is no login entry.
+      assert :ok = Mount.signed_in(ctx, entry.id)
+      {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
+      assert {:error, {:entry_unavailable, "revoked"}} = Mount.signed_in(ctx, entry.id)
+
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               Mount.login_entry(ctx, entry.id, "claude", for: :sign_in)
+
+      {:ok, key} =
+        TestContext.create_vault(ctx, %{
+          name: "a-key",
+          kind: "api_key",
+          fields: %{"K" => "v"},
+          destination: %{"hosts" => ["api.example.com"]}
+        })
+
+      assert {:error, :not_a_login_entry} = Mount.signed_in(ctx, key.id)
+    end
+
     test "login_entry/3 reads the context's athanor alone", %{ctx: ctx} do
       entry = login!(ctx)
       other = %{ctx | athanor_id: Prima.UUID7.generate_id("ath")}
