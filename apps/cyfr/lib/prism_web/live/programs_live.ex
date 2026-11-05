@@ -320,11 +320,19 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   # The session the terminal open now started, so selecting another target
-  # closes it first.
+  # closes it first. One a terminal no longer open started (the person
+  # chose another target before its start was heard here) is closed now:
+  # no session outlives the terminal it was opened for.
   def handle_info({SignInTerminalComponent, :started, id, token}, socket) do
     case socket.assigns.terminal do
-      %{id: ^id} = terminal -> {:noreply, assign(socket, :terminal, %{terminal | token: token})}
-      _other -> {:noreply, socket}
+      %{id: ^id} = terminal ->
+        {:noreply, assign(socket, :terminal, %{terminal | token: token})}
+
+      _other ->
+        CyfrWeb.ContextGuard.guard(socket, fn socket ->
+          Opus.Programs.sign_in_close(socket.assigns.context, token)
+          {:noreply, socket}
+        end)
     end
   end
 
@@ -538,9 +546,11 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   # One sign-in at a time: a terminal for a new target closes the session
-  # of the one before, and each terminal is a component of its own, so
-  # selecting a target, or the same one again after its session ended,
-  # starts afresh and never reaches the previous session.
+  # of the one before (or, when that session's start has not been heard
+  # here yet, closes it when it is: the `:started` above), and each
+  # terminal is a component of its own, so selecting a target, or the same
+  # one again after its session ended, starts afresh and never reaches the
+  # previous session.
   defp open_terminal(socket, name, entry) do
     close_terminal(socket)
     id = "sign-in-#{System.unique_integer([:positive])}"
