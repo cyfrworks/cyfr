@@ -4,12 +4,13 @@
 defmodule Locus.Backends.Owners do
   @moduledoc """
   The owner table of the backends service: one owner per athanor and
-  server row, running at the generation `g` and epoch `e` its last sync
-  named, each with the backends (`Locus.Backends.Backend`, under
-  `Locus.Backends.BackendSupervisor`) that sync defined. An owner lives
-  while its lease does; nothing about it is persisted. The table's
-  lifetime is the service's: `boot/1` names it, and a restart forgets
-  every owner under a new one.
+  `mcp_servers` row, running at the generation `g` and epoch `e` its last
+  sync named, with the programs that sync defined and the sessions opened
+  on them (`Locus.Backends.Backend`, under
+  `Locus.Backends.BackendSupervisor`). An owner lives while its lease
+  does; nothing about it is persisted. The table's lifetime is the
+  service's: `boot/1` names it, and a restart forgets every owner under a
+  new one. A kept home outlives all of it: it is the launcher's.
 
   ## Control messages
 
@@ -27,44 +28,67 @@ defmodule Locus.Backends.Owners do
   | `renew` | each owner running at exactly `(g, e)` with a live lease is `renewed`; the rest `unknown` |
   | `release` | each owner at or below `(g, e)` retired |
   | `reconcile` | each owner not at exactly `g` and its kept `e` retired |
-  | `status` | each named owner present, its backends as they report themselves |
+  | `status` | each named owner present, its programs as their sessions report them |
+  | `home` | every session of the home among the athanor's owners ended, then the home reset or retired |
 
-  A sync is answered on admission: its backends start once the version it
-  replaces is retired, and `rev`, which every change to what the owner's
-  `tools/list` answers raises, says when they are ready, as does the
-  owner's move from `starting` to `running` once every backend has been
-  ready or failed. A retired owner leaves routing at once and holds its
-  uids until its backends are stopped; a lapsed one stays routed,
-  answering `lapsed`, until then.
+  A sync starts nothing: it is answered on admission with every program
+  `idle`, or `failed` for none. A retired owner leaves routing at once and
+  ends its sessions; a lapsed one stays routed, answering `lapsed`, until
+  they are gone.
 
-  ## Invokes
+  ## Sessions
 
-  `admit/2` answers the backends of the owner an invoke names at exactly
-  its `(g, e)`: `unknown_owner` without one, `stale_epoch` below it,
-  `epoch_ahead` above it, `lapsed` while it drains or once its lease has
-  passed.
+  `open/3` opens a session at exactly the owner's `(g, e)`. A `run` open
+  attaches to the session running for its `(program, home, key)`
+  (`resumed: true`) or starts one (`resumed: false`); a `sign_in` open
+  does the same for the program's login command on a pseudo-terminal,
+  which needs a kept home and a login command (`bad_request`). A program
+  whose home is kept needs a `home_id` and a scratch one none
+  (`bad_request`); a program the owner does not define is
+  `unknown_program`; one failed, `program_failed`. An owner holds at most
+  `Prima.LocusBackends.max_sessions/0` sessions, running or ended: the
+  oldest ended one is forgotten for a new one, and with all of them
+  running an open is `capacity`.
 
-  ## The uid pool
+  Before a scratch session's process starts it holds a uid of the pool
+  `backends`: the claim is made after one read of the pool
+  (`Locus.Launcher.pool_stats/2`), with the check and the claim in one
+  step of this process, and the uids held never exceed the pool's size
+  less its quarantined uids (`capacity`; a pool the launcher does not
+  answer is `unavailable`). The uid is freed when the session's process
+  is gone. A kept session holds no uid of the pool: its home is made if it
+  is absent (`Locus.Launcher.home_ensure/2`) and the process runs under
+  the home's own uid.
 
-  Every backend the service runs, or will run once a retirement finishes,
-  holds one uid of the pool `backends`, and the uids held never exceed the
-  pool's size less its quarantined uids beyond what the retirement of a
-  replaced version is about to free. A uid is claimed at one place, after
-  one read of the pool (`Locus.Launcher.pool_stats/2`), with the check and
-  the claim in one step of this process: at a sync, for all its backends,
-  and at the wake of an idle backend (`claim/2`). A claim past the pool is
-  `capacity`; a pool the launcher does not answer is `unavailable`. A uid
-  is freed at the retirement that ends its tenure — the owner's backends
-  stopped, an idle backend's process retired, a failed backend's last
-  process released — and a backend holds one or none, so a retirement seen
-  twice frees nothing twice.
+  `session/3` names the running or ended session a `send`, `recv` or
+  `close` reaches, at exactly the owner's version; one the owner does not
+  hold is `unknown_session`. Nothing waits on a session here: those calls
+  go to the session itself.
+
+  ## Crashes
+
+  A session whose process crashed (`Locus.Backends.Backend`) counts
+  against its program within `crash_window_ms/0`: the next open starts its
+  process only once the backoff's wait for that many crashes
+  (`restart_backoff_ms/0`) has passed since the last, and the
+  `max_crashes/0`-th marks the program `failed` until a sync at a new
+  version.
+
+  ## Kept homes and their bound
+
+  A program with a kept home and a `home_max_bytes` has its home measured
+  before each session's process starts (`Locus.Launcher.home_measure/2`)
+  and, while one of its sessions runs, every `:measure_interval_ms`
+  (10 s): a home at or past the bound has every session in it ended and is
+  over its cap, refusing every open `home_over_cap` until a `home` reset.
 
   ## Sleeping on nothing
 
-  This process waits on no launcher and no backend: a pool read, the
-  stopping of an owner's backends and the collection of a status run in
-  processes of their own and report back. The lease and idle checks run
-  when `sweep/1` asks (`Locus.Backends.LeaseSweeper`).
+  This process waits on no launcher and no session: a pool read, a home's
+  making or measuring, the stopping of an owner's sessions and the
+  collection of a status run in processes of their own and report back.
+  The lease, idle and measuring checks run when `sweep/1` asks
+  (`Locus.Backends.LeaseSweeper`).
   """
 
   use GenServer
@@ -79,27 +103,32 @@ defmodule Locus.Backends.Owners do
   # The keeper answers a pool read within its own 5 s; this bound covers a
   # launcher that never answers at all.
   @pool_timeout_ms 6_000
+  # A home's making, measuring, reset or retirement is the launcher's work
+  # as the home's own uid, which may take it up to 120 s.
+  @home_timeout_ms 130_000
   @status_timeout_ms 5_000
   @stop_grace_ms 2_000
+  @measure_interval_ms 10_000
   @call_timeout_ms 120_000
+  # An open may make and measure a kept home before its process starts.
+  @open_timeout_ms 300_000
 
   @typedoc "An owner as a message names it: its athanor and server row."
   @type key :: {String.t(), String.t()}
-
-  @typedoc "What `admit/2` answers: the owner's backends by name, and its secret values."
-  @type admitted :: %{backends: [{String.t(), pid() | nil}], secrets: [String.t()]}
 
   # ————— the interface —————
 
   @doc """
   Starts the table. Options: `:name`; `:boot` (a lifetime minted here by
   default); `:launcher` and `:launcher_server` (`Locus.Executor.executor/0`'s
-  by default); `:supervisor`, the `DynamicSupervisor` backends start under;
-  `:clock`, the milliseconds leases and idle periods are read on
-  (monotonic by default); `:max_in_flight`, `:rpc_timeout_ms`,
-  `:init_timeout_ms` and `:memory_bytes` (`Locus.Config`'s by default);
-  `:stop_grace_ms`; `:pool_timeout_ms`; `:status_timeout_ms`; and
-  `:backend_opts`, more options for every backend.
+  by default); `:supervisor`, the `DynamicSupervisor` sessions start
+  under; `:clock`, the milliseconds leases, crashes and idle periods are
+  read on (monotonic by default); `:memory_bytes` (`Locus.Config`'s by
+  default), the bound of a program that names none; `:stop_grace_ms`;
+  `:pool_timeout_ms`; `:status_timeout_ms`; `:measure_interval_ms`;
+  `:bounds`, overriding `Prima.LocusBackends`' `restart_backoff_ms`,
+  `crash_window_ms` and `max_crashes`; and `:session_opts`, more options
+  for every session.
   """
   def start_link(opts \\ []),
     do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -117,8 +146,8 @@ defmodule Locus.Backends.Owners do
   @doc """
   Applies a control message whose header carried `fields`, after every one
   that arrived before it. `open_env`, for a sync, answers the sync's
-  opened environment (`{:ok, %{backend => %{name => value}}}` or
-  `:error`) and is called only for a version not yet held.
+  opened environment (`{:ok, %{program => %{name => value}}}` or `:error`)
+  and is called only for a version not yet held.
   """
   @spec control(
           GenServer.server(),
@@ -132,28 +161,32 @@ defmodule Locus.Backends.Owners do
     :exit, _reason -> {:error, :internal}
   end
 
-  @doc "The backends an invoke at the owner's exact version reaches, or the refusal."
-  @spec admit(GenServer.server(), map()) :: {:ok, admitted()} | {:error, LocusBackends.code()}
+  @doc "Whether the owner a session message's header names runs at exactly its version, or the refusal."
+  @spec admit(GenServer.server(), map()) :: :ok | {:error, LocusBackends.code()}
   def admit(server \\ __MODULE__, %{athanor: _, server: _, generation: _, epoch: _} = invoke),
     do: GenServer.call(server, {:admit, invoke})
 
-  @doc """
-  A uid of the pool for the backend `backend`, which is about to start a
-  process with none held: `:ok`, `{:error, :capacity}`,
-  `{:error, :unavailable}`, or `{:error, :gone}` for a backend whose owner
-  is retiring or unknown.
-  """
-  @spec claim(GenServer.server(), pid()) :: :ok | {:error, :capacity | :unavailable | :gone}
-  def claim(server \\ __MODULE__, backend) when is_pid(backend) do
-    GenServer.call(server, {:claim, backend}, @pool_timeout_ms + @call_timeout_ms)
+  @doc "Opens a session as `message` asks, for the owner `invoke` names."
+  @spec open(GenServer.server(), map(), map()) ::
+          {:ok, %{status: :running, session: String.t(), resumed: boolean(), pty: boolean()}}
+          | {:error, LocusBackends.code()}
+  def open(server \\ __MODULE__, invoke, message) do
+    GenServer.call(server, {:open, invoke, message}, @open_timeout_ms)
   catch
     :exit, _reason -> {:error, :unavailable}
   end
 
+  @doc "The session `id` of the owner `invoke` names: its process and the owner's secrets."
+  @spec session(GenServer.server(), map(), String.t()) ::
+          {:ok, pid() | nil, [String.t()]} | {:error, LocusBackends.code()}
+  def session(server \\ __MODULE__, invoke, id),
+    do: GenServer.call(server, {:session, invoke, id})
+
   @doc """
-  Retires every owner whose lease has passed, and asks every ready backend
-  of the rest to retire if no call has used it within its owner's idle
-  period.
+  Retires every owner whose lease has passed, asks every running session
+  of the rest to end if no send and no recv used it within its owner's
+  idle period, and measures every capped kept home a session runs in
+  whose interval has passed.
   """
   @spec sweep(GenServer.server()) :: :ok
   def sweep(server \\ __MODULE__), do: GenServer.call(server, :sweep)
@@ -170,22 +203,27 @@ defmodule Locus.Backends.Owners do
          launcher_server: Keyword.get(opts, :launcher_server, launcher),
          supervisor: Keyword.get(opts, :supervisor, Locus.Backends.BackendSupervisor),
          clock: Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end),
-         max_in_flight:
-           Keyword.get_lazy(opts, :max_in_flight, &Locus.Config.backends_max_in_flight/0),
-         rpc_timeout_ms:
-           Keyword.get_lazy(opts, :rpc_timeout_ms, &Locus.Config.backends_rpc_timeout_ms/0),
-         init_timeout_ms:
-           Keyword.get_lazy(opts, :init_timeout_ms, &Locus.Config.backends_init_timeout_ms/0),
          memory_bytes:
            Keyword.get_lazy(opts, :memory_bytes, &Locus.Config.backends_memory_bytes/0),
          stop_grace_ms: Keyword.get(opts, :stop_grace_ms, @stop_grace_ms),
          pool_timeout_ms: Keyword.get(opts, :pool_timeout_ms, @pool_timeout_ms),
          status_timeout_ms: Keyword.get(opts, :status_timeout_ms, @status_timeout_ms),
-         backend_opts: Keyword.get(opts, :backend_opts, []),
+         measure_interval_ms: Keyword.get(opts, :measure_interval_ms, @measure_interval_ms),
+         session_opts: Keyword.get(opts, :session_opts, []),
+         bounds:
+           Map.merge(
+             Map.take(LocusBackends.bounds(), [
+               :restart_backoff_ms,
+               :crash_window_ms,
+               :max_crashes
+             ]),
+             Map.new(Keyword.get(opts, :bounds, []))
+           ),
          high_water: {0, 0},
          owners: %{},
          routes: %{},
          pids: %{},
+         homes: %{},
          queue: :queue.new(),
          busy: nil,
          pending: %{},
@@ -220,18 +258,29 @@ defmodule Locus.Backends.Owners do
   end
 
   def handle_call({:admit, invoke}, _from, state) do
-    {reply, state} = admit_invoke(state, invoke)
-    {:reply, reply, state}
+    case admit_owner(state, invoke) do
+      {:ok, _owner, state} -> {:reply, :ok, state}
+      {:error, code, state} -> {:reply, {:error, code}, state}
+    end
   end
 
-  def handle_call({:claim, pid}, from, state) do
-    case locate(state, pid) do
-      {:ok, owner, _backend} when owner.state != :draining ->
-        {_ref, state} = read_pool(state, {:claim, from, pid})
-        {:noreply, state}
+  def handle_call({:open, invoke, message}, from, state) do
+    case admit_owner(state, invoke) do
+      {:ok, owner, state} -> open_session(state, owner, message, from)
+      {:error, code, state} -> {:reply, {:error, code}, state}
+    end
+  end
 
-      _gone ->
-        {:reply, {:error, :gone}, state}
+  def handle_call({:session, invoke, id}, _from, state) do
+    case admit_owner(state, invoke) do
+      {:ok, owner, state} ->
+        case Map.fetch(owner.sessions, id) do
+          {:ok, session} -> {:reply, {:ok, session.pid, owner.secrets}, state}
+          :error -> {:reply, {:error, :unknown_session}, state}
+        end
+
+      {:error, code, state} ->
+        {:reply, {:error, code}, state}
     end
   end
 
@@ -262,7 +311,7 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  def handle_info({Backend, pid, event}, state), do: {:noreply, on_backend(state, pid, event)}
+  def handle_info({Backend, pid, event}, state), do: {:noreply, on_session(state, pid, event)}
 
   def handle_info({:DOWN, monitor, :process, pid, _reason}, state) do
     cond do
@@ -271,7 +320,7 @@ defmodule Locus.Backends.Owners do
         {:noreply, drained(%{state | drainers: drainers}, id)}
 
       Map.has_key?(state.pids, pid) ->
-        {:noreply, backend_down(state, pid)}
+        {:noreply, session_down(state, pid)}
 
       ref = pending_by_monitor(state, monitor) ->
         {entry, pending} = Map.pop(state.pending, ref)
@@ -288,9 +337,9 @@ defmodule Locus.Backends.Owners do
     {:noreply, state}
   end
 
-  # An owner's environment and secret values are credentials, and so is a
-  # sync waiting on its pool read: no status or crash report shows more of
-  # them than their count, or the kind of work pending.
+  # An owner's environment and secret values are credentials, and so is
+  # work pending on a sync: no status or crash report shows more of them
+  # than their count, or the kind of work pending.
   @impl GenServer
   def format_status(status) do
     Map.new(status, fn
@@ -311,10 +360,7 @@ defmodule Locus.Backends.Owners do
     %{
       owner
       | secrets: {:redacted, length(owner.secrets)},
-        backends:
-          Map.new(owner.backends, fn {name, backend} ->
-            {name, %{backend | env: {:redacted, map_size(backend.env)}}}
-          end)
+        env: Map.new(owner.env, fn {name, block} -> {name, {:redacted, map_size(block)}} end)
     }
   end
 
@@ -402,11 +448,10 @@ defmodule Locus.Backends.Owners do
         ref = %{athanor: entry.athanor, server: entry.server, e: entry.e}
 
         case routed(state, {entry.athanor, entry.server}) do
-          %{state: owner_state, g: ^g, e: e} = owner
-          when owner_state != :draining and e == entry.e and owner.lease_until > now ->
+          %{state: :running, g: ^g, e: e} = owner
+          when e == entry.e and owner.lease_until > now ->
             owner = %{owner | lease_until: now + message.lease_ms}
-            answer = Map.merge(ref, %{state: owner.state, rev: owner.rev})
-            {[answer | renewed], unknown, put_owner(state, owner)}
+            {[Map.put(ref, :state, owner.state) | renewed], unknown, put_owner(state, owner)}
 
           _other ->
             {renewed, [ref | unknown], state}
@@ -423,16 +468,16 @@ defmodule Locus.Backends.Owners do
       entries
       |> Enum.map(&routed(state, {&1.athanor, &1.server}))
       |> Enum.reject(&is_nil/1)
-      |> Enum.map(&snapshot(&1, now))
+      |> Enum.map(&snapshot(state, &1, now))
 
     {ref, state} = gather(state, from, snapshots)
     {:wait, ref, state}
   end
 
-  defp apply_control(state, from, fields, %{type: :sync} = message, open_env) do
+  defp apply_control(state, _from, fields, %{type: :sync} = message, open_env) do
     key = {message.owner.athanor, message.owner.server}
     version = {fields.generation, message.e}
-    definition = definition(message.backends)
+    definition = definition(message.programs)
     existing = routed(state, key)
 
     case existing && compare(version, existing, definition) do
@@ -455,8 +500,34 @@ defmodule Locus.Backends.Owners do
         {:reply, {:ok, sync_answer(owner)}, put_owner(state, owner)}
 
       _new ->
-        admit_sync(state, from, message, version, definition, existing, open_env)
+        admit_sync(state, message, version, definition, existing, open_env)
     end
+  end
+
+  defp apply_control(state, from, _fields, %{type: :home} = message, _open_env) do
+    pids =
+      for {_id, owner} <- state.owners,
+          owner.athanor == message.athanor,
+          {_sid, %{home_id: home_id, pid: pid}} <- owner.sessions,
+          home_id == message.home_id,
+          pid != nil,
+          do: pid
+
+    home = Map.get(state.homes, message.home_id, new_home())
+    state = %{state | homes: Map.put(state.homes, message.home_id, %{home | busy: true})}
+    %{launcher: launcher, launcher_server: server, stop_grace_ms: grace_ms} = state
+
+    {ref, state} =
+      run(state, {:home, from, message}, @home_timeout_ms + grace_ms + 30_000, fn ->
+        stop_all(pids, nil, grace_ms)
+
+        case message.op do
+          :reset -> launcher.home_reset(server, message.home_id)
+          :retire -> launcher.home_retire(server, message.home_id)
+        end
+      end)
+
+    {:wait, ref, state}
   end
 
   defp compare(version, owner, definition) do
@@ -470,26 +541,21 @@ defmodule Locus.Backends.Owners do
   end
 
   # A version not held: its environment opened and checked against its
-  # definitions, then the pool read; the version it replaces is retired on
-  # admission alone.
-  defp admit_sync(state, from, message, {g, e}, definition, existing, open_env) do
-    with true <- length(definition) <= LocusBackends.max_backends() || :error,
+  # definitions; the version it replaces is retired on admission.
+  defp admit_sync(state, message, {g, e}, definition, existing, open_env) do
+    with true <- length(definition) <= LocusBackends.max_programs() || :error,
          {:ok, env} <- open(open_env),
          :ok <- environment(definition, env) do
-      sync = %{
-        athanor: message.owner.athanor,
-        server: message.owner.server,
-        g: g,
-        e: e,
-        definition: definition,
-        env: env,
-        lease_ms: message.lease_ms,
-        idle_ms: message.idle_ms,
-        replacing: existing && existing.id
+      state = if existing, do: retire(state, existing), else: state
+      owner = new_owner(state, message, {g, e}, definition, env)
+
+      state = %{
+        state
+        | owners: Map.put(state.owners, owner.id, owner),
+          routes: Map.put(state.routes, {owner.athanor, owner.server}, owner.id)
       }
 
-      {ref, state} = read_pool(state, {:sync, from, sync})
-      {:wait, ref, state}
+      {:reply, {:ok, sync_answer(owner)}, state}
     else
       :error -> {:reply, {:error, :bad_request}, state}
     end
@@ -504,13 +570,13 @@ defmodule Locus.Backends.Owners do
 
   defp open(_open_env), do: :error
 
-  # The definitions as they are compared: each backend's variable names
-  # sorted, the backends in the order the sync named them.
-  defp definition(backends),
-    do: Enum.map(backends, &%{&1 | env_names: Enum.sort(&1.env_names)})
+  # The definitions as they are compared: each program's variable names
+  # sorted, the programs in the order the sync named them.
+  defp definition(programs),
+    do: Enum.map(programs, &%{&1 | env_names: Enum.sort(&1.env_names)})
 
-  # The opened environment names exactly the backends, each block exactly
-  # its backend's variables, every value a string.
+  # The opened environment names exactly the programs, each block exactly
+  # its program's variables, every value a string.
   defp environment(definition, env) do
     names = definition |> Enum.map(& &1.name) |> Enum.sort()
 
@@ -543,72 +609,6 @@ defmodule Locus.Backends.Owners do
     control_done(state)
   end
 
-  defp continue(state, {:sync, from, sync}, result) do
-    case pool(result) do
-      {:ok, pool} ->
-        replacing =
-          case sync.replacing && Map.get(state.owners, sync.replacing) do
-            nil -> 0
-            owner -> slots(owner)
-          end
-
-        if slots_held(state) - replacing + length(sync.definition) > capacity(pool) do
-          GenServer.reply(from, {:error, :capacity})
-          control_done(state)
-        else
-          # The version it replaces is retired only now, once the replacement
-          # is admitted: a sync the pool cannot hold leaves the owner it
-          # named running as it ran.
-          state =
-            case sync.replacing && Map.get(state.owners, sync.replacing) do
-              nil -> state
-              held -> retire(state, held)
-            end
-
-          owner = new_owner(state, sync)
-
-          state = %{
-            state
-            | owners: Map.put(state.owners, owner.id, owner),
-              routes: Map.put(state.routes, {owner.athanor, owner.server}, owner.id)
-          }
-
-          # Answered on admission; the backends start after the answer.
-          GenServer.reply(from, {:ok, sync_answer(owner)})
-          state |> start(owner.id) |> control_done()
-        end
-
-      :error ->
-        GenServer.reply(from, {:error, :unavailable})
-        control_done(state)
-    end
-  end
-
-  defp continue(state, {:claim, from, pid}, result) do
-    {reply, state} =
-      case {pool(result), locate(state, pid)} do
-        {_pool, {:ok, %{state: :draining}, _backend}} ->
-          {{:error, :gone}, state}
-
-        {{:ok, _pool}, {:ok, owner, %{slot: true}}} when owner.state != :draining ->
-          {:ok, state}
-
-        {{:ok, pool}, {:ok, owner, backend}} ->
-          if slots_held(state) + 1 > capacity(pool),
-            do: {{:error, :capacity}, state},
-            else: {:ok, put_backend(state, owner, %{backend | slot: true})}
-
-        {:error, {:ok, _owner, _backend}} ->
-          {{:error, :unavailable}, state}
-
-        {_pool, :error} ->
-          {{:error, :gone}, state}
-      end
-
-    GenServer.reply(from, reply)
-    state
-  end
-
   defp continue(state, {:status, from}, {:ok, owners}) do
     GenServer.reply(from, {:ok, %{owners: owners}})
     control_done(state)
@@ -619,6 +619,31 @@ defmodule Locus.Backends.Owners do
     control_done(state)
   end
 
+  defp continue(state, {:home, from, message}, result) do
+    home = Map.get(state.homes, message.home_id, new_home())
+
+    {reply, homes} =
+      case {message.op, result} do
+        {:reset, :ok} ->
+          {{:ok, %{home_id: message.home_id, state: :empty}},
+           Map.put(state.homes, message.home_id, new_home())}
+
+        {:retire, :ok} ->
+          {{:ok, %{home_id: message.home_id, state: :absent}},
+           Map.delete(state.homes, message.home_id)}
+
+        {_op, _failed} ->
+          {{:error, :unavailable}, Map.put(state.homes, message.home_id, %{home | busy: false})}
+      end
+
+    GenServer.reply(from, reply)
+    control_done(%{state | homes: homes})
+  end
+
+  defp continue(state, {:open, from, ask}, result), do: opened(state, from, ask, result)
+
+  defp continue(state, {:measured, home_id}, result), do: measured(state, home_id, result)
+
   defp pool({:ok, %{size: size, free: free, quarantined: quarantined} = pool})
        when is_integer(size) and size >= 0 and is_integer(free) and free >= 0 and
               is_integer(quarantined) and quarantined >= 0,
@@ -626,27 +651,490 @@ defmodule Locus.Backends.Owners do
 
   defp pool(_result), do: :error
 
-  # The uids a backend may hold: every uid of the pool not quarantined.
+  # The uids a session may hold: every uid of the pool not quarantined.
   defp capacity(%{size: size, quarantined: quarantined}), do: size - quarantined
 
-  # ————— work of its own, in processes of its own —————
+  # ————— opening a session —————
 
-  # A pool read in a process of its own, bounded; its answer or its failure
-  # arrives as the continuation's result.
-  defp read_pool(state, continuation) do
-    %{launcher: launcher, launcher_server: server} = state
-    run(state, continuation, state.pool_timeout_ms, fn -> launcher.pool_stats(server, @pool) end)
+  defp open_session(state, owner, message, from) do
+    case Enum.find(owner.definition, &(&1.name == message.program)) do
+      nil -> {:reply, {:error, :unknown_program}, state}
+      program -> open_program(state, owner, program, message, from)
+    end
   end
 
-  # Each named owner's backends asked for their state at once, each within
-  # the status bound; a backend that does not answer reports what this
-  # table last heard of it.
+  defp open_program(state, owner, program, message, from) do
+    ask = %{
+      owner: owner.id,
+      program: program.name,
+      home_id: message.home_id,
+      key: {program.name, message.home_id, message.key, message.mode},
+      mode: message.mode,
+      argv: message.argv
+    }
+
+    with :ok <- shape(program, message),
+         :ok <- not_failed(owner, program),
+         :error <- running(owner, ask.key),
+         :ok <- home_open(state, message.home_id),
+         {:ok, owner} <- room(state, owner) do
+      state = put_owner(state, owner)
+      %{launcher: launcher, launcher_server: server} = state
+
+      case program.home do
+        :kept ->
+          cap = program.home_max_bytes
+          state = put_home(state, message.home_id, &%{&1 | athanor: owner.athanor, cap: cap})
+
+          {_ref, state} =
+            run(state, {:open, from, ask}, @home_timeout_ms * 2, fn ->
+              kept_ready(launcher, server, message.home_id, cap)
+            end)
+
+          {:noreply, state}
+
+        :scratch ->
+          {_ref, state} = read_pool(state, {:open, from, ask})
+          {:noreply, state}
+      end
+    else
+      {:ok, session_id} ->
+        session = owner.sessions[session_id]
+        {:reply, {:ok, opened_answer(session_id, true, session.mode)}, state}
+
+      {:error, code} ->
+        {:reply, {:error, code}, state}
+    end
+  end
+
+  # A kept program's sessions need a home, and a scratch one's none; a
+  # sign-in runs a login command in a kept home.
+  defp shape(%{home: :kept}, %{home_id: nil}), do: {:error, :bad_request}
+
+  defp shape(%{home: :scratch}, %{home_id: home_id}) when home_id != nil,
+    do: {:error, :bad_request}
+
+  defp shape(%{home: :scratch}, %{mode: :sign_in}), do: {:error, :bad_request}
+  defp shape(%{login_command: nil}, %{mode: :sign_in}), do: {:error, :bad_request}
+  defp shape(_program, %{mode: :sign_in, argv: [_ | _]}), do: {:error, :bad_request}
+  defp shape(_program, _message), do: :ok
+
+  defp not_failed(owner, program) do
+    if owner.programs[program.name].failed, do: {:error, :program_failed}, else: :ok
+  end
+
+  defp running(owner, key) do
+    with {:ok, session_id} <- Map.fetch(owner.keys, key),
+         %{running: true} <- owner.sessions[session_id] do
+      {:ok, session_id}
+    else
+      _ -> :error
+    end
+  end
+
+  defp home_open(_state, nil), do: :ok
+
+  defp home_open(state, home_id) do
+    case state.homes[home_id] do
+      %{over_cap: true} -> {:error, :home_over_cap}
+      %{busy: true} -> {:error, :unavailable}
+      _ -> :ok
+    end
+  end
+
+  # Room for one more session: the oldest ended one forgotten if the owner
+  # holds its bound, `capacity` with every one of them running. A session
+  # whose process is still going holds its place until it is gone.
+  defp room(state, owner) do
+    if map_size(owner.sessions) < LocusBackends.max_sessions() do
+      {:ok, owner}
+    else
+      oldest =
+        owner.sessions
+        |> Enum.filter(fn {_id, session} -> not session.running and not session.slot end)
+        |> Enum.min_by(fn {_id, session} -> session.opened end, fn -> nil end)
+
+      case oldest do
+        nil ->
+          {:error, :capacity}
+
+        {id, session} ->
+          if session.pid, do: forget(state, session.pid)
+          {:ok, %{owner | sessions: Map.delete(owner.sessions, id)}}
+      end
+    end
+  end
+
+  defp forget(state, pid) do
+    DynamicSupervisor.terminate_child(state.supervisor, pid)
+  catch
+    :exit, _reason -> :ok
+  end
+
+  # Run in a process of its own: a kept home made if it is absent, and
+  # measured against its bound when it has one.
+  defp kept_ready(launcher, server, home_id, cap) do
+    with {:ok, _uid} <- launcher.home_ensure(server, home_id),
+         :ok <- under_cap(launcher, server, home_id, cap) do
+      :kept
+    end
+  end
+
+  defp under_cap(_launcher, _server, _home_id, nil), do: :ok
+
+  defp under_cap(launcher, server, home_id, cap) do
+    case launcher.home_measure(server, home_id) do
+      {:ok, bytes} when bytes >= cap -> {:over_cap, bytes}
+      {:ok, _bytes} -> :ok
+      other -> other
+    end
+  end
+
+  # The open's work done: the session started, or the refusal.
+  defp opened(state, from, ask, result) do
+    with {:ok, owner} <- still_open(state, ask),
+         program = Enum.find(owner.definition, &(&1.name == ask.program)),
+         {:ok, slot?} <- claimed(state, program, ask, result) do
+      case running(owner, ask.key) do
+        {:ok, session_id} ->
+          GenServer.reply(from, {:ok, opened_answer(session_id, true, ask.mode)})
+          state
+
+        :error ->
+          start_session(state, owner, program, ask, slot?, from)
+      end
+    else
+      {:error, code, state} ->
+        GenServer.reply(from, {:error, code})
+        state
+
+      {:error, code} ->
+        GenServer.reply(from, {:error, code})
+        state
+    end
+  end
+
+  defp still_open(state, ask) do
+    case Map.fetch(state.owners, ask.owner) do
+      {:ok, %{state: :running} = owner} -> {:ok, owner}
+      _gone -> {:error, :lapsed}
+    end
+  end
+
+  # A scratch session's uid of the pool, claimed in this step; a kept
+  # session's home ready under its bound.
+  defp claimed(state, %{home: :scratch}, _ask, result) do
+    case pool(result) do
+      {:ok, pool} ->
+        if slots_held(state) + 1 > capacity(pool),
+          do: {:error, :capacity},
+          else: {:ok, true}
+
+      :error ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp claimed(state, %{home: :kept}, ask, result) do
+    case result do
+      :kept ->
+        {:ok, false}
+
+      {:over_cap, bytes} ->
+        {:error, :home_over_cap,
+         put_home(state, ask.home_id, &%{&1 | bytes: bytes, over_cap: true})}
+
+      {:error, {:refused, "capacity"}} ->
+        {:error, :capacity}
+
+      _failed ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp start_session(state, owner, program, ask, slot?, from) do
+    session_id = "ss_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+    record = owner.programs[program.name]
+
+    opts =
+      [
+        owner: %{athanor: owner.athanor, server: owner.server, g: owner.g, e: owner.e},
+        session: session_id,
+        program: program.name,
+        spec: spec(state, owner, program, ask),
+        secrets: owner.secrets,
+        launcher: state.launcher,
+        launcher_server: state.launcher_server,
+        notify: self(),
+        delay_ms: backoff(state, record),
+        stop_grace_ms: state.stop_grace_ms,
+        clock: state.clock
+      ]
+      |> Keyword.merge(state.session_opts)
+
+    case DynamicSupervisor.start_child(state.supervisor, {Backend, opts}) do
+      {:ok, pid} ->
+        Process.monitor(pid)
+
+        session = %{
+          pid: pid,
+          program: program.name,
+          home_id: ask.home_id,
+          mode: ask.mode,
+          running: true,
+          started: false,
+          slot: slot?,
+          opened: System.unique_integer([:monotonic]),
+          waiting: [from]
+        }
+
+        owner = %{
+          owner
+          | sessions: Map.put(owner.sessions, session_id, session),
+            keys: Map.put(owner.keys, ask.key, session_id),
+            programs:
+              Map.put(owner.programs, program.name, %{
+                record
+                | last: session_id,
+                  homes:
+                    if(ask.home_id, do: MapSet.put(record.homes, ask.home_id), else: record.homes)
+              })
+        }
+
+        %{state | pids: Map.put(state.pids, pid, {owner.id, session_id})} |> put_owner(owner)
+
+      {:error, _reason} ->
+        Logger.error(
+          "[Locus.Backends.Owners] #{owner.athanor}/#{owner.server} #{program.name}: " <>
+            "a session did not start"
+        )
+
+        GenServer.reply(from, {:error, :internal})
+        state
+    end
+  end
+
+  # What a session's process runs: a run's command with the open's
+  # arguments as its own, `"$@"` (the administrator allowed the program;
+  # its arguments shape only what runs inside its box), or a sign-in's
+  # login command on a pseudo-terminal.
+  defp spec(state, owner, program, ask) do
+    argv =
+      case ask.mode do
+        :run -> ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv]
+        :sign_in -> ["/bin/sh", "-c", program.login_command]
+      end
+
+    %{
+      argv: argv,
+      env: Map.fetch!(owner.env, program.name),
+      pool: @pool,
+      memory_bytes: program.memory_bytes || state.memory_bytes
+    }
+    |> put_given(:home, ask.home_id)
+    |> put_given(:home_max_bytes, program.home_max_bytes)
+    |> put_given(:pty, if(ask.mode == :sign_in, do: true))
+  end
+
+  defp put_given(map, _key, nil), do: map
+  defp put_given(map, key, value), do: Map.put(map, key, value)
+
+  # The wait before a program's next process after its crashes: the
+  # backoff's wait for their count, less the time since the last.
+  defp backoff(_state, %{crashes: []}), do: 0
+
+  defp backoff(state, %{crashes: [last | _] = crashes}) do
+    waits = state.bounds.restart_backoff_ms
+    wait = Enum.at(waits, min(length(crashes), length(waits)) - 1)
+    max(wait - (state.clock.() - last), 0)
+  end
+
+  defp opened_answer(session_id, resumed?, mode),
+    do: %{status: :running, session: session_id, resumed: resumed?, pty: mode == :sign_in}
+
+  # ————— what sessions report —————
+
+  defp on_session(state, pid, event) do
+    case locate(state, pid) do
+      {:ok, owner, session_id, session} -> session_event(state, owner, session_id, session, event)
+      :error -> state
+    end
+  end
+
+  defp session_event(state, owner, session_id, session, :started) do
+    Enum.each(
+      session.waiting,
+      &GenServer.reply(&1, {:ok, opened_answer(session_id, false, session.mode)})
+    )
+
+    put_session(state, owner, session_id, %{session | started: true, waiting: []})
+  end
+
+  defp session_event(state, owner, session_id, session, {:ended, ended}) do
+    refusal =
+      if String.contains?(ended.error || "", "home_over_cap"),
+        do: :home_over_cap,
+        else: spawn_refusal(ended)
+
+    Enum.each(session.waiting, &GenServer.reply(&1, {:error, refusal}))
+    session = %{session | running: false, waiting: []}
+    state = put_session(state, owner, session_id, session)
+    owner = Map.fetch!(state.owners, owner.id)
+    if ended.crash, do: crashed(state, owner, session.program, ended.error), else: state
+  end
+
+  defp session_event(state, owner, session_id, session, :vacated),
+    do: put_session(state, owner, session_id, %{session | slot: false})
+
+  defp session_event(state, _owner, _session_id, _session, _event), do: state
+
+  defp spawn_refusal(%{error: "spawn refused: home_over_cap"}), do: :home_over_cap
+  defp spawn_refusal(%{error: "spawn refused: capacity"}), do: :capacity
+  defp spawn_refusal(_ended), do: :unavailable
+
+  # A crash counts against its program within the window; the window's
+  # last crash fails it.
+  defp crashed(state, owner, name, error) do
+    now = state.clock.()
+    window = state.bounds.crash_window_ms
+    record = owner.programs[name]
+    crashes = [now | Enum.filter(record.crashes, &(now - &1 < window))]
+    failed? = length(crashes) >= state.bounds.max_crashes
+
+    if failed?,
+      do:
+        Logger.error(
+          "[Locus.Backends.Owners] #{owner.athanor}/#{owner.server} #{name}: " <>
+            "failed after #{length(crashes)} crashes"
+        )
+
+    record = %{
+      record
+      | crashes: crashes,
+        restarts: record.restarts + 1,
+        error: LocusBackends.mask(error, owner.secrets),
+        failed: record.failed or failed?
+    }
+
+    put_owner(state, %{owner | programs: Map.put(owner.programs, name, record)})
+  end
+
+  # A session process that ended without saying so: its process is gone
+  # with it, and it holds nothing.
+  defp session_down(state, pid) do
+    {{id, session_id}, pids} = Map.pop(state.pids, pid)
+    state = %{state | pids: pids}
+
+    case Map.fetch(state.owners, id) do
+      {:ok, owner} ->
+        case Map.fetch(owner.sessions, session_id) do
+          {:ok, session} ->
+            Enum.each(session.waiting, &GenServer.reply(&1, {:error, :internal}))
+            running? = session.running
+            session = %{session | pid: nil, running: false, slot: false, waiting: []}
+            state = put_session(state, owner, session_id, session)
+
+            if running? and owner.state != :draining,
+              do: crashed(state, Map.fetch!(state.owners, id), session.program, "session ended"),
+              else: state
+
+          :error ->
+            state
+        end
+
+      :error ->
+        state
+    end
+  end
+
+  # ————— status —————
+
   defp gather(state, from, snapshots) do
     timeout = state.status_timeout_ms
 
     run(state, {:status, from}, timeout + 1_000, fn ->
       {:ok, Enum.map(snapshots, &report(&1, timeout))}
     end)
+  end
+
+  defp snapshot(state, owner, now) do
+    programs =
+      Enum.map(owner.definition, fn program ->
+        record = owner.programs[program.name]
+        sessions = for {_id, s} <- owner.sessions, s.program == program.name, s.running, do: s
+        homes = Enum.map(record.homes, &Map.get(state.homes, &1, new_home()))
+        last = record.last && owner.sessions[record.last]
+
+        %{
+          name: program.name,
+          status:
+            cond do
+              record.failed -> :failed
+              sessions != [] -> :running
+              true -> :idle
+            end,
+          restarts: record.restarts,
+          error: record.error,
+          home: program.home,
+          home_bytes: home_bytes(program.home, homes),
+          over_cap: Enum.any?(homes, & &1.over_cap),
+          sessions: length(sessions),
+          last: last && last.pid
+        }
+      end)
+
+    %{
+      athanor: owner.athanor,
+      server: owner.server,
+      g: owner.g,
+      e: owner.e,
+      state: owner.state,
+      lease_ms_left: max(0, owner.lease_until - now),
+      programs: programs
+    }
+  end
+
+  defp home_bytes(:scratch, _homes), do: nil
+
+  defp home_bytes(:kept, homes) do
+    case for(%{bytes: bytes} <- homes, bytes != nil, do: bytes) do
+      [] -> nil
+      measured -> Enum.sum(measured)
+    end
+  end
+
+  # The stderr tail of each program's last session, asked at once, each
+  # within the status bound; one that does not answer reports none.
+  defp report(snapshot, timeout) do
+    programs =
+      snapshot.programs
+      |> Enum.map(fn program -> {program, Task.async(fn -> tail(program.last, timeout) end)} end)
+      |> Enum.map(fn {program, task} ->
+        tail =
+          case Task.yield(task, timeout + 100) || Task.shutdown(task, :brutal_kill) do
+            {:ok, tail} -> tail
+            _ -> ""
+          end
+
+        program |> Map.delete(:last) |> Map.put(:stderr_tail, tail)
+      end)
+
+    %{snapshot | programs: programs}
+  end
+
+  defp tail(nil, _timeout), do: ""
+
+  defp tail(pid, timeout) do
+    Backend.status(pid, timeout).stderr_tail
+  catch
+    :exit, _reason -> ""
+  end
+
+  # ————— work of its own, in processes of its own —————
+
+  defp read_pool(state, continuation) do
+    %{launcher: launcher, launcher_server: server} = state
+    run(state, continuation, state.pool_timeout_ms, fn -> launcher.pool_stats(server, @pool) end)
   end
 
   defp run(state, continuation, timeout, fun) do
@@ -662,122 +1150,38 @@ defmodule Locus.Backends.Owners do
     Enum.find_value(state.pending, fn {ref, entry} -> entry.monitor == monitor && ref end)
   end
 
-  defp snapshot(owner, now) do
-    %{
-      athanor: owner.athanor,
-      server: owner.server,
-      g: owner.g,
-      e: owner.e,
-      state: owner.state,
-      rev: owner.rev,
-      lease_ms_left: max(0, owner.lease_until - now),
-      backends: Enum.map(owner.order, &Map.fetch!(owner.backends, &1))
-    }
-  end
-
-  defp report(snapshot, timeout) do
-    backends =
-      snapshot.backends
-      |> Enum.map(fn backend ->
-        {backend, Task.async(fn -> backend_report(backend, timeout) end)}
-      end)
-      |> Enum.map(fn {backend, task} ->
-        case Task.yield(task, timeout + 100) || Task.shutdown(task, :brutal_kill) do
-          {:ok, report} -> report
-          _ -> last_heard(backend)
-        end
-      end)
-
-    %{snapshot | backends: backends}
-  end
-
-  defp backend_report(%{pid: nil} = backend, _timeout), do: last_heard(backend)
-
-  defp backend_report(backend, timeout) do
-    report = Backend.status(backend.pid, timeout)
-
-    %{
-      name: backend.name,
-      status: wire_status(report, backend.status),
-      restarts: report.restarts,
-      tools: report.tools,
-      error: report.error,
-      stderr_tail: report.stderr_tail
-    }
-  catch
-    :exit, _reason -> last_heard(backend)
-  end
-
-  defp last_heard(backend) do
-    %{
-      name: backend.name,
-      status: backend.status,
-      restarts: 0,
-      tools: backend.tools,
-      error: nil,
-      stderr_tail: ""
-    }
-  end
-
-  # The wire's status for what a backend reports; a stopped backend is
-  # reported as it last was.
-  defp wire_status(%{status: :starting, phase: phase}, _last) when phase != nil, do: phase
-  defp wire_status(%{status: :starting}, _last), do: :spawning
-  defp wire_status(%{status: :stopped}, last), do: last
-  defp wire_status(%{status: status}, _last), do: status
-
   # ————— owners —————
 
-  defp new_owner(state, sync) do
-    secrets = secret_values(sync.env)
-
-    backends =
-      Map.new(sync.definition, fn %{name: name, command: command} ->
-        {name,
-         %{
-           name: name,
-           command: command,
-           env: Map.fetch!(sync.env, name),
-           pid: nil,
-           status: :spawning,
-           tools: 0,
-           settled: false,
-           slot: true
-         }}
-      end)
-
-    waits =
-      case sync.replacing && Map.get(state.owners, sync.replacing) do
-        nil -> []
-        previous -> [previous.id | previous.waits]
-      end
-
+  defp new_owner(state, message, {g, e}, definition, env) do
     %{
       id: make_ref(),
-      athanor: sync.athanor,
-      server: sync.server,
-      g: sync.g,
-      e: sync.e,
-      definition: sync.definition,
-      state: :starting,
-      lease_until: state.clock.() + sync.lease_ms,
-      idle_ms: sync.idle_ms,
-      rev: 0,
-      secrets: secrets,
-      order: Enum.map(sync.definition, & &1.name),
-      backends: backends,
-      waits: Enum.filter(waits, &Map.has_key?(state.owners, &1)),
-      started: false,
+      athanor: message.owner.athanor,
+      server: message.owner.server,
+      g: g,
+      e: e,
+      definition: definition,
+      env: env,
+      secrets: secret_values(env),
+      state: :running,
+      lease_until: state.clock.() + message.lease_ms,
+      idle_ms: message.idle_ms,
+      programs:
+        Map.new(definition, fn program ->
+          {program.name,
+           %{crashes: [], restarts: 0, error: nil, failed: false, last: nil, homes: MapSet.new()}}
+        end),
+      sessions: %{},
+      keys: %{},
       drain_started: false
     }
   end
 
-  # The values masked in everything an owner's backends answer: every
+  # The values masked in everything an owner's sessions answer: every
   # value of its environment but the literal ones.
   defp secret_values(env) do
     literal = LocusBackends.literal_env_names()
 
-    for {_backend, block} <- env,
+    for {_program, block} <- env,
         {name, value} <- block,
         name not in literal,
         uniq: true,
@@ -787,11 +1191,9 @@ defmodule Locus.Backends.Owners do
   defp sync_answer(owner) do
     %{
       status: owner.state,
-      rev: owner.rev,
-      backends:
-        Enum.map(owner.order, fn name ->
-          backend = Map.fetch!(owner.backends, name)
-          %{name: name, status: backend.status, tools: backend.tools}
+      programs:
+        Enum.map(owner.definition, fn %{name: name} ->
+          %{name: name, status: if(owner.programs[name].failed, do: :failed, else: :idle)}
         end)
     }
   end
@@ -807,22 +1209,26 @@ defmodule Locus.Backends.Owners do
 
   defp put_owner(state, owner), do: %{state | owners: Map.put(state.owners, owner.id, owner)}
 
-  defp put_backend(state, owner, backend) do
+  defp put_session(state, owner, session_id, session) do
     owner = Map.fetch!(state.owners, owner.id)
-    put_owner(state, %{owner | backends: Map.put(owner.backends, backend.name, backend)})
+    put_owner(state, %{owner | sessions: Map.put(owner.sessions, session_id, session)})
   end
 
   defp locate(state, pid) do
-    with {:ok, {id, name}} <- Map.fetch(state.pids, pid),
-         {:ok, owner} <- Map.fetch(state.owners, id) do
-      {:ok, owner, Map.fetch!(owner.backends, name)}
+    with {:ok, {id, session_id}} <- Map.fetch(state.pids, pid),
+         {:ok, owner} <- Map.fetch(state.owners, id),
+         {:ok, session} <- Map.fetch(owner.sessions, session_id) do
+      {:ok, owner, session_id, session}
+    else
+      _ -> :error
     end
   end
 
-  defp slots(owner), do: Enum.count(owner.backends, fn {_name, backend} -> backend.slot end)
-
-  defp slots_held(state),
-    do: Enum.reduce(state.owners, 0, fn {_id, owner}, held -> held + slots(owner) end)
+  defp slots_held(state) do
+    Enum.reduce(state.owners, 0, fn {_id, owner}, held ->
+      held + Enum.count(owner.sessions, fn {_id, session} -> session.slot end)
+    end)
+  end
 
   defp unroute(state, owner) do
     key = {owner.athanor, owner.server}
@@ -832,151 +1238,100 @@ defmodule Locus.Backends.Owners do
       else: state
   end
 
-  # Starts an admitted owner's backends once every version before it is
-  # retired, unless it was retired meanwhile.
-  defp start(state, id) do
-    case Map.fetch(state.owners, id) do
-      {:ok, %{state: :starting, started: false} = owner} ->
-        if owner.waits == [] and Map.get(state.routes, key(owner)) == id,
-          do: start_backends(state, owner),
-          else: state
+  # ————— homes —————
 
-      _other ->
+  defp new_home,
+    do: %{
+      athanor: nil,
+      cap: nil,
+      over_cap: false,
+      bytes: nil,
+      busy: false,
+      measuring: false,
+      measured_at: nil
+    }
+
+  defp put_home(state, home_id, fun),
+    do: %{
+      state
+      | homes: Map.put(state.homes, home_id, fun.(Map.get(state.homes, home_id, new_home())))
+    }
+
+  # Every capped home a session runs in, measured once its interval has
+  # passed, one measure at a time each.
+  defp measure_homes(state) do
+    now = state.clock.()
+
+    running =
+      for {_id, owner} <- state.owners,
+          owner.state == :running,
+          {_sid, %{running: true, home_id: home_id}} <- owner.sessions,
+          home_id != nil,
+          uniq: true,
+          do: home_id
+
+    Enum.reduce(running, state, fn home_id, state ->
+      home = Map.get(state.homes, home_id, new_home())
+
+      if home.cap != nil and not home.measuring and not home.over_cap and
+           (home.measured_at == nil or now - home.measured_at >= state.measure_interval_ms) do
+        %{launcher: launcher, launcher_server: server} = state
+        state = put_home(state, home_id, &%{&1 | measuring: true})
+
+        {_ref, state} =
+          run(state, {:measured, home_id}, @home_timeout_ms, fn ->
+            launcher.home_measure(server, home_id)
+          end)
+
         state
-    end
-  end
-
-  defp key(owner), do: {owner.athanor, owner.server}
-
-  defp start_backends(state, owner) do
-    owners = self()
-
-    Enum.reduce(owner.order, put_owner(state, %{owner | started: true}), fn name, state ->
-      owner = Map.fetch!(state.owners, owner.id)
-      backend = Map.fetch!(owner.backends, name)
-
-      opts =
-        [
-          owner: %{athanor: owner.athanor, server: owner.server, g: owner.g, e: owner.e},
-          definition: %{name: name, command: backend.command, env: backend.env},
-          secrets: owner.secrets,
-          launcher: state.launcher,
-          launcher_server: state.launcher_server,
-          memory_bytes: state.memory_bytes,
-          bounds:
-            Keyword.merge(
-              [max_in_flight: state.max_in_flight],
-              Keyword.get(state.backend_opts, :bounds, [])
-            ),
-          rpc_timeout_ms: state.rpc_timeout_ms,
-          init_timeout_ms: state.init_timeout_ms,
-          stop_grace_ms: state.stop_grace_ms,
-          notify: owners,
-          claim: fn -> claim(owners, self()) end,
-          clock: state.clock
-        ]
-        |> Keyword.merge(Keyword.delete(state.backend_opts, :bounds))
-
-      case DynamicSupervisor.start_child(state.supervisor, {Backend, opts}) do
-        {:ok, pid} ->
-          Process.monitor(pid)
-          state = %{state | pids: Map.put(state.pids, pid, {owner.id, name})}
-          put_backend(state, owner, %{backend | pid: pid})
-
-        {:error, _reason} ->
-          Logger.error(
-            "[Locus.Backends.Owners] #{owner.athanor}/#{owner.server} #{name}: not started"
-          )
-
-          failed(state, owner, backend)
+      else
+        state
       end
     end)
   end
 
-  # ————— what backends report —————
+  defp measured(state, home_id, result) do
+    home = %{
+      Map.get(state.homes, home_id, new_home())
+      | measuring: false,
+        measured_at: state.clock.()
+    }
 
-  defp on_backend(state, pid, event) do
-    case locate(state, pid) do
-      {:ok, owner, backend} -> backend_event(state, owner, backend, event)
-      :error -> state
+    case result do
+      {:ok, bytes} when home.cap != nil and bytes >= home.cap ->
+        Logger.warning(
+          "[Locus.Backends.Owners] a kept home reached its bound; ending its sessions"
+        )
+
+        state = %{
+          state
+          | homes: Map.put(state.homes, home_id, %{home | bytes: bytes, over_cap: true})
+        }
+
+        end_home(state, home_id, "home_over_cap")
+
+      {:ok, bytes} ->
+        %{state | homes: Map.put(state.homes, home_id, %{home | bytes: bytes})}
+
+      _failed ->
+        %{state | homes: Map.put(state.homes, home_id, home)}
     end
   end
 
-  defp backend_event(state, owner, backend, {:view, view}),
-    do: put_backend(state, owner, seen(backend, view))
-
-  defp backend_event(state, owner, backend, {:ready, changed?, view}) do
-    state = put_backend(state, owner, %{seen(backend, view) | settled: true})
-    state = if changed?, do: touch(state, owner.id), else: state
-    running(state, owner.id)
-  end
-
-  defp backend_event(state, owner, backend, {:crashed, withdrawn?, view}) do
-    state = put_backend(state, owner, seen(backend, view))
-    if withdrawn?, do: touch(state, owner.id), else: state
-  end
-
-  defp backend_event(state, owner, backend, {:failed, view}) do
-    state = put_backend(state, owner, %{seen(backend, view) | settled: true})
-    state |> touch(owner.id) |> running(owner.id)
-  end
-
-  defp backend_event(state, owner, backend, :vacated),
-    do: put_backend(state, owner, %{backend | slot: false})
-
-  defp backend_event(state, _owner, _backend, _event), do: state
-
-  defp seen(backend, view),
-    do: %{backend | status: wire_status(view, backend.status), tools: view.tools}
-
-  # A backend process that ended on its own holds no uid and runs nothing.
-  defp backend_down(state, pid) do
-    {{id, name}, pids} = Map.pop(state.pids, pid)
-    state = %{state | pids: pids}
-
-    case Map.fetch(state.owners, id) do
-      {:ok, %{state: :draining} = owner} ->
-        put_backend(state, owner, %{Map.fetch!(owner.backends, name) | pid: nil, slot: false})
-
-      {:ok, owner} ->
-        Logger.error("[Locus.Backends.Owners] #{owner.athanor}/#{owner.server} #{name}: ended")
-        failed(state, owner, %{Map.fetch!(owner.backends, name) | pid: nil})
-
-      :error ->
-        state
-    end
-  end
-
-  defp failed(state, owner, backend) do
-    backend = %{backend | status: :failed, tools: 0, settled: true, slot: false}
+  defp end_home(state, home_id, reason) do
+    for {_id, owner} <- state.owners,
+        {_sid, %{running: true, home_id: ^home_id, pid: pid}} <- owner.sessions,
+        pid != nil,
+        do: Backend.end_session(pid, reason)
 
     state
-    |> put_backend(owner, backend)
-    |> touch(owner.id)
-    |> running(owner.id)
-  end
-
-  defp touch(state, id) do
-    owner = Map.fetch!(state.owners, id)
-    put_owner(state, %{owner | rev: owner.rev + 1})
-  end
-
-  defp running(state, id) do
-    owner = Map.fetch!(state.owners, id)
-
-    if owner.state == :starting and
-         Enum.all?(owner.backends, fn {_name, backend} -> backend.settled end) do
-      touch(put_owner(state, %{owner | state: :running}), id)
-    else
-      state
-    end
   end
 
   # ————— retirement —————
 
   defp retire_all(state, owners), do: Enum.reduce(owners, state, &retire(&2, &1))
 
-  # Leaves routing at once; its uids are held until its backends stop.
+  # Leaves routing at once; its uids are held until its sessions stop.
   defp retire(state, owner), do: state |> unroute(owner) |> drain(owner.id)
 
   defp drain(state, id) do
@@ -986,7 +1341,13 @@ defmodule Locus.Backends.Owners do
 
       owner ->
         state = put_owner(state, %{owner | state: :draining, drain_started: true})
-        pids = for {_name, %{pid: pid}} <- owner.backends, pid != nil, do: pid
+
+        pids = for {_sid, %{pid: pid}} <- owner.sessions, pid != nil, do: pid
+
+        for {_sid, session} <- owner.sessions,
+            from <- session.waiting,
+            do: GenServer.reply(from, {:error, :lapsed})
+
         %{supervisor: supervisor, stop_grace_ms: grace_ms} = state
 
         {_pid, monitor} = spawn_monitor(fn -> stop_all(pids, supervisor, grace_ms) end)
@@ -995,8 +1356,8 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  # Every backend stopped at once, each within its grace and its release
-  # bound, then taken off the supervisor.
+  # Every session stopped at once, each within its grace and its release
+  # bound, then taken off the supervisor when one is named.
   defp stop_all(pids, supervisor, grace_ms) do
     pids
     |> Enum.map(fn pid -> Task.async(fn -> stop(pid, supervisor, grace_ms) end) end)
@@ -1010,13 +1371,12 @@ defmodule Locus.Backends.Owners do
       :exit, _reason -> :ok
     end
 
-    DynamicSupervisor.terminate_child(supervisor, pid)
+    if supervisor, do: DynamicSupervisor.terminate_child(supervisor, pid)
   catch
     :exit, _reason -> :ok
   end
 
-  # An owner whose backends are stopped frees its uids and leaves the table;
-  # an owner waiting on it may start.
+  # An owner whose sessions are stopped frees its uids and leaves the table.
   defp drained(state, id) do
     case Map.pop(state.owners, id) do
       {nil, _owners} ->
@@ -1024,46 +1384,28 @@ defmodule Locus.Backends.Owners do
 
       {owner, owners} ->
         pids =
-          Enum.reduce(owner.backends, state.pids, fn {_name, backend}, pids ->
-            Map.delete(pids, backend.pid)
+          Enum.reduce(owner.sessions, state.pids, fn {_sid, session}, pids ->
+            Map.delete(pids, session.pid)
           end)
 
-        state = unroute(%{state | owners: owners, pids: pids}, owner)
-
-        waiting =
-          for {other_id, other} <- state.owners, id in other.waits, do: other_id
-
-        Enum.reduce(waiting, state, fn other_id, state ->
-          other = Map.fetch!(state.owners, other_id)
-          state |> put_owner(%{other | waits: List.delete(other.waits, id)}) |> start(other_id)
-        end)
+        unroute(%{state | owners: owners, pids: pids}, owner)
     end
   end
 
-  # ————— invokes and the sweep —————
+  # ————— versions and the sweep —————
 
-  defp admit_invoke(state, %{generation: g, epoch: e} = invoke) do
+  defp admit_owner(state, %{generation: g, epoch: e} = invoke) do
     case routed(state, {invoke.athanor, invoke.server}) do
       nil ->
-        {{:error, :unknown_owner}, state}
+        {:error, :unknown_owner, state}
 
       owner ->
         cond do
-          {g, e} < {owner.g, owner.e} ->
-            {{:error, :stale_epoch}, state}
-
-          {g, e} > {owner.g, owner.e} ->
-            {{:error, :epoch_ahead}, state}
-
-          owner.state == :draining ->
-            {{:error, :lapsed}, state}
-
-          owner.lease_until <= state.clock.() ->
-            {{:error, :lapsed}, lapse(state, owner)}
-
-          true ->
-            backends = for name <- owner.order, do: {name, owner.backends[name].pid}
-            {{:ok, %{backends: backends, secrets: owner.secrets}}, state}
+          {g, e} < {owner.g, owner.e} -> {:error, :stale_epoch, state}
+          {g, e} > {owner.g, owner.e} -> {:error, :epoch_ahead, state}
+          owner.state == :draining -> {:error, :lapsed, state}
+          owner.lease_until <= state.clock.() -> {:error, :lapsed, lapse(state, owner)}
+          true -> {:ok, owner, state}
         end
     end
   end
@@ -1071,24 +1413,27 @@ defmodule Locus.Backends.Owners do
   defp sweep_owners(state) do
     now = state.clock.()
 
-    Enum.reduce(state.routes, state, fn {_key, id}, state ->
-      owner = Map.fetch!(state.owners, id)
+    state =
+      Enum.reduce(state.routes, state, fn {_key, id}, state ->
+        owner = Map.fetch!(state.owners, id)
 
-      cond do
-        owner.state == :draining ->
-          state
+        cond do
+          owner.state == :draining ->
+            state
 
-        owner.lease_until <= now ->
-          lapse(state, owner)
+          owner.lease_until <= now ->
+            lapse(state, owner)
 
-        true ->
-          for {_name, %{status: :ready, pid: pid}} <- owner.backends,
-              pid != nil,
-              do: Backend.retire_if_idle(pid, owner.idle_ms)
+          true ->
+            for {_sid, %{running: true, pid: pid}} <- owner.sessions,
+                pid != nil,
+                do: Backend.retire_if_idle(pid, owner.idle_ms)
 
-          state
-      end
-    end)
+            state
+        end
+      end)
+
+    measure_homes(state)
   end
 
   # A lapsed owner answers `lapsed` while it retires, then is gone.
