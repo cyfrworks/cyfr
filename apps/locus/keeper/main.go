@@ -6,7 +6,7 @@
 // Command cyfr-locus starts processes under uids of their own on behalf of
 // an unprivileged client.
 //
-//	cyfr-locus serve --pool <name>:<first>-<last>[:netns] --home-root <dir> --client-user <user> -- <command> [args…]
+//	cyfr-locus serve --pool <name>:<first>-<last>[:netns] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --client-user <user> -- <command> [args…]
 //
 // `serve` is the only subcommand an operator runs. It needs exactly the
 // capabilities SETUID, SETGID and KILL and refuses to start with any other.
@@ -14,16 +14,18 @@
 // its cgroup is the root of a cgroup namespace mounted writable (Docker's
 // `writable-cgroups=true` security option, which adds no capability), and
 // refuses spawns anywhere else (package cgroup).
-// `stage`, `relay` and `retire` are helpers that read their instructions
-// from a pipe on fd 3. An isolated stage starts with the keeper's ids until
+// `stage`, `relay`, `retire` and `home` are helpers that read their
+// instructions from a pipe on fd 3. An isolated stage starts with the keeper's ids until
 // its namespace is mapped; other stages and retirement helpers start as
-// their pooled uid, and relays start as the client user.
+// their pooled uid, home helpers as their kept home's uid, and relays start
+// as the client user.
 package main
 
 import (
 	"fmt"
 	"os"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/relay"
 	"github.com/cyfr/locus/keeper/internal/retire"
 	"github.com/cyfr/locus/keeper/internal/serve"
@@ -44,6 +46,8 @@ func main() {
 		os.Exit(relay.Main())
 	case "retire":
 		os.Exit(retire.Main())
+	case "home":
+		os.Exit(home.HelperMain())
 	default:
 		fmt.Fprintln(os.Stderr, "usage: "+serve.Usage)
 		os.Exit(serve.ExitUsage)

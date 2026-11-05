@@ -52,8 +52,15 @@ func (f Found) Empty() bool {
 // directory it cannot open is not searched, and a pooled uid cannot search
 // it either.
 func Find(roots Roots, sysvipcDir string, uid int) (Found, error) {
+	return FindExcept(roots, sysvipcDir, uid, "")
+}
+
+// FindExcept is Find with the entry at except neither reported nor
+// searched: a kept home's own path, when its uid is scrubbed, since the home
+// is its uid's for the home's life.
+func FindExcept(roots Roots, sysvipcDir string, uid int, except string) (Found, error) {
 	var found Found
-	w := &walker{uid: uid, found: &found}
+	w := &walker{uid: uid, found: &found, except: except}
 	for _, dir := range roots.Dirs {
 		if err := w.root(dir); err != nil {
 			return Found{}, err
@@ -121,6 +128,7 @@ type walker struct {
 	uid     int
 	found   *Found
 	visited int
+	except  string
 }
 
 func (w *walker) root(dir string) error {
@@ -156,6 +164,9 @@ func (w *walker) dir(fd int, path string, dev uint64, depth int) error {
 		}
 		w.visited++
 		child := filepath.Join(path, name)
+		if child == w.except {
+			continue
+		}
 		var st unix.Stat_t
 		if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			if unreachable(err) {

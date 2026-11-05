@@ -50,10 +50,12 @@ defmodule Prima.KeeperProtocol do
   whose absence reads as `false`. `home_make`, `home_measure` and
   `home_retire` carry exactly `id`, `path` and `uid`, under the same rules,
   and are answered `home_made`, `home_measured` (with the home's `bytes`)
-  and `home_retired`. The keeper validates all of these and acts on none
-  of them yet: it answers a home request, and a spawn whose `home_mode`
-  is `"kept"` or whose `pty` is `true`, with an `error` whose code is
-  `not_built`.
+  and `home_retired`. The keeper runs a kept spawn under `home_uid` in
+  its home, both within its `--kept-homes` (a home directly under the
+  root, a uid of the range), and refuses one whose home already holds
+  `home_max_bytes` as `home_over_cap`; a `pty` spawn's stdin, stdout and
+  stderr are a pseudo-terminal, which its stdout frames carry. Each home
+  request acts as a helper running as the home's uid.
 
   ## Frames
 
