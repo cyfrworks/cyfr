@@ -296,9 +296,7 @@ defmodule Sanctum.Vault do
   Create an entry holding material (`Sanctum.Vault.Payload`). `params`:
 
     * `:name` (required) — athanor-unique label among living entries
-    * `:kind` (required) — `"api_key" | "oauth" | "bundle"`; `"login"`
-      is refused `{:not_built, :login}`, since no program mounts a login
-      entry yet
+    * `:kind` (required) — `"api_key" | "oauth" | "bundle" | "login"`
     * `:fields` — `%{name => value}` material map (default empty)
     * `:oauth` — token bundle map (see `Sanctum.Vault.Payload`)
     * `:provider_hint` — immutable; defaults `""`
@@ -308,10 +306,20 @@ defmodule Sanctum.Vault do
       `Prima.Destination` map (string or atom keys); absent is
       `:destination_required` and one outside the grammar
       `{:invalid_destination, reason}`, both before anything is asked; a
-      program's destination (`{"program": name}`) is a login entry's and is
-      refused `{:not_built, :login}`
+      program's destination (`{"program": name}`) is a login entry's alone
+      and is refused `:program_destination_login_only` for any other kind
     * `:disclose` — `true` to let a component read the fields; `false`
       when absent, so the entry is attach-only unless it says otherwise
+    * `:program` — a login entry's program, the `mcp_servers` row its kept
+      home is mounted into
+
+  A `login` entry points at a program's own sign-in: it names its
+  `:program` (`:program_required` without one) and holds no material, so
+  it takes no `:fields`, `:oauth`, `:destination` or `:disclose: true`
+  (each `:login_binding_fixed`). Its destination is the program form
+  `{"program": name}`, it is attach-only, and its id is the id of the kept
+  home the program runs in (`Sanctum.Mount`); the box that holds the home
+  draws the home's uid when it first makes it, so the entry stores none.
 
   An `oauth` entry names its provider (`:provider_required`), and its
   endpoints are fixed here and never change: a provider hint with a preset
@@ -328,7 +336,7 @@ defmodule Sanctum.Vault do
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
          {:ok, endpoints} <- create_endpoints(kind, params),
-         {:ok, destination} <- required_destination(params),
+         {:ok, destination} <- create_destination(kind, params),
          {:ok, disclose} <- disclose_param(params),
          {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
@@ -495,7 +503,8 @@ defmodule Sanctum.Vault do
          :ok <- endpoints_unnamed(params),
          :ok <- scopes_unnamed(params),
          {:ok, changes} <- rebind_changes(params),
-         {:ok, entry} <- get_living(ctx, id) do
+         {:ok, entry} <- get_living(ctx, id),
+         :ok <- not_login(entry) do
       if changes == %{} do
         {:error, :no_binding_changes}
       else
@@ -740,10 +749,36 @@ defmodule Sanctum.Vault do
   defp required_name(%{name: name}) when is_binary(name) and name != "", do: {:ok, name}
   defp required_name(_), do: {:error, :name_required}
 
-  # A login entry names a kept home that no program mounts yet.
-  defp required_kind(%{kind: "login"}), do: {:error, {:not_built, :login}}
   defp required_kind(%{kind: kind}) when kind in @kinds, do: {:ok, kind}
   defp required_kind(_), do: {:error, {:invalid_kind, @kinds}}
+
+  # A login entry's destination is its program's, and it holds nothing a
+  # create could name beside it: no material, no destination of hosts, no
+  # disclosure. Every other kind names where its material may go.
+  defp create_destination("login", params) do
+    cond do
+      not match?(%{program: program} when is_binary(program), params) ->
+        {:error, :program_required}
+
+      Enum.any?(
+        [:destination, :oauth, :oauth_endpoints, :oauth_scopes],
+        &Map.has_key?(params, &1)
+      ) or
+        Map.get(params, :fields, %{}) != %{} or Map.get(params, :disclose) == true ->
+        {:error, :login_binding_fixed}
+
+      true ->
+        case Prima.Destination.from_map(%{"program" => params.program}) do
+          {:ok, parsed} -> {:ok, Prima.Destination.canonical(parsed)}
+          {:error, _reason} = refused -> refused
+        end
+    end
+  end
+
+  defp create_destination(_kind, %{program: _program}),
+    do: {:error, :program_destination_login_only}
+
+  defp create_destination(_kind, params), do: required_destination(params)
 
   # Where an entry's material may go: named by the caller, never defaulted,
   # and stored as the destination's canonical text, the bytes its binding
@@ -759,8 +794,8 @@ defmodule Sanctum.Vault do
   # A destination as a caller names it, string or atom keys, held to
   # `Prima.Destination`'s athanor-entry grammar and answered as its
   # canonical text. `Sanctum.Vault.OAuthGrant` holds a new entry's to the
-  # same rule. A program's destination is a login entry's, which is not
-  # built yet, so a create and a rebind refuse it alike.
+  # same rule. A program's destination is a login entry's alone, which a
+  # create of another kind, a rebind and a new OAuth entry refuse alike.
   @spec destination_text(term()) :: {:ok, String.t()} | {:error, term()}
   def destination_text(%{} = destination) when not is_struct(destination) do
     case Prima.Destination.from_map(string_keys(destination)) do
@@ -768,7 +803,7 @@ defmodule Sanctum.Vault do
         {:ok, Prima.Destination.canonical(parsed)}
 
       {:ok, %Prima.Destination{}} ->
-        {:error, {:not_built, :login}}
+        {:error, :program_destination_login_only}
 
       {:error, _reason} = refused ->
         refused
@@ -895,8 +930,16 @@ defmodule Sanctum.Vault do
     end
   end
 
+  # A login entry's binding is its program and nothing else, and it holds no
+  # material: a rotate or a rebind has nothing to move.
+  defp not_login(%{kind: "login"}), do: {:error, :login_binding_fixed}
+  defp not_login(_entry), do: :ok
+
   defp get_rotatable(ctx, id) do
     case get_any(ctx, id) do
+      {:ok, %{kind: "login"}} ->
+        {:error, :login_binding_fixed}
+
       {:ok, %{status: status} = entry} when status in ["active", "needs_reauth"] ->
         {:ok, entry}
 

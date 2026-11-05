@@ -5474,10 +5474,12 @@ type VaultCreateArgs struct {
 	// Binding field: scopes this credential was authorized for
 	OauthScopes    Field[[]string]                      `json:"oauth_scopes,omitzero"`
 	OauthEndpoints Field[VaultCreateArgsOauthEndpoints] `json:"oauth_endpoints,omitzero"`
-	// Binding field: where the material may go — required, never defaulted
-	Destination VaultCreateArgsDestination `json:"destination"`
+	// Binding field: where the material may go — required of every kind but login, never defaulted
+	Destination Field[VaultCreateArgsDestination] `json:"destination,omitzero"`
 	// Binding field: true lets a component read the fields; otherwise they are never handed to a component
 	Disclose Field[bool] `json:"disclose,omitzero"`
+	// A login entry's program: the program row (mcp_servers name) whose own sign-in the entry points at; its kept home is mounted into that program alone
+	Program Field[string] `json:"program,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

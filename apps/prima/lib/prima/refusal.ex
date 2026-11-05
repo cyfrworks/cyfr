@@ -387,10 +387,20 @@ defmodule Prima.Refusal do
   defp row({:invalid_argument, message}) when is_binary(message),
     do: {:invalid_argument, message}
 
-  # A part this release declares and does not run yet (a login entry, a
-  # need met by mounting one): refused before anything is read or written.
+  # A part this release declares and does not run yet (a recipient's use
+  # of a shared login entry): refused before anything is read or written.
   defp row({:not_built, what}) when is_atom(what),
     do: {:invalid_argument, "This is not built yet."}
+
+  # A login need's mount (`Sanctum.Mount`): the program its entry names is
+  # not set up as a program with a kept home, or the bound entry is no
+  # login entry.
+  defp row({:program_unavailable, name}) when is_binary(name),
+    do:
+      {:setup_required,
+       "The program #{name} is not set up with a kept home; set it up on Programs."}
+
+  defp row(:not_mountable), do: {:invalid_argument, "This entry is not a login entry."}
 
   defp row({:conflict, message}) when is_binary(message), do: {:conflict, message}
 
