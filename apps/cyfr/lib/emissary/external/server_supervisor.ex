@@ -7,7 +7,9 @@ defmodule Emissary.External.ServerSupervisor do
 
   Manages `Emissary.External.Server` GenServer processes. Servers are started
   on-demand when `tools/list` is called or a tool is invoked — no
-  eager startup loading.
+  eager startup loading — and are never restarted by this supervisor: one
+  that stops is started again by its next use, so no server's failures
+  spend the restart intensity every other server's life depends on.
   """
 
   @doc """
