@@ -12,8 +12,8 @@ defmodule Prima.KeeperProtocolTest do
   order and all; every invalid request is refused, naming the member its
   `why` is about; a spawn's memory bound runs over the vectors' range,
   `min_memory_bytes/0` to `max_memory_bytes/0`; every reserved prefix is
-  refused in a spawn's env; every request the keeper answers `not_built`
-  encodes to its line; and every reply, the home replies among them,
+  refused in a spawn's env; every home request (a kept spawn, a pty spawn
+  and the three home requests) encodes to its line; and every reply, the home replies among them,
   decodes to its typed shape. Beyond the vectors: an
   oversized or unknown frame header, an attach frame of the wrong shape, a
   line past the bound, and a reply of another version, type, member or
@@ -30,7 +30,7 @@ defmodule Prima.KeeperProtocolTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies not_built_requests home_replies)
+  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies home_requests home_replies)
 
   @request_types %{
     "spawn" => :spawn,
@@ -182,6 +182,14 @@ defmodule Prima.KeeperProtocolTest do
                  {to_string(k), %{"least" => least, "most" => most}}
                end)
 
+      assert @vectors["kept_unbounded_rlimits"] ==
+               Enum.map(KeeperProtocol.kept_unbounded_rlimits(), &to_string/1)
+
+      assert Enum.all?(
+               KeeperProtocol.kept_unbounded_rlimits(),
+               &Keyword.has_key?(KeeperProtocol.rlimits(), &1)
+             )
+
       # What the codec does with them, not only what it names.
       for name <- @vectors["reserved_env"] do
         assert refused(spawn_request(%{env: %{name => "t"}})) =~ ~r/\Aenv /
@@ -308,17 +316,17 @@ defmodule Prima.KeeperProtocolTest do
       end
     end
 
-    test "every request the keeper answers not_built encodes to its line" do
-      for vector <- @vectors["not_built_requests"] do
+    test "every home request encodes to its line" do
+      for vector <- @vectors["home_requests"] do
         line = line(request(vector))
         assert line == encoded_line(vector) <> "\n"
         assert Jason.decode!(line) == vector
       end
 
-      assert @vectors["not_built_requests"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
+      assert @vectors["home_requests"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
                ~w(home_make home_measure home_retire spawn spawn)
 
-      spawns = for %{"type" => "spawn"} = spawn <- @vectors["not_built_requests"], do: spawn
+      spawns = for %{"type" => "spawn"} = spawn <- @vectors["home_requests"], do: spawn
       assert Enum.any?(spawns, &(&1["home_mode"] == "kept" and &1["home_max_bytes"]))
       assert Enum.any?(spawns, &(&1["pty"] == true))
 
@@ -388,17 +396,18 @@ defmodule Prima.KeeperProtocolTest do
                ~w(error exited pool released spawned)
     end
 
-    test "every home reply decodes to its typed shape, and the not_built refusal as an error" do
+    test "every home reply decodes to its typed shape, and the over-cap refusal as an error" do
       for vector <- @vectors["home_replies"] do
         assert KeeperProtocol.decode_reply(Jason.encode!(vector) <> "\n") ==
                  {:ok, expected_reply(vector)}
       end
 
       assert @vectors["home_replies"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
-               ~w(error home_made home_measured home_retired)
+               ~w(error error home_made home_measured home_retired)
 
-      assert %{"code" => "not_built"} =
-               Enum.find(@vectors["home_replies"], &(&1["type"] == "error"))
+      assert @vectors["home_replies"]
+             |> Enum.filter(&(&1["type"] == "error"))
+             |> Enum.map(& &1["code"]) == ~w(home_over_cap uid_busy)
     end
   end
 

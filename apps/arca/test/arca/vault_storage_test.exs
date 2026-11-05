@@ -376,6 +376,35 @@ defmodule Arca.VaultStorageTest do
     end
   end
 
+  describe "standing/1" do
+    test "names each id's athanor, kind and status whatever athanor holds it, and no payload",
+         %{actor: actor} do
+      live = put!(actor, %{kind: "login", destination: ~s({"program":"claude"})})
+      gone = put!(actor, %{kind: "login", destination: ~s({"program":"claude"})})
+      {:ok, _} = VaultStorage.tombstone(actor, gone.id)
+      athanor = actor.athanor_id
+
+      assert {:ok, standing} = VaultStorage.standing([live.id, gone.id, "vlt_no-such-entry"])
+
+      assert standing == %{
+               live.id => %{
+                 athanor_id: athanor,
+                 kind: "login",
+                 status: "active",
+                 athanor_archived: false
+               },
+               gone.id => %{
+                 athanor_id: athanor,
+                 kind: "login",
+                 status: "tombstoned",
+                 athanor_archived: false
+               }
+             }
+
+      assert {:ok, %{}} = VaultStorage.standing([])
+    end
+  end
+
   describe "tombstone/2" do
     test "flips status and erases the sealed payload in one update", %{actor: actor} do
       entry = put!(actor)

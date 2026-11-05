@@ -256,86 +256,116 @@ defmodule Sanctum.Consent.PlanTest do
   end
 
   describe "a need met by mounting" do
-    test "is not built yet: the plan and the preview refuse it as the shape is read",
-         %{ctx: ctx} do
-      publish!(ctx, "plan-mount", "1.0.0", %{
-        "needs" => %{
-          "claude" => %{
-            "type" => "login",
-            "program" => "claude",
-            "reason" => "to run Claude Code on your own plan",
-            "install" => %{"command" => "claude", "login_command" => "claude auth login"}
-          }
-        }
-      })
+    @login_need %{
+      "type" => "login",
+      "program" => "claude",
+      "reason" => "to run Claude Code on your own plan",
+      "install" => %{"command" => "claude", "login_command" => "claude auth login"}
+    }
 
+    defp login_entry!(ctx, program) do
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "login-#{program}-#{System.unique_integer([:positive])}",
+          kind: "login",
+          program: program
+        })
+
+      view
+    end
+
+    test "is covered by the program its destination names: the login entry naming it is offered",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
       ref = "reagent:local.plan-mount"
+      claude = login_entry!(ctx, "claude")
+      _codex = login_entry!(ctx, "codex")
 
-      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
-      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+      assert {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      [row] = plan.needs
 
-      # Nothing was staged for it.
-      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+      assert row.need == "claude"
+      assert row.program == "claude"
+      assert row.hosts == nil
+      assert [%{entry_id: id, source: "own", kind: "login", disclosed: false}] = row.candidates
+      assert id == claude.id
+      assert row.suggested.entry_id == claude.id
     end
 
-    test "in a dependency's manifest is refused alike, though the source declares none",
+    test "a required login need no entry meets says to create one for its program",
          %{ctx: ctx} do
-      publish!(ctx, "plan-mount-dep", "1.0.0", %{
-        "needs" => %{
-          "claude" => %{
-            "type" => "login",
-            "program" => "claude",
-            "reason" => "to run Claude Code on your own plan"
-          }
-        }
-      })
+      publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
+
+      assert {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-mount"})
+      assert [%{need: "claude", candidates: []}] = plan.needs
+
+      assert ("need 'claude' wants login entry for the program claude, and none can yet. " <>
+                "Create one first.") in plan.warnings
+    end
+
+    test "commits to a login entry, attach-only and projecting nothing", %{ctx: ctx} do
+      publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
+      ref = "reagent:local.plan-mount"
+      claude = login_entry!(ctx, "claude")
+
+      commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: claude.id}]})
+
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+      assert [%{vault_entry_id: id}] = head.vault_refs
+      assert id == claude.id
+    end
+
+    test "refuses a login entry naming another program", %{ctx: ctx} do
+      publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
+      ref = "reagent:local.plan-mount"
+      codex = login_entry!(ctx, "codex")
+
+      assert {:error, {:entry_mismatch, "claude"}} =
+               Sanctum.Consent.Commit.preview(ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "claude", entry_id: codex.id}]
+               })
+    end
+
+    test "in a dependency's manifest no longer refuses the plan", %{ctx: ctx} do
+      publish!(ctx, "plan-mount-dep", "1.0.0", %{"needs" => %{"claude" => @login_need}})
 
       publish!(ctx, "plan-mount-app", "1.0.0", %{
         "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-mount-dep"}]}
       })
 
-      ref = "reagent:local.plan-mount-app"
-
-      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
-      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
-      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+      assert {:ok, _plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-mount-app"})
     end
 
-    # The guard reads the manifests of the closure's one resolution. A
-    # resolution the store cannot answer refuses; the next one, answered,
-    # still meets the guard: a read that recovers never builds the
-    # dependency's login row.
-    @tag :capture_log
-    test "is refused when the closure's resolution cannot answer, and again once it can",
-         %{ctx: ctx} do
-      publish!(ctx, "plan-mount-dep", "1.0.0", %{
-        "needs" => %{
-          "claude" => %{
-            "type" => "login",
-            "program" => "claude",
-            "reason" => "to run Claude Code on your own plan"
-          }
-        }
-      })
+    test "the @ingress slot never offers a login entry, and no share is offered for a login need" do
+      login = %{
+        id: "vlt_login",
+        name: "claude",
+        kind: "login",
+        provider_hint: "",
+        destination: %{"program" => "claude"},
+        attach_only: false,
+        field_names: [],
+        oauth_scopes: []
+      }
 
-      publish!(ctx, "plan-mount-app", "1.0.0", %{
-        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-mount-dep"}]}
-      })
+      share = %{
+        id: "shr_login",
+        owner: %{name: "Ada"},
+        kind: "login",
+        provider_hint: "",
+        destination: %{"program" => "claude"},
+        field_names: []
+      }
 
-      ref = "reagent:local.plan-mount-app"
-      counter = :atomics.new(1, [])
-      unanswered!([], counted_read: {:resolve, 1, counter})
+      assert %{candidates: []} =
+               Plan.need_choice(%{own: [login], shares: [share], defaults: %{}}, nil)
 
-      assert {:error, {:unavailable, "Components"}} = Plan.plan(ctx, %{ref: ref})
-      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
+      [need] = Prima.Manifest.Needs.from_manifest(%{"needs" => %{"claude" => @login_need}})
+      sources = %{own: [login], shares: [share], defaults: %{}}
 
-      :atomics.put(counter, 1, 0)
-
-      assert {:error, {:unavailable, "Components"}} =
-               Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
-
-      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
-      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+      assert %{candidates: [%{entry_id: "vlt_login"}]} = Plan.need_choice(sources, need)
     end
   end
 

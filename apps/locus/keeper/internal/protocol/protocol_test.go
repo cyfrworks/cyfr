@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -37,6 +38,7 @@ type vectors struct {
 		Least uint64 `json:"least"`
 		Most  uint64 `json:"most"`
 	} `json:"rlimits"`
+	KeptUnbounded   []string          `json:"kept_unbounded_rlimits"`
 	Frames          []frameVector     `json:"frames"`
 	ControlFrames   []frameVector     `json:"control_frames"`
 	RelayFrames     []frameVector     `json:"relay_frames"`
@@ -48,9 +50,9 @@ type vectors struct {
 		SpawnID string          `json:"spawn_id"`
 		Request json.RawMessage `json:"request"`
 	} `json:"invalid_requests"`
-	Replies          []json.RawMessage `json:"replies"`
-	NotBuiltRequests []json.RawMessage `json:"not_built_requests"`
-	HomeReplies      []json.RawMessage `json:"home_replies"`
+	Replies      []json.RawMessage `json:"replies"`
+	HomeRequests []json.RawMessage `json:"home_requests"`
+	HomeReplies  []json.RawMessage `json:"home_replies"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -153,6 +155,9 @@ func TestSharedRequestBounds(t *testing.T) {
 			t.Fatalf("rlimits.%s is %v here, the vectors pin %d..%d", name, got, r.Least, r.Most)
 		}
 	}
+	if !slices.Equal(v.KeptUnbounded, KeptUnbounded) {
+		t.Fatalf("KeptUnbounded = %q, the vectors say %q", KeptUnbounded, v.KeptUnbounded)
+	}
 }
 
 func TestReservedEnvPrefixesAreTheSharedList(t *testing.T) {
@@ -171,30 +176,22 @@ func TestReservedEnvPrefixesAreTheSharedList(t *testing.T) {
 
 func TestSharedValidRequestsParse(t *testing.T) {
 	for _, raw := range loadVectors(t).ValidRequests {
-		req, err := ParseRequest(raw)
-		if err != nil {
+		if _, err := ParseRequest(raw); err != nil {
 			t.Errorf("%s: refused: %v", raw, err)
-			continue
-		}
-		if req.NotBuilt() {
-			t.Errorf("%s: answered as not built", raw)
 		}
 	}
 }
 
-// The keeper accepts every not-built request as valid and answers it
-// CodeNotBuilt: each of them is one the keeper does not act on yet.
-func TestSharedNotBuiltRequestsParseAndAreNotBuilt(t *testing.T) {
-	requests := loadVectors(t).NotBuiltRequests
+// The keeper accepts every home request as valid: a kept spawn, a pty
+// spawn and the three home requests.
+func TestSharedHomeRequestsParse(t *testing.T) {
+	requests := loadVectors(t).HomeRequests
 	types := map[string]int{}
 	for _, raw := range requests {
 		req, err := ParseRequest(raw)
 		if err != nil {
 			t.Errorf("%s: refused: %v", raw, err)
 			continue
-		}
-		if !req.NotBuilt() {
-			t.Errorf("%s: not answered as not built", raw)
 		}
 		types[req.Type]++
 	}
@@ -208,7 +205,7 @@ func TestSharedNotBuiltRequestsParseAndAreNotBuilt(t *testing.T) {
 // names scratch and no pty is today's spawn.
 func TestHomeFieldsAreDecoded(t *testing.T) {
 	v := loadVectors(t)
-	kept, err := ParseRequest(v.NotBuiltRequests[0])
+	kept, err := ParseRequest(v.HomeRequests[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,14 +213,14 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 		kept.HomeUID == nil || *kept.HomeUID != 40001 || kept.HomeMaxBytes == nil || *kept.HomeMaxBytes != 1<<30 || kept.Pty != nil {
 		t.Fatalf("kept spawn decoded to %+v", kept)
 	}
-	pty, err := ParseRequest(v.NotBuiltRequests[1])
+	pty, err := ParseRequest(v.HomeRequests[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pty.Pty == nil || !*pty.Pty || pty.HomeMode != "" {
 		t.Fatalf("pty spawn decoded to %+v", pty)
 	}
-	home, err := ParseRequest(v.NotBuiltRequests[2])
+	home, err := ParseRequest(v.HomeRequests[2])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +342,8 @@ func TestSharedHomeRepliesMatchTheEncoders(t *testing.T) {
 		NewHomeMade("22"),
 		NewHomeMeasured("23", 1<<20),
 		NewHomeRetired("24"),
-		NewError("20", "", CodeNotBuilt),
+		NewError("20", "", CodeHomeOverCap),
+		NewError("21", "", CodeUIDBusy),
 	}
 	want := loadVectors(t).HomeReplies
 	if len(want) != len(built) {
@@ -445,6 +443,25 @@ func TestMemoryBoundIsDecodedForEveryPool(t *testing.T) {
 	}
 	if refused < 10 {
 		t.Fatalf("%d vectors refuse a malformed memory bound, want absent, null, zero, below, above, negative, fractional, not a number, misplaced and on another request", refused)
+	}
+}
+
+func TestAKeptSpawnTakesNoFileSizeLimitUnlessItAsks(t *testing.T) {
+	var none *Rlimits
+	kept := none.ResolveKept()
+	if kept.Fsize != Unlimited || kept.Nofile != Ceilings.Nofile || kept.Nproc != Ceilings.Nproc {
+		t.Fatalf("a kept spawn's defaults %+v", kept)
+	}
+	fsize := uint64(1 << 20)
+	if got := (&Rlimits{Fsize: &fsize}).ResolveKept(); got.Fsize != 1<<20 {
+		t.Fatalf("a kept spawn's own fsize is %d", got.Fsize)
+	}
+	nproc := uint64(8)
+	if got := (&Rlimits{Nproc: &nproc}).ResolveKept(); got.Fsize != Unlimited || got.Nproc != 8 {
+		t.Fatalf("a kept spawn lowering nproc alone: %+v", got)
+	}
+	if none.Resolve().Fsize != Ceilings.Fsize {
+		t.Fatal("a scratch spawn lost its file-size ceiling")
 	}
 }
 

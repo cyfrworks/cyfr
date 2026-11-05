@@ -7,7 +7,9 @@ defmodule Emissary.External.ServerSupervisor do
 
   Manages `Emissary.External.Server` GenServer processes. Servers are started
   on-demand when `tools/list` is called or a tool is invoked — no
-  eager startup loading.
+  eager startup loading — and are never restarted by this supervisor: one
+  that stops is started again by its next use, so no server's failures
+  spend the restart intensity every other server's life depends on.
   """
 
   @doc """
@@ -18,9 +20,20 @@ defmodule Emissary.External.ServerSupervisor do
   header template, backend, epoch or timeout replaces the process before the
   next call.
 
-  Returns `{:ok, pid}` if started, already running, or restarted.
+  Returns `{:ok, pid}` if started, already running, or restarted. A `pipe`
+  row is a program a catalyst drives and has no MCP server process: it is
+  refused with a sentence that says so.
   """
   def ensure_started(config) do
+    if config[:transport] == :pipe,
+      do:
+        {:error,
+         {:invalid_argument,
+          "Server '#{config[:name]}' is a pipe program: a catalyst drives it, not MCP"}},
+      else: ensure_mcp_started(config)
+  end
+
+  defp ensure_mcp_started(config) do
     name = config[:name]
     athanor_id = Emissary.External.Server.athanor_id!(config)
     digest = config_digest(config)
@@ -62,7 +75,7 @@ defmodule Emissary.External.ServerSupervisor do
   def config_digest(config) do
     :erlang.phash2(
       {config[:id], config[:transport], config[:epoch], config[:url], config[:headers] || %{},
-       config[:backends] || [], config[:timeout_ms]}
+       config[:backends] || [], config[:timeout_ms], config[:login_entry_id]}
     )
   end
 

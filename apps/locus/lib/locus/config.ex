@@ -34,9 +34,6 @@ defmodule Locus.Config do
   | `LOCUS_BACKENDS_KEY` | `:backends_key` | 64 hexadecimal digits, the backends service key | none: the node serves no backends |
   | `LOCUS_BACKENDS_BIND` | `:backends_bind` | an IPv4 or IPv6 address | `0.0.0.0` |
   | `LOCUS_BACKENDS_PORT` | `:backends_port` | 1..65535 | 4101 |
-  | `LOCUS_BACKENDS_MAX_IN_FLIGHT` | `:backends_max_in_flight` | 1..1024 | #{Prima.LocusBackends.max_in_flight()} |
-  | `LOCUS_BACKENDS_INIT_TIMEOUT_MS` | `:backends_init_timeout_ms` | 1000..600000 | 15000 |
-  | `LOCUS_BACKENDS_RPC_TIMEOUT_MS` | `:backends_rpc_timeout_ms` | 1000..600000 | 30000 |
   | `LOCUS_BACKENDS_MEMORY_BYTES` | `:backends_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 536870912 (512 MiB) |
   | `LOCUS_RUNTIME_SERVICE_ID` | `:runtime`, `:service_id` | `wrk_` and 1 to 64 letters, digits, `_` or `-` | `wrk_local` |
   | `LOCUS_RUNTIME_KEY` | `:runtime`, `:service_key` | 64 hexadecimal digits, the key derived for the service's id | none: the node serves no runtime |
@@ -100,9 +97,8 @@ defmodule Locus.Config do
   range is the keeper's own for a spawn's `memory_bytes`
   (`memory_range/0`, from `Prima.KeeperProtocol`), so a value accepted
   here is one the keeper accepts. There is no value that means "no
-  bound". `:backends_max_in_flight` is the calls that may await one
-  backend at a time, and the two timeouts bound a backend's handshake and
-  each call to it.
+  bound". A program whose row names its own bound is spawned under that
+  instead of `:backends_memory_bytes`.
 
   A node's logging is the release's one setting whichever role it serves:
   `:log_level` and `:log_format` become the logger's when a release node
@@ -136,9 +132,6 @@ defmodule Locus.Config do
     log_format: :text,
     backends_bind: {0, 0, 0, 0},
     backends_port: 4101,
-    backends_max_in_flight: Prima.LocusBackends.max_in_flight(),
-    backends_init_timeout_ms: 15_000,
-    backends_rpc_timeout_ms: 30_000,
     backends_memory_bytes: 536_870_912
   ]
 
@@ -168,9 +161,6 @@ defmodule Locus.Config do
     {"LOCUS_BACKENDS_KEY", :backends, :backends_key},
     {"LOCUS_BACKENDS_BIND", :backends, :backends_bind},
     {"LOCUS_BACKENDS_PORT", :backends, :backends_port},
-    {"LOCUS_BACKENDS_MAX_IN_FLIGHT", :backends, :backends_max_in_flight},
-    {"LOCUS_BACKENDS_INIT_TIMEOUT_MS", :backends, :backends_init_timeout_ms},
-    {"LOCUS_BACKENDS_RPC_TIMEOUT_MS", :backends, :backends_rpc_timeout_ms},
     {"LOCUS_BACKENDS_MEMORY_BYTES", :backends, :backends_memory_bytes},
     {"LOCUS_RUNTIME_SERVICE_ID", :runtime, :service_id},
     {"LOCUS_RUNTIME_KEY", :runtime, :service_key},
@@ -240,9 +230,6 @@ defmodule Locus.Config do
           backends_key: binary() | nil,
           backends_bind: :inet.ip_address(),
           backends_port: :inet.port_number(),
-          backends_max_in_flight: pos_integer(),
-          backends_init_timeout_ms: pos_integer(),
-          backends_rpc_timeout_ms: pos_integer(),
           backends_memory_bytes: pos_integer(),
           runtime: keyword()
         ]
@@ -318,25 +305,6 @@ defmodule Locus.Config do
     with {:ok, key} <- EnvValue.hex_key(getenv, variable(:backends, :backends_key)),
          {:ok, bind} <- EnvValue.bind(getenv, variable(:backends, :backends_bind)),
          {:ok, port} <- EnvValue.port(getenv, variable(:backends, :backends_port)),
-         {:ok, max_in_flight} <-
-           EnvValue.whole_number(
-             getenv,
-             variable(:backends, :backends_max_in_flight),
-             1..1024,
-             "calls"
-           ),
-         {:ok, init_timeout_ms} <-
-           EnvValue.milliseconds(
-             getenv,
-             variable(:backends, :backends_init_timeout_ms),
-             1_000..600_000
-           ),
-         {:ok, rpc_timeout_ms} <-
-           EnvValue.milliseconds(
-             getenv,
-             variable(:backends, :backends_rpc_timeout_ms),
-             1_000..600_000
-           ),
          {:ok, memory_bytes} <-
            EnvValue.bytes(getenv, variable(:backends, :backends_memory_bytes), memory_range()) do
       {:ok,
@@ -344,9 +312,6 @@ defmodule Locus.Config do
          backends_key: key,
          backends_bind: bind || @defaults[:backends_bind],
          backends_port: port || @defaults[:backends_port],
-         backends_max_in_flight: max_in_flight || @defaults[:backends_max_in_flight],
-         backends_init_timeout_ms: init_timeout_ms || @defaults[:backends_init_timeout_ms],
-         backends_rpc_timeout_ms: rpc_timeout_ms || @defaults[:backends_rpc_timeout_ms],
          backends_memory_bytes: memory_bytes || @defaults[:backends_memory_bytes]
        ]}
     end
@@ -739,19 +704,7 @@ defmodule Locus.Config do
   @spec backends_port() :: :inet.port_number()
   def backends_port, do: get(:backends_port)
 
-  @doc "The calls that may await one backend at a time."
-  @spec backends_max_in_flight() :: pos_integer()
-  def backends_max_in_flight, do: get(:backends_max_in_flight)
-
-  @doc "The bound on each step of a backend's handshake, in milliseconds."
-  @spec backends_init_timeout_ms() :: pos_integer()
-  def backends_init_timeout_ms, do: get(:backends_init_timeout_ms)
-
-  @doc "The bound on one call to a backend, in milliseconds."
-  @spec backends_rpc_timeout_ms() :: pos_integer()
-  def backends_rpc_timeout_ms, do: get(:backends_rpc_timeout_ms)
-
-  @doc "The memory bound each backend's process is spawned under, in bytes."
+  @doc "The memory bound a program's process is spawned under when its row names none, in bytes."
   @spec backends_memory_bytes() :: pos_integer()
   def backends_memory_bytes, do: get(:backends_memory_bytes)
 

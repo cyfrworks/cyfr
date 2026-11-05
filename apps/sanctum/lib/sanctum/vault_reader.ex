@@ -26,7 +26,11 @@ defmodule Sanctum.VaultReader do
      it cannot pass
   5. the entry is disclosed: an attach-only entry's material is never
      handed to a component, so a field read or a token dispense of one is
-     refused `:disclosure_refused` before anything is unsealed
+     refused `:disclosure_refused` before anything is unsealed; a login
+     entry (or any entry naming a program destination) holds no material
+     and is only mounted (`Sanctum.Mount`), so it is refused the same way
+     whatever its disclosure, and an attach of one is refused
+     `:connection_not_granted`
   6. the binding is still live for its use: a resource carrying a
      `binding_key` is held to its `consent_vault_refs` row's lifetime
      (`Sanctum.Attach.lifetime/3`), so an expired `until` is
@@ -108,6 +112,7 @@ defmodule Sanctum.VaultReader do
           | :binding_mismatch
           | :destination_mismatch
           | :disclosure_refused
+          | :connection_not_granted
           | :unseal_failed
           | {:invalid_payload, atom() | tuple()}
           | {:provider_mismatch, String.t()}
@@ -380,7 +385,13 @@ defmodule Sanctum.VaultReader do
   @spec load_and_unseal(Context.t(), vault_resource()) ::
           {:ok, Arca.VaultStorage.entry(), map()} | {:error, error()}
   def load_and_unseal(%Context{} = ctx, resource),
-    do: load_and_unseal(ctx, resource, fn _entry -> :ok end)
+    do: load_and_unseal(ctx, resource, &attachable/1)
+
+  # An attach sends a field of the entry's material; a login entry has
+  # none and is mounted, never attached.
+  defp attachable(entry) do
+    if mounted?(entry), do: {:error, :connection_not_granted}, else: :ok
+  end
 
   # `admit` decides, on the entry's metadata alone, whether its material
   # may be unsealed for this read; nothing is unsealed when it refuses.
@@ -400,8 +411,30 @@ defmodule Sanctum.VaultReader do
   # A consent read hands material to a component and a by-name env read to
   # a backend's process; an attach-only entry's material never leaves
   # either way, so it is refused before it is unsealed.
-  defp check_disclosed(%{attach_only: false}), do: :ok
-  defp check_disclosed(_entry), do: {:error, :disclosure_refused}
+  defp check_disclosed(entry) do
+    cond do
+      mounted?(entry) -> {:error, :disclosure_refused}
+      entry.attach_only == false -> :ok
+      true -> {:error, :disclosure_refused}
+    end
+  end
+
+  @doc false
+  # Whether `entry` is one a program mounts rather than one whose material
+  # leaves: a login entry, or any row whose destination names a program,
+  # read from its kind and its stored destination alike so neither column
+  # alone admits it to a dispense.
+  @spec mounted?(map()) :: boolean()
+  def mounted?(%{kind: "login"}), do: true
+
+  def mounted?(%{destination: text}) when is_binary(text) do
+    case Prima.Json.decode(text) do
+      {:ok, %{"program" => _program}} -> true
+      _hosts_or_unreadable -> false
+    end
+  end
+
+  def mounted?(_entry), do: false
 
   @doc """
   Checks whether an active vault entry’s binding digest matches the

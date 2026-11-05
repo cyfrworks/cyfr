@@ -6,14 +6,17 @@
 Run as docker-compose.yml's locus-backends service with a pool of one uid,
 and driven only by requests signed as CYFR signs them (harness.py):
 
-- Outside its home a backend can write only into the home root, which it
-  cannot list: /tmp, /var/tmp and /run are read-only, /dev/shm is absent and
-  the release's run directory is closed to it.
+- Outside its home a program's process can write only into the home root
+  and the kept homes' root, neither of which it can list: /tmp, /var/tmp
+  and /run are read-only, /dev/shm is absent and the release's run
+  directory is closed to it.
 - What it does leave (tests/fixtures/residue-canary.go) — an entry in the
-  home root, a directory tree it made unwritable, System V shared memory, a
-  semaphore set, a message queue and a POSIX message queue — is gone, with
-  every process of its uid, once its owner is released, before a second
-  owner runs under the same uid; and the keeper logs no quarantine.
+  home root and one in the kept homes' root, a directory tree it made
+  unwritable, System V shared memory, a semaphore set, a message queue and
+  a POSIX message queue — is gone, with every process of its uid, once its
+  owner is released, before a second owner runs under the same uid; and the
+  keeper logs no quarantine. The kept homes' root is searched like any
+  writable mount when a pooled uid is scrubbed.
 - cyfr-locus refuses to start where a pooled uid could write a shared
   location: a writable root, a shared /tmp, Docker's default /dev/shm.
 
@@ -30,7 +33,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HOME_ROOT, POOL_FIRST, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
+    HOME_ROOT, KEPT_ROOT, POOL_FIRST, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
     expect, owner_of, probe, require_docker, run,
 )
 from imagesuite import read_listing, run_name  # noqa: E402
@@ -38,7 +41,7 @@ from imagesuite import read_listing, run_name  # noqa: E402
 UID = POOL_FIRST
 TAG = "locus-backends-residue"
 SHARED = [f"/tmp/{TAG}", f"/var/tmp/{TAG}", f"/dev/shm/{TAG}", f"/run/{TAG}", f"{RUN_DIR}/{TAG}"]
-LEFT = [f"{HOME_ROOT}/{TAG}", f"{HOME_ROOT}/{TAG}-tree/"]
+LEFT = [f"{HOME_ROOT}/{TAG}", f"{HOME_ROOT}/{TAG}-tree/", f"{KEPT_ROOT}/{TAG}"]
 IPC = ["shm", "sem", "msg", "mqueue"]
 
 
@@ -49,7 +52,7 @@ def held_by_uid(stack):
     from a command that exits 0 (read_listing).
     """
     script = f"""
-      home="$(find {HOME_ROOT} /dev/mqueue -mindepth 1 -maxdepth 1 -user {UID})" || exit 3
+      home="$(find {HOME_ROOT} {KEPT_ROOT} /dev/mqueue -mindepth 1 -maxdepth 1 -user {UID})" || exit 3
       ipc="$(for t in shm sem msg; do
           awk -v u={UID} 'NR == 1 {{ for (i = 1; i <= NF; i++) h[i] = $i; next }}
             {{ for (i = 1; i <= NF; i++) if ((h[i] == "uid" || h[i] == "cuid") && $i == u) {{ print FILENAME ": " $2; next }} }}' \\
@@ -69,8 +72,11 @@ def sync_probe(c, owner):
     expect(status == 200, f"{owner['athanor']} is synced", answer)
     c.running(owner)
     report = c.report(owner)
-    expect([b["status"] for b in report["backends"]] == ["ready"], f"{owner['athanor']}'s backend is ready", report)
-    return c.tool(owner, "probe__whoami")
+    expect([(p["status"], p["sessions"]) for p in report["programs"]] == [("idle", 0)],
+           f"{owner['athanor']}'s program is defined and nothing of it runs yet", report)
+    who = c.tool(owner, "probe__whoami")
+    expect(c.program(owner)["status"] == "running", f"{owner['athanor']}'s first call started its program")
+    return who
 
 
 def canary(c, owner, verb):
@@ -97,12 +103,14 @@ def main():
         expect(planted["uid"] == UID and planted["files"] == {
             f"/tmp/{TAG}": "EROFS", f"/var/tmp/{TAG}": "EROFS", f"/dev/shm/{TAG}": "ENOENT", f"/run/{TAG}": "EROFS",
             f"{RUN_DIR}/{TAG}": "EACCES", f"{HOME_ROOT}/{TAG}": "ok", f"{HOME_ROOT}/{TAG}-tree/": "ok",
-        }, "outside its home a backend writes only into the home root", planted)
+            f"{KEPT_ROOT}/{TAG}": "ok",
+        }, "outside its home a program writes only into the home root and the kept homes' root", planted)
         for kind in IPC:
             expect(planted[kind] == "ok", f"the backend leaves a {kind} object", planted)
 
         held = held_by_uid(stack)
-        expect(f"{HOME_ROOT}/{TAG}" in held and f"{HOME_ROOT}/{TAG}-tree" in held and f"/dev/mqueue/{TAG}" in held
+        expect(f"{HOME_ROOT}/{TAG}" in held and f"{HOME_ROOT}/{TAG}-tree" in held and f"{KEPT_ROOT}/{TAG}" in held
+               and f"/dev/mqueue/{TAG}" in held
                and all(any(line.startswith(f"/proc/sysvipc/{t}:") for line in held) for t in ["shm", "sem", "msg"]),
                "the kernel holds all of it for the uid", held)
 
@@ -117,6 +125,7 @@ def main():
         expect(probed["uid"] == UID and probed["files"] == {
             f"/tmp/{TAG}": "absent", f"/var/tmp/{TAG}": "absent", f"/dev/shm/{TAG}": "absent", f"/run/{TAG}": "absent",
             f"{RUN_DIR}/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
+            f"{KEPT_ROOT}/{TAG}": "absent",
         }, "nothing the first owner left reaches the second", probed)
         for kind in IPC:
             expect(probed[kind] == "absent", f"no {kind} object reaches the second owner", probed)

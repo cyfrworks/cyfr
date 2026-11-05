@@ -914,4 +914,221 @@ defmodule Locus.KeeperTest do
       assert_receive {Keeper, ^ref, :released}, 5_000
     end
   end
+
+  describe "kept homes against the fake keeper" do
+    setup do
+      root = FakeKeeper.short_tmp_dir()
+      on_exit(fn -> File.rm_rf!(root) end)
+      %File.Stat{uid: uid} = File.stat!(root)
+      [root: root, uid: uid]
+    end
+
+    # The fake makes every home as the test's own uid, which its own
+    # processes hold too: the client reads an empty /proc of its own.
+    defp kept_client(root, first, last) do
+      proc = FakeKeeper.short_tmp_dir()
+      ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(proc) end)
+      FakeKeeper.start_client!(kept_homes: "#{root}:#{first}-#{last}", proc_root: proc)
+    end
+
+    defp home_requests(fake),
+      do: for(%{"type" => "home_" <> _} = request <- FakeKeeper.requests(fake), do: request)
+
+    test "home_ensure draws the lowest free uid and makes the home; a made home answers its owner",
+         %{root: root, uid: uid} do
+      %{name: name, fake: fake} = kept_client(root, uid, uid + 1)
+
+      assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
+
+      assert [%{"type" => "home_make", "path" => path, "uid" => ^uid, "v" => 1}] =
+               home_requests(fake)
+
+      assert path == Path.join(root, "vlt_a")
+      assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
+      assert length(home_requests(fake)) == 1
+
+      # The fake makes every home as the test's own uid, which the next
+      # draw finds taken.
+      assert {:ok, next} = Keeper.home_ensure(name, "vlt_b")
+      assert next == uid + 1
+
+      assert {:error, {:refused, "bad_request"}} = Keeper.home_ensure(name, "../x")
+
+      # A range every uid of which a home owns draws none.
+      %{name: full} = kept_client(root, uid, uid)
+      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(full, "vlt_c")
+    end
+
+    test "a uid cyfr-locus refuses as busy is set aside and the next free uid drawn",
+         %{root: root, uid: uid} do
+      %{fake: fake, name: name} = kept_client(root, uid, uid + 1)
+      FakeKeeper.mode(fake, {:uid_busy, %{uid => true}})
+
+      assert {:ok, drawn} = Keeper.home_ensure(name, "vlt_busy")
+      assert drawn == uid + 1
+
+      assert [%{"type" => "home_make", "uid" => ^uid}, %{"type" => "home_make", "uid" => ^drawn}] =
+               home_requests(fake)
+
+      # With every uid of the range busy, none is drawn.
+      FakeKeeper.mode(fake, {:uid_busy, %{uid => true, (uid + 1) => true}})
+      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(name, "vlt_none")
+    end
+
+    test "a uid a live process holds is no free uid, even with no home folder; home_list names the homes",
+         %{root: root, uid: uid} do
+      proc = FakeKeeper.short_tmp_dir()
+      on_exit(fn -> File.rm_rf!(proc) end)
+      # A process of the first uid outlives its home's folder, as one that
+      # removed its own home would.
+      File.mkdir_p!(Path.join(proc, "4242"))
+
+      File.write!(
+        Path.join([proc, "4242", "status"]),
+        "Name:\tsleep\nUid:\t#{uid}\t#{uid}\t#{uid}\t#{uid}\nGid:\t1\t1\t1\t1\n"
+      )
+
+      File.mkdir_p!(Path.join(proc, "self"))
+
+      %{name: name} =
+        FakeKeeper.start_client!(kept_homes: "#{root}:#{uid}-#{uid + 1}", proc_root: proc)
+
+      assert {:ok, next} = Keeper.home_ensure(name, "vlt_b")
+      assert next == uid + 1
+
+      # With every uid held by a process, none is drawn.
+      File.mkdir_p!(Path.join(proc, "4243"))
+
+      File.write!(
+        Path.join([proc, "4243", "status"]),
+        "Uid:\t1\t#{uid + 1}\t1\t1\n"
+      )
+
+      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(name, "vlt_c")
+
+      # A /proc that cannot be read draws no uid at all.
+      %{name: blind} =
+        FakeKeeper.start_client!(
+          kept_homes: "#{root}:#{uid}-#{uid + 1}",
+          proc_root: Path.join(proc, "absent")
+        )
+
+      assert {:error, {:refused, "unavailable"}} = Keeper.home_ensure(blind, "vlt_d")
+
+      # A process whose status cannot be read holds a uid it does not name,
+      # so none is drawn; one gone with its whole entry holds none.
+      unread = FakeKeeper.short_tmp_dir()
+      on_exit(fn -> File.rm_rf!(unread) end)
+      File.mkdir_p!(Path.join([unread, "4244", "status"]))
+
+      %{name: unreadable} =
+        FakeKeeper.start_client!(kept_homes: "#{root}:#{uid}-#{uid + 1}", proc_root: unread)
+
+      assert {:error, {:refused, "unavailable"}} = Keeper.home_ensure(unreadable, "vlt_e")
+      File.rm_rf!(Path.join(unread, "4244"))
+      assert {:ok, _uid} = Keeper.home_ensure(unreadable, "vlt_e")
+      File.rm_rf!(Path.join(root, "vlt_e"))
+
+      File.write!(Path.join(root, "not-a-home.txt"), "x")
+      assert {:ok, ["vlt_b"]} = Keeper.home_list(name)
+
+      assert {:error, {:refused, "unavailable"}} =
+               Keeper.home_list(FakeKeeper.start_client!().name)
+    end
+
+    test "home_measure, home_reset and home_retire act on a made home as its uid",
+         %{root: root, uid: uid} do
+      %{name: name, fake: fake} = kept_client(root, uid, uid)
+
+      assert :absent = Keeper.home_measure(name, "vlt_a")
+      assert :ok = Keeper.home_reset(name, "vlt_a")
+      assert :ok = Keeper.home_retire(name, "vlt_a")
+      assert home_requests(fake) == []
+
+      assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
+      File.write!(Path.join([root, "vlt_a", "notes"]), "0123456789")
+      assert {:ok, 10} = Keeper.home_measure(name, "vlt_a")
+
+      assert :ok = Keeper.home_reset(name, "vlt_a")
+      assert File.ls!(Path.join(root, "vlt_a")) == []
+
+      assert [_make, %{"type" => "home_measure"}, retire, make] = home_requests(fake)
+      assert %{"type" => "home_retire", "uid" => ^uid} = retire
+      assert %{"type" => "home_make", "uid" => ^uid} = make
+
+      assert :ok = Keeper.home_retire(name, "vlt_a")
+      refute File.exists?(Path.join(root, "vlt_a"))
+    end
+
+    test "a spawn in a kept home names the home, its uid, its bound and its terminal",
+         %{root: root, uid: uid} do
+      %{name: name, fake: fake} = kept_client(root, uid, uid)
+      spec = %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456}
+
+      assert {:error, {:refused, "home_absent"}} =
+               Keeper.spawn(name, Map.put(spec, :home, "vlt_a"))
+
+      assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
+
+      assert {:ok, _handle} =
+               Keeper.spawn(
+                 name,
+                 Map.merge(spec, %{home: "vlt_a", home_max_bytes: 1_048_576, pty: true})
+               )
+
+      assert [spawn] = for(%{"type" => "spawn"} = r <- FakeKeeper.requests(fake), do: r)
+
+      assert Map.take(spawn, ~w(home_mode home_path home_uid home_max_bytes pty)) == %{
+               "home_mode" => "kept",
+               "home_path" => Path.join(root, "vlt_a"),
+               "home_uid" => uid,
+               "home_max_bytes" => 1_048_576,
+               "pty" => true
+             }
+
+      :ok = FakeKeeper.mode(fake, :home_over_cap)
+
+      assert {:error, {:refused, "home_over_cap"}} =
+               Keeper.spawn(name, Map.put(spec, :home, "vlt_a"))
+    end
+
+    test "a refused home request is the keeper's code", %{root: root, uid: uid} do
+      %{name: name, fake: fake} = kept_client(root, uid, uid)
+      :ok = FakeKeeper.mode(fake, :home_refused)
+      assert {:error, {:refused, "internal"}} = Keeper.home_ensure(name, "vlt_a")
+    end
+
+    test "a keeper that keeps no homes refuses every home and kept spawn as unavailable" do
+      %{name: name, fake: fake} = FakeKeeper.start_client!()
+
+      for call <- [
+            &Keeper.home_ensure/2,
+            &Keeper.home_measure/2,
+            &Keeper.home_reset/2,
+            &Keeper.home_retire/2
+          ],
+          do: assert({:error, {:refused, "unavailable"}} = call.(name, "vlt_a"))
+
+      assert {:error, {:refused, "unavailable"}} =
+               Keeper.spawn(name, %{
+                 argv: ["true"],
+                 env: %{},
+                 pool: "backends",
+                 memory_bytes: 268_435_456,
+                 home: "vlt_a"
+               })
+
+      assert FakeKeeper.requests(fake) == []
+    end
+
+    test "the kept-homes variable reads as cyfr-locus writes it" do
+      assert Keeper.kept_homes_env() == "KEEPER_KEPT_HOMES"
+
+      assert {:ok, %{root: "/var/lib/locus/kept", first: 40_001, last: 49_999}} =
+               Keeper.parse_kept_homes("/var/lib/locus/kept:40001-49999")
+
+      for text <- ["", "/k", "k:1-2", "/:1-2", "/k/:1-2", "/k:2-1", "/k:0-2", "/k:1-x", nil],
+          do: assert(:error = Keeper.parse_kept_homes(text), inspect(text))
+    end
+  end
 end

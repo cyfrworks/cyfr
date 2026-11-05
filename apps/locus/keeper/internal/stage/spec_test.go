@@ -90,3 +90,49 @@ func TestLookPathUsesOnlyTheFixedPath(t *testing.T) {
 		t.Fatal("a missing command resolved")
 	}
 }
+
+// A kept spawn's home is directly under the kept-homes root, named by an
+// id, and its group is named for its spawn; a pooled spawn's group may not
+// be a spawn's, nor a kept spawn's another uid's.
+func TestKeptSpecValidation(t *testing.T) {
+	kept := validSpec()
+	kept.UID, kept.GID, kept.User = 40001, 40001, "40001"
+	kept.HomeRoot, kept.Home, kept.Kept = "/var/lib/locus/kept", "/var/lib/locus/kept/vlt_01a-b", true
+	kept.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
+	if err := kept.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	kept.Cgroup = "/keeper-40001"
+	if err := kept.Validate(); err != nil {
+		t.Fatalf("a kept spawn in its uid's group: %v", err)
+	}
+	for name, mutate := range map[string]func(*Spec){
+		"a home below another": func(s *Spec) { s.Home = "/var/lib/locus/kept/a/b" },
+		"a home elsewhere":     func(s *Spec) { s.Home = "/var/lib/locus/homes/vlt_a" },
+		"another uid's group":  func(s *Spec) { s.Cgroup = "/keeper-40002" },
+		"a malformed group":    func(s *Spec) { s.Cgroup = "/keeper-s-xyz" },
+	} {
+		s := kept
+		s.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
+		mutate(&s)
+		if err := s.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// A kept spawn's file size may be unlimited; a pooled spawn's may not.
+	unbounded := kept
+	unbounded.Limits.Fsize = protocol.Unlimited
+	if err := unbounded.Validate(); err != nil {
+		t.Fatalf("a kept spawn with no file-size limit: %v", err)
+	}
+	scratch := validSpec()
+	scratch.Limits.Fsize = protocol.Unlimited
+	if err := scratch.Validate(); err == nil {
+		t.Fatal("a pooled spawn with no file-size limit was accepted")
+	}
+	pooled := validSpec()
+	pooled.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
+	if err := pooled.Validate(); err == nil {
+		t.Fatal("a pooled spawn in a spawn's group was accepted")
+	}
+}

@@ -89,6 +89,7 @@ defmodule Sanctum do
       Handle,
       IdentityFreshness,
       Invitations,
+      Mount,
       Namespace,
       Network,
       Newcomer,

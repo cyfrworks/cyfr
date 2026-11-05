@@ -119,7 +119,15 @@ func Main(args []string) int {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
-	if err := residue.CheckMounts(mounts, cfg.HomeRoot, PoolAccounts(accounts)); err != nil {
+	keptRoot := ""
+	if cfg.Kept != nil {
+		if err := home.CheckKeptRoot(cfg.Kept.Root, client.GID); err != nil {
+			log.Error("refusing to start: %v", err)
+			return ExitConfig
+		}
+		keptRoot = cfg.Kept.Root
+	}
+	if err := residue.CheckMounts(mounts, cfg.HomeRoot, keptRoot, PoolAccounts(accounts)); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
@@ -151,6 +159,8 @@ func Main(args []string) int {
 		pools:    map[string]*pool.Pool{},
 		spawns:   map[string]*spawn{},
 		waiters:  map[int]*child{},
+		keptLive: map[int]int{},
+		keptOps:  map[int]*sync.Mutex{},
 	}
 	for _, spec := range cfg.Pools {
 		s.pools[spec.Name] = pool.New(spec)
@@ -323,10 +333,13 @@ func (c *child) reaped() bool {
 	}
 }
 
-// spawn is one allocation: a uid, its home, its leader and its relay.
+// spawn is one allocation: a uid, its home, its leader and its relay. A
+// kept spawn runs under its kept home's uid in that home, and has no pool:
+// several kept spawns may share a uid, and the uid is never a pool's.
 type spawn struct {
 	id      string
 	pool    *pool.Pool
+	kept    bool
 	account Account
 	home    string
 	leader  *child
@@ -360,6 +373,20 @@ type server struct {
 	pools   map[string]*pool.Pool
 	spawns  map[string]*spawn
 	waiters map[int]*child
+	// keptLive counts the live spawns of each kept home's uid; keptOps
+	// holds each such uid's lock, which a spawn's start, the uid's full
+	// retirement and a home request take, so none of them interleaves
+	// with another of the same uid. A kept uid follows a pooled uid's
+	// discipline: keptHomes names the home a live uid runs in; from the
+	// release of its last spawn until every process of it is ended and
+	// nothing it left remains, it is retiring (keptRetiring, its channel
+	// closed at the end); a retirement that cannot finish quarantines it
+	// (keptQuarantined, naming its home) until the sweeper's retry does.
+	keptLive        map[int]int
+	keptOps         map[int]*sync.Mutex
+	keptHomes       map[int]string
+	keptRetiring    map[int]chan struct{}
+	keptQuarantined map[int]string
 
 	channel  *os.File
 	writeMu  sync.Mutex
@@ -396,7 +423,7 @@ func (s *server) run() int {
 		s.log.Error("socketpair: %v", err)
 		return ExitStart
 	}
-	clientProc, err := s.start(argv0, s.cfg.ClientArgv, ClientEnviron(os.Environ(), s.client, channelID),
+	clientProc, err := s.start(argv0, s.cfg.ClientArgv, ClientEnviron(os.Environ(), s.client, channelID, s.cfg.Kept),
 		[]uintptr{0, 1, 2, theirs.Fd()}, s.client.UID, s.client.GID, "")
 	theirs.Close()
 	if err != nil {
@@ -545,11 +572,6 @@ func (s *server) serveChannel() {
 			s.send(rerr.Reply())
 			continue
 		}
-		if req.NotBuilt() {
-			s.log.Warn("refused a %s request %s: not built yet", req.Type, req.ID)
-			s.send(protocol.NewError(req.ID, "", protocol.CodeNotBuilt))
-			continue
-		}
 		go s.handle(req)
 	}
 }
@@ -579,6 +601,8 @@ func (s *server) handle(req *protocol.Request) {
 		s.handleRelease(req)
 	case protocol.TypePool:
 		s.handlePool(req)
+	case protocol.TypeHomeMake, protocol.TypeHomeMeasure, protocol.TypeHomeRetire:
+		s.handleHome(req)
 	}
 }
 
@@ -661,9 +685,20 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
+	// A kept home and a pseudo-terminal are a program's, whose pool shares
+	// the keeper's namespaces.
+	if req.Isolation != "" && (req.HomeMode == protocol.HomeKept || (req.Pty != nil && *req.Pty)) {
+		s.log.Warn("spawn %s refused: an isolated spawn takes no kept home and no pty", req.ID)
+		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+		return
+	}
 	if s.memory == nil {
 		s.log.Warn("spawn %s refused: its memory bound is unavailable here", req.ID)
 		s.send(protocol.NewError(req.ID, "", protocol.CodeMemoryUnavailable))
+		return
+	}
+	if req.HomeMode == protocol.HomeKept {
+		s.handleKeptSpawn(req)
 		return
 	}
 	s.mu.Lock()
@@ -796,7 +831,13 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	// The spawn's group exists before its stage does, and the stage
 	// is moved into it while it still waits for its spec, so nothing of the
 	// spawn runs outside the bound; the stage checks where it is for itself.
-	group, err := s.memory.Create(cgroup.Name(sp.account.UID), *req.MemoryBytes)
+	groupName := cgroup.Name(sp.account.UID)
+	homeRoot := s.cfg.HomeRoot
+	if sp.kept {
+		groupName = cgroup.SpawnName(sp.id)
+		homeRoot = s.cfg.Kept.Root
+	}
+	group, err := s.memory.Create(groupName, *req.MemoryBytes)
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
@@ -806,11 +847,12 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		UID:      sp.account.UID,
 		GID:      sp.account.GID,
 		User:     sp.account.Name,
-		HomeRoot: s.cfg.HomeRoot,
+		HomeRoot: homeRoot,
 		Home:     sp.home,
+		Kept:     sp.kept,
 		Argv:     req.Argv,
 		Env:      req.Env,
-		Limits:   req.Rlimits.Resolve(),
+		Limits:   limits(sp.kept, req.Rlimits),
 		Control:  req.Control,
 		Cgroup:   group.Path(),
 	})
@@ -819,6 +861,26 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	}
 	stageFiles := []uintptr{stdinR.Fd(), stdoutW.Fd(), stderrW.Fd(), specR.Fd(), statusW.Fd()}
 	stageOwned := []*os.File{stdinR, stdoutW, stderrW, specR, statusW}
+	// A pty spawn's stdin, stdout and stderr are the terminal's other end;
+	// the relay holds the master as its stdin and its stdout, and its
+	// stderr is a pipe no one writes, which ends at once.
+	pty := req.Pty != nil && *req.Pty
+	if pty {
+		master, slave, err := openPty()
+		if err != nil {
+			return protocol.CodeInternal, err
+		}
+		opened = append(opened, master, slave)
+		masterIn, err := dupFile(master, "pty-stdin")
+		if err != nil {
+			return protocol.CodeInternal, err
+		}
+		opened = append(opened, masterIn)
+		stageFiles = []uintptr{slave.Fd(), slave.Fd(), slave.Fd(), specR.Fd(), statusW.Fd()}
+		stageOwned = []*os.File{slave, specR, statusW}
+		stdinW, stdoutR = masterIn, master
+		_ = stderrW.Close()
+	}
 	// A descriptor of ^0 is closed in the child: an isolated spawn without
 	// a control channel has no stage.ControlFD before its stage.RelayFD.
 	switch {
@@ -837,7 +899,13 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	if isolated {
 		leader, err = s.startWith(s.self, stageArgv, nil, stageFiles, "/", isolatedAttr())
 	} else {
-		leader, err = s.start(s.self, stageArgv, nil, stageFiles, sp.account.UID, sp.account.GID, "/")
+		leader, err = s.startWith(s.self, stageArgv, nil, stageFiles, "/", &syscall.SysProcAttr{
+			Setsid:     true,
+			Setctty:    pty,
+			Ctty:       0,
+			Credential: &syscall.Credential{Uid: uint32(sp.account.UID), Gid: uint32(sp.account.GID), Groups: []uint32{}},
+			Pdeathsig:  syscall.SIGKILL,
+		})
 	}
 	if err != nil {
 		return protocol.CodeInternal, err
@@ -956,6 +1024,10 @@ func (s *server) memoryExceeded(sp *spawn) bool {
 // quarantined if a process or anything it left survives. With notify,
 // `released` follows.
 func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
+	if sp.kept {
+		s.retireKept(sp, grace, notify)
+		return
+	}
 	sp.retireOnce.Do(func() {
 		go func() {
 			defer close(sp.retired)
@@ -964,7 +1036,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			if sp.home != "" {
 				paths = []string{sp.home}
 			}
-			clean := s.scrub(sp.account, grace, paths)
+			clean := s.scrub(sp.account, grace, paths, "")
 			if sp.relay != nil {
 				select {
 				case <-sp.relay.done:
@@ -996,16 +1068,20 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
 			}
 			if notify {
-				// `released` follows `exited`; a leader that survived
-				// retirement is not waited for.
-				select {
-				case <-sp.exitReported:
-				case <-time.After(clearTimeout):
-				}
-				s.send(protocol.NewReleased(sp.id))
+				s.reportReleased(sp)
 			}
 		}()
 	})
+}
+
+// reportReleased sends `released`, which follows `exited`; a leader that
+// survived retirement is not waited for.
+func (s *server) reportReleased(sp *spawn) {
+	select {
+	case <-sp.exitReported:
+	case <-time.After(clearTimeout):
+	}
+	s.send(protocol.NewReleased(sp.id))
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends
@@ -1013,7 +1089,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 // given paths; then the keeper looks for anything else the uid owns on the
 // writable mounts and retires it again with what it found. It reports
 // whether the uid is clean.
-func (s *server) scrub(acct Account, grace time.Duration, paths []string) bool {
+func (s *server) scrub(acct Account, grace time.Duration, paths []string, except string) bool {
 	for pass := 1; ; pass++ {
 		if exit := s.runRetire(acct, paths, grace); exit != retire.ExitClean && exit != retire.ExitResidue {
 			return false
@@ -1021,7 +1097,7 @@ func (s *server) scrub(acct Account, grace time.Duration, paths []string) bool {
 		if !s.waitClear(acct.UID) {
 			return false
 		}
-		found, err := residue.Find(s.roots, residue.SysvipcDir, acct.UID)
+		found, err := residue.FindExcept(s.roots, residue.SysvipcDir, acct.UID, except)
 		if err != nil {
 			s.log.Error("uid %d: looking for what it left: %v", acct.UID, err)
 			return false
@@ -1115,8 +1191,9 @@ func (s *server) sweeper() {
 			}
 		}
 		s.mu.Unlock()
+		s.sweepKept()
 		for _, e := range todo {
-			if !s.scrub(s.accounts[e.uid], 0, nil) {
+			if !s.scrub(s.accounts[e.uid], 0, nil, "") {
 				continue
 			}
 			s.mu.Lock()
@@ -1166,4 +1243,14 @@ func lookPathIn(file, path string) (string, error) {
 		}
 	}
 	return "", errors.New(file + ": not found in PATH")
+}
+
+// limits are a spawn's resource limits: the ceilings lowered by its
+// request, with no file-size limit of its own for a kept spawn, whose disk
+// its home's bound and the kept homes' volume hold.
+func limits(kept bool, r *protocol.Rlimits) protocol.Limits {
+	if kept {
+		return r.ResolveKept()
+	}
+	return r.Resolve()
 }

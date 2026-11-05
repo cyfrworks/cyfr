@@ -56,9 +56,6 @@ defmodule Locus.ConfigTest do
     backends_key: nil,
     backends_bind: {0, 0, 0, 0},
     backends_port: 4101,
-    backends_max_in_flight: 32,
-    backends_init_timeout_ms: 15_000,
-    backends_rpc_timeout_ms: 30_000,
     backends_memory_bytes: 536_870_912
   ]
 
@@ -100,9 +97,6 @@ defmodule Locus.ConfigTest do
       "LOCUS_BACKENDS_KEY" => @backends_key_hex,
       "LOCUS_BACKENDS_BIND" => "127.0.0.2",
       "LOCUS_BACKENDS_PORT" => "4201",
-      "LOCUS_BACKENDS_MAX_IN_FLIGHT" => "8",
-      "LOCUS_BACKENDS_INIT_TIMEOUT_MS" => "20000",
-      "LOCUS_BACKENDS_RPC_TIMEOUT_MS" => "45000",
       "LOCUS_BACKENDS_MEMORY_BYTES" => "268435456"
     }
   end
@@ -219,9 +213,6 @@ defmodule Locus.ConfigTest do
              backends_key: @backends_key,
              backends_bind: {127, 0, 0, 2},
              backends_port: 4201,
-             backends_max_in_flight: 8,
-             backends_init_timeout_ms: 20_000,
-             backends_rpc_timeout_ms: 45_000,
              backends_memory_bytes: 268_435_456
            ]
 
@@ -348,10 +339,6 @@ defmodule Locus.ConfigTest do
           {"LOCUS_BACKENDS_KEY", "not-a-key", "64 hexadecimal digits"},
           {"LOCUS_BACKENDS_BIND", "backends", "IPv4 or IPv6 address"},
           {"LOCUS_BACKENDS_PORT", "65536", "port from 1 to 65535"},
-          {"LOCUS_BACKENDS_MAX_IN_FLIGHT", "0", "calls from 1 to 1024"},
-          {"LOCUS_BACKENDS_MAX_IN_FLIGHT", "1025", "calls from 1 to 1024"},
-          {"LOCUS_BACKENDS_INIT_TIMEOUT_MS", "999", "milliseconds from 1000 to 600000"},
-          {"LOCUS_BACKENDS_RPC_TIMEOUT_MS", "600001", "milliseconds from 1000 to 600000"},
           {"LOCUS_BACKENDS_MEMORY_BYTES", "16777215", "bytes from 16777216 to 1099511627776"},
           {"LOCUS_BACKENDS_MEMORY_BYTES", "unlimited", "bytes from 16777216 to 1099511627776"}
         ] do
@@ -568,9 +555,6 @@ defmodule Locus.ConfigTest do
     assert Config.backends_key() == nil
     assert Config.backends_bind() == {0, 0, 0, 0}
     assert Config.backends_port() == 4101
-    assert Config.backends_max_in_flight() == Prima.LocusBackends.max_in_flight()
-    assert Config.backends_init_timeout_ms() == 15_000
-    assert Config.backends_rpc_timeout_ms() == 30_000
     assert Config.backends_memory_bytes() == 536_870_912
 
     # The facade's listener reads the same settings.

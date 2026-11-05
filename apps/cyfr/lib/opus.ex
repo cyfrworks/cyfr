@@ -44,6 +44,10 @@ defmodule Opus do
     exports: [
       Host.Children,
       Keys,
+      Programs,
+      Programs.Definition,
+      Programs.Session,
+      Programs.StatusRedaction,
       Schedules.Scheduler,
       Supervisor
     ],

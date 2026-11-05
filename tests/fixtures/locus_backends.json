@@ -1,623 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.LocusBackends, the backends wire between CYFR's controller and the backends service Locus serves; apps/prima/test/prima/locus_backends_test.exs consumes every section, and every end of the wire (the Locus service, CYFR's client and the image probe) reproduces them. Every consumer derives the control, seal and owner keys from the service key over the label, reproduces each control message's and the invoke's canonical string, MAC and header, reads each control body and its answer to its members and writes them back to the same bytes, opens the sealed environment for its owner and lifetime only, parses every accepted header, refuses every malformed one as its kind and every one at another version token (v2) as unknown_version, refuses every invalid message with the error named and answers it with the refusal named, refuses every header under auth_rejected at its instant with its reason, and masks the input to the output. Integers are decimal in canonical strings and headers, and a header names its body's hex SHA-256 as body=, which an accepted header parses to as its body_hash. reserved_env_prefixes is Prima.KeeperProtocol's list, which the wire reserves. The fences are the service's, against state the wire does not hold: every fence_rejected vector runs against a fresh service at the boot the control vectors name, under the service key, each message presented at its now, with its headers beside its signature, and answered at its status until the refused one, which is the held message if one is held (its head sent and its body sent only once every later message is answered), else the last; it is refused with the code named, its body unread where read_body is false. advance_ms moves the service's lease clock; given names the pool its launcher answers (\"unavailable\" for none, 64 free uids otherwise), the live nonces the owner's cache already holds, and the stderr each backend process writes as it starts.",
-  "version": 1,
-  "domain": "cyfr-locus/v1",
-  "service": "backends",
-  "label": "cyfr-locus/v1/backends",
   "auth_header": "x-cyfr-auth",
-  "boot_header": "x-cyfr-boot",
-  "window_ms": 30000,
-  "routes": {
-    "control": "/locus/v1/backends/control",
-    "health": "/locus/v1/backends/health",
-    "mcp": "/locus/v1/backends/mcp"
-  },
-  "statuses": {
-    "bad_request": 400,
-    "capacity": 409,
-    "conflict": 409,
-    "epoch_ahead": 409,
-    "internal": 500,
-    "lapsed": 409,
-    "nonce_cache_full": 503,
-    "replay": 409,
-    "stale_boot": 409,
-    "stale_control": 409,
-    "stale_epoch": 409,
-    "status_too_large": 409,
-    "too_large": 413,
-    "too_many_owners": 400,
-    "unauthorized": 401,
-    "unavailable": 503,
-    "unknown_owner": 409,
-    "version": 409
-  },
-  "bounds": {
-    "crash_window_ms": 600000,
-    "max_backends": 16,
-    "max_command_bytes": 4096,
-    "max_control_bytes": 1048576,
-    "max_crashes": 5,
-    "max_frame_bytes": 10485760,
-    "max_idle_ms": 86400000,
-    "max_in_flight": 32,
-    "max_lease_ms": 60000,
-    "max_mcp_bytes": 10551296,
-    "max_nonces": 8192,
-    "max_status_answer_bytes": 1048576,
-    "max_status_owners": 64,
-    "nonce_window_ms": 30000,
-    "restart_backoff_ms": [
-      1000,
-      2000,
-      4000,
-      8000,
-      16000
-    ],
-    "stderr_tail_bytes": 65536,
-    "stderr_tail_slack_bytes": 4096
-  },
-  "reserved_env_prefixes": [
-    "CYFR_",
-    "LOCUS_",
-    "KEEPER_"
-  ],
-  "literal_env_names": [
-    "NODE_ENV",
-    "LOG_LEVEL",
-    "TZ",
-    "LANG",
-    "LC_ALL",
-    "NO_COLOR",
-    "DEBUG"
-  ],
-  "key_hex": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
-  "control_key_hex": "466b3f00f5014372ba873d401976202e19b4ff8c3b403f0baf73bdb048f423fc",
-  "seal_key_hex": "eb192dd854791f9586d8382d878518cc74b3ff9faa75c4bbd8879b844d4310db",
-  "owner": {
-    "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-    "epoch": 7,
-    "generation": 3,
-    "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2"
-  },
-  "owner_key_hex": "f852539d36794b12e52011f7023836f32a6c3ee1c3a373ad48545ef6f03bd4f9",
-  "builds_key_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
-  "key_text": {
-    "invalid": [
-      "",
-      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4",
-      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f0",
-      " 303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
-      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4g",
-      "0x3132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
-      "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8="
-    ],
-    "valid": [
-      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
-      "303132333435363738393A3B3C3D3E3F404142434445464748494A4B4C4D4E4F"
-    ]
-  },
-  "hello": {
-    "answer": "{\"boot\":\"bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\",\"pool\":{\"free\":64,\"size\":64},\"version\":1}",
-    "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":1}",
-    "canonical": "cyfr-locus/v1/backends/control\n3\n1\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\n-\n1789305249701\ne1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04",
-    "fields": {
-      "boot": "-",
-      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-      "generation": 3,
-      "seq": 1,
-      "ts": 1789305249701
-    },
-    "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305249701 body=e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04 mac=tU8J5ojCVpxivB6-xB3Bd4ZG53q6ofBX_fy25qjB654",
-    "mac": "tU8J5ojCVpxivB6-xB3Bd4ZG53q6ofBX_fy25qjB654",
-    "ts": 1789305249701
-  },
-  "reconcile": {
-    "answer": "{\"released\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":4,\"g\":2,\"server\":\"mcp_01a09fee-1b2c-7d3e-8f40-5a6b7c8d9e0f\"}],\"version\":1}",
-    "body": "{\"keep\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"reconcile\",\"version\":1}",
-    "canonical": "cyfr-locus/v1/backends/control\n3\n2\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249702\nbd0e3bfb7619435188d8104b0e91d5d298ea3a9fa8fcda354000ac644b802dcd",
-    "fields": {
-      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-      "generation": 3,
-      "seq": 2,
-      "ts": 1789305249702
-    },
-    "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249702 body=bd0e3bfb7619435188d8104b0e91d5d298ea3a9fa8fcda354000ac644b802dcd mac=FrX3EDEB84vjltzGh8ydhVO9Yvq93XGALgAN4oWLheU",
-    "mac": "FrX3EDEB84vjltzGh8ydhVO9Yvq93XGALgAN4oWLheU",
-    "ts": 1789305249702
-  },
-  "sync": {
-    "answer": "{\"backends\":[{\"name\":\"fetch\",\"status\":\"spawning\",\"tools\":0}],\"rev\":0,\"status\":\"starting\",\"version\":1}",
-    "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-    "canonical": "cyfr-locus/v1/backends/control\n3\n3\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249703\nc137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8",
-    "fields": {
-      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-      "generation": 3,
-      "seq": 3,
-      "ts": 1789305249703
-    },
-    "header": "v1 kind=control gen=3 seq=3 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249703 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=-HJjiJPvYA9f9LJMUYZrYo4NcCWXfvLlOV9fySxLgQ4",
-    "mac": "-HJjiJPvYA9f9LJMUYZrYo4NcCWXfvLlOV9fySxLgQ4",
-    "ts": 1789305249703
-  },
-  "renew": {
-    "answer": "{\"renewed\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"rev\":2,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"unknown\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":1,\"server\":\"mcp_01a09fee-1b2c-7d3e-8f40-5a6b7c8d9e0f\"}],\"version\":1}",
-    "body": "{\"lease_ms\":30000,\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"renew\",\"version\":1}",
-    "canonical": "cyfr-locus/v1/backends/control\n3\n4\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249704\n33740446fdae0ac3b292f663f6b2fb8c392d3a6a2f1e1a7eb4b11b153357651a",
-    "fields": {
-      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-      "generation": 3,
-      "seq": 4,
-      "ts": 1789305249704
-    },
-    "header": "v1 kind=control gen=3 seq=4 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249704 body=33740446fdae0ac3b292f663f6b2fb8c392d3a6a2f1e1a7eb4b11b153357651a mac=WUSVGycgedCiF4V3So9ygQ715dQdsK9dcMxtcuBBESM",
-    "mac": "WUSVGycgedCiF4V3So9ygQ715dQdsK9dcMxtcuBBESM",
-    "ts": 1789305249704
-  },
-  "release": {
-    "answer": "{\"released\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"version\":1}",
-    "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"release\",\"version\":1}",
-    "canonical": "cyfr-locus/v1/backends/control\n3\n5\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249705\neb96b3770c4ee10e9af22dcfc7256c9fa47a7c0e9c24e839126c9d055cd0d078",
-    "fields": {
-      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-      "generation": 3,
-      "seq": 5,
-      "ts": 1789305249705
-    },
-    "header": "v1 kind=control gen=3 seq=5 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249705 body=eb96b3770c4ee10e9af22dcfc7256c9fa47a7c0e9c24e839126c9d055cd0d078 mac=B7FfcP4dB6IQEzksLNKuTvgB91XJy9-TVVFdfwg8s-o",
-    "mac": "B7FfcP4dB6IQEzksLNKuTvgB91XJy9-TVVFdfwg8s-o",
-    "ts": 1789305249705
-  },
-  "status": {
-    "answer": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"backends\":[{\"error\":null,\"name\":\"fetch\",\"restarts\":1,\"status\":\"ready\",\"stderr_tail\":\"token [REDACTED] accepted\\n\",\"tools\":3}],\"e\":7,\"g\":3,\"lease_ms_left\":28500,\"rev\":2,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"version\":1}",
-    "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-    "canonical": "cyfr-locus/v1/backends/control\n3\n6\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249706\n4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c",
-    "fields": {
-      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-      "generation": 3,
-      "seq": 6,
-      "ts": 1789305249706
-    },
-    "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
-    "mac": "qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
-    "ts": 1789305249706
-  },
-  "invoke": {
-    "answer": "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":{\"cacheScope\":\"private\",\"resultType\":\"complete\",\"tools\":[{\"description\":\"[fetch] Fetches a URL\",\"inputSchema\":{\"type\":\"object\"},\"name\":\"fetch__fetch\"}],\"ttlMs\":60000}}",
-    "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_7d3e9a\n6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232",
-    "fields": {
-      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-      "epoch": 7,
-      "generation": 3,
-      "nonce": "n_7d3e9a",
-      "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
-      "ts": 1789305249602
-    },
-    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-    "mac": "R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8"
-  },
-  "seal": {
-    "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-    "iv_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
-    "plaintext": "{\"fetch\":{\"API_TOKEN\":\"sk-canary-0123456789\"}}",
-    "sealed": "oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg"
-  },
-  "header_parse": {
-    "accepted": [
-      {
-        "body_hash": "6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232",
-        "fields": {
-          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-          "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-          "epoch": 7,
-          "generation": 3,
-          "nonce": "n_7d3e9a",
-          "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
-          "ts": 1789305249602
-        },
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke",
-        "mac": "R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8"
-      },
-      {
-        "body_hash": "e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04",
-        "fields": {
-          "boot": "-",
-          "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-          "generation": 3,
-          "seq": 1,
-          "ts": 1789305249701
-        },
-        "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305249701 body=e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04 mac=tU8J5ojCVpxivB6-xB3Bd4ZG53q6ofBX_fy25qjB654",
-        "kind": "control",
-        "mac": "tU8J5ojCVpxivB6-xB3Bd4ZG53q6ofBX_fy25qjB654"
-      },
-      {
-        "body_hash": "4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c",
-        "fields": {
-          "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-          "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-          "generation": 3,
-          "seq": 6,
-          "ts": 1789305249706
-        },
-        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
-        "kind": "control",
-        "mac": "qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg"
-      },
-      {
-        "body_hash": "6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232",
-        "fields": {
-          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-          "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
-          "epoch": 7,
-          "generation": 3,
-          "nonce": "n_7d3e9a",
-          "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
-          "ts": 1789305249602
-        },
-        "header": "v1 body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8 nonce=n_7d3e9a ts=1789305249602 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e epoch=7 gen=3 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 kind=invoke",
-        "kind": "invoke",
-        "mac": "R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8"
-      },
-      {
-        "body_hash": "e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04",
-        "fields": {
-          "boot": "-",
-          "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
-          "generation": 0,
-          "seq": 9007199254740991,
-          "ts": 0
-        },
-        "header": "v1 kind=control gen=0 seq=9007199254740991 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=0 body=e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04 mac=Q9NCTyJXvaQLfDN4CP4MvRzgxtMabgJp-1EcXGnEDd4",
-        "kind": "control",
-        "mac": "Q9NCTyJXvaQLfDN4CP4MvRzgxtMabgJp-1EcXGnEDd4"
-      }
-    ],
-    "malformed": [
-      {
-        "header": "V1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": " v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8 ",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2  gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 generation=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=03 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=-3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=9007199254740992 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a seq=6 body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=café body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 =n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=Invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
-        "kind": "invoke"
-      },
-      {
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "control"
-      },
-      {
-        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=4B6531BBBFFCED27CBE03A4EC5332D6BADA1C32F15A6581DB34B19387AFABE1C mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
-        "kind": "control"
-      },
-      {
-        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
-        "kind": "control"
-      },
-      {
-        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
-        "kind": "control"
-      },
-      {
-        "header": "v1 kind=request ts=1789305249706 nonce=n_5c3e9a1b body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "kind": "control"
-      },
-      {
-        "header": "",
-        "kind": "control"
-      },
-      {
-        "header": "v1",
-        "kind": "control"
-      },
-      {
-        "header": null,
-        "kind": "control"
-      }
-    ],
-    "unknown_version": [
-      {
-        "header": "v2 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
-        "kind": "invoke"
-      }
-    ]
-  },
-  "valid_fields": [
-    {
-      "field": "athanor",
-      "value": "12345"
-    },
-    {
-      "field": "nonce",
-      "value": "a=b"
-    },
-    {
-      "field": "generation",
-      "value": 0
-    },
-    {
-      "field": "ts",
-      "value": 9007199254740991
-    }
-  ],
-  "invalid_fields": [
-    {
-      "field": "athanor",
-      "value": ""
-    },
-    {
-      "field": "athanor",
-      "value": "ath with space"
-    },
-    {
-      "field": "server",
-      "value": "mcp\nrow"
-    },
-    {
-      "field": "nonce",
-      "value": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
-    },
-    {
-      "field": "nonce",
-      "value": "café"
-    },
-    {
-      "field": "athanor",
-      "value": 42
-    },
-    {
-      "field": "nonce",
-      "value": null
-    },
-    {
-      "field": "generation",
-      "value": "3"
-    },
-    {
-      "field": "generation",
-      "value": true
-    },
-    {
-      "field": "epoch",
-      "value": -1
-    },
-    {
-      "field": "epoch",
-      "value": 1.5
-    },
-    {
-      "field": "ts",
-      "value": 9007199254740992
-    }
-  ],
-  "invalid_messages": [
-    {
-      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":2}",
-      "error": "version",
-      "name": "wrong_version",
-      "refusal": "version"
-    },
-    {
-      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\"}",
-      "error": "version",
-      "name": "no_version",
-      "refusal": "version"
-    },
-    {
-      "body": "[]",
-      "error": "not_json",
-      "name": "not_json",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"restart\",\"version\":1}",
-      "error": "unknown_type",
-      "name": "unknown_type",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"version\":1}",
-      "error": "missing_field",
-      "name": "no_type",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"pool\":1,\"type\":\"hello\",\"version\":1}",
-      "error": "unknown_field",
-      "name": "unknown_field",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"g\":3,\"type\":\"hello\",\"version\":1}",
-      "error": "missing_field",
-      "name": "missing_field",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":0,\"type\":\"hello\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "zero_generation",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"owners\":[{\"athanor\":\"ath with space\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"release\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "bad_owner_ref",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":0,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"release\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "zero_epoch",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"lease_ms\":30000,\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"renew\",\"version\":1}",
-      "error": "missing_field",
-      "name": "owner_without_epoch",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_1\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_2\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_3\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_4\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_5\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_6\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_7\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_8\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_9\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_10\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_11\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_12\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_13\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_14\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_15\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_16\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_17\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_18\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_19\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_20\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_21\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_22\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_23\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_24\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_25\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_26\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_27\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_28\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_29\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_30\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_31\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_32\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_33\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_34\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_35\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_36\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_37\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_38\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_39\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_40\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_41\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_42\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_43\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_44\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_45\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_46\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_47\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_48\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_49\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_50\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_51\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_52\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_53\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_54\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_55\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_56\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_57\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_58\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_59\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_60\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_61\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_62\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_63\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_64\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_65\"}],\"type\":\"status\",\"version\":1}",
-      "error": "too_many",
-      "name": "too_many_owners",
-      "refusal": "too_many_owners"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":60001,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "out_of_range",
-      "name": "oversize_lease",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":86400001,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "out_of_range",
-      "name": "oversize_idle",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"lease_ms\":0,\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"renew\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "zero_lease",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"Fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "bad_backend_definition",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env\":{},\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "unknown_field",
-      "name": "backend_extra_field",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "no_backends",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"run\",\"env_names\":[],\"name\":\"b1\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b2\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b3\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b4\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b5\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b6\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b7\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b8\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b9\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b10\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b11\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b12\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b13\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b14\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b15\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b16\"},{\"command\":\"run\",\"env_names\":[],\"name\":\"b17\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "too_many",
-      "name": "too_many_backends",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"},{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "duplicate",
-      "name": "duplicate_backend",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx server --token vault:api_token\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "vault_reference",
-      "name": "vault_command",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "too_large",
-      "name": "long_command",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"api_token\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "env_name_form",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\",\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "duplicate",
-      "name": "duplicate_env_name",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"PATH\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "reserved_env_name",
-      "name": "reserved_env_name",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"CYFR_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-      "error": "reserved_env_name",
-      "name": "reserved_env_prefix",
-      "refusal": "bad_request"
-    },
-    {
-      "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"not base64!\",\"type\":\"sync\",\"version\":1}",
-      "error": "invalid_field",
-      "name": "bad_sealed",
-      "refusal": "bad_request"
-    }
-  ],
   "auth_rejected": [
     {
       "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
@@ -780,14 +162,66 @@
       "refusal": "malformed"
     }
   ],
+  "boot_header": "x-cyfr-boot",
+  "bounds": {
+    "crash_window_ms": 600000,
+    "line_charge_bytes": 32,
+    "max_argv": 64,
+    "max_buffer_bytes": 8388608,
+    "max_buffer_lines": 65536,
+    "max_command_bytes": 4096,
+    "max_control_bytes": 1048576,
+    "max_crashes": 5,
+    "max_idle_ms": 86400000,
+    "max_key_bytes": 128,
+    "max_lease_ms": 60000,
+    "max_line_bytes": 1048576,
+    "max_nonces": 8192,
+    "max_programs": 16,
+    "max_recv_wait_ms": 30000,
+    "max_session_bytes": 16777216,
+    "max_sessions": 16,
+    "max_status_answer_bytes": 1048576,
+    "max_status_owners": 64,
+    "nonce_window_ms": 30000,
+    "restart_backoff_ms": [
+      1000,
+      2000,
+      4000,
+      8000,
+      16000
+    ],
+    "stderr_tail_bytes": 65536,
+    "stderr_tail_slack_bytes": 4096
+  },
+  "builds_key_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+  "close": {
+    "answer": "{\"status\":\"closed\",\"version\":2}",
+    "body": "{\"e\":7,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"type\":\"close\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249605\nn_close_7d3e9a\nf4c3197eabb8445b793f278b4c9c505ab219c6aec5f1264da29e46c9a36f57ec",
+    "fields": {
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "epoch": 7,
+      "generation": 3,
+      "nonce": "n_close_7d3e9a",
+      "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
+      "ts": 1789305249605
+    },
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249605 nonce=n_close_7d3e9a body=f4c3197eabb8445b793f278b4c9c505ab219c6aec5f1264da29e46c9a36f57ec mac=AUt-yeZKG1jwXEqTnOacgyjmtkLJMIE3Q3fMhuIuo3c",
+    "mac": "AUt-yeZKG1jwXEqTnOacgyjmtkLJMIE3Q3fMhuIuo3c"
+  },
+  "comment": "The vectors pinning Prima.LocusBackends, the backends wire between CYFR's programs controller and the backends service Locus serves; apps/prima/test/prima/locus_backends_test.exs consumes every section, and every end of the wire (the Locus service, CYFR's client and the image probe) reproduces them. Every consumer derives the control, seal and owner keys from the service key over the label, reproduces each control message's and each session message's canonical string, MAC and header, reads each control and session body and its answer to its members and writes them back to the same bytes, opens the sealed environment for its owner and lifetime only, parses every accepted header, refuses every malformed one as its kind and every one at another version token (v2) as unknown_version, refuses every invalid message with the error named and answers it with the refusal named, refuses every header under auth_rejected at its instant with its reason, and masks the input to the output. Integers are decimal in canonical strings and headers, and a header names its body's hex SHA-256 as body=, which an accepted header parses to as its body_hash. reserved_env_prefixes is Prima.KeeperProtocol's list, which the wire reserves. The fences are the service's, against state the wire does not hold: every fence_rejected vector runs against a fresh service at the boot the control vectors name, under the service key, each message presented at its now, with its headers beside its signature, and answered at its status until the refused one, which is the held message if one is held (its head sent and its body sent only once every later message is answered), else the last; it is refused with the code named, its body unread where read_body is false. advance_ms moves the service's lease clock; given names the pool its launcher answers (\"unavailable\" for none, 64 free uids otherwise), the live nonces the owner's cache already holds, and the stderr each program's process writes as it starts, which an open starts. The auth_rejected vectors are the envelope's alone: their bodies are bytes a signature covers, read as no message.",
+  "control_key_hex": "466b3f00f5014372ba873d401976202e19b4ff8c3b403f0baf73bdb048f423fc",
+  "domain": "cyfr-locus/v1",
   "fence_rejected": [
     {
       "name": "stale_boot_control",
       "refusal": "stale_boot",
       "sequence": [
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_0000000000000000000000000000dead ts=1789305250000 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=nE2-qoVxZT0y3L0jXq3XEPa15sizUpF81pwlK_7FJ2Y",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_0000000000000000000000000000dead ts=1789305250000 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=Mm5QMa15hCY9-UbrtFoVS8wMDMEwM4QGfGOoYRPZfaw",
           "now": 1789305250000,
           "read_body": false,
           "route": "control"
@@ -799,8 +233,8 @@
       "refusal": "stale_boot",
       "sequence": [
         {
-          "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04 mac=ujAMq562gWZKTEc4nz6Y5HzKx7t6dgm6ACFkS-xFLVA",
+          "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4aa7a1315fc6dadd60a25a3dfc798cd1918e24f69990350210d5ae2648d14c1c mac=W2hrdCbwVVwVcyZnFcC4GsDdBfF_eP3B1iotgPAaFBM",
           "now": 1789305250000,
           "read_body": true,
           "route": "control"
@@ -812,8 +246,8 @@
       "refusal": "stale_boot",
       "sequence": [
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305250000 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=YSa--YbbwqhdsJ1n3Y2PvJ2yNzp42F3rfaCdEyP2BSE",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305250000 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=T5NQdd4BdETXHp0VTlafMAd4O4TwpR4KlaJF5gzxpM8",
           "now": 1789305250000,
           "read_body": true,
           "route": "control"
@@ -825,22 +259,18 @@
       "refusal": "stale_boot",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_boot body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=Fk0ZvN-gzkLKEvtQzILVSH3XtOpCSEaO590kFLng_G8",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_boot body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=qdiEZ7TenTeGdefD2xyav9YOUIYPAR-Hy8PogZH5Njs",
           "now": 1789305250001,
           "read_body": false,
-          "route": "mcp"
+          "route": "session"
         }
       ]
     },
@@ -849,15 +279,15 @@
       "refusal": "stale_control",
       "sequence": [
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=wVM8k8I5i55erQ1h2IiIk1BaXjhvrWfXBeUdMlAT4zA",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=E9QyLKLxGlkih61LJdnF1uEUWmqYEhDUBjP230bzDoo",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=RaULgvXeTjzrmgERsaSIyi2CGHXpaEjqUL9HGHTu70Y",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=936PaBBaGrrrBnrQzAKDPcQYhHLbGd20imx1IWp-Vfk",
           "now": 1789305250001,
           "read_body": false,
           "route": "control"
@@ -869,15 +299,15 @@
       "refusal": "stale_control",
       "sequence": [
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=wVM8k8I5i55erQ1h2IiIk1BaXjhvrWfXBeUdMlAT4zA",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=E9QyLKLxGlkih61LJdnF1uEUWmqYEhDUBjP230bzDoo",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=2 seq=9 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=BUerqgTOyOaNPpuUF5V4mzBaSFlb17tETiEb3CdyqJk",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=2 seq=9 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=l7YrvU5MWBhlnpaEIzEOGs-ArffOxJh5DNEGc_dHjIk",
           "now": 1789305250001,
           "read_body": false,
           "route": "control"
@@ -889,16 +319,16 @@
       "refusal": "stale_control",
       "sequence": [
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=wVM8k8I5i55erQ1h2IiIk1BaXjhvrWfXBeUdMlAT4zA",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=E9QyLKLxGlkih61LJdnF1uEUWmqYEhDUBjP230bzDoo",
           "hold": true,
           "now": 1789305250000,
           "read_body": true,
           "route": "control"
         },
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=3 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=r9n4qiSREBDMUgsRCbpGb8GOyBj_2ojvc6oZK4tX55U",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=3 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=P3o-ENW6AnVYI30_MOS1Rvli6CVmW9qf6Rm68mwE53A",
           "now": 1789305250001,
           "route": "control",
           "status": 200
@@ -910,15 +340,15 @@
       "refusal": "stale_epoch",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":6,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6SlpqeoqaqrS19wn43mJSkMPrdUJItGYRe2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=292a0601b0b616c66a4db16e67e922304cb2b8f99bf4289c3a2482261dbe7800 mac=ZfwqplpBewtuCUiNgR42MYJ8OSg0HTnDX6laHc08Hc0",
+          "body": "{\"e\":6,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6SlpqeoqaqrS19wn43mJSkMPrdUJItGYRe2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=f99e9c68c3684acfe110439123d6d493d5dabf3da01127efa9a1185b8f6ed660 mac=462-F6WDQmnAZxbpczWLNY9GG8fdAarG3TBMwc7ChdY",
           "now": 1789305250001,
           "read_body": true,
           "route": "control"
@@ -930,22 +360,18 @@
       "refusal": "stale_epoch",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=6 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_stale body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=S-TqsFssqm-Svjx2iO45HHO48khjCbLPIa0tQrz-41U",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":6,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=6 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_stale body=fab3110f3a83b2014a63b8f323157746fe52f8e0d0cb8788d077b62e46b89968 mac=IS3v8lH-ZktHPsmAcxpTZ-8bIKCXgZB5nshPds98u7A",
           "now": 1789305250001,
           "read_body": false,
-          "route": "mcp"
+          "route": "session"
         }
       ]
     },
@@ -954,22 +380,18 @@
       "refusal": "epoch_ahead",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_ahead body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=1cz7sbSD4NBR20pObKblbKi700VWBioPn38GzgadgvU",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":8,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_ahead body=30f31f53791b0cd7d3989690834ffc372d09dbe91ec3bb3c1b844d15d972b43a mac=_1gkWIC_t-ttVpeQxg4uGJnp1CTJ4AzYQE9tfY1bQw8",
           "now": 1789305250001,
           "read_body": false,
-          "route": "mcp"
+          "route": "session"
         }
       ]
     },
@@ -978,15 +400,15 @@
       "refusal": "conflict",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"backends\":[{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"one\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"two\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=388c30b200c5edbb30309af20d3a0418fe14290b1d5f76c43cd0e06634c0f48e mac=ntPlJZwWAI7ZJ67m2RNNVrrXDhbCrSk_HC80UK6p7tI",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"two\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=196ec2c31aa74d617a5991ce0a813c01f2f15684f165615f905fa6bceed16dfc mac=g1keu580vx1dG79x5jUpr_hM5z4cnoBcG0yG9c1T7JU",
           "now": 1789305250001,
           "read_body": true,
           "route": "control"
@@ -998,8 +420,8 @@
       "refusal": "lapsed",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=7071c47bc6b87ee03d4fffc9596d5f8996996ed7f4a758807c0ace1f2218a2ec mac=ZeaoOIh5f9IH_skySn72XSdk_CJW_kPFBN9_M_LG13k",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4790cc2a0b6e8da53d61461fe8250bf075c5cb6ccee5154fcbaa138fa5c8ca40 mac=VWIXbnRQS1YnyeNHf5RrcGPnefUJRtZKfgRqsXiiai8",
           "now": 1789305250000,
           "route": "control",
           "status": 200
@@ -1008,15 +430,11 @@
           "advance_ms": 1000
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapsed body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=GjLQG34woUVoaBhG0Nt6RWBPyVzWVIkCGKQdoYiH1Wk",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapsed body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=RSy-kSruI2KuhhVdnqiMQ-FZ7wAuoCuvswtn1Dc4mPo",
           "now": 1789305250001,
           "read_body": false,
-          "route": "mcp"
+          "route": "session"
         }
       ]
     },
@@ -1025,29 +443,32 @@
       "refusal": "lapsed",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=7071c47bc6b87ee03d4fffc9596d5f8996996ed7f4a758807c0ace1f2218a2ec mac=ZeaoOIh5f9IH_skySn72XSdk_CJW_kPFBN9_M_LG13k",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4790cc2a0b6e8da53d61461fe8250bf075c5cb6ccee5154fcbaa138fa5c8ca40 mac=VWIXbnRQS1YnyeNHf5RrcGPnefUJRtZKfgRqsXiiai8",
           "now": 1789305250000,
           "route": "control",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"held\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_held body=feca3f91ac12da2d19337f57005e2db40f94771121e15bfb7f43141ef5e1c88d mac=tbGi_83eY4sFLwCpP5zZ5VJ9Y-QBuYxqnMhunI6_8_g",
+          "now": 1789305250000,
+          "route": "session",
           "status": 200
         },
         {
           "advance_ms": 1000
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapse body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=l094YJqMQ9se_vj36an98VpSFee5TEkvLwW9riF0AzA",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapse body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=4mJPaQd3YQPsgOwu74ZXTukpIT5JVal4-odsVxq92AQ",
           "now": 1789305250001,
-          "route": "mcp",
+          "route": "session",
           "status": 409
         },
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250002 body=7071c47bc6b87ee03d4fffc9596d5f8996996ed7f4a758807c0ace1f2218a2ec mac=qsAGvztiEGKpGc4FTjO6B3u4YWB5l_U-j16-Xv99y5E",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250002 body=4790cc2a0b6e8da53d61461fe8250bf075c5cb6ccee5154fcbaa138fa5c8ca40 mac=GhYpTbYoEzBkMCDZwCALyaQ9rV74jjB0BrpWD5bS-ns",
           "now": 1789305250002,
           "read_body": true,
           "route": "control"
@@ -1059,15 +480,11 @@
       "refusal": "unknown_owner",
       "sequence": [
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_fence_unknown body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=HJlpJWjWnuUXA53j_aVXz4SbTObDEWe8oHpmADrbcpg",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_fence_unknown body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=aeZ5RHDV0xUkaHAWUxjye6YMtY3Y7Za9Myna7lKyfFs",
           "now": 1789305250000,
           "read_body": false,
-          "route": "mcp"
+          "route": "session"
         }
       ]
     },
@@ -1076,33 +493,25 @@
       "refusal": "replay",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=1r0Tm0m5mFJp1-oLwspUEg9Q9HK-dFZGSvS6dINt0Ac",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=o_4JzW8f7p7lyIf9YhwnF8G6F_SiI7PeKmgqKuAOn2Q",
           "now": 1789305250001,
-          "route": "mcp",
+          "route": "session",
           "status": 200
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=1r0Tm0m5mFJp1-oLwspUEg9Q9HK-dFZGSvS6dINt0Ac",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=o_4JzW8f7p7lyIf9YhwnF8G6F_SiI7PeKmgqKuAOn2Q",
           "now": 1789305250001,
           "read_body": false,
-          "route": "mcp"
+          "route": "session"
         }
       ]
     },
@@ -1114,22 +523,18 @@
       "refusal": "nonce_cache_full",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_full body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=73y_luwd8YQxF9WDk6QOywE9v4gGyhu1VmSqHw4CFuw",
-          "headers": {
-            "mcp-method": "tools/list",
-            "mcp-protocol-version": "2026-07-28"
-          },
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_full body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=ITPHx7PGHLLmVCeFN66P3tFh3cD-BDI4jey69kvX1js",
           "now": 1789305250001,
           "read_body": false,
-          "route": "mcp"
+          "route": "session"
         }
       ]
     },
@@ -1145,11 +550,25 @@
       "refusal": "capacity",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"one\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"two\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=388c30b200c5edbb30309af20d3a0418fe14290b1d5f76c43cd0e06634c0f48e mac=rYpaKUTNGtMzlsP-ToEr45mVd9CLyK8SUdZwmMFg1F8",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"BJ9dmO5qewRJhUy026IeZOGFCpRzZRAQqSHfo3aLKURexveqDW0\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=9998be278399f13025e2f8bc2403c5f626b67731399788d524968f87f139530e mac=JWCIIo07uoqm9lL__0CPOqbNkaRUhfwfoGygv21BBEY",
+          "now": 1789305250000,
+          "route": "control",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=iBAZTAcZPP-YXbR_E6EpzF--8avZXw76P8oEs29yd2E",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=j7w0cIyTZ4d-dNqzkQlZg-mENLhveiqqIK5Emprz248",
           "now": 1789305250000,
           "read_body": true,
-          "route": "control"
+          "route": "session"
         }
       ]
     },
@@ -1165,11 +584,25 @@
       "refusal": "capacity",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"one\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"two\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=388c30b200c5edbb30309af20d3a0418fe14290b1d5f76c43cd0e06634c0f48e mac=rYpaKUTNGtMzlsP-ToEr45mVd9CLyK8SUdZwmMFg1F8",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"NpI84Ubxw_xehcc4s0gGq9TbilQnklHY7JR1xEy0-oUCMAJwuxM\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=27670abce755ea58feac8ceec9c2025e5f690da532a3b053abd81bcaddf607db mac=z9UMA9NCaSF8-ZguK1jWqicNNyW5ZPfOJEpI3-GX1O0",
+          "now": 1789305250000,
+          "route": "control",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=iBAZTAcZPP-YXbR_E6EpzF--8avZXw76P8oEs29yd2E",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=j7w0cIyTZ4d-dNqzkQlZg-mENLhveiqqIK5Emprz248",
           "now": 1789305250000,
           "read_body": true,
-          "route": "control"
+          "route": "session"
         }
       ]
     },
@@ -1181,11 +614,18 @@
       "refusal": "unavailable",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c137c2a69f20bd087f37c4a325c41eea6b1f2dc48f6d4f77f61e2401c9a67cb8 mac=_KnXHbkpUTXtYUw4oYctWxS3kPvHoduMUGSTNnbRrbY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
+          "now": 1789305250000,
+          "route": "control",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_fence body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=0yj4E8hjhg6HHIcNMrfw3XZsl92BprK9h0smaGhFIa0",
           "now": 1789305250000,
           "read_body": true,
-          "route": "control"
+          "route": "session"
         }
       ]
     },
@@ -1197,8 +637,8 @@
       "refusal": "unavailable",
       "sequence": [
         {
-          "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305250000 body=e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04 mac=3RtqCrnKO4Adhot6ZbybFjEvVsSHwLytPZlZEDNpY7c",
+          "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305250000 body=4aa7a1315fc6dadd60a25a3dfc798cd1918e24f69990350210d5ae2648d14c1c mac=xb6-NNu4xj3fj8zHd44E7vvJP-zfXI8Mlo4Aq8UuOXk",
           "now": 1789305250000,
           "read_body": true,
           "route": "control"
@@ -1210,8 +650,8 @@
       "refusal": "too_many_owners",
       "sequence": [
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_1\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_2\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_3\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_4\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_5\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_6\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_7\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_8\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_9\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_10\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_11\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_12\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_13\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_14\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_15\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_16\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_17\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_18\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_19\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_20\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_21\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_22\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_23\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_24\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_25\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_26\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_27\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_28\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_29\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_30\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_31\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_32\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_33\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_34\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_35\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_36\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_37\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_38\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_39\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_40\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_41\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_42\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_43\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_44\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_45\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_46\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_47\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_48\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_49\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_50\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_51\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_52\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_53\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_54\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_55\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_56\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_57\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_58\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_59\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_60\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_61\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_62\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_63\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_64\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_65\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=c6201d0b8b2c8e9f4aecd9b153c2dfe35864eb517a9ddcdd38628b76c4bfa82c mac=SXlpH9CfP-5xu12BUa0prPNCFN-lU5Yyh0idvKiWZcY",
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_1\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_2\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_3\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_4\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_5\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_6\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_7\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_8\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_9\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_10\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_11\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_12\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_13\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_14\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_15\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_16\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_17\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_18\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_19\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_20\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_21\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_22\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_23\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_24\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_25\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_26\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_27\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_28\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_29\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_30\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_31\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_32\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_33\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_34\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_35\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_36\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_37\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_38\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_39\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_40\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_41\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_42\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_43\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_44\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_45\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_46\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_47\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_48\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_49\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_50\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_51\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_52\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_53\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_54\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_55\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_56\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_57\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_58\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_59\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_60\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_61\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_62\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_63\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_64\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_65\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=dde0fb9a0a4a61d5b4183bd384432640c03b199e53895d5eeabaca0b7cba3696 mac=KRM5W3pc71sBEmymXatOqnRXz4B7KDJpLY_DaaFe9KE",
           "now": 1789305250000,
           "read_body": true,
           "route": "control"
@@ -1226,15 +666,127 @@
       "refusal": "status_too_large",
       "sequence": [
         {
-          "body": "{\"backends\":[{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b1\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b2\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b3\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b4\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b5\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b6\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b7\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b8\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b9\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b10\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b11\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b12\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b13\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b14\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b15\"},{\"command\":\"exec cat\",\"env_names\":[],\"name\":\"b16\"}],\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"sealed\":\"oKGio6Slpqeoqaqr99iBCcEtcxwy12ooKHO2Rxe2oTzh8nxzsKE8fsKUN9AyYv2hLEGqTX6NqYC1TbYtvUf0Z2Z74m-zKDRORAe0N04VQhk_0CPDTgpUnjbWvfhg2Y-MwN51mEuBbxz1WqGcWxwO2eQdhFu6vDyPBRtRB3SeAzdWvaX6imEW3TggdW6WATWS2VqPipZaeoEyyK0wb2V8GhyBE-I\",\"type\":\"sync\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=564f127def2fd3f444541b5497a06fac20d76be14261e8bbc27672847e17a324 mac=_kQwx8-abm8W0iIW7LVOMiDGmFRgN9KBBy627ELlORg",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b1\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b2\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b3\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b4\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b5\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b6\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b7\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b8\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b9\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b10\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b11\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b12\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b13\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b14\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b15\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b16\"}],\"sealed\":\"oKGio6Slpqeoqaqr99iBCcEtcxwy12ooKHO2Rxe2oTzh8nxzsKE8fsKUN9AyYv2hLEGqTX6NqYC1TbYtvUf0Z2Z74m-zKDRORAe0N04VQhk_0CPDTgpUnjbWvfhg2Y-MwN51mEuBbxz1WqGcWxwO2eQdhFu6vDyPBRtRB3SeAzdWvaX6imEW3TggdW6WATWS2VqPipZaeoEyyK0wb2V8GhyBE-I\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=7d26f9ab9df93d007137ece1d7e7858a5b65dc281f6ffec479cc4d4a1043c4f0 mac=TKMILqaH1oLUy01OwGk_4-pejeKK2MIQdJETtELiaEM",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":1}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=RaULgvXeTjzrmgERsaSIyi2CGHXpaEjqUL9HGHTu70Y",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k0\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b1\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=2e9da1651b562850265bb0258b059dd47a6610a39eb6ba2dfd82a46ce9feb0e8 mac=46AzAqPbcshcwBYt1FEmSNHDOPPuiW-00To1joeUUMw",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b2\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=c2a4f89e114b231a937724f832b6acc693760271d2541c1ef4f461b33f9bcb06 mac=i_jFQTO8cm_Eu8vg5Dl8lS9jzzyXLDE64LktIVIqVI0",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k2\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b3\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_2 body=bdb520c1764f9912646b7fc681f758a1bb48bdbf3ffa33e5dbfbf2f9d3ac0524 mac=sLQ--dWMm6nExfKnGPUNq1mQdsPh0eljTOXFMVO34VA",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k3\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b4\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_3 body=45dea2cd2d90712961fae6084cd67be123f65295e8193058829cd1c2a53d5893 mac=vdziVigU_alLiQZKFbnLbHN1kKLaKSznFD8ycZFeGCA",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k4\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b5\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_4 body=448e83ffb7680f8e8c09f2c32010abc943c71bbbfe5bf712748342e64e9a510c mac=U8gVjXnoRm0ZSpwCxnl4XssPwGydTIqSZZNMG6xRq2A",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k5\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b6\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_5 body=0b1611a41d069ad332029d6d30a47fa0efaec69f7ebf1be7fc52162aa48ef3c6 mac=zFK1o__mNJ5xyyP-Ongl34bXZF6pEJKQjl7n1-k6zN8",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k6\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b7\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_6 body=f4e1457f254032bf2c9869b9ba73ed2b6770d8388e40718db4d915f49e9e1c96 mac=mojVLgcDgfj3UMu33qmJao-sqsDobXoUIj71c6VN0qE",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k7\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b8\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_7 body=415dfaf88a6c76ffd83a4de5bcf5fa3b55306cf6429d785acab17629373fe0eb mac=LO9PEt-aABn_fWEiMx5o_9VJ3DapAhwNi7zXD-afym0",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k8\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b9\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_8 body=c1bf8025610dc01afe17a85ebd61f37412384692fe37dea15f45449075129105 mac=amHU3VZb_OF-s2D4ejIeC9rrXtew37a1sBdW1HtXFp0",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k9\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b10\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_9 body=61aca059229c9c6ab8f7a5f096d5b3df52a46befa4f7f6b705e0e8a2990ab8da mac=l5jCDMAxivTBG2W3aAkhRC321eUzyOQoywlXaHNeCMM",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k10\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b11\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_10 body=2b7e1d189c2158caac5a056577b908d2e5fb63870f6e0810cd7a14a1fa6990b1 mac=rO6nIdBeloz3JJlHgRciuNs_GO7Ui2ypJxSoBc8gfRw",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k11\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b12\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_11 body=b64f05168c66807aaa09aaccd9334a303688f67b7225a027f3e4aab39cb34a62 mac=Wjpo4OObo25FvHjNeecx2jTlxZaNLP68FsTnbL-l9Aw",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k12\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b13\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_12 body=fd7d2c3c902a770254e0e1d72efcbc842670aa84064ba649efb09d73f3193239 mac=66ZRniQ2OSqgEML4LNxhMNt1XiaFKjXJ0YNIInfE89Y",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k13\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b14\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_13 body=e22166c42f3756da63987cc59a44f44c5cdc90755b36b6c44bbf06f8d504a755 mac=7Xaf2eEJ-zBpm1n6119bE2nvDsyW7P1Hx_EcHlx1XzY",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k14\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b15\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_14 body=d05fec87f8cb26f5f015f63423e7246209ee9dbec14682d0a2793ee7186bcee9 mac=RzH8uRAFwugjBo1TLSGtmooA8xhMpjZkp9Bp9jyp670",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k15\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b16\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_15 body=eeaa13a39a5d791644c3f4b2e656e20505bb527b2e927693845af3af03e8974b mac=Vu4Rc5WtKIYOj2UwCBPYp6ME4znwVQrtgmVgmv2ubac",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
+          "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=936PaBBaGrrrBnrQzAKDPcQYhHLbGd20imx1IWp-Vfk",
           "now": 1789305250001,
           "read_body": true,
           "route": "control"
@@ -1242,97 +794,575 @@
       ]
     }
   ],
-  "refusals": [
+  "header_parse": {
+    "accepted": [
+      {
+        "body_hash": "6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232",
+        "fields": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+          "epoch": 7,
+          "generation": 3,
+          "nonce": "n_7d3e9a",
+          "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "ts": 1789305249602
+        },
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke",
+        "mac": "R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8"
+      },
+      {
+        "body_hash": "e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04",
+        "fields": {
+          "boot": "-",
+          "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+          "generation": 3,
+          "seq": 1,
+          "ts": 1789305249701
+        },
+        "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305249701 body=e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04 mac=tU8J5ojCVpxivB6-xB3Bd4ZG53q6ofBX_fy25qjB654",
+        "kind": "control",
+        "mac": "tU8J5ojCVpxivB6-xB3Bd4ZG53q6ofBX_fy25qjB654"
+      },
+      {
+        "body_hash": "4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c",
+        "fields": {
+          "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+          "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+          "generation": 3,
+          "seq": 6,
+          "ts": 1789305249706
+        },
+        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
+        "kind": "control",
+        "mac": "qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg"
+      },
+      {
+        "body_hash": "6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232",
+        "fields": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+          "epoch": 7,
+          "generation": 3,
+          "nonce": "n_7d3e9a",
+          "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "ts": 1789305249602
+        },
+        "header": "v1 body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8 nonce=n_7d3e9a ts=1789305249602 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e epoch=7 gen=3 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 kind=invoke",
+        "kind": "invoke",
+        "mac": "R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8"
+      },
+      {
+        "body_hash": "e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04",
+        "fields": {
+          "boot": "-",
+          "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+          "generation": 0,
+          "seq": 9007199254740991,
+          "ts": 0
+        },
+        "header": "v1 kind=control gen=0 seq=9007199254740991 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=0 body=e1581ecbfa4ab7655230557afcffebad36266ef24f22a3764ec8c9e37d3bed04 mac=Q9NCTyJXvaQLfDN4CP4MvRzgxtMabgJp-1EcXGnEDd4",
+        "kind": "control",
+        "mac": "Q9NCTyJXvaQLfDN4CP4MvRzgxtMabgJp-1EcXGnEDd4"
+      }
+    ],
+    "malformed": [
+      {
+        "header": "V1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": " v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8 ",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2  gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 generation=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=03 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=-3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=9007199254740992 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a seq=6 body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=caf\u00e9 body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 =n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=Invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
+        "kind": "invoke"
+      },
+      {
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "control"
+      },
+      {
+        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=4B6531BBBFFCED27CBE03A4EC5332D6BADA1C32F15A6581DB34B19387AFABE1C mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
+        "kind": "control"
+      },
+      {
+        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
+        "kind": "control"
+      },
+      {
+        "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 mac=qROHIoD74QQ5OYf7lJkzAPjDLkxJZD4hdQ4XlTi62Pg",
+        "kind": "control"
+      },
+      {
+        "header": "v1 kind=request ts=1789305249706 nonce=n_5c3e9a1b body=4b6531bbbffced27cbe03a4ec5332d6bada1c32f15a6581db34b19387afabe1c mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "kind": "control"
+      },
+      {
+        "header": "",
+        "kind": "control"
+      },
+      {
+        "header": "v1",
+        "kind": "control"
+      },
+      {
+        "header": null,
+        "kind": "control"
+      }
+    ],
+    "unknown_version": [
+      {
+        "header": "v2 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=6eef494c744fa84cc559b3f9550908afeced006127191118732b72be9fc12232 mac=R0fHaAXCsIcAgp6PUXKrL6ANpvSkwOZiWZJObXBXWq8",
+        "kind": "invoke"
+      }
+    ]
+  },
+  "hello": {
+    "answer": "{\"boot\":\"bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\",\"pool\":{\"free\":64,\"size\":64},\"version\":2}",
+    "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n1\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\n-\n1789305249701\n4aa7a1315fc6dadd60a25a3dfc798cd1918e24f69990350210d5ae2648d14c1c",
+    "fields": {
+      "boot": "-",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 1,
+      "ts": 1789305249701
+    },
+    "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=- ts=1789305249701 body=4aa7a1315fc6dadd60a25a3dfc798cd1918e24f69990350210d5ae2648d14c1c mac=iy3YDeLL0IS70-cOOA2nufowS6B0LcS0qonS7o8Nh0M",
+    "mac": "iy3YDeLL0IS70-cOOA2nufowS6B0LcS0qonS7o8Nh0M",
+    "ts": 1789305249701
+  },
+  "home": {
+    "answer": "{\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"state\":\"empty\",\"version\":2}",
+    "body": "{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"op\":\"reset\",\"type\":\"home\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n7\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249707\n2138e869444449d0003f7a3a5a44894eded35dba3309cdef3eb03f1231dfdb2e",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 7,
+      "ts": 1789305249707
+    },
+    "header": "v1 kind=control gen=3 seq=7 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249707 body=2138e869444449d0003f7a3a5a44894eded35dba3309cdef3eb03f1231dfdb2e mac=jb7LW9Q-VN_ZOdJipwb0WoWTUDwo_ImIp5ivUNON_CU",
+    "mac": "jb7LW9Q-VN_ZOdJipwb0WoWTUDwo_ImIp5ivUNON_CU",
+    "ts": 1789305249707
+  },
+  "homes": {
+    "answer": "{\"homes\":[\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"vlt_01a09fee-3d4e-7f50-9b6c-7d8e9f0a1b2c\"],\"version\":2}",
+    "body": "{\"type\":\"homes\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n8\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249708\nd3450c5b019e8a48d1cb930eb795dcc235dd3f392553e2ca974b87a72ea38931",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 8,
+      "ts": 1789305249708
+    },
+    "header": "v1 kind=control gen=3 seq=8 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249708 body=d3450c5b019e8a48d1cb930eb795dcc235dd3f392553e2ca974b87a72ea38931 mac=-iKNJiZlzYO2u15bzJkRZwS_UOktrsWyOZBwb-jpVqU",
+    "mac": "-iKNJiZlzYO2u15bzJkRZwS_UOktrsWyOZBwb-jpVqU",
+    "ts": 1789305249708
+  },
+  "invalid_fields": [
     {
-      "body": "{\"error\":\"bad_request\",\"version\":1}",
-      "code": "bad_request",
-      "status": 400
+      "field": "athanor",
+      "value": ""
     },
     {
-      "body": "{\"error\":\"capacity\",\"version\":1}",
-      "code": "capacity",
-      "status": 409
+      "field": "athanor",
+      "value": "ath with space"
     },
     {
-      "body": "{\"error\":\"conflict\",\"version\":1}",
-      "code": "conflict",
-      "status": 409
+      "field": "server",
+      "value": "mcp\nrow"
     },
     {
-      "body": "{\"error\":\"epoch_ahead\",\"version\":1}",
-      "code": "epoch_ahead",
-      "status": 409
+      "field": "nonce",
+      "value": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
     },
     {
-      "body": "{\"error\":\"internal\",\"version\":1}",
-      "code": "internal",
-      "status": 500
+      "field": "nonce",
+      "value": "caf\u00e9"
     },
     {
-      "body": "{\"error\":\"lapsed\",\"version\":1}",
-      "code": "lapsed",
-      "status": 409
+      "field": "athanor",
+      "value": 42
     },
     {
-      "body": "{\"error\":\"nonce_cache_full\",\"version\":1}",
-      "code": "nonce_cache_full",
-      "status": 503
+      "field": "nonce",
+      "value": null
     },
     {
-      "body": "{\"error\":\"replay\",\"version\":1}",
-      "code": "replay",
-      "status": 409
+      "field": "generation",
+      "value": "3"
     },
     {
-      "body": "{\"error\":\"stale_boot\",\"version\":1}",
-      "code": "stale_boot",
-      "status": 409
+      "field": "generation",
+      "value": true
     },
     {
-      "body": "{\"error\":\"stale_control\",\"version\":1}",
-      "code": "stale_control",
-      "status": 409
+      "field": "epoch",
+      "value": -1
     },
     {
-      "body": "{\"error\":\"stale_epoch\",\"version\":1}",
-      "code": "stale_epoch",
-      "status": 409
+      "field": "epoch",
+      "value": 1.5
     },
     {
-      "body": "{\"error\":\"status_too_large\",\"version\":1}",
-      "code": "status_too_large",
-      "status": 409
-    },
-    {
-      "body": "{\"error\":\"too_large\",\"version\":1}",
-      "code": "too_large",
-      "status": 413
-    },
-    {
-      "body": "{\"error\":\"too_many_owners\",\"version\":1}",
-      "code": "too_many_owners",
-      "status": 400
-    },
-    {
-      "body": "{\"error\":\"unauthorized\",\"version\":1}",
-      "code": "unauthorized",
-      "status": 401
-    },
-    {
-      "body": "{\"error\":\"unavailable\",\"version\":1}",
-      "code": "unavailable",
-      "status": 503
-    },
-    {
-      "body": "{\"error\":\"unknown_owner\",\"version\":1}",
-      "code": "unknown_owner",
-      "status": 409
-    },
-    {
-      "body": "{\"error\":\"version\",\"version\":1}",
-      "code": "version",
-      "status": 409
+      "field": "ts",
+      "value": 9007199254740992
     }
+  ],
+  "invalid_messages": [
+    {
+      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\",\"version\":1}",
+      "error": "version",
+      "name": "wrong_version",
+      "refusal": "version"
+    },
+    {
+      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"hello\"}",
+      "error": "version",
+      "name": "no_version",
+      "refusal": "version"
+    },
+    {
+      "body": "[]",
+      "error": "not_json",
+      "name": "not_json",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"type\":\"restart\",\"version\":2}",
+      "error": "unknown_type",
+      "name": "unknown_type",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"version\":2}",
+      "error": "missing_field",
+      "name": "no_type",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":3,\"pool\":1,\"type\":\"hello\",\"version\":2}",
+      "error": "unknown_field",
+      "name": "unknown_field",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"g\":3,\"type\":\"hello\",\"version\":2}",
+      "error": "missing_field",
+      "name": "missing_field",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"cyfr_boot\":\"boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\",\"g\":0,\"type\":\"hello\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "zero_generation",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"owners\":[{\"athanor\":\"ath with space\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"release\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "bad_owner_ref",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":0,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"release\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "zero_epoch",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"lease_ms\":30000,\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"renew\",\"version\":2}",
+      "error": "missing_field",
+      "name": "owner_without_epoch",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_1\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_2\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_3\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_4\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_5\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_6\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_7\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_8\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_9\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_10\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_11\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_12\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_13\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_14\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_15\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_16\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_17\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_18\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_19\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_20\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_21\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_22\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_23\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_24\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_25\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_26\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_27\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_28\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_29\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_30\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_31\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_32\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_33\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_34\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_35\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_36\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_37\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_38\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_39\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_40\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_41\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_42\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_43\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_44\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_45\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_46\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_47\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_48\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_49\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_50\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_51\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_52\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_53\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_54\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_55\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_56\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_57\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_58\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_59\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_60\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_61\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_62\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_63\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_64\"},{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_65\"}],\"type\":\"status\",\"version\":2}",
+      "error": "too_many",
+      "name": "too_many_owners",
+      "refusal": "too_many_owners"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":60001,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "out_of_range",
+      "name": "oversize_lease",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":86400001,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "out_of_range",
+      "name": "oversize_idle",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"lease_ms\":0,\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"renew\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "zero_lease",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"Fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "bad_program_definition",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env\":{},\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "unknown_field",
+      "name": "program_extra_field",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "no_programs",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b1\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b2\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b3\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b4\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b5\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b6\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b7\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b8\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b9\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b10\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b11\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b12\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b13\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b14\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b15\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b16\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b17\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "too_many",
+      "name": "too_many_programs",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"},{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "duplicate",
+      "name": "duplicate_program",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx server --token vault:api_token\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "vault_reference",
+      "name": "vault_command",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "too_large",
+      "name": "long_command",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"api_token\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "env_name_form",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\",\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "duplicate",
+      "name": "duplicate_env_name",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"PATH\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "reserved_env_name",
+      "name": "reserved_env_name",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"CYFR_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "reserved_env_name",
+      "name": "reserved_env_prefix",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"not base64!\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "bad_sealed",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":1048576,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "scratch_disk_bound",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"shared\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "unknown_home",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"memory_bytes\":1024,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "small_memory_bound",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"login_command\":\"login --token vault:t\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "vault_reference",
+      "name": "vault_login_command",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "missing_field",
+      "name": "program_without_home",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"attach\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "open_unknown_mode",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"argv\":[\"--force\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"sign_in\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "sign_in_with_argv",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":\"../etc\",\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "open_bad_home_id",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "open_null_home_id",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"login_command\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "null_login_command",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "null_memory_bound",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"has space\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "open_bad_key",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"attach\",\"version\":2}",
+      "error": "unknown_type",
+      "name": "open_session_type_unknown",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"lines\":[\"one\\ntwo\"],\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"type\":\"send\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "send_line_with_newline",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"after\":0,\"e\":7,\"max_wait_ms\":30001,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"type\":\"recv\",\"version\":2}",
+      "error": "out_of_range",
+      "name": "recv_wait_too_long",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"after\":0,\"e\":7,\"max_wait_ms\":25000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"session\":\"ss_short\",\"type\":\"recv\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "recv_bad_session",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"home_id\":null,\"op\":\"reset\",\"type\":\"home\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "home_without_id",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"home_id\":\"vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"op\":\"make\",\"type\":\"home\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "home_unknown_op",
+      "refusal": "bad_request"
+    }
+  ],
+  "key_hex": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+  "key_text": {
+    "invalid": [
+      "",
+      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4",
+      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f0",
+      " 303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4g",
+      "0x3132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+      "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8="
+    ],
+    "valid": [
+      "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+      "303132333435363738393A3B3C3D3E3F404142434445464748494A4B4C4D4E4F"
+    ]
+  },
+  "label": "cyfr-locus/v1/backends",
+  "literal_env_names": [
+    "NODE_ENV",
+    "LOG_LEVEL",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+    "NO_COLOR",
+    "DEBUG"
   ],
   "masking": {
     "input": {
@@ -1371,5 +1401,311 @@
       "short1",
       "Basic x"
     ]
-  }
+  },
+  "open": {
+    "answer": "{\"pty\":false,\"resumed\":false,\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"status\":\"running\",\"version\":2}",
+    "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_open_7d3e9a\ndb84b4baccea1397e0479baae8a5a8ad35ba5814f501bebda48897b80acdf153",
+    "fields": {
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "epoch": 7,
+      "generation": 3,
+      "nonce": "n_open_7d3e9a",
+      "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
+      "ts": 1789305249602
+    },
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_open_7d3e9a body=db84b4baccea1397e0479baae8a5a8ad35ba5814f501bebda48897b80acdf153 mac=AAd2S2hZNgsUJsyOqnM2ZV0SO3ANFb19qVbRwDvNxqE",
+    "mac": "AAd2S2hZNgsUJsyOqnM2ZV0SO3ANFb19qVbRwDvNxqE"
+  },
+  "owner": {
+    "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+    "epoch": 7,
+    "generation": 3,
+    "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2"
+  },
+  "owner_key_hex": "f852539d36794b12e52011f7023836f32a6c3ee1c3a373ad48545ef6f03bd4f9",
+  "reconcile": {
+    "answer": "{\"released\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":4,\"g\":2,\"server\":\"mcp_01a09fee-1b2c-7d3e-8f40-5a6b7c8d9e0f\"}],\"version\":2}",
+    "body": "{\"keep\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"reconcile\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n2\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249702\n718717810b8514555d1d0bc2aa048738a86ccb9533103f1a1e29b279545cdb3e",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 2,
+      "ts": 1789305249702
+    },
+    "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249702 body=718717810b8514555d1d0bc2aa048738a86ccb9533103f1a1e29b279545cdb3e mac=VVSb3kQPwYun_bpCyRpi8WY37twu9JIfvnEV_lneGRQ",
+    "mac": "VVSb3kQPwYun_bpCyRpi8WY37twu9JIfvnEV_lneGRQ",
+    "ts": 1789305249702
+  },
+  "recv": {
+    "answer": "{\"dropped\":1,\"lines\":[{\"seq\":2,\"text\":\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"result\\\":{\\\"tools\\\":[]}}\"}],\"running\":true,\"version\":2}",
+    "answer_ended": "{\"dropped\":0,\"exit_code\":0,\"lines\":[{\"seq\":3,\"text\":\"Login successful.\"}],\"running\":false,\"version\":2}",
+    "body": "{\"after\":0,\"e\":7,\"max_wait_ms\":25000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"type\":\"recv\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249604\nn_recv_7d3e9a\na9c071ac45c823975c1e507cef2c923f0847c0002ebf97412af1d8c6bb93bc86",
+    "fields": {
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "epoch": 7,
+      "generation": 3,
+      "nonce": "n_recv_7d3e9a",
+      "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
+      "ts": 1789305249604
+    },
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249604 nonce=n_recv_7d3e9a body=a9c071ac45c823975c1e507cef2c923f0847c0002ebf97412af1d8c6bb93bc86 mac=NJtn7Kh9aB2J-3eKJW0Mjeedn99Q02uUnTSc4TaHqnI",
+    "mac": "NJtn7Kh9aB2J-3eKJW0Mjeedn99Q02uUnTSc4TaHqnI"
+  },
+  "refusals": [
+    {
+      "body": "{\"error\":\"bad_request\",\"version\":2}",
+      "code": "bad_request",
+      "status": 400
+    },
+    {
+      "body": "{\"error\":\"capacity\",\"version\":2}",
+      "code": "capacity",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"conflict\",\"version\":2}",
+      "code": "conflict",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"epoch_ahead\",\"version\":2}",
+      "code": "epoch_ahead",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"home_over_cap\",\"version\":2}",
+      "code": "home_over_cap",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"internal\",\"version\":2}",
+      "code": "internal",
+      "status": 500
+    },
+    {
+      "body": "{\"error\":\"lapsed\",\"version\":2}",
+      "code": "lapsed",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"nonce_cache_full\",\"version\":2}",
+      "code": "nonce_cache_full",
+      "status": 503
+    },
+    {
+      "body": "{\"error\":\"program_failed\",\"version\":2}",
+      "code": "program_failed",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"replay\",\"version\":2}",
+      "code": "replay",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"stale_boot\",\"version\":2}",
+      "code": "stale_boot",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"stale_control\",\"version\":2}",
+      "code": "stale_control",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"stale_epoch\",\"version\":2}",
+      "code": "stale_epoch",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"status_too_large\",\"version\":2}",
+      "code": "status_too_large",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"too_large\",\"version\":2}",
+      "code": "too_large",
+      "status": 413
+    },
+    {
+      "body": "{\"error\":\"too_many_owners\",\"version\":2}",
+      "code": "too_many_owners",
+      "status": 400
+    },
+    {
+      "body": "{\"error\":\"unauthorized\",\"version\":2}",
+      "code": "unauthorized",
+      "status": 401
+    },
+    {
+      "body": "{\"error\":\"unavailable\",\"version\":2}",
+      "code": "unavailable",
+      "status": 503
+    },
+    {
+      "body": "{\"error\":\"unknown_owner\",\"version\":2}",
+      "code": "unknown_owner",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"unknown_program\",\"version\":2}",
+      "code": "unknown_program",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"unknown_session\",\"version\":2}",
+      "code": "unknown_session",
+      "status": 409
+    },
+    {
+      "body": "{\"error\":\"version\",\"version\":2}",
+      "code": "version",
+      "status": 409
+    }
+  ],
+  "release": {
+    "answer": "{\"released\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"version\":2}",
+    "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"release\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n5\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249705\nb272e326a3ebb3131f0d30d8d4783de76c1fe91c1868415a718bfddcfecf81d0",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 5,
+      "ts": 1789305249705
+    },
+    "header": "v1 kind=control gen=3 seq=5 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249705 body=b272e326a3ebb3131f0d30d8d4783de76c1fe91c1868415a718bfddcfecf81d0 mac=Qdvvwz0wWUHAx-5H_ZYqAtidx7d1roH22lx33n3fmbw",
+    "mac": "Qdvvwz0wWUHAx-5H_ZYqAtidx7d1roH22lx33n3fmbw",
+    "ts": 1789305249705
+  },
+  "renew": {
+    "answer": "{\"renewed\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"unknown\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":1,\"server\":\"mcp_01a09fee-1b2c-7d3e-8f40-5a6b7c8d9e0f\"}],\"version\":2}",
+    "body": "{\"lease_ms\":30000,\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"renew\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n4\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249704\n948f88a0199d9085290be1b06b9e5e01f6818ebe07b75ea13a990ff35d3f591a",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 4,
+      "ts": 1789305249704
+    },
+    "header": "v1 kind=control gen=3 seq=4 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249704 body=948f88a0199d9085290be1b06b9e5e01f6818ebe07b75ea13a990ff35d3f591a mac=L-rUNFzVccPU1MFlCBpT-dUJZyqAbq0VBKHb1-hsjG0",
+    "mac": "L-rUNFzVccPU1MFlCBpT-dUJZyqAbq0VBKHb1-hsjG0",
+    "ts": 1789305249704
+  },
+  "reserved_env_prefixes": [
+    "CYFR_",
+    "LOCUS_",
+    "KEEPER_"
+  ],
+  "routes": {
+    "control": "/locus/v1/backends/control",
+    "health": "/locus/v1/backends/health",
+    "session": "/locus/v1/backends/session"
+  },
+  "seal": {
+    "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+    "iv_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "plaintext": "{\"fetch\":{\"API_TOKEN\":\"sk-canary-0123456789\"}}",
+    "sealed": "oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg"
+  },
+  "seal_key_hex": "eb192dd854791f9586d8382d878518cc74b3ff9faa75c4bbd8879b844d4310db",
+  "send": {
+    "answer": "{\"status\":\"running\",\"version\":2}",
+    "body": "{\"e\":7,\"lines\":[\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"method\\\":\\\"tools/list\\\"}\"],\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"type\":\"send\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249603\nn_send_7d3e9a\n3e970e052c9fecb602185f3eb1d10d45e01f4d7b8452893051ffadb7996d6cd1",
+    "fields": {
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "epoch": 7,
+      "generation": 3,
+      "nonce": "n_send_7d3e9a",
+      "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
+      "ts": 1789305249603
+    },
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249603 nonce=n_send_7d3e9a body=3e970e052c9fecb602185f3eb1d10d45e01f4d7b8452893051ffadb7996d6cd1 mac=2mU1y8cLxYwEN0r5zlIsyGEijWCJmkGTi_g5uFUj2Jg",
+    "mac": "2mU1y8cLxYwEN0r5zlIsyGEijWCJmkGTi_g5uFUj2Jg"
+  },
+  "service": "backends",
+  "status": {
+    "answer": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"lease_ms_left\":28500,\"programs\":[{\"error\":\"exited code=1 signal=null\",\"home\":\"scratch\",\"name\":\"fetch\",\"over_cap\":false,\"restarts\":1,\"sessions\":1,\"status\":\"running\",\"stderr_tail\":\"token [REDACTED] accepted\\n\"}],\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"version\":2}",
+    "answer_kept": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"lease_ms_left\":28500,\"programs\":[{\"error\":\"exited code=1 signal=null\",\"home\":\"kept\",\"home_bytes\":1048576,\"name\":\"kept\",\"over_cap\":false,\"restarts\":1,\"sessions\":1,\"status\":\"running\",\"stderr_bytes\":26}],\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"version\":2}",
+    "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n6\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249706\na42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 6,
+      "ts": 1789305249706
+    },
+    "header": "v1 kind=control gen=3 seq=6 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249706 body=a42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3 mac=jkD1U-zHhbz7g397reYlcPdKbg9NZmO4L1NDWC9RNQU",
+    "mac": "jkD1U-zHhbz7g397reYlcPdKbg9NZmO4L1NDWC9RNQU",
+    "ts": 1789305249706
+  },
+  "statuses": {
+    "bad_request": 400,
+    "capacity": 409,
+    "conflict": 409,
+    "epoch_ahead": 409,
+    "home_over_cap": 409,
+    "internal": 500,
+    "lapsed": 409,
+    "nonce_cache_full": 503,
+    "program_failed": 409,
+    "replay": 409,
+    "stale_boot": 409,
+    "stale_control": 409,
+    "stale_epoch": 409,
+    "status_too_large": 409,
+    "too_large": 413,
+    "too_many_owners": 400,
+    "unauthorized": 401,
+    "unavailable": 503,
+    "unknown_owner": 409,
+    "unknown_program": 409,
+    "unknown_session": 409,
+    "version": 409
+  },
+  "sync": {
+    "answer": "{\"programs\":[{\"name\":\"fetch\",\"status\":\"idle\"}],\"status\":\"running\",\"version\":2}",
+    "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n3\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249703\n2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b",
+    "fields": {
+      "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
+      "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
+      "generation": 3,
+      "seq": 3,
+      "ts": 1789305249703
+    },
+    "header": "v1 kind=control gen=3 seq=3 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249703 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=DYBjcDTdT0B_EBMR1hbWmBJu0ZjWEqVltXyuCLz4Qhs",
+    "mac": "DYBjcDTdT0B_EBMR1hbWmBJu0ZjWEqVltXyuCLz4Qhs",
+    "ts": 1789305249703
+  },
+  "valid_fields": [
+    {
+      "field": "athanor",
+      "value": "12345"
+    },
+    {
+      "field": "nonce",
+      "value": "a=b"
+    },
+    {
+      "field": "generation",
+      "value": 0
+    },
+    {
+      "field": "ts",
+      "value": 9007199254740991
+    }
+  ],
+  "version": 2,
+  "window_ms": 30000
 }

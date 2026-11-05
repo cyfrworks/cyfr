@@ -2539,6 +2539,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :home_max_bytes, :bigint
       # The command a sign-in session runs on a pseudo-terminal.
       add :login_command, :text
+      # A kept `stdio` row's login entry, whose home its sessions run in; a
+      # `pipe` row's catalyst names its own entry and leaves this null.
+      add :login_entry_id, :string
       # A program's network list (JSON).
       add :hosts, :text
       add :url, :string

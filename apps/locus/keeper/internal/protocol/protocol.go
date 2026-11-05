@@ -80,11 +80,15 @@
 // pseudo-terminal; absent reads as false. The `home_make`, `home_measure`
 // and `home_retire` requests name a kept home by `path` and `uid`.
 //
-// The keeper validates all of these and acts on none of them yet: a home
-// request, and a spawn whose `home_mode` is HomeKept or whose `pty` is
-// true (Request.NotBuilt), is answered CodeNotBuilt. The `home_made`,
-// `home_measured` and `home_retired` replies are defined for the client
-// that will hear them.
+// The keeper runs a kept spawn under its home_uid in its home_path, both
+// within its `--kept-homes <root>:<first>-<last>` (a home directly under the
+// root, a uid of the range), and takes no uid of the pool for it; a kept
+// spawn whose home already holds home_max_bytes is refused as
+// CodeHomeOverCap. A `pty` spawn's stdin, stdout and stderr are a
+// pseudo-terminal, which its stdout frames carry; its stderr ends at once.
+// The home requests act as helpers running as the home's uid: `home_make`
+// makes the home 0700, `home_measure` answers the bytes allocated under it,
+// and `home_retire` ends every process of the uid and removes the home.
 //
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
@@ -120,6 +124,11 @@ const (
 // ChannelEnv is the client environment variable naming the channel socket.
 const ChannelEnv = "KEEPER_CHANNEL"
 
+// KeptHomesEnv is the client environment variable naming the kept-homes root
+// and uid range, `<root>:<first>-<last>`, as the keeper's --kept-homes names
+// them; absent for a keeper that keeps no homes.
+const KeptHomesEnv = "KEEPER_KEPT_HOMES"
+
 // Message types.
 const (
 	TypeSpawn        = "spawn"
@@ -150,9 +159,15 @@ const (
 	// CodeMemoryUnavailable refuses a spawn whose memory bound the keeper
 	// cannot enforce where it runs.
 	CodeMemoryUnavailable = "memory_unavailable"
-	// CodeNotBuilt answers a valid request the keeper does not act on yet
-	// (Request.NotBuilt).
-	CodeNotBuilt = "not_built"
+	// CodeHomeOverCap refuses a kept spawn whose home already holds its
+	// home_max_bytes.
+	CodeHomeOverCap = "home_over_cap"
+	// CodeUIDBusy refuses a home_make or a kept spawn on a kept home's uid
+	// that is not free for it: retiring (its last spawn released, its
+	// processes not yet all ended), quarantined (a retirement that could not
+	// finish), or live under another home. A client drawing a uid for a new
+	// home takes another.
+	CodeUIDBusy = "uid_busy"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors
@@ -215,6 +230,15 @@ type Limits struct {
 // Ceilings are the default limits and the most a request may ask for.
 var Ceilings = Limits{Nofile: 1024, Nproc: 128, Core: 0, Fsize: 256 << 20}
 
+// Unlimited is RLIM_INFINITY: no limit at all.
+const Unlimited = ^uint64(0)
+
+// KeptUnbounded names the limits a kept spawn takes no default for: its
+// file size, since its disk is bounded by its home_max_bytes and the kept
+// homes' volume, and a program a person installs may write a file past
+// the ceiling. A request may still lower each to the ceilings' range.
+var KeptUnbounded = []string{"fsize"}
+
 // Floors are the least a request may lower each limit to.
 var Floors = Limits{Nofile: 16, Nproc: 1, Core: 0, Fsize: 1}
 
@@ -224,6 +248,16 @@ type Rlimits struct {
 	Nproc  *uint64 `json:"nproc,omitempty"`
 	Core   *uint64 `json:"core,omitempty"`
 	Fsize  *uint64 `json:"fsize,omitempty"`
+}
+
+// ResolveKept is Resolve for a kept spawn: a limit KeptUnbounded names
+// that r does not set is Unlimited.
+func (r *Rlimits) ResolveKept() Limits {
+	out := r.Resolve()
+	if r == nil || r.Fsize == nil {
+		out.Fsize = Unlimited
+	}
+	return out
 }
 
 // Resolve returns the ceilings lowered by whatever r sets. r may be nil.
@@ -319,19 +353,6 @@ type Request struct {
 	// request that does not carry them is refused, as CYFR's codec refuses
 	// them (Prima.KeeperProtocol).
 	present map[string]bool
-}
-
-// NotBuilt reports whether the keeper answers r CodeNotBuilt rather than
-// acting on it: a home request, or a spawn of a kept home or with a
-// pseudo-terminal.
-func (r *Request) NotBuilt() bool {
-	switch r.Type {
-	case TypeHomeMake, TypeHomeMeasure, TypeHomeRetire:
-		return true
-	case TypeSpawn:
-		return r.HomeMode == HomeKept || (r.Pty != nil && *r.Pty)
-	}
-	return false
 }
 
 // RequestError is a refused request: the code to reply with, the request's

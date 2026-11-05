@@ -50,10 +50,12 @@ defmodule Prima.KeeperProtocol do
   whose absence reads as `false`. `home_make`, `home_measure` and
   `home_retire` carry exactly `id`, `path` and `uid`, under the same rules,
   and are answered `home_made`, `home_measured` (with the home's `bytes`)
-  and `home_retired`. The keeper validates all of these and acts on none
-  of them yet: it answers a home request, and a spawn whose `home_mode`
-  is `"kept"` or whose `pty` is `true`, with an `error` whose code is
-  `not_built`.
+  and `home_retired`. The keeper runs a kept spawn under `home_uid` in
+  its home, both within its `--kept-homes` (a home directly under the
+  root, a uid of the range), and refuses one whose home already holds
+  `home_max_bytes` as `home_over_cap`; a `pty` spawn's stdin, stdout and
+  stderr are a pseudo-terminal, which its stdout frames carry. Each home
+  request acts as a helper running as the home's uid.
 
   ## Frames
 
@@ -328,6 +330,15 @@ defmodule Prima.KeeperProtocol do
   @doc "Each resource limit a spawn may lower, with its least and its most, the keeper's ceiling."
   @spec rlimits() :: [{atom(), {non_neg_integer(), non_neg_integer()}}]
   def rlimits, do: @rlimits
+
+  @doc """
+  The limits a kept spawn takes no default for: its file size, since its
+  disk is held by its `home_max_bytes` and the kept homes' volume. Every
+  other spawn's default is the ceiling `rlimits/0` names, and a kept spawn
+  may still lower these within it.
+  """
+  @spec kept_unbounded_rlimits() :: [atom()]
+  def kept_unbounded_rlimits, do: [:fsize]
 
   @doc "The variable names no spawn's `env` may carry."
   @spec reserved_env_names() :: [String.t()]

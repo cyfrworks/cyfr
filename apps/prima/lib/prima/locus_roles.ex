@@ -42,6 +42,13 @@ defmodule Prima.LocusRoles do
   (`network_mode: service:<guard>`) and starts behind; the runtime, whose
   runners have no network, has none (`nil`).
 
+  A role whose programs keep their folders, the backends role, names the
+  kept folders' root `kept_root`, the compose volume `kept_volume` mounted
+  there (never under `data/`, never in a backup) and the uid range
+  `kept_uids` the keeper's `--kept-homes` flag draws each folder's uid
+  from, outside every pool and every user of the image; every other role
+  has none (`nil`). The root is the release user's group's, mode 1773.
+
   A role whose `isolation` is `nil` spawns into its container's own
   namespaces, so every spawn of the island shares the island's network
   namespace and the container's one IPC namespace (compose's
@@ -101,7 +108,10 @@ defmodule Prima.LocusRoles do
           container: String.t(),
           network: String.t(),
           profile: String.t() | nil,
-          guard: String.t() | nil
+          guard: String.t() | nil,
+          kept_root: String.t() | nil,
+          kept_volume: String.t() | nil,
+          kept_uids: Range.t() | nil
         }
 
   @release %{
@@ -137,7 +147,10 @@ defmodule Prima.LocusRoles do
       container: "cyfr-locus-runtime",
       network: "locus-runtime",
       profile: nil,
-      guard: nil
+      guard: nil,
+      kept_root: nil,
+      kept_volume: nil,
+      kept_uids: nil
     },
     %{
       name: :builds,
@@ -151,7 +164,10 @@ defmodule Prima.LocusRoles do
       container: "cyfr-locus-builds",
       network: "locus-builds",
       profile: "locus-builds",
-      guard: "locus-builds-guard"
+      guard: "locus-builds-guard",
+      kept_root: nil,
+      kept_volume: nil,
+      kept_uids: nil
     },
     %{
       name: :backends,
@@ -165,7 +181,10 @@ defmodule Prima.LocusRoles do
       container: "cyfr-locus-backends",
       network: "locus-backends",
       profile: nil,
-      guard: "locus-backends-guard"
+      guard: "locus-backends-guard",
+      kept_root: "/var/lib/locus/kept",
+      kept_volume: "homes",
+      kept_uids: 40_001..49_999
     }
   ]
 

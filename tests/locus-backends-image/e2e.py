@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The backends image runs a stdio backend end to end, as docker-compose.yml's locus-backends service.
+"""The backends image runs a stdio MCP program end to end, as docker-compose.yml's locus-backends service.
 
-First driven only by requests signed as CYFR signs them (harness.py):
+First driven only by requests signed as CYFR signs them (harness.py), the
+MCP client speaking JSON-RPC over a session's lines as CYFR's does:
 
 - `hello` learns the service's lifetime and pool, and `reconcile` of
   nothing keeps nothing.
-- A synced owner's probe backend starts, the owner is reported running,
-  and its tools are listed as `<backend>__<tool>`, every result naming the
-  service (`cyfr-locus`) in its `_meta`.
-- The backend's sealed credential reaches its environment and never leaves
+- A synced owner runs at once and starts nothing; the first open starts
+  the probe program, which answers MCP's handshake and its own tools/list
+  over the session, and a line read again by its number is the same line.
+- The program's sealed credential reaches its environment and never leaves
   the service: a result, a tool's error, a command's output, the stderr tail
   a status reports and the service's own log carry `[REDACTED]` where it
   was; a literal variable is not masked.
-- A backend no call used within the owner's idle period is retired: its
-  process and uid gone, its tools still listed, reported `idle`; the next
-  call wakes it under a new process, and it is ready again.
-- A released owner runs nothing, and an invoke for it is `unknown_owner`.
+- A session with no line sent or read within the owner's idle period is
+  ended: its process and uid gone, the program reported `idle`; the next
+  call finds the session ended, opens it again (`resumed: false`) and
+  initializes the program afresh under a new process.
+- A released owner runs nothing, and an open for it is `unknown_owner`.
 
 Then driven by `cyfr` itself: docker-compose.yml's cyfr service, from the
 app image (CYFR_IMAGE, `cyfr:push` as the workflow builds it), beside the
@@ -25,9 +27,10 @@ same locus-backends service, both with every setting compose gives them.
 A person signed in on the server (tests/release-boot/fixture.exs) has a
 canary credential, a random token, in the vault under a name this suite
 owns, seeded by the release's fixture (`vault`), defines a stdio server
-whose probe backend reads it from the vault over `/mcp` with the person's
-session, and calls the backend's tools as the console calls them (`/mcp`
-dispatches declared tools only):
+whose probe program reads it from the vault over `/mcp` with the person's
+session, and calls the program's tools as the console calls them (`/mcp`
+dispatches declared tools only); cyfr's MCP client drives the program over
+the session routes:
 
 - entering a credential is a sensitive change: `vault.create` over `/mcp`
   with the session alone, typing the canary, answers the consent signal
@@ -35,16 +38,20 @@ dispatches declared tools only):
   and enters nothing; the scans below cover what it typed;
 - the probe's environment holds the canary; every answer the person sees
   carries it masked;
+- a session cyfr opened that no line used within the idle period
+  (CYFR_LOCUS_BACKENDS_IDLE_MS, set short here) is ended, its process gone,
+  and the person's next call is answered all the same: cyfr opens the
+  session again and initializes the program afresh under a new process;
 - after that round trip the canary appears in no request-log row
   (`mcp_logs`), no decision row (`decision_logs`, `policy_logs`) and
   neither container's log;
-- the controller (`cyfr`) is killed while the service holds its owner: an
-  invoke signed under that owner is still served until the owner's lease
-  runs out, and within the lease (CYFR_LOCUS_BACKENDS_LEASE_MS, set short
-  here) the service releases it — no process of its backend is left — and
-  serves nothing under it again: the same invoke is refused `lapsed`, or
-  `unknown_owner` once the service has forgotten the owner, and still
-  refused a lease later.
+- the controller (`cyfr`) is killed while the service holds its owner: a
+  session message signed under that owner is still served until the
+  owner's lease runs out, and within the lease
+  (CYFR_LOCUS_BACKENDS_LEASE_MS, set short here) the service releases it —
+  no process of its program is left — and serves nothing under it again: an
+  open is refused `lapsed`, or `unknown_owner` once the service has
+  forgotten the owner, and still refused a lease later.
 
 Prerequisites: harness.py's, and the app image. Usage: tests/locus-backends-image/e2e.py IMAGE
 """
@@ -61,8 +68,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HERE, MCP_VERSION, POOL_FIRST, POOL_LAST, ROOT, ROUTES, STATUSES, Controller, Stack, eventually, expect,
-    backend_environ, owner_of, post, probe, require_docker, run, wire_json,
+    HERE, MCP_VERSION, POOL_FIRST, POOL_LAST, ROOT, ROUTES, STATUSES, VERSION, Controller, Stack, eventually,
+    expect, backend_environ, owner_of, post, probe, require_docker, run, wire_json,
 )
 import imagesuite  # noqa: E402
 
@@ -70,6 +77,10 @@ SECRET = "e2e-backend-secret-0123456789"
 LITERAL = "debug-literal-kept"
 IDLE_MS = 3_000
 OWNER = owner_of("e2e")
+
+# The idle period cyfr asks the service for: short, so an idle session
+# ends within the suite's patience.
+CYFR_IDLE_MS = 4_000
 
 # The app image the second half runs, as the workflow's job builds it.
 CYFR_IMAGE = os.environ.get("CYFR_IMAGE", "cyfr:push")
@@ -99,23 +110,38 @@ def scripted_controller(image):
 
         env = {"PROBE_SECRET": SECRET, "LOG_LEVEL": LITERAL}
         status, synced, _ = c.sync(OWNER, [probe(env=env)], idle_ms=IDLE_MS)
-        expect(status == 200 and synced["backends"][0]["name"] == "probe",
-               "a sync of one probe backend is admitted at once", synced)
+        expect(status == 200 and synced == {"version": VERSION, "status": "running",
+                                            "programs": [{"name": "probe", "status": "idle"}]},
+               "a sync of one probe program is admitted at once and starts nothing", synced)
         c.running(OWNER)
-        report = c.report(OWNER)
-        expect(report["backends"][0]["status"] == "ready" and report["e"] == OWNER["e"],
-               "the owner runs at its version, its backend ready", report)
+        expect(not stack.pool_processes(), "a synced program runs nothing until it is opened")
 
-        status, listed, _, _ = c.invoke(OWNER, "tools/list")
-        names = sorted(tool["name"] for tool in listed["result"]["tools"])
-        expect(status == 200 and "probe__whoami" in names and "probe__echo_env" in names,
-               "the backend's tools are listed as <backend>__<tool>", names)
-        server = listed["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]
-        expect(server["name"] == "cyfr-locus", "every result names the service", server)
+        client = c.mcp(OWNER, "probe")
+        names = sorted(tool["name"] for tool in client.list_tools())
+        expect("whoami" in names and "echo_env" in names and client.initializations == 1 and client.resumed is False,
+               "the first open starts the program, which answers the handshake and its own tools/list", names)
+        report = c.report(OWNER)
+        expect(report["programs"][0]["status"] == "running" and report["programs"][0]["sessions"] == 1
+               and report["e"] == OWNER["e"], "the owner runs at its version, its program running in one session",
+               report)
+
+        # A recv is idempotent: the same `after` answers the same lines.
+        status, opened = c.open(OWNER, "probe", key="mcp")
+        expect(status == 200 and opened["resumed"] is True and opened["session"] == client.session,
+               "an open of a running session's key attaches to it", opened)
+        line = json.dumps({"jsonrpc": "2.0", "id": 900, "method": "tools/list"}, separators=(",", ":"))
+        expect(c.send(OWNER, client.session, [line]) == (200, {"version": VERSION, "status": "running"}),
+               "a line is sent to the running session")
+        first, _after, _running = c.lines_until(OWNER, client.session, lambda lines: any('"id":900' in x for x in lines),
+                                                after=client.after)
+        again = c.recv(OWNER, client.session, client.after, 0)
+        expect([x["text"] for x in again[1]["lines"]] == first and again[1]["dropped"] == 0,
+               "a recv answers the same lines again for the same after", [first, again])
+        client.after = again[1]["lines"][-1]["seq"]
 
         who = c.tool(OWNER, "probe__whoami")
         environ = backend_environ(stack, who["pid"], who["uid"])
-        expect(f"PROBE_SECRET={SECRET}" in environ, "the sealed credential reaches the backend's environment")
+        expect(f"PROBE_SECRET={SECRET}" in environ, "the sealed credential reaches the program's environment")
 
         # Every way out of the service masks it.
         echoed = c.tool(OWNER, "probe__echo_env", {"name": "PROBE_SECRET", "stderr": True})
@@ -124,7 +150,7 @@ def scripted_controller(image):
         expect(literal == {"value": LITERAL}, "a literal variable is not masked", literal)
 
         status, failed = c.call(OWNER, "probe__fail", {"name": "PROBE_SECRET"})
-        expect(status == 200 and SECRET not in text_of(failed) and "[REDACTED]" in text_of(failed),
+        expect(status == 200 and "error" in failed and SECRET not in text_of(failed) and "[REDACTED]" in text_of(failed),
                "a tool's error carries the credential masked", failed)
 
         ran = c.tool(OWNER, "probe__run", {"argv": ["/bin/sh", "-c",
@@ -133,35 +159,34 @@ def scripted_controller(image):
                and ran["stderr"].strip() == "Bearer [REDACTED]",
                "a command's output carries the credential masked, whole and after a scheme", ran)
 
-        report = eventually(lambda: (lambda r: r if "[REDACTED]" in r["backends"][0]["stderr_tail"] else None)(
-            c.report(OWNER)), "the stderr tail to hold the masked credential")
-        expect(SECRET not in text_of(report), "a status's stderr tail carries the credential masked",
-               report["backends"][0]["stderr_tail"][-400:])
+        program = eventually(lambda: (lambda p: p if "[REDACTED]" in p["stderr_tail"] else None)(
+            c.program(OWNER)), "the stderr tail to hold the masked credential")
+        expect(SECRET not in text_of(program), "a status's stderr tail carries the credential masked",
+               program["stderr_tail"][-400:])
 
-        # Idle: no call for the idle period retires the process and keeps the tools.
+        # Idle: no line sent or read for the idle period ends the session.
         uid, pid = who["uid"], who["pid"]
-        idle = eventually(lambda: (lambda r: r if r["backends"][0]["status"] == "idle" else None)(c.report(OWNER)),
-                          "the backend to be retired idle", timeout_s=IDLE_MS / 1000 + 20)
-        expect(idle["backends"][0]["tools"] > 0, "an idle backend keeps its tools", idle)
+        idle = eventually(lambda: (lambda p: p if p["status"] == "idle" and p["sessions"] == 0 else None)(
+            c.program(OWNER)), "the session to be ended idle", timeout_s=IDLE_MS / 1000 + 20)
+        expect(idle["restarts"] == 0, "an idle end is no crash", idle)
         eventually(lambda: not stack.under_uid(uid), f"no process of uid {uid} once idle")
-        status, listed, _, _ = c.invoke(OWNER, "tools/list")
-        expect(status == 200 and "probe__whoami" in [t["name"] for t in listed["result"]["tools"]],
-               "an idle backend's tools stay listed", listed)
+        ended = c.recv(OWNER, client.session, client.after, 0)
+        expect(ended[0] == 200 and ended[1]["running"] is False, "the ended session answers running: false", ended)
 
         woken = c.tool(OWNER, "probe__whoami")
-        expect(woken["pid"] != pid and POOL_FIRST <= woken["uid"] <= POOL_LAST,
-               "the next call wakes the backend under a new process", woken)
-        report = c.report(OWNER)
-        expect(report["backends"][0]["status"] == "ready", "a woken backend is ready", report)
+        expect(woken["pid"] != pid and POOL_FIRST <= woken["uid"] <= POOL_LAST and client.initializations == 2
+               and client.resumed is False,
+               "the next call opens the session again and initializes the program afresh under a new process", woken)
+        expect(c.program(OWNER)["status"] == "running", "a woken program runs", c.report(OWNER))
 
         status, released, _ = c.release([OWNER])
         expect(status == 200 and [(o["server"], o["e"]) for o in released["released"]] == [(OWNER["server"],
                                                                                           OWNER["e"])],
                "a release names the version it released", released)
         eventually(lambda: not stack.pool_processes(), "no pooled process once released")
-        status, refused, _, _ = c.invoke(OWNER, "tools/list")
-        expect(status == STATUSES["unknown_owner"] and refused == {"version": 1, "error": "unknown_owner"},
-               "an invoke for a released owner is unknown_owner", refused)
+        status, refused = c.open(OWNER, "probe", key="after-release")
+        expect(status == STATUSES["unknown_owner"] and refused == {"version": VERSION, "error": "unknown_owner"},
+               "an open for a released owner is unknown_owner", refused)
 
         time.sleep(1)
         expect(SECRET not in stack.logs(), "the credential never reaches the service's log")
@@ -188,6 +213,7 @@ services:
       - cyfr-data:/app/data
     environment:
       - CYFR_LOCUS_BACKENDS_LEASE_MS={LEASE_MS}
+      - CYFR_LOCUS_BACKENDS_IDLE_MS={CYFR_IDLE_MS}
 volumes:
   cyfr-data: {{}}
 """
@@ -353,12 +379,6 @@ def cyfr_controller(image):
         }})
         print(f"created: {json.dumps(created)[:400]}", flush=True)
 
-        # The backend runs on the service under the owner cyfr synced.
-        processes = eventually(lambda: stack.pool_processes(), "cyfr's owner to run its backend", timeout_s=60)
-        environ = backend_environ(stack, processes[0]["pid"], processes[0]["uids"][0])
-        expect(f"PROBE_SECRET={canary}" in environ,
-               "the canary reaches the backend's environment from the vault, through cyfr's seal")
-
         # A proxied tool is `<server>:<tool>`, which the console calls for
         # the person through the gate (/mcp dispatches declared tools only);
         # the server opted into that plane with `console`.
@@ -368,6 +388,25 @@ def cyfr_controller(image):
         echoed = console("e2e-probe:probe__echo_env", {"name": "PROBE_SECRET", "stderr": True})
         expect("ok" in echoed and canary not in text_of(echoed) and "[REDACTED]" in text_of(echoed),
                "the person sees the canary masked in the tool's answer", echoed)
+
+        # The program runs on the service in the session cyfr opened.
+        processes = eventually(lambda: stack.pool_processes(), "cyfr's session to run its program", timeout_s=60)
+        environ = backend_environ(stack, processes[0]["pid"], processes[0]["uids"][0])
+        expect(f"PROBE_SECRET={canary}" in environ,
+               "the canary reaches the program's environment from the vault, through cyfr's seal")
+
+        # Idle: the session cyfr opened ends when no line uses it, and the
+        # person's next call wakes it: cyfr opens it again and initializes
+        # the program afresh.
+        idle_pid = processes[0]["pid"]
+        eventually(lambda: not stack.pool_processes(), "cyfr's session to end idle",
+                   timeout_s=CYFR_IDLE_MS / 1000 + 20)
+        woken = console("e2e-probe:probe__whoami", {})
+        expect("ok" in woken and canary not in text_of(woken), "the next call through cyfr is answered after the idle "
+               "end", woken)
+        rewoken = eventually(lambda: stack.pool_processes(), "cyfr's woken session to run its program", timeout_s=60)
+        expect(all(p["pid"] != idle_pid for p in rewoken), "cyfr woke the program under a new process",
+               [idle_pid, rewoken])
         failed = console("e2e-probe:probe__fail", {"name": "PROBE_SECRET"})
         expect(canary not in text_of(failed), "a tool's error through cyfr carries no canary", failed)
         ran = console("e2e-probe:probe__run", {"argv": ["/bin/sh", "-c", 'echo "$PROBE_SECRET"; echo "$PROBE_SECRET" >&2']})
@@ -398,17 +437,16 @@ def cyfr_controller(image):
         ).splitlines() if x.startswith("OWNER=")][-1][len("OWNER="):])
         owner = {"athanor": server["athanor"], "server": server["server"], "e": server["e"]}
         _status, _health, boot = post(stack.base + ROUTES["health"], {"content-type": "application/json"},
-                                      wire_json({"version": 1}))
+                                      wire_json({"version": VERSION}))
         controller = Controller(stack.base, stack.key, generation=server["g"])
         controller.boot = boot
 
         def served():
-            status, answer, _boot, _request = controller.invoke(owner, "tools/list")
-            return status, answer
+            return controller.open(owner, "probe", key=f"e2e-{secrets.token_hex(4)}")
 
         status, answer = served()
-        expect(status == 200 and any(t["name"] == "probe__echo_env" for t in answer["result"]["tools"]),
-               "an invoke signed under cyfr's owner is served while cyfr holds it", answer)
+        expect(status == 200 and answer["resumed"] is False,
+               "an open signed under cyfr's owner is served while cyfr holds it", answer)
 
         # The controller dies with its owner held.
         killed_at = time.monotonic()
@@ -416,9 +454,20 @@ def cyfr_controller(image):
         status, answer = served()
         expect(status == 200, "the dead controller's owner is still served inside its lease", answer)
 
-        eventually(lambda: not stack.pool_processes(), "the service to release the dead controller's owner",
+        # Released is the service's word, never an emptied pool: the open just
+        # served ends at cyfr's idle period (CYFR_IDLE_MS), which can come
+        # before the lease runs out. The test's controller asks the status
+        # above every sequence the dead controller used.
+        controller.seq = 10**12
+
+        def released():
+            report = controller.report(owner)
+            return report is None or report["state"] == "draining"
+
+        eventually(released, "the service to release the dead controller's owner",
                    timeout_s=LEASE_MS / 1000 + 10)
         released_after = time.monotonic() - killed_at
+        eventually(lambda: not stack.pool_processes(), "no process of the released owner left", timeout_s=10)
         # The lease runs from the last renewal, before the kill; the
         # service's sweep ticks every second and retires the backend after.
         expect(released_after <= LEASE_MS / 1000 + 3,
@@ -428,11 +477,11 @@ def cyfr_controller(image):
         # the owner, as an owner it does not know: either way, not served.
         status, answer = served()
         expect(isinstance(answer, dict) and answer.get("error") in ("lapsed", "unknown_owner")
-               and status == STATUSES[answer["error"]] and answer == {"version": 1, "error": answer["error"]},
+               and status == STATUSES[answer["error"]] and answer == {"version": VERSION, "error": answer["error"]},
                "nothing is served under the dead controller's owner once released", answer)
         time.sleep(LEASE_MS / 1000)
         status, answer = served()
-        expect(status != 200 and "result" not in (answer or {}),
+        expect(status != 200 and "session" not in (answer or {}),
                "nor a lease later", answer)
         expect(canary not in stack.logs(), "the canary is not in locus-backends' log after the release")
     finally:

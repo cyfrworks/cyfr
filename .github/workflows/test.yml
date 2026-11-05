@@ -1484,11 +1484,19 @@ jobs:
       - name: Residue across uid reuse
         run: python3 tests/locus-backends-image/residue.py cyfr-locus:backends
 
-      # A backend past LOCUS_BACKENDS_MEMORY_BYTES is ended at its bound in
-      # a cgroup of its own, alone: its sibling and the service keep
-      # running, and it restarts.
-      - name: Every backend's memory bound
+      # A program past its row's memory bound, or LOCUS_BACKENDS_MEMORY_BYTES
+      # without one, is ended at its bound in a cgroup of its own, alone:
+      # its sibling and the service keep running, and its next open starts
+      # it again.
+      - name: Every program's memory bound
         run: python3 tests/locus-backends-image/memory.py cyfr-locus:backends
+
+      # A kept home: a uid of the kept range that no pool holds, shared by
+      # two sessions of one entry, surviving retirement, unreadable by a
+      # pooled uid and by locus, ended and refused over its disk cap until
+      # a reset, removed with its entry, and a sign-in on a pseudo-terminal.
+      - name: Kept homes
+        run: python3 tests/locus-backends-image/kept_home.py cyfr-locus:backends
 
       # The Compose proof (tests/compose-proof/run.sh) on the app image
       # built above, as the proof's own build would make it: the shipped

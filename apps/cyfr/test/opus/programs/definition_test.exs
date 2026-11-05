@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.External.BackendDefinitionTest do
+defmodule Opus.Programs.DefinitionTest do
   @moduledoc """
   A stdio server's backends: named, capped per server, a command that
   names no vault entry, env names that are neither malformed nor reserved,
@@ -11,7 +11,7 @@ defmodule Emissary.External.BackendDefinitionTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.External.BackendDefinition
+  alias Opus.Programs.Definition, as: BackendDefinition
 
   defp backend(overrides \\ %{}) do
     Map.merge(

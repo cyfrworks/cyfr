@@ -28,8 +28,9 @@ defmodule Prima.LocusRolesTest do
   @release_keys ~w(bin edge_address edge_caddy_address edge_ip_range edge_network edge_subnet
                    edge_tailscale_address endpoint_address endpoint_ip_range endpoint_network
                    endpoint_subnet home_root image_role run_dir run_size uid user)
-  @role_keys ~w(container first_uid guard home_size isolation last_uid name network pool port
-                profile service user_prefix)
+  @role_keys ~w(container first_uid guard home_size isolation kept_first_uid kept_last_uid
+                kept_root kept_volume last_uid name network pool port profile service
+                user_prefix)
 
   # The file's spelling of a value of the module: atoms as their names,
   # a uid range as its first and last uid.
@@ -42,10 +43,12 @@ defmodule Prima.LocusRolesTest do
 
   defp spelled_role(role) do
     {uids, role} = Map.pop!(role, :uids)
+    {kept, role} = Map.pop!(role, :kept_uids)
 
     role
     |> Map.new(fn {key, value} -> {to_string(key), spelled(value)} end)
     |> Map.merge(%{"first_uid" => uids.first, "last_uid" => uids.last})
+    |> Map.merge(%{"kept_first_uid" => kept && kept.first, "kept_last_uid" => kept && kept.last})
   end
 
   test "the vector file is the table, value by value, under exactly its keys" do

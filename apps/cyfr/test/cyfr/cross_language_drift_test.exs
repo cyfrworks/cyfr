@@ -492,11 +492,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(chains directory entries identifiers keys kinds kits locate max_entry_bytes prefix protocol requests)}
     ],
     "keeper_protocol.json" => [
-      {"apps/cyfr/test/emissary/external/backend_definition_test.exs", ~w(reserved_env_prefixes)},
+      {"apps/cyfr/test/opus/programs/definition_test.exs", ~w(reserved_env_prefixes)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames valid_requests invalid_requests not_built_requests replies home_replies)},
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames valid_requests invalid_requests home_requests replies home_replies)},
       {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
-      {"apps/locus/keeper/internal/serve/serve_linux_test.go", ~w(not_built_requests)},
+      {"apps/locus/keeper/internal/serve/serve_linux_test.go", ~w(home_requests)},
       {"apps/locus/test/locus/config_test.exs", ~w(valid_requests invalid_requests)},
       {"apps/locus/test/locus/keeper_test.exs", ~w(valid_requests)},
       {"apps/locus/test/locus/keeper_vectors_test.exs",
@@ -505,25 +505,24 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(control_frames valid_requests replies)},
       {"apps/locus/test/locus/runtime/keeper_memory_test.exs", ~w(valid_requests replies)},
       {"apps/prima/test/prima/keeper_protocol_test.exs",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests not_built_requests replies home_replies)}
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies)}
     ],
     "layout.json" => [
       {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid unsupported)}
     ],
     "locus_backends.json" => [
-      {"apps/cyfr/test/emissary/external/backend_definition_test.exs",
+      {"apps/cyfr/test/opus/programs/definition_test.exs",
        ~w(reserved_env_prefixes literal_env_names)},
-      {"apps/cyfr/test/emissary/external/backends_test.exs",
-       ~w(version bounds owner sync status)},
+      {"apps/cyfr/test/opus/programs_test.exs", ~w(bounds)},
       {"apps/locus/test/locus/backends/auth_test.exs",
-       ~w(auth_header routes key_hex builds_key_hex sync status invoke auth_rejected)},
+       ~w(auth_header routes key_hex builds_key_hex sync status open auth_rejected)},
       {"apps/locus/test/locus/backends/service_test.exs",
-       ~w(version routes key_hex owner hello sync release status invoke invalid_messages fence_rejected refusals)},
+       ~w(version routes key_hex owner hello sync release status open invalid_messages fence_rejected refusals)},
       {"apps/locus/test/locus/listener_test.exs", ~w(version service key_hex owner hello sync)},
       {"apps/prima/test/prima/locus_backends_test.exs",
-       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status invoke seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking)},
+       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking)},
       {"tests/locus-backends-image/harness.py",
-       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status invoke seal refusals)}
+       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals)}
     ],
     "locus_builds.json" => [
       {"apps/cyfr/test/support/scripted_builder.ex", ~w(key_hex request_key_hex lines)},
@@ -814,18 +813,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
   test "the MCP conformance vocabulary is spelled the same in every client" do
     # Check shared metadata keys, request headers and binary sentinels across
-    # bundled clients: the Go CLI's literals, the backends wire's vector file
-    # (which the image suite's harness speaks from) and the codes the Locus
-    # backends service answers with, its numeric literals read without their
-    # digit separators.
+    # bundled clients: the Go CLI's literals and the codec's. The backends
+    # service carries lines and speaks no MCP, so neither it nor its vector
+    # file is a source.
     protocol = read!("apps/prima/lib/prima/mcp/protocol.ex")
     message = read!("apps/prima/lib/prima/mcp/message.ex")
-    fixture = read!("tests/fixtures/locus_backends.json")
-
-    service =
-      "apps/locus/lib/locus/backends/service.ex"
-      |> read!()
-      |> String.replace(~r/(\d)_(\d)/, "\\1\\2")
 
     client_go = read!("apps/codex/internal/mcp/client.go")
     types_go = read!("apps/codex/internal/mcp/types.go")
@@ -833,12 +825,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
     request_metadata = read!("apps/cyfr/lib/emissary/web/plugs/mcp_request_metadata.ex")
 
     # {literal, [sources that must carry it]} — a source is listed only
-    # where it genuinely speaks that part of the vocabulary (the backends
-    # service names its `_meta` keys through Prima.MCP.Protocol, so the
-    # vector file carries them for it).
+    # where it genuinely speaks that part of the vocabulary.
     vocabulary = [
-      {"io.modelcontextprotocol/protocolVersion", [protocol, fixture, go]},
-      {"io.modelcontextprotocol/clientCapabilities", [protocol, fixture, go]},
+      {"io.modelcontextprotocol/protocolVersion", [protocol, go]},
+      {"io.modelcontextprotocol/clientCapabilities", [protocol, go]},
       {"io.modelcontextprotocol/clientInfo", [protocol, go]},
       {"io.modelcontextprotocol/serverInfo", [protocol, go]},
       # The key a repeated change carries its confirmation's secret under:
@@ -846,12 +836,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
       # open a new record.
       {"cyfr/confirmationId", [request_metadata, go]},
       {"=?base64?", [protocol, go]},
-      {"-32020", [message, service]},
-      {"-32022", [message, service]},
+      {"-32020", [message]},
+      {"-32022", [message]},
       # The auth sentinel: the Go CLI keys `errors.Is(err, ErrAuthRequired)`
-      # on this number and the backends service answers with it, but all
-      # three define it independently and nothing else holds them together.
-      {"-33001", [message, service, go]}
+      # on this number, but both define it independently and nothing else
+      # holds them together.
+      {"-33001", [message, go]}
     ]
 
     for {literal, sources} <- vocabulary,
@@ -867,12 +857,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
         assert String.contains?(String.downcase(source), header),
                "request header #{header} missing from #{name}"
       end
-    end
-
-    # The two every signed invoke of the vector file carries.
-    for header <- ["mcp-protocol-version", "mcp-method"] do
-      assert String.contains?(fixture, header),
-             "request header #{header} missing from tests/fixtures/locus_backends.json"
     end
   end
 end

@@ -10,13 +10,14 @@ defmodule Locus.Backends.ServiceTest do
   refusal; header-first refusals that close the connection with the body
   unread; the body bounds and the hash check; every fence vector
   (`fence_rejected`) replayed against a fresh service, a held message's
-  body sent only once the messages after it are answered; the MCP route's
-  conformance refusals and JSON-RPC codes; and, through the probe
-  (`fixtures/probe.mjs`, which needs `node`), a tool call end to end with
-  the owner's secrets masked in every answered field.
+  body sent only once the messages after it are answered; the session
+  route's round trips through the vectors, its refusals before and after
+  the body, and, through the test environment's `Locus.DirectLauncher`, a
+  session end to end: lines sent and received, the owner's secrets masked
+  in every line, a recv replayed by its `after`, a close.
 
   Unless a test says otherwise the service's launcher is a stub that
-  starts nothing: a backend's process never speaks, but for the stderr a
+  starts nothing: a session's process never speaks, but for the stderr a
   vector names, and its release is never reported, so a retiring owner
   stays retiring for the length of a test.
   """
@@ -27,7 +28,6 @@ defmodule Locus.Backends.ServiceTest do
 
   alias Locus.Backends.{Backend, Owners, Service}
   alias Prima.LocusBackends, as: LB
-  alias Prima.MCP.Protocol, as: MCPProtocol
 
   @vectors Path.expand("../../../../../tests/fixtures/locus_backends.json", __DIR__)
            |> File.read!()
@@ -41,15 +41,13 @@ defmodule Locus.Backends.ServiceTest do
   @g @vectors["owner"]["generation"]
   @e @vectors["owner"]["epoch"]
   @instant @vectors["hello"]["ts"]
-  @probe Path.expand("fixtures/probe.mjs", __DIR__)
-  @version_key MCPProtocol.meta_protocol_version_key()
-  @capabilities_key MCPProtocol.meta_client_capabilities_key()
 
   defmodule Launcher do
     @moduledoc false
     # Starts nothing: a spawn answers a handle whose process never speaks
     # but for the stderr the test set, and a release is never reported. The
-    # pool is the test's.
+    # pool is the test's; a kept home is made, empty, and reset or retired
+    # at once.
     import Kernel, except: [send: 2]
 
     def pool_stats(agent, "backends") do
@@ -73,6 +71,17 @@ defmodule Locus.Backends.ServiceTest do
     def send(_handle, _data), do: :ok
     def signal(_handle, _sig), do: :ok
     def release(_agent, _handle, _grace_ms), do: :ok
+    def home_ensure(_agent, _id), do: {:ok, 40_001}
+    def home_measure(_agent, _id), do: {:ok, 0}
+    def home_reset(_agent, _id), do: :ok
+    def home_retire(_agent, _id), do: :ok
+
+    # The homes the vectors' `homes` answer names, in another order: the
+    # service answers them sorted.
+    def home_list(_agent),
+      do:
+        {:ok,
+         ["vlt_01a09fee-3d4e-7f50-9b6c-7d8e9f0a1b2c", "vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b"]}
   end
 
   setup context do
@@ -95,11 +104,10 @@ defmodule Locus.Backends.ServiceTest do
     now = start_supervised!({Agent, fn -> @instant end}, id: :now)
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one}, id: :backends)
 
-    {launcher_opts, backend_opts} =
+    {launcher_opts, session_opts} =
       case context[:launcher] do
         :direct ->
-          {[launcher: Locus.DirectLauncher, launcher_server: []],
-           [release_timeout_ms: 5_000, init_timeout_ms: 30_000]}
+          {[launcher: Locus.DirectLauncher, launcher_server: []], [release_timeout_ms: 5_000]}
 
         nil ->
           {[launcher: Launcher, launcher_server: launcher], []}
@@ -113,7 +121,7 @@ defmodule Locus.Backends.ServiceTest do
            supervisor: supervisor,
            clock: fn -> Agent.get(clock, & &1) end,
            stop_grace_ms: 100,
-           backend_opts: backend_opts
+           session_opts: session_opts
          ] ++ launcher_opts}
       )
 
@@ -226,7 +234,7 @@ defmodule Locus.Backends.ServiceTest do
     post(ctx.port, route("control"), body, [{"x-cyfr-auth", header}])
   end
 
-  defp sync_message(backends, env, opts \\ []) do
+  defp sync_message(programs, env, opts \\ []) do
     owner = %{athanor: @athanor, server: Keyword.get(opts, :server, @server)}
     e = Keyword.get(opts, :e, @e)
 
@@ -244,20 +252,50 @@ defmodule Locus.Backends.ServiceTest do
       e: e,
       lease_ms: 30_000,
       idle_ms: 600_000,
-      backends: backends,
+      programs: programs,
       sealed: sealed
     }
   end
 
-  defp fetch_sync(ctx) do
-    backends = [%{name: "fetch", command: "exec cat", env_names: ["API_TOKEN"]}]
-    answer = control(ctx, sync_message(backends, %{"fetch" => %{"API_TOKEN" => "sk-canary-0"}}))
+  defp program(name, command),
+    do: %{
+      name: name,
+      command: command,
+      login_command: nil,
+      env_names: ["API_TOKEN"],
+      home: :scratch,
+      memory_bytes: nil,
+      home_max_bytes: nil
+    }
+
+  @canary "sk-canary-0123456789"
+
+  defp fetch_sync(ctx, command \\ "exec cat") do
+    answer =
+      control(
+        ctx,
+        sync_message([program("fetch", command)], %{"fetch" => %{"API_TOKEN" => @canary}})
+      )
+
     assert answer.status == 200
   end
 
-  # An MCP message, signed with the owner's key.
+  # A session message, signed with the owner's key.
   defp invoke(ctx, message, opts \\ []) do
-    body = if is_binary(message), do: message, else: Jason.encode!(message)
+    body =
+      cond do
+        is_binary(message) ->
+          message
+
+        true ->
+          {:ok, body} =
+            message
+            |> Map.merge(%{owner: %{athanor: @athanor, server: @server}, e: @e})
+            |> LB.encode_session()
+
+          body
+      end
+
     ts = Agent.get(ctx.now, & &1)
     epoch = Keyword.get(opts, :epoch, @e)
     owner = %{athanor: @athanor, server: @server, generation: @g, epoch: epoch}
@@ -267,30 +305,19 @@ defmodule Locus.Backends.ServiceTest do
       Map.merge(owner, %{boot: @boot, ts: ts, nonce: "n_#{System.unique_integer([:positive])}"})
 
     {:ok, header} = LB.invoke_header(owner_key, fields, Keyword.get(opts, :signed, body))
-    headers = [{"x-cyfr-auth", header} | Keyword.get(opts, :headers, mcp_headers(message))]
-    post(ctx.port, route("mcp"), body, headers)
+    post(ctx.port, route("session"), body, [{"x-cyfr-auth", header}])
   end
 
-  defp mcp(method, params \\ %{}, id \\ 1) do
-    meta = %{@version_key => MCPProtocol.version(), @capabilities_key => %{}}
-
+  defp open_message(opts \\ []) do
     %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "method" => method,
-      "params" => Map.put(params, "_meta", meta)
+      type: :open,
+      program: "fetch",
+      home_id: nil,
+      key: Keyword.get(opts, :key, "mcp"),
+      mode: :run,
+      argv: Keyword.get(opts, :argv, [])
     }
   end
-
-  defp mcp_headers(%{"method" => method} = message) do
-    [{"mcp-protocol-version", MCPProtocol.version()}, {"mcp-method", method}] ++
-      case message do
-        %{"params" => %{"name" => name}} -> [{"mcp-name", name}]
-        _ -> []
-      end
-  end
-
-  defp mcp_headers(_message), do: [{"mcp-protocol-version", MCPProtocol.version()}]
 
   defp json(%{body: body}), do: Jason.decode!(body)
 
@@ -306,14 +333,14 @@ defmodule Locus.Backends.ServiceTest do
 
   describe "the routes" do
     test "health answers the protocol version and the release, without a key", ctx do
-      answer = post(ctx.port, route("health"), ~s({"version":1}))
+      answer = post(ctx.port, route("health"), LB.health_body())
       assert answer.status == 200
       assert answer.headers["x-cyfr-boot"] == @boot
-      assert json(answer) == %{"version" => 1, "release" => Prima.Version.current()}
+      assert json(answer) == %{"version" => 2, "release" => Prima.Version.current()}
 
-      assert_refused(post(ctx.port, route("health"), ~s({"version":2})), "version")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":1})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({})), "version")
-      assert_refused(post(ctx.port, route("health"), ~s({"version":1,"x":1})), "bad_request")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":2,"x":1})), "bad_request")
       assert_refused(post(ctx.port, route("health"), "nope"), "bad_request")
 
       too_large = post(ctx.port, route("health"), String.duplicate(" ", 4097))
@@ -325,12 +352,8 @@ defmodule Locus.Backends.ServiceTest do
       assert_refused(post(ctx.port, "/locus/v1/backends/nope", ""), "bad_request")
       assert_refused(post(ctx.port, "/locus/v1/builds/build", ""), "bad_request")
       assert_refused(post(ctx.port, route("control"), "", [], "GET"), "bad_request")
-
-      answer = post(ctx.port, route("mcp"), "", [], "GET")
-      assert answer.status == 405
-      assert answer.headers["allow"] == "POST"
-      assert answer.headers["x-cyfr-boot"] == @boot
-      assert %{"error" => %{"code" => -32_600}, "id" => nil} = json(answer)
+      assert_refused(post(ctx.port, route("session"), "", [], "GET"), "bad_request")
+      assert_refused(post(ctx.port, "/locus/v1/backends/mcp", "{}"), "bad_request")
     end
   end
 
@@ -341,12 +364,12 @@ defmodule Locus.Backends.ServiceTest do
       # A version of another server row at an earlier generation, for the
       # vectors' reconcile to retire.
       other = "mcp_01a09fee-1b2c-7d3e-8f40-5a6b7c8d9e0f"
-      backends = [%{name: "fetch", command: "exec cat", env_names: []}]
+      programs = [%{program("fetch", "exec cat") | env_names: []}]
 
       seeded =
         control(
           ctx,
-          sync_message(backends, %{"fetch" => %{}}, server: other, generation: 2, e: 4),
+          sync_message(programs, %{"fetch" => %{}}, server: other, generation: 2, e: 4),
           generation: 2,
           seq: 1,
           ts: @instant - 1
@@ -354,7 +377,7 @@ defmodule Locus.Backends.ServiceTest do
 
       assert seeded.status == 200
 
-      for type <- ~w(hello reconcile sync renew release status) do
+      for type <- ~w(hello reconcile sync renew release status home homes) do
         v = @vectors[type]
         at(ctx, v["ts"])
         answer = post(ctx.port, route("control"), v["body"], [{"x-cyfr-auth", v["header"]}])
@@ -364,11 +387,11 @@ defmodule Locus.Backends.ServiceTest do
 
         case type do
           # What a live service answers of these is the vectors' own bytes.
-          t when t in ~w(hello reconcile sync release) ->
+          t when t in ~w(hello reconcile sync release home homes) ->
             assert answer.body == v["answer"], type
 
           "renew" ->
-            assert [%{athanor: @athanor, server: @server, e: @e, state: :starting, rev: 0}] =
+            assert [%{athanor: @athanor, server: @server, e: @e, state: :running}] =
                      read.renewed
 
             assert read.unknown == []
@@ -380,9 +403,19 @@ defmodule Locus.Backends.ServiceTest do
       end
     end
 
-    test "every invalid body is refused with the refusal the vectors name", ctx do
+    test "every invalid body is refused with the refusal the vectors name, on its route", ctx do
+      fetch_sync(ctx)
+
       for vector <- @vectors["invalid_messages"] do
-        answer = control(ctx, %{}, body: vector["body"])
+        answer =
+          case Jason.decode(vector["body"]) do
+            {:ok, %{"type" => type}} when type in ~w(open send recv close) ->
+              invoke(ctx, vector["body"])
+
+            _ ->
+              control(ctx, %{}, body: vector["body"])
+          end
+
         assert_refused(answer, vector["refusal"])
       end
     end
@@ -399,7 +432,7 @@ defmodule Locus.Backends.ServiceTest do
             [],
             [{"x-cyfr-auth", builds_header}],
             [{"x-cyfr-auth", tampered}],
-            [{"x-cyfr-auth", @vectors["invoke"]["header"]}],
+            [{"x-cyfr-auth", @vectors["open"]["header"]}],
             [{"x-cyfr-auth", v["header"]}, {"x-cyfr-auth", v["header"]}]
           ] do
         answer = post(ctx.port, route("control"), v["body"], headers)
@@ -416,7 +449,7 @@ defmodule Locus.Backends.ServiceTest do
 
     test "a body past its bound is refused unread, one not the one signed is unauthorized", ctx do
       max = LB.max_control_bytes()
-      body = ~s({"version":1,"type":"status","owners":[]})
+      body = ~s({"version":2,"type":"status","owners":[]})
 
       fields = %{generation: @g, seq: seq(), cyfr_boot: @cyfr_boot, boot: @boot, ts: @instant}
       {:ok, header} = LB.control_header(LB.control_key(@key), fields, body)
@@ -557,13 +590,11 @@ defmodule Locus.Backends.ServiceTest do
     true = :ets.insert(Service.Nonces, rows)
   end
 
-  # Every backend the vector's syncs name has started and its stderr
-  # arrived: the status the vector asks for is whole. A sync is answered
-  # on admission and its backends start after the answer, one child at a
-  # time, so the children started so far need not be every backend.
+  # Every session the vector's opens started has its stderr: the status
+  # the vector asks for is whole.
   defp await_stderr(ctx, messages, %{"stderr_bytes" => bytes}) do
     wanted = min(bytes, LB.stderr_tail_bytes())
-    named = messages |> Enum.flat_map(&synced_backends/1) |> length()
+    named = Enum.count(messages, &(&1["route"] == "session"))
 
     wait_until(
       fn ->
@@ -578,306 +609,128 @@ defmodule Locus.Backends.ServiceTest do
     )
   end
 
-  defp synced_backends(%{"route" => "control", "body" => body}) do
-    case Jason.decode(body) do
-      {:ok, %{"type" => "sync", "backends" => backends}} -> backends
-      _other -> []
-    end
-  end
+  # ————— sessions —————
 
-  defp synced_backends(_message), do: []
-
-  # ————— MCP —————
-
-  describe "the MCP route" do
-    setup ctx do
+  describe "the session route" do
+    test "each session message reads and verifies as the vectors say", ctx do
       fetch_sync(ctx)
-      :ok
-    end
 
-    test "discovery answers this revision, stamped with the result type and this service", ctx do
-      answer =
-        invoke(ctx, mcp("server/discover"),
-          headers: [{"x-request-id", "req-1"}] ++ mcp_headers(mcp("server/discover"))
-        )
+      # The vectors' open, at its instant: a session of its own, answered
+      # in the open answer's shape.
+      v = @vectors["open"]
+      at(ctx, v["fields"]["ts"])
+      answer = post(ctx.port, route("session"), v["body"], [{"x-cyfr-auth", v["header"]}])
+      assert answer.status == 200, answer.body
 
-      assert answer.status == 200
-      assert answer.headers["mcp-protocol-version"] == MCPProtocol.version()
-      assert answer.headers["x-request-id"] == "req-1"
-      assert answer.headers["x-cyfr-boot"] == @boot
+      assert {:ok, %{status: :running, resumed: false, pty: false}} =
+               LB.read_session_answer(:open, answer.body)
 
-      assert %{"jsonrpc" => "2.0", "id" => 1, "result" => result} = json(answer)
-      assert result["supportedVersions"] == MCPProtocol.supported()
-      assert result["resultType"] == "complete"
-      assert result["cacheScope"] == "private"
-      assert %{"name" => "cyfr-locus"} = result["_meta"][MCPProtocol.meta_server_info_key()]
-
-      # A request without a request id is given one.
-      answer = invoke(ctx, mcp("tools/list"))
-      assert answer.headers["x-request-id"] =~ ~r/\A[0-9a-f-]{36}\z/
-      assert %{"result" => %{"tools" => [], "ttlMs" => 60_000}} = json(answer)
-    end
-
-    test "every conformance refusal is a JSON-RPC error at 400", ctx do
-      version = MCPProtocol.version()
-      call = mcp("tools/call", %{"name" => "fetch__fetch"})
-      no_meta = Map.put(mcp("tools/list"), "params", %{})
-
-      without = fn message, key ->
-        update_in(message, ["params", "_meta"], &Map.delete(&1, key))
-      end
-
-      for {message, headers, code, text} <- [
-            {mcp("tools/list"), [{"mcp-method", "tools/list"}], -32_020,
-             "Missing required MCP-Protocol-Version"},
-            {no_meta, mcp_headers(no_meta), -32_020, "Missing required #{@version_key}"},
-            {mcp("tools/list"),
-             [{"mcp-protocol-version", "2025-11-25"}, {"mcp-method", "tools/list"}], -32_020,
-             "does not match"},
-            {put_in(mcp("tools/list"), ["params", "_meta", @version_key], "2025-11-25"),
-             [{"mcp-protocol-version", "2025-11-25"}, {"mcp-method", "tools/list"}], -32_022,
-             "Unsupported protocol version 2025-11-25"},
-            {without.(mcp("tools/list"), @capabilities_key), mcp_headers(mcp("tools/list")),
-             -32_602, "Missing required #{@capabilities_key}"},
-            {put_in(mcp("tools/list"), ["params", "_meta", @capabilities_key], []),
-             mcp_headers(mcp("tools/list")), -32_602, "#{@capabilities_key} must be an object"},
-            {mcp("tools/list"), [{"mcp-protocol-version", version}, {"mcp-method", "tools/call"}],
-             -32_020, "Mcp-Method header (tools/call)"},
-            {mcp("tools/list"), [{"mcp-protocol-version", version}], -32_020,
-             "Mcp-Method header (absent)"},
-            {call,
-             [
-               {"mcp-protocol-version", version},
-               {"mcp-method", "tools/call"},
-               {"mcp-name", "other"}
-             ], -32_020, "Mcp-Name header (other)"},
-            {call, [{"mcp-protocol-version", version}, {"mcp-method", "tools/call"}], -32_020,
-             "Mcp-Name header (absent)"}
-          ] do
-        answer = invoke(ctx, message, headers: headers)
-        assert answer.status == 400, text
-        assert %{"id" => 1, "error" => %{"code" => ^code, "message" => message}} = json(answer)
-        assert message =~ text
-      end
-
-      # The unsupported revision names the supported one.
-      message = put_in(mcp("tools/list"), ["params", "_meta", @version_key], "2025-11-25")
-      headers = [{"mcp-protocol-version", "2025-11-25"}, {"mcp-method", "tools/list"}]
-
-      assert %{"error" => %{"data" => %{"supported" => [^version], "requested" => "2025-11-25"}}} =
-               json(invoke(ctx, message, headers: headers))
-
-      # A name sent encoded is compared decoded.
-      headers = [
-        {"mcp-protocol-version", version},
-        {"mcp-method", "tools/call"},
-        {"mcp-name", "=?base64?#{Base.encode64("fetch__fetch")}?="}
-      ]
-
-      assert invoke(ctx, call, headers: headers).status == 200
-    end
-
-    test "each JSON-RPC error at its status", ctx do
-      assert %{status: 400, body: body} = invoke(ctx, "{nope")
-      assert %{"error" => %{"code" => -32_700}, "id" => nil} = Jason.decode!(body)
-
-      assert %{status: 400, body: body} = invoke(ctx, "[]")
-      assert %{"error" => %{"code" => -32_600}} = Jason.decode!(body)
-
-      # A notification is answered with nothing.
-      notification = Map.delete(mcp("notifications/initialized"), "id")
-      assert %{status: 202, body: ""} = invoke(ctx, notification)
-
-      assert %{status: 404} = answer = invoke(ctx, mcp("ping"))
-
-      assert %{"error" => %{"code" => -32_601, "message" => "unsupported method: ping"}} =
-               json(answer)
-
-      # A request whose id is null is a request.
-      assert %{status: 404} = invoke(ctx, mcp("ping", %{}, nil))
-
-      answer =
-        invoke(ctx, mcp("tools/call"),
-          headers: [{"mcp-protocol-version", MCPProtocol.version()}, {"mcp-method", "tools/call"}]
-        )
-
-      assert answer.status == 200
-
-      assert %{"error" => %{"code" => -32_603, "message" => "tools/call: missing 'name'"}} =
-               json(answer)
-
-      for {name, text} <- [
-            {"nope", "unknown tool: nope"},
-            {"__fetch", "unknown tool: __fetch"},
-            {"other__fetch", "unknown tool: other__fetch"},
-            {"fetch__fetch", "backend 'fetch' not ready: starting"}
-          ] do
-        answer = invoke(ctx, mcp("tools/call", %{"name" => name}))
-        assert answer.status == 200
-
-        assert %{
-                 "result" => %{
-                   "isError" => true,
-                   "content" => [%{"type" => "text", "text" => ^text}],
-                   "resultType" => "complete"
-                 }
-               } =
-                 json(answer)
+      # The vectors' send, recv and close name a session this service never
+      # opened: read and verified, they are refused as unknown.
+      for type <- ~w(send recv close) do
+        v = @vectors[type]
+        at(ctx, v["fields"]["ts"])
+        answer = post(ctx.port, route("session"), v["body"], [{"x-cyfr-auth", v["header"]}])
+        assert_refused(answer, "unknown_session")
       end
     end
 
-    test "an unauthorized request is -33001 at 401, and closes the connection unread", ctx do
-      message = mcp("tools/list")
-      other_key = :binary.copy(<<7>>, 32)
+    @tag launcher: :direct
+    test "a session end to end: lines sent and received, masked, replayed, closed", ctx do
+      fetch_sync(ctx, ~s(echo "token $API_TOKEN"; exec cat))
 
-      {:ok, header} =
-        LB.invoke_header(
-          LB.control_key(other_key),
-          %{
-            athanor: @athanor,
-            server: @server,
-            generation: @g,
-            epoch: @e,
-            boot: @boot,
-            ts: @instant,
-            nonce: "n_x"
-          },
-          Jason.encode!(message)
-        )
+      opened = invoke(ctx, open_message())
+      assert opened.status == 200, opened.body
 
-      for headers <- [
-            [],
-            [{"x-cyfr-auth", header}],
-            [{"x-cyfr-auth", @vectors["status"]["header"]}]
-          ] do
+      assert {:ok, %{session: session, resumed: false}} =
+               LB.read_session_answer(:open, opened.body)
+
+      again = invoke(ctx, open_message())
+
+      assert {:ok, %{session: ^session, resumed: true}} =
+               LB.read_session_answer(:open, again.body)
+
+      sent = invoke(ctx, %{type: :send, session: session, lines: ["hello", "again"]})
+      assert {:ok, %{status: :running}} = LB.read_session_answer(:send, sent.body)
+
+      recv = fn after_seq ->
         answer =
-          post(ctx.port, route("mcp"), Jason.encode!(message), headers ++ mcp_headers(message))
+          invoke(ctx, %{type: :recv, session: session, after: after_seq, max_wait_ms: 2_000})
 
-        assert answer.status == 401
-
-        assert %{"error" => %{"code" => -33_001, "message" => "unauthorized"}, "id" => nil} =
-                 json(answer)
-
-        assert answer.headers["connection"] == "close"
-        assert closed?(answer)
+        assert answer.status == 200, answer.body
+        {:ok, read} = LB.read_session_answer(:recv, answer.body)
+        read
       end
+
+      wait_until(fn -> length(recv.(0).lines) == 3 end, 10_000)
+      read = recv.(0)
+      assert Enum.map(read.lines, & &1.text) == ["token [REDACTED]", "hello", "again"]
+      refute inspect(read) =~ @canary
+      assert %{running: true, dropped: 0} = read
+
+      # Replayed by the same after, the same lines; past them, none.
+      assert Enum.map(recv.(1).lines, & &1.text) == ["hello", "again"]
+      assert Enum.map(recv.(1).lines, & &1.text) == ["hello", "again"]
+
+      past =
+        invoke(ctx, %{type: :recv, session: session, after: 3, max_wait_ms: 0})
+
+      assert {:ok, %{lines: []}} = LB.read_session_answer(:recv, past.body)
+
+      closed = invoke(ctx, %{type: :close, session: session})
+      assert {:ok, %{status: :closed}} = LB.read_session_answer(:close, closed.body)
+      assert %{running: false} = recv.(3)
+
+      sent = invoke(ctx, %{type: :send, session: session, lines: ["late"]})
+      assert {:ok, %{status: :ended}} = LB.read_session_answer(:send, sent.body)
+    end
+
+    test "a session message is refused before its body for its owner, and after it for its shape",
+         ctx do
+      fetch_sync(ctx)
+
+      # No owner at that epoch: refused with the body unread.
+      answer = invoke(ctx, open_message(), epoch: @e + 1)
+      assert_refused(answer, "epoch_ahead")
+      assert answer.headers["connection"] == "close"
 
       # A body other than the one signed.
-      answer = invoke(ctx, message, signed: "{}")
-      assert answer.status == 401
-      assert %{"error" => %{"code" => -33_001}} = json(answer)
+      {:ok, body} =
+        open_message()
+        |> Map.merge(%{owner: %{athanor: @athanor, server: @server}, e: @e})
+        |> LB.encode_session()
+
+      assert_refused(invoke(ctx, body <> " ", signed: body), "unauthorized")
+
+      # A body naming another owner than its signature.
+      {:ok, other} =
+        open_message()
+        |> Map.merge(%{owner: %{athanor: @athanor, server: "mcp_other"}, e: @e})
+        |> LB.encode_session()
+
+      assert_refused(invoke(ctx, other), "bad_request")
+
+      # A control body on the session route, and a program the owner lacks.
+      assert_refused(invoke(ctx, @vectors["status"]["body"]), "bad_request")
+      assert_refused(invoke(ctx, %{open_message() | program: "nope"}), "unknown_program")
+
+      unknown = "ss_" <> String.duplicate("9", 32)
+      assert_refused(invoke(ctx, %{type: :close, session: unknown}), "unknown_session")
     end
 
-    test "a body past its bound is -32600 at 413, unread", ctx do
-      max = LB.max_mcp_bytes()
+    test "a session body past its bound is refused unread", ctx do
+      fetch_sync(ctx)
+      max = LB.max_session_bytes()
       owner = %{athanor: @athanor, server: @server, generation: @g, epoch: @e}
       {:ok, owner_key} = LB.owner_key(@key, owner)
       fields = Map.merge(owner, %{boot: @boot, ts: @instant, nonce: "n_big"})
       {:ok, header} = LB.invoke_header(owner_key, fields, "{}")
 
       socket = connect(ctx.port)
-      :ok = :gen_tcp.send(socket, head(route("mcp"), max + 1, [{"x-cyfr-auth", header}]))
+      :ok = :gen_tcp.send(socket, head(route("session"), max + 1, [{"x-cyfr-auth", header}]))
       answer = socket |> response("") |> Map.put(:socket, socket)
-      assert answer.status == 413
-
-      assert %{"error" => %{"code" => -32_600, "message" => "Request body too large"}} =
-               json(answer)
-
+      assert_refused(answer, "too_large")
       assert closed?(answer)
-    end
-
-    test "a nonce is recorded only once its body was the one signed", ctx do
-      message = mcp("tools/list")
-      body = Jason.encode!(message)
-      owner = %{athanor: @athanor, server: @server, generation: @g, epoch: @e}
-      {:ok, owner_key} = LB.owner_key(@key, owner)
-      fields = Map.merge(owner, %{boot: @boot, ts: @instant, nonce: "n_once"})
-      {:ok, header} = LB.invoke_header(owner_key, fields, body)
-      headers = [{"x-cyfr-auth", header} | mcp_headers(message)]
-
-      assert post(ctx.port, route("mcp"), body <> " ", headers).status == 401
-      assert post(ctx.port, route("mcp"), body, headers).status == 200
-      assert_refused(post(ctx.port, route("mcp"), body, headers), "replay")
-    end
-  end
-
-  # ————— end to end —————
-
-  describe "a tool call through the probe" do
-    @describetag :requires_node
-    @describetag launcher: :direct
-
-    test "is answered, and the owner's secrets are masked in every answered field", ctx do
-      {node, 0} =
-        System.cmd("node", ["-e", "process.stdout.write(process.execPath)"],
-          env: Locus.Test.ProcessFamily.without_cyfr()
-        )
-
-      token = "tok-0123456789abcdef"
-      # A value that is also a tool's description, so the catalogue shows it masked.
-      description = "Answers its arguments"
-
-      backends = [
-        %{
-          name: "probe",
-          command: ~s(exec "#{node}" "#{@probe}"),
-          env_names: ["OTHER", "PROBE_TOKEN"]
-        }
-      ]
-
-      env = %{"probe" => %{"PROBE_TOKEN" => token, "OTHER" => description}}
-      assert control(ctx, sync_message(backends, env)).status == 200
-
-      status = %{type: :status, owners: [%{athanor: @athanor, server: @server}]}
-
-      wait_until(
-        fn ->
-          match?(%{"owners" => [%{"state" => "running"}]}, json(control(ctx, status)))
-        end,
-        5_000
-      )
-
-      tools = json(invoke(ctx, mcp("tools/list")))["result"]["tools"]
-      assert Enum.map(tools, & &1["name"]) == ["probe__echo", "probe__secret"]
-
-      assert Enum.find(tools, &(&1["name"] == "probe__echo"))["description"] ==
-               "[probe] [REDACTED]"
-
-      answer =
-        json(
-          invoke(
-            ctx,
-            mcp("tools/call", %{"name" => "probe__echo", "arguments" => %{"said" => "hi"}})
-          )
-        )
-
-      assert %{"content" => [%{"text" => ~s({"said":"hi"})}], "resultType" => "complete"} =
-               answer["result"]
-
-      answer =
-        json(
-          invoke(
-            ctx,
-            mcp("tools/call", %{
-              "name" => "probe__secret",
-              "arguments" => %{"name" => "PROBE_TOKEN"}
-            })
-          )
-        )
-
-      assert %{"content" => [%{"text" => "[REDACTED]"}]} = answer["result"]
-
-      # The backend's own error, which quotes the caller's text, masked too.
-      answer = json(invoke(ctx, mcp("tools/call", %{"name" => "probe__#{token}"})))
-      assert %{"isError" => true, "content" => [%{"text" => text}]} = answer["result"]
-      refute text =~ token
-
-      # The status's stderr tail, as the backend wrote it, masked.
-      wait_until(fn -> control(ctx, status).body =~ "secret PROBE_TOKEN" end, 5_000)
-      body = control(ctx, status).body
-      assert body =~ "secret PROBE_TOKEN=[REDACTED]"
-      refute body =~ token
-      refute body =~ description
     end
   end
 end

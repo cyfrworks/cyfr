@@ -51,11 +51,10 @@ defmodule Sanctum.Consent.BootstrapTest do
     component
   end
 
-  # No binding meets a need by mounting yet: the walk derives the shape
-  # before it reads a share or a dependency's profile, so a closure that
-  # declares one, in the source or a dependency, mints nothing.
-  test "a closure with a need met by mounting is skipped not built, and nothing is minted",
-       %{ctx: ctx} do
+  # A need met by mounting is a need like any other the walk leaves for
+  # its person to bind: a closure that declares one, in the source or a
+  # dependency, is minted as one with an unbound credential need is.
+  test "a closure with a need met by mounting is minted like any other", %{ctx: ctx} do
     login = %{
       "needs" => %{
         "claude" => %{
@@ -75,9 +74,8 @@ defmodule Sanctum.Consent.BootstrapTest do
     assert {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
 
     for ref <- ~w(reagent:local.boot-mount-dep reagent:local.boot-mount-app) do
-      assert {ref, {:not_built, :mount}} in skipped
-      refute ref in minted
-      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+      refute Enum.any?(skipped, &match?({^ref, _reason}, &1)), inspect(skipped)
+      assert ref in minted
     end
   end
 

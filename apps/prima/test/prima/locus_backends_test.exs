@@ -6,8 +6,9 @@ defmodule Prima.LocusBackendsTest do
   The backends wire reproduces every shared vector
   (`tests/fixtures/locus_backends.json`): the protocol's data and bounds,
   the keys derived over the service label, each control message's and the
-  invoke's canonical string, MAC and header, every control body and answer
-  read to its members and written back to its bytes, the sealed
+  each session message's canonical string, MAC and header, every control
+  and session body and answer read to its members and written back to its
+  bytes, the sealed
   environment, every accepted and malformed header, every valid and invalid
   field, every invalid message refused with its error and answered with its
   refusal, every rejected header refused at its instant, every fence
@@ -20,13 +21,13 @@ defmodule Prima.LocusBackendsTest do
   use ExUnit.Case, async: true
 
   alias Prima.{KeeperProtocol, LocusBackends, MacEnvelope}
-  alias Prima.MCP.Protocol, as: MCPProtocol
 
   @vectors Path.expand("../../../../tests/fixtures/locus_backends.json", __DIR__)
            |> File.read!()
            |> Jason.decode!()
 
-  @control_types ~w(hello reconcile sync renew release status)
+  @control_types ~w(hello reconcile sync renew release status home homes)
+  @session_types ~w(open send recv close)
 
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
   defp unhex(text), do: Base.decode16!(text, case: :lower)
@@ -43,6 +44,18 @@ defmodule Prima.LocusBackendsTest do
   end
 
   defp owner, do: atom_keys(@vectors["owner"])
+
+  # A session body by its type, read by the session reader; every other body
+  # by the control reader.
+  defp read_message(body) do
+    case Jason.decode(body) do
+      {:ok, %{"type" => type}} when type in ~w(open send recv close) ->
+        LocusBackends.read_session(body)
+
+      _ ->
+        LocusBackends.read_control(body)
+    end
+  end
 
   describe "the shared vectors" do
     test "the protocol's data is what the vectors say" do
@@ -93,13 +106,13 @@ defmodule Prima.LocusBackendsTest do
       assert LocusBackends.reserved_env_prefixes() == @vectors["reserved_env_prefixes"]
     end
 
-    test "the MCP names an invoke carries through are Prima.MCP.Protocol's" do
-      assert LocusBackends.mcp_headers() == MCPProtocol.request_headers()
-
-      assert LocusBackends.mcp_meta_keys() == [
-               MCPProtocol.meta_protocol_version_key(),
-               MCPProtocol.meta_client_capabilities_key()
-             ]
+    test "the health probe's body is the version alone, and another version is refused" do
+      assert LocusBackends.health_body() == ~s({"version":#{@vectors["version"]}})
+      assert :ok = LocusBackends.read_health(LocusBackends.health_body())
+      assert {:error, {:version, 1}} = LocusBackends.read_health(~s({"version":1}))
+      assert {:error, {:version, nil}} = LocusBackends.read_health("{}")
+      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":2,"x":1}))
+      assert {:error, :not_json} = LocusBackends.read_health("[]")
     end
 
     test "the keys derive from the service key over the label, and the key text decodes" do
@@ -171,30 +184,83 @@ defmodule Prima.LocusBackendsTest do
       assert e == owner().epoch
     end
 
-    test "the invoke signs under the owner's key and carries an MCP body as the vectors say" do
-      v = @vectors["invoke"]
-      fields = atom_keys(v["fields"])
+    test "each session message signs under the owner's key, reads and writes back as the vectors say" do
       {:ok, owner_key} = LocusBackends.owner_key(key(), owner())
 
-      assert Map.take(fields, Map.keys(owner())) == owner()
-      assert {:ok, v["canonical"]} == LocusBackends.canonical(:invoke, fields, v["body"])
-      assert {:ok, v["header"]} == LocusBackends.invoke_header(owner_key, fields, v["body"])
-      [_signed, mac] = String.split(v["header"], " mac=")
-      assert mac == v["mac"]
-      assert v["header"] =~ " gen=#{owner().generation} "
+      for type <- @session_types do
+        v = @vectors[type]
+        fields = atom_keys(v["fields"])
+        session_type = String.to_existing_atom(type)
 
-      assert {:ok, ^fields} =
-               LocusBackends.verify(:invoke, key(), v["header"], v["body"], fields.ts)
+        assert Map.take(fields, Map.keys(owner())) == owner(), type
+        assert {:ok, v["canonical"]} == LocusBackends.canonical(:invoke, fields, v["body"]), type
 
-      body = Jason.decode!(v["body"])
-      assert body["method"] == "tools/list"
-      meta = body["params"]["_meta"]
-      assert Enum.sort(Map.keys(meta)) == Enum.sort(LocusBackends.mcp_meta_keys())
-      assert meta[MCPProtocol.meta_protocol_version_key()] == MCPProtocol.version()
+        assert {:ok, v["header"]} == LocusBackends.invoke_header(owner_key, fields, v["body"]),
+               type
 
-      answer = Jason.decode!(v["answer"])
-      assert answer["id"] == body["id"]
-      assert %{"tools" => [_ | _]} = answer["result"]
+        [_signed, mac] = String.split(v["header"], " mac=")
+        assert mac == v["mac"], type
+        assert v["header"] =~ " gen=#{owner().generation} "
+
+        assert {:ok, ^fields} =
+                 LocusBackends.verify(:invoke, key(), v["header"], v["body"], fields.ts)
+
+        assert {:ok, message} = LocusBackends.read_session(v["body"]), type
+        assert message.type == session_type
+        assert message.owner == %{athanor: owner().athanor, server: owner().server}
+        assert message.e == owner().epoch
+        assert {:ok, v["body"]} == LocusBackends.encode_session(message), type
+
+        assert {:ok, answer} = LocusBackends.read_session_answer(session_type, v["answer"]), type
+
+        assert {:ok, v["answer"]} == LocusBackends.encode_session_answer(session_type, answer),
+               type
+      end
+
+      # A control body is no session message, nor a session body a control one.
+      assert {:error, {:unknown_type, "sync"}} =
+               LocusBackends.read_session(@vectors["sync"]["body"])
+
+      assert {:error, {:unknown_type, "open"}} =
+               LocusBackends.read_control(@vectors["open"]["body"])
+    end
+
+    test "a recv answers lines in rising sequence, each within the line bound" do
+      {:ok, answer} = LocusBackends.read_session_answer(:recv, @vectors["recv"]["answer"])
+      [line] = answer.lines
+
+      assert {:error, {:invalid_field, "lines[1].seq"}} =
+               LocusBackends.encode_session_answer(:recv, %{answer | lines: [line, line]})
+
+      long = %{line | text: :binary.copy("x", LocusBackends.max_line_bytes() + 1)}
+
+      assert {:error, {:invalid_field, "lines[0].text"}} =
+               LocusBackends.encode_session_answer(:recv, %{answer | lines: [long]})
+    end
+
+    test "an ended session's recv names its exit status, and a running one never does" do
+      body = @vectors["recv"]["answer_ended"]
+
+      assert {:ok, %{running: false, exit_code: 0} = ended} =
+               LocusBackends.read_session_answer(:recv, body)
+
+      assert {:ok, ^body} = LocusBackends.encode_session_answer(:recv, ended)
+
+      assert {:error, {:invalid_field, "exit_code"}} =
+               LocusBackends.encode_session_answer(:recv, %{ended | running: true})
+
+      {:ok, running} = LocusBackends.read_session_answer(:recv, @vectors["recv"]["answer"])
+      assert running.exit_code == nil
+      refute @vectors["recv"]["answer"] =~ "exit_code"
+    end
+
+    test "a session body is bounded before it is parsed" do
+      max = LocusBackends.max_session_bytes()
+
+      assert {:error, {:too_large, :session, _bytes, ^max}} =
+               LocusBackends.read_session(:binary.copy(" ", max + 1))
+
+      assert :too_large = LocusBackends.refusal_for({:too_large, :session, max + 1, max})
     end
 
     test "the sealed environment matches, and opens for its owner and lifetime only" do
@@ -284,7 +350,7 @@ defmodule Prima.LocusBackendsTest do
     test "every invalid message is refused with its error, answered with its refusal, and described" do
       for %{"name" => name, "body" => body, "error" => error, "refusal" => refusal} <-
             @vectors["invalid_messages"] do
-        assert {:error, err} = LocusBackends.read_control(body), name
+        assert {:error, err} = read_message(body), name
         assert Atom.to_string(tag(err)) == error, "#{name}: #{inspect(err)}"
         assert Atom.to_string(LocusBackends.code(LocusBackends.refusal_for(err))) == refusal, name
         assert is_binary(LocusBackends.describe(err))
@@ -293,8 +359,10 @@ defmodule Prima.LocusBackendsTest do
       names = Enum.map(@vectors["invalid_messages"], & &1["name"])
 
       for name <- ~w(wrong_version no_version unknown_type bad_owner_ref too_many_owners
-                     oversize_lease oversize_idle bad_backend_definition vault_command
-                     env_name_form reserved_env_name) do
+                     oversize_lease oversize_idle bad_program_definition vault_command
+                     env_name_form reserved_env_name scratch_disk_bound sign_in_with_argv
+                     open_bad_home_id recv_wait_too_long send_line_with_newline
+                     home_without_id) do
         assert name in names, name
       end
     end
@@ -378,7 +446,7 @@ defmodule Prima.LocusBackendsTest do
           {kind, route} =
             case message["route"] do
               "control" -> {:control, LocusBackends.route(:control)}
-              "mcp" -> {:invoke, LocusBackends.route(:mcp)}
+              "session" -> {:invoke, LocusBackends.route(:session)}
             end
 
           assert @vectors["routes"][message["route"]] == route
@@ -390,12 +458,16 @@ defmodule Prima.LocusBackendsTest do
           assert fields.ts == message["now"], name
           assert body_hash == Prima.Digest.sha256_hex(message["body"]), name
 
-          # An invoke carries the MCP conformance headers beside its signature.
-          assert message
-                 |> Map.get("headers", %{})
-                 |> Map.keys()
-                 |> Kernel.--(LocusBackends.mcp_headers()) == [],
-                 name
+          # Every body but a refused one is a message of its route's, read
+          # strictly.
+          if message != refused do
+            assert {:ok, _message} =
+                     if(kind == :control,
+                       do: LocusBackends.read_control(message["body"]),
+                       else: LocusBackends.read_session(message["body"])
+                     ),
+                   name
+          end
 
           if message != refused,
             do: assert(message["status"] in [200, LocusBackends.status(:lapsed)], name)
@@ -437,7 +509,7 @@ defmodule Prima.LocusBackendsTest do
       assert :ok = LocusBackends.verify_body(:control, hash, v["body"])
       assert {:error, :bad_mac} = LocusBackends.verify_body(:control, hash, v["body"] <> " ")
 
-      i = @vectors["invoke"]
+      i = @vectors["open"]
 
       {:ok, _fields, ihash} =
         LocusBackends.verify_header(:invoke, key(), i["header"], i["fields"]["ts"])
@@ -447,7 +519,7 @@ defmodule Prima.LocusBackendsTest do
 
     test "neither kind verifies as the other, nor under the builds key" do
       c = @vectors["status"]
-      i = @vectors["invoke"]
+      i = @vectors["open"]
       builds_key = unhex(@vectors["builds_key_hex"])
 
       assert {:error, :malformed} =
@@ -487,34 +559,35 @@ defmodule Prima.LocusBackendsTest do
     test "a status answer the encoder would send past its bound is refused whole" do
       {:ok, answer} = LocusBackends.read_answer(:status, @vectors["status"]["answer"])
       [owner] = answer.owners
-      [backend] = owner.backends
+      [program] = owner.programs
       tail = String.duplicate("x", LocusBackends.stderr_tail_bytes())
 
-      backends =
-        for i <- 1..LocusBackends.max_backends(),
-            do: %{backend | name: "b#{i}", stderr_tail: tail}
+      programs =
+        for i <- 1..LocusBackends.max_programs(),
+            do: %{program | name: "b#{i}", stderr_tail: tail}
 
-      owner = %{owner | backends: backends}
+      owner = %{owner | programs: programs}
 
       assert {:error, {:too_large, :status_answer, _bytes, _max}} =
                LocusBackends.encode_answer(:status, %{owners: [owner]})
     end
 
     test "a body at another version is refused before its type is read, and maps to the version refusal" do
-      assert {:error, {:version, 2}} = LocusBackends.read_control(~s({"version":2,"type":"nope"}))
+      assert {:error, {:version, 1}} = LocusBackends.read_control(~s({"version":1,"type":"nope"}))
       assert {:error, {:version, nil}} = LocusBackends.read_control(~s({"type":"hello"}))
-      assert {:protocol_mismatch, 1, 2} = LocusBackends.refusal_for({:version, 2})
-      assert {:protocol_mismatch, 1, nil} = LocusBackends.refusal_for({:version, "1"})
+      assert {:error, {:version, 1}} = LocusBackends.read_session(~s({"version":1,"type":"open"}))
+      assert {:protocol_mismatch, 2, 1} = LocusBackends.refusal_for({:version, 1})
+      assert {:protocol_mismatch, 2, nil} = LocusBackends.refusal_for({:version, "2"})
 
-      assert LocusBackends.encode_refusal({:protocol_mismatch, 1, 2}) ==
-               ~s({"error":"version","version":1})
+      assert LocusBackends.encode_refusal({:protocol_mismatch, 2, 1}) ==
+               ~s({"error":"version","version":2})
 
-      assert LocusBackends.status({:protocol_mismatch, 1, nil}) == 409
+      assert LocusBackends.status({:protocol_mismatch, 2, nil}) == 409
 
-      assert {:error, {:version, 2}} =
+      assert {:error, {:version, 1}} =
                LocusBackends.read_answer(
                  :hello,
-                 ~s({"version":2,"boot":"bb","pool":{"size":1,"free":1}})
+                 ~s({"version":1,"boot":"bb","pool":{"size":1,"free":1}})
                )
     end
 
@@ -541,6 +614,59 @@ defmodule Prima.LocusBackendsTest do
 
       assert {:error, {:unknown_field, "extra"}} =
                LocusBackends.encode_control(Map.put(message, :extra, 1))
+    end
+
+    test "a kept program's report names its stderr's length and never its text" do
+      body = @vectors["status"]["answer_kept"]
+
+      assert {:ok, %{owners: [%{programs: [kept]}]} = answer} =
+               LocusBackends.read_answer(:status, body)
+
+      assert %{home: :kept, stderr_bytes: 26, stderr_tail: nil} = kept
+      assert {:ok, ^body} = LocusBackends.encode_answer(:status, answer)
+
+      [owner] = answer.owners
+      with_tail = %{owner | programs: [%{kept | stderr_tail: "a secret line"}]}
+
+      assert {:error, {:unknown_field, "owners[0].programs[0].stderr_tail"}} =
+               LocusBackends.encode_answer(:status, %{owners: [with_tail]})
+
+      {:ok, %{owners: [%{programs: [scratch]} = scratch_owner]}} =
+        LocusBackends.read_answer(:status, @vectors["status"]["answer"])
+
+      assert %{home: :scratch, stderr_bytes: nil} = scratch
+      counted = %{scratch_owner | programs: [%{scratch | stderr_bytes: 3}]}
+
+      assert {:error, {:unknown_field, "owners[0].programs[0].stderr_bytes"}} =
+               LocusBackends.encode_answer(:status, %{owners: [counted]})
+    end
+
+    test "the buffer is bounded by lines as well as bytes, each line charged its framing" do
+      assert LocusBackends.max_buffer_lines() == @vectors["bounds"]["max_buffer_lines"]
+      assert LocusBackends.line_charge_bytes() == @vectors["bounds"]["line_charge_bytes"]
+      assert LocusBackends.line_charge_bytes() > 0
+    end
+
+    test "a sign-in takes no arguments of the opener's, and a disk bound is a kept home's alone" do
+      {:ok, open} = LocusBackends.read_session(@vectors["open"]["body"])
+
+      assert {:ok, _body} =
+               LocusBackends.encode_session(%{open | mode: :sign_in, argv: [], home_id: "vlt_x"})
+
+      {:ok, sync} = LocusBackends.read_control(@vectors["sync"]["body"])
+      [program] = sync.programs
+
+      assert {:ok, _body} =
+               LocusBackends.encode_control(%{
+                 sync
+                 | programs: [%{program | home: :kept, home_max_bytes: 1_048_576}]
+               })
+
+      assert {:error, {:invalid_field, "programs[0].home_max_bytes"}} =
+               LocusBackends.encode_control(%{
+                 sync
+                 | programs: [%{program | home_max_bytes: 1_048_576}]
+               })
     end
 
     test "masking leaves every value alone when there is nothing to mask" do

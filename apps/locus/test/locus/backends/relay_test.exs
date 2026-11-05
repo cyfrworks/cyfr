@@ -3,173 +3,108 @@
 
 defmodule Locus.Backends.RelayTest do
   @moduledoc """
-  A backend's stdio as data, from literal bytes: stdout split into
-  JSON-RPC lines however it arrives, a line or an unfinished one past the
-  frame bound refused; the stderr tail and its slack, masked before the
-  cut; the backend's own requests never answering a call, whatever their
-  id; an answer naming its call by the minted id or the string spelling
-  it; everything else dropped and counted.
+  A session's buffer as data: stdout split into numbered lines whatever
+  the chunks, a trailing carriage return dropped and bytes that are not
+  UTF-8 replaced; a line past its bound refused; a partial line flushed as
+  a line of its own; lines let go only once a take names an `after` at or
+  above them, so a take repeated answers the same lines; the buffer's
+  bound dropping the oldest lines and a take counting them; a take's byte
+  budget; the stderr tail masked and cut.
   """
-
   use ExUnit.Case, async: true
 
   alias Locus.Backends.Relay
 
-  defp line(message), do: Jason.encode!(message) <> "\n"
+  defp texts(lines), do: Enum.map(lines, & &1.text)
 
-  # A relay with one call pending under id 1, tagged `:first`.
-  defp pending(opts \\ []) do
-    {line, 1, relay} = Relay.request(Relay.new(opts), "tools/call", %{name: "echo"}, :first)
+  test "stdout becomes numbered lines, whatever its chunks" do
+    {:ok, relay} = Relay.stdout(Relay.new(), "one\ntw")
+    assert Relay.partial?(relay)
+    {:ok, relay} = Relay.stdout(relay, "o\r\nthree\n")
 
-    assert Jason.decode!(IO.iodata_to_binary(line)) == %{
-             "jsonrpc" => "2.0",
-             "id" => 1,
-             "method" => "tools/call",
-             "params" => %{"name" => "echo"}
-           }
-
-    relay
+    {lines, 0, _relay} = Relay.take(relay, 0, 1_000_000)
+    assert lines == [%{seq: 1, text: "one"}, %{seq: 2, text: "two"}, %{seq: 3, text: "three"}]
   end
 
-  describe "stdout" do
-    test "lines are split on newlines across chunks; blank lines are nothing" do
-      relay = pending()
-      [whole] = [line(%{jsonrpc: "2.0", id: 1, result: "done"})]
-      <<a::binary-size(10), b::binary>> = whole
-
-      assert {:ok, [], relay} = Relay.stdout(relay, "\n  \n" <> a)
-      assert {:ok, [{:answer, :first, {:result, "done"}}], relay} = Relay.stdout(relay, b)
-      assert Relay.pending_count(relay) == 0
-      assert Relay.dropped(relay) == 0
-    end
-
-    test "a line, or an unfinished one, longer than the frame bound is refused" do
-      relay = Relay.new(max_frame_bytes: 16)
-      assert {:ok, [], relay} = Relay.stdout(relay, String.duplicate("x", 16))
-      assert {:error, :frame_too_large} = Relay.stdout(relay, "x")
-
-      assert {:error, :frame_too_large} =
-               Relay.stdout(Relay.new(max_frame_bytes: 16), String.duplicate("y", 17) <> "\n")
-
-      # The bound is the one `Prima.LocusBackends` names.
-      assert Relay.new().max_frame_bytes == Prima.LocusBackends.max_frame_bytes()
-    end
-
-    test "a message carrying a method is the backend's own, and never answers a call, whatever its id" do
-      relay = pending()
-
-      assert {:ok, events, relay} =
-               Relay.stdout(
-                 relay,
-                 line(%{jsonrpc: "2.0", id: 1, method: "sampling/createMessage", result: "x"}) <>
-                   line(%{jsonrpc: "2.0", method: "notifications/progress"})
-               )
-
-      assert events == [
-               {:child, 1, "sampling/createMessage"},
-               {:child, nil, "notifications/progress"}
-             ]
-
-      assert Relay.pending_count(relay) == 1
-    end
-
-    test "an answer names its call by the minted id, a number or the string spelling it" do
-      for id <- [1, 1.0, "1", " 1 ", "1.0"] do
-        assert {:ok, [{:answer, :first, {:error, %{"code" => -1}}}], relay} =
-                 Relay.stdout(
-                   pending(),
-                   line(%{jsonrpc: "2.0", id: id, error: %{code: -1}})
-                 )
-
-        assert Relay.pending_count(relay) == 0
-      end
-
-      for id <- ["01x", "one", "", 2, "2", 1.5, true, [1]] do
-        assert {:ok, [], relay} =
-                 Relay.stdout(pending(), line(%{jsonrpc: "2.0", id: id, result: "x"}))
-
-        assert Relay.pending_count(relay) == 1
-        assert Relay.dropped(relay) == 1
-      end
-    end
-
-    test "anything else is dropped and counted" do
-      relay = pending()
-
-      assert {:ok, [], relay} =
-               Relay.stdout(
-                 relay,
-                 "not json\n" <>
-                   "[1, 2]\n" <>
-                   line(%{jsonrpc: "2.0", id: 1}) <>
-                   line(%{jsonrpc: "2.0", id: nil, result: "x"}) <>
-                   line(%{jsonrpc: "2.0", result: "x"})
-               )
-
-      assert Relay.dropped(relay) == 5
-      assert Relay.pending_count(relay) == 1
-
-      # The pending call is still answered.
-      assert {:ok, [{:answer, :first, {:result, nil}}], _relay} =
-               Relay.stdout(relay, line(%{jsonrpc: "2.0", id: 1, result: nil}))
-    end
+  test "a line that is not UTF-8 is text all the same" do
+    {:ok, relay} = Relay.stdout(Relay.new(), <<"a", 0xFF, "b\n">>)
+    {[%{text: text}], 0, _relay} = Relay.take(relay, 0, 1_000_000)
+    assert String.valid?(text)
+    assert text =~ "a" and text =~ "b"
   end
 
-  describe "calls" do
-    test "ids are minted in order, cancelled one at a time or taken all at once, and start over for the next process" do
-      relay = pending()
-      {_line, 2, relay} = Relay.request(relay, "tools/list", nil, :second)
-      {_line, 3, relay} = Relay.request(relay, "tools/list", nil, :third)
-
-      assert {:second, relay} = Relay.cancel(relay, 2)
-      assert {nil, relay} = Relay.cancel(relay, 2)
-      assert {[:first, :third], relay} = Relay.take_pending(relay)
-      assert Relay.pending_count(relay) == 0
-
-      relay = relay |> Relay.stderr("kept") |> Relay.restart()
-      assert {_line, 1, _relay} = Relay.request(relay, "initialize", %{}, :init)
-      assert Relay.stderr_tail(relay, []) == "kept"
-    end
-
-    test "a notification and an answer to the backend's own request are lines of their own" do
-      notification = IO.iodata_to_binary(Relay.notification("notifications/initialized"))
-      assert String.ends_with?(notification, "}\n")
-
-      assert Jason.decode!(notification) == %{
-               "jsonrpc" => "2.0",
-               "method" => "notifications/initialized"
-             }
-
-      assert Jason.decode!(IO.iodata_to_binary(Relay.reply_error(7, -32_601, "no"))) == %{
-               "jsonrpc" => "2.0",
-               "id" => 7,
-               "error" => %{"code" => -32_601, "message" => "no"}
-             }
-    end
+  test "a line past its bound, whole or still partial, is refused" do
+    relay = Relay.new(max_line_bytes: 8)
+    assert {:error, :line_too_long} = Relay.stdout(relay, "123456789\n")
+    assert {:error, :line_too_long} = Relay.stdout(relay, "123456789")
+    assert {:ok, _relay} = Relay.stdout(relay, "12345678\n")
   end
 
-  describe "stderr" do
-    test "the tail and its slack are kept, the secret masked before the cut is taken" do
-      relay = Relay.new(stderr_tail_bytes: 16, stderr_tail_slack_bytes: 8)
-      relay = Relay.stderr(relay, String.duplicate("a", 30))
-      assert byte_size(relay.stderr) == 24
+  test "a flush makes the partial line a line of its own" do
+    {:ok, relay} = Relay.stdout(Relay.new(), "Paste the code: ")
+    refute Relay.past?(relay, 0)
+    relay = Relay.flush(relay)
+    refute Relay.partial?(relay)
+    assert {[%{seq: 1, text: "Paste the code: "}], 0, _relay} = Relay.take(relay, 0, 1_000)
+    assert Relay.flush(relay) == relay
+  end
 
-      # A secret the cut would split is masked whole first.
-      relay = Relay.stderr(relay, "token=s3cr3t-value!")
-      tail = Relay.stderr_tail(relay, ["s3cr3t-value"])
-      refute tail =~ "s3cr3t"
-      assert tail == String.slice("token=[REDACTED]!", -16, 16)
-      assert byte_size(tail) <= 16
-    end
+  test "a take lets go of what its after names, and answers the same lines when repeated" do
+    {:ok, relay} = Relay.stdout(Relay.new(), "a\nb\nc\n")
 
-    test "the bounds are the ones Prima.LocusBackends names, and the tail is text" do
-      relay = Relay.new()
-      assert relay.tail_bytes == Prima.LocusBackends.stderr_tail_bytes()
-      assert relay.slack_bytes == Prima.LocusBackends.stderr_tail_slack_bytes()
+    {first, 0, relay} = Relay.take(relay, 0, 1_000)
+    {again, 0, relay} = Relay.take(relay, 0, 1_000)
+    assert first == again
 
-      cut = Relay.new(stderr_tail_bytes: 3, stderr_tail_slack_bytes: 0)
-      tail = cut |> Relay.stderr("aé€") |> Relay.stderr_tail([])
-      assert String.valid?(tail)
-    end
+    {rest, 0, relay} = Relay.take(relay, 2, 1_000)
+    assert texts(rest) == ["c"]
+    assert relay.bytes == 1 + Prima.LocusBackends.line_charge_bytes()
+    refute Relay.past?(relay, 3)
+  end
+
+  test "the buffer's bound drops the oldest lines, and a take counts them" do
+    relay = Relay.new(max_buffer_bytes: 6, line_charge_bytes: 1)
+    {:ok, relay} = Relay.stdout(relay, "aa\nbb\ncc\n")
+
+    assert Relay.dropped(relay) == 1
+    {lines, dropped, _relay} = Relay.take(relay, 0, 1_000)
+    assert texts(lines) == ["bb", "cc"]
+    assert dropped == 1
+  end
+
+  test "empty lines are bounded and counted: by their framing and by their number" do
+    {:ok, by_count} = Relay.stdout(Relay.new(max_buffer_lines: 3), String.duplicate("\n", 5))
+    assert Relay.dropped(by_count) == 2
+    {lines, dropped, _relay} = Relay.take(by_count, 0, 1_000)
+    assert texts(lines) == ["", "", ""]
+    assert dropped == 2
+
+    relay = Relay.new(max_buffer_bytes: 32 * 100)
+    {:ok, by_bytes} = Relay.stdout(relay, String.duplicate("\n", 10_000))
+    assert Relay.dropped(by_bytes) == 10_000 - 100
+    assert by_bytes.bytes <= 32 * 100
+  end
+
+  test "a take answers what fits its budget, and one line at least" do
+    {:ok, relay} = Relay.stdout(Relay.new(), "aaaa\nbbbb\n")
+    {one, 0, relay} = Relay.take(relay, 0, 1)
+    assert texts(one) == ["aaaa"]
+    {both, 0, _relay} = Relay.take(relay, 0, 1_000)
+    assert texts(both) == ["aaaa", "bbbb"]
+  end
+
+  test "every byte of stderr is counted, beyond the tail kept" do
+    relay = Relay.new(stderr_tail_bytes: 4, stderr_tail_slack_bytes: 0)
+    relay = relay |> Relay.stderr("abcdef") |> Relay.stderr("gh")
+    assert Relay.stderr_bytes(relay) == 8
+    assert byte_size(relay.stderr) == 4
+  end
+
+  test "the stderr tail is masked and cut to its bound" do
+    relay = Relay.new(stderr_tail_bytes: 16, stderr_tail_slack_bytes: 8)
+    relay = Relay.stderr(relay, "noise noise token secret-123456 ok\n")
+    tail = Relay.stderr_tail(relay, ["secret-123456"])
+    assert byte_size(tail) <= 16
+    refute tail =~ "secret-123456"
   end
 end

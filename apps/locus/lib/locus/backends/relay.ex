@@ -3,64 +3,81 @@
 
 defmodule Locus.Backends.Relay do
   @moduledoc """
-  The stdio side of one backend's process, as data: the JSON-RPC lines
-  its stdout forms, the calls awaiting an answer, and the tail of its
-  stderr. State in, state out; no process. The launcher decodes the
-  process's frames and hands their payloads to `stdout/2` and `stderr/2`.
+  The stdio of one session's process, as data: the sequence-numbered
+  buffer of the lines its stdout writes and the tail of its stderr. State
+  in, state out; no process, and no protocol: what the lines mean is the
+  owner's.
 
-  Stdout is newline-delimited JSON-RPC. A line, or the part of one that
-  has no newline yet, longer than `Prima.LocusBackends.max_frame_bytes/0`
-  is `:frame_too_large`, and the backend's process is killed for it. Each
-  whole line that decodes to a JSON object is one of:
+  Stdout is split on newlines; a line's trailing carriage return is
+  dropped (a pseudo-terminal ends its lines with one), and its bytes that
+  are not UTF-8 are replaced, so every line is text. A line, or the part
+  of one that has no newline yet, longer than
+  `Prima.LocusBackends.max_line_bytes/0` is `:line_too_long`, and the
+  session's process is killed for it. `flush/1` makes the part with no
+  newline a line of its own, as a session on a pseudo-terminal does with a
+  prompt that waits for its answer.
 
-    * a message carrying `method`: the backend's own request or
-      notification (`{:child, id | nil, method}`), which never answers a
-      call, whatever its `id`, since the backend counts its ids apart;
-    * a message carrying `id` and `result` or `error`, naming a pending
-      call by the id `request/4` minted: the call's answer
-      (`{:answer, tag, {:result, result} | {:error, error}}`). A string
-      id names the numeric one it spells, as JSON-RPC peers echo either;
-    * anything else, dropped and counted (`dropped/1`).
+  Each line is numbered from 1. The buffer keeps a line until `take/4`
+  names an `after` at or above its number, and holds at most
+  `Prima.LocusBackends.max_buffer_bytes/0` bytes of lines, each line
+  charged its text and `line_charge_bytes/0` of framing, and at most
+  `max_buffer_lines/0` lines: past either the oldest are dropped and
+  counted, so empty lines cannot grow it without end. `take/4` answers the lines past `after`
+  that fit its byte budget (one at least) and how many lines between
+  `after` and the first it answers were dropped; asked twice with the same
+  `after`, it answers the same lines, so a lost answer is replayed.
 
   Stderr is never parsed: the last `Prima.LocusBackends.stderr_tail_bytes/0`
-  bytes are what a status reports, and `stderr_tail_slack_bytes/0` more
-  are kept so a credential split by the cut is masked before the cut is
-  taken (`stderr_tail/2`).
+  bytes are what a status reports for a scratch program, and
+  `stderr_tail_slack_bytes/0` more are kept so a credential split by the
+  cut is masked before the cut is taken (`stderr_tail/2`). Every byte is
+  counted (`stderr_bytes/1`), which is all a kept program's status names.
   """
 
   alias Prima.LocusBackends
 
-  defstruct line: "",
-            stderr: "",
-            pending: %{},
-            next_id: 0,
+  # `lines` is made by `new/1`: a queue is opaque, so no struct literal
+  # holds one.
+  defstruct partial: "",
+            lines: nil,
+            count: 0,
+            bytes: 0,
+            next_seq: 1,
             dropped: 0,
-            max_frame_bytes: nil,
+            stderr: "",
+            stderr_bytes: 0,
+            max_line_bytes: nil,
+            max_buffer_bytes: nil,
+            max_buffer_lines: nil,
+            charge: nil,
             tail_bytes: nil,
             slack_bytes: nil
 
-  @typedoc "A pending call's own term, answered back with its answer."
-  @type tag :: term()
-
   @type t :: %__MODULE__{
-          line: binary(),
-          stderr: binary(),
-          pending: %{pos_integer() => tag()},
-          next_id: non_neg_integer(),
+          partial: binary(),
+          lines: :queue.queue({pos_integer(), String.t()}),
+          count: non_neg_integer(),
+          bytes: non_neg_integer(),
+          next_seq: pos_integer(),
           dropped: non_neg_integer(),
-          max_frame_bytes: pos_integer(),
+          stderr: binary(),
+          stderr_bytes: non_neg_integer(),
+          max_line_bytes: pos_integer(),
+          max_buffer_bytes: pos_integer(),
+          max_buffer_lines: pos_integer(),
+          charge: pos_integer(),
           tail_bytes: pos_integer(),
           slack_bytes: non_neg_integer()
         }
 
-  @typedoc "What a backend's stdout said."
-  @type event ::
-          {:answer, tag(), {:result, term()} | {:error, term()}}
-          | {:child, term(), String.t()}
+  # A line's share of an answer beyond its text: its sequence number and
+  # the members around them.
+  @line_overhead 32
 
   @doc """
   A relay with no bytes seen. Options, each defaulting to
-  `Prima.LocusBackends`' bound of the same name: `:max_frame_bytes`,
+  `Prima.LocusBackends`' bound of the same name: `:max_line_bytes`,
+  `:max_buffer_bytes`, `:max_buffer_lines`, `:line_charge_bytes`,
   `:stderr_tail_bytes`, `:stderr_tail_slack_bytes`.
   """
   @spec new(keyword() | map()) :: t()
@@ -68,188 +85,154 @@ defmodule Locus.Backends.Relay do
     opts = Map.new(opts)
 
     %__MODULE__{
-      max_frame_bytes: Map.get(opts, :max_frame_bytes, LocusBackends.max_frame_bytes()),
+      lines: :queue.new(),
+      max_line_bytes: Map.get(opts, :max_line_bytes, LocusBackends.max_line_bytes()),
+      max_buffer_bytes: Map.get(opts, :max_buffer_bytes, LocusBackends.max_buffer_bytes()),
+      max_buffer_lines: Map.get(opts, :max_buffer_lines, LocusBackends.max_buffer_lines()),
+      charge: Map.get(opts, :line_charge_bytes, LocusBackends.line_charge_bytes()),
       tail_bytes: Map.get(opts, :stderr_tail_bytes, LocusBackends.stderr_tail_bytes()),
       slack_bytes:
         Map.get(opts, :stderr_tail_slack_bytes, LocusBackends.stderr_tail_slack_bytes())
     }
   end
 
-  @doc """
-  The relay for the backend's next process: stdout and pending calls
-  start over, ids from 1 again; the stderr kept and the count of dropped
-  messages carry on.
-  """
-  @spec restart(t()) :: t()
-  def restart(%__MODULE__{} = relay),
-    do: %{relay | line: "", pending: %{}, next_id: 0}
+  # ————— stdout —————
 
-  # ————— calls —————
+  @doc "Bytes of the process's stdout: every line they complete is buffered."
+  @spec stdout(t(), binary()) :: {:ok, t()} | {:error, :line_too_long}
+  def stdout(%__MODULE__{} = relay, data) when is_binary(data) do
+    [partial | complete] =
+      (relay.partial <> data) |> :binary.split("\n", [:global]) |> Enum.reverse()
 
-  @doc """
-  A call of `method` with `params` (none when nil), pending under a newly
-  minted id with `tag`: the line to write to the backend's stdin, the id,
-  and the relay.
-  """
-  @spec request(t(), String.t(), term(), tag()) :: {iolist(), pos_integer(), t()}
-  def request(%__MODULE__{} = relay, method, params, tag) when is_binary(method) do
-    id = relay.next_id + 1
-    message = with_params(%{jsonrpc: "2.0", id: id, method: method}, params)
+    if Enum.any?([partial | complete], &(byte_size(&1) > relay.max_line_bytes)) do
+      {:error, :line_too_long}
+    else
+      relay =
+        complete |> Enum.reverse() |> Enum.reduce(%{relay | partial: partial}, &push(&2, &1))
 
-    {[Jason.encode_to_iodata!(message), ?\n], id,
-     %{relay | next_id: id, pending: Map.put(relay.pending, id, tag)}}
+      {:ok, relay}
+    end
   end
 
-  @doc "A notification of `method`, which nothing answers: the line to write."
-  @spec notification(String.t(), term()) :: iolist()
-  def notification(method, params \\ nil) when is_binary(method),
-    do: [Jason.encode_to_iodata!(with_params(%{jsonrpc: "2.0", method: method}, params)), ?\n]
+  @doc "Whether part of a line waits for its newline."
+  @spec partial?(t()) :: boolean()
+  def partial?(%__MODULE__{partial: partial}), do: partial != ""
 
-  @doc "An answer to the backend's own request `id`: the line to write."
-  @spec reply_error(term(), integer(), String.t()) :: iolist()
-  def reply_error(id, code, message) when is_integer(code) and is_binary(message),
-    do: [
-      Jason.encode_to_iodata!(%{jsonrpc: "2.0", id: id, error: %{code: code, message: message}}),
-      ?\n
-    ]
+  @doc "The part of a line with no newline yet, made a line of its own."
+  @spec flush(t()) :: t()
+  def flush(%__MODULE__{partial: ""} = relay), do: relay
+  def flush(%__MODULE__{} = relay), do: push(%{relay | partial: ""}, relay.partial)
 
-  defp with_params(message, nil), do: message
-  defp with_params(message, params), do: Map.put(message, :params, params)
+  defp push(relay, raw) do
+    text = raw |> String.trim_trailing("\r") |> String.replace_invalid()
+    seq = relay.next_seq
 
-  @doc "The pending call `id`'s tag, which is pending no more, or nil."
-  @spec cancel(t(), pos_integer()) :: {tag() | nil, t()}
-  def cancel(%__MODULE__{} = relay, id) do
-    {tag, pending} = Map.pop(relay.pending, id)
-    {tag, %{relay | pending: pending}}
+    %{
+      relay
+      | lines: :queue.in({seq, text}, relay.lines),
+        count: relay.count + 1,
+        bytes: relay.bytes + charge(relay, text),
+        next_seq: seq + 1
+    }
+    |> bound()
   end
 
-  @doc "Every pending call's tag, none pending after."
-  @spec take_pending(t()) :: {[tag()], t()}
-  def take_pending(%__MODULE__{} = relay),
-    do: {relay.pending |> Enum.sort() |> Enum.map(&elem(&1, 1)), %{relay | pending: %{}}}
+  # What a line costs the buffer: its text and its framing.
+  defp charge(relay, text), do: byte_size(text) + relay.charge
 
-  @doc "How many calls are pending."
-  @spec pending_count(t()) :: non_neg_integer()
-  def pending_count(%__MODULE__{pending: pending}), do: map_size(pending)
+  # The oldest lines go, counted, until the buffer is within both bounds.
+  defp bound(%{bytes: bytes, count: count} = relay)
+       when bytes <= relay.max_buffer_bytes and count <= relay.max_buffer_lines,
+       do: relay
 
-  @doc "How many stdout messages were neither an answer nor the backend's own."
+  defp bound(relay) do
+    {{:value, {_seq, text}}, lines} = :queue.out(relay.lines)
+
+    bound(%{
+      relay
+      | lines: lines,
+        count: relay.count - 1,
+        bytes: relay.bytes - charge(relay, text),
+        dropped: relay.dropped + 1
+    })
+  end
+
+  @doc "How many lines the buffer dropped for its bound."
   @spec dropped(t()) :: non_neg_integer()
   def dropped(%__MODULE__{dropped: dropped}), do: dropped
 
-  # ————— bytes in —————
-
-  @doc "Bytes of the backend's stdout: the events of every line they complete."
-  @spec stdout(t(), binary()) :: {:ok, [event()], t()} | {:error, :frame_too_large}
-  def stdout(%__MODULE__{} = relay, data) when is_binary(data) do
-    case :binary.match(data, "\n") do
-      :nomatch -> partial(relay, relay.line <> data)
-      _found -> lines(relay, data)
+  @doc "Whether a line past `after` is buffered."
+  @spec past?(t(), non_neg_integer()) :: boolean()
+  def past?(%__MODULE__{} = relay, after_seq) do
+    case :queue.peek_r(relay.lines) do
+      {:value, {seq, _text}} -> seq > after_seq
+      :empty -> false
     end
   end
 
-  # No newline yet: the line grows, within its bound.
-  defp partial(relay, line) do
-    if byte_size(line) > relay.max_frame_bytes,
-      do: {:error, :frame_too_large},
-      else: {:ok, [], %{relay | line: line}}
+  @doc """
+  Every line at or below `after` let go, then the lines past it that fit
+  `budget` bytes of an answer (the first always), each `%{seq, text}`, and
+  how many lines between `after` and the first of them were dropped.
+  """
+  @spec take(t(), non_neg_integer(), pos_integer()) ::
+          {[LocusBackends.line()], non_neg_integer(), t()}
+  def take(%__MODULE__{} = relay, after_seq, budget) do
+    relay = acknowledge(relay, after_seq)
+
+    first =
+      case :queue.peek(relay.lines) do
+        {:value, {seq, _text}} -> seq
+        :empty -> relay.next_seq
+      end
+
+    lines = collect(:queue.to_list(relay.lines), budget, [])
+    {lines, max(first - after_seq - 1, 0), relay}
   end
 
-  defp lines(relay, data) do
-    [partial | lines] = (relay.line <> data) |> :binary.split("\n", [:global]) |> Enum.reverse()
-    lines = Enum.reverse(lines)
-
-    if Enum.any?([partial | lines], &(byte_size(&1) > relay.max_frame_bytes)) do
-      {:error, :frame_too_large}
-    else
-      {events, relay} = Enum.reduce(lines, {[], %{relay | line: partial}}, &on_line/2)
-      {:ok, Enum.reverse(events), relay}
-    end
-  end
-
-  defp on_line(line, {events, relay}) do
-    case line |> String.trim() |> decode() do
-      :blank -> {events, relay}
-      {:ok, message} -> classify(message, events, relay)
-      :error -> {events, drop(relay)}
-    end
-  end
-
-  defp decode(""), do: :blank
-
-  defp decode(line) do
-    case Jason.decode(line) do
-      {:ok, %{} = message} -> {:ok, message}
-      _ -> :error
-    end
-  end
-
-  # The backend's own request or notification: its ids are its own.
-  defp classify(%{"method" => method} = message, events, relay),
-    do: {[{:child, message["id"], child_method(method)} | events], relay}
-
-  defp classify(%{"id" => id} = message, events, relay) when id != nil do
-    with {:ok, outcome} <- outcome(message),
-         {:ok, key} <- pending_key(relay.pending, id) do
-      {tag, pending} = Map.pop(relay.pending, key)
-      {[{:answer, tag, outcome} | events], %{relay | pending: pending}}
-    else
-      :error -> {events, drop(relay)}
-    end
-  end
-
-  defp classify(_message, events, relay), do: {events, drop(relay)}
-
-  defp child_method(method) when is_binary(method), do: method
-  defp child_method(_method), do: ""
-
-  defp outcome(%{"error" => error}) when error != nil, do: {:ok, {:error, error}}
-  defp outcome(%{"result" => result}), do: {:ok, {:result, result}}
-  defp outcome(_message), do: :error
-
-  # The id as minted, or a number or a string spelling it.
-  defp pending_key(pending, id) when is_integer(id) and is_map_key(pending, id), do: {:ok, id}
-
-  defp pending_key(pending, id) when is_float(id) do
-    key = trunc(id)
-    if key == id and is_map_key(pending, key), do: {:ok, key}, else: :error
-  end
-
-  defp pending_key(pending, id) when is_binary(id) do
-    case number(String.trim(id)) do
-      {:ok, number} -> pending_key(pending, number)
-      :error -> :error
-    end
-  end
-
-  defp pending_key(_pending, _id), do: :error
-
-  defp number(""), do: :error
-
-  defp number(text) do
-    case Integer.parse(text) do
-      {integer, ""} ->
-        {:ok, integer}
+  defp acknowledge(relay, after_seq) do
+    case :queue.peek(relay.lines) do
+      {:value, {seq, text}} when seq <= after_seq ->
+        relay
+        |> Map.merge(%{
+          lines: :queue.drop(relay.lines),
+          count: relay.count - 1,
+          bytes: relay.bytes - charge(relay, text)
+        })
+        |> acknowledge(after_seq)
 
       _ ->
-        case Float.parse(text) do
-          {float, ""} -> {:ok, float}
-          _ -> :error
-        end
+        relay
     end
   end
 
-  defp drop(relay), do: %{relay | dropped: relay.dropped + 1}
+  defp collect([], _budget, taken), do: Enum.reverse(taken)
 
-  @doc "Bytes of the backend's stderr, of which the tail and its slack are kept."
+  defp collect([{seq, text} | rest], budget, taken) do
+    cost = byte_size(Jason.encode!(text)) + @line_overhead
+
+    if taken != [] and cost > budget,
+      do: Enum.reverse(taken),
+      else: collect(rest, budget - cost, [%{seq: seq, text: text} | taken])
+  end
+
+  # ————— stderr —————
+
+  @doc "Bytes of the process's stderr, of which the tail and its slack are kept."
   @spec stderr(t(), binary()) :: t()
   def stderr(%__MODULE__{} = relay, data) when is_binary(data) do
     kept = relay.stderr <> data
     keep = relay.tail_bytes + relay.slack_bytes
+    relay = %{relay | stderr_bytes: relay.stderr_bytes + byte_size(data)}
 
     if byte_size(kept) > keep,
       do: %{relay | stderr: binary_part(kept, byte_size(kept) - keep, keep)},
       else: %{relay | stderr: kept}
   end
+
+  @doc "How many bytes of stderr the process wrote, all a kept program's status names."
+  @spec stderr_bytes(t()) :: non_neg_integer()
+  def stderr_bytes(%__MODULE__{stderr_bytes: bytes}), do: bytes
 
   @doc """
   The stderr a status reports: what is kept, masked with `secrets` as

@@ -36,6 +36,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:default_start, nil)
      |> assign(:tool_actions, nil)
      |> assign(:model_status, %{})
+     |> assign(:program_offers, %{})
      |> assign(:installing, nil)
      |> assign(:editor_editing_prompt, nil)
      |> assign(:editor_prompt_content, "")
@@ -419,7 +420,54 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:roles, roles)
     |> assign(:default_start, default_start(roles))
     |> assign(:model_status, Aqua.model_status(ctx, agents))
+    |> assign(:program_offers, program_offers(ctx, agents))
     |> ensure_tool_actions_loaded()
+  end
+
+  # For each agent's catalyst, the programs its login needs suggest and
+  # the athanor has no row for: each the query of the Programs page's
+  # install form. A plan that cannot be read offers nothing.
+  defp program_offers(ctx, agents) do
+    plans =
+      for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
+          is_binary(ref),
+          {:ok, plan} <- [
+            PrismWeb.Ops.call_tool(ctx, "component", %{
+              "action" => "setup_plan",
+              "reference" => ref
+            })
+          ],
+          do: {ref, installable(plan)}
+
+    names =
+      if Enum.any?(plans, fn {_ref, needs} -> needs != [] end) do
+        case PrismWeb.Ops.call_tool(ctx, "mcp_servers/list", %{}) do
+          {:ok, %{servers: servers}} -> Enum.map(servers, & &1[:name])
+          _ -> []
+        end
+      else
+        []
+      end
+
+    for {ref, needs} <- plans, into: %{} do
+      offers =
+        for need <- needs, need.program not in names do
+          %{
+            program: need.program,
+            query: URI.encode_query(%{"install" => ref, "need" => need.name})
+          }
+        end
+
+      {ref, offers}
+    end
+  end
+
+  defp installable(plan) do
+    for need <- plan[:needs] || [],
+        need[:kind] == "login",
+        is_map(need[:install]),
+        is_binary(need[:program]),
+        do: %{name: need[:name], program: need[:program]}
   end
 
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
@@ -689,6 +737,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         model_status={Map.get(@model_status, @soul["catalyst_ref"])}
         installing={@installing}
         athanor={@athanor}
+        offers={Map.get(@program_offers, @soul["catalyst_ref"], [])}
       />
 
       <div :if={@roles != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
@@ -700,6 +749,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           tool_actions={@tool_actions || []}
           is_soul={false}
           athanor={@athanor}
+          offers={Map.get(@program_offers, role["catalyst_ref"], [])}
         />
       </div>
 
@@ -764,6 +814,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :model_status, :any, default: nil
   attr :installing, :any, default: nil
   attr :athanor, :any, default: nil
+  attr :offers, :list, default: []
 
   defp agent_card(assigns) do
     assigns =
@@ -874,6 +925,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           class="w-full rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
         />
       </form>
+
+      <div :if={@offers != []} class="flex flex-wrap items-center gap-2 text-[11px]">
+        <span class="text-amber-300">Its brain runs a program you have not installed:</span>
+        <.link
+          :for={offer <- @offers}
+          navigate={PrismWeb.Focus.path(@athanor, "/programs?" <> offer.query)}
+          class="text-blue-400 hover:underline"
+          data-test="install-program"
+        >
+          install {offer.program}
+        </.link>
+      </div>
 
       <div
         :if={@is_soul and @model_status}

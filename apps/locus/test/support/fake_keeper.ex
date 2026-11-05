@@ -27,13 +27,23 @@ defmodule Locus.Test.FakeKeeper do
     the command's output. In every other mode a build's relay dials first
     and the command reads the stdin the client sends.
   - `:pool_refused` — every `pool` request is refused with `unknown_pool`
+  - `:home_over_cap` — every spawn is refused with `home_over_cap`, as a
+    keeper refuses a kept spawn whose home holds its bound
+  - `:home_refused` — every home request is refused with `internal`
+  - `{:uid_busy, uids}` — a `home_make` on one of `uids` is refused with
+    `uid_busy`, as cyfr-locus refuses a kept uid that is retiring,
+    quarantined or live under another home
 
   A spawn in any pool but `build` is long-lived: its relay carries stdin
   frames to the command as they arrive and its stdout and stderr, apart,
   as the command writes them, until the command exits. A `signal` request
   signals its process group; a `release` with a grace sends it a term
   signal and the kill once the grace passes. A `pool` request is answered
-  with a pool of four uids, three free and none quarantined.
+  with a pool of four uids, three free and none quarantined. A home request
+  acts on its path as the test's own user: `home_make` makes the folder
+  0700, `home_measure` answers the bytes of the files under it, and
+  `home_retire` removes it. A spawn's kept-home and `pty` members are
+  recorded among the requests and run as any other spawn.
   """
 
   use GenServer
@@ -66,12 +76,13 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   @doc """
-  A fake and a `Locus.Keeper` client on its channel, both stopped and the
-  client's attach directory removed when the calling test ends: answers
+  A fake and a `Locus.Keeper` client on its channel, started with
+  `keeper_opts` beside its channel and attach directory, both stopped and
+  the client's attach directory removed when the calling test ends: answers
   `%{fake: fake, name: client, client: client}`, the client addressed
   by its pid.
   """
-  def start_client! do
+  def start_client!(keeper_opts \\ []) do
     {fake, channel} = start()
     attach_dir = short_tmp_dir()
 
@@ -80,7 +91,11 @@ defmodule Locus.Test.FakeKeeper do
       File.rm_rf!(attach_dir)
     end)
 
-    {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
+    {:ok, client} =
+      Locus.Keeper.start_link(
+        [channel: channel, attach_dir: attach_dir, name: nil] ++ keeper_opts
+      )
+
     Process.unlink(client)
     ExUnit.Callbacks.on_exit(fn -> Process.exit(client, :kill) end)
     :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
@@ -236,8 +251,40 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   defp handle_request(%{"type" => "spawn", "id" => id}, %{mode: mode} = state)
-       when mode in [:capacity, :memory_unavailable] do
+       when mode in [:capacity, :memory_unavailable, :home_over_cap] do
     send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
+    state
+  end
+
+  defp handle_request(%{"type" => "home_" <> _, "id" => id}, %{mode: :home_refused} = state) do
+    send(self(), {:send, %{type: "error", id: id, code: "internal"}})
+    state
+  end
+
+  defp handle_request(
+         %{"type" => "home_make", "id" => id, "uid" => uid},
+         %{mode: {:uid_busy, uids}} = state
+       )
+       when is_map_key(uids, uid) do
+    send(self(), {:send, %{type: "error", id: id, code: "uid_busy"}})
+    state
+  end
+
+  defp handle_request(%{"type" => "home_make", "id" => id, "path" => path}, state) do
+    File.mkdir_p!(path)
+    File.chmod!(path, 0o700)
+    send(self(), {:send, %{type: "home_made", id: id}})
+    state
+  end
+
+  defp handle_request(%{"type" => "home_measure", "id" => id, "path" => path}, state) do
+    send(self(), {:send, %{type: "home_measured", id: id, bytes: measured(path)}})
+    state
+  end
+
+  defp handle_request(%{"type" => "home_retire", "id" => id, "path" => path}, state) do
+    File.rm_rf!(path)
+    send(self(), {:send, %{type: "home_retired", id: id}})
     state
   end
 
@@ -288,6 +335,16 @@ defmodule Locus.Test.FakeKeeper do
     do: signal(state, spawn_id, "KILL")
 
   defp handle_request(_request, state), do: state
+
+  defp measured(path) do
+    path
+    |> Path.join("**")
+    |> Path.wildcard(match_dot: true)
+    |> Enum.map(&File.lstat!/1)
+    |> Enum.filter(&(&1.type == :regular))
+    |> Enum.map(& &1.size)
+    |> Enum.sum()
+  end
 
   # A spawn whose command has not yet started holds the signal until it
   # does, as cyfr-locus signals a spawn it has answered whether or not its

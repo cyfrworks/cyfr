@@ -25,6 +25,10 @@ defmodule Prima.Sanitizer do
   # `encryption_key`, `hmac_key`, `derived_key` and `key_material` are the
   # material itself.
   #
+  # `sign_in_line` is what a person types into a program's sign-in
+  # terminal (`PrismWeb.SignInTerminalComponent`): a pasted code or a
+  # password, whatever the program asks.
+  #
   # `confirmation_id` and `confirmationId` are a pending confirmation's
   # secret, which only the asking client holds, under the names it travels
   # by: a context's `confirmation_id` and the MCP request metadata key
@@ -43,7 +47,7 @@ defmodule Prima.Sanitizer do
     device_code stripe basic_auth cookie signature code_verifier
     proof ticket confirmation_id confirmationId recovery_code
     keyring crypto_keyring master_key encryption_key hmac_key
-    derived_key key_material keystore passphrase
+    derived_key key_material keystore passphrase sign_in_line
   )
 
   # Match code, state, key, fields, invitation_url, fragment and the

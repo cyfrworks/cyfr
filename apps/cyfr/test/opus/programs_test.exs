@@ -1,29 +1,30 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.External.BackendsTest do
+defmodule Opus.ProgramsTest do
   @moduledoc """
-  The backends controller and the stdio arm of a server process, against a
-  scripted backends service (`Cyfr.Test.ScriptedBackends`) that speaks the
-  wire (`Prima.LocusBackends`) and verifies every signature the way the
-  service does: the controller greets the service and reconciles at start;
-  a stdio server syncs its owner with its env sealed for its version and
-  the service's lifetime and signs every request with its owner key; one member of the
-  cell holds each backend's claim and the losers of a proposal start
-  nothing, a member that loses a claim stands down without revoking what
-  a peer now runs, and a claim that only lapsed is asked for again; a
-  sync's caller waits for its backends while every other owner's lease is
-  renewed, and a catalogue that changes later is listed again; every stop
-  path releases the owner; renewal fences each owner against its row; a
-  restarted service and a new generation are greeted and live owners synced
-  again; nothing is sent and no claim written without the control plane;
-  refusals of a call are answered as their kind requires; a status names
-  no more owners than the service answers for and is read no further than
-  the answer bound, each refusal of it, a refusal at another protocol
-  version and an answer at one included, its own typed result; an athanor,
-  and the person who created the rows — the server's synthetic principal
-  being one such person — each hold at most a quarter of the pool; no key
-  reaches a status or a crash report.
+  The programs controller (`Opus.Programs`, its local box) and the stdio
+  arm of a server process, against a scripted backends service
+  (`Cyfr.Test.ScriptedBackends`) that speaks the wire (`Prima.LocusBackends`)
+  and verifies every signature the way the service does: the box greets the
+  service and reconciles at start; a stdio server holds its owner, synced
+  with its programs and its env sealed for its version and the service's
+  lifetime, and speaks MCP over a session per backend signed with its owner
+  key; a session is read only while a call is outstanding, so one left
+  alone is ended by idle and the next call opens and initializes it again,
+  and one that ends fails the call awaiting it; one member of the cell
+  holds each owner's claim, a member that loses it tells its holders to
+  stand down without revoking what a peer now runs, and a claim that only
+  lapsed is asked for again; every stop path releases the owner; renewal
+  fences each owner against its row; a restarted service and a new
+  generation are greeted and live owners synced again; nothing is sent
+  without the control plane; refusals are answered as their kind requires;
+  a status names no more owners than the service answers for and is read
+  no further than the answer bound; a pipe row syncs with its program
+  settings; a kept stdio row runs in its login entry's home; a sign-in is
+  relayed both ways and ends with its command; a kept home is reset, and a
+  retire is sent again until it lands; no key reaches a status or a crash
+  report.
   """
   use ExUnit.Case, async: false
 
@@ -35,7 +36,7 @@ defmodule Emissary.External.BackendsTest do
 
   alias Arca.JobClaims
   alias Cyfr.Test.ScriptedBackends, as: Scripted
-  alias Emissary.External.Backends
+  alias Opus.Programs
   alias Emissary.External.Servers
   alias Emissary.External.Provider
   alias Prima.LocusBackends
@@ -185,7 +186,7 @@ defmodule Emissary.External.BackendsTest do
   defp assert_released(row, epoch) do
     assert_receive {:control, "release", %{"owners" => owners}, _fields}, 3_000
     assert %{"server" => row.id, "e" => epoch} in Enum.map(owners, &Map.delete(&1, "athanor"))
-    await_idle(Process.whereis(Backends))
+    await_idle(GenServer.whereis(Programs.via("local")))
   end
 
   # How a binary looks wherever a term holding it is inspected, from its
@@ -229,12 +230,20 @@ defmodule Emissary.External.BackendsTest do
              "e" => 1,
              "lease_ms" => 30_000,
              "idle_ms" => 900_000,
-             "backends" => [%{"name" => "github", "env_names" => ["GITHUB_TOKEN"]}]
+             "programs" => [
+               %{"name" => "github", "env_names" => ["GITHUB_TOKEN"], "home" => "scratch"}
+             ]
            } = sync
 
     assert {athanor, server} == {ctx.athanor_id, row.id}
-    refute Map.has_key?(hd(sync["backends"]), "env")
+    refute Map.has_key?(hd(sync["programs"]), "env")
+    refute Map.has_key?(hd(sync["programs"]), "memory_bytes")
     assert_receive {:sealed_env, ^server, %{"github" => %{"GITHUB_TOKEN" => @secret}}}
+
+    assert_receive {:session, "open", %{"program" => "github", "key" => "mcp", "mode" => "run"},
+                    %{athanor: ^athanor, server: ^server, generation: 1, epoch: 1}}
+
+    assert_receive {:invoke, "initialize", _fields}
 
     assert_receive {:invoke, "tools/list",
                     %{athanor: ^athanor, server: ^server, generation: 1, epoch: 1}}
@@ -250,74 +259,9 @@ defmodule Emissary.External.BackendsTest do
 
     # The process holds its owner key and no env value.
     refute inspect(:sys.get_state(pid), limit: :infinity) =~ @secret
-    refute inspect(:sys.get_state(Process.whereis(Backends)), limit: :infinity) =~ @secret
-  end
 
-  describe "readiness" do
-    test "a sync waiting for its backends holds no other owner's renewal back, and answers once its wait passes",
-         %{ctx: ctx, fake: fake} do
-      start_controller(fake, tick_ms: 100, ready_wait_ms: 1_200)
-      kept = stdio_row(ctx, "kept", %{"NODE_ENV" => "production"})
-      connect(ctx, kept)
-      assert_receive {:control, "sync", %{"owner" => %{"server" => kept_id}}, _}, 2_000
-      assert kept_id == kept.id
-
-      slow = stdio_row(ctx, "slow", %{"NODE_ENV" => "production"})
-      Scripted.readiness(fake, slow.id, "starting", 0)
-      Scripted.tools(fake, slow.id, [])
-      started = System.monotonic_time(:millisecond)
-      waiting = Task.async(fn -> Servers.ensure_started(slow, ctx) end)
-      assert_receive {:control, "sync", %{"owner" => %{"server" => slow_id}}, _}, 2_000
-      assert slow_id == slow.id
-
-      for _ <- 1..4 do
-        assert_receive {:control, "renew", %{"owners" => owners}, _}, 1_000
-        assert kept.id in Enum.map(owners, & &1["server"])
-      end
-
-      refute Task.yield(waiting, 0)
-      assert {:ok, []} = Task.await(waiting, 5_000)
-      assert System.monotonic_time(:millisecond) - started >= 1_200
-    end
-
-    test "a sync's caller is answered as soon as the service reports its owner running",
-         %{ctx: ctx, fake: fake} do
-      start_controller(fake, ready_wait_ms: 10_000)
-      row = stdio_row(ctx, "soon", %{"NODE_ENV" => "production"})
-      Scripted.readiness(fake, row.id, "starting", 0)
-      waiting = Task.async(fn -> Servers.ensure_started(row, ctx) end)
-      assert_receive {:control, "sync", _sync, _fields}, 2_000
-      assert_receive {:control, "renew", _renew, _fields}, 1_000
-
-      Scripted.readiness(fake, row.id, "running", 1)
-      assert {:ok, [%{"name" => "github__search"}]} = Task.await(waiting, 2_000)
-    end
-
-    test "a backend that becomes ready after the wait has its tools discovered without a refresh",
-         %{ctx: ctx, fake: fake} do
-      start_controller(fake, ready_wait_ms: 300)
-      row = stdio_row(ctx, "late", %{"NODE_ENV" => "production"})
-      Scripted.readiness(fake, row.id, "starting", 0)
-      Scripted.tools(fake, row.id, [])
-
-      Cyfr.Bus.subscribe(
-        Sanctum.Context.actor(ctx),
-        Cyfr.Bus.mcp_servers(Sanctum.Context.actor(ctx))
-      )
-
-      assert {:ok, []} = Servers.ensure_started(row, ctx)
-      pid = server_pid(ctx, row)
-      refute_received %Cyfr.Bus.McpServers{}
-
-      Scripted.tools(fake, row.id, ["github__search"])
-      Scripted.readiness(fake, row.id, "running", 2)
-
-      assert_receive %Cyfr.Bus.McpServers{kind: :changed}, 3_000
-      assert [%{"name" => "github__search"}] = :sys.get_state(pid).tools
-
-      assert {:ok, [%{"name" => "github__search"}]} =
-               Emissary.External.Server.get_tools("late", ctx.athanor_id)
-    end
+    refute inspect(:sys.get_state(GenServer.whereis(Programs.via("local"))), limit: :infinity) =~
+             @secret
   end
 
   describe "one claimed controller per backend" do
@@ -329,7 +273,7 @@ defmodule Emissary.External.BackendsTest do
       peer = claimed_by_peer(ctx, row)
 
       assert {:error, :claimed_elsewhere} =
-               Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+               Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
       # Nothing was sent, and nothing read: the row comes before the store
       # and before the vault, so a member that holds no claim resolves no
@@ -343,7 +287,7 @@ defmodule Emissary.External.BackendsTest do
       assert :ok = JobClaims.release(peer)
 
       assert {:ok, %{epoch: 1}} =
-               Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+               Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
       assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
       assert %{owner: owner} = taken = claim_row(ctx, row)
@@ -352,7 +296,7 @@ defmodule Emissary.External.BackendsTest do
 
       # And giving the owner up here gives the row up with it, lease run
       # out, so the next member takes the backend at once.
-      Backends.release(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+      Programs.release(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
       given_up = claim_row(ctx, row)
       refute JobClaims.live?(given_up)
       assert given_up.fence > taken.fence
@@ -376,7 +320,7 @@ defmodule Emissary.External.BackendsTest do
       # A crash report prints the state, claim rows and all: they survive
       # the redaction whole, holding nothing that has to be redacted.
       {:status, _pid, _module, items} = :sys.get_status(controller)
-      assert %Backends.State{claims: held} = status_state(items, Backends.State)
+      assert %Opus.Programs.Box.State{claims: held} = status_state(items, Opus.Programs.Box.State)
       assert [%{owner: owner}] = Map.values(held)
       assert owner == Prima.Boot.id()
     end
@@ -508,7 +452,7 @@ defmodule Emissary.External.BackendsTest do
       other = stdio_row(ctx, "ungenerated-too", %{"NODE_ENV" => "production"})
 
       assert {:error, :control_plane_lost} =
-               Backends.sync(%{athanor_id: ctx.athanor_id, server_id: other.id, epoch: 1})
+               Programs.hold(%{athanor_id: ctx.athanor_id, server_id: other.id, epoch: 1})
 
       assert {:error, :not_found} = JobClaims.read("mcp_backend", claim_key(ctx, other))
       assert claim_row(ctx, row).fence == before.fence
@@ -529,7 +473,7 @@ defmodule Emissary.External.BackendsTest do
       assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
       before = claim_row(ctx, row)
 
-      :persistent_term.put(@generation_key, 2)
+      Prima.Test.Env.put_persistent_term(@generation_key, 2)
       tick(controller)
 
       assert_receive {:control, "hello", %{"g" => 2}, %{generation: 2}}, 2_000
@@ -616,8 +560,7 @@ defmodule Emissary.External.BackendsTest do
     end
 
     test "a vault change raises the epoch after releasing in memory", %{ctx: ctx, row: row} do
-      Application.put_env(:cyfr, :external_server_reconciler_enabled, true)
-      on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
       start_supervised!(Emissary.External.Reconciler)
 
       {:ok, entry} = Arca.VaultStorage.get_by_name(Sanctum.Context.actor(ctx), "gh-token")
@@ -631,8 +574,7 @@ defmodule Emissary.External.BackendsTest do
     end
 
     test "an archived athanor", %{ctx: ctx, row: row} do
-      Application.put_env(:cyfr, :external_server_reconciler_enabled, true)
-      on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
       start_supervised!(Emissary.External.Reconciler)
 
       Cyfr.Bus.broadcast_global(
@@ -723,7 +665,7 @@ defmodule Emissary.External.BackendsTest do
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
 
-    :persistent_term.put(@generation_key, 2)
+    Prima.Test.Env.put_persistent_term(@generation_key, 2)
     tick(controller)
 
     assert_receive {:control, "hello", %{"g" => 2}, %{generation: 2}}, 2_000
@@ -741,7 +683,7 @@ defmodule Emissary.External.BackendsTest do
     Arca.ControlPlane.record(:lost)
 
     assert {:error, :control_plane_lost} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     tick(controller)
     refute_receive {:control, _type, _message, _fields}, 200
@@ -760,7 +702,7 @@ defmodule Emissary.External.BackendsTest do
     refute_receive {:control, _type, _message, _fields}, 200
 
     assert {:error, :control_plane_lost} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     assert Process.alive?(controller)
     assert %{generation: 1, boot: "bb_first"} = :sys.get_state(controller)
@@ -786,9 +728,60 @@ defmodule Emissary.External.BackendsTest do
     assert {:ok, %{"content" => _}} =
              Emissary.External.Server.call_tool(pid, "github__search", %{})
 
-    assert_receive {:invoke, "tools/call", _refused}
+    # The refused send carried the call and nothing ran; the owner is synced
+    # again and the call sent once more, which runs.
     assert_receive {:control, "sync", _again, _fields}, 2_000
     assert_receive {:invoke, "tools/call", _retried}
+    refute_receive {:invoke, "tools/call", _twice}, 200
+  end
+
+  test "a server that fails is not restarted, and its failures take no other server down",
+       %{ctx: ctx, fake: fake} do
+    start_controller(fake)
+    failing = stdio_row(ctx, "failing", %{"NODE_ENV" => "production"})
+    bystander_row = stdio_row(ctx, "bystander", %{"NODE_ENV" => "production"})
+    bystander = connect(ctx, bystander_row)
+    supervisor = Process.whereis(Emissary.External.ServerSupervisor)
+
+    # More failures within the supervisor's restart window than its
+    # intensity allows: each server is started again by its use alone.
+    for _failure <- 1..5 do
+      pid = connect(ctx, failing)
+      down = Process.monitor(pid)
+      capture_log(fn -> catch_exit(GenServer.call(pid, :no_such_call)) end)
+      assert_receive {:DOWN, ^down, :process, ^pid, _crash}, 2_000
+
+      assert Registry.lookup(Emissary.External.ServerRegistry, {failing.name, ctx.athanor_id}) ==
+               []
+    end
+
+    assert Process.whereis(Emissary.External.ServerSupervisor) == supervisor
+    assert Process.alive?(bystander)
+
+    assert {:ok, %{"content" => _}} =
+             Emissary.External.Server.call_tool(bystander, "github__search", %{})
+  end
+
+  test "a reader killed while its recv waits fails nothing of the service's", %{
+    ctx: ctx,
+    fake: fake
+  } do
+    # The server kills a session's reader whenever the session is dropped
+    # (a refusal, a new grant), which may be while its recv still waits on
+    # the service: a request whose client went away is no failure of the
+    # service's, here or once the HTTP server has given up on it.
+    start_controller(fake)
+    row = stdio_row(ctx, "abandoned", %{"NODE_ENV" => "production"})
+    pid = connect(ctx, row)
+    %{grant: grant, sessions: sessions} = :sys.get_state(pid)
+    [%{session: session}] = Map.values(sessions)
+
+    reader = spawn(fn -> Opus.Programs.Session.recv(grant, session, 1_000_000, 25_000) end)
+    assert_receive {:session, "recv", %{"after" => 1_000_000}, _fields}, 2_000
+    Process.exit(reader, :kill)
+
+    # Past the HTTP server's own wait for a request whose client is gone.
+    Process.sleep(6_000)
   end
 
   test "a call refused as stale_epoch after the row moved leaves the server in error",
@@ -816,7 +809,7 @@ defmodule Emissary.External.BackendsTest do
     assert_receive {:control, "sync", _sync, _fields}, 2_000
 
     assert {:error, {:pool_share, 1}} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: second.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: second.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
   end
@@ -829,7 +822,7 @@ defmodule Emissary.External.BackendsTest do
     row = stdio_row(ctx, "unresolved", %{"GITHUB_TOKEN" => "vault:absent"})
 
     assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
   end
@@ -887,7 +880,7 @@ defmodule Emissary.External.BackendsTest do
     underneath = stdio_row(ctx, "underneath")
 
     assert {:error, :disclosure_refused} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: underneath.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: underneath.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
     refute_received {:sealed_env, _server, _env}
@@ -934,7 +927,7 @@ defmodule Emissary.External.BackendsTest do
       })
 
     assert {:error, :disclosure_refused} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     assert {:ok, %{last_used_at: nil}} =
              Arca.VaultStorage.get(Sanctum.Context.actor(ctx), disclosed.id)
@@ -947,7 +940,7 @@ defmodule Emissary.External.BackendsTest do
     absent = stdio_row(ctx, "absent", %{"A_TOKEN" => "vault:gh-token", "B_TOKEN" => "vault:nope"})
 
     assert {:error, {:env_unresolved, "github", "B_TOKEN"}} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: absent.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: absent.id, epoch: 1})
 
     assert {:ok, %{last_used_at: nil}} =
              Arca.VaultStorage.get(Sanctum.Context.actor(ctx), disclosed.id)
@@ -971,7 +964,7 @@ defmodule Emissary.External.BackendsTest do
     row = stdio_row(ctx, "shared-named", %{"GITHUB_TOKEN" => "vault:" <> entry_name})
 
     assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
-             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+             Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
     refute_received {:sealed_env, _server, _env}
@@ -990,7 +983,7 @@ defmodule Emissary.External.BackendsTest do
     admin = %{ctx | permissions: MapSet.new([:*])}
 
     assert {:ok,
-            %{transport: "stdio", epoch: 1, status: "ready", backends: [%{"status" => "ready"}]}} =
+            %{transport: "stdio", epoch: 1, status: "ready", programs: [%{"name" => "github"}]}} =
              Provider.handle("mcp_servers", admin, %{
                "action" => "get",
                "name" => "described"
@@ -1102,7 +1095,7 @@ defmodule Emissary.External.BackendsTest do
 
     log =
       capture_log(fn ->
-        assert {:ok, %{epoch: epoch}} = Backends.sync(owner)
+        assert {:ok, %{epoch: epoch}} = Programs.hold(owner)
         assert epoch == row.epoch
       end)
 
@@ -1117,21 +1110,429 @@ defmodule Emissary.External.BackendsTest do
     assert log =~
              ~s(starts with a warning: Backend 'github' has "`" in its command beside the vault-bound NODE_TOKEN: )
 
-    Backends.release(owner)
+    Programs.release(owner)
+  end
+
+  # Every session message the script reported so far, dropped from the
+  # mailbox.
+  defp flush_sessions do
+    receive do
+      {:session, _type, _message, _fields} -> flush_sessions()
+      {:invoke, _method, _fields} -> flush_sessions()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp pipe_row(ctx, name, over \\ %{}) do
+    {:ok, row} =
+      Arca.McpServerStorage.insert(
+        Sanctum.Context.actor(ctx),
+        Map.merge(
+          %{
+            cap: 0,
+            name: name,
+            transport: "pipe",
+            url: nil,
+            home: "kept",
+            memory_bytes: 1_073_741_824,
+            home_max_bytes: 2_147_483_648,
+            login_command: "claude auth login",
+            config_json:
+              Jason.encode!(%{
+                "backends" => [
+                  %{
+                    "name" => "claude",
+                    "command" => "npx -y @anthropic-ai/claude-code",
+                    "env" => %{}
+                  }
+                ]
+              })
+          },
+          over
+        )
+      )
+
+    row
+  end
+
+  # A login entry of the athanor naming `program`; its id is its home's.
+  defp login_entry(ctx, name, program) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{name: name, kind: "login", program: program})
+
+    entry.id
+  end
+
+  describe "sessions" do
+    # The scripted service keys, ends and idles sessions as Locus does.
+    defp held(ctx, fake, name) do
+      start_controller(fake)
+      row = stdio_row(ctx, name, %{"NODE_ENV" => "production"})
+
+      {:ok, grant} =
+        Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch})
+
+      grant
+    end
+
+    defp opened(grant, home_id, mode) do
+      {:ok, answer} =
+        Opus.Programs.Session.open(grant, %{
+          program: "github",
+          home_id: home_id,
+          key: "k",
+          mode: mode,
+          argv: []
+        })
+
+      answer
+    end
+
+    test "the service keys a session by its program, home, key and mode", %{ctx: ctx, fake: fake} do
+      grant = held(ctx, fake, "keyed")
+      run = opened(grant, "vlt_keyed", :run)
+      assert %{resumed: true, session: same} = opened(grant, "vlt_keyed", :run)
+      assert same == run.session
+
+      assert %{resumed: false, session: sign_in} = opened(grant, "vlt_keyed", :sign_in)
+      assert %{resumed: false, session: other_home} = opened(grant, "vlt_other", :run)
+      assert Enum.uniq([run.session, sign_in, other_home]) == [run.session, sign_in, other_home]
+    end
+
+    test "a reset of a home ends every session of that home", %{ctx: ctx, fake: fake} do
+      grant = held(ctx, fake, "reset")
+      %{session: in_home} = opened(grant, "vlt_reset", :run)
+      %{session: elsewhere} = opened(grant, "vlt_spared", :run)
+
+      assert :ok = Programs.home(ctx.athanor_id, "vlt_reset", :reset)
+
+      assert {:ok, %{running: false}} = Opus.Programs.Session.recv(grant, in_home, 0, 0)
+      assert {:ok, %{running: true}} = Opus.Programs.Session.recv(grant, elsewhere, 0, 0)
+    end
+
+    test "a waiting recv counts as use at its arrival alone, so idle ends the session it waits on",
+         %{ctx: ctx, fake: fake} do
+      grant = held(ctx, fake, "waiting")
+      %{session: session} = opened(grant, nil, :run)
+      Scripted.set(fake, :idle_ms, 300)
+
+      started = System.monotonic_time(:millisecond)
+      assert {:ok, %{running: false}} = Opus.Programs.Session.recv(grant, session, 0, 3_000)
+      assert System.monotonic_time(:millisecond) - started < 2_500
+    end
+
+    test "a stdio session is read only while a call is outstanding, so idle ends it and the next call initializes it again",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      row = stdio_row(ctx, "idling", %{"NODE_ENV" => "production"})
+      pid = connect(ctx, row)
+      assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+      assert_receive {:invoke, "tools/call", _fields}, 2_000
+
+      # Answered, nothing is outstanding: no reader polls the session, so it
+      # sees no activity of this server's.
+      Process.sleep(100)
+      flush_sessions()
+      refute_receive {:session, "recv", _message, _fields}, 400
+
+      # The service ends it for idleness; the next call finds it ended, opens
+      # it again and initializes the backend afresh before calling.
+      Scripted.set(fake, :idle_ms, 200)
+      Process.sleep(300)
+
+      assert {:ok, %{"content" => [%{"text" => "found"}]}} =
+               Emissary.External.Server.call_tool(pid, "github__search", %{})
+
+      assert_receive {:session, "open", %{"key" => "mcp"}, _fields}, 2_000
+      assert_receive {:invoke, "initialize", _fields}, 2_000
+      assert_receive {:invoke, "tools/call", _fields}, 2_000
+      assert [_ended, _running] = Map.values(Scripted.sessions(fake, row.id))
+    end
+
+    test "a session that ends fails the call awaiting it, and the next call opens it again",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      row = stdio_row(ctx, "ending", %{"NODE_ENV" => "production"})
+      pid = connect(ctx, row)
+      Scripted.set(fake, :silent, ["tools/call"])
+
+      call = Task.async(fn -> Emissary.External.Server.call_tool(pid, "github__search", %{}) end)
+      assert_receive {:invoke, "tools/call", _fields}, 2_000
+      Scripted.end_sessions(fake, row.id)
+
+      assert {:error, sentence} = Task.await(call, 5_000)
+      assert sentence =~ "ended before it answered"
+
+      Scripted.set(fake, :silent, [])
+      assert {:ok, _} = Emissary.External.Server.call_tool(pid, "github__search", %{})
+      assert_receive {:invoke, "initialize", _fields}, 2_000
+    end
+
+    test "a pipe row syncs its program with its settings and has no MCP process",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      row = pipe_row(ctx, "claude")
+      owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch}
+
+      assert {:ok, %{epoch: 1, url: url}} = Programs.hold(owner)
+      assert url =~ LocusBackends.route(:session)
+
+      assert_receive {:control, "sync",
+                      %{
+                        "programs" => [
+                          %{
+                            "name" => "claude",
+                            "home" => "kept",
+                            "memory_bytes" => 1_073_741_824,
+                            "home_max_bytes" => 2_147_483_648,
+                            "login_command" => "claude auth login",
+                            "env_names" => []
+                          }
+                        ]
+                      }, _fields},
+                     2_000
+
+      assert {:error, {:invalid_argument, sentence}} = Servers.ensure_started(row, ctx)
+      assert sentence =~ "pipe program"
+      Programs.release(owner)
+      assert_released(row, 1)
+    end
+
+    test "a kept stdio row runs its sessions in its login entry's home, and connects to none without it",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+
+      {:ok, row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "gh",
+          transport: "stdio",
+          url: nil,
+          home: "kept",
+          login_entry_id: "vlt_missing",
+          login_command: "gh auth login",
+          config_json:
+            Jason.encode!(%{
+              "backends" => [
+                %{
+                  "name" => "github",
+                  "command" => "gh mcp",
+                  "env" => %{"NODE_ENV" => "production"}
+                }
+              ]
+            })
+        })
+
+      assert {:error, sentence} = Servers.ensure_started(row, ctx)
+      assert sentence =~ "login entry"
+      refute_received {:control, "sync", _sync, _fields}
+
+      # Another program's login entry is refused alike.
+      other = login_entry(ctx, "claude-login", "claude")
+
+      {:ok, row} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{login_entry_id: other})
+
+      assert {:error, sentence} = Servers.ensure_started(row, ctx)
+      assert sentence =~ "login entry"
+
+      gh = login_entry(ctx, "gh-login", "gh")
+
+      {:ok, row} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{login_entry_id: gh})
+
+      assert {:ok, [%{"name" => "github__search"}]} = Servers.ensure_started(row, ctx)
+      assert_receive {:session, "open", %{"home_id" => ^gh, "mode" => "run"}, _}, 2_000
+      refute_received {:session, "open", %{"home_id" => ^other}, _fields}
+    end
+  end
+
+  describe "sign-in and homes" do
+    setup %{ctx: ctx, fake: fake} do
+      controller = start_controller(fake)
+      row = pipe_row(ctx, "claude")
+      entry = login_entry(ctx, "claude-login", "claude")
+      admin = %{ctx | permissions: MapSet.new([:*])}
+      {:ok, controller: controller, row: row, admin: admin, entry: entry}
+    end
+
+    test "a sign-in runs the login command in the entry's home and relays its lines both ways",
+         %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
+      assert {:ok, %{session: token, program: "claude", entry: ^entry}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "sign_in",
+                 "name" => "claude",
+                 "entry" => "claude-login"
+               })
+
+      assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry, "argv" => []},
+                      _},
+                     2_000
+
+      # A line the program wrote before anyone attached is kept for them.
+      Scripted.write(fake, row.id, "Open https://claude.ai/oauth and paste the code:")
+      Process.sleep(100)
+
+      # Only the caller that started it attaches.
+      other = %{admin | user_id: "someone-else"}
+      assert {:error, :not_yours} = Programs.sign_in_attach(other, token, self())
+      assert :ok = Programs.sign_in_attach(admin, token, self())
+
+      assert_receive {Opus.Programs, ^token, {:lines, ["Open https://claude.ai/oauth" <> _]}},
+                     2_000
+
+      assert :ok = Programs.sign_in_send(admin, token, "code-1234")
+      assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
+
+      # The command ends by a signal: the subscriber is told, and the owner
+      # released.
+      Scripted.end_sessions(fake, row.id)
+      assert_receive {Opus.Programs, ^token, {:ended, {:exited, nil}}}, 3_000
+      assert_released(row, 1)
+      refute ctx == nil
+    end
+
+    test "a needs_reauth entry signed in with an exit 0 is active again, and with exit 1 stays as it is",
+         %{ctx: ctx, fake: fake, row: row, admin: admin, entry: entry} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = Arca.VaultStorage.set_status(actor, entry, "needs_reauth")
+
+      sign_in = fn ->
+        assert {:ok, %{session: token}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "sign_in",
+                   "name" => "claude",
+                   "entry" => entry
+                 })
+
+        assert :ok = Programs.sign_in_attach(admin, token, self())
+        token
+      end
+
+      token = sign_in.()
+      Scripted.end_sessions(fake, row.id, 1)
+      assert_receive {Opus.Programs, ^token, {:ended, {:exited, 1}}}, 3_000
+      assert_released(row, 1)
+      assert {:ok, %{status: "needs_reauth"}} = Arca.VaultStorage.get(actor, entry)
+
+      # A mount still refuses it meanwhile: only a sign-in admits it.
+      assert {:error, {:entry_unavailable, "needs_reauth"}} =
+               Sanctum.Mount.login_entry(ctx, entry, "claude")
+
+      token = sign_in.()
+      Scripted.end_sessions(fake, row.id, 0)
+      assert_receive {Opus.Programs, ^token, {:ended, :signed_in}}, 3_000
+      assert_released(row, 1)
+      assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(actor, entry)
+    end
+
+    test "a sign-in refuses an entry that is no login entry for the program, and a scratch program",
+         %{ctx: ctx, admin: admin, entry: entry} do
+      login_entry(ctx, "other-login", "other")
+
+      assert {:error, {:invalid_argument, refusal}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "sign_in",
+                 "name" => "claude",
+                 "entry" => "other-login"
+               })
+
+      assert refusal =~ "no active login entry"
+      refute_received {:session, "open", _message, _fields}
+
+      pipe_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
+
+      assert {:error, {:invalid_argument, refusal}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "sign_in",
+                 "name" => "scratchy",
+                 "entry" => entry
+               })
+
+      assert refusal =~ "no sign-in"
+      refute_received {:session, "open", _message, _fields}
+    end
+
+    test "reset_home empties the entry's kept home through the box",
+         %{admin: admin, entry: entry} do
+      assert {:ok, %{reset: ^entry}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "reset_home",
+                 "entry" => entry
+               })
+
+      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry, "athanor" => _},
+                      _},
+                     2_000
+
+      assert {:error, {:not_found, "Login entry", "vlt_none"}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "reset_home",
+                 "entry" => "vlt_none"
+               })
+    end
+
+    test "a retire that does not land is sent again on every tick until it does",
+         %{ctx: ctx, fake: fake, controller: controller} do
+      Scripted.refuse_once(fake, "home", "unavailable")
+      assert {:error, :backends_unavailable} = Programs.home(ctx.athanor_id, "vlt_gone", :retire)
+      assert_receive {:control, "home", %{"op" => "retire"}, _fields}, 2_000
+      assert %{homes: homes} = await_idle(controller)
+      assert %{op: :retire} = homes[{ctx.athanor_id, "vlt_gone"}]
+
+      tick(controller)
+      assert_receive {:control, "home", %{"op" => "retire", "home_id" => "vlt_gone"}, _}, 2_000
+      assert %{homes: homes} = await_idle(controller)
+      assert homes == %{}
+    end
+
+    test "a deleted login entry's home is retired, and so is every one of an archived athanor",
+         %{ctx: ctx, entry: entry} do
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
+      start_supervised!(Emissary.External.Reconciler)
+
+      Cyfr.Bus.broadcast_global(
+        Cyfr.Bus.vault_changed_global(),
+        %Cyfr.Bus.VaultEntryChanged{
+          athanor_id: ctx.athanor_id,
+          entry_id: entry,
+          name: "claude-login",
+          kind: :delete
+        }
+      )
+
+      assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^entry}, _}, 3_000
+
+      second = login_entry(ctx, "second-login", "claude")
+
+      Cyfr.Bus.broadcast_global(
+        Cyfr.Bus.athanor_archived_global(),
+        Cyfr.Bus.AthanorArchived.new(ctx.athanor_id)
+      )
+
+      retired =
+        for _ <- 1..2 do
+          assert_receive {:control, "home", %{"op" => "retire", "home_id" => id}, _}, 3_000
+          id
+        end
+
+      assert Enum.sort(retired) == Enum.sort([entry, second])
+    end
   end
 
   describe "status" do
     test "is nil for an owner the service runs nothing for, its entry for one it runs, and names no more owners than the service's bound",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
-      assert {:ok, nil} = Backends.status(ctx.athanor_id, "mcp_nothing")
+      assert {:ok, nil} = Programs.status(ctx.athanor_id, "mcp_nothing")
       assert_receive {:control, "status", %{"owners" => [%{"server" => "mcp_nothing"}]}, _}, 2_000
 
       row = stdio_row(ctx, "running", %{"NODE_ENV" => "production"})
       connect(ctx, row)
 
-      assert {:ok, %{"e" => 1, "backends" => [%{"status" => "ready"}]}} =
-               Backends.status(ctx.athanor_id, row.id)
+      assert {:ok, %{"e" => 1, "programs" => [%{"name" => "github", "home" => "scratch"}]}} =
+               Programs.status(ctx.athanor_id, row.id)
 
       assert_receive {:control, "status", %{"owners" => owners}, _fields}, 2_000
       assert length(owners) <= LocusBackends.max_status_owners()
@@ -1144,16 +1545,16 @@ defmodule Emissary.External.BackendsTest do
       connect(ctx, row)
 
       Scripted.refuse_once(fake, "status", "too_many_owners", 400)
-      assert {:error, :too_many_owners} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, :too_many_owners} = Programs.status(ctx.athanor_id, row.id)
 
       Scripted.refuse_once(fake, "status", "status_too_large")
-      assert {:error, :status_too_large} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, :status_too_large} = Programs.status(ctx.athanor_id, row.id)
 
-      Bypass.down(fake.bypass)
-      assert {:error, :backends_unavailable} = Backends.status(ctx.athanor_id, row.id)
+      Scripted.down(fake)
+      assert {:error, :backends_unavailable} = Programs.status(ctx.athanor_id, row.id)
 
-      Bypass.up(fake.bypass)
-      assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
+      Scripted.up(fake)
+      assert {:ok, %{"e" => 1}} = Programs.status(ctx.athanor_id, row.id)
     end
 
     test "an answer the service did not bound is stopped at the answer bound and is status_too_large as well: neither read whole, emptied nor unavailable",
@@ -1162,10 +1563,10 @@ defmodule Emissary.External.BackendsTest do
       row = stdio_row(ctx, "verbose", %{"NODE_ENV" => "production"})
       connect(ctx, row)
       Scripted.set(fake, :stderr_bytes, LocusBackends.max_status_answer_bytes() + 1)
-      assert {:error, :status_too_large} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, :status_too_large} = Programs.status(ctx.athanor_id, row.id)
 
       Scripted.set(fake, :stderr_bytes, 0)
-      assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
+      assert {:ok, %{"e" => 1}} = Programs.status(ctx.athanor_id, row.id)
     end
 
     # The controller asks a status for at most `max_status_owners/0` owners
@@ -1173,7 +1574,7 @@ defmodule Emissary.External.BackendsTest do
     # (`Prima.LocusBackends`): the bounds the service keeps.
     test "the bounds a status is asked and read within are the wire's, as its vector file states them" do
       bounds =
-        Path.expand("../../../../../tests/fixtures/locus_backends.json", __DIR__)
+        Path.expand("../../../../tests/fixtures/locus_backends.json", __DIR__)
         |> File.read!()
         |> Jason.decode!()
         |> Map.fetch!("bounds")
@@ -1189,20 +1590,20 @@ defmodule Emissary.External.BackendsTest do
       connect(ctx, row)
 
       Scripted.refuse_once(fake, "status", "unauthorized")
-      assert {:error, :backends_refused_signature} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, :backends_refused_signature} = Programs.status(ctx.athanor_id, row.id)
 
       Scripted.refuse_once(fake, "status", "version")
-      assert {:error, :protocol_mismatch} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, :protocol_mismatch} = Programs.status(ctx.athanor_id, row.id)
 
       Scripted.set(fake, :answer_version, LocusBackends.version() + 1)
-      assert {:error, :protocol_mismatch} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, :protocol_mismatch} = Programs.status(ctx.athanor_id, row.id)
 
       # A code that is not the one its status carries reads as nothing.
       Scripted.set(fake, :answer_version, LocusBackends.version())
       Scripted.refuse_once(fake, "status", "too_many_owners", 409)
-      assert {:error, {:backends_status, 409}} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, {:backends_status, 409}} = Programs.status(ctx.athanor_id, row.id)
 
-      assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
+      assert {:ok, %{"e" => 1}} = Programs.status(ctx.athanor_id, row.id)
     end
   end
 
@@ -1227,12 +1628,12 @@ defmodule Emissary.External.BackendsTest do
 
       {:status, _pid, _module, items} = :sys.get_status(controller)
 
-      assert %Backends.State{
+      assert %Opus.Programs.Box.State{
                root: "[REDACTED]",
                control_key: "[REDACTED]",
                seal_key: "[REDACTED]"
              } =
-               status_state(items, Backends.State)
+               status_state(items, Opus.Programs.Box.State)
 
       status = inspect(items, limit: :infinity, printable_limit: :infinity)
       for key <- keys, do: refute(status =~ rendered(key))
@@ -1249,7 +1650,7 @@ defmodule Emissary.External.BackendsTest do
       released = Process.monitor(held)
       send(held, :go)
       assert_receive {:DOWN, ^released, :process, ^held, _reason}, 5_000
-      assert log =~ "Emissary.External.Backends.handle_call/3"
+      assert log =~ "Opus.Programs.Box.handle_call/3"
       for key <- keys, do: refute(log =~ rendered(key))
     end
 
@@ -1279,7 +1680,7 @@ defmodule Emissary.External.BackendsTest do
 
     test "a message carrying a grant, and a reason carrying a state, are redacted" do
       grant = %{
-        url: "http://locus-backends:4101/locus/v1/backends/mcp",
+        url: "http://locus-backends:4101/locus/v1/backends/session",
         owner_key: :crypto.strong_rand_bytes(32),
         epoch: 1
       }
@@ -1289,19 +1690,20 @@ defmodule Emissary.External.BackendsTest do
       headers = %{"authorization" => "Bearer #{@secret}"}
 
       reason =
-        {:function_clause, [{Backends, :handle_call, [:bogus, spec, [headers: headers]], []}]}
+        {:function_clause,
+         [{Opus.Programs.Box, :handle_call, [:bogus, spec, [headers: headers]], []}]}
 
       assert %{
                message:
-                 {:backends_owner,
+                 {Opus.Programs, :owner,
                   %{
                     owner_key: "[REDACTED]",
-                    url: "http://locus-backends:4101/locus/v1/backends/mcp"
+                    url: "http://locus-backends:4101/locus/v1/backends/session"
                   }},
                reason:
                  {:function_clause,
                   [
-                    {Backends, :handle_call,
+                    {Opus.Programs.Box, :handle_call,
                      [
                        :bogus,
                        %{
@@ -1315,8 +1717,8 @@ defmodule Emissary.External.BackendsTest do
                   ]},
                log: [[:io | "data"]]
              } =
-               Emissary.External.StatusRedaction.format_status(%{
-                 message: {:backends_owner, grant},
+               Opus.Programs.StatusRedaction.format_status(%{
+                 message: {Opus.Programs, :owner, grant},
                  reason: reason,
                  log: [[:io | "data"]]
                })

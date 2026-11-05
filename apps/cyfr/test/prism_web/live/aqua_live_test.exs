@@ -139,6 +139,51 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, conn: conn, ctx: ctx, athanor: athanor}
     end
 
+    test "a brain whose catalyst runs a program not installed offers its install on the card",
+         %{conn: conn, ctx: ctx} do
+      manifest = %{
+        "name" => "harness",
+        "type" => "catalyst",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "needs" => %{
+          "claude" => %{
+            "type" => "login",
+            "program" => "claude",
+            "reason" => "to run Claude Code on your own plan",
+            "install" => %{"command" => "npx -y @anthropic-ai/claude-code"}
+          }
+        }
+      }
+
+      unit =
+        Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
+          manifest: manifest,
+          wasm: Cyfr.Test.Guests.wasm(:catalyst)
+        )
+
+      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+      soul_names_catalyst!(ctx, "catalyst:local.harness")
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-card-aqua a[data-test="install-program"]),
+               "install claude"
+             )
+
+      [href] =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(#aqua-card-aqua a[data-test="install-program"]))
+        |> LazyHTML.attribute("href")
+
+      assert %{"install" => "catalyst:local.harness", "need" => "claude"} =
+               URI.decode_query(URI.parse(href).query)
+    end
+
     test "the soul offers no Delete; a shipped role is disabled and enabled from its card",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")

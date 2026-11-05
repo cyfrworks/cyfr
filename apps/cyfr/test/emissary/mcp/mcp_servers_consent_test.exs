@@ -8,14 +8,17 @@ defmodule Emissary.MCP.McpServersConsentTest do
   interactive session's acts: an admin API key is refused at the dispatch
   gate and is not shown them in `tools/list`, a running chain reaches no
   `mcp_servers` action, and a signed-in person defines and changes servers.
-  The actions that operate a saved server keep their admin posture.
+  Signing a program in (`sign_in`, a person answering its own sign-in on a
+  terminal) and resetting a kept folder (`reset_home`, the person's files
+  gone) are a person's acts too. The actions that operate a saved server
+  keep their admin posture.
   """
   use ExUnit.Case, async: false
 
   alias Sanctum.Visibility
   alias Emissary.External.Provider
 
-  @defining ~w(create update)
+  @defining ~w(create update sign_in reset_home)
   @operating ~w(delete list get test refresh enable disable restart)
 
   setup tags do

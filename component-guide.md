@@ -540,7 +540,7 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | (key) | string | Yes | The need name — the slot the operator binds a vault entry to. Lowercase, matching `^[a-z][a-z0-9_-]{0,31}$` |
-| `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`) |
+| `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`); or `login` alone, for a program the component runs (below) |
 | `reason` | string | Yes | Prose the operator sees on the consent sheet instead of your key names |
 | `fields` | string[] | No | The names your component reads the credential under: exactly one for an attached API key or bundle, which CYFR attaches; for a disclosed need, the names your binary passes to `cyfr:vault/read.get`. The person's entry need not use these names: the grant maps each to one of the entry's fields, by itself when the names are equal or both sides hold one field, otherwise as the person chooses |
 | `scopes` | string[] | OAuth only | OAuth scopes the grant must cover. Only valid on `oauth:*` types |
@@ -564,6 +564,19 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 ```
 
 An OAuth need declares the provider, its scopes and the hosts the token is sent to (`"type": "oauth:google"`, `"scopes": [...]`, `"hosts": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
+
+A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by a login entry whose destination is that program: the program runs in the folder the entry keeps, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. An optional `install` block suggests the row: `command`, what fetches or runs the program, and `login_command`, its own sign-in, each held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the AQUA page offer **install `<program>`** with both shown and editable; the person decides, and accepting defines the row, makes the login entry and opens the sign-in terminal. Pin the version your component was tested against in `command`.
+
+```json
+"needs": {
+  "claude": {
+    "type": "login",
+    "program": "claude",
+    "reason": "to run Claude Code on your own plan",
+    "install": {"command": "npx -y @anthropic-ai/claude-code@2.1.316", "login_command": "claude auth login"}
+  }
+}
+```
 
 ### `caps` Section
 

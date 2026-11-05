@@ -59,6 +59,26 @@ defmodule Locus.DirectLauncher do
   on a fifo outlives the suite. Every pool is one uid wide, and none is
   quarantined.
 
+  ## Kept homes and pseudo-terminals
+
+  Given `kept_root: dir` as its server (`launcher_server`), it keeps homes
+  as `Locus.Launcher` says: one folder per id under `dir`, made by
+  `home_ensure/2`, measured by `home_measure/2` (the bytes of its regular
+  files), emptied by `home_reset/2` and removed by `home_retire/2`. This
+  node's own user stands in for each home's uid, so `home_ensure/2`
+  answers the folder's owner, which is that user's uid for every home:
+  nothing here keeps one home from another. A spawn naming a home runs
+  with that folder as its `HOME`, and is refused `"home_over_cap"` when a
+  `home_max_bytes` it names is reached, `"home_absent"` for a home not made
+  and `"unavailable"` for a launcher with no kept root; a reset or a
+  retirement of a home not made answers `:ok` and leaves it absent. It
+  measures a home by its files' sizes where the keeper counts their
+  allocated blocks. A spawn with `pty: true` runs
+  under util-linux `script -qfec`, which gives the command a
+  pseudo-terminal as its stdin, stdout and stderr and copies it to the
+  port, so its owner hears what it writes to the terminal as stdout and
+  no stderr.
+
   A spec with `control: true` is a runner's: its standard input and
   output are its control channel (`RUNTIME_CONTROL_FD=0`), since a port
   hands a child no other descriptor, and its relay (`Prima.RunnerRelay`)
@@ -227,8 +247,15 @@ defmodule Locus.DirectLauncher do
     mode = if Map.get(spec, :control) == true, do: :control, else: :stdio
     janitor = if Keyword.keyword?(opts), do: Keyword.get(opts, :janitor)
     strand? = Keyword.keyword?(opts) and Keyword.get(opts, :strand_reader, false) == true
+    argv = if Map.get(spec, :pty) == true, do: pty(argv), else: argv
 
-    case GenServer.start(Child, {self(), ref, argv, env, mode, janitor, strand?}) do
+    with {:ok, home} <- kept_home(opts, spec) do
+      start_child(ref, {self(), ref, argv, env, mode, janitor, strand?, home})
+    end
+  end
+
+  defp start_child(ref, args) do
+    case GenServer.start(Child, args) do
       # The child sent its handle before its start answered, and messages
       # between two processes arrive in the order they were sent: the
       # handle is here already, however soon the process ended.
@@ -272,6 +299,123 @@ defmodule Locus.DirectLauncher do
 
   @impl Locus.Launcher
   def pool_stats(_opts, pool) when is_binary(pool), do: {:ok, %{size: 1, free: 1, quarantined: 0}}
+
+  # ————— kept homes —————
+
+  @impl Locus.Launcher
+  def home_ensure(opts, id) do
+    with {:ok, path} <- home_path(opts, id),
+         :ok <- File.mkdir_p(Path.join(path, "tmp")),
+         :ok <- File.chmod(path, 0o700),
+         {:ok, %File.Stat{uid: uid}} <- File.stat(path) do
+      {:ok, uid}
+    else
+      {:error, {:refused, _code}} = refused -> refused
+      {:error, reason} -> {:error, {:spawn_failed, reason}}
+    end
+  end
+
+  @impl Locus.Launcher
+  def home_measure(opts, id) do
+    with {:ok, path} <- home_path(opts, id) do
+      if File.dir?(path), do: {:ok, bytes(path)}, else: :absent
+    end
+  end
+
+  @impl Locus.Launcher
+  def home_reset(opts, id) do
+    with {:ok, path} <- home_path(opts, id) do
+      # A home not made is left absent, as the keeper leaves one.
+      if File.dir?(path) do
+        File.rm_rf(path)
+        with {:ok, _uid} <- home_ensure(opts, id), do: :ok
+      else
+        :ok
+      end
+    end
+  end
+
+  @impl Locus.Launcher
+  def home_retire(opts, id) do
+    with {:ok, path} <- home_path(opts, id) do
+      File.rm_rf(path)
+      :ok
+    end
+  end
+
+  @impl Locus.Launcher
+  def home_list(opts) do
+    root = if Keyword.keyword?(opts), do: Keyword.get(opts, :kept_root)
+
+    case root && File.ls(root) do
+      nil ->
+        {:error, {:refused, "unavailable"}}
+
+      {:ok, names} ->
+        {:ok,
+         names
+         |> Enum.filter(&(Prima.LocusBackends.home_id?(&1) and File.dir?(Path.join(root, &1))))
+         |> Enum.sort()}
+
+      {:error, reason} ->
+        {:error, {:spawn_failed, reason}}
+    end
+  end
+
+  defp home_path(opts, id) do
+    root = if Keyword.keyword?(opts), do: Keyword.get(opts, :kept_root)
+
+    cond do
+      root == nil -> {:error, {:refused, "unavailable"}}
+      not Prima.LocusBackends.home_id?(id) -> {:error, {:refused, "bad_request"}}
+      true -> {:ok, Path.join(root, id)}
+    end
+  end
+
+  # The home a spawn runs in: its own temporary one, or the kept one it
+  # names, made and under the bound it names.
+  defp kept_home(opts, spec) do
+    case Map.get(spec, :home) do
+      nil ->
+        {:ok, nil}
+
+      id ->
+        with {:ok, path} <- home_path(opts, id),
+             true <- File.dir?(path) || {:error, {:refused, "home_absent"}},
+             :ok <- under(path, Map.get(spec, :home_max_bytes)) do
+          {:ok, path}
+        end
+    end
+  end
+
+  defp under(_path, nil), do: :ok
+
+  defp under(path, max) do
+    if bytes(path) >= max, do: {:error, {:refused, "home_over_cap"}}, else: :ok
+  end
+
+  defp bytes(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        case File.ls(path) do
+          {:ok, names} -> names |> Enum.map(&bytes(Path.join(path, &1))) |> Enum.sum()
+          {:error, _reason} -> 0
+        end
+
+      {:ok, %File.Stat{type: :regular, size: size}} ->
+        size
+
+      _other ->
+        0
+    end
+  end
+
+  # A command on a pseudo-terminal: util-linux `script` runs it as one
+  # shell word each, flushing what it writes and answering its status.
+  defp pty(argv),
+    do: ["/usr/bin/script", "-qfec", Enum.map_join(argv, " ", &shell_word/1), "/dev/null"]
+
+  defp shell_word(word), do: "'" <> String.replace(word, "'", "'\\''") <> "'"
 
   defp call(child, request) do
     GenServer.call(child, request)
@@ -463,16 +607,21 @@ defmodule Locus.DirectLauncher.Child do
   }
 
   @impl true
-  def init({owner, ref, argv, env, mode, janitor, strand?}) do
+  def init({owner, ref, argv, env, mode, janitor, strand?, kept}) do
     Process.flag(:trap_exit, true)
     home = Path.join(System.tmp_dir!(), "locus_spawn_#{Prima.Hex.short()}")
     log = Path.join(home, "stderr")
+    # A kept home is the process's HOME; its own home holds its fifo and
+    # relay, and is removed with it, the kept one left as it is.
+    process_home = kept || home
 
     with :ok <- File.mkdir_p(Path.join(home, "tmp")),
+         :ok <- File.mkdir_p(Path.join(process_home, "tmp")),
          :ok <- File.chmod(home, 0o700),
          :ok <- mkfifo(log),
          {:ok, relay, relay_env} <- relay(mode, home) do
-      environment = env |> Map.merge(DirectLauncher.base_env(home)) |> Map.merge(relay_env)
+      environment =
+        env |> Map.merge(DirectLauncher.base_env(process_home)) |> Map.merge(relay_env)
 
       # The shell opens the fifo for the process's standard error, then
       # becomes the process; a stranded reader's process never opens it.
@@ -485,7 +634,7 @@ defmodule Locus.DirectLauncher.Child do
           :eof,
           :exit_status,
           :use_stdio,
-          cd: home,
+          cd: process_home,
           args:
             ["-i"] ++
               Enum.map(environment, fn {k, v} -> "#{k}=#{v}" end) ++

@@ -33,7 +33,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   everything after it, the gate first; one killed after the gate restarts
   only what follows it; a refused rerun fails the tier and then the root;
   an endpoint in a crash loop exhausts the web tier alone; and a dead
-  backends controller restarts the servers that release through it.
+  programs box restarts alone.
 
   A stop is the start backwards: the endpoint first, the cell last, and
   every child that holds a claim stopped before its tier returns.
@@ -97,7 +97,9 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
        Opus.Sweeper,
        Opus.WorkerWatch,
        Opus.Host.Egress.Pins,
-       Opus.HostListener
+       Opus.HostListener,
+       {Opus.Programs,
+        [Opus.Programs.Registry, Opus.Programs.Relays, {Opus.Programs.Box, "local"}]}
      ]},
     {Aqua.Supervisor,
      [
@@ -111,7 +113,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
        {Emissary.External.ServerTree,
         [
           Emissary.External.ServerRegistry,
-          Emissary.External.Backends,
           Emissary.External.ServerSupervisor,
           Emissary.External.Reconciler
         ]},
@@ -133,6 +134,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Compendium.Supervisor => {:one_for_one, {10, 60}},
     Opus.Supervisor => {:rest_for_one, {10, 60}},
     Opus.Tree => {:rest_for_one, {10, 60}},
+    Opus.Programs => {:rest_for_one, {10, 60}},
     Aqua.Supervisor => {:rest_for_one, {10, 60}},
     Aqua.WorkerTree => {:rest_for_one, {10, 60}},
     Aqua.RunnerTree => {:rest_for_one, {10, 60}},
@@ -157,7 +159,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Emissary.TaskSupervisor,
     Emissary.External.Reconciler,
     Emissary.External.ServerSupervisor,
-    Emissary.External.Backends,
     Emissary.External.ServerRegistry,
     Aqua.RunnerSupervisor,
     Aqua.RunnerRegistry,
@@ -165,6 +166,9 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Aqua.Loop.Worker,
     Aqua.Crew,
     Aqua.ScheduleNotes,
+    {Opus.Programs.Box, "local"},
+    Opus.Programs.Relays,
+    Opus.Programs.Registry,
     Opus.HostListener,
     Opus.Host.Egress.Pins,
     Opus.WorkerWatch,
@@ -202,7 +206,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.Cell,
     Cyfr.RetentionScheduler,
     Opus.WorkerWatch,
-    Emissary.External.Backends
+    {Opus.Programs.Box, "local"}
   ]
 
   # The leaves the product starts no lasting process for: the one-shot
@@ -580,28 +584,24 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       stop_tree(starter, [retry])
     end
 
-    # The servers release their owners through the controller, so a
-    # controller that dies takes them down and starts them again after
-    # it, with the reconciler that fills them; the registry before it,
-    # and everything outside the group, keep running.
+    # A box is the last child of the programs controller: one that dies
+    # restarts alone. Its holders hold no reference into it; the service
+    # refuses their grants once the dead box's leases lapse, and they hold
+    # their owners again.
     @tag :capture_log
-    test "a dead backends controller restarts the servers it releases, and nothing else" do
+    test "a dead programs box restarts alone" do
       {starter, root} = booted!()
-      group = [:barrier_infra, Emissary.Supervisor, Emissary.External.ServerTree]
-      registry = pid_at(root, group ++ [Emissary.External.ServerRegistry])
+      group = [:barrier_infra, Opus.Supervisor, Opus.Programs]
+      registry = pid_at(root, group ++ [Opus.Programs.Registry])
+      relays = pid_at(root, group ++ [Opus.Programs.Relays])
 
-      kill!(root, group ++ [Emissary.External.Backends])
-      next_stopped!([Emissary.External.Reconciler, Emissary.External.ServerSupervisor])
-
-      next_started!([
-        Emissary.External.Backends,
-        Emissary.External.ServerSupervisor,
-        Emissary.External.Reconciler
-      ])
+      kill!(root, group ++ [{Opus.Programs.Box, "local"}])
+      next_started!([{Opus.Programs.Box, "local"}])
 
       quiet!()
       refute_received {:stopped, _}
-      assert pid_at(root, group ++ [Emissary.External.ServerRegistry]) == registry
+      assert pid_at(root, group ++ [Opus.Programs.Registry]) == registry
+      assert pid_at(root, group ++ [Opus.Programs.Relays]) == relays
       stop_tree(starter)
     end
   end
@@ -800,14 +800,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
   end
 
-  # The next stand-ins to stop are `ids`, in this order.
-  defp next_stopped!(ids) do
-    for id <- ids do
-      assert_receive {:stopped, stopped}, 5_000
-      assert stopped == id
-    end
-  end
-
   defp quiet!, do: refute_receive({:started, _}, 200)
 
   # Every stand-in stopped so far, in the order they stopped, with
@@ -910,7 +902,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   defp leaves(shapes),
     do:
       Enum.flat_map(shapes, fn
-        {_id, children} -> leaves(children)
+        {_id, children} when is_list(children) -> leaves(children)
         id -> [id]
       end)
 

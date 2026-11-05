@@ -256,11 +256,12 @@ defmodule Sanctum.Consent.Plan do
   with that dependency's needs missing; one not installed leaves it
   unresolved as missing.
 
-  A source whose closure declares a need met by mounting a login entry
-  (`Prima.Manifest.Needs.mount_only?/1`), in its own manifest or a
-  dependency's, is refused `{:not_built, :mount}`
-  as its shape is derived (`Sanctum.Consent.ShapeDerivation.shape_input/3`),
-  before any profile, head or binding is read.
+  A need met by mounting a login entry (`Prima.Manifest.Needs.mount_only?/1`)
+  is covered by the program its destination names, never by hosts: its
+  row names the `program`, its candidates are the athanor's login entries
+  naming that program (attach-only, holding no fields), and no share is
+  offered for it, since a recipient's use of a shared login entry is not
+  built. The `@ingress` slot never offers a login entry.
   """
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def plan(%Context{} = ctx, %{ref: ref} = params) when is_binary(ref) do
@@ -508,6 +509,7 @@ defmodule Sanctum.Consent.Plan do
             scopes: need.scopes,
             required: need.required
           }
+          |> Prima.MapUtil.put_present(:program, Map.get(need, :program))
           |> Map.merge(prefill(need))
           |> Map.merge(choice_row(sources, need))
           |> put_newer_shipped(need, newer)
@@ -609,7 +611,10 @@ defmodule Sanctum.Consent.Plan do
       Enum.join(scope_set(need.scopes), ", ")
   end
 
-  defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts, ", ")}"
+  defp kind_words(%{kind: "login"} = need),
+    do: "login entry for the program #{Map.get(need, :program)}"
+
+  defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts || [], ", ")}"
 
   defp newer_words(%{newer_shipped: version}) when is_binary(version),
     do: ", or update to version #{version}, which the release ships"
@@ -715,14 +720,24 @@ defmodule Sanctum.Consent.Plan do
       |> with_fit(entry, need)
 
     if meets?(candidate, entry.oauth_scopes, need) and mappable?(candidate, need) and
-         (candidate.disclosed or not reads_itself?(need)),
+         (candidate.disclosed or not reads_itself?(need)) and not mounted_at_ingress?(entry, need),
        do: [candidate],
        else: []
   end
 
+  # A login entry is mounted into its program and holds nothing a
+  # component reads: it never meets the `@ingress` slot, whatever its row
+  # says of disclosure.
+  defp mounted_at_ingress?(%{kind: "login"}, nil), do: true
+  defp mounted_at_ingress?(_entry, _need), do: false
+
   # A share has no component policy: it meets any need it fits, on any
   # node, and never one the component reads itself, since it is attach-only.
   defp share_candidate(_share, nil), do: []
+
+  # A recipient's use of a shared login entry is not built, so no share is
+  # offered for a need met by mounting.
+  defp share_candidate(_share, %{kind: "login"}), do: []
 
   defp share_candidate(share, need) do
     candidate =

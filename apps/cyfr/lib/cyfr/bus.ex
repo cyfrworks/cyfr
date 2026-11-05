@@ -206,7 +206,7 @@ defmodule Cyfr.Bus do
       match: {:exact, "bus:mcp_servers"},
       template: "tenant:<athanor_id>:bus:mcp_servers",
       producers: ["Emissary.External.Provider", "Emissary.External.Server"],
-      consumers: ["PrismWeb.McpServersLive", "Emissary.MCP.Subscriptions"],
+      consumers: ["PrismWeb.ProgramsLive", "Emissary.MCP.Subscriptions"],
       reason: "the athanor's external MCP servers or their tool lists changed"
     },
     %{
