@@ -358,7 +358,7 @@ defmodule Arca.StorageTest do
       assert Storage.locate(["aqua"]) == :above_unit
 
       assert {:dir, _, _} = Storage.locate(["components", "catalysts", "local", "n", "1.0.0"])
-      assert {:file, _} = Storage.locate(["aqua", "roles", "a.md"])
+      assert {:file, _} = Storage.locate(["aqua", "crew", "a.md"])
     end
 
     test "seed_prefix/1 spells the seed vocabulary, and only for seed roots" do
@@ -514,7 +514,7 @@ defmodule Arca.StorageLocatorWiringTest do
     end
 
     assert UnitLocator.impl!() == original
-    assert {:file, _} = Arca.Storage.locate(["aqua", "roles", "a.md"])
+    assert {:file, _} = Arca.Storage.locate(["aqua", "crew", "a.md"])
 
     # A root wired to a module without locate/1 is refused too.
     assert_raise ArgumentError, ~r/does not implement/, fn ->
@@ -532,7 +532,7 @@ defmodule Arca.StorageLocatorWiringTest do
 
     error =
       assert_raise UnitLocator.NotInstalledError, fn ->
-        Arca.Storage.locate(["aqua", "roles", "a.md"])
+        Arca.Storage.locate(["aqua", "crew", "a.md"])
       end
 
     assert error.message =~ "Arca.Storage.UnitLocator.install!/1"

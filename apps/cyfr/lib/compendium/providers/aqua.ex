@@ -4,10 +4,10 @@
 defmodule Compendium.Providers.Aqua do
   @moduledoc """
   AQUA tool handlers for the Compendium MCP provider — the soul and its
-  roles, the scrolls, and the documentation guides.
+  crew, the scrolls, and the documentation guides.
 
-  The soul and its roles are the athanor's own: one frontmatter-markdown
-  file each — `aqua/aqua.md` and `aqua/roles/<name>.md`
+  The soul and its crew are the athanor's own: one frontmatter-markdown
+  file each — `aqua/aqua.md` and `aqua/crew/<name>.md`
   (`Compendium.AquaAgent` is the format, `Compendium.AquaPath` the
   layout) — served through the seed overlay: shipped files read through
   until edited, edited ones shadow only themselves, and deleting an
@@ -62,16 +62,16 @@ defmodule Compendium.Providers.Aqua do
   # handler they gate; Compendium.Provider assembles its roster from these.
   def definition do
     alias Prima.{Arg, Operation}
-    # The soul and the roles are the athanor's own. Reading them is
+    # The soul and the crew are the athanor's own. Reading them is
     # open to any authenticated caller, a running chain included —
     # a turn resolves its agent through `get`, so the reads
     # carry no consent class and stay reachable from every surface
-    # that can start one. Editing them — the closet, the prompts,
+    # that can start one. Editing them — the crew, the prompts,
     # the `tool_policy` that decides what a chain may call — is a
     # member's act from outside, never something a chain can do to
     # itself.
     # Every write is `consent: :interactive`: a person's own session
-    # changes the soul, the closet and the scrolls, never a standing
+    # changes the soul, the crew and the scrolls, never a standing
     # credential — an API key, a `*` key included, is refused at the
     # registry's dispatch gate and does not see these actions in
     # `tools/list`.
@@ -86,9 +86,9 @@ defmodule Compendium.Providers.Aqua do
     # prompt index, so each write deserves its own click — no
     # standing "Always" at any scope (`standing: false`). Deleting
     # stays a member's act alone: never proposable, never standing.
-    # Reset restores shipped units — one role by name, else every
-    # edited copy. With all=true it also deletes athanor-made
-    # roles and scrolls.
+    # Reset restores shipped units — one agent by name, else every
+    # edited copy. With all=true it also deletes the crew members and
+    # scrolls the athanor made.
     Operation.tool(
       [
         Operation.new(
@@ -98,11 +98,11 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("detail", :boolean,
               description:
-                "For list: include each agent's full fields (model, tool_policy, catalyst_ref, content, disabled) — one call instead of a get per agent"
+                "For list: include each agent's full fields (model, catalyst_ref, options, avoid, tool_policy, content, disabled) — one call instead of a get per agent"
             ),
             Arg.new("include_disabled", :boolean,
               description:
-                "For list: include roles set aside with disabled: true, which the roster otherwise leaves out"
+                "For list: include crew members set aside with disabled: true, which the roster otherwise leaves out"
             )
           ],
           kind: :read,
@@ -117,7 +117,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             )
           ],
           kind: :read,
@@ -132,14 +132,14 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             ),
             Arg.new("title", :string,
               description: "Human-readable title (for create/update actions)"
             ),
             Arg.new("description", :string,
               description:
-                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+                "What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
             ),
             Arg.new("catalyst_ref", :string,
               description: "Versionless catalyst reference (for create/update actions)"
@@ -147,9 +147,13 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("model", :string,
               description: "Model identifier (for create/update actions)"
             ),
-            Arg.new("tool_policy", {:map, Arg.new(nil, :string, enum: ["ask", "auto"])},
+            Arg.new("avoid", :string,
               description:
-                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's."
+                "What the soul should never hand a crew member (create/update; crew members only)"
+            ),
+            Arg.new("options", {:map, Arg.new(nil, :json)},
+              description:
+                "The options this agent's brain is asked with on every request — names and values its describe declares (create/update)"
             ),
             Arg.new("content", :string,
               bulk: true,
@@ -170,7 +174,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             ),
             Arg.new("title", :string,
               nullable: true,
@@ -179,7 +183,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("description", :string,
               nullable: true,
               description:
-                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+                "What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
             ),
             Arg.new("catalyst_ref", :string,
               nullable: true,
@@ -189,10 +193,24 @@ defmodule Compendium.Providers.Aqua do
               nullable: true,
               description: "Model identifier (for create/update actions)"
             ),
+            Arg.new("avoid", :string,
+              nullable: true,
+              description:
+                "What the soul should never hand a crew member (create/update; crew members only)"
+            ),
+            Arg.new("options", {:map, Arg.new(nil, :json)},
+              nullable: true,
+              description:
+                "The options this agent's brain is asked with on every request — names and values its describe declares (create/update)"
+            ),
+            Arg.new("options_patch", {:map, Arg.new(nil, :json, nullable: true)},
+              description:
+                "update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options."
+            ),
             Arg.new("tool_policy", {:map, Arg.new(nil, :string, enum: ["ask", "auto"])},
               nullable: true,
               description:
-                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's."
+                "The soul's per-(tool,action) allowlist, which every crew member runs under too (a crew member has none of its own). Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's."
             ),
             Arg.new(
               "tool_policy_patch",
@@ -208,7 +226,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("disabled", :boolean,
               nullable: true,
               description:
-                "Take a role out of the closet without deleting its file (for update; shipped roles cannot be deleted — disable them instead)"
+                "Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)"
             ),
             Arg.new("expected_digest", :string,
               description:
@@ -228,7 +246,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             )
           ],
           kind: :destructive,
@@ -243,11 +261,11 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("name", :string,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             ),
             Arg.new("all", :boolean,
               description:
-                "For reset: also DELETE the roles and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)"
+                "For reset: also DELETE the crew members and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)"
             )
           ],
           kind: :destructive,
@@ -274,7 +292,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             )
           ],
           kind: :read,
@@ -290,12 +308,12 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             ),
             Arg.new("description", :string,
               required: true,
               description:
-                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+                "What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
             ),
             Arg.new("content", :string,
               required: true,
@@ -319,11 +337,11 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             ),
             Arg.new("description", :string,
               description:
-                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+                "What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
             ),
             Arg.new("content", :string,
               bulk: true,
@@ -346,7 +364,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             )
           ],
           kind: :destructive,
@@ -362,7 +380,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
             )
           ],
           kind: :destructive,
@@ -372,7 +390,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it hands work to through crew.ask, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; roles and scrolls the athanor made are kept unless all=true).",
+        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, running under the soul's tool policy), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
       title: "AQUA Agent System"
     )
   end
@@ -408,13 +426,13 @@ defmodule Compendium.Providers.Aqua do
     # refused, a typed refusal as it came and any other answer as the
     # file's other reads refuse it (`passthrough_or_unavailable/2`):
     # answering the guides without the agents the store holds would read
-    # as an athanor with no assistant. A role that could not be read stays
-    # out of the closet.
+    # as an athanor with no assistant. A crew member that could not be read
+    # stays out of the crew.
     with {:ok, agents, errors} <- AquaAgent.list(ctx),
          :ok <- soul_read(errors) do
       # The detail flag widens the projection of the already-loaded agents.
       detail? = args["detail"] == true
-      # Disabled roles are out of the closet: the model's roster never
+      # Disabled crew members are out of the crew: the model's roster never
       # holds them. A page that puts them back asks for them by flag,
       # in the same read, rather than by a `get` per file.
       include_disabled? = args["include_disabled"] == true
@@ -434,6 +452,8 @@ defmodule Compendium.Providers.Aqua do
             Map.merge(base, %{
               model: agent.model,
               catalyst_ref: agent.catalyst_ref,
+              options: agent.options,
+              avoid: agent.avoid,
               tool_policy: agent.tool_policy,
               content: agent.prompt,
               disabled: agent.disabled
@@ -443,7 +463,7 @@ defmodule Compendium.Providers.Aqua do
           end
         end)
 
-      # The soul first, then the roles, then the guides.
+      # The soul first, then the crew, then the guides.
       all = agent_guides ++ doc_guides
 
       {:ok, %{guides: all, count: length(all)}}
@@ -479,15 +499,17 @@ defmodule Compendium.Providers.Aqua do
          type: AquaAgent.type_of(agent),
          title: agent.title,
          description: agent.description,
+         avoid: agent.avoid,
          tool_policy: agent.tool_policy,
          catalyst_ref: agent.catalyst_ref,
          model: agent.model,
+         options: agent.options,
          disabled: agent.disabled,
          content_digest: content_digest(agent.prompt)
        }}
     else
       {:error, :not_found} ->
-        {:error, {:not_found, "Soul, role or guide", name}}
+        {:error, {:not_found, "Soul, crew member or guide", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -498,21 +520,22 @@ defmodule Compendium.Providers.Aqua do
   end
 
   # --- create ---
-  # A role, flat in the closet. The soul is never created: its name is
-  # reserved, it ships with the server, and `update` is how it changes.
+  # A crew member. The soul is never created: its name is reserved, it
+  # ships with the server, and `update` is how it changes.
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with :ok <- validate_name(name),
          :ok <- refute_reserved(name),
-         :ok <- validate_tool_policy(args["tool_policy"], AquaAgent.role_type()) do
-      create_role(ctx, name, args)
+         :ok <- no_crew_policy(name, args),
+         :ok <- validate_options(args["options"]) do
+      create_member(ctx, name, args)
     end
   end
 
   # --- update ---
 
   # One serialized read-modify-write, like a scroll's: two members
-  # editing the same role at once each see the other's bytes, never
+  # editing the same agent at once each see the other's bytes, never
   # overwrite them, because the write is made only while the file still
   # holds the bytes the edit was given. Two edits meet in two ways. An
   # allowlist edit arrives as `tool_policy_patch` — the keys it names,
@@ -524,28 +547,31 @@ defmodule Compendium.Providers.Aqua do
   # answered) and is refused as a conflict when the prompt has changed
   # since, rather than writing over the other member's words.
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
-    type = type_of_name(name)
-
     rewrite = fn bytes ->
       with {:ok, agent} <- AquaAgent.parse(name, bytes),
            :ok <- check_expected_digest(agent, args["expected_digest"]),
            agent = apply_updates(agent, args),
-           {:ok, policy} <- patched_policy(agent.tool_policy, args["tool_policy_patch"], type) do
-        {:ok, AquaAgent.serialize(%{agent | tool_policy: policy})}
+           {:ok, policy} <- patched_policy(agent.tool_policy, args["tool_policy_patch"]) do
+        options = patched_options(agent.options, args["options_patch"])
+        {:ok, AquaAgent.serialize(%{agent | tool_policy: policy, options: options})}
       end
     end
 
     with :ok <- validate_name(name),
+         :ok <- no_crew_policy(name, args),
          :ok <- one_policy_argument(args),
-         :ok <- validate_tool_policy(args["tool_policy"], type),
+         :ok <- validate_tool_policy(args["tool_policy"]),
          :ok <- validate_patch(args["tool_policy_patch"]),
+         :ok <- one_options_argument(args),
+         :ok <- validate_options(args["options"]),
+         :ok <- validate_options_patch(args["options_patch"]),
          :ok <-
            Arca.Overlay.update(Sanctum.Context.actor(ctx), AquaPath.agent_file(name), rewrite) do
       resync_index(ctx)
       {:ok, %{updated: name}}
     else
       {:error, :not_found} ->
-        {:error, {:not_found, "Soul or role", name}}
+        {:error, {:not_found, "Soul or crew member", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -556,9 +582,9 @@ defmodule Compendium.Providers.Aqua do
   end
 
   # --- delete ---
-  # A shipped role, edited or not, cannot be deleted (a reset restores
-  # it) — disabling is the closet-removal verb. An athanor-made role
-  # deletes outright. The soul takes the same verb and refuses with its
+  # A shipped crew member, edited or not, cannot be deleted (a reset
+  # restores it) — disabling is how it leaves the crew. An athanor-made
+  # member deletes outright. The soul takes the same verb and refuses with its
   # own sentence.
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
@@ -575,7 +601,7 @@ defmodule Compendium.Providers.Aqua do
           {:error, {:invalid_argument, bundled_delete_message(name)}}
 
         {:error, :not_found} ->
-          {:error, {:not_found, "Soul or role", name}}
+          {:error, {:not_found, "Soul or crew member", name}}
 
         # This member's slot is not live: nothing was removed, and the
         # refusal reads as itself.
@@ -593,12 +619,12 @@ defmodule Compendium.Providers.Aqua do
   end
 
   # --- reset ---
-  # With a name, one role's (or the soul's) edited copy is restored;
+  # With a name, one crew member's (or the soul's) edited copy is restored;
   # without, every edited copy of a shipped unit.
 
   def handle(%Context{} = ctx, %{"action" => "reset", "name" => name}) when is_binary(name) do
     with :ok <- validate_name(name) do
-      restore_unit(ctx, AquaPath.agent_file(name), "Soul or role", name)
+      restore_unit(ctx, AquaPath.agent_file(name), "Soul or crew member", name)
     end
   end
 
@@ -839,7 +865,7 @@ defmodule Compendium.Providers.Aqua do
     if AquaPath.soul?(name),
       do: "The soul ships with the server and cannot be deleted — edit it, or reset",
       else:
-        "Role '#{name}' ships with the server and cannot be deleted — " <>
+        "Crew member '#{name}' ships with the server and cannot be deleted — " <>
           "disable it instead (update name=#{name} disabled=true)"
   end
 
@@ -881,39 +907,41 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  defp create_role(ctx, name, args) do
-    role = %{
+  defp create_member(ctx, name, args) do
+    member = %{
       name: name,
       title: Map.get(args, "title", name),
       description: Map.get(args, "description", ""),
+      avoid: Map.get(args, "avoid", ""),
       disabled: false,
       catalyst_ref: args["catalyst_ref"],
       model: args["model"],
-      tool_policy: args["tool_policy"] || %{},
+      options: args["options"] || %{},
+      tool_policy: %{},
       prompt: Map.get(args, "content", "")
     }
 
-    # A role is a file unit: the one atomic put IS the unit commit — no
-    # sentinel, no rollback needed, the overlay's file CoW applies. It
+    # A crew member is a file unit: the one atomic put IS the unit commit
+    # — no sentinel, no rollback needed, the overlay's file CoW applies. It
     # goes through the commit for `if_absent:` alone: the union answers
-    # for shipped and athanor-made roles alike, and asking it while the
+    # for shipped and athanor-made members alike, and asking it while the
     # commit holds the unit's draft is what keeps two creators of one
     # name from both passing a probe.
-    bytes = AquaAgent.serialize(role)
+    bytes = AquaAgent.serialize(member)
 
     case Arca.Overlay.commit_unit(
            Sanctum.Context.actor(ctx),
-           AquaPath.role_file(name),
+           AquaPath.crew_file(name),
            {:files, [{[], bytes}]},
            cap: {:checked, byte_size(bytes)},
            if_absent: true
          ) do
       {:ok, _written} ->
         resync_index(ctx)
-        {:ok, %{created: name, type: AquaAgent.role_type()}}
+        {:ok, %{created: name, type: AquaAgent.crew_type()}}
 
       {:error, :exists} ->
-        {:error, {:invalid_argument, "Role '#{name}' already exists"}}
+        {:error, {:invalid_argument, "Crew member '#{name}' already exists"}}
 
       {:error, {:limit_reached, _, _} = reason} ->
         {:error, reason}
@@ -972,16 +1000,16 @@ defmodule Compendium.Providers.Aqua do
   defp validate_patch(_patch),
     do: {:error, {:invalid_argument, "tool_policy_patch must be an object"}}
 
-  defp patched_policy(policy, nil, _type), do: {:ok, policy}
+  defp patched_policy(policy, nil), do: {:ok, policy}
 
-  defp patched_policy(policy, patch, type) do
+  defp patched_policy(policy, patch) do
     merged =
       Enum.reduce(patch, policy, fn
         {key, nil}, acc -> Map.delete(acc, key)
         {key, mode}, acc -> Map.put(acc, key, mode)
       end)
 
-    with :ok <- validate_tool_policy(merged, type), do: {:ok, merged}
+    with :ok <- validate_tool_policy(merged), do: {:ok, merged}
   end
 
   # `nil` for an updatable field removes it; an absent key leaves it
@@ -990,9 +1018,11 @@ defmodule Compendium.Providers.Aqua do
     agent
     |> maybe_update(args, "title", :title, agent.name)
     |> maybe_update(args, "description", :description, "")
+    |> maybe_update(args, "avoid", :avoid, "")
     |> maybe_update(args, "tool_policy", :tool_policy, %{})
     |> maybe_update(args, "catalyst_ref", :catalyst_ref, nil)
     |> maybe_update(args, "model", :model, nil)
+    |> maybe_update(args, "options", :options, %{})
     |> maybe_update(args, "disabled", :disabled, false)
     |> then(fn a ->
       case args["content"] do
@@ -1077,35 +1107,88 @@ defmodule Compendium.Providers.Aqua do
          {:invalid_argument, "Invalid name #{inspect(name)} — use letters, digits, '_' and '-'"}}
   end
 
-  # One rule at this door, `Compendium.AquaAgent.validate_tool_policy/2`:
+  # One rule at this door, `Compendium.AquaAgent.validate_tool_policy/1`:
   # the grammar the file parser applies, so nothing this door admits can
   # fail to parse back, and then what a person may WRITE — no automatic
-  # destructive or external action on any agent, no key a role has no use
-  # for, no UI event held at ask. The parser holds a file to the grammar
-  # and the no-effect rule only, so a hand-edited file that says more
+  # destructive or external action, no UI event held at ask. The parser
+  # holds a file to the grammar only, so a hand-edited file that says more
   # still loads and the runtime ceiling demotes what this door would have
   # refused. An absent argument leaves the policy alone (`apply_updates/2`).
-  defp validate_tool_policy(nil, _type), do: :ok
+  defp validate_tool_policy(nil), do: :ok
 
-  defp validate_tool_policy(policy, type) do
-    case AquaAgent.validate_tool_policy(policy, type) do
+  defp validate_tool_policy(policy) do
+    case AquaAgent.validate_tool_policy(policy) do
       :ok -> :ok
       {:error, reason} when is_binary(reason) -> {:error, {:invalid_argument, reason}}
       {:error, reason} -> {:error, {:invalid_argument, tool_policy_message(reason)}}
     end
   end
 
-  defp type_of_name(name),
-    do: if(AquaPath.soul?(name), do: AquaAgent.soul_type(), else: AquaAgent.role_type())
+  # A crew member runs under the soul's policy and holds none of its own:
+  # a write that names one for it is refused, never dropped.
+  defp no_crew_policy(name, args) do
+    if not AquaPath.soul?(name) and
+         (not is_nil(args["tool_policy"]) or not is_nil(args["tool_policy_patch"])),
+       do:
+         {:error,
+          {:invalid_argument,
+           "A crew member runs under the soul's tool policy and has none of its own — " <>
+             "edit the soul's"}},
+       else: :ok
+  end
+
+  # A brain's options: named strings, integers and booleans, the kinds a
+  # brain declares (`Prima.Model`). Which names and values the brain
+  # takes is the brain's to say when a turn opens on it.
+  defp validate_options(nil), do: :ok
+
+  defp validate_options(options) when is_map(options) do
+    if Enum.all?(options, fn {name, value} ->
+         is_binary(name) and name != "" and
+           (is_binary(value) or is_integer(value) or is_boolean(value))
+       end),
+       do: :ok,
+       else: {:error, {:invalid_argument, "options are named strings, integers or booleans"}}
+  end
+
+  defp validate_options(_options), do: {:error, {:invalid_argument, "options must be an object"}}
+
+  defp one_options_argument(%{"options" => options, "options_patch" => patch})
+       when not is_nil(options) and not is_nil(patch),
+       do: {:error, {:invalid_argument, "Give options or options_patch, not both"}}
+
+  defp one_options_argument(_args), do: :ok
+
+  # A patch's values are an option's kinds, or null to take one off.
+  defp validate_options_patch(nil), do: :ok
+
+  defp validate_options_patch(patch) when is_map(patch) do
+    {cleared, set} = Enum.split_with(patch, fn {_name, value} -> is_nil(value) end)
+
+    with :ok <- validate_options(Map.new(set)) do
+      if Enum.all?(cleared, fn {name, _} -> is_binary(name) and name != "" end),
+        do: :ok,
+        else: {:error, {:invalid_argument, "options_patch names options by name"}}
+    end
+  end
+
+  defp validate_options_patch(_patch),
+    do: {:error, {:invalid_argument, "options_patch must be an object"}}
+
+  # Applied to the options the file holds as the write lands, under the
+  # rewrite's lock: only the options the patch names change.
+  defp patched_options(options, nil), do: options
+
+  defp patched_options(options, patch) do
+    Enum.reduce(patch, options || %{}, fn
+      {name, nil}, acc -> Map.delete(acc, name)
+      {name, value}, acc -> Map.put(acc, name, value)
+    end)
+  end
 
   defp tool_policy_message({:tool_policy_invalid_value, key, value}),
     do:
       "Invalid tool_policy value #{inspect(value)} for #{inspect(key)} — use \"ask\" or \"auto\""
-
-  defp tool_policy_message({:tool_policy_no_effect, key}),
-    do:
-      "#{key} has no effect on a role — a role launches nothing and every launch asks; " <>
-        "leave it out"
 
   defp tool_policy_message({:tool_policy_invalid_key, key}),
     do:

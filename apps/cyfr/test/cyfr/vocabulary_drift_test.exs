@@ -3,18 +3,19 @@
 
 defmodule Cyfr.VocabularyDriftTest do
   @moduledoc """
-  Checks assistant, role, scroll and note terminology in code and product
+  Checks assistant, crew, scroll and note terminology in code and product
   copy. The words the product does not use are spelled split here so the
   file passes the gate it enforces.
 
-  The agent-type values are held the same way: `"soul"` and `"role"` are
-  `Compendium.AquaAgent`'s (`soul_type/0`, `role_type/0`, `type_of/1`),
+  The agent-type values are held the same way: `"soul"` and `"crew"` are
+  `Compendium.AquaAgent`'s (`soul_type/0`, `crew_type/0`, `type_of/1`),
   and a reader comparing against a bare literal would filter to nothing
-  if the writer's spelling moved. `"role"` is also the provider-shape
-  message key (`%{"role" => "user"}`) and a membership field
-  (`m["role"]`): a key is followed by `=>` or wrapped in `[...]`, and
-  neither spelling is the type value, so both are set aside before a
-  line is counted.
+  if the writer's spelling moved. Every reader tells the soul from the
+  crew, so the soul's value is the one pinned: `"crew"` also names the
+  tree's directory, a child thread's kind and the hand-off's tool, so a
+  line spelling it says nothing of the type. A key is followed by `=>` or
+  wrapped in `[...]` and is not the type value, so it is set aside before
+  a line is counted.
   """
 
   use ExUnit.Case, async: true
@@ -26,7 +27,7 @@ defmodule Cyfr.VocabularyDriftTest do
   # holds the gate.
   @lib_trees ["apps/cyfr/lib/**/*.ex", "apps/sanctum/lib/**/*.ex"]
 
-  # The agent a turn is addressed to is a soul or a role, never this word:
+  # The agent a turn is addressed to is the soul or a crew member, never this word:
   # no code line under `apps/cyfr/lib` and `apps/sanctum/lib` and no column
   # of the baseline says it, quoted, bare, as an atom or as a field — by
   # file and exact count, none.
@@ -34,13 +35,13 @@ defmodule Cyfr.VocabularyDriftTest do
   @unused_word_allowed %{}
   @baseline "apps/arca/priv/repo/migrations/*_baseline.exs"
 
-  @type_value ~r/"(?:soul|role)"/
-  @type_key ~r/\["(?:soul|role)"\]|"(?:soul|role)"\s*=>|Arg\.new\("(?:soul|role)",/
+  @type_value ~r/"soul"/
+  @type_key ~r/\["soul"\]|"soul"\s*=>|Arg\.new\("soul",/
 
   # Lines that spell an agent type as a bare value, by file and exact count.
   @type_literal_allowed %{
-    # The two attributes the vocabulary is read from.
-    "apps/cyfr/lib/compendium/aqua_agent.ex" => 2
+    # The attribute the vocabulary is read from.
+    "apps/cyfr/lib/compendium/aqua_agent.ex" => 1
   }
 
   defp type_value_line?(line) do
@@ -52,8 +53,8 @@ defmodule Cyfr.VocabularyDriftTest do
   end
 
   test "the scan distinguishes argument names from agent type values" do
-    refute type_value_line?("Arg.new(\"role\", :string, required: true)")
-    assert type_value_line?("agent.type == \"role\"")
+    refute type_value_line?("Arg.new(\"soul\", :string, required: true)")
+    assert type_value_line?("agent.type == \"soul\"")
   end
 
   # One walk of the lib trees serves every pin.
@@ -128,7 +129,7 @@ defmodule Cyfr.VocabularyDriftTest do
 
   @unused_words Regex.compile!("sub-agent|\\bsub_agent\\b|" <> @unused_word, "i")
 
-  test "the seed, the CLI and the guides speak soul, role and scroll" do
+  test "the seed, the CLI and the guides speak soul, crew and scroll" do
     stale =
       for glob <- @product_files ++ shipped_guides(),
           path <- Prima.Test.SourceTree.files!(Path.join(@root, glob)),

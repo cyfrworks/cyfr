@@ -1002,11 +1002,11 @@ defmodule Arca.PublicationContract do
           assert Enum.sort(staged(actor, unit)) == Enum.sort([@sentinel, "a.txt", "b.txt"])
         end
 
-        test "a role is created by writing its own file, which is its one commit; a scroll by " <>
+        test "a crew member is created by writing its own file, which is its one commit; a scroll by " <>
                "its SKILL.md, and nothing lands inside it before that",
              %{actor: actor} do
           n = System.unique_integer([:positive])
-          role = ["aqua", "roles", "made-#{n}.md"]
+          role = ["aqua", "crew", "made-#{n}.md"]
           {root, key} = UnitLocator.unit_key(role)
 
           assert :ok = Arca.put(actor, role, "# made")

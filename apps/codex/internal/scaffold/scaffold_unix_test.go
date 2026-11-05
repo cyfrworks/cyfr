@@ -22,8 +22,8 @@ func TestWriteKeepsTheTreeReadableUnderAnyUmask(t *testing.T) {
 	t.Cleanup(func() { syscall.Umask(saved) })
 	r := &Release{entries: []entry{
 		{name: "aqua", dir: true},
-		{name: "aqua/roles", dir: true},
-		{name: "aqua/roles/shipped.md", mode: 0o644, data: []byte("a role")},
+		{name: "aqua/crew", dir: true},
+		{name: "aqua/crew/shipped.md", mode: 0o644, data: []byte("a crew member")},
 		{name: "aqua/skills/shipped/SKILL.md", mode: 0o644, data: []byte("a scroll, its parents absent from the tarball")},
 	}}
 	if err := r.Write(false); err != nil {

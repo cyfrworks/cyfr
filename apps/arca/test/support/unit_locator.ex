@@ -16,7 +16,7 @@ defmodule Arca.Test.UnitLocator do
   branches on, not the grammar the domain enforces: a components path is
   a directory unit at the version directory the contracts spell
   (`Prima.ComponentPath.version_dir/4`, five segments) with a sentinel
-  that marks a completed copy; an aqua role is a file unit and an aqua
+  that marks a completed copy; an aqua crew member is a file unit and an aqua
   skill a directory unit. A path that names neither sits above any unit.
   A refusal the real grammar would make — a malformed name, an unknown
   type — is the domain's to make and is not this double's business.
@@ -62,9 +62,9 @@ defmodule Arca.Test.UnitLocator do
     @impl Arca.Storage.UnitLocator
     def locate([@root, @soul | _rest]), do: {:file, [@root, @soul]}
 
-    def locate([@root, "roles", file | _rest]) do
+    def locate([@root, "crew", file | _rest]) do
       if String.ends_with?(file, ".md"),
-        do: {:file, [@root, "roles", file]},
+        do: {:file, [@root, "crew", file]},
         else: :above_unit
     end
 

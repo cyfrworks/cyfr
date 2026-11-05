@@ -90,7 +90,7 @@ defmodule Aqua.ToolGrants do
   @doc """
   The effective policy for a turn, as the guest reads it: `effective/2`
   projected to `"auto" | "ask" | "deny"`. The only thing that should ever
-  be handed to a turn — the soul's or a role's — as its policy.
+  be handed to a turn — the soul's or a crew member's — as its policy.
   """
   @spec resolve(map(), [grant()]) :: map()
   def resolve(declared, grants) when is_map(declared) and is_list(grants) do

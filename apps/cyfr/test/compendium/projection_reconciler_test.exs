@@ -168,11 +168,11 @@ defmodule Compendium.ProjectionReconcilerTest do
       assert caught_up?(actor)
     end
 
-    test "of the agent tree observes the role in the index", %{ctx: ctx, actor: actor} do
-      # The soul and a role are file units: each lands by its commit.
+    test "of the agent tree observes the crew member in the index", %{ctx: ctx, actor: actor} do
+      # The soul and a crew member are file units: each lands by its commit.
       for {unit, body} <- [
             {["aqua", "aqua.md"], "---\ntitle: Soul\n---\n\nsoul\n"},
-            {["aqua", "roles", "scout.md"], "---\ntitle: Scout\n---\n\nscout\n"}
+            {["aqua", "crew", "scout.md"], "---\ntitle: Scout\n---\n\nscout\n"}
           ] do
         {:ok, _} = Arca.Overlay.commit_unit(actor, unit, {:files, [{[], body}]}, cap: :exempt)
       end
@@ -181,7 +181,7 @@ defmodule Compendium.ProjectionReconcilerTest do
       assert "scout" in Enum.map(rows, & &1.name)
       assert caught_up?(actor, "aqua")
 
-      :ok = Arca.delete(actor, ["aqua", "roles", "scout.md"])
+      :ok = Arca.delete(actor, ["aqua", "crew", "scout.md"])
       assert {:ok, rows} = AgentIndex.list(ctx)
       refute "scout" in Enum.map(rows, & &1.name)
     end

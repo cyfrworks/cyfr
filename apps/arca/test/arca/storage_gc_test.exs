@@ -617,11 +617,11 @@ defmodule Arca.StorageGCTest do
       unit: unit
     } do
       # A file unit and a directory unit: the one framing, both shapes.
-      agent = ["aqua", "roles", "gc-#{System.unique_integer([:positive])}.md"]
+      agent = ["aqua", "crew", "gc-#{System.unique_integer([:positive])}.md"]
       commit_unreleased(actor, unit, "one")
 
       dies_unreleased(actor, agent, fn ->
-        Arca.Overlay.commit_unit(actor, agent, {:files, [{[], "# a role"}]}, cap: :exempt)
+        Arca.Overlay.commit_unit(actor, agent, {:files, [{[], "# a crew member"}]}, cap: :exempt)
       end)
 
       expire!(actor, unit)
@@ -630,7 +630,7 @@ defmodule Arca.StorageGCTest do
       for repaired <- [unit, agent],
           do: assert({:ok, :repaired} = Arca.Overlay.repair_unit(actor, repaired))
 
-      assert {:ok, "# a role"} = Arca.get(actor, agent)
+      assert {:ok, "# a crew member"} = Arca.get(actor, agent)
       assert served(actor, unit) == whole("one")
 
       for intact <- [unit, agent],

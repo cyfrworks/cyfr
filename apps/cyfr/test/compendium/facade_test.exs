@@ -83,8 +83,8 @@ defmodule Compendium.FacadeTest do
     acknowledged_projection_epoch: 3,
     agent: 2,
     agent_capability_digest: 1,
+    agent_crew_type: 0,
     agent_file_path: 1,
-    agent_role_type: 0,
     agent_row: 1,
     agent_snapshot: 2,
     agent_soul_type: 0,
@@ -102,11 +102,11 @@ defmodule Compendium.FacadeTest do
     local_formula_refs: 1,
     manifest_leaves: 1,
     model_catalysts: 1,
-    parse_agent: 2,
     parse_agent_frontmatter: 1,
     parse_component_path: 1,
     resolve: 2,
     resolve_activation: 2,
+    resolve_agent: 3,
     resolve_verified_activation: 2,
     shipped_versions: 2,
     skill_dir: 1,
@@ -189,7 +189,7 @@ defmodule Compendium.FacadeTest do
     test "agents and skills answer as Compendium.AquaAgent and Compendium.AquaSkills", %{
       ctx: ctx
     } do
-      assert Compendium.agent_role_type() == Compendium.AquaAgent.role_type()
+      assert Compendium.agent_crew_type() == Compendium.AquaAgent.crew_type()
       assert Compendium.agent_soul_type() == Compendium.AquaAgent.soul_type()
       assert Compendium.skills_index_limit() == Compendium.AquaSkills.index_limit()
 

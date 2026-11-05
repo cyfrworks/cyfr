@@ -669,10 +669,14 @@ defmodule Opus.ProviderTest do
       soul = Prima.AgentRef.soul_ref()
 
       agents = [
-        %{"type" => Compendium.agent_soul_type(), "catalyst_ref" => "catalyst:local.claude"}
+        %{
+          "name" => "aqua",
+          "type" => Compendium.agent_soul_type(),
+          "catalyst_ref" => "catalyst:local.claude"
+        }
       ]
 
-      assert %{"catalyst:local.claude" => {:ready, resolved}} = Aqua.model_status(ctx, agents)
+      assert %{"aqua" => {:ready, resolved}} = Aqua.model_status(ctx, agents)
       assert {:ok, _authority} = Opus.authority_for(ctx, :default, soul)
 
       # The component index falls behind once the model's own listing and
@@ -680,7 +684,7 @@ defmodule Opus.ProviderTest do
       behind_at_profiles!(ctx, soul)
 
       assert Aqua.model_status(ctx, agents) == %{
-               "catalyst:local.claude" => {:consent_unavailable, resolved}
+               "aqua" => {:consent_unavailable, resolved}
              }
 
       assert {:error, {:unavailable, "The component graph"}} =

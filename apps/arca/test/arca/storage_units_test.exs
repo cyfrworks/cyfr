@@ -527,13 +527,13 @@ defmodule Arca.StorageUnitsTest do
       commit!(actor, key <> "-gone", "rev_g")
       :ok = StorageUnits.retire(actor, @root, key <> "-gone")
 
-      {:ok, _} = StorageUnits.register_draft(actor, "aqua", "roles/scribe.md", "wrt_a")
+      {:ok, _} = StorageUnits.register_draft(actor, "aqua", "crew/scribe.md", "wrt_a")
 
       assert {:ok, pointers} = StorageUnits.current_under(actor, @root)
       assert %{^key => %{current_revision: "rev_1"}} = pointers
       refute Map.has_key?(pointers, key <> "-draft")
       refute Map.has_key?(pointers, key <> "-gone")
-      refute Map.has_key?(pointers, "roles/scribe.md")
+      refute Map.has_key?(pointers, "crew/scribe.md")
     end
   end
 

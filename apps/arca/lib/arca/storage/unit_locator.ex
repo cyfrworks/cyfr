@@ -152,8 +152,8 @@ defmodule Arca.Storage.UnitLocator do
 
   ## Examples
 
-      iex> Arca.Storage.UnitLocator.unit_key(["aqua", "roles", "scribe.md"])
-      {"aqua", "roles/scribe.md"}
+      iex> Arca.Storage.UnitLocator.unit_key(["aqua", "crew", "scribe.md"])
+      {"aqua", "crew/scribe.md"}
   """
   @spec unit_key(Arca.Storage.path()) :: {root :: String.t(), unit_key :: String.t()}
   def unit_key([root | [_ | _] = rest]) when is_binary(root), do: {root, Enum.join(rest, "/")}
@@ -163,8 +163,8 @@ defmodule Arca.Storage.UnitLocator do
 
   ## Examples
 
-      iex> Arca.Storage.UnitLocator.unit_path("aqua", "roles/scribe.md")
-      ["aqua", "roles", "scribe.md"]
+      iex> Arca.Storage.UnitLocator.unit_path("aqua", "crew/scribe.md")
+      ["aqua", "crew", "scribe.md"]
   """
   @spec unit_path(String.t(), String.t()) :: Arca.Storage.path()
   def unit_path(root, unit_key) when is_binary(root) and is_binary(unit_key),
@@ -204,8 +204,8 @@ defmodule Arca.Storage.UnitLocator do
 
       iex> Arca.Storage.UnitLocator.in_revision({:dir, ["aqua", "skills", "pdf"], "SKILL.md"}, "rev_1", ["aqua", "skills", "pdf", "SKILL.md"])
       ["aqua", ".staging", "skills", "pdf", "rev_1", "SKILL.md"]
-      iex> Arca.Storage.UnitLocator.in_revision({:file, ["aqua", "roles", "a.md"]}, "rev_1", ["aqua", "roles", "a.md"])
-      ["aqua", ".staging", "roles", "a.md", "rev_1", "a.md"]
+      iex> Arca.Storage.UnitLocator.in_revision({:file, ["aqua", "crew", "a.md"]}, "rev_1", ["aqua", "crew", "a.md"])
+      ["aqua", ".staging", "crew", "a.md", "rev_1", "a.md"]
   """
   @spec in_revision(
           {:file, Arca.Storage.path()} | {:dir, Arca.Storage.path(), String.t()},
@@ -265,8 +265,8 @@ defmodule Arca.Storage.UnitLocator do
 
   ## Examples
 
-      iex> Arca.Storage.UnitLocator.staged_object(["aqua", "roles", "a.md"], "rev_1", [])
-      ["aqua", ".staging", "roles", "a.md", "rev_1", "a.md"]
+      iex> Arca.Storage.UnitLocator.staged_object(["aqua", "crew", "a.md"], "rev_1", [])
+      ["aqua", ".staging", "crew", "a.md", "rev_1", "a.md"]
   """
   @spec staged_object(Arca.Storage.path(), String.t(), Arca.Storage.path()) ::
           Arca.Storage.path()

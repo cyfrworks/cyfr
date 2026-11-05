@@ -611,6 +611,35 @@ defmodule Prima.Refusal do
   defp row(:thread_archived),
     do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
 
+  # A crew member whose brain cannot take a job yet (`Aqua.Crew.ready/2`):
+  # the sentence says what the person does about it.
+  defp row({:crew_unready, member, :no_brain}) when is_binary(member),
+    do: {:setup_required, "#{member} has no brain yet — pick its model on the AQUA page"}
+
+  defp row({:crew_unready, member, :not_installed}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s brain is not installed here — install it from its card on the AQUA page"}
+
+  defp row({:crew_unready, member, :no_key}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s brain has no key bound yet — connect one from its card on the AQUA page"}
+
+  defp row({:crew_unready, member, :not_signed_in}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s program is not signed in — sign it in on the Programs page, then connect " <>
+         "it from its card on the AQUA page"}
+
+  defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
+    do:
+      {:corrupt,
+       "A consent #{member}'s brain runs under is damaged — revoke it and grant it again"}
+
+  defp row({:crew_unready, member, :unavailable}) when is_binary(member),
+    do: {:unavailable, "#{member}'s brain cannot be read right now — retry shortly"}
+
   defp row({:child_awaits_card, member}) when is_binary(member),
     do:
       {:conflict,
