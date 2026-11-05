@@ -40,8 +40,9 @@ entry's home round-trips a line, its process running in the entry's kept
 home under the home's uid; the person revokes the entry
 (`Sanctum.Vault.revoke/2`, as the console does), and well inside the
 row's idle period cyfr ends the session: its process is gone from the
-service, a read of the session answers `running: false` with no lines, and
-an open of the row in the revoked entry's home is refused.
+service, and a read of the session answers `running: false` with no lines.
+(An open after the revoke is refused by CYFR's host before it reaches the
+controller, as apps/cyfr/test/integration/runtime/pipe_test.exs proves.)
 
 Prerequisites: harness.py's, and the app image. Usage: tests/locus-backends-image/pipe.py IMAGE
 """
@@ -344,9 +345,6 @@ def cyfr_controller(image):
         after = step(stack, token, RECV, **held)
         expect(after.get("ok", {}).get("running") is False and after["ok"]["lines"] == [],
                "a read of the ended session answers running: false and no lines", after)
-        refused = step(stack, token, OPEN, **{**names, "opener": f"att_pipe-{secrets.token_hex(6)}"})
-        expect("error" in refused, "an open in the revoked entry's home is refused", refused)
-        expect(not cat_processes(stack), "and starts nothing")
     finally:
         stack.down()
 
