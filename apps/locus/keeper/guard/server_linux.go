@@ -96,7 +96,8 @@ func listen(path string) (*net.UnixListener, error) {
 			return nil, err
 		}
 	}
-	mask := syscall.Umask(0o077)
+	// A socket takes 0777 less the mask: 0600, root's to read and write.
+	mask := syscall.Umask(0o177)
 	defer syscall.Umask(mask)
 	return net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 }

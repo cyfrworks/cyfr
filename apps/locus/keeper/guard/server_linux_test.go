@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -180,5 +181,31 @@ func TestALostConnectionLeavesANewerConnectionsAdmissions(t *testing.T) {
 	got := f.taken()[3:]
 	if want := [][]string{{"admit", "40002"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("after the older connection ended the guard ran %v, want only uid 40002 refused", got)
+	}
+}
+
+// The control's socket is root's alone: its folder 0700 and the socket
+// 0600, as the package says.
+func TestListenMakesARootOnlySocket(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("listening in a folder root owns needs root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "guard.sock")
+	l, err := listen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	socket, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder, err := os.Lstat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if socket.Mode()&os.ModeSocket == 0 || socket.Mode().Perm() != 0o600 || folder.Mode().Perm() != 0o700 {
+		t.Fatalf("the socket is %v and its folder %v, want a socket 0600 in a folder 0700", socket.Mode(), folder.Mode())
 	}
 }
