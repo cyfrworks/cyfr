@@ -494,8 +494,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "keeper_protocol.json" => [
       {"apps/cyfr/test/emissary/external/backend_definition_test.exs", ~w(reserved_env_prefixes)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames valid_requests invalid_requests replies)},
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames valid_requests invalid_requests not_built_requests replies home_replies)},
       {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
+      {"apps/locus/keeper/internal/serve/serve_linux_test.go", ~w(not_built_requests)},
       {"apps/locus/test/locus/config_test.exs", ~w(valid_requests invalid_requests)},
       {"apps/locus/test/locus/keeper_test.exs", ~w(valid_requests)},
       {"apps/locus/test/locus/keeper_vectors_test.exs",
@@ -504,7 +505,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(control_frames valid_requests replies)},
       {"apps/locus/test/locus/runtime/keeper_memory_test.exs", ~w(valid_requests replies)},
       {"apps/prima/test/prima/keeper_protocol_test.exs",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)}
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests not_built_requests replies home_replies)}
     ],
     "layout.json" => [
       {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid unsupported)}
@@ -547,6 +548,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(protocol_version supported meta header_values named_subject error_codes consent_tags consent_errors)},
       {"apps/prima/test/prima/mcp/wire_vectors_test.exs",
        ~w(protocol_version supported meta error_codes consent_tags)}
+    ],
+    "model_chat.json" => [
+      {"apps/prima/test/prima/model_test.exs",
+       ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)}
     ],
     "person_assertion.json" => [
       {"apps/prima/test/prima/person_assertion_test.exs",
