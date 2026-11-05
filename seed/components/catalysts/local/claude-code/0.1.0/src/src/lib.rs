@@ -62,8 +62,7 @@ fn handle(input: &str) -> String {
                         .to_string()
                 }
             };
-            let listing = chat::listing(&mut HostPipe, &listing_key(), Instant::now() + chat::LISTING_BUDGET).ok();
-            ok(chat::describe(model, listing.as_deref()))
+            chat::describe_answer(&mut HostPipe, &listing_key(), model, Instant::now() + chat::LISTING_BUDGET)
         }
         Some("models") => match chat::listing(&mut HostPipe, &listing_key(), Instant::now() + chat::LISTING_BUDGET) {
             Ok(listing) => ok(chat::models(&listing)),

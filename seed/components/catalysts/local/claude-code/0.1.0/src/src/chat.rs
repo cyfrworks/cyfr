@@ -106,17 +106,19 @@ pub trait Pipe {
 // Refusals
 // ---------------------------------------------------------------------------
 
-/// A typed refusal of the contract.
+/// A typed refusal of the contract, and the pipe's code when the pipe
+/// answered it.
 #[derive(Debug, PartialEq)]
 pub struct Refusal {
     pub status: i64,
     pub kind: &'static str,
     pub message: String,
+    pub code: Option<String>,
 }
 
 impl Refusal {
     fn new(status: i64, kind: &'static str, message: impl Into<String>) -> Self {
-        Refusal { status, kind, message: message.into() }
+        Refusal { status, kind, message: message.into(), code: None }
     }
 
     pub fn envelope(&self) -> String {
@@ -131,7 +133,7 @@ pub fn invalid(message: impl Into<String>) -> Refusal {
 /// The contract's refusal for a code the pipe answered. The host's own
 /// sentence stays with the host; the code says enough to act on.
 pub fn pipe_refusal(code: &str) -> Refusal {
-    match code {
+    let refusal = match code {
         // `Prima.Refusal`'s sentence for an account not granted, on which
         // the console offers the grant.
         "denied" => Refusal::new(403, "secret_denied", "This account is not granted to the component; grant it first."),
@@ -149,7 +151,8 @@ pub fn pipe_refusal(code: &str) -> Refusal {
             "provider_error",
             "The pipe's answer was lost; the harness may have received what this turn sent.",
         ),
-    }
+    };
+    Refusal { code: Some(code.to_string()), ..refusal }
 }
 
 fn harness_error(kind: &'static str) -> Refusal {
@@ -542,6 +545,19 @@ pub fn describe(model: Option<&str>, listing: Option<&[Value]>) -> Value {
         described["context_window"] = json!(CONTEXT_WINDOW);
     }
     described
+}
+
+/// `describe`'s envelope, from the harness's listing in a session of its
+/// own (keyed `key`). With no login entry bound (the pipe answers
+/// `denied`) it answers the options the harness cannot list, deliberately;
+/// any other failure to list keeps its contract error.
+pub fn describe_answer<P: Pipe>(pipe: &mut P, key: &str, model: Option<&str>, deadline: Instant) -> String {
+    let listing = match listing(pipe, key, deadline) {
+        Ok(listing) => Some(listing),
+        Err(refusal) if refusal.code.as_deref() == Some("denied") => None,
+        Err(refusal) => return refusal.envelope(),
+    };
+    json!({"status": 200, "data": describe(model, listing.as_deref())}).to_string()
 }
 
 /// The listing as contract entries.
@@ -1207,6 +1223,30 @@ mod tests {
         let bare = describe(None, None);
         let names: Vec<_> = bare["options"].as_array().unwrap().iter().map(|o| o["name"].clone()).collect();
         assert_eq!(names, [json!("permission_mode"), json!("tools")]);
+    }
+
+    #[test]
+    fn describe_falls_back_only_when_no_login_is_bound() {
+        // Nothing bound: the options the harness cannot list, deliberately.
+        let mut pipe = Scripted::new(|_| Vec::new());
+        pipe.open_error = Some("denied".into());
+        let answered: Value = serde_json::from_str(&describe_answer(&mut pipe, "listing-1", None, far())).unwrap();
+        assert_eq!(answered["status"], 200);
+        let names: Vec<_> = answered["data"]["options"].as_array().unwrap().iter().map(|o| o["name"].clone()).collect();
+        assert_eq!(names, [json!("permission_mode"), json!("tools")]);
+
+        // A lost open, or a program that ends before it answers initialize,
+        // keeps its contract error.
+        for code in ["lost", "unavailable", "setup_required"] {
+            let mut pipe = Scripted::new(|_| Vec::new());
+            pipe.open_error = Some(code.into());
+            let answered: Value = serde_json::from_str(&describe_answer(&mut pipe, "listing-1", None, far())).unwrap();
+            assert_eq!(answered["error"]["type"], pipe_refusal(code).kind, "{code}");
+        }
+        let mut pipe = Scripted::new(|_| Vec::new());
+        pipe.running = false;
+        let answered: Value = serde_json::from_str(&describe_answer(&mut pipe, "listing-1", Some("opus"), far())).unwrap();
+        assert_eq!(answered["error"]["type"], "incomplete_stream");
     }
 
     fn models_answer(listing: &[Value]) -> Value {

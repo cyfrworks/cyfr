@@ -44,7 +44,7 @@ What the harness does not list ships here:
 - **tools**: a string, the harness's own tools as `--tools` takes them (comma-separated, empty for none).
 - **context_window**: 200,000 for any model, on `describe` with a `model`; the harness lists no window and manages its own context.
 
-When the harness cannot be asked (no login entry granted yet), `describe` answers with the two options it does not need the listing for, and `models` answers the pipe's refusal.
+With no login entry granted yet (the pipe answers `denied`), `describe` answers deliberately with the two options it does not need the listing for. Any other failure to list, such as an open whose answer was lost or a program that ends before it answers `initialize`, keeps its contract error, and `models` answers the pipe's refusal.
 
 ## Building
 
