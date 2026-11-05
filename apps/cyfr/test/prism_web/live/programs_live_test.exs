@@ -761,6 +761,51 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert row.login_entry_id == entry
   end
 
+  test "a program's hosts are set in its form, shown on its row and changed there",
+       %{conn: conn, athanor: athanor} do
+    controller!()
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("button", "Add stdio server") |> render_click()
+
+    # The form says what the list admits, a shared address among it.
+    assert has_element?(view, ~s([data-test="hosts-help"]), "shares an address with another")
+
+    view
+    |> form("form#add-stdio", %{
+      "name" => "fetch",
+      "backend" => "fetch",
+      "command" => "npx -y @modelcontextprotocol/server-fetch",
+      "home" => "scratch",
+      "hosts" => "api.example.com, registry.npmjs.org"
+    })
+    |> render_submit()
+
+    assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
+    assert Jason.decode!(row.hosts) == ["api.example.com", "registry.npmjs.org"]
+
+    view |> element("tr[phx-value-name=fetch]") |> render_click()
+
+    assert has_element?(
+             view,
+             ~s([data-test="program-hosts"]),
+             "api.example.com, registry.npmjs.org"
+           )
+
+    view |> form("form#hosts-fetch", %{"hosts" => "api.example.com"}) |> render_submit()
+    assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
+    assert Jason.decode!(row.hosts) == ["api.example.com"]
+
+    view |> form("form#hosts-fetch", %{"hosts" => "*.example.com"}) |> render_submit()
+    assert flash(view, "error") =~ "config.hosts"
+
+    assert {:ok, %{hosts: ~s(["api.example.com"])}} =
+             Arca.McpServerStorage.get(ctx(athanor), "fetch")
+
+    view |> form("form#hosts-fetch", %{"hosts" => ""}) |> render_submit()
+    assert {:ok, %{hosts: nil}} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
+    assert has_element?(view, ~s([data-test="program-hosts"]), "every public host")
+  end
+
   test "the list says each row's transport and home", %{conn: conn, athanor: athanor} do
     pipe_row!(athanor)
 

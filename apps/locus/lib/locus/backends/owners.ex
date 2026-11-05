@@ -77,6 +77,15 @@ defmodule Locus.Backends.Owners do
   caller's crashing session, leave every other key's process alone. A
   status reports the program `failed` while any of its keys is.
 
+  ## A program's hosts
+
+  A program that names `hosts` has each session's process started with
+  them (`t:Locus.Launcher.spec/0`): the launcher resolves them as the
+  process starts and has the island's guard hold its uid to their
+  addresses. An open whose process the launcher refused for them answers
+  `hosts_unresolved` (a name resolved to no address) or `guard_unavailable`
+  (the guard did not confirm), each counted as a crash of its key.
+
   ## Kept homes and their bound
 
   A program with a kept home and a `home_max_bytes` has its home measured
@@ -990,6 +999,7 @@ defmodule Locus.Backends.Owners do
     |> put_given(:home, ask.home_id)
     |> put_given(:home_max_bytes, program.home_max_bytes)
     |> put_given(:pty, if(ask.mode == :sign_in, do: true))
+    |> put_given(:hosts, program.hosts)
   end
 
   defp put_given(map, _key, nil), do: map
@@ -1046,6 +1056,8 @@ defmodule Locus.Backends.Owners do
 
   defp spawn_refusal(%{error: "spawn refused: home_over_cap"}), do: :home_over_cap
   defp spawn_refusal(%{error: "spawn refused: capacity"}), do: :capacity
+  defp spawn_refusal(%{error: "spawn refused: hosts_unresolved"}), do: :hosts_unresolved
+  defp spawn_refusal(%{error: "spawn refused: guard_unavailable"}), do: :guard_unavailable
   defp spawn_refusal(_ended), do: :unavailable
 
   # A crash counts against its session's key within the window; the

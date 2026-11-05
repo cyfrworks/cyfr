@@ -343,7 +343,7 @@ def open_sealed(sealing_key, owner, boot, sealed):
 
 
 def program_wire(program):
-    """A program as a sync defines it, from {name, command, env} and the optional login command, home and bounds.
+    """A program as a sync defines it, from {name, command, env} and the optional login command, home, bounds and hosts.
 
     An optional member with no value is absent, never null: the wire refuses a present null.
     """
@@ -353,7 +353,7 @@ def program_wire(program):
         "env_names": sorted((program.get("env") or {}).keys()),
         "home": program.get("home", "scratch"),
     }
-    for name in ["login_command", "memory_bytes", "home_max_bytes"]:
+    for name in ["login_command", "memory_bytes", "home_max_bytes", "hosts"]:
         if program.get(name) is not None:
             wire[name] = program[name]
     return wire
@@ -923,8 +923,10 @@ class Stack(imagesuite.Stack):
         container's own configuration (capabilities, security options,
         read-only root, ipc, init, tmpfs mounts, limit, mounts, environment
         and entrypoint), read from that container, so the second instance
-        is the shipped service and spells none of it. With `publish`, its
-        port is published on the loopback, read with `docker port`.
+        is the shipped service and spells none of it, but for its keeper's
+        `--guard`: no guard stands beside it, so its keeper sets no
+        program's egress and its programs name no hosts. With `publish`,
+        its port is published on the loopback, read with `docker port`.
         """
         info = self.inspect(self.container)
         host, config = info["HostConfig"], info["Config"]
@@ -957,7 +959,10 @@ class Stack(imagesuite.Stack):
                 args += ["--mount", f"type=volume,target={mount['Target']}"]
         for entry in config.get("Env") or []:
             args += ["--env", entry]
-        entrypoint = config.get("Entrypoint") or []
+        entrypoint = list(config.get("Entrypoint") or [])
+        if "--guard" in entrypoint:
+            at = entrypoint.index("--guard")
+            del entrypoint[at:at + 2]
         args += ["--entrypoint", entrypoint[0], self.image, *entrypoint[1:], *(config.get("Cmd") or [])]
         run(*args)
 
@@ -1039,7 +1044,7 @@ def raw_head(base, route, header, declared):
 
 
 def probe(name="probe", env=None, **program):
-    """The probe program, an MCP server; `program` adds a login command, a home or bounds."""
+    """The probe program, an MCP server; `program` adds a login command, a home, bounds or hosts."""
     return {"name": name, "command": PROBE, "env": env or {}, **program}
 
 

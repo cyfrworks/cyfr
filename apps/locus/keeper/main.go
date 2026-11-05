@@ -6,9 +6,11 @@
 // Command cyfr-locus starts processes under uids of their own on behalf of
 // an unprivileged client.
 //
-//	cyfr-locus serve --pool <name>:<first>-<last>[:netns] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --client-user <user> -- <command> [args…]
+//	cyfr-locus serve --pool <name>:<first>-<last>[:netns] --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]
+//	cyfr-locus guard-control <socket>
 //
-// `serve` is the only subcommand an operator runs. It needs exactly the
+// `serve` is the only subcommand an operator runs; `guard-control` is the
+// one an island's egress guard runs once its rules are in (package guard). It needs exactly the
 // capabilities SETUID, SETGID and KILL and refuses to start with any other.
 // Every spawn requires a memory bound. The keeper enforces it only where
 // its cgroup is the root of a cgroup namespace mounted writable (Docker's
@@ -25,6 +27,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cyfr/locus/keeper/guard"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/relay"
 	"github.com/cyfr/locus/keeper/internal/retire"
@@ -48,6 +51,8 @@ func main() {
 		os.Exit(retire.Main())
 	case "home":
 		os.Exit(home.HelperMain())
+	case "guard-control":
+		os.Exit(guard.Main(os.Args[2:]))
 	default:
 		fmt.Fprintln(os.Stderr, "usage: "+serve.Usage)
 		os.Exit(serve.ExitUsage)

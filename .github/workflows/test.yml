@@ -1506,6 +1506,15 @@ jobs:
       - name: A program's pipe
         run: python3 tests/locus-backends-image/pipe.py cyfr-locus:backends
 
+      # A program's network list: a row's hosts admitted for its uid at the
+      # guard, pooled or kept, its listed host reached and an unlisted
+      # address refused on its own chain; a second uid, its row naming
+      # none, unaffected; a name resolving to nothing refused
+      # hosts_unresolved; the guard's check proving the uid's rules; a
+      # retirement clearing them and the keeper's loss refusing them.
+      - name: A program's network list
+        run: python3 tests/locus-backends-image/egress.py cyfr-locus:backends
+
       # The Compose proof (tests/compose-proof/run.sh) on the app image
       # built above, as the proof's own build would make it: the shipped
       # docker-compose.yml brought up as a project of its own by the `cyfr`

@@ -276,8 +276,18 @@ defmodule Prima.Destination do
   @doc "Whether `host` is a destination host: an exact hostname or `*.` and a hostname."
   @spec valid_host?(term()) :: boolean()
   def valid_host?("*." <> base), do: Regex.match?(@wildcard_base, base)
-  def valid_host?(host) when is_binary(host), do: Regex.match?(@hostname, host)
-  def valid_host?(_host), do: false
+  def valid_host?(host), do: exact_host?(host)
+
+  @doc """
+  Whether `host` is an exact hostname of the grammar: lowercase labels,
+  no wildcard, scheme, port or trailing dot. A program's network list
+  (`Prima.LocusBackends`, `Prima.KeeperProtocol`) names hosts in it, since
+  it is enforced on the addresses a name resolves to and a wildcard
+  resolves to none.
+  """
+  @spec exact_host?(term()) :: boolean()
+  def exact_host?(host) when is_binary(host), do: Regex.match?(@hostname, host)
+  def exact_host?(_host), do: false
 
   @doc """
   Whether `path` is in the path grammar the module doc names: begins with

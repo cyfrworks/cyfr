@@ -41,6 +41,14 @@
 #      names resolve to, which are the deployment's own registries and MCP
 #      servers. A name that does not resolve when the guard starts is logged
 #      and opens nothing; the guard resolves again when it restarts.
+#   5. from a spawn uid whose program's row names its hosts, every address
+#      but the ones its keeper admitted for it (CYFR_GUARD_HOSTS jumps to
+#      the uid's own chain, CYFR_GUARD_U<uid>, which returns each admitted
+#      address and refuses the rest). The rules before this one stand for
+#      it as for every spawn: an admitted address that is metadata, the
+#      control plane or private is still refused, and the resolver and the
+#      private hosts still pass, so a row's list narrows the public rule
+#      and never widens it.
 # Everything else, the public Internet, passes. A refusal answers the
 # sender at once with an administratively-prohibited ICMP, which the
 # sender sees as EHOSTUNREACH (EACCES over IPv6), never a timeout.
@@ -49,7 +57,18 @@
 # rule of its own, so the packet the filter sees carries the rewritten
 # port: the exception matches the connection's original destination.
 #
-#   cyfr-guard         install the rules, write the ready file and sleep
+#   cyfr-guard         install the rules, write the ready file, then serve
+#                      the island's keeper its control on the socket
+#                      CYFR_GUARD_CONTROL names (`cyfr-locus guard-control`,
+#                      apps/locus/keeper/guard), or sleep where it names none
+#   cyfr-guard admit <uid> [address…]
+#                      the control's: give the spawn uid exactly these
+#                      addresses under rule 5, replacing what it held (no
+#                      address refuses it every public one), and record the
+#                      rules; a change that fails leaves the uid refused
+#                      every public address and exits 1
+#   cyfr-guard clear <uid>
+#                      the control's: return the uid to the island's rule
 #   cyfr-guard check   the health probe: the ready file is present, both
 #                      rule tables can be read, the rules they hold are the
 #                      ones the file records, and every spawn range has its
@@ -65,11 +84,22 @@
 #   CYFR_PRIVATE_EGRESS_TARGETS  the private hosts, addresses or CIDRs the
 #                                deployment's own outbound calls may reach,
 #                                comma-separated (configuration-guide.md)
+#   CYFR_GUARD_CONTROL           the control's socket, on a volume the
+#                                island's service mounts read-only; unset,
+#                                the island takes no list and no uid is
+#                                ever admitted
+#
+# The rules change only under the lock on LOCK, which `admit` and `clear`
+# take whole and `check` takes shared, and every change records the rules
+# again in the ready file before it answers, so the probe always compares
+# the rules installed with the ones the guard last recorded.
 set -eu
 
 READY_DIR=/run/cyfr-guard
 READY="$READY_DIR/ready"
+LOCK="$READY_DIR/lock"
 CHAIN=CYFR_GUARD
+HOSTS=CYFR_GUARD_HOSTS
 # Set by `cyfr-guard rules` alone, never from the environment.
 PRINT_ONLY=
 
@@ -254,6 +284,8 @@ digest() {
 
 check() {
   [ -f "$READY" ] || { log "not ready: $READY is absent"; exit 1; }
+  exec 9>"$LOCK"
+  flock -s -w 2 9 || { log "not ready: the rules are changing"; exit 1; }
   recorded="$(cat "$READY")"
   installed="$(digest)" || { log "not ready: a rule table could not be read"; exit 1; }
   [ "$recorded" = "$installed" ] || { log "not ready: the rules installed are not the ones recorded"; exit 1; }
@@ -351,6 +383,8 @@ add_rules() {
 
   v4 -N "$CHAIN"
   v6 -N "$CHAIN"
+  v4 -N "$HOSTS"
+  v6 -N "$HOSTS"
   v4 -A OUTPUT -j "$CHAIN"
   v6 -A OUTPUT -j "$CHAIN"
   v4 -A "$CHAIN" -m conntrack ! --ctstate NEW -j RETURN
@@ -410,22 +444,136 @@ add_rules() {
   done
   for range in $PRIVATE_V4; do v4 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp-admin-prohibited; done
   for range in $PRIVATE_V6; do v6 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp6-adm-prohibited; done
+
+  # 5. the spawns whose rows name their hosts: each admitted uid's chain
+  v4 -A "$CHAIN" -j "$HOSTS"
+  v6 -A "$CHAIN" -j "$HOSTS"
+}
+
+# Records the rules now installed in the ready file, as install_rules does.
+record() {
+  recorded="$(digest)" || { log "error: a rule table could not be read, so the guard is not ready"; return 1; }
+  printf '%s\n' "$recorded" > "$READY.tmp"
+  mv "$READY.tmp" "$READY"
+}
+
+# A uid of one of the spawn ranges, or 1.
+spawn_uid() {
+  case "$1" in
+    "" | *[!0-9]* | 0*) log "error: '$1' is not a uid"; return 1 ;;
+  esac
+  for range in $(spawn_ranges); do
+    [ "$1" -ge "${range%-*}" ] && [ "$1" -le "${range#*-}" ] && return 0
+  done
+  log "error: uid $1 is no spawn's of this island"
+  return 1
+}
+
+# Installs one family's chain for uid in one transaction: each address
+# returned, every other refused, and the jump to it once.
+uid_chain() {
+  family="$1" uid="$2"
+  shift 2
+  chain="CYFR_GUARD_U$uid"
+  if [ "$family" = 4 ]; then tool=iptables reject=icmp-admin-prohibited bits=32
+  else tool=ip6tables reject=icmp6-adm-prohibited bits=128; fi
+  {
+    echo "*filter"
+    echo ":$chain - [0:0]"
+    for address in "$@"; do echo "-A $chain -d $address/$bits -j RETURN"; done
+    echo "-A $chain -j REJECT --reject-with $reject"
+    "$tool" -w 5 -C "$HOSTS" -m owner --uid-owner "$uid" -j "$chain" 2>/dev/null \
+      || echo "-A $HOSTS -m owner --uid-owner $uid -j $chain"
+    echo "COMMIT"
+  } | "${tool}-restore" -w 5 --noflush || { log "error: $tool: the rules of uid $uid failed"; return 1; }
+}
+
+# Removes one family's chain of uid, and the jump to it, in one transaction.
+uid_unchain() {
+  family="$1" uid="$2"
+  chain="CYFR_GUARD_U$uid"
+  if [ "$family" = 4 ]; then tool=iptables; else tool=ip6tables; fi
+  "$tool" -w 5 -S "$chain" >/dev/null 2>&1 || return 0
+  {
+    echo "*filter"
+    "$tool" -w 5 -C "$HOSTS" -m owner --uid-owner "$uid" -j "$chain" 2>/dev/null \
+      && echo "-D $HOSTS -m owner --uid-owner $uid -j $chain"
+    echo "-F $chain"
+    echo "-X $chain"
+    echo "COMMIT"
+  } | "${tool}-restore" -w 5 --noflush || { log "error: $tool: clearing uid $uid failed"; return 1; }
+}
+
+admit() {
+  uid="$1"
+  shift
+  spawn_uid "$uid" || exit 1
+  v4list="" v6list=""
+  for address in "$@"; do
+    case "$address" in
+      "" | *[!0-9a-f.:]*) log "error: '$address' is not an address"; exit 1 ;;
+      *:*) v6list="$v6list $address" ;;
+      *[!0-9.]*) log "error: '$address' is not an address"; exit 1 ;;
+      *.*.*.*) v4list="$v4list $address" ;;
+      *) log "error: '$address' is not an address"; exit 1 ;;
+    esac
+  done
+  exec 9>"$LOCK"
+  flock 9
+  # shellcheck disable=SC2086 # one argument per address
+  if uid_chain 4 "$uid" $v4list && uid_chain 6 "$uid" $v6list; then
+    record || exit 1
+    log "uid $uid admitted to$v4list$v6list"
+    return 0
+  fi
+  uid_chain 4 "$uid" || log "error: uid $uid could not be refused every IPv4 address"
+  uid_chain 6 "$uid" || log "error: uid $uid could not be refused every IPv6 address"
+  record || true
+  exit 1
+}
+
+clear_uid() {
+  uid="$1"
+  spawn_uid "$uid" || exit 1
+  exec 9>"$LOCK"
+  flock 9
+  failed=""
+  uid_unchain 4 "$uid" || failed=1
+  uid_unchain 6 "$uid" || failed=1
+  if [ -n "$failed" ]; then
+    uid_chain 4 "$uid" || true
+    uid_chain 6 "$uid" || true
+    record || true
+    exit 1
+  fi
+  record || exit 1
+  log "uid $uid cleared"
 }
 
 install_rules() {
   rm -f "$READY"
   add_rules
   mkdir -p "$READY_DIR"
-  recorded="$(digest)" || { log "error: a rule table could not be read, so the guard is not ready"; exit 1; }
-  printf '%s\n' "$recorded" > "$READY.tmp"
-  mv "$READY.tmp" "$READY"
+  record || exit 1
   log "ready: every rule installed for spawns $(printf '%s' "$ranges" | tr '\n' ' ' | sed 's/ $//')"
 }
 
 case "${1:-}" in
   "")
     install_rules
+    if [ -n "${CYFR_GUARD_CONTROL:-}" ]; then
+      exec cyfr-locus guard-control "$CYFR_GUARD_CONTROL"
+    fi
     exec sleep infinity
+    ;;
+  admit)
+    [ $# -ge 2 ] || { log "usage: cyfr-guard admit <uid> [address…]"; exit 2; }
+    shift
+    admit "$@"
+    ;;
+  clear)
+    [ $# -eq 2 ] || { log "usage: cyfr-guard clear <uid>"; exit 2; }
+    clear_uid "$2"
     ;;
   check)
     check
@@ -435,7 +583,7 @@ case "${1:-}" in
     add_rules
     ;;
   *)
-    log "usage: cyfr-guard [check | rules]"
+    log "usage: cyfr-guard [admit <uid> [address…] | clear <uid> | check | rules]"
     exit 2
     ;;
 esac

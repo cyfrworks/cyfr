@@ -142,12 +142,12 @@ defmodule Cyfr.StackShapeTest do
   defp service_violations(merged, expected, role) do
     wrong = for {key, value} <- expected, Map.get(merged, key) != value, do: key
 
-    # The one volume a Locus service holds: the backends role's kept
-    # folders, at their root and nowhere else.
+    # The volumes a Locus service holds: the backends role's kept folders,
+    # at their root and nowhere else, and its guard's control, read-only.
     forbidden =
       for key <- @forbidden_keys,
           Map.has_key?(merged, key),
-          not (key == "volumes" and Map.get(merged, key) == kept_volumes(role)),
+          not (key == "volumes" and Map.get(merged, key) == island_volumes(role)),
           do: key
 
     unbounded =
@@ -163,15 +163,36 @@ defmodule Cyfr.StackShapeTest do
     wrong ++ forbidden ++ unbounded
   end
 
-  defp kept_volumes(%{kept_root: nil}), do: nil
-  defp kept_volumes(%{kept_root: root, kept_volume: volume}), do: ["#{volume}:#{root}"]
+  defp island_volumes(%{kept_root: nil}), do: nil
+
+  defp island_volumes(%{kept_root: root, kept_volume: volume} = role),
+    do: ["#{volume}:#{root}" | control_volume(role, ":ro")]
+
+  # The backends island's programs may name their hosts: its keeper sets
+  # each program's uid at its guard over the control on a volume both
+  # mount, which the guard writes and the service only reads. The builds
+  # island's builds name none, and its guard serves no control.
+  @guard_control_dir "/run/cyfr-guard-control"
+  @guard_control "#{@guard_control_dir}/guard.sock"
+
+  defp control_volume(%{name: :backends}, mode),
+    do: ["guard-control:#{@guard_control_dir}#{mode}"]
+
+  defp control_volume(_role, _mode), do: []
+
+  defp guard_argv(%{name: :backends}), do: ["--guard", @guard_control]
+  defp guard_argv(_role), do: []
+
+  defp control_env(%{name: :backends}), do: ["CYFR_GUARD_CONTROL=#{@guard_control}"]
+  defp control_env(_role), do: []
 
   # An island's egress guard as compose runs it, whole: the Locus image
   # running cyfr-guard, NET_ADMIN alone, the ready file's tmpfs its only
-  # writable surface, every uid range the island's keeper spawns under (its
-  # pool, and the kept folders' uids where it keeps them) and cyfr's fixed
-  # endpoint address in its environment with the private hosts the
-  # deployment names,
+  # writable surface (with, for the backends island, its control's volume,
+  # whose socket its environment names), every uid range the island's keeper
+  # spawns under (its pool, and the kept folders' uids where it keeps them)
+  # and cyfr's fixed endpoint address in its environment with the private
+  # hosts the deployment names,
   # the island's service name as its alias on the island's network, and the
   # guard's own health probe. Its profile is the island's.
   defp guard_service(release, role, backends) do
@@ -192,6 +213,7 @@ defmodule Cyfr.StackShapeTest do
         "CYFR_GUARD_POOL=#{spawn_ranges(role)}",
         "CYFR_GUARD_CONTROL_PLANE=#{release.endpoint_address}",
         "CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-#{backends.service}}"
+        | control_env(role)
       ],
       "networks" => %{role.network => %{"aliases" => [role.service]}},
       "healthcheck" => %{
@@ -205,6 +227,12 @@ defmodule Cyfr.StackShapeTest do
       "logging" => @shared_hardening["logging"],
       "deploy" => %{"resources" => %{"limits" => %{"memory" => "32M"}}}
     }
+
+    guard =
+      case control_volume(role, "") do
+        [] -> guard
+        volumes -> Map.put(guard, "volumes", volumes)
+      end
 
     if role.profile, do: Map.put(guard, "profiles", [role.profile]), else: guard
   end
@@ -307,7 +335,8 @@ defmodule Cyfr.StackShapeTest do
   # starting the release as its user.
   defp keeper_argv(release, role) do
     ["cyfr-locus", "serve", "--pool", pool_spec(role), "--home-root", release.home_root] ++
-      kept_argv(role) ++ ["--client-user", release.user, "--", release.bin, "start"]
+      kept_argv(role) ++
+      guard_argv(role) ++ ["--client-user", release.user, "--", release.bin, "start"]
   end
 
   # A role whose programs keep their folders names their root and uid range
@@ -1368,8 +1397,15 @@ defmodule Cyfr.StackShapeTest do
        "    networks:\n      #{builds.network}:\n        aliases:\n          - #{builds.service}\n",
        "    networks:\n      - #{builds.network}\n", [{builds.guard, "networks"}]},
       {"the backends guard guarding another pool",
-       "      - CYFR_GUARD_POOL=#{backends.uids.first}-#{backends.uids.last}\n",
+       "      - CYFR_GUARD_POOL=#{spawn_ranges(backends)}\n",
        "      - CYFR_GUARD_POOL=#{backends.uids.first}-#{backends.uids.last + 1}\n",
+       [{backends.guard, "environment"}]},
+      {"the backends guard leaving the kept folders' uids out",
+       "      - CYFR_GUARD_POOL=#{spawn_ranges(backends)}\n",
+       "      - CYFR_GUARD_POOL=#{backends.uids.first}-#{backends.uids.last}\n",
+       [{backends.guard, "environment"}]},
+      {"the backends guard serving no control",
+       "      - CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock\n", "",
        [{backends.guard, "environment"}]}
     ]
 
@@ -1767,8 +1803,10 @@ defmodule Cyfr.StackShapeTest do
         |> Enum.map(&String.replace(&1, ~r/(^|\s)#.*$/, ""))
         |> Enum.join("\n")
 
+      # A port is the whole number: 4000 inside a uid range such as
+      # 40001-49999 is no port.
       bare =
-        ~r/(?<!:-)(?<!=)(?<!:)400[01]/
+        ~r/(?<!:-)(?<!=)(?<!:)(?<!\d)400[01](?!\d)/
         |> Regex.scan(stripped)
         |> List.flatten()
 

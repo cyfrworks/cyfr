@@ -1510,7 +1510,7 @@ has_line "^run -d --name $ns-cluster-minio -p 127\.0\.0\.1::9000 -e MINIO_ROOT_U
 has_line '^cluster=0$' "$scratch/close.log/cluster.summary" || fail "the cluster suite did not pass: $(cat "$scratch/close.log/cluster.summary")"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
-  'backends_image: test.yml locus-backends-image: 24 steps' 'browser_a: test.yml browser shard=a: 6 steps' \
+  'backends_image: test.yml locus-backends-image: 25 steps' 'browser_a: test.yml browser shard=a: 6 steps' \
   'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 4 steps' \
   'browser_d: test.yml browser shard=d: 6 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
   grep -qxF "    harness.$job passed" "$scratch/close.out" || fail "the close did not report $job passed: $(cat "$scratch/close.out")"
@@ -1537,6 +1537,7 @@ python3 tests/locus-backends-image/residue.py NS/cyfr-locus:backends|prefix=PREF
 python3 tests/locus-backends-image/memory.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/kept_home.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX
+python3 tests/locus-backends-image/egress.py NS/cyfr-locus:backends|prefix=PREFIX
 tests/compose-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=
 tests/compose-proof/predicates-test.sh |skip=unset browsers= join= db= case_image=
 tests/compose-proof/tailscale-standin/proof.sh |skip=unset browsers= join= db= case_image=

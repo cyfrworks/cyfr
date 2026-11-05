@@ -1299,6 +1299,93 @@ defmodule Opus.ProgramsTest do
       assert_released(row, 1)
     end
 
+    test "a row's hosts go with its sync, and a stored list that does not read syncs nothing",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      listed = pipe_row(ctx, "listed", %{hosts: Jason.encode!(["api.anthropic.com"])})
+      owner = %{athanor_id: ctx.athanor_id, server_id: listed.id, epoch: listed.epoch}
+
+      assert {:ok, _held} = Programs.hold(owner)
+
+      assert_receive {:control, "sync", %{"programs" => [%{"hosts" => ["api.anthropic.com"]}]},
+                      _fields},
+                     2_000
+
+      Programs.release(owner)
+      assert_released(listed, 1)
+
+      # A list that does not read is never read as no list, which would
+      # open the program to every public host.
+      broken = pipe_row(ctx, "broken", %{hosts: ~s(["API.example.com"])})
+
+      assert {:error, {:invalid_argument, sentence}} =
+               Programs.hold(%{athanor_id: ctx.athanor_id, server_id: broken.id, epoch: 1})
+
+      assert sentence =~ "hosts"
+      refute_receive {:control, "sync", _sync, _fields}, 200
+    end
+
+    test "a program's hosts are defined with it, shown as a list, checked and cleared",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      admin = %{ctx | permissions: MapSet.new([:*])}
+      actor = Sanctum.Context.actor(ctx)
+
+      config = fn hosts ->
+        %{
+          "transport" => "pipe",
+          "home" => "kept",
+          "backends" => [%{"name" => "claude", "command" => "npx -y @anthropic-ai/claude-code"}]
+        }
+        |> then(&if(hosts, do: Map.put(&1, "hosts", hosts), else: &1))
+      end
+
+      assert {:ok, _} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "create",
+                 "name" => "claude",
+                 "config" => config.(["api.anthropic.com", "statsig.anthropic.com"])
+               })
+
+      assert {:ok, row} = Arca.McpServerStorage.get(actor, "claude")
+      assert Jason.decode!(row.hosts) == ["api.anthropic.com", "statsig.anthropic.com"]
+
+      assert {:ok, %{config: shown}} =
+               Provider.handle("mcp_servers", admin, %{"action" => "get", "name" => "claude"})
+
+      assert shown["hosts"] == ["api.anthropic.com", "statsig.anthropic.com"]
+
+      for hosts <- [
+            [],
+            ["*.anthropic.com"],
+            ["https://api.anthropic.com"],
+            ["api.anthropic.com:443"],
+            ["API.anthropic.com"],
+            ["a.example", "a.example"],
+            "api.anthropic.com"
+          ] do
+        assert {:error, {:invalid_argument, sentence}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "update",
+                   "name" => "claude",
+                   "epoch" => row.epoch,
+                   "config" => config.(hosts)
+                 })
+
+        assert sentence =~ "config.hosts", inspect(hosts)
+      end
+
+      assert {:ok, _} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "update",
+                 "name" => "claude",
+                 "epoch" => row.epoch,
+                 "config" => config.(nil)
+               })
+
+      assert {:ok, %{hosts: nil}} = Arca.McpServerStorage.get(actor, "claude")
+    end
+
     test "a kept stdio row runs its sessions in its login entry's home, and connects to none without it",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)

@@ -46,7 +46,14 @@ defmodule Arca.McpServerStorage do
   alias Arca.Schemas.McpServer
 
   # A program's settings, which `update/4` writes as named (nil clears one).
-  @program_columns [:home, :memory_bytes, :home_max_bytes, :login_command, :login_entry_id]
+  @program_columns [
+    :home,
+    :memory_bytes,
+    :home_max_bytes,
+    :login_command,
+    :login_entry_id,
+    :hosts
+  ]
 
   @doc """
   The decoded `config_json` of a stored row — headers, `timeout_ms`,

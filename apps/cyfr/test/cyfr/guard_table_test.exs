@@ -7,8 +7,9 @@ defmodule Cyfr.GuardTableTest do
   `Prima.Cidr.address_table/0`, the table the control plane's own outbound
   calls are held to, and installs exactly it beside the island's own
   rows: the control plane, the island's subnets, the spawns' reach into
-  the namespace, the service's own loopback and the deployment's private
-  hosts, in the guard's order.
+  the namespace, the service's own loopback, the deployment's private
+  hosts and the jump to the uids a network list holds, in the guard's
+  order.
   """
 
   use ExUnit.Case, async: true
@@ -52,6 +53,8 @@ defmodule Cyfr.GuardTableTest do
              [
                "iptables -N CYFR_GUARD",
                "ip6tables -N CYFR_GUARD",
+               "iptables -N CYFR_GUARD_HOSTS",
+               "ip6tables -N CYFR_GUARD_HOSTS",
                "iptables -A OUTPUT -j CYFR_GUARD",
                "ip6tables -A OUTPUT -j CYFR_GUARD",
                "iptables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j RETURN",
@@ -76,7 +79,11 @@ defmodule Cyfr.GuardTableTest do
                  "iptables -A CYFR_GUARD -d 10.9.8.0/24 -j RETURN",
                  "ip6tables -A CYFR_GUARD -d fd12:3456::/64 -j RETURN"
                ] ++
-               rejects(private)
+               rejects(private) ++
+               [
+                 "iptables -A CYFR_GUARD -j CYFR_GUARD_HOSTS",
+                 "ip6tables -A CYFR_GUARD -j CYFR_GUARD_HOSTS"
+               ]
   end
 
   test "the guard's table holds every range the island must refuse" do

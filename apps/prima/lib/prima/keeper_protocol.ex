@@ -57,6 +57,19 @@ defmodule Prima.KeeperProtocol do
   stderr are a pseudo-terminal, which its stdout frames carry. Each home
   request acts as a helper running as the home's uid.
 
+  ## Hosts
+
+  A spawn's `hosts` names the only hosts its command may reach beyond the
+  resolver and the deployment's private hosts (`valid_hosts?/1`), never on
+  an isolated spawn, which reaches nothing; absent keeps the
+  island's public-hosts rule. The keeper resolves the names at the spawn,
+  and only then, and has the island's egress guard admit those addresses
+  for the spawn's uid and refuse it every other public one, or, for a spawn
+  without `hosts`, return the uid to the island's rule, before the command
+  starts. A name that resolves to no address refuses the spawn as
+  `hosts_unresolved`, and a guard that does not confirm (or none) as
+  `guard_unavailable`.
+
   ## Frames
 
   A frame is a stream byte (`streams/0`), a 4-byte big-endian length and
@@ -120,6 +133,7 @@ defmodule Prima.KeeperProtocol do
   @max_home_path_bytes 4095
   @max_uid 4_294_967_294
   @max_home_bytes 1024 * 1024 * 1024 * 1024 * 1024
+  @max_hosts 32
   @home_modes ~w(scratch kept)
   @isolations ~w(netns)
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
@@ -164,7 +178,8 @@ defmodule Prima.KeeperProtocol do
          home_path: :optional,
          home_uid: :optional,
          home_max_bytes: :optional,
-         pty: :optional
+         pty: :optional,
+         hosts: :optional
        ]},
     signal: {"signal", [spawn_id: :required, sig: :required]},
     release: {"release", [spawn_id: :required, grace_ms: :required]},
@@ -210,8 +225,8 @@ defmodule Prima.KeeperProtocol do
   `memory_bytes` and `attach` (`%{path: path, token: token}`); `env`
   (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
   `control`, `isolation` (`"netns"`), `home_mode` (`"scratch"` or
-  `"kept"`), `home_path`, `home_uid`, `home_max_bytes` and `pty` are
-  optional, the home's three carried exactly when `home_mode` is
+  `"kept"`), `home_path`, `home_uid`, `home_max_bytes`, `pty` and `hosts`
+  are optional, the home's three carried exactly when `home_mode` is
   `"kept"`, `home_max_bytes` among them optional. A home request carries
   `id`, `path` and `uid`.
   """
@@ -231,7 +246,8 @@ defmodule Prima.KeeperProtocol do
             optional(:home_path) => String.t(),
             optional(:home_uid) => pos_integer(),
             optional(:home_max_bytes) => pos_integer(),
-            optional(:pty) => boolean()
+            optional(:pty) => boolean(),
+            optional(:hosts) => [String.t(), ...]
           }
           | %{type: :signal, spawn_id: String.t(), sig: signal()}
           | %{type: :release, spawn_id: String.t(), grace_ms: non_neg_integer()}
@@ -308,7 +324,8 @@ defmodule Prima.KeeperProtocol do
   one value, of argv and env together and of an attach path, the longest
   grace a release may ask for, the least and most of a spawn's
   `memory_bytes`, the most bytes of a kept home's path, the highest uid a
-  kept home may own and the most a kept home's `home_max_bytes` may be.
+  kept home may own, the most a kept home's `home_max_bytes` may be and the
+  most hosts a spawn may name.
   """
   @spec request_bounds() :: %{atom() => non_neg_integer()}
   def request_bounds do
@@ -323,8 +340,21 @@ defmodule Prima.KeeperProtocol do
       max_memory_bytes: @max_memory_bytes,
       max_home_path_bytes: @max_home_path_bytes,
       max_uid: @max_uid,
-      max_home_bytes: @max_home_bytes
+      max_home_bytes: @max_home_bytes,
+      max_hosts: @max_hosts
     }
+  end
+
+  @doc """
+  Whether `hosts` is a spawn's network list as the keeper takes it: 1 to
+  `max_hosts` (`request_bounds/0`) distinct exact hostnames
+  (`Prima.Destination.exact_host?/1`). A program's row and the backends
+  wire hold their `hosts` to this rule.
+  """
+  @spec valid_hosts?(term()) :: boolean()
+  def valid_hosts?(hosts) do
+    is_list(hosts) and hosts != [] and length(hosts) <= @max_hosts and
+      Enum.all?(hosts, &Prima.Destination.exact_host?/1) and Enum.uniq(hosts) == hosts
   end
 
   @doc "Each resource limit a spawn may lower, with its least and its most, the keeper's ceiling."
@@ -478,6 +508,7 @@ defmodule Prima.KeeperProtocol do
     if type == :spawn do
       check_spec(fields)
       check_home(fields)
+      check_hosts(fields)
     end
 
     line =
@@ -558,6 +589,7 @@ defmodule Prima.KeeperProtocol do
     do: {"home_max_bytes", bytes}
 
   defp write(:spawn, {:pty, pty}) when is_boolean(pty), do: {"pty", pty}
+  defp write(:spawn, {:hosts, hosts}), do: {"hosts", hosts!(hosts)}
 
   defp write(type, {:path, path}) when type in @home_requests,
     do: {"path", home_path!("path", path)}
@@ -579,6 +611,8 @@ defmodule Prima.KeeperProtocol do
   end
 
   defp argv!(_argv), do: invalid!("argv")
+
+  defp hosts!(hosts), do: if(valid_hosts?(hosts), do: hosts, else: invalid!("hosts"))
 
   # An environment's names and values are checked without quoting either.
   defp env!(env) when is_map(env) and not is_struct(env) and map_size(env) <= @max_env do
@@ -656,6 +690,12 @@ defmodule Prima.KeeperProtocol do
 
     :ok
   end
+
+  # An isolated spawn reaches nothing, so it names no hosts.
+  defp check_hosts(%{hosts: _hosts, isolation: _isolation}),
+    do: raise(ArgumentError, "hosts is carried only by a spawn that is not isolated")
+
+  defp check_hosts(_fields), do: :ok
 
   # The keeper's bound on a spawn's argv and env together, as it counts it.
   defp check_spec(fields) do

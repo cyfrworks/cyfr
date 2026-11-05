@@ -131,6 +131,7 @@ func TestSharedRequestBounds(t *testing.T) {
 		"max_home_path_bytes":   MaxHomePathBytes,
 		"max_uid":               MaxUID,
 		"max_home_bytes":        MaxHomeBytes,
+		"max_hosts":             MaxHosts,
 	}
 	if !reflect.DeepEqual(v.RequestBounds, want) {
 		t.Fatalf("the request bounds are %v, the vectors pin %v", want, v.RequestBounds)
@@ -315,6 +316,8 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewPoolReply("9", "backends", 32, 30, 1),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, true),
 		NewError("12", "", CodeMemoryUnavailable),
+		NewError("31", "", CodeHostsUnresolved),
+		NewError("31", "", CodeGuardUnavailable),
 	}
 	want := loadVectors(t).Replies
 	if len(want) != len(built) {
@@ -424,7 +427,7 @@ func TestMemoryBoundIsDecodedForEveryPool(t *testing.T) {
 		}
 	}
 	want := map[string][]uint64{
-		"backends": {512 << 20, 512 << 20, 512 << 20},
+		"backends": {512 << 20, 512 << 20, 512 << 20, 512 << 20},
 		"build":    {1 << 30, MinMemoryBytes, MaxMemoryBytes},
 		"runner":   {384 << 20, 384 << 20, 512 << 20},
 	}

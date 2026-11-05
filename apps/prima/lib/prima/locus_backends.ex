@@ -49,7 +49,7 @@ defmodule Prima.LocusBackends do
   | `homes` | none | `homes[]` |
 
   A sync's program is `{name, command, login_command?, env_names, home,
-  memory_bytes?, home_max_bytes?}`: a `name` of lowercase letters, digits
+  memory_bytes?, home_max_bytes?, hosts?}`: a `name` of lowercase letters, digits
   and hyphens, a `command` and an optional `login_command` each meeting
   `check_command/1`, the `env_names` its sealed
   environment carries (each an uppercase variable name, none reserved:
@@ -58,8 +58,14 @@ defmodule Prima.LocusBackends do
   entry that survives retirement), its `memory_bytes` (absent: the
   service's own bound, `LOCUS_BACKENDS_MEMORY_BYTES`, bounds each process)
   and, for a kept home only, its `home_max_bytes` (absent: the homes
-  volume is the only bound). `sealed` is the environment `seal/5` sealed
-  to the owner and the service's lifetime.
+  volume is the only bound), and its `hosts`, the only hosts its processes
+  may reach beside the resolver and the deployment's private hosts
+  (`Prima.KeeperProtocol.valid_hosts?/1`), resolved when each process
+  starts and held there by the island's egress guard on the addresses they
+  resolved to (absent: public hosts). An `open` whose hosts resolve to no
+  address is refused `hosts_unresolved`, and one the guard does not hold to
+  them `guard_unavailable`; neither starts. `sealed` is the environment
+  `seal/5` sealed to the owner and the service's lifetime.
 
   A status reports each program as `{name, status, restarts, error?,
   stderr_tail?, stderr_bytes?, home, home_bytes?, over_cap, sessions}`:
@@ -259,6 +265,7 @@ defmodule Prima.LocusBackends do
     unknown_session: 409,
     program_failed: 409,
     home_over_cap: 409,
+    hosts_unresolved: 409,
     replay: 409,
     capacity: 409,
     status_too_large: 409,
@@ -267,6 +274,7 @@ defmodule Prima.LocusBackends do
     too_many_owners: 400,
     too_large: 413,
     unavailable: 503,
+    guard_unavailable: 503,
     nonce_cache_full: 503,
     internal: 500
   }
@@ -316,7 +324,7 @@ defmodule Prima.LocusBackends do
   @session_optional %{open: ~w(home_id)}
   @session_answer_optional %{recv: ~w(exit_code)}
   @program_fields ~w(name command env_names home)
-  @program_optional ~w(login_command memory_bytes home_max_bytes)
+  @program_optional ~w(login_command memory_bytes home_max_bytes hosts)
   @program_report_fields ~w(name status restarts home over_cap sessions)
   @program_report_optional ~w(error stderr_tail stderr_bytes home_bytes)
   @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
@@ -418,7 +426,8 @@ defmodule Prima.LocusBackends do
           env_names: [String.t()],
           home: home(),
           memory_bytes: pos_integer() | nil,
-          home_max_bytes: pos_integer() | nil
+          home_max_bytes: pos_integer() | nil,
+          hosts: [String.t(), ...] | nil
         }
 
   @typedoc "A control message by its `type`."
@@ -536,6 +545,7 @@ defmodule Prima.LocusBackends do
           | :unknown_session
           | :program_failed
           | :home_over_cap
+          | :hosts_unresolved
           | :replay
           | :capacity
           | :status_too_large
@@ -544,6 +554,7 @@ defmodule Prima.LocusBackends do
           | :too_many_owners
           | :too_large
           | :unavailable
+          | :guard_unavailable
           | :nonce_cache_full
           | :internal
 
@@ -1124,7 +1135,8 @@ defmodule Prima.LocusBackends do
          {:ok, memory_bytes} <-
            optional(wire, "memory_bytes", &memory_bytes(&1, at <> ".memory_bytes")),
          {:ok, home_max_bytes} <-
-           optional(wire, "home_max_bytes", &home_max_bytes(&1, home, at <> ".home_max_bytes")) do
+           optional(wire, "home_max_bytes", &home_max_bytes(&1, home, at <> ".home_max_bytes")),
+         {:ok, hosts} <- optional(wire, "hosts", &hosts(&1, at <> ".hosts")) do
       {:ok,
        %{
          name: name,
@@ -1133,7 +1145,8 @@ defmodule Prima.LocusBackends do
          env_names: env_names,
          home: home,
          memory_bytes: memory_bytes,
-         home_max_bytes: home_max_bytes
+         home_max_bytes: home_max_bytes,
+         hosts: hosts
        }}
     end
   end
@@ -1156,6 +1169,12 @@ defmodule Prima.LocusBackends do
   end
 
   defp home_max_bytes(_value, _home, at), do: {:error, {:invalid_field, at}}
+
+  # The keeper's rule for a spawn's hosts, which the program's processes
+  # carry to it.
+  defp hosts(hosts, at) do
+    if KeeperProtocol.valid_hosts?(hosts), do: {:ok, hosts}, else: {:error, {:invalid_field, at}}
+  end
 
   defp program_name(name, at) do
     if is_binary(name) and Regex.match?(@program_name, name),

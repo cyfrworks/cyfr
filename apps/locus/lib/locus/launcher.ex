@@ -57,8 +57,9 @@ defmodule Locus.Launcher do
 
   @typedoc """
   What a process is started with: the memory it is bounded by, which every
-  process has, `control` where it has a control channel, and `isolation`
-  where its pool isolates it.
+  process has, `control` where it has a control channel, `isolation`
+  where its pool isolates it, a program's kept `home` with its bound and
+  `pty`, and `hosts`, the only hosts it may reach where its row names them.
   """
   @type spec :: %{
           required(:argv) => [String.t(), ...],
@@ -69,7 +70,8 @@ defmodule Locus.Launcher do
           optional(:isolation) => String.t(),
           optional(:home) => String.t(),
           optional(:home_max_bytes) => pos_integer(),
-          optional(:pty) => boolean()
+          optional(:pty) => boolean(),
+          optional(:hosts) => [String.t(), ...]
         }
 
   @typedoc """

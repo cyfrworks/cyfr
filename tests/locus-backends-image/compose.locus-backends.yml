@@ -11,7 +11,9 @@
 # (tests/fixtures/residue-canary.go), read-only, and the settings a test
 # chooses: the backend pool's uid range, the kept homes' root and uid range
 # (the keeper's --kept-homes, as the shipped entrypoint names them; the
-# root is the shipped `homes` volume) and the per-program memory bound
+# root is the shipped `homes` volume), the shipped guard's control (the
+# keeper's --guard, on the shipped `guard-control` volume) and the
+# per-program memory bound
 # (empty for the default). On the guard it adds the image under
 # test, a loopback port for the service's listener, which the guard's
 # namespace holds, and a tools directory first on its PATH, empty in every
@@ -34,7 +36,7 @@ services:
     volumes:
       - ${PROBE_DIR:?set PROBE_DIR}:/probe:ro
       - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
-    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:${BACKENDS_POOL:?set BACKENDS_POOL}", "--home-root", "/var/lib/locus/homes", "--kept-homes", "${KEPT_HOMES:?set KEPT_HOMES}", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:${BACKENDS_POOL:?set BACKENDS_POOL}", "--home-root", "/var/lib/locus/homes", "--kept-homes", "${KEPT_HOMES:?set KEPT_HOMES}", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]
     environment:
       - LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}
   locus-backends-guard:

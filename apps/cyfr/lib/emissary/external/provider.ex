@@ -20,8 +20,9 @@ defmodule Emissary.External.Provider do
   A program also carries its settings, stored as columns of its row
   (`Opus.Programs.Definition.validate_row/1`): its home (`scratch`, or
   `kept`: one home per login entry that survives retirement), its memory
-  bound, a kept home's disk bound, the login command a sign-in runs, and,
-  for a kept `stdio` row, the login entry its sessions run in, which must
+  bound, a kept home's disk bound, the login command a sign-in runs, the
+  hosts it may reach (none named: every public host), and, for a kept
+  `stdio` row, the login entry its sessions run in, which must
   be an active login entry of this athanor naming the row
   (`Sanctum.Mount.login_entry/3`). A program is refused when this server
   runs no programs controller (`Opus.Programs`) or runs as a cluster.
@@ -184,6 +185,10 @@ defmodule Emissary.External.Provider do
            Arg.new("login_entry_id", :string,
              description:
                "A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own)."
+           ),
+           Arg.new("hosts", {:array, Arg.new(nil, :string)},
+             description:
+               "A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host."
            ),
            Arg.new("url", :string, description: "MCP server endpoint URL (http)")
          ]},
@@ -491,7 +496,7 @@ defmodule Emissary.External.Provider do
       Enum.any?(BackendDefinition.program_keys(), &Map.has_key?(config, &1)) ->
         {:error,
          {:invalid_argument,
-          "An http server is no program: it has no home, bounds or login command"}}
+          "An http server is no program: it has no home, bounds, login command or hosts"}}
 
       true ->
         with :ok <- validate_header_credentials(config["headers"]),
@@ -549,7 +554,8 @@ defmodule Emissary.External.Provider do
       memory_bytes: nil,
       home_max_bytes: nil,
       login_command: nil,
-      login_entry_id: nil
+      login_entry_id: nil,
+      hosts: nil
     }
 
   # A kept stdio row names its login entry, which must be an active login
@@ -1212,16 +1218,7 @@ defmodule Emissary.External.Provider do
   end
 
   # A program's settings, stored as columns, shown in its config as given.
-  defp with_program(config, %{transport: "http"}), do: config
-
-  defp with_program(config, server) do
-    Enum.reduce(BackendDefinition.program_keys(), config, fn key, acc ->
-      case Map.get(server, String.to_existing_atom(key)) do
-        nil -> acc
-        value -> Map.put(acc, key, value)
-      end
-    end)
-  end
+  defp with_program(config, server), do: Map.merge(config, BackendDefinition.settings(server))
 
   # A vault template names a vault entry, which is the binding an operator
   # needs to see; anything else is a literal and only its presence is

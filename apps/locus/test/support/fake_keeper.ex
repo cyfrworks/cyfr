@@ -29,6 +29,9 @@ defmodule Locus.Test.FakeKeeper do
   - `:pool_refused` — every `pool` request is refused with `unknown_pool`
   - `:home_over_cap` — every spawn is refused with `home_over_cap`, as a
     keeper refuses a kept spawn whose home holds its bound
+  - `:hosts_unresolved`, `:guard_unavailable` — every spawn is refused so,
+    as a keeper refuses one whose hosts resolve to nothing or whose egress
+    its guard does not confirm
   - `:home_refused` — every home request is refused with `internal`
   - `{:uid_busy, uids}` — a `home_make` on one of `uids` is refused with
     `uid_busy`, as cyfr-locus refuses a kept uid that is retiring,
@@ -251,7 +254,13 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   defp handle_request(%{"type" => "spawn", "id" => id}, %{mode: mode} = state)
-       when mode in [:capacity, :memory_unavailable, :home_over_cap] do
+       when mode in [
+              :capacity,
+              :memory_unavailable,
+              :home_over_cap,
+              :hosts_unresolved,
+              :guard_unavailable
+            ] do
     send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
     state
   end
