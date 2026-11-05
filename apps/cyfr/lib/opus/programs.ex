@@ -288,8 +288,7 @@ defmodule Opus.Programs do
     "signin-" <>
       (binding
        |> :erlang.term_to_binary()
-       |> then(&:crypto.hash(:sha256, &1))
-       |> Base.encode16(case: :lower)
+       |> Prima.Digest.sha256_hex()
        |> binary_part(0, 32))
   end
 
