@@ -58,12 +58,12 @@ defmodule Locus.Backends.RelayTest do
 
     {rest, 0, relay} = Relay.take(relay, 2, 1_000)
     assert texts(rest) == ["c"]
-    assert relay.bytes == 1
+    assert relay.bytes == 1 + Prima.LocusBackends.line_charge_bytes()
     refute Relay.past?(relay, 3)
   end
 
   test "the buffer's bound drops the oldest lines, and a take counts them" do
-    relay = Relay.new(max_buffer_bytes: 4)
+    relay = Relay.new(max_buffer_bytes: 6, line_charge_bytes: 1)
     {:ok, relay} = Relay.stdout(relay, "aa\nbb\ncc\n")
 
     assert Relay.dropped(relay) == 1
@@ -72,12 +72,32 @@ defmodule Locus.Backends.RelayTest do
     assert dropped == 1
   end
 
+  test "empty lines are bounded and counted: by their framing and by their number" do
+    {:ok, by_count} = Relay.stdout(Relay.new(max_buffer_lines: 3), String.duplicate("\n", 5))
+    assert Relay.dropped(by_count) == 2
+    {lines, dropped, _relay} = Relay.take(by_count, 0, 1_000)
+    assert texts(lines) == ["", "", ""]
+    assert dropped == 2
+
+    relay = Relay.new(max_buffer_bytes: 32 * 100)
+    {:ok, by_bytes} = Relay.stdout(relay, String.duplicate("\n", 10_000))
+    assert Relay.dropped(by_bytes) == 10_000 - 100
+    assert by_bytes.bytes <= 32 * 100
+  end
+
   test "a take answers what fits its budget, and one line at least" do
     {:ok, relay} = Relay.stdout(Relay.new(), "aaaa\nbbbb\n")
     {one, 0, relay} = Relay.take(relay, 0, 1)
     assert texts(one) == ["aaaa"]
     {both, 0, _relay} = Relay.take(relay, 0, 1_000)
     assert texts(both) == ["aaaa", "bbbb"]
+  end
+
+  test "every byte of stderr is counted, beyond the tail kept" do
+    relay = Relay.new(stderr_tail_bytes: 4, stderr_tail_slack_bytes: 0)
+    relay = relay |> Relay.stderr("abcdef") |> Relay.stderr("gh")
+    assert Relay.stderr_bytes(relay) == 8
+    assert byte_size(relay.stderr) == 4
   end
 
   test "the stderr tail is masked and cut to its bound" do

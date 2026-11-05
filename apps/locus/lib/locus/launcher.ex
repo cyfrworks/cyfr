@@ -25,7 +25,8 @@ defmodule Locus.Launcher do
   answers the uid; `c:home_measure/2` answers the bytes it holds;
   `c:home_reset/2` ends every process of its uid and empties it, keeping
   its uid; `c:home_retire/2` ends every process of its uid, removes it and
-  frees its uid. Each acts as a helper under the home's uid, since nothing
+  frees its uid; `c:home_list/1` answers the id of every home it holds.
+  Each of the four acts as a helper under the home's uid, since nothing
   else can read a home. A launcher with no kept-homes root refuses each,
   and a spawn naming a home, `{:refused, "unavailable"}`. The process that called it is the process's
   owner: every event of the process reaches it as
@@ -165,6 +166,9 @@ defmodule Locus.Launcher do
   @callback home_measure(GenServer.server() | keyword(), String.t()) ::
               {:ok, non_neg_integer()} | :absent | {:error, error()}
 
+  @doc "The id of every kept home the launcher holds."
+  @callback home_list(GenServer.server() | keyword()) :: {:ok, [String.t()]} | {:error, error()}
+
   @doc "End every process of the kept home `id`'s uid and empty the home, keeping its uid."
   @callback home_reset(GenServer.server() | keyword(), String.t()) :: :ok | {:error, error()}
 
@@ -186,5 +190,6 @@ defmodule Locus.Launcher do
                       home_ensure: 2,
                       home_measure: 2,
                       home_reset: 2,
-                      home_retire: 2
+                      home_retire: 2,
+                      home_list: 1
 end

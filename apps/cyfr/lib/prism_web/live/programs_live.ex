@@ -256,7 +256,7 @@ defmodule PrismWeb.ProgramsLive do
   def handle_event("reset_home", %{"entry" => entry}, socket) when entry != "" do
     case call_tool(socket, "mcp_servers/reset_home", %{"entry" => entry}) do
       {:ok, _} ->
-        {:noreply, socket |> refresh_servers() |> put_flash(:info, "The home is empty again.")}
+        {:noreply, socket |> refresh_servers() |> put_flash(:info, "The folder is empty again.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Reset failed: #{error_message(reason)}")}
@@ -264,7 +264,7 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   def handle_event("reset_home", _params, socket),
-    do: {:noreply, put_flash(socket, :error, "Choose the login entry whose home to reset.")}
+    do: {:noreply, put_flash(socket, :error, "Choose the login entry whose folder to reset.")}
 
   @impl true
   def handle_params(params, _uri, socket) do
@@ -306,15 +306,25 @@ defmodule PrismWeb.ProgramsLive do
   def handle_info({:install, ref, need}, socket),
     do: {:noreply, prefill_install(socket, ref, need)}
 
-  # The sign-in relay's lines and its end, for the terminal open now.
+  # The sign-in relay's lines and its end, for the terminal open now; the
+  # terminal reads only its own session's.
   def handle_info({Opus.Programs, token, event}, socket) do
     case socket.assigns.terminal do
-      %{} ->
-        send_update(SignInTerminalComponent, id: "sign-in", relay: {token, event})
+      %{id: id} ->
+        send_update(SignInTerminalComponent, id: id, relay: {token, event})
         {:noreply, socket}
 
       nil ->
         {:noreply, socket}
+    end
+  end
+
+  # The session the terminal open now started, so selecting another target
+  # closes it first.
+  def handle_info({SignInTerminalComponent, :started, id, token}, socket) do
+    case socket.assigns.terminal do
+      %{id: ^id} = terminal -> {:noreply, assign(socket, :terminal, %{terminal | token: token})}
+      _other -> {:noreply, socket}
     end
   end
 
@@ -527,8 +537,21 @@ defmodule PrismWeb.ProgramsLive do
     |> Enum.find(&(not MapSet.member?(taken, &1)))
   end
 
-  defp open_terminal(socket, name, entry),
-    do: assign(socket, :terminal, %{row: name, entry: entry})
+  # One sign-in at a time: a terminal for a new target closes the session
+  # of the one before, and each terminal is a component of its own, so
+  # selecting a target, or the same one again after its session ended,
+  # starts afresh and never reaches the previous session.
+  defp open_terminal(socket, name, entry) do
+    close_terminal(socket)
+    id = "sign-in-#{System.unique_integer([:positive])}"
+    assign(socket, :terminal, %{id: id, row: name, entry: entry, token: nil})
+  end
+
+  defp close_terminal(%{assigns: %{terminal: %{token: token}, context: context}})
+       when is_binary(token),
+       do: Opus.Programs.sign_in_close(context, token)
+
+  defp close_terminal(_socket), do: :ok
 
   # ————— reading —————
 
@@ -651,7 +674,7 @@ defmodule PrismWeb.ProgramsLive do
       <.live_component
         :if={@terminal}
         module={SignInTerminalComponent}
-        id="sign-in"
+        id={@terminal.id}
         context={@context}
         row={@terminal.row}
         entry={@terminal.entry}
@@ -667,7 +690,7 @@ defmodule PrismWeb.ProgramsLive do
           </p>
           <p :if={!@install} class="text-xs text-gray-500">
             A program a component drives, such as a coding harness. Its command fetches or runs
-            it; CYFR ships none. With a kept home it keeps its own sign-in between runs.
+            it; CYFR ships none. A program that keeps its folder keeps its own sign-in between runs.
           </p>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
@@ -834,8 +857,8 @@ defmodule PrismWeb.ProgramsLive do
                         <dt class="text-gray-500">Disk bound</dt>
                         <dd class="text-gray-300">
                           {if server[:home] == "kept",
-                            do: bytes(config(@detail)["home_max_bytes"], "the homes volume"),
-                            else: "scratch home"}
+                            do: bytes(config(@detail)["home_max_bytes"], "the folders' volume"),
+                            else: "scratch folder"}
                         </dd>
                         <dt class="text-gray-500">Sign-in command</dt>
                         <dd class="font-mono text-gray-300">
@@ -869,10 +892,10 @@ defmodule PrismWeb.ProgramsLive do
                             {program["sessions"] || 0} sessions · {program["restarts"] || 0} crashes
                           </span>
                           <span :if={program["home_bytes"]} class="text-gray-500 text-xs">
-                            · home {bytes(program["home_bytes"], "")}
+                            · folder {bytes(program["home_bytes"], "")}
                           </span>
                           <span :if={program["over_cap"]} class="text-xs text-red-400">
-                            over its disk bound: reset the home to run it again
+                            over its disk bound: reset its folder to run it again
                           </span>
                           <span :if={program["error"]} class="text-xs text-red-400 truncate">
                             {program["error"]}
@@ -966,13 +989,15 @@ defmodule PrismWeb.ProgramsLive do
     </div>
     <div class="grid gap-3 md:grid-cols-3">
       <div>
-        <label class="block text-xs text-gray-500 uppercase mb-1">Home</label>
+        <label class="block text-xs text-gray-500 uppercase mb-1">Folder</label>
         <select
           name="home"
           class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
         >
-          <option value="kept" selected={@kind == "pipe"}>kept: survives, keeps its sign-in</option>
-          <option value="scratch" selected={@kind != "pipe"}>scratch: scrubbed each run</option>
+          <option value="kept" selected={@kind == "pipe"}>
+            kept: the program keeps its folder and its sign-in
+          </option>
+          <option value="scratch" selected={@kind != "pipe"}>scratch: a fresh folder each run</option>
         </select>
       </div>
       <div>
@@ -981,11 +1006,11 @@ defmodule PrismWeb.ProgramsLive do
       </div>
       <div>
         <label class="block text-xs text-gray-500 uppercase mb-1">Disk bound (MiB, kept)</label>
-        <.input name="disk_mib" placeholder="the homes volume" class="font-mono" />
+        <.input name="disk_mib" placeholder="the folders' volume" class="font-mono" />
       </div>
     </div>
     <div :if={@kind == "stdio"}>
-      <label class="block text-xs text-gray-500 uppercase mb-1">Login entry (kept home)</label>
+      <label class="block text-xs text-gray-500 uppercase mb-1">Login entry (kept folder)</label>
       <select
         name="login_entry"
         class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
@@ -996,7 +1021,7 @@ defmodule PrismWeb.ProgramsLive do
         </option>
       </select>
       <p class="text-xs text-gray-600 mt-1">
-        A server that signs in on its own keeps its home in a login entry naming this server.
+        A server that signs in on its own keeps its folder in a login entry naming this server.
       </p>
     </div>
     <div>
@@ -1057,9 +1082,9 @@ defmodule PrismWeb.ProgramsLive do
         <.button
           type="submit"
           variant="ghost"
-          data-confirm="Empty this home? The program's sign-in and everything it kept there are removed."
+          data-confirm="Empty this folder? The program's sign-in and everything it kept there are removed."
         >
-          Reset home
+          Reset folder
         </.button>
       </form>
     </div>

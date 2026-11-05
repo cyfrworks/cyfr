@@ -45,9 +45,14 @@ const (
 	ExitInvalid = 3
 )
 
-// maxMeasured bounds the entries one measure walks: a home past it answers
-// what it counted, which a disk bound takes as at least that much.
-const maxMeasured = 2_000_000
+// maxMeasured bounds the entries one measure walks: a home past it is not
+// measured at all (ErrUnmeasured), since a partial total could miss what
+// the rest of the tree holds and let it pass its bound. A variable so a
+// test can lower it.
+var maxMeasured = 2_000_000
+
+// ErrUnmeasured is a walk that stopped short of the whole home.
+var ErrUnmeasured = errors.New("the home was not walked whole")
 
 // HelperSpec is what the keeper hands `cyfr-locus home`: the op, the kept
 // home's path and the uid it runs as, which is the home's.
@@ -141,7 +146,9 @@ func Make(path string, uid int) error {
 
 // Measure answers the bytes allocated to everything under path, the
 // directory itself included, without following a symbolic link or leaving
-// its filesystem. An entry that vanishes while it walks is not counted.
+// its filesystem. An entry that vanishes while it walks is not counted. A
+// walk that cannot finish, past maxMeasured entries or at a directory it
+// cannot read, is an error and never a partial total.
 func Measure(path string) (uint64, error) {
 	var root unix.Stat_t
 	if err := unix.Lstat(path, &root); err != nil {
@@ -157,7 +164,7 @@ func Measure(path string) (uint64, error) {
 			return err
 		}
 		if visited++; visited > maxMeasured {
-			return filepath.SkipAll
+			return ErrUnmeasured
 		}
 		var st unix.Stat_t
 		if err := unix.Lstat(p, &st); err != nil {
@@ -175,5 +182,8 @@ func Measure(path string) (uint64, error) {
 		total += uint64(st.Blocks) * 512
 		return nil
 	})
-	return total, err
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }

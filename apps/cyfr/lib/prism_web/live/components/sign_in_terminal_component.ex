@@ -10,14 +10,19 @@ defmodule PrismWeb.SignInTerminalComponent do
   On its first update it asks `mcp_servers.sign_in` for the row and the
   entry, which opens the session and starts a relay bound to the person's
   session, and attaches the page's process to it
-  (`Opus.Programs.sign_in_attach/3`). The page forwards each relay message,
+  (`Opus.Programs.sign_in_attach/3`), telling the page
+  `{PrismWeb.SignInTerminalComponent, :started, id, token}` so it closes
+  this session before it opens a terminal for another target: each
+  terminal holds one session, under an id of its own. The page forwards each relay message,
   `{Opus.Programs, token, {:lines, lines}}` or `{:ended, reason}`, here as
   the `relay` assign. The frame keeps the last #{500} lines, each with its
   terminal control sequences removed; a line the person types goes to the
   program with `Opus.Programs.sign_in_send/3`. Close ends the session
   (`Opus.Programs.sign_in_close/2`) and tells the page
   `{PrismWeb.SignInTerminalComponent, :closed}`. CYFR stores nothing of
-  what passes: the program keeps its own sign-in in its home.
+  what passes: the program keeps its own sign-in in its home. What the
+  person types is sent and never kept here; its field, `sign_in_line`, is
+  one `Prima.Sanitizer.filter_parameters/0` names, so no event log shows it.
   """
 
   use PrismWeb, :live_component
@@ -70,7 +75,7 @@ defmodule PrismWeb.SignInTerminalComponent do
   end
 
   @impl true
-  def handle_event("send", %{"line" => line}, %{assigns: %{state: :running}} = socket) do
+  def handle_event("send", %{"sign_in_line" => line}, %{assigns: %{state: :running}} = socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case Opus.Programs.sign_in_send(socket.assigns.context, socket.assigns.token, line) do
         :ok -> {:noreply, update(socket, :sent, &(&1 + 1))}
@@ -97,6 +102,7 @@ defmodule PrismWeb.SignInTerminalComponent do
     with {:ok, result} <- call_tool(socket.assigns.context, "mcp_servers/sign_in", args),
          token when is_binary(token) <- result[:session] || result["session"],
          :ok <- Opus.Programs.sign_in_attach(socket.assigns.context, token, self()) do
+      send(self(), {__MODULE__, :started, socket.assigns.id, token})
       socket |> assign(:token, token) |> assign(:state, :running)
     else
       {:error, reason} -> ended(socket, reason)
@@ -162,10 +168,11 @@ defmodule PrismWeb.SignInTerminalComponent do
         phx-target={@myself}
         class="flex gap-2 border-t border-gray-800 px-4 py-2"
         id={"#{@id}-input"}
+        data-test="terminal-input"
       >
         <.input
           id={"#{@id}-line-#{@sent}"}
-          name="line"
+          name="sign_in_line"
           value=""
           placeholder="type an answer and press Enter"
           class="font-mono"

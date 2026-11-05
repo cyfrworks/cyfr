@@ -77,7 +77,13 @@ defmodule Emissary.External.Server do
   moved: a spurious restart, never a missed one.
   """
 
-  use GenServer
+  # Temporary: a server is started on demand (`ServerSupervisor.ensure_started/1`),
+  # so one that stops is started again by its next use, with the stored
+  # configuration. Restarted by its supervisor instead, a server that keeps
+  # failing (a bad upstream, a crash) would spend the supervisor's restart
+  # intensity, and the supervisor reaching it shuts down every server of
+  # every athanor at once.
+  use GenServer, restart: :temporary
   require Logger
 
   alias Prima.MCP.{Message, Protocol}
