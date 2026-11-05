@@ -289,6 +289,42 @@ defmodule Sanctum.Mount do
   end
 
   @doc """
+  Which of the kept homes `home_ids` (a box's) no login entry holds any
+  more, with the athanor each was its entry's (nil for an entry with no
+  row left): its entry deleted, another kind, or its athanor archived.
+  The positive evidence the programs controller retires a home on; a home
+  whose entry stands is not named. `{:error, :unavailable}` when the store
+  cannot answer, so the sweep retires nothing and asks again later.
+  """
+  @spec orphaned_homes([home_id()]) ::
+          {:ok, [{home_id(), String.t() | nil}]} | {:error, :unavailable}
+  def orphaned_homes(home_ids) when is_list(home_ids) do
+    case Arca.VaultStorage.standing(home_ids) do
+      {:ok, standing} ->
+        orphans =
+          Enum.flat_map(home_ids, fn id ->
+            case orphaned(Map.get(standing, id)) do
+              :stands -> []
+              athanor_id -> [{id, athanor_id}]
+            end
+          end)
+
+        {:ok, orphans}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp orphaned(nil), do: nil
+
+  defp orphaned(%{kind: @login, status: status, athanor_archived: false})
+       when status != "tombstoned",
+       do: :stands
+
+  defp orphaned(%{athanor_id: athanor_id}), do: athanor_id
+
+  @doc """
   The ids of `athanor_id`'s login entries that are not deleted: the kept
   homes an archived athanor leaves behind, which the programs controller
   retires. `{:error, :unavailable}` when the store cannot answer.

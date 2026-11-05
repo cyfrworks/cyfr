@@ -995,6 +995,15 @@ defmodule Emissary.External.Server do
   end
 
   defp ensure_session(state, backend) do
+    # A kept row's entry is checked at every open, not only at connect: an
+    # entry revoked since then mounts nothing more.
+    case login_entry(state) do
+      :ok -> open_session(state, backend)
+      {:error, reason} -> {:error, backends_reason(reason), state}
+    end
+  end
+
+  defp open_session(state, backend) do
     params = %{
       program: backend,
       key: @session_key,

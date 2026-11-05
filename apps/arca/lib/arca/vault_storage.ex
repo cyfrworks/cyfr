@@ -299,6 +299,50 @@ defmodule Arca.VaultStorage do
 
   def get(%Prima.Actor{}, id) when is_binary(id), do: {:error, :no_athanor}
 
+  @doc """
+  Where the entries `ids` stand, whatever athanor holds each, for the
+  programs controller's sweep of the kept homes a box holds: each id that
+  names a row maps to its athanor, kind and status and whether its athanor
+  is archived. An id that names no row is absent. No material and no
+  binding is read.
+  """
+  @spec standing([String.t()]) ::
+          {:ok,
+           %{
+             String.t() => %{
+               athanor_id: String.t(),
+               kind: String.t(),
+               status: String.t(),
+               athanor_archived: boolean()
+             }
+           }}
+          | {:error, :database_error}
+  # arca:unscoped-ok a box names its kept homes by entry id alone, so the sweep reads each id's own athanor back and answers no payload.
+  def standing(ids) when is_list(ids) do
+    Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.standing", fn ->
+      rows =
+        Arca.Repo.all(
+          from(v in VaultEntry,
+            left_join: a in Arca.Schemas.Athanor,
+            on: a.id == v.athanor_id,
+            where: v.id in ^Enum.uniq(ids),
+            select: {v.id, v.athanor_id, v.kind, v.status, a.status}
+          )
+        )
+
+      {:ok,
+       Map.new(rows, fn {id, athanor_id, kind, status, athanor_status} ->
+         {id,
+          %{
+            athanor_id: athanor_id,
+            kind: kind,
+            status: status,
+            athanor_archived: athanor_status == "archived"
+          }}
+       end)}
+    end)
+  end
+
   @doc "The living entry with this name in the actor's athanor, if any."
   @spec get_by_name(Prima.Actor.t(), String.t()) ::
           {:ok, entry()} | {:error, :not_found} | refusal()

@@ -32,8 +32,11 @@ defmodule Cyfr.Test.ScriptedBackends do
   no `send` or `recv` within it) answers `running: false`, and the next
   `open` of its key starts it afresh (`resumed: false`).
 
-  A status reports `stderr_bytes` of stderr tail per program (none unless
-  set): the script does not bound its answers, so a test can see what the
+  A `homes` message answers the kept homes the script holds (`homes`, a
+  set: each an open names, until its retire; `set(fake, :homes, …)`).
+
+  A status reports `stderr_bytes` of stderr per program (none unless set),
+  as its tail for a scratch program and as its length for a kept one: the script does not bound its answers, so a test can see what the
   box makes of an unbounded one. `answer_version` is the protocol version
   its answers name (the wire's unless set).
   """
@@ -63,6 +66,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              hold: MapSet.new(),
              pool: 32,
              stderr_bytes: 0,
+             homes: MapSet.new(),
              idle_ms: nil,
              silent: [],
              answer_version: LocusBackends.version(),
@@ -374,11 +378,15 @@ defmodule Cyfr.Test.ScriptedBackends do
               "name" => p["name"],
               "status" => if(running > 0, do: "running", else: "idle"),
               "restarts" => 0,
-              "stderr_tail" => String.duplicate("x", st.stderr_bytes),
               "home" => p["home"] || "scratch",
               "over_cap" => false,
               "sessions" => running
             }
+            |> Map.merge(
+              if p["home"] == "kept",
+                do: %{"stderr_bytes" => st.stderr_bytes},
+                else: %{"stderr_tail" => String.duplicate("x", st.stderr_bytes)}
+            )
           end
 
         Map.merge(owner, %{
@@ -394,9 +402,15 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp handle(conn, agent, %{"type" => "home", "op" => op, "home_id" => home_id}, _fields) do
+    if op == "retire", do: Agent.update(agent, &%{&1 | homes: MapSet.delete(&1.homes, home_id)})
     st = Agent.get(agent, & &1)
     state = if op == "reset", do: "empty", else: "absent"
     control_answer(conn, st, %{"home_id" => home_id, "state" => state})
+  end
+
+  defp handle(conn, agent, %{"type" => "homes"}, _fields) do
+    st = Agent.get(agent, & &1)
+    control_answer(conn, st, %{"homes" => st.homes |> MapSet.to_list() |> Enum.sort()})
   end
 
   # ————— sessions —————
@@ -517,6 +531,11 @@ defmodule Cyfr.Test.ScriptedBackends do
             }
 
             st = %{st | sessions: Map.put(st.sessions, id, s), keys: Map.put(st.keys, key, id)}
+
+            st =
+              if message.home_id,
+                do: %{st | homes: MapSet.put(st.homes, message.home_id)},
+                else: st
 
             {%{
                "status" => "running",

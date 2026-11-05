@@ -984,8 +984,10 @@ defmodule Emissary.External.Provider do
   end
 
   # What the backends service reports for a program's backends: status,
-  # restarts, the last crash, a masked stderr tail, its home, the bytes its
-  # kept homes hold, whether one is over its cap and its running sessions.
+  # restarts, the last crash, a scratch program's masked stderr tail or a
+  # kept one's stderr length alone (a kept home's contents are the
+  # person's), its home, the bytes its kept homes hold, whether one is over
+  # its cap and its running sessions.
   # Nil for an http server, or when the service runs nothing for it.
   defp program_status(ctx, %{transport: transport} = server)
        when transport in ["stdio", "pipe"] do

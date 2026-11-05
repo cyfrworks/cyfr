@@ -195,6 +195,10 @@ defmodule Opus.Programs do
     call(box_of(athanor_id), {:home, athanor_id, home_id, op}, Box.control_timeout_ms())
   end
 
+  @doc "The ids of every kept home the box holds, as its `homes` answer names them."
+  @spec homes() :: {:ok, [String.t()]} | {:error, term()}
+  def homes, do: call(@local, :homes, Box.control_timeout_ms())
+
   defp call(box, message, timeout) do
     case box_pid(box) do
       nil -> {:error, :backends_not_configured}
@@ -246,6 +250,22 @@ defmodule Opus.Programs do
   @spec sign_in_send(Sanctum.Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def sign_in_send(ctx, token, line) when is_binary(line),
     do: relay_call(token, {:send, caller(ctx), line})
+
+  @doc """
+  End every running sign-in of the athanor on the login entry `entry_id`:
+  the entry was revoked, suspended or deleted, so nothing runs in its home
+  any more. Answers at once; each relay ends `:entry_ended`.
+  """
+  @spec end_sign_ins(String.t(), String.t()) :: :ok
+  def end_sign_ins(athanor_id, entry_id) when is_binary(athanor_id) and is_binary(entry_id) do
+    if Process.whereis(@relays) do
+      for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(@relays),
+          is_pid(pid),
+          do: GenServer.cast(pid, {:entry_ended, athanor_id, entry_id})
+    end
+
+    :ok
+  end
 
   @doc "End the sign-in: its command is ended and its owner released."
   @spec sign_in_close(Sanctum.Context.t(), String.t()) :: :ok | {:error, term()}

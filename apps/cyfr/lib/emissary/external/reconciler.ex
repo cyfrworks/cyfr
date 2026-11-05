@@ -44,7 +44,17 @@ defmodule Emissary.External.Reconciler do
   archived athanor (`Sanctum.Mount.login_entries/1`). The programs
   controller sends a retire again on every tick until the backends service
   acknowledges it; a vault that cannot say whether an entry was a login
-  entry is asked again after the fast retries' backoff.
+  entry is asked again after the fast retries' backoff. Neither path is
+  the only one: the periodic sweep asks the backends service which kept
+  homes it holds (`Opus.Programs.homes/0`) and retires every one no login
+  entry holds any more (`Sanctum.Mount.orphaned_homes/1`), so a lookup
+  that failed delays a home's retirement by a sweep and never loses it,
+  and a store that cannot answer retires nothing.
+
+  A kept stdio row runs its sessions in the home of the login entry it
+  names (`login_entry_id`), and a sign-in runs in one: a change to that
+  entry stops the rows that mount it as a change to a referenced
+  credential does, and ends its sign-ins (`Opus.Programs.end_sign_ins/2`).
 
   Reconcile failures are **not** swallowed: a raise or transient storage error
   emits `[:cyfr, :emissary, :external_server, :reconcile_failed]` telemetry and is
@@ -126,9 +136,9 @@ defmodule Emissary.External.Reconciler do
         )
 
       {:error, _unavailable} ->
-        Logger.error(
+        Logger.warning(
           "[Emissary.External.Reconciler] the kept home of a deleted entry of #{athanor_id} " <>
-            "could not be looked up; it stays on the backends service"
+            "could not be looked up; the next sweep retires it"
         )
     end
 
@@ -143,9 +153,9 @@ defmodule Emissary.External.Reconciler do
         retire_homes(athanor_id, entries)
 
       {:error, _unavailable} ->
-        Logger.error(
+        Logger.warning(
           "[Emissary.External.Reconciler] the login entries of archived #{athanor_id} could " <>
-            "not be read; their kept homes stay on the backends service"
+            "not be read; the next sweep retires their kept homes"
         )
     end
 
@@ -171,6 +181,9 @@ defmodule Emissary.External.Reconciler do
     # Then catch what no signal said: a live server whose vault revisions
     # moved under it.
     _ = while_held(&sweep_revisions/0)
+
+    # And the kept homes the box holds that no login entry holds any more.
+    _ = while_held(&sweep_homes/0)
 
     schedule_sweep()
     {:noreply, state}
@@ -238,6 +251,7 @@ defmodule Emissary.External.Reconciler do
     names = changed_names(meta)
 
     _released = Opus.Programs.release_referencing(athanor_id, names)
+    if is_binary(entry_id), do: Opus.Programs.end_sign_ins(athanor_id, entry_id)
 
     with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       stop_affected(servers, names, athanor_id, entry_id, ctx)
@@ -261,7 +275,7 @@ defmodule Emissary.External.Reconciler do
   # process and raising an epoch again are both harmless.
   defp stop_affected(servers, names, athanor_id, entry_id, ctx) do
     servers
-    |> Enum.filter(&references?(&1, names))
+    |> Enum.filter(&(references?(&1, names) or mounts?(&1, entry_id)))
     |> stop_servers(athanor_id, entry_id, ctx)
   end
 
@@ -306,6 +320,23 @@ defmodule Emissary.External.Reconciler do
   end
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
+
+  # Every kept home the box holds whose entry is gone, another kind or its
+  # athanor archived is retired, under the athanor its entry was in (a home
+  # whose entry left no row has no athanor to name: "-", which holds no
+  # session). A box or store that cannot answer retires nothing this sweep.
+  @doc false
+  @spec sweep_homes() :: :ok
+  def sweep_homes do
+    with {:ok, [_ | _] = homes} <- Opus.Programs.homes(),
+         {:ok, orphans} <- Sanctum.Mount.orphaned_homes(homes) do
+      orphans
+      |> Enum.group_by(fn {_home, athanor} -> athanor || "-" end, &elem(&1, 0))
+      |> Enum.each(fn {athanor, ids} -> retire_homes(athanor, ids) end)
+    end
+
+    :ok
+  end
 
   # The revision pass, one athanor at a time. A server that is not
   # connected resolved nothing and is skipped; an athanor whose revisions
@@ -366,6 +397,12 @@ defmodule Emissary.External.Reconciler do
         stale != [],
         do: {name, stale}
   end
+
+  # A kept stdio row runs its sessions in the home of the login entry it
+  # names: a change to that entry stops it as a change to a referenced
+  # credential does.
+  defp mounts?(%{login_entry_id: entry_id}, entry_id) when is_binary(entry_id), do: true
+  defp mounts?(_server, _entry_id), do: false
 
   defp references?(server, names) do
     config = Arca.McpServerStorage.config(server)

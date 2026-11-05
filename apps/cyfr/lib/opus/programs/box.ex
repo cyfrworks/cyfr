@@ -324,6 +324,10 @@ defmodule Opus.Programs.Box do
     {:noreply, state |> enqueue({:status, key, from}) |> dispatch()}
   end
 
+  def handle_call(:homes, from, state) do
+    {:noreply, state |> enqueue({:homes, from}) |> dispatch()}
+  end
+
   def handle_call({:home, athanor, home_id, op}, from, state) do
     if plane_generation(state) == :not_owner do
       {:reply, {:error, :control_plane_lost}, state}
@@ -677,6 +681,7 @@ defmodule Opus.Programs.Box do
 
   defp lane({:sync, _key}), do: :queue
   defp lane({:status, _key, _from}), do: :queue
+  defp lane({:homes, _from}), do: :queue
   defp lane(_job), do: :urgent
 
   defp enqueue(state, job) do
@@ -772,6 +777,11 @@ defmodule Opus.Programs.Box do
     do: reply_release_waiters(state, Map.keys(state.release_waiters))
 
   defp refuse(state, {:home, hkey}, reason), do: home_failed(state, hkey, reason)
+
+  defp refuse(state, {:homes, from}, reason) do
+    GenServer.reply(from, {:error, reason})
+    state
+  end
 
   defp refuse(state, _job, _reason), do: state
 
@@ -890,6 +900,9 @@ defmodule Opus.Programs.Box do
     end
   end
 
+  defp prepare({:homes, _from}, state),
+    do: {:send, state |> base_spec(:homes) |> Map.put(:body, %{type: :homes})}
+
   defp prepare({:status, {athanor, server}, from}, state) do
     if LocusBackends.max_status_owners() < 1 do
       GenServer.reply(from, {:error, :too_many_owners})
@@ -938,7 +951,9 @@ defmodule Opus.Programs.Box do
     case Arca.McpServerStorage.fenced(pairs) do
       {:ok, rows} ->
         {kept, fenced_out} =
-          Enum.split_with(pairs, fn key -> passes_fence?(rows[key], spec.owners[key]) end)
+          Enum.split_with(pairs, fn key ->
+            passes_fence?(rows[key], spec.owners[key]) and mount_live?(rows[key])
+          end)
 
         answer = if kept == [], do: :nothing_to_renew, else: renew(spec, keys.control, kept)
         {:renewed, answer, fenced_out}
@@ -1079,6 +1094,21 @@ defmodule Opus.Programs.Box do
   defp program(_row), do: {:error, :not_a_program}
 
   defp passes_fence?(fenced, epoch), do: match?({:ok, _row}, fence_verdict(fenced, epoch))
+
+  # A kept stdio row runs in the home of the login entry it names, so each
+  # renewal asks again that the entry is an active login entry of the
+  # row's athanor naming the row: one revoked, suspended by a restore or
+  # deleted releases the owner. A vault that cannot answer releases it too:
+  # nothing runs in a home whose entry cannot be shown live. A pipe row's
+  # entry is its catalyst's need's, checked where the need is resolved.
+  defp mount_live?(%{row: %{transport: "stdio", home: "kept"} = row}) do
+    ctx = Sanctum.Context.internal(athanor_id: row.athanor_id, scope: :athanor)
+
+    is_binary(row.login_entry_id) and
+      match?({:ok, _entry}, Sanctum.Mount.login_entry(ctx, row.login_entry_id, row.name))
+  end
+
+  defp mount_live?(_fenced), do: true
 
   defp within_share(%{share: nil}, _count), do: :ok
 
@@ -1443,6 +1473,16 @@ defmodule Opus.Programs.Box do
     home_failed(state, hkey, refusal(result))
   end
 
+  defp settle_job(state, {:homes, from}, _spec, {:http, 200, _boot, %{homes: homes}}) do
+    GenServer.reply(from, {:ok, homes})
+    state
+  end
+
+  defp settle_job(state, {:homes, from}, _spec, result) do
+    GenServer.reply(from, {:error, refusal(result)})
+    state
+  end
+
   defp settle_job(state, {:status, key, from}, _spec, {:http, 200, _boot, %{owners: owners}}) do
     status = Enum.find(owners, &({&1.athanor, &1.server} == key))
     GenServer.reply(from, {:ok, status && wire(status)})
@@ -1490,7 +1530,10 @@ defmodule Opus.Programs.Box do
   end
 
   # An owner report as the wire names it, which is how a status answers.
-  defp wire(%{} = map), do: Map.new(map, fn {key, value} -> {to_string(key), wire(value)} end)
+  # An absent member (nil) stays absent, as the wire spells it.
+  defp wire(%{} = map),
+    do: for({key, value} <- map, value != nil, into: %{}, do: {to_string(key), wire(value)})
+
   defp wire(list) when is_list(list), do: Enum.map(list, &wire/1)
   defp wire(atom) when is_atom(atom) and atom not in [nil, true, false], do: Atom.to_string(atom)
   defp wire(value), do: value

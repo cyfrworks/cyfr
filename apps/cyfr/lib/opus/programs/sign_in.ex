@@ -24,7 +24,11 @@ defmodule Opus.Programs.SignIn do
   exits or asks it to (`:closed`), when no subscriber attaches within 30 s
   (`:unattended`), when the box tells it to stand down or issues a new
   grant (`:stand_down`, `:owner_moved`), or when the session cannot be read
-  (`:lost`). CYFR stores nothing of what passes through.
+  (`:lost`), or when its login entry is revoked, suspended or deleted
+  (`:entry_ended`, `Opus.Programs.end_sign_ins/2`). CYFR stores nothing
+  of what passes through, and nothing of it shows in `:sys.get_status/1`
+  or a crash report: a sign-in's lines and what the person types are
+  credentials, shown only as counts.
   """
 
   use GenServer, restart: :temporary
@@ -103,6 +107,15 @@ defmodule Opus.Programs.SignIn do
   def handle_call(_request, _from, state), do: {:reply, {:error, :not_yours}, state}
 
   @impl true
+  def handle_cast({:entry_ended, athanor_id, entry_id}, %{entry_id: entry_id} = state) do
+    if state.owner.athanor_id == athanor_id,
+      do: {:stop, :normal, ended(state, :entry_ended)},
+      else: {:noreply, state}
+  end
+
+  def handle_cast({:entry_ended, _athanor_id, _entry_id}, state), do: {:noreply, state}
+
+  @impl true
   def handle_info({:read, lines, running, exit_code}, state) do
     state = relay(state, lines)
 
@@ -147,8 +160,31 @@ defmodule Opus.Programs.SignIn do
     :ok
   end
 
+  # A sign-in's lines and what the person types are credentials: its state
+  # keeps only how many lines it holds, and a message carrying text keeps
+  # only its count, before the generic redaction takes the keys.
   @impl true
-  def format_status(status), do: Opus.Programs.StatusRedaction.format_status(status)
+  def format_status(status) do
+    status
+    |> Map.new(fn
+      {:state, %{} = state} -> {:state, %{state | kept: {:redacted, length(state.kept)}}}
+      {:message, message} -> {:message, redact_text(message)}
+      {:log, _log} -> {:log, []}
+      other -> other
+    end)
+    |> Opus.Programs.StatusRedaction.format_status()
+  end
+
+  defp redact_text({:read, lines, running, exit_code}),
+    do: {:read, {:redacted, length(lines)}, running, exit_code}
+
+  defp redact_text({:"$gen_call", from, {:send, binding, _line}}),
+    do: {:"$gen_call", from, {:send, binding, :redacted}}
+
+  defp redact_text({Opus.Programs, token, {:lines, lines}}),
+    do: {Opus.Programs, token, {:lines, {:redacted, length(lines)}}}
+
+  defp redact_text(message), do: message
 
   # Only a command that exited 0 signed the program in; the entry is made
   # active again then, and left as it is on any other end.
