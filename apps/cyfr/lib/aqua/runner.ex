@@ -978,6 +978,9 @@ defmodule Aqua.Runner do
       addressee: addressee,
       reply_to: reply && reply.request.id,
       outcome: reply && reply.outcome,
+      # A card's notice waits with its card until the card is decided.
+      approval_id: reply && reply[:approval_id],
+      status: if(reply && reply[:approval_id], do: "pending"),
       content: text,
       id: Keyword.get(opts, :id),
       client_id: Keyword.get(opts, :client_id),

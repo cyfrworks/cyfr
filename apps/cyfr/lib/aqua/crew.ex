@@ -60,7 +60,10 @@ defmodule Aqua.Crew do
       addressed to the request's sender, and answers every request the
       record names. To the soul it opens or steers the soul's turn; to
       the person it is room content and wakes nothing. A `needs_you`
-      record is a notice of a card in the child turn: it answers nothing.
+      record is a notice of a card in the child turn: it answers nothing,
+      waits `pending` with the card's approval, and is decided with the
+      card (`Arca.TurnStorage.resolve_approval/4`); a card decided before
+      its notice lands writes none (`:card_decided`).
 
   A refusal that may pass (`:busy`, `:held_elsewhere`, `:unavailable`,
   and any other but those below) leaves the record pending for the next
@@ -103,7 +106,8 @@ defmodule Aqua.Crew do
     :no_origin,
     :not_a_room,
     :empty,
-    :message_too_long
+    :message_too_long,
+    :card_decided
   ]
 
   @typedoc "What one drain of an athanor did."
@@ -567,7 +571,12 @@ defmodule Aqua.Crew do
       ctx
       |> Runner.send_message(snapshot["asking_thread_id"], reply_text(snapshot),
         sent_by: snapshot["member"],
-        reply: %{request: request, outcome: outcome, answers: answers},
+        reply: %{
+          request: request,
+          outcome: outcome,
+          answers: answers,
+          approval_id: snapshot["approval_id"]
+        },
         payload: reply_payload(ctx, record, answers),
         receipt: receipt(record, held, "applied")
       )
@@ -696,24 +705,21 @@ defmodule Aqua.Crew do
       {:ok, turn} ->
         base
         |> Map.put("from_thread", turn.thread_id)
-        |> Map.merge(card(ctx, turn, snapshot["outcome"]))
+        |> Map.merge(card(ctx, snapshot))
 
       {:error, _} ->
         base
     end
   end
 
-  defp card(ctx, turn, "needs_you") do
-    case Tape.pending_approvals(ctx, turn) do
-      {:ok, [approval | _]} ->
-        %{"approval_id" => approval.id, "card_message_id" => approval.message_id}
-
-      _ ->
-        %{}
+  defp card(ctx, %{"outcome" => "needs_you", "approval_id" => id}) when is_binary(id) do
+    case Tape.approval(ctx, id) do
+      {:ok, approval} -> %{"approval_id" => id, "card_message_id" => approval.message_id}
+      _ -> %{"approval_id" => id}
     end
   end
 
-  defp card(_ctx, _turn, _outcome), do: %{}
+  defp card(_ctx, _snapshot), do: %{}
 
   defp receipt(record, %{claim: claim, slot: slot}, outcome),
     do: %{receipt: receipt_of(record, outcome), claim: claim, slot: slot}

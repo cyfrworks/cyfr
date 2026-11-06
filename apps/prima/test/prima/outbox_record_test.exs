@@ -115,6 +115,20 @@ defmodule Prima.OutboxRecordTest do
     end
   end
 
+  test "a needs_you reply names its card's approval, and no other reply does" do
+    assert %{snapshot: %{"approval_id" => "apr_1"} = snapshot} =
+             OutboxRecord.crew_reply(reply(%{outcome: "needs_you", approval_id: "apr_1"}))
+
+    assert map_size(snapshot) == 9
+
+    for outcome <- OutboxRecord.reply_outcomes() -- ["needs_you"] do
+      %{snapshot: snapshot} =
+        OutboxRecord.crew_reply(reply(%{outcome: outcome, approval_id: "apr_1"}))
+
+      refute Map.has_key?(snapshot, "approval_id"), outcome
+    end
+  end
+
   test "a reply's text is cut at its bound on a character boundary, and says so" do
     max = OutboxRecord.max_reply_bytes()
 

@@ -154,6 +154,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:models_loaded, false)
       |> stream_configure(:messages, dom_id: &(dom <> "-m-" <> &1.id))
       |> stream(:messages, [])
+      |> assign(:decided_notices, MapSet.new())
       |> allow_upload(:attachments,
         accept: :any,
         max_entries: Aqua.attachment_limits().max_files,
@@ -206,6 +207,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:assistant, nil)
       |> assign(:input, "")
       |> stream(:messages, [], reset: true)
+      |> assign(:decided_notices, MapSet.new())
       |> assign(:requests, %{})
       |> assign(:children, [])
       |> assign(:parent, nil)
@@ -236,6 +238,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
         socket
         |> stream(:messages, shown, reset: true)
+        |> assign(:decided_notices, decided_notices(rows))
         |> assign(:requests, requests)
         |> assign(:pending_approvals, pending_in(rows))
         |> note_schedules(pending_in(rows))
@@ -787,8 +790,26 @@ defmodule PrismWeb.ThreadPaneLive do
     read_children(socket)
   end
 
-  defp handle_thread_event(socket, :notice, row),
-    do: socket |> upsert_message(row) |> read_children()
+  # A notice moves from pending to decided and never back: an announcement
+  # of it pending that arrives after its decision's is an older snapshot,
+  # and the decided row the pane holds stands.
+  defp handle_thread_event(socket, :notice, row) do
+    decided = socket.assigns.decided_notices
+
+    cond do
+      row.status == "pending" and MapSet.member?(decided, row.id) ->
+        socket
+
+      row.status != "pending" ->
+        socket
+        |> assign(:decided_notices, MapSet.put(decided, row.id))
+        |> upsert_message(row)
+        |> read_children()
+
+      true ->
+        socket |> upsert_message(row) |> read_children()
+    end
+  end
 
   # A turn may start for a message queued earlier — the sender's draft of
   # a newer message stays where it is (`send_message/3` clears on send).
@@ -1876,6 +1897,7 @@ defmodule PrismWeb.ThreadPaneLive do
                   />
                 <% crew(msg) == :reply -> %>
                   <.reply id={@dom <> "-reply-" <> msg.id} dom={@dom} reply={msg} />
+                <% crew(msg) == :decided_notice -> %>
                 <% crew(msg) == :notice -> %>
                   <div class="flex flex-col items-start">
                     <span class="text-xs text-gray-500 mb-0.5 px-1">{msg.sent_by} needs you</span>
@@ -2301,7 +2323,19 @@ defmodule PrismWeb.ThreadPaneLive do
   # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
   # crew member, a reply to one, a notice that a member needs the person,
   # or none of these.
-  defp crew(%{reply_to: id, outcome: "needs_you"}) when is_binary(id), do: :notice
+  # The notices a load reads already decided, which no announcement reopens.
+  defp decided_notices(rows) do
+    for %{outcome: "needs_you", status: status, id: id} <- rows,
+        status != "pending",
+        into: MapSet.new(),
+        do: id
+  end
+
+  # A notice shows while its card waits; one decided with its card is gone.
+  defp crew(%{reply_to: id, outcome: "needs_you", status: "pending"}) when is_binary(id),
+    do: :notice
+
+  defp crew(%{reply_to: id, outcome: "needs_you"}) when is_binary(id), do: :decided_notice
   defp crew(%{reply_to: id}) when is_binary(id), do: :reply
 
   defp crew(%{addressee: addressee, status: status})

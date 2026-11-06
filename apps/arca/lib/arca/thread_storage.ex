@@ -351,7 +351,9 @@ defmodule Arca.ThreadStorage do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.pending_requests", fn ->
       query =
         from(m in Message,
+          # A card's notice waits too, but answers a request and is none.
           where: not is_nil(m.addressee) and m.status == "pending" and m.kind == "text",
+          where: is_nil(m.reply_to),
           order_by: [asc: m.inserted_at, asc: m.seq]
         )
 
