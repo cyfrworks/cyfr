@@ -292,13 +292,14 @@ defmodule Aqua.Loop.Planner do
 
   @doc """
   Whether a row is pinned in the projection: a request to a crew member
-  still waiting on its reply.
+  still waiting on its reply. A card's notice waits too, but answers a
+  request and is none.
   """
   @spec pinned?(Aqua.Tape.row()) :: boolean()
   def pinned?(row),
     do:
       Map.get(row, :kind) == "text" and is_binary(Map.get(row, :addressee)) and
-        Map.get(row, :status) == "pending"
+        is_nil(Map.get(row, :reply_to)) and Map.get(row, :status) == "pending"
 
   defp first_kept_seq(%{payload: json}) when is_binary(json) do
     case Jason.decode(json) do

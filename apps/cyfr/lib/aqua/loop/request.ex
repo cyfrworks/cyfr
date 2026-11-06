@@ -483,6 +483,7 @@ defmodule Aqua.Loop.Request do
     me = Keyword.get(opts, :me)
 
     cond do
+      decided_notice?(row) -> acc
       is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
       request?(row) and own?(row, me) -> acc
       request?(row) -> said(request_text(row, opts), row, acc)
@@ -587,6 +588,10 @@ defmodule Aqua.Loop.Request do
 
     "[#{asker} asked #{row.addressee} (request #{row.id}, #{row.status})]\n#{row.content}"
   end
+
+  # A notice is read while its card waits; a decided card waits for no one.
+  defp decided_notice?(row),
+    do: Map.get(row, :outcome) == "needs_you" and Map.get(row, :status) != "pending"
 
   defp reply_text(%{outcome: "needs_you"} = row) do
     "[#{row.sent_by} needs the person on request #{row.reply_to}: a card waits for them " <>

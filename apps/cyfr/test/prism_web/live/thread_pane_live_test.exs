@@ -1517,6 +1517,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           addressee: "person",
           reply_to: request.id,
           outcome: "needs_you",
+          status: "pending",
           content: text,
           payload: %{"from_thread" => child.id, "approval_id" => "apr_x"}
         }
@@ -1597,6 +1598,34 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert_patch(view, PrismWeb.ChatLive.chat_path(route(athanor), child.id))
       assert %{id: id} = on_thread(view, pane)
       assert id == child.id
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a notice decided with its card is gone, live and on a fresh read",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      request = request!(here, room, "explorer", "Deploy the site")
+      {_view, pane} = chat!(conn, athanor, room)
+
+      notice = notice!(here, room, request, child, "Approve the deploy")
+      shown = ~s([id$="-m-#{notice.id}"])
+      assert has_element?(pane, shown, "explorer needs you")
+
+      # The card's decision writes the notice decided and announces it.
+      decided = %{notice | status: "approved"}
+
+      Arca.Repo.update_all(
+        from(m in Arca.Schemas.Message, where: m.id == ^notice.id),
+        set: [status: "approved"]
+      )
+
+      Aqua.Tape.announce(here, room.id, :notice, decided)
+      refute has_element?(pane, shown, "explorer needs you")
+
+      {_view, pane} = chat!(conn, athanor, room)
+      refute has_element?(pane, shown, "explorer needs you")
+      refute render(pane) =~ "Approve the deploy"
 
       Cyfr.Test.Sandbox.end_views()
     end

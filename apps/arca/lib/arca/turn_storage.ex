@@ -166,6 +166,12 @@ defmodule Arca.TurnStorage do
 
   An archived thread admits nothing (`{:error, :thread_archived}`).
 
+  A card's notice (a `needs_you` row naming its `:approval_id`, written
+  `pending`) is written only while its approval waits: read under a lock
+  the decision's write waits on, so a decision committed first refuses it
+  `{:error, :card_decided}` with nothing written, and one after it
+  resolves it (`resolve_approval/4`).
+
   Answers `{:ok, %{message: row, turn: row | nil}}`. A `client_id` this
   thread already accepted answers `{:error, :duplicate_client_id}`,
   a message `id` already taken `{:error, :message_id_reused}`
@@ -193,6 +199,7 @@ defmodule Arca.TurnStorage do
 
           thread = locked_thread!(athanor_id, thread_id)
           if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
+          card_waits!(athanor_id, message)
 
           row =
             Arca.ThreadStorage.insert_message!(
@@ -231,6 +238,19 @@ defmodule Arca.TurnStorage do
   end
 
   def accept_message(%Prima.Actor{}, _thread_id, _attrs), do: {:error, :no_athanor}
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp card_waits!(athanor_id, %{outcome: "needs_you", approval_id: id}) when is_binary(id) do
+    from(a in Approval, where: a.athanor_id == ^athanor_id and a.id == ^id, select: a.status)
+    |> Arca.QueryHelpers.for_share()
+    |> Arca.Repo.one()
+    |> case do
+      "pending" -> :ok
+      _decided_or_gone -> Arca.Repo.rollback(:card_decided)
+    end
+  end
+
+  defp card_waits!(_athanor_id, _message), do: :ok
 
   @doc "The acceptance a sender's `client_id` already produced: its message and turn."
   @spec accepted(Prima.Actor.t(), String.t(), String.t()) ::
@@ -1915,7 +1935,7 @@ defmodule Arca.TurnStorage do
             from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)
             |> Arca.Repo.update_all(set: [approval_id: approval_id])
 
-          replied!(athanor_id, turn, "needs_you", now, card_row.content)
+          replied!(athanor_id, turn, "needs_you", now, card_row.content, approval_id)
           event!(athanor_id, turn, "approval.opened", step_id, %{"approval_id" => approval_id})
           %{approval: approval, card: card_row}
         end)
@@ -1940,11 +1960,13 @@ defmodule Arca.TurnStorage do
   grant its thread. A resolution kind, scope or grant the rows do not bear
   out is `{:error, :illegal_transition}`.
   An approved step returns to `proposed`, its kind unchanged; any other
-  decision closes it `denied`. Answers `{:ok, %{approval, step, card}}`;
+  decision closes it `denied`. The card's pending notices on the threads
+  that asked for the turn are decided with it. Answers `{:ok, %{approval,
+  step, card, notices}}`;
   a decision already made answers `{:error, {:already_resolved, approval}}`.
   """
   @spec resolve_approval(Prima.Actor.t(), String.t(), String.t(), map()) ::
-          {:ok, %{approval: map(), step: map(), card: map()}}
+          {:ok, %{approval: map(), step: map(), card: map(), notices: [map()]}}
           | {:error, term()}
   def resolve_approval(%Prima.Actor{athanor_id: athanor_id} = actor, approval_id, decision, attrs)
       when is_binary(athanor_id) and athanor_id != "" and decision in @decisions and is_map(attrs) do
@@ -1998,6 +2020,18 @@ defmodule Arca.TurnStorage do
             ]
           )
 
+          # The notices of the card on the threads that asked for the turn
+          # are decided with it: none waits on the person any more.
+          {_, notices} =
+            from(m in Message,
+              where: m.athanor_id == ^athanor_id and m.approval_id == ^approval_id,
+              where: m.outcome == "needs_you" and m.status == "pending",
+              select: m.id
+            )
+            |> Arca.Repo.update_all(
+              set: [status: decision, resolved_by: Map.get(attrs, :decided_by), resolved_at: now]
+            )
+
           if decision == "approved" do
             {1, _} =
               from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step.id)
@@ -2025,7 +2059,11 @@ defmodule Arca.TurnStorage do
           %{
             approval: approval!(athanor_id, approval_id),
             step: step!(athanor_id, step.id),
-            card: Arca.Repo.get_by!(Message, id: approval.message_id, athanor_id: athanor_id)
+            card: Arca.Repo.get_by!(Message, id: approval.message_id, athanor_id: athanor_id),
+            notices:
+              Arca.Repo.all(
+                from(m in Message, where: m.athanor_id == ^athanor_id and m.id in ^notices)
+              )
           }
         end)
       end)
@@ -3069,9 +3107,12 @@ defmodule Arca.TurnStorage do
   # are every request delivered into it, opening one first, each named
   # by its delivered row's payload.
   # arca:db-raise-ok inside the caller's transaction
-  defp replied!(_athanor_id, %Turn{asking_thread_id: nil}, _outcome, _at, _text), do: :ok
+  defp replied!(athanor_id, turn, outcome, at, text, approval_id \\ nil)
 
-  defp replied!(athanor_id, %Turn{} = turn, outcome, %DateTime{} = at, text) do
+  defp replied!(_athanor_id, %Turn{asking_thread_id: nil}, _outcome, _at, _text, _approval_id),
+    do: :ok
+
+  defp replied!(athanor_id, %Turn{} = turn, outcome, %DateTime{} = at, text, approval_id) do
     requests =
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
@@ -3093,7 +3134,7 @@ defmodule Arca.TurnStorage do
     # by nobody.
     case asked_by(athanor_id, turn.request_id) do
       {:ok, person_id, origin} ->
-        reply!(athanor_id, turn, outcome, at, text, requests, person_id, origin)
+        reply!(athanor_id, turn, {outcome, approval_id}, at, text, requests, person_id, origin)
 
       :gone ->
         :ok
@@ -3116,9 +3157,19 @@ defmodule Arca.TurnStorage do
   end
 
   # arca:db-raise-ok inside the caller's transaction
-  defp reply!(athanor_id, %Turn{} = turn, outcome, at, text, requests, person_id, origin) do
+  defp reply!(
+         athanor_id,
+         %Turn{} = turn,
+         {outcome, approval_id},
+         at,
+         text,
+         requests,
+         person_id,
+         origin
+       ) do
     record =
       Prima.OutboxRecord.crew_reply(%{
+        approval_id: approval_id,
         athanor_id: athanor_id,
         turn_id: turn.id,
         ended_at: at,

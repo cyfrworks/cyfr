@@ -52,7 +52,8 @@ defmodule Aqua.Tape do
   @doc """
   Accept a message atomically with the work it opens. `attrs`:
   `:message` (`:author`, `:sent_by`, `:content`, `:payload`, optional
-  `:id`, `:client_id`, `:addressee`, `:reply_to`, `:outcome`, `:status`),
+  `:id`, `:client_id`, `:addressee`, `:reply_to`, `:outcome`, `:status`,
+  `:approval_id` for a card's notice),
   and one of `:turn` (`%{agent, requested_by, model, options}`) or
   `:steer_turn_id`, or neither for room content; and the crew members of
   `TurnStorage.accept_message/3` as they stand: `:reply_address`,
@@ -529,9 +530,14 @@ defmodule Aqua.Tape do
     end
   end
 
-  @doc "Consume a pending approval with the decision and its consequences, in one transaction."
+  @doc """
+  Consume a pending approval with the decision and its consequences, in one
+  transaction; the card's notices decided with it are announced on their
+  threads.
+  """
   @spec resolve_approval(Context.t(), turn(), String.t(), String.t(), map()) ::
-          {:ok, %{approval: approval(), step: step(), card: row()}} | {:error, term()}
+          {:ok, %{approval: approval(), step: step(), card: row(), notices: [row()]}}
+          | {:error, term()}
   def resolve_approval(%Context{} = ctx, turn, approval_id, decision, attrs) when is_map(attrs) do
     with {:ok, %{card: card, step: step} = resolved} <-
            TurnStorage.resolve_approval(
@@ -553,6 +559,11 @@ defmodule Aqua.Tape do
         approval_id: approval_id,
         decision: decision
       })
+
+      # A notice of the card, on the thread that asked for the turn, is
+      # decided with it.
+      for notice <- Map.get(resolved, :notices, []),
+          do: broadcast(ctx, notice.thread_id, :notice, notice)
 
       # The runner holding the turn learns the decision from the topic,
       # after the commit like every row.

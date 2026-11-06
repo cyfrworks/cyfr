@@ -566,12 +566,19 @@ defmodule Aqua.CrewTest do
     assert from == child.id
     assert %{status: "pending"} = row(ctx, first)
 
+    # The notice waits with its card, and is no request of its own.
+    assert %{status: "pending", approval_id: ^approval_id} = notice
+    assert Enum.map(Tape.pending_requests(ctx, room.id), & &1.id) == [first]
+
     {:ok, %{message_id: more}} = Runner.send_message(ctx, room.id, "@planner and the rest")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert delivered_turn(ctx, child, more) == turn_id
 
     assert {:ok, %{decision: "approved"}} =
              Approvals.resolve(ctx, approval_id, %{decision: :approved})
+
+    # Decided with its card: the notice waits on the person no more.
+    assert %{status: "approved"} = row(ctx, notice.id)
 
     await_status(ctx, turn_id, "completed")
     assert {:ok, %{"applied" => 1}} = drain(ctx)

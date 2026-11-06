@@ -1876,6 +1876,7 @@ defmodule PrismWeb.ThreadPaneLive do
                   />
                 <% crew(msg) == :reply -> %>
                   <.reply id={@dom <> "-reply-" <> msg.id} dom={@dom} reply={msg} />
+                <% crew(msg) == :decided_notice -> %>
                 <% crew(msg) == :notice -> %>
                   <div class="flex flex-col items-start">
                     <span class="text-xs text-gray-500 mb-0.5 px-1">{msg.sent_by} needs you</span>
@@ -2301,7 +2302,11 @@ defmodule PrismWeb.ThreadPaneLive do
   # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
   # crew member, a reply to one, a notice that a member needs the person,
   # or none of these.
-  defp crew(%{reply_to: id, outcome: "needs_you"}) when is_binary(id), do: :notice
+  # A notice shows while its card waits; one decided with its card is gone.
+  defp crew(%{reply_to: id, outcome: "needs_you", status: "pending"}) when is_binary(id),
+    do: :notice
+
+  defp crew(%{reply_to: id, outcome: "needs_you"}) when is_binary(id), do: :decided_notice
   defp crew(%{reply_to: id}) when is_binary(id), do: :reply
 
   defp crew(%{addressee: addressee, status: status})

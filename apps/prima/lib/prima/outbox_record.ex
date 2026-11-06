@@ -204,21 +204,24 @@ defmodule Prima.OutboxRecord do
   transaction read: `athanor_id`, the turn's `turn_id` and `ended_at`,
   its reply address (`asking_thread_id`, `request_ids`), `member`,
   `outcome` (one of `reply_outcomes/0`), the final `text`, `person_id`
-  and `origin`.
+  and `origin`; a `needs_you` record also names the card's `approval_id`,
+  which the notice it becomes is resolved with.
   """
   @spec crew_reply(map()) :: t()
-  def crew_reply(%{
-        athanor_id: athanor_id,
-        turn_id: turn_id,
-        ended_at: %DateTime{} = ended_at,
-        asking_thread_id: asking_thread_id,
-        request_ids: [_ | _] = request_ids,
-        member: member,
-        outcome: outcome,
-        text: text,
-        person_id: person_id,
-        origin: origin
-      })
+  def crew_reply(
+        %{
+          athanor_id: athanor_id,
+          turn_id: turn_id,
+          ended_at: %DateTime{} = ended_at,
+          asking_thread_id: asking_thread_id,
+          request_ids: [_ | _] = request_ids,
+          member: member,
+          outcome: outcome,
+          text: text,
+          person_id: person_id,
+          origin: origin
+        } = attrs
+      )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and turn_id != "" and
              is_binary(asking_thread_id) and asking_thread_id != "" and is_binary(member) and
              member != "" and outcome in @reply_outcomes and is_binary(text) and
@@ -232,18 +235,25 @@ defmodule Prima.OutboxRecord do
       source_revision: instant(ended_at),
       athanor_id: athanor_id,
       kind: "crew_reply",
-      snapshot: %{
-        "asking_thread_id" => asking_thread_id,
-        "request_ids" => request_ids,
-        "member" => member,
-        "outcome" => outcome,
-        "text" => text,
-        "truncated" => truncated?,
-        "person_id" => person_id,
-        "origin" => Prima.Origin.to_wire(origin)
-      }
+      snapshot:
+        %{
+          "asking_thread_id" => asking_thread_id,
+          "request_ids" => request_ids,
+          "member" => member,
+          "outcome" => outcome,
+          "text" => text,
+          "truncated" => truncated?,
+          "person_id" => person_id,
+          "origin" => Prima.Origin.to_wire(origin)
+        }
+        |> card(outcome, Map.get(attrs, :approval_id))
     }
   end
+
+  defp card(snapshot, "needs_you", approval_id) when is_binary(approval_id) and approval_id != "",
+    do: Map.put(snapshot, "approval_id", approval_id)
+
+  defp card(snapshot, _outcome, _approval_id), do: snapshot
 
   defp names!(names, member) do
     unless Enum.all?(names, &(is_binary(&1) and &1 != "")),
