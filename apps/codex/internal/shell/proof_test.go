@@ -327,30 +327,3 @@ func knows(purpose, field string) bool {
 	}
 	return false
 }
-
-// pin_reset's field list is tests/fixtures/device_pin.json's, the reset
-// proof is reproduced byte for byte from its held challenge, and no verify
-// case the home refuses is one this signer makes.
-func TestPINVectors_TheResetProof(t *testing.T) {
-	var v unlockVectors
-	fixture(t, "device_pin.json", &v)
-	p, ok := v.PurposeFields["pin_reset"]
-	want := append(append(slices.Clone(bindingFields), freshFields...), p.Fields...)
-	if got, known := fieldsOf("pin_reset"); !ok || !p.Fresh || !known || !slices.Equal(got, want) {
-		t.Fatalf("pin_reset fields %v, want the fixture's %v", got, want)
-	}
-	key, pub := keyOf(t, v.Keys["device_1"].Seed)
-	reset := v.Proofs["pin_reset"]
-	raw, _ := json.Marshal(without(reset, "sig"))
-	c, err := Challenge(raw, "pin_reset", bindingOf(reset, pub), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proof, _ := Prove(c, key); proof["sig"] != reset["sig"] {
-		t.Fatalf("pin_reset sig %v, want %v", proof["sig"], reset["sig"])
-	}
-	if len(v.Verify) == 0 {
-		t.Fatal("the fixture holds no pin_reset verify cases")
-	}
-	signerNeverMakesARefusedProof(t, v)
-}

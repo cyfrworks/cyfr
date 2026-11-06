@@ -232,7 +232,7 @@ type pageData struct {
 
 func (srv *Server) page(w http.ResponseWriter, v View, answer string) {
 	d := pageData{View: v, Answer: answer, Print: template.JS(printScript), Close: template.JS(closeScript)}
-	d.Digits = v.Kind == holder.KindChip || v.PIN || (v.Kind == "" && v.Chip && v.Passphrase == "")
+	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && v.Passphrase == "")
 	if (v.Page == PageSetup || v.Page == PageRestore || v.Page == PageLocked) && srv.Reachable != nil && !srv.Reachable() {
 		d.Waiting = true
 	}

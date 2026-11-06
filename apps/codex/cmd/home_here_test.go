@@ -38,10 +38,10 @@ func TestHomeHere(t *testing.T) {
 }
 
 // The box's own screen counts its home as this machine whatever the
-// address it is reached at, so it never keeps a PIN the home counts.
+// address it is reached at.
 func TestScreenShell_TheHomeIsThisMachine(t *testing.T) {
-	if c := screenShellConfig(t.TempDir(), "https://box.tail0000.ts.net", nil, "box", func() {}); !c.HomeHere || c.EnrollPIN != nil {
-		t.Fatalf("the screen's shell: HomeHere %v, EnrollPIN set %v", c.HomeHere, c.EnrollPIN != nil)
+	if c := screenShellConfig(t.TempDir(), "https://box.tail0000.ts.net", nil, "box", func() {}); !c.HomeHere {
+		t.Fatalf("the screen's shell: HomeHere %v", c.HomeHere)
 	}
 }
 

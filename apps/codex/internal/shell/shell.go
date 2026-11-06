@@ -23,6 +23,8 @@ package shell
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,11 +79,8 @@ type Config struct {
 	// again by a resume of that enrollment; empty for any other admission.
 	Invitation string
 	// HomeHere is a home that runs on this same machine, as a box's own
-	// screen's does: a six-digit PIN the home counts is refused there.
+	// screen's does.
 	HomeHere bool
-	// EnrollPIN is pin.enroll at the home, through this device's session
-	// (SetPIN); nil where no PIN is offered.
-	EnrollPIN PINEnroll
 }
 
 // PendingConfirm is a confirmation the shell drew: the home's record and
@@ -91,7 +90,6 @@ type PendingConfirm struct {
 	Operation string
 	Preview   map[string]any
 	Asker     map[string]any
-	Digest    string
 	drawn     time.Time
 }
 
@@ -216,8 +214,6 @@ type View struct {
 	// NameWaits is a name page whose name waits for cyfr.run to answer,
 	// not for another name.
 	NameWaits bool
-	// PIN is a software key kept under a six-digit PIN its home counts.
-	PIN bool
 }
 
 // View is the page the screen shows now, and the notice of the last action
@@ -255,7 +251,6 @@ func (s *Shell) View() View {
 			v.Kind = s.rec.Kind
 		}
 		v.Admission = s.rec.Admission
-		v.PIN = s.rec.Hardened()
 		if len(s.rec.Certificate) == 0 {
 			v.Digest = KeyDigest(s.rec.PublicKey)
 		}
@@ -294,9 +289,6 @@ func (s *Shell) sentence(err error) string { return sentence(err, s.cfg.Noun) }
 func sentence(err error, noun string) string {
 	var intent *IntentError
 	var home *HomeError
-	if s := pinSentence(err, noun); s != "" {
-		return s
-	}
 	switch {
 	case errors.Is(err, holder.ErrWrongSecret):
 		return "That is not this " + noun + "'s PIN or passphrase. Nothing was sent anywhere."
@@ -862,17 +854,10 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
 		return
 	}
-	key, missed, err := s.open(ctx, secret)
+	key, err := s.rec.Open(secret)
 	if err != nil {
-		// A PIN evaluator the home does not know is one a restore may
-		// have suspended: the recovery code is offered, as for a
-		// suspended screen.
-		s.standingEnded = errors.Is(err, ErrPINUnknown)
 		s.say("%s", s.sentence(err))
 		return
-	}
-	if missed != "" {
-		s.say("%s", missed)
 	}
 	// An enrollment whose recovery code was never said saved (RequestID
 	// kept) unlocks only to show that code again, under the admission it
@@ -920,35 +905,16 @@ func (s *Shell) Reenable(ctx context.Context, code string, secret []byte) {
 	if s.rec == nil || s.rec.ClientID == "" || s.key != nil || !s.standingEnded {
 		return
 	}
-	// A key under a PIN the home counts opens only after the re-enable:
-	// the restore suspended its evaluator with the screen, and the
-	// recovery code brings both back. Any other key opens first, so a
-	// wrong PIN spends nothing at the home.
-	var key *holder.Key
-	var missed string
-	var err error
-	if !s.rec.Hardened() {
-		if key, missed, err = s.open(ctx, secret); err != nil {
-			s.say("%s", s.sentence(err))
-			return
-		}
-	}
-	if err := reenable(ctx, s.cfg.Client, s.cfg.Address, strings.TrimSpace(code), s.rec.ClientID); err != nil {
-		if key != nil {
-			key.Erase()
-		}
-		s.say("%s", kitSentence(err))
+	// The key opens first, so a wrong PIN spends nothing at the home.
+	key, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s", s.sentence(err))
 		return
 	}
-	if key == nil {
-		if key, missed, err = s.open(ctx, secret); err != nil {
-			s.standingEnded = false
-			s.say("%s", s.sentence(err))
-			return
-		}
-	}
-	if missed != "" {
-		s.say("%s", missed)
+	if err := reenable(ctx, s.cfg.Client, s.cfg.Address, strings.TrimSpace(code), s.rec.ClientID); err != nil {
+		key.Erase()
+		s.say("%s", kitSentence(err))
+		return
 	}
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
@@ -1114,7 +1080,7 @@ func (s *Shell) Draw(ctx context.Context, ref string) {
 		s.say("Unlock this screen first, then confirm the change again from the page that asked.")
 		return
 	}
-	p, _, err := s.pending(ctx, ref)
+	p, err := s.pending(ctx, ref)
 	if err != nil {
 		s.say("%s", s.sentence(err))
 		return
@@ -1122,32 +1088,63 @@ func (s *Shell) Draw(ctx context.Context, ref string) {
 	s.confirm = p
 }
 
-// pending reads ref's record and challenge from the home and checks the
-// challenge is for this ref, this device and this home.
-func (s *Shell) pending(ctx context.Context, ref string) (*PendingConfirm, map[string]any, error) {
+// pending reads ref's record from the home: what this device draws
+// before it signs.
+func (s *Shell) pending(ctx context.Context, ref string) (*PendingConfirm, error) {
 	raw, err := s.ch.Call(ctx, "confirmation.pending", map[string]any{"request": ref})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var got struct {
 		Confirmations []struct {
-			Ref       string          `json:"ref"`
-			Operation string          `json:"operation"`
-			Preview   map[string]any  `json:"preview"`
-			Asker     map[string]any  `json:"asker"`
-			Challenge json.RawMessage `json:"challenge"`
+			Ref       string         `json:"ref"`
+			Operation string         `json:"operation"`
+			Preview   map[string]any `json:"preview"`
+			Asker     map[string]any `json:"asker"`
 		} `json:"confirmations"`
 	}
 	if err := json.Unmarshal(raw, &got); err != nil || len(got.Confirmations) != 1 || got.Confirmations[0].Ref != ref {
-		return nil, nil, errors.New("CYFR holds no open confirmation by that name")
+		return nil, errors.New("CYFR holds no open confirmation by that name")
 	}
 	r := got.Confirmations[0]
-	c, err := Challenge(r.Challenge, "confirm", s.binding(), Expect{"ref": ref})
-	if err != nil {
-		return nil, nil, err
-	}
 	return &PendingConfirm{Ref: ref, Operation: r.Operation, Preview: r.Preview, Asker: r.Asker,
-		Digest: c["digest"].(string), drawn: s.cfg.Now()}, c, nil
+		drawn: s.cfg.Now()}, nil
+}
+
+// answer confirms the record ref by key (Prima.SignIn): the home's
+// confirm request for it, asked on this device's channel
+// (confirmation.request), held to this home and the confirm purpose, its
+// digest (SHA-256 of its canonical bytes) signed by key, and the answer
+// {challenge, kid, sig} presented (confirmation.confirm).
+func (s *Shell) answer(ctx context.Context, ref string, key Signer) error {
+	raw, err := s.ch.Call(ctx, "confirmation.request", map[string]any{"ref": ref})
+	if err != nil {
+		return err
+	}
+	var got struct {
+		Request map[string]any `json:"request"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || got.Request == nil {
+		return errors.New("CYFR answered no request to sign")
+	}
+	r := got.Request
+	challenge, ok := r["challenge"].(string)
+	if r["purpose"] != "confirm" || r["audience"] != s.cfg.Address || !ok {
+		return errors.New("CYFR answered no request to sign")
+	}
+	msg, err := Canonical(r)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(msg)
+	pub := sha256.Sum256(s.rec.PublicKey)
+	answer := map[string]any{
+		"challenge": challenge,
+		"kid":       "sha256:" + hex.EncodeToString(pub[:]),
+		"sig":       b64(key.Sign(digest[:])),
+	}
+	_, err = s.ch.Call(ctx, "confirmation.confirm", map[string]any{"ref": ref, "answer": answer})
+	return err
 }
 
 // Decide answers the drawn confirmation: cancelled, timed out or changed
@@ -1174,7 +1171,7 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		s.say("That confirmation waited too long, so nothing was signed. Ask again from the page that asked.")
 		return
 	}
-	now, challenge, err := s.pending(ctx, ref)
+	now, err := s.pending(ctx, ref)
 	if err != nil {
 		s.confirm = nil
 		s.say("%s Nothing was signed.", s.sentence(err))
@@ -1185,23 +1182,15 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		s.say("The change CYFR holds is not the one shown, so nothing was signed.")
 		return
 	}
-	fresh, missed, err := s.open(ctx, secret)
+	fresh, err := s.rec.Open(secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
 		return
 	}
-	// Whatever the confirmation's outcome, a reset the home did not take
-	// is said beside it.
-	defer s.alsoSay(missed)
-	proof, err := Prove(challenge, fresh)
+	err = s.answer(ctx, ref, fresh)
 	fresh.Erase()
-	if err != nil {
-		s.confirm = nil
-		s.say("%s", s.sentence(err))
-		return
-	}
 	s.confirm = nil
-	if _, err := s.ch.Call(ctx, "confirmation.confirm", map[string]any{"ref": ref, "device_proof": proof}); err != nil {
+	if err != nil {
 		s.say("CYFR did not take the confirmation: %s", s.sentence(err))
 		return
 	}
@@ -1212,9 +1201,9 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 // another credential of this device's (the command line's session) and
 // shown before the secret was asked: the secret, asked after it, opens
 // the key afresh, which proves this device on a channel of its own; the
-// home's confirm challenge for that ref is read there, and only when the
+// home's confirm request for that ref is read there, and only when the
 // record behind it is still the one drawn (its operation and preview) is
-// that challenge signed and presented (confirmation.confirm). The channel
+// that request answered (confirmation.confirm). The channel
 // is closed and the key erased whatever the outcome; the notice says it.
 func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret []byte) {
 	s.mu.Lock()
@@ -1223,7 +1212,7 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
 		return
 	}
-	key, missed, err := s.open(ctx, secret)
+	key, err := s.rec.Open(secret)
 	if err != nil {
 		s.say("%s Nothing was signed.", s.sentence(err))
 		return
@@ -1231,12 +1220,11 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
 		s.say("%s Nothing was signed.", s.sentence(err))
-		s.alsoSay(missed)
 		return
 	}
 	notice := ""
-	defer func() { s.lock(""); s.notice = notice; s.alsoSay(missed) }()
-	now, challenge, err := s.pending(ctx, drawn.Ref)
+	defer func() { s.lock(""); s.notice = notice }()
+	now, err := s.pending(ctx, drawn.Ref)
 	if err != nil {
 		notice = s.sentence(err) + " Nothing was signed."
 		return
@@ -1247,12 +1235,7 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 		notice = "The change CYFR holds is not the one shown, so nothing was signed."
 		return
 	}
-	proof, err := Prove(challenge, s.key)
-	if err != nil {
-		notice = s.sentence(err)
-		return
-	}
-	if _, err := s.ch.Call(ctx, "confirmation.confirm", map[string]any{"ref": drawn.Ref, "device_proof": proof}); err != nil {
+	if err := s.answer(ctx, drawn.Ref, s.key); err != nil {
 		notice = "CYFR did not take the confirmation: " + s.sentence(err)
 		return
 	}
@@ -1260,11 +1243,11 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 }
 
 // same is whether the confirmation at the home is still the one drawn:
-// its operation, preview and the digest its challenge binds.
+// its operation and preview.
 func same(a, b *PendingConfirm) bool {
 	pa, _ := Canonical(a.Preview)
 	pb, _ := Canonical(b.Preview)
-	return a.Operation == b.Operation && a.Digest == b.Digest && string(pa) == string(pb)
+	return a.Operation == b.Operation && string(pa) == string(pb)
 }
 
 func erase(bufs ...[]byte) {

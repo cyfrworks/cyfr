@@ -38,7 +38,7 @@ func runCommand(t *testing.T, ctx context.Context, args ...string) (string, erro
 	// here is a process of its own.
 	reset := func() {
 		flagJSON, flagURL, flagContext, flagNoInteractive, flagToken = false, "", "", false, ""
-		flagLoginSetup, flagLoginJoin, flagLoginInvitation, flagLoginName, flagLoginPIN = false, false, "", "", false
+		flagLoginSetup, flagLoginJoin, flagLoginInvitation, flagLoginName = false, false, "", ""
 		rootCmd.SetArgs(nil)
 	}
 	reset()

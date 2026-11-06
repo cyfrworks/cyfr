@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,6 +52,7 @@ type fakeHome struct {
 	locked                     []string
 	confirmed                  []map[string]any
 	pending                    map[string]map[string]any // ref -> record
+	asked                      map[string]map[string]any // challenge -> the confirm request answered
 	capabilities               [][]string
 	unlockSeq                  int
 	conns                      []*websocket.Conn
@@ -71,7 +74,6 @@ type fakeHome struct {
 	pairOptional               [][]string // the args each may add (a remote person's certificate)
 	// stale is a certificate this home will not take any more (4408).
 	stale func(cert map[string]any) bool
-	pin   *pinHome // the PIN evaluators (pin_home_test.go)
 }
 
 // pairing is one invitation a confirmed addition opened: the key it names
@@ -158,7 +160,6 @@ func newFakeHome(t *testing.T) *fakeHome {
 	mux.HandleFunc("POST /restore/kit/reenable", h.kitReenable)
 	mux.HandleFunc("/device/websocket", h.channel)
 	mux.HandleFunc("POST /device/session", h.deviceSession)
-	h.pin = newPINHome(h, mux)
 	h.srv = httptest.NewServer(mux)
 	t.Cleanup(h.srv.Close)
 	t.Cleanup(func() {
@@ -536,20 +537,58 @@ func (h *fakeHome) intent(op string, args, binding map[string]any) (any, any) {
 		if rec == nil {
 			return map[string]any{"confirmations": []any{}}, nil
 		}
-		digest, _ := Digest(rec)
 		entry := map[string]any{"ref": ref, "operation": rec["operation"], "preview": rec["preview"],
-			"asker": map[string]any{"name": "Prism"}, "challenge": bound("confirm", map[string]any{"ref": ref, "digest": digest})}
+			"asker": map[string]any{"name": "Prism"}}
 		return map[string]any{"confirmations": []any{entry}}, nil
-	case "confirmation.confirm":
-		proof, _ := args["device_proof"].(map[string]any)
-		held, ok := h.verify(proof, "confirm")
-		if !ok || held["ref"] != args["ref"] {
-			return nil, map[string]any{"class": "unauthenticated", "message": "That proof does not confirm this change"}
+	case "confirmation.request":
+		ref, _ := args["ref"].(string)
+		rec := h.pending[ref]
+		if rec == nil {
+			return nil, map[string]any{"class": "not_found"}
 		}
-		h.confirmed = append(h.confirmed, held)
+		digest, _ := Digest(rec)
+		challenge := b64([]byte(fmt.Sprintf("%032d", len(h.asked)+1)))
+		request := map[string]any{"protocol": "cyfr-sign-in/v1", "purpose": "confirm",
+			"audience": h.srv.URL, "challenge": challenge, "expires_at": time.Now().Add(time.Minute).UnixMilli(),
+			"return": h.srv.URL + "/login", "subject": digest}
+		if h.asked == nil {
+			h.asked = map[string]map[string]any{}
+		}
+		h.asked[challenge] = map[string]any{"ref": ref, "request": request}
+		return map[string]any{"request": request}, nil
+	case "confirmation.confirm":
+		answer, _ := args["answer"].(map[string]any)
+		challenge, _ := answer["challenge"].(string)
+		held := h.asked[challenge]
+		delete(h.asked, challenge)
+		if held == nil || held["ref"] != args["ref"] || !h.answered(held["request"].(map[string]any), answer, binding) {
+			return nil, map[string]any{"class": "unauthenticated", "message": "That answer does not confirm this change"}
+		}
+		h.confirmed = append(h.confirmed, map[string]any{"ref": args["ref"]})
 		return map[string]any{"ref": args["ref"], "state": "confirmed"}, nil
 	}
 	return nil, map[string]any{"class": "unknown"}
+}
+
+// answered is whether answer is the device's signature, by the key the
+// channel's binding names, over request's digest (Prima.SignIn).
+func (h *fakeHome) answered(request, answer, binding map[string]any) bool {
+	msg, err := Canonical(request)
+	if err != nil {
+		return false
+	}
+	key, err := unb64(stringOf(binding, "device_key"))
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		return false
+	}
+	sig, err := unb64(stringOf(answer, "sig"))
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256(msg)
+	kid := sha256.Sum256(key)
+	return answer["kid"] == "sha256:"+hex.EncodeToString(kid[:]) &&
+		ed25519.Verify(ed25519.PublicKey(key), digest[:], sig)
 }
 
 // closeChannels closes every open channel with code, as the home ends a
@@ -632,7 +671,6 @@ func (h *fakeHome) kitReenable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.reenabled = append(h.reenabled, stringOf(m, "client_id"))
-	h.pin.reauthorize(stringOf(m, "client_id"))
 	h.closeWith = 0
 	reply(w, 200, map[string]any{"reenabled": m["client_id"]})
 }

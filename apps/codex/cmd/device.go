@@ -23,7 +23,6 @@ import (
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/mcp"
-	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/shell"
 )
 
@@ -85,12 +84,6 @@ type deviceOptions struct {
 	// session is the session a change to confirm is read through, when
 	// it is not the one cyfr login's shell holds in its environment.
 	session string
-	// enrollPIN is pin.enroll through the unlocked device's session (cyfr
-	// login --pin); nil where no PIN is set up.
-	enrollPIN shell.PINEnroll
-	// certify obtains a certificate at the person's own home when their
-	// identity is kept there (certifyAtHome); nil where none is asked.
-	certify shell.CertifyCall
 }
 
 // device is this command line's device as cyfr login, a confirmation on
@@ -112,7 +105,6 @@ type device interface {
 	Decide(ctx context.Context, ref string, confirm bool, secret []byte)
 	Unlocked() bool
 	Lock(why string)
-	SetPIN(ctx context.Context, pin, again []byte)
 	Reenable(ctx context.Context, code string, secret []byte)
 }
 
@@ -173,7 +165,6 @@ func deviceShell(o deviceOptions) (*shell.Shell, error) {
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("this command line's key record %s cannot be read (%v)", path, err)
 	}
-	anonymous := mcp.NewClient(o.address)
 	return shell.New(shell.Config{
 		Address:     home,
 		Record:      path,
@@ -183,26 +174,9 @@ func deviceShell(o deviceOptions) (*shell.Shell, error) {
 		DisplayName: deviceName(),
 		Invitation:  o.invitation,
 		HomeHere:    homeHere(o.address),
-		EnrollPIN:   o.enrollPIN,
-		Certify:     o.certify,
 		Tokens:      func() (string, string) { return o.setupToken, "" },
 		Restart:     o.locked,
-		Pair: func(ctx context.Context, args map[string]any) (map[string]any, error) {
-			return anonymous.CallTool(ctx, ops.Pairing, pairingComplete(args))
-		},
 	})
-}
-
-// pairingComplete is pairing.complete's arguments: args with its action.
-// The shell builds the arguments as a map from the fixture's field list,
-// so the call stays a map beside the catalog's ops.PairingCompleteArgs,
-// which names the same fields.
-func pairingComplete(args map[string]any) map[string]any {
-	out := map[string]any{"action": ops.PairingComplete}
-	for k, v := range args {
-		out[k] = v
-	}
-	return out
 }
 
 // deviceName is the name Devices lists this command line by: "cyfr on"

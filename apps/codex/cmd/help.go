@@ -27,7 +27,7 @@ var groupCommandOrder = map[string][]string{
 		"run", "fork", "remove", "push", "deprecate", "yank", "schedule",
 		"tincture",
 	},
-	"security": {"key", "profile", "webhook", "pair"},
+	"security": {"key", "profile", "webhook"},
 	"admin": {
 		"admin", "settings", "log", "decision", "retention", "aqua", "mcp", "registry", "report",
 		"notify", "context", "call",

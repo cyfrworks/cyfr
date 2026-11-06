@@ -39,7 +39,6 @@ var (
 		"lock":    {"session_id"},
 		// The reset of a PIN's attempt count (pin.go): the nonce is the
 		// evaluation's, revision the count's as the home charged it.
-		"pin_reset": {"revision"},
 	}
 )
 
@@ -99,7 +98,7 @@ func Challenge(raw json.RawMessage, purpose string, b Binding, expect Expect) (m
 		if !ok {
 			return nil, fmt.Errorf("%w: no %s", ErrRefusedChallenge, f)
 		}
-		if f == "expires_at" || f == "revision" {
+		if f == "expires_at" {
 			n, ok := v.(json.Number)
 			if !ok {
 				return nil, fmt.Errorf("%w: %s", ErrRefusedChallenge, f)

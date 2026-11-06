@@ -1216,7 +1216,6 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr call vault '{"action":"list",…}'` | Manage vault entries (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Vault page |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
 | `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Vault page |
-| `cyfr pair <code>` / `cyfr pair list` / `cyfr pair revoke [client-id]` | Pair a new device with the code its `/pair` page or its `cyfr login` shows (or the approve address), list paired devices, revoke one; pairing and revoking each need a fresh confirmation, given in Prism or on this command line when it is a paired device ([devices-guide.md](devices-guide.md)) |
 
 ### Administration
 
