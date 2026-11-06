@@ -17,6 +17,7 @@ defmodule Aqua.FacadeTest do
     attachment_refs: 1,
     auto_permitted?: 2,
     brain_options: 2,
+    brain_signs_in?: 1,
     describe_note_result: 1,
     model_status: 2,
     models: 1,
@@ -46,6 +47,18 @@ defmodule Aqua.FacadeTest do
       |> Enum.sort()
 
     assert exported == @roster
+  end
+
+  test "whether a brain runs on a program's own sign-in is Aqua.Models'" do
+    login = %{kind: "login", required: true}
+    key = %{kind: "api_key", required: true}
+
+    for plan <- [%{needs: [login]}, %{needs: [login, key]}, %{needs: []}, %{}] do
+      assert Aqua.brain_signs_in?(plan) == Aqua.Models.signs_in?(plan)
+    end
+
+    assert Aqua.brain_signs_in?(%{needs: [login, %{key | required: false}]})
+    refute Aqua.brain_signs_in?(%{needs: [login, key]})
   end
 
   test "approval scopes parse and print as Aqua.ApprovalScope does" do
