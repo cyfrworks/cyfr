@@ -1050,7 +1050,7 @@ func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startEr
 // notSetUpMarker begins the line the boot of a CYFR with no person yet
 // logs (Cyfr.Application.not_set_up_marker/0); setUpMarker begins the line
 // CYFR logs once it gains its first person
-// (Cyfr.Application.set_up_marker/0), after which the boot's line no
+// (Arca.InstallationClaims.set_up_marker/0), after which the boot's line no
 // longer stands.
 const (
 	notSetUpMarker = "[Cyfr] Not set up:"

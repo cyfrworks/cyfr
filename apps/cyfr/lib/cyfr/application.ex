@@ -1054,19 +1054,14 @@ defmodule Cyfr.Application do
 
   @doc """
   What the boot's notice for a CYFR with no person yet begins with: the
-  line `cyfr up` looks for in the service's log. It means no one was set
-  up at this boot.
+  line `cyfr` looks for in the service's log. It means no one was set up
+  at this boot. Its counterpart, `Arca.InstallationClaims.set_up_marker/0`
+  ("[Cyfr] Set up:"), is logged once the installation gains its first
+  person, by the mint that made them; after it this line no longer
+  stands.
   """
   @spec not_set_up_marker() :: String.t()
   def not_set_up_marker, do: "[Cyfr] Not set up:"
-
-  @doc """
-  What the line logged once the installation gains its first person
-  begins with (`Arca.InstallationClaims.set_up_marker/0`, which logs it):
-  after it, the boot's `not_set_up_marker/0` no longer stands.
-  """
-  @spec set_up_marker() :: String.t()
-  defdelegate set_up_marker, to: Arca.InstallationClaims
 
   @doc false
   @spec not_set_up_notice() :: String.t()
