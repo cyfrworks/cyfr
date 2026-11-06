@@ -338,8 +338,8 @@ defmodule Cyfr.Boundaries do
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
     Arca.PersonIdentities Arca.IdentityLog
-    Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
-    Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
+    Arca.DirectoryHeads Arca.DeviceCertificates
+    Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.InstallationClaims
     Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages

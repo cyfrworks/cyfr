@@ -22,7 +22,6 @@
 0.0	apps/arca/test/arca/cache_eviction_test.exs
 0.0	apps/arca/test/arca/cache_test.exs
 0.3	apps/arca/test/arca/canvas_versions_test.exs
-1.0	apps/arca/test/arca/carry_actions_test.exs
 0.5	apps/arca/test/arca/cipher_rotation_test.exs
 0.9	apps/arca/test/arca/company_authorizations_test.exs
 0.8	apps/arca/test/arca/company_login_attempts_test.exs
@@ -39,7 +38,6 @@
 1.5	apps/arca/test/arca/db_rescue_coverage_test.exs
 26.7	apps/arca/test/arca/decision_log_test.exs
 0.1	apps/arca/test/arca/device_certificates_test.exs
-0.5	apps/arca/test/arca/device_certifications_test.exs
 1.4	apps/arca/test/arca/directory_heads_test.exs
 1.0	apps/arca/test/arca/doors_test.exs
 0.1	apps/arca/test/arca/ensure_roots_test.exs

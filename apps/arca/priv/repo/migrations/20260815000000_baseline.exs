@@ -26,7 +26,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
-  A person's identity, carries, passkeys, company sign-in and company
+  A person's identity, passkeys, company sign-in and company
   sign-in attempts, the directory's log and the handles and spent nonces
   of the registry beside it, the cached heads of other people's logs and
   the pre-authentication rate windows are not an athanor's either
@@ -561,7 +561,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
-  # People: identity, the directory, carries, passkeys, rate windows
+  # People: identity, the directory, passkeys, rate windows
   # ==========================================================================
 
   # None of these rows is an athanor's: a person's identity and passkeys
@@ -692,62 +692,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       timestamps(type: :utc_datetime_usec)
     end
-
-    carry_checks = [
-      known("carry_actions_kind_known", "kind", ~w(source login_receipt)),
-      known(
-        "carry_actions_phase_known",
-        "phase",
-        ~w(pending delivered completed cancelled expired)
-      )
-    ]
-
-    # The sign-in carry: a `source` action at the person's signing home, one
-    # destination, its immutable payload and assertion; and at a relying
-    # home, the `login_receipt` of an accepted assertion, unique per home
-    # and challenge. A terminal action keeps its digests and outcome until
-    # `retain_until`, its payload cleared.
-    create table(:carry_actions, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(carry_checks, 0))
-      add :action_id, :string, null: false
-      add :user_id, :string, null: false
-      add :source_home, :text, null: false
-      add :destination_home, :text, null: false
-      add :return_url, :text
-      add :operation, :string, null: false, default: "join"
-      add :payload, :binary
-      add :payload_digest, :string
-      add :key_epoch, :string, null: false
-      add :challenge, :text
-      add :challenge_digest, :string
-      add :challenge_id, :string
-      add :assertion, :binary
-      add :assertion_digest, :string
-      add :browser_binding_digest, :string
-      add :phase, :string, null: false, check: if(sqlite?, do: Enum.at(carry_checks, 1))
-      add :outcome, :string
-      add :outcome_body, :text
-      add :revision, :bigint, null: false, default: 1
-      add :expires_at, :utc_datetime_usec, null: false
-      add :retain_until, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :carry_actions, carry_checks)
-    create index(:carry_actions, [:user_id, :phase])
-    create index(:carry_actions, [:phase, :expires_at])
-
-    create unique_index(:carry_actions, [:action_id],
-             where: "kind = 'source'",
-             name: :carry_actions_source_index
-           )
-
-    create unique_index(:carry_actions, [:destination_home, :challenge_id],
-             where: "kind = 'login_receipt'",
-             name: :carry_actions_receipt_index
-           )
 
     passkey_state =
       known("passkeys_state_known", "state", ~w(pending active suspended revoked))
@@ -900,43 +844,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:device_certificates, [:athanor_id, :paired_client_id])
     create index(:device_certificates, [:user_id, :state])
     create index(:device_certificates, [:identifier, :kid])
-
-    certification_state =
-      known("device_certifications_state_known", "state", ~w(active revoked))
-
-    # What this home certified for one of its people's devices at another
-    # home: the client id that home reserved, the device key, that home and
-    # its athanor, the `key_epoch` the person confirmed it under and the
-    # latest certificate's expiry. One row per person, audience and client,
-    # replaced by each fresh certification; a renewal that proves the
-    # device key extends it only under the same `key_epoch`. The athanor is
-    # the other home's, so it is no tenant column here.
-    create table(:device_certifications, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :identifier, :string, null: false
-      add :key_epoch, :string, null: false
-      add :client_id, :string, null: false
-      add :device_public_key, :binary, null: false
-      add :audience_home, :text, null: false
-      add :audience_athanor, :string, null: false
-      add :expires_at, :utc_datetime_usec, null: false
-
-      add :state, :string,
-        null: false,
-        default: "active",
-        check: if(sqlite?, do: certification_state)
-
-      add :revision, :bigint, null: false, default: 1
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :device_certifications, [certification_state])
-
-    create unique_index(:device_certifications, [:user_id, :audience_home, :client_id],
-             name: :device_certifications_binding_index
-           )
 
     confirmation_checks = [
       known(
