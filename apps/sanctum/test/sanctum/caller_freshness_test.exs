@@ -457,85 +457,18 @@ defmodule Sanctum.CallerFreshnessTest do
     end
   end
 
-  # ---- a remote person's session ------------------------------------------------
+  # ---- a session on its account's head -------------------------------------------
 
-  # A directory this home cannot reach: an operator-listed loopback port
-  # nothing listens on, or a loopback address the operator never listed.
-  @unreachable "https://localhost:1"
-
-  defp keypair, do: :crypto.generate_key(:eddsa, :ed25519)
-
-  # A person whose keys are at another home, admitted here: their identity
-  # row is `remote`, their head cached as verified now, and a session row
-  # bound to `epoch` (`:head` for the cached head's) as a door at this
-  # home mints one, with a whole idle window ahead of it.
-  defp remote!(epoch \\ :head) do
-    n = System.unique_integer([:positive])
-
-    {:ok, user} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|remote-#{n}",
-        provider: "github",
-        email: "remote#{n}@example.com",
-        verified: true
-      })
-
-    athanor = Sanctum.Test.People.athanor!(user)
-    Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id))
-
-    {live, _} = keypair()
-    {operational_pub, operational} = keypair()
-    {recovery, _} = keypair()
-
-    {:ok, genesis} =
-      Prima.Identity.Entry.genesis(
-        live_key: live,
-        operational_key: operational_pub,
-        recovery_keys: [recovery],
-        directory: @unreachable
-      )
-
-    genesis = Prima.Identity.sign(genesis, operational)
-    identifier = Prima.Identity.identifier(genesis)
-    head = Prima.Identity.hash(genesis)
-
-    {:ok, _} =
-      Arca.PersonIdentities.create(Prima.Actor.system(), %{
-        user_id: user.id,
-        provenance: "remote",
-        identifier: identifier,
-        directory_url: @unreachable
-      })
-
-    {:ok, _} =
-      Arca.DirectoryHeads.put(Prima.Actor.system(), %{
-        identifier: identifier,
-        genesis: Prima.Identity.canonical(genesis),
-        directory_url: @unreachable,
-        head_hash: head,
-        key_epoch: head,
-        recovery_epoch: head,
-        state: ~s({"head":"#{head}"})
-      })
-
-    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    now = DateTime.utc_now()
-
-    Arca.Repo.insert_all(Arca.Schemas.Session, [
-      %{
-        id: Prima.UUID7.generate_id("ses"),
-        token_hash: Session.token_hash(token),
-        token_prefix: String.slice(token, 0, 8),
-        user_id: user.id,
-        provider: "cyfr",
-        athanor_id: athanor.id,
-        identity_key_epoch: if(epoch == :head, do: head, else: epoch),
-        expires_at: DateTime.add(now, 30 * 86_400, :second),
-        inserted_at: now
-      }
-    ])
-
-    %{user: user, athanor: athanor, identifier: identifier, epoch: head, token: token}
+  # A person admitted by their account (`Sanctum.Test.People.linked/1`),
+  # their head cached here as verified now at the suite's directory, which
+  # this CYFR cannot reach, and a session of theirs with a whole idle
+  # window ahead of it. A public CYFR pauses a head it cannot refresh past
+  # its bound.
+  defp remote! do
+    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    %{user: user, athanor: athanor, session: session} = person!()
+    account = Sanctum.TestContext.account!(user.id)
+    %{user: user, athanor: athanor, identifier: account.identifier, token: session.token}
   end
 
   defp establish(%{token: token, athanor: athanor}),
@@ -557,8 +490,8 @@ defmodule Sanctum.CallerFreshnessTest do
     :ok
   end
 
-  describe "a remote person's session" do
-    test "stands on a fresh head bound to its key_epoch, and reads no directory within the bound" do
+  describe "a session on its account's head" do
+    test "stands on a fresh head, and reads no directory within the bound" do
       remote = remote!()
       verified_at = cached_at(remote.identifier)
 
@@ -588,44 +521,6 @@ defmodule Sanctum.CallerFreshnessTest do
       verified!(remote.identifier, DateTime.utc_now())
       assert {:ok, %Context{}} = establish(remote)
       assert {:ok, %Context{}} = Caller.revalidate_session(held)
-    end
-
-    test "one bound to no key_epoch is refused and revoked, never exempted" do
-      remote = remote!(nil)
-
-      capture_log(fn -> assert {:error, :unauthenticated} = establish(remote) end)
-      refute session_row(remote)
-    end
-
-    test "one bound to an epoch the fresh head does not name is revoked there and then" do
-      remote = remote!(Prima.Digest.sha256("an older head"))
-
-      capture_log(fn -> assert {:error, :unauthenticated} = establish(remote) end)
-      refute session_row(remote)
-
-      # A held context whose session's epoch is retired behind it is refused
-      # at its revalidation, and its session revoked.
-      remote = remote!()
-      {:ok, held} = establish(remote)
-
-      Arca.Repo.update_all(
-        from(s in Arca.Schemas.Session, where: s.token_hash == ^held.session_token_hash),
-        set: [identity_key_epoch: Prima.Digest.sha256("retired")]
-      )
-
-      capture_log(fn ->
-        assert {:error, :unauthenticated} = Caller.revalidate_session(held)
-      end)
-
-      refute session_row(remote)
-    end
-
-    test "a local person's session reads no directory, whatever the cache holds" do
-      %{ctx: ctx, session: session, athanor: athanor} = person!()
-
-      assert {:ok, _} = Caller.revalidate_session(ctx)
-      assert {:ok, _} = Caller.establish(session.token, focus: athanor.id, refresh: false)
-      assert Arca.Repo.all(Arca.Schemas.DirectoryHead) == []
     end
   end
 
@@ -673,7 +568,7 @@ defmodule Sanctum.CallerFreshnessTest do
   defp use_frame(bearer),
     do: Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1")
 
-  describe "a frame credential a remote person's session minted" do
+  describe "a frame credential a session minted" do
     setup do
       frame_settings!()
       :ok
@@ -701,39 +596,6 @@ defmodule Sanctum.CallerFreshnessTest do
       assert session_row(remote)
       verified!(remote.identifier, DateTime.utc_now())
       assert {:ok, %Context{frame: %{}}} = use_frame(bearer)
-    end
-
-    test "a head that retired its session's key_epoch refuses it as the session is refused" do
-      remote = remote!()
-      bearer = frame!(remote)
-      newer = Prima.Digest.sha256("a newer head")
-
-      Arca.Repo.update_all(
-        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^remote.identifier),
-        set: [head_hash: newer, key_epoch: newer]
-      )
-
-      capture_log(fn -> assert {:error, :unauthenticated} = use_frame(bearer) end)
-
-      # Its session is revoked there and then, and refused the same way.
-      refute session_row(remote)
-      assert {:error, :unauthenticated} = establish(remote)
-    end
-
-    test "a local person's frame reads no directory" do
-      %{ctx: ctx} = person!()
-
-      {:ok, %{credential: bearer}} =
-        Sanctum.TinctureAuth.mint_frame_credential(
-          %{ctx | client_ip: "127.0.0.1"},
-          @tincture,
-          @digest,
-          1,
-          "frm_#{System.unique_integer([:positive])}_local"
-        )
-
-      assert {:ok, %Context{frame: %{}}} = use_frame(bearer)
-      assert Arca.Repo.all(Arca.Schemas.DirectoryHead) == []
     end
   end
 

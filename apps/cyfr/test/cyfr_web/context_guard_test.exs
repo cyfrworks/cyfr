@@ -257,76 +257,14 @@ defmodule CyfrWeb.ContextGuardTest do
     end
   end
 
-  # A directory this home cannot reach: a loopback port nothing listens on.
-  @unreachable "https://localhost:1"
-
-  # `user`, signed in, made a person whose keys are at another home: their
-  # identity row is `remote`, their head cached as verified now from a
-  # genesis naming a directory nothing answers at, and the conn holds a
-  # session of theirs bound to that head's `key_epoch`. The athanor is the
-  # one the sign-in focused them on.
+  # `user`, signed in, held to their account's head: the head this CYFR
+  # caches for it (`Sanctum.TestContext.account!/1`) at the suite's
+  # directory, which it cannot reach, on a public CYFR, which pauses a head
+  # it cannot refresh past its bound.
   defp remote!(conn, user) do
-    {conn, _token, _hash} = signed_in(conn, user)
-    athanor_id = Process.get(:prism_test_athanor_id)
-
-    Arca.Repo.delete_all(
-      from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.user_id)
-    )
-
-    {live, _} = :crypto.generate_key(:eddsa, :ed25519)
-    {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
-    {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
-
-    {:ok, genesis} =
-      Prima.Identity.Entry.genesis(
-        live_key: live,
-        operational_key: operational_pub,
-        recovery_keys: [recovery],
-        directory: @unreachable
-      )
-
-    genesis = Prima.Identity.sign(genesis, operational)
-    identifier = Prima.Identity.identifier(genesis)
-    head = Prima.Identity.hash(genesis)
-
-    {:ok, _} =
-      Arca.PersonIdentities.create(Prima.Actor.system(), %{
-        user_id: user.user_id,
-        provenance: "remote",
-        identifier: identifier,
-        directory_url: @unreachable
-      })
-
-    {:ok, _} =
-      Arca.DirectoryHeads.put(Prima.Actor.system(), %{
-        identifier: identifier,
-        genesis: Prima.Identity.canonical(genesis),
-        directory_url: @unreachable,
-        head_hash: head,
-        key_epoch: head,
-        recovery_epoch: head,
-        state: ~s({"head":"#{head}"})
-      })
-
-    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    now = DateTime.utc_now()
-
-    Arca.Repo.insert_all(Arca.Schemas.Session, [
-      %{
-        id: Prima.UUID7.generate_id("ses"),
-        token_hash: Sanctum.Session.token_hash(token),
-        token_prefix: String.slice(token, 0, 8),
-        user_id: user.user_id,
-        provider: "cyfr",
-        athanor_id: athanor_id,
-        identity_key_epoch: head,
-        expires_at: DateTime.add(now, 30 * 86_400, :second),
-        inserted_at: now
-      }
-    ])
-
-    conn = Plug.Test.init_test_session(conn, %{session_key() => token})
-    {conn, identifier, Sanctum.Session.token_hash(token)}
+    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    {conn, _token, hash} = signed_in(conn, user)
+    {conn, Sanctum.TestContext.account!(user.user_id).identifier, hash}
   end
 
   defp stale!(identifier) do
@@ -341,7 +279,7 @@ defmodule CyfrWeb.ContextGuardTest do
   defp session_stands?(hash),
     do: Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
 
-  describe "a remote person whose identity could not be confirmed fresh" do
+  describe "a person whose account could not be confirmed fresh" do
     test "an action halts with the refusal's sentence, and the person stays on the page",
          %{conn: conn} do
       user = test_user()
