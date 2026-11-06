@@ -21,10 +21,10 @@
 #            (compose.yml); the same link in another browser then closed,
 #            and the command exited 0, its address gone.
 #   again    `cyfr setup` again in that project: exit 0 with the next
-#            step of the CYFR set up there, the setup link at its address
-#            (the boot's line says no one was set up at its start) or
-#            `cyfr open`, nothing written and nothing served at the port
-#            asked for.
+#            step of the CYFR whose first person the pages made, `cyfr
+#            open` (its log holds the set-up line after the boot's
+#            not-set-up line), nothing written and nothing served at the
+#            port asked for.
 #
 # Usage: tests/setup-proof/run.sh
 # Env: SETUP_PROOF_IMAGE (default cyfr:setup-proof), built from this tree
@@ -200,15 +200,9 @@ cp "$WORK/$LOCAL/.env" "$WORK/$LOCAL.env.before"
 setup_start "$LOCAL" --port "$port"
 setup_wait 30
 [ "$SETUP_STATUS" = 0 ] || fail "cyfr setup over an existing .env exited $SETUP_STATUS: $(cat "$WORK/$LOCAL.setup.log")"
-first="$(head -n 1 "$WORK/$LOCAL.setup.log")"
-case "$first" in
-  "Open http://localhost:$LOCAL_PORT/setup#$token to set up its first person, or run cyfr login --setup here.") ;;
-  "CYFR is set up and has its first person. cyfr open opens it.") ;;
-  *) fail "cyfr setup over an existing .env said: $(cat "$WORK/$LOCAL.setup.log")" ;;
-esac
-if grep -q '^Error:' "$WORK/$LOCAL.setup.log"; then
-  fail "cyfr setup over an existing .env failed: $(cat "$WORK/$LOCAL.setup.log")"
-fi
+first="$(cat "$WORK/$LOCAL.setup.log")"
+[ "$first" = "CYFR is set up and has its first person. cyfr open opens it." ] ||
+  fail "cyfr setup over an existing .env said: $first"
 cmp -s "$WORK/$LOCAL/.env" "$WORK/$LOCAL.env.before" || fail "cyfr setup over an existing .env changed .env"
 [ ! -e "$WORK/$LOCAL/.cyfr/setup.url" ] || fail "cyfr setup over an existing .env wrote an address"
 if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/"; then
