@@ -249,6 +249,15 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert has_element?(view, "#aqua-card-harness", "Model connected")
       refute has_element?(view, "#aqua-card-harness", "Program not signed in")
+
+      # A login entry holds no key: its action changes the entry.
+      assert has_element?(
+               view,
+               "#aqua-card-harness button[phx-click=open_consent]",
+               "Change the entry"
+             )
+
+      refute has_element?(view, "#aqua-card-harness", "Change the key")
     end
 
     test "the soul offers no Delete; a shipped crew member is disabled and enabled from its card",
