@@ -129,22 +129,22 @@ func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 		after                string
 	}{
 		{name: "public", env: scenarioEnv, log: "booting\n" + line, exit: "0", container: true, display: true,
-			after: "\nOpen https://cyfr.example.com/setup#" + token + " to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n"},
+			after: "\nOpen https://cyfr.example.com/setup#" + token + " to set up its first person, or run cyfr login --setup here.\n"},
 		{name: "tailnet", env: tailnet, log: line, exit: "0", container: true,
-			after: "\nOpen https://cyfr.tail1234.ts.net/setup#" + token + " on your phone or laptop, with Tailscale on, to set up its first person with a passkey, or run cyfr login --setup here.\n"},
+			after: "\nOpen https://cyfr.tail1234.ts.net/setup#" + token + " on your phone or laptop, with Tailscale on, to set up its first person, or run cyfr login --setup here.\n"},
 		{name: "local with a display", env: local, log: line, exit: "0", container: true, display: true,
-			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n"},
+			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person, or run cyfr login --setup here.\n"},
 		{name: "local with no display", env: local, log: line, exit: "0", container: true,
-			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n" +
+			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person, or run cyfr login --setup here.\n" +
 				"From another computer: ssh -L 4123:127.0.0.1:4123 " + account.Username + "@" + host + ", then open the link there.\n"},
 		{name: "a screen to reboot into", env: local, log: line, exit: "0", container: true, enabled: true,
 			after: "\nNow run sudo reboot. This screen opens setup at power-on.\n"},
 		{name: "a screen that runs", env: local, log: line, exit: "0", container: true, enabled: true, active: true,
 			after: "\nSetup is on this screen (Ctrl+Alt+F1).\n"},
 		{name: "headless", env: scenarioEnv + "CYFR_HEADLESS=on\n", log: line, exit: "0", container: true,
-			after: "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.\n"},
+			after: "\nRun cyfr login --setup here to set up its first person.\n"},
 		{name: "headless with its switch spaced", env: scenarioEnv + `CYFR_HEADLESS=" on "` + "\n", log: line, exit: "0", container: true,
-			after: "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.\n"},
+			after: "\nRun cyfr login --setup here to set up its first person.\n"},
 		{name: "a later start", env: scenarioEnv, log: "booting\n", exit: "0", container: true, enabled: true},
 		{name: "a headless later start", env: scenarioEnv + "CYFR_HEADLESS=on\n", log: "booting\n", exit: "0", container: true},
 		{name: "a log unread", env: scenarioEnv, log: line, exit: "1", container: true},
@@ -570,7 +570,7 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 		}
 		stdout, stderr, status := runAsCyfr(t, "started-local", dir, "access", "tailnet", "--yes")
 		check(t, "access tailnet", stdout, stderr, status)
-		if !strings.Contains(stdout, "This changes how CYFR is reached:") {
+		if !strings.Contains(stdout, "CYFR will be reached by your devices on Tailscale at ") {
 			t.Errorf("cyfr access tailnet showed no change before making it:\n%s", stdout)
 		}
 		// Recovery's start is a start path too: a switch it finished on
@@ -891,7 +891,7 @@ func TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 	if err := runAccess(ctx, access.ModeTailnet, accessOptions{}, true, "", &out); err != nil {
 		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
 	}
-	for _, want := range []string{"Tailscale Serve is closed, so CYFR answers on this machine only.", "Done. CYFR is reached as:\n", "  Serve: open\n"} {
+	for _, want := range []string{"CYFR answers on this computer only right now. Once the tailnet machine checks out,", "Done. CYFR is reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n", "  Serve: open\n"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the reopen lacks %q:\n%s", want, out.String())
 		}

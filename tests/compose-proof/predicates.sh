@@ -112,45 +112,51 @@ PY
 }
 
 # The preview the command line printed in `$1` (a log, its first line the
-# command) for the switch from head `$2` to head `$3` (JSON): exactly the
-# preview block, each of the four sentences of the words the access vectors
-# hold for those heads as old → new, a line for each change of a head
-# field the four do not show (the tailnet machine, the port on this
-# computer, the builds service; apps/codex/cmd/access.go unwordedChanges),
-# and, as the address changes, the
-# engine's address-change steps (apps/codex/internal/access/switch.go
-# addressChanges) and the line on the CYFR identity; then one line, the
-# command's refusal that it made no change: the complete sentence
-# apps/codex/cmd/access.go showUnconfirmed returns, as the command line
-# prints an error ("Error: ", apps/codex/cmd/root.go).
+# command) for the switch from head `$2` to head `$3` (JSON), on a CYFR
+# that has booted, so someone may be set up on it: exactly the preview
+# block, who will reach CYFR at the new head's address (the access vectors'
+# words for its mode; apps/codex/cmd/access.go reachedBy), a line for each
+# other field that changes (a tailnet machine replaced, without its node
+# id, the certificate email, the ports unless the new head is public, the
+# port on this computer, the builds service; access.go changedRows), and,
+# as the address changes, the engine's address-change steps
+# (apps/codex/internal/access/switch.go addressChanges) and the line on
+# the CYFR identity; then one line, the command's refusal that it made no
+# change: the complete sentence apps/codex/cmd/access.go showUnconfirmed
+# returns, as the command line prints an error ("Error: ",
+# apps/codex/cmd/root.go).
 preview_holds() {
   python3 -I - "$ROOT/tests/fixtures/access_modes.json" "$ROOT/apps/codex/internal/access/switch.go" \
     "$ROOT/apps/codex/cmd/access.go" "$@" <<'PY'
 import json, re, sys
 vectors, switch_go, access_go, log, old_text, new_text = sys.argv[1:7]
 words = json.load(open(vectors))["words"]
-def sentences(head):
-    # The words of a head: the vectors' sentences for a head of the same
-    # mode and email presence, with its own address.
+def described(head):
+    # The words of a head: the vectors' for a head of the same mode and
+    # email presence, with its own address and email.
     shaped = [w for w in words if w["head"]["mode"] == head["mode"] and bool(w["head"].get("acme_email")) == bool(head.get("acme_email"))]
     if not shaped:
         sys.exit(print(f"the access vectors hold no words for a {head['mode']} head like {head}") or 1)
-    who, _, email, ports = shaped[0]["sentences"]
+    who, _, email, ports = (s.partition(": ")[2] for s in shaped[0]["sentences"])
     address = head["public_url"] if head["mode"] != "local" else f"http://localhost:{head['port']}"
-    email = f"Certificate email: {head['acme_email']}" if head.get("acme_email") else email
-    return [who, f"Address: {address}", email, ports]
+    return {"who": who, "address": address, "email": head.get("acme_email") or email, "ports": ports}
 old, new = json.loads(old_text), json.loads(new_text)
-block = ["This changes how CYFR is reached:"]
-for before, after in zip(sentences(old), sentences(new)):
-    label, _, was = before.partition(": ")
-    _, _, now = after.partition(": ")
-    block.append(f"  {label}: {was} → {now}")
-def machine(head):
-    return f"{head['host']} ({head['node_id']})" if head.get("node_id") else "none"
+was, now = described(old), described(new)
+if new["mode"] == "tailnet":
+    lead = f"by your devices on Tailscale at {now['address']}"
+elif new["mode"] == "public":
+    lead = f"by {now['who']}, at {now['address']}, through ports {now['ports']} on this machine"
+else:
+    lead = f"from this computer at {now['address']}"
+block = [f"CYFR will be reached {lead}."]
+if old.get("node_id") and new.get("node_id") and old["node_id"] != new["node_id"]:
+    block.append(f"  Tailnet machine: {old['host']} → a new machine, {new['host']}")
+if was["email"] != now["email"]:
+    block.append(f"  Certificate email: {was['email']} → {now['email']}")
+if was["ports"] != now["ports"] and new["mode"] != "public":
+    block.append(f"  Ports opened on this machine: {was['ports']} → {now['ports']}")
 def builds(head):
     return head.get("builds_url") or "off"
-if old.get("node_id") != new.get("node_id"):
-    block.append(f"  Tailnet machine: {machine(old)} → {machine(new)}")
 if old["port"] != new["port"]:
     block.append(f"  Port on this computer: {old['port']} → {new['port']}")
 if old.get("builds_url") != new.get("builds_url"):
@@ -160,14 +166,14 @@ listed = re.search(r"var addressChanges = \[\]string\{(.*?)\n\}", source, re.S)
 if not listed:
     sys.exit(print("switch.go holds no addressChanges list") or 1)
 changes = [json.loads(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"', listed.group(1))]
-if sentences(old)[1] != sentences(new)[1]:
+if was["address"] != now["address"]:
     block.append("The address changes, so:")
     block += [f"  {i}. {c}" for i, c in enumerate(changes, 1)]
     block.append("Your CYFR identity does not change.")
 GO_STRING = r'"(?:[^"\\]|\\.)*"'
 unconfirmed = re.search(r"^func showUnconfirmed\(.*?^\}$", open(access_go).read(), re.S | re.M)
 again = unconfirmed and re.search(r"^\tconst again = (" + GO_STRING + r")$", unconfirmed.group(0), re.M)
-shown = unconfirmed and re.search(r"^\tprintPreview\(out, p\)\n\treturn errors\.New\((" + GO_STRING + r") \+ again\)$", unconfirmed.group(0), re.M)
+shown = unconfirmed and re.search(r"^\tprintPreview\(out, p, !neverBooted\(\)\)\n\treturn errors\.New\((" + GO_STRING + r") \+ again\)$", unconfirmed.group(0), re.M)
 if not (again and shown):
     sys.exit(print("access.go's showUnconfirmed holds no refusal after the preview to expect") or 1)
 refusal = "Error: " + json.loads(shown.group(1)) + json.loads(again.group(1))

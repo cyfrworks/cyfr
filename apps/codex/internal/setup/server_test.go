@@ -196,10 +196,10 @@ func TestServerTakesActionsFromThePagesAlone(t *testing.T) {
 func TestServerAnswersRefusalsWithTheirSentence(t *testing.T) {
 	f := &fakeSession{state: State{Phase: PhaseReady}}
 	srv := NewServer(f, testToken, testPort)
-	f.set(State{Phase: PhaseReady}, errors.New(".env says CYFR is reached as local"))
+	f.set(State{Phase: PhaseReady}, errors.New("Another command set CYFR up here meanwhile, so these pages changed nothing"))
 	w := request(t, srv, http.MethodPost, "/api/start", `{}`, nil)
 	var body map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusUnprocessableEntity || body["sentence"] != ".env says CYFR is reached as local" {
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusUnprocessableEntity || body["sentence"] != "Another command set CYFR up here meanwhile, so these pages changed nothing" {
 		t.Errorf("a refusal answered %d %s", w.Code, w.Body)
 	}
 	f.set(State{Phase: PhaseRunning}, fmt.Errorf("%w: \"retry\" is not offered", ErrNotNow))

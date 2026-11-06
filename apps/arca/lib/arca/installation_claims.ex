@@ -82,6 +82,8 @@ defmodule Arca.InstallationClaims do
 
   import Ecto.Query
 
+  require Logger
+
   alias Arca.QueryHelpers
 
   alias Arca.Schemas.{
@@ -304,6 +306,25 @@ defmodule Arca.InstallationClaims do
             c.audience_home == ^home
       )
     )
+  end
+
+  @doc """
+  What the line logged once the installation gains its first person
+  begins with, after the mint that made them committed
+  (`first_person_made/0`): `cyfr` reads it from the cyfr service's log
+  after the boot's `Cyfr.Application.not_set_up_marker/0`, which then no
+  longer stands.
+  """
+  @spec set_up_marker() :: String.t()
+  def set_up_marker, do: "[Cyfr] Set up:"
+
+  @doc false
+  @spec first_person_made() :: :ok
+  # Said by `Arca.Users.mint/4` once the mint of the first person, by
+  # setup, `cyfr login --setup` or a restore, committed. Logged at the
+  # boot's notice level, so a log that holds the one holds the other.
+  def first_person_made do
+    Logger.warning(set_up_marker() <> " this CYFR has its first person.")
   end
 
   @doc false

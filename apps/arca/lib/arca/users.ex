@@ -322,13 +322,21 @@ defmodule Arca.Users do
                  |> settled(),
                {:ok, _identity} <- insert_identity(identity_attrs, user.id),
                :ok <- also_ran(also.(Arca.Data.project(user))) do
-            {:ok, user}
+            {:ok, {admitted, user}}
           end
       end
     end)
     |> case do
-      {:ok, user} -> {:ok, user}
-      {:error, reason} -> lost_the_race(actor, identity_attrs && identity_attrs[:key], reason)
+      {:ok, {:first, user}} ->
+        # Committed: the installation holds its first person from here on.
+        Arca.InstallationClaims.first_person_made()
+        {:ok, user}
+
+      {:ok, {:ok, user}} ->
+        {:ok, user}
+
+      {:error, reason} ->
+        lost_the_race(actor, identity_attrs && identity_attrs[:key], reason)
     end
   end
 

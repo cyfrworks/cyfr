@@ -69,7 +69,7 @@ func setupTokenOf(t *testing.T) string {
 // holds.
 func setupLinkLine(t *testing.T, address string) string {
 	t.Helper()
-	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person with a passkey in your browser, or run cyfr login --setup at this terminal.\n"
+	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person, or run cyfr login --setup here.\n"
 }
 
 // initThenPublic is a new CYFR from init, then made public at
@@ -185,7 +185,7 @@ func TestInitFollowsTheTemplatesPort(t *testing.T) {
 	if got := cfg.Contexts["local"].URL; got != "http://127.0.0.1:4123" {
 		t.Errorf("the local context is %s, want the home's loopback port", got)
 	}
-	if !strings.Contains(out.String(), "CYFR is reached from this machine, at http://localhost:4123.\n") || !strings.Contains(out.String(), setupLinkLine(t, "http://localhost:4123")) {
+	if !strings.Contains(out.String(), "CYFR is set up in this directory, reached from this computer at http://localhost:4123.\n") || !strings.Contains(out.String(), setupLinkLine(t, "http://localhost:4123")) {
 		t.Errorf("init does not print the home's address and setup link at its port:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "CYFR is reached as:") {
@@ -307,7 +307,7 @@ func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 		t.Errorf("init run again changed the setup token from %q to %q", token, again)
 	}
 	again := out.String()
-	if !strings.HasSuffix(again, "\n\nNext: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.\n  `cyfr access status` shows how CYFR is reached.\n") || strings.Contains(again, "/setup#") {
+	if !strings.HasSuffix(again, "says.\nNext: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.\n") || strings.Contains(again, "/setup#") {
 		t.Errorf("init run again printed:\n%s", again)
 	}
 }
@@ -315,8 +315,8 @@ func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 // localEnding is the head of init's ending for a CYFR reached from this
 // machine at address, up to its next step.
 func localEnding(address string) string {
-	return "CYFR is reached from this machine, at " + address + ".\n" +
-		"To reach it from your phone and laptop too, run cyfr access tailnet before its first person is set up, since passkeys belong to the address. From the internet: cyfr access public --domain <your domain>.\n"
+	return "CYFR is set up in this directory, reached from this computer at " + address + ".\n" +
+		"Want it on your phone and laptop too? Run cyfr access tailnet first.\n"
 }
 
 // Without the screen, init's last line on a machine with no display is
@@ -353,8 +353,8 @@ func TestInitEndsWithTheSSHLineOnAMachineWithNoDisplay(t *testing.T) {
 // reads it, prints that the first person runs cyfr login --setup after
 // cyfr up, and no setup link, since a headless CYFR serves no page.
 func TestInitPrintsLoginSetupForAHeadlessCYFR(t *testing.T) {
-	const notice = "\nCYFR is reached from this machine, at http://localhost:4000.\n" +
-		"To reach it from your phone and laptop too, run cyfr access tailnet before its first person is set up, since passkeys belong to the address. From the internet: cyfr access public --domain <your domain>.\n" +
+	const notice = "\nCYFR is set up in this directory, reached from this computer at http://localhost:4000.\n" +
+		"Want it on your phone and laptop too? Run cyfr access tailnet first.\n" +
 		"CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.\n"
 	for _, c := range []struct {
 		assignment string

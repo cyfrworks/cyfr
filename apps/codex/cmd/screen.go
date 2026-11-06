@@ -58,12 +58,21 @@ var screenOnCmd = &cobra.Command{
 	Short: "Show CYFR on this machine's own screen; again, rewrite what shows it",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		if err := screenOn(cmd.Context(), true, cmd.OutOrStdout()); err != nil {
-			return err
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "The screen starts at the next boot. Run `cyfr up`, then `sudo reboot`.")
-		return nil
+		return runScreenOn(cmd.Context(), cmd.OutOrStdout())
 	},
+}
+
+// runScreenOn is `cyfr screen on`: screenOn, asking first, then the next
+// step; answered no, it says so and ends as no failure.
+func runScreenOn(ctx context.Context, out io.Writer) error {
+	switch err := screenOn(ctx, true, out); {
+	case errors.Is(err, errDeclined):
+		return nil
+	case err != nil:
+		return err
+	}
+	fmt.Fprintln(out, "The screen starts at the next boot. Run `cyfr up`, then `sudo reboot`.")
+	return nil
 }
 
 var screenOffCmd = &cobra.Command{
@@ -143,7 +152,8 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 			return interruption{errQuestionInterrupted}
 		}
 		if !strings.EqualFold(answer, "yes") && !strings.EqualFold(answer, "y") {
-			return errors.New("Nothing was changed. Run `cyfr screen on` again when you want to continue")
+			fmt.Fprintln(out, "Nothing was installed. Run cyfr screen on again when you want to continue.")
+			return errDeclined
 		}
 	}
 	err = machine.apply(commands)

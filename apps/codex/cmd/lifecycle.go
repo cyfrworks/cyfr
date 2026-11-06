@@ -114,10 +114,10 @@ func workerKey(root []byte, serviceID string) []byte {
 	return mac.Sum(nil)
 }
 
-// envChange names a setting cyfr init wrote into .env, and how it came by
-// its value. It never carries the value.
+// envChange names a setting cyfr init wrote into .env. It never carries
+// the value.
 type envChange struct {
-	key, how string
+	key string
 }
 
 // refuseEnv is the error for a .env init will not complete: a sentence
@@ -148,31 +148,31 @@ func refuseEnv(format string, args ...any) error {
 func stackKeys(values map[string]string) (map[string]string, []envChange, error) {
 	add := map[string]string{}
 	var changes []envChange
-	set := func(key, value, how string) {
+	set := func(key, value string) {
 		add[key] = value
-		changes = append(changes, envChange{key, how})
+		changes = append(changes, envChange{key})
 	}
-	mint := func(key, how string, generate func() (string, error)) error {
+	mint := func(key string, generate func() (string, error)) error {
 		v, err := generate()
 		if err != nil {
 			return fmt.Errorf("generate %s: %w", key, err)
 		}
-		set(key, v, how)
+		set(key, v)
 		return nil
 	}
 
 	if values[secretKeyBaseVar] == "" {
-		if err := mint(secretKeyBaseVar, "generated", generateSecretKey); err != nil {
+		if err := mint(secretKeyBaseVar, generateSecretKey); err != nil {
 			return nil, nil, err
 		}
 	}
 	if values[backendsKeyVar] == "" {
-		if err := mint(backendsKeyVar, "generated", generateHexKey); err != nil {
+		if err := mint(backendsKeyVar, generateHexKey); err != nil {
 			return nil, nil, err
 		}
 	}
 	if values[setupTokenVar] == "" {
-		if err := mint(setupTokenVar, "generated", generateHexKey); err != nil {
+		if err := mint(setupTokenVar, generateHexKey); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -195,11 +195,11 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 		if err != nil {
 			return nil, nil, fmt.Errorf("generate %s: %w", workerRootVar, err)
 		}
-		set(workerRootVar, minted, "generated")
+		set(workerRootVar, minted)
 		root, _ = decodeHexKey(minted)
 		fallthrough
 	case serviceKeyText == "":
-		set(serviceKeyVar, hex.EncodeToString(workerKey(root, serviceID)), "derived for "+serviceID)
+		set(serviceKeyVar, hex.EncodeToString(workerKey(root, serviceID)))
 	default:
 		key, keyOK := decodeHexKey(serviceKeyText)
 		if !keyOK || !hmac.Equal(key, workerKey(root, serviceID)) {
@@ -215,18 +215,18 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 	// public home they are still that one origin, so no browser client of
 	// this stack is cross-origin. Never a wildcard.
 	if _, assigned := values[corsOriginsVar]; !assigned {
-		set(corsOriginsVar, "", "empty: no cross-origin browser client")
+		set(corsOriginsVar, "")
 	}
 
 	buildsURL, buildsKey := values[buildsURLVar], values[buildsKeyVar]
 	switch {
 	case buildsURL != "" && buildsKey != "":
 	case buildsURL != "":
-		if err := mint(buildsKeyVar, "generated", generateHexKey); err != nil {
+		if err := mint(buildsKeyVar, generateHexKey); err != nil {
 			return nil, nil, err
 		}
 	case buildsKey != "":
-		set(buildsURLVar, defaultBuildsURL, defaultBuildsURL)
+		set(buildsURLVar, defaultBuildsURL)
 	}
 
 	return add, changes, nil
@@ -311,11 +311,11 @@ func writeAll(f *os.File, data []byte) error {
 	return err
 }
 
-// describeChanges renders the settings init wrote, without their values.
+// describeChanges names the settings init wrote, without their values.
 func describeChanges(changes []envChange) string {
 	parts := make([]string, len(changes))
 	for i, c := range changes {
-		parts[i] = c.key + " (" + c.how + ")"
+		parts[i] = c.key
 	}
 	return strings.Join(parts, ", ")
 }
@@ -410,7 +410,7 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
+On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo; answered no, init installs nothing, writes nothing and exits 0. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
 
 The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
@@ -474,13 +474,11 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 		return err
 	}
 	if !fresh || !fileExists(".env") {
-		fmt.Fprintln(out, "")
 		if fileExists("docker-compose.yml") {
-			fmt.Fprintln(out, "Next: run 'cyfr up' to start the stack.")
+			fmt.Fprintln(out, "Next: cyfr up.")
 		} else {
 			fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 		}
-		fmt.Fprintln(out, "  `cyfr access status` shows how CYFR is reached.")
 		return nil
 	}
 	var screenErr error
@@ -492,18 +490,19 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 }
 
 // initEnding is init's last word on the new CYFR in the working directory,
-// reached from this machine: its address, the ways to reach it from
-// elsewhere, and the next step, which on screen is the reboot that shows
-// setup there, and otherwise the setup link or cyfr login --setup at this
-// terminal (sshTunnel's line beside them on a machine with no display). A
-// headless CYFR serves no setup page.
+// reached from this machine: its address, the offer to reach it from the
+// person's other devices, made before anyone is set up since passkeys
+// belong to the address, and the next step, which on screen is the reboot
+// that shows setup there, and otherwise the setup link or cyfr login
+// --setup at this terminal (sshTunnel's line beside them on a machine
+// with no display). A headless CYFR serves no setup page.
 func initEnding(out io.Writer, screen bool) {
 	values, _ := access.ReadEnvValues(".env")
 	port := existingSelection(".env").port
 	address := access.Describe(access.Head{Mode: access.ModeLocal, Port: port}).Address
 	fmt.Fprintln(out, "")
-	fmt.Fprintf(out, "CYFR is reached from this machine, at %s.\n", address)
-	fmt.Fprintln(out, "To reach it from your phone and laptop too, run cyfr access tailnet before its first person is set up, since passkeys belong to the address. From the internet: cyfr access public --domain <your domain>.")
+	fmt.Fprintf(out, "CYFR is set up in this directory, reached from this computer at %s.\n", address)
+	fmt.Fprintln(out, "Want it on your phone and laptop too? Run cyfr access tailnet first.")
 	if headless(values) {
 		fmt.Fprintln(out, "CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.")
 		return
@@ -513,7 +512,7 @@ func initEnding(out io.Writer, screen bool) {
 		fmt.Fprintln(out, "At power-on this screen opens CYFR's setup page, which sets up its first person with a passkey.")
 		return
 	}
-	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person with a passkey in your browser, or run cyfr login --setup at this terminal.\n", hyperlink(out, setupLink(address, values)))
+	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person, or run cyfr login --setup here.\n", hyperlink(out, setupLink(address, values)))
 	if !hasDisplay() {
 		fmt.Fprintln(out, sshTunnel(port))
 	}
@@ -599,9 +598,6 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		}
 	}
 
-	composeExists := fileExists("docker-compose.yml")
-	caddyfileExists := fileExists("Caddyfile")
-
 	if len(unremoved) > 0 {
 		return forceRemovalRefusal(unremoved, removed)
 	}
@@ -611,30 +607,25 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// it. If .env.example isn't present — a dev build, where the scaffold
 	// download is a no-op — skip it; the dev-build notice below tells the
 	// user where to get it.
-	envCreated := false
 	sel := existingSelection(".env")
 	if !envExisted && fileExists(".env.example") {
 		begin(initStepSettings)
-		text, changes, d, err := newEnv(".env.example")
+		text, _, d, err := newEnv(".env.example")
 		if err != nil {
 			return err
 		}
 		if err := writeFileAtomic(".env", text, 0600); err != nil {
 			return fmt.Errorf("Failed to write .env: %w", err)
 		}
-		envCreated = true
-		envChanges = changes
 		sel = selection{profiles: d.Head.Profiles, port: d.Head.Port}
 	}
 
 	// Generate .gitignore if it doesn't already exist (idempotent), before
 	// the engine makes .cyfr/.
-	gitignoreCreated := false
 	if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
 		if err := os.WriteFile(".gitignore", []byte(projectGitignore), 0644); err != nil {
 			return fmt.Errorf("Failed to write .gitignore: %w", err)
 		}
-		gitignoreCreated = true
 	}
 
 	// Create directories. These are the bind-mount sources in
@@ -652,6 +643,8 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// fetches exactly the images the verified scaffold names. Falls back to the published cyfr
 	// image on a dev build (no compose). The pulls run outside the lock
 	// and change nothing of the stack, so they are no call of the engine.
+	// Each is one line: docker's quiet pull prints only the reference it
+	// pulled, which the line names already, and its failures.
 	if !o.noPull {
 		begin(initStepImages)
 		images := imagesFromCompose("docker-compose.yml", sel.profiles)
@@ -660,8 +653,8 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		}
 		for _, img := range images {
 			fmt.Fprintf(out, "Pulling %s ...\n", img)
-			pull := exec.Command("docker", "pull", img)
-			pull.Stdout = out
+			pull := exec.Command("docker", "pull", "--quiet", img)
+			pull.Stdout = io.Discard
 			pull.Stderr = errOut
 			if err := pull.Run(); err != nil {
 				fmt.Fprintf(errOut, "Warning: failed to pull %s: %v (continuing anyway)\n", img, err)
@@ -683,35 +676,12 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		fmt.Fprintf(errOut, "warning: could not save CLI config: %v\n", err)
 	}
 
-	fmt.Fprintln(out, "CYFR project initialized.")
-	if releaseBuild {
-		if composeExists {
-			fmt.Fprintln(out, "  docker-compose.yml ready (cyfr, locus-runtime, locus-builds, locus-backends; tailscale for tailnet access, caddy for public access)")
-		}
-		if caddyfileExists {
-			fmt.Fprintln(out, "  Caddyfile ready")
-		}
-		fmt.Fprintf(out, "  %s downloaded\n", strings.Join(scaffold.Guides, " / "))
-		fmt.Fprintln(out, "  wit/ interface definitions downloaded")
-		fmt.Fprintln(out, "  aqua/ soul, roles and scrolls downloaded")
+	// The files and keys are in the directory and .env; what init says of
+	// them is what it added to an existing .env, the one change a re-run
+	// makes.
+	if len(envChanges) > 0 {
+		fmt.Fprintf(out, "Added to .env: %s.\n", describeChanges(envChanges))
 	}
-	switch {
-	case envCreated:
-		fmt.Fprintf(out, "  .env created from .env.example with %s — do not commit\n", describeChanges(envChanges))
-	case len(envChanges) > 0:
-		fmt.Fprintf(out, "  .env: added %s; nothing else changed\n", describeChanges(envChanges))
-	case envExisted:
-		fmt.Fprintln(out, "  .env already has every key the stack needs (unchanged).")
-	}
-	if slices.Contains(sel.profiles, buildsProfile) {
-		fmt.Fprintln(out, "  builds are on: `cyfr up` starts locus-builds (README.md, \"Builds\", says how to turn them off)")
-	}
-	if gitignoreCreated {
-		fmt.Fprintln(out, "  .gitignore created")
-	} else {
-		fmt.Fprintln(out, "  .gitignore already exists (skipped).")
-	}
-	fmt.Fprintln(out, "  data/, aqua/ created")
 
 	if !releaseBuild {
 		fmt.Fprintln(out, "")
@@ -760,12 +730,6 @@ func existingAccess(path string) (string, error) {
 		return "", refusalError{access.Refuse("access_missing", nil)}
 	}
 	return current, nil
-}
-
-// existingHomeRefusal refuses to change how an existing home, reached as
-// current, is reached, for command, which sets up a new one.
-func existingHomeRefusal(command, current string) error {
-	return fmt.Errorf(".env says CYFR is reached as %s, and %s leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current, command)
 }
 
 // localHead is the head a new home's .env starts from, reached from this
@@ -1010,7 +974,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	if local := (startedLocally{}); startErr != nil && !errors.As(startErr, &local) {
 		startErr = withBootFatal(ctx, e, head, startErr)
 	}
-	firstStart := startErr == nil && notSetUp(ctx, e, head)
+	firstStart := startErr == nil && readSetUp(ctx, e, head) == setUpNone
 	release()
 	select {
 	case <-interrupts:
@@ -1023,6 +987,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	fmt.Fprintln(out, "CYFR server started.")
 	fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
 	if firstStart {
+		fmt.Fprintln(out, "")
 		setupNext(out, head)
 	}
 	return nil
@@ -1038,20 +1003,19 @@ func runUp(ctx context.Context, out io.Writer) error {
 func setupNext(out io.Writer, head access.Head) {
 	values, _ := access.ReadEnvValues(".env")
 	if headless(values) {
-		fmt.Fprintln(out, "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.")
+		fmt.Fprintln(out, "Run cyfr login --setup here to set up its first person.")
 		return
 	}
 	link := hyperlink(out, setupLink(access.Describe(head).Address, values))
-	fmt.Fprintln(out, "")
 	switch enabled, active := machine.screenService(); {
 	case active:
 		fmt.Fprintln(out, "Setup is on this screen (Ctrl+Alt+F1).")
 	case enabled:
 		fmt.Fprintln(out, "Now run sudo reboot. This screen opens setup at power-on.")
 	case head.Mode == access.ModeTailnet:
-		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person with a passkey, or run cyfr login --setup here.\n", link)
+		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person, or run cyfr login --setup here.\n", link)
 	default:
-		fmt.Fprintf(out, "Open %s to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n", link)
+		fmt.Fprintf(out, "Open %s to set up its first person, or run cyfr login --setup here.\n", link)
 		if head.Mode == access.ModeLocal && !hasDisplay() {
 			fmt.Fprintln(out, sshTunnel(head.Port))
 		}
@@ -1084,17 +1048,80 @@ func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startEr
 }
 
 // notSetUpMarker begins the line the boot of a CYFR with no person yet
-// logs (Cyfr.Application.not_set_up_marker/0).
-const notSetUpMarker = "[Cyfr] Not set up:"
+// logs (Cyfr.Application.not_set_up_marker/0); setUpMarker begins the line
+// CYFR logs once it gains its first person
+// (Arca.InstallationClaims.set_up_marker/0), after which the boot's line no
+// longer stands.
+const (
+	notSetUpMarker = "[Cyfr] Not set up:"
+	setUpMarker    = "[Cyfr] Set up:"
+)
 
-// notSetUp reports whether the cyfr service's log, read under the lock,
-// holds the boot's line for a CYFR with no person yet. A log that cannot
-// be read holds none.
-func notSetUp(ctx context.Context, e stackEngine, head access.Head) bool {
+// setUp is what the cyfr service's log since its current start says of
+// whether anyone is set up on the CYFR in the working directory.
+type setUp int
+
+const (
+	// setUpUnknown: cyfr runs, and its log could not be read.
+	setUpUnknown setUp = iota
+	// setUpStopped: no cyfr runs, so there is no log of this start.
+	setUpStopped
+	// setUpNone: the boot's not-set-up line, and no set-up line after it.
+	setUpNone
+	// setUpDone: a set-up line, or a log since the start that holds
+	// neither, since the boot logs its line only when no one exists.
+	setUpDone
+)
+
+// readSetUp reads setUp for the CYFR at head from the cyfr service's log
+// since its current start, under the lock.
+func readSetUp(ctx context.Context, e stackEngine, head access.Head) setUp {
 	res, err := cyfrLogSinceStart(ctx, e, head)
-	return err == nil && res.ExitCode == 0 &&
-		strings.Contains(string(res.Stdout)+"\n"+string(res.Stderr), notSetUpMarker)
+	switch {
+	case errors.Is(err, errNoCyfrRunning):
+		return setUpStopped
+	case err != nil || res.ExitCode != 0:
+		return setUpUnknown
+	}
+	log := string(res.Stdout) + "\n" + string(res.Stderr)
+	if notSet := strings.LastIndex(log, notSetUpMarker); notSet >= 0 && !strings.Contains(log[notSet:], setUpMarker) {
+		return setUpNone
+	}
+	return setUpDone
 }
+
+// upThenSetup is the next step of a CYFR that never booted, with .env's
+// values: cyfr up, then its first person set up at the setup link link,
+// or at this terminal for a headless CYFR, which serves no setup page.
+func upThenSetup(values map[string]string, link string) string {
+	if headless(values) {
+		return "Next: cyfr up. Then run cyfr login --setup here to set up its first person."
+	}
+	return "Next: cyfr up. Then open " + link + " to set up its first person."
+}
+
+// neverBooted reports whether the CYFR in the working directory has never
+// booted: .env leaves its database where the compose file puts it, the
+// SQLite file data/cyfr.db (CYFR_DATABASE, CYFR_DATA_PATH and
+// CYFR_DATABASE_PATH unassigned), and its first boot has not made that
+// file. A container is no witness, since cyfr down removes them all.
+func neverBooted() bool {
+	values, err := access.ReadEnvValues(".env")
+	if err != nil {
+		return false
+	}
+	for _, name := range []string{"CYFR_DATABASE", "CYFR_DATA_PATH", "CYFR_DATABASE_PATH"} {
+		if _, assigned := values[name]; assigned {
+			return false
+		}
+	}
+	_, err = os.Lstat(filepath.Join("data", "cyfr.db"))
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// errNoCyfrRunning is cyfrLogSinceStart's answer when no cyfr container
+// runs.
+var errNoCyfrRunning = errors.New("no cyfr container runs")
 
 // cyfrLogSinceStart is the cyfr service's log since its container's
 // current start (its StartedAt), so a notice an earlier boot logged is
@@ -1114,7 +1141,10 @@ func cyfrLogSinceStart(ctx context.Context, e stackEngine, head access.Head) (ac
 		return access.Result{}, err
 	}
 	id, err := run(args)
-	if err != nil || id == "" || strings.ContainsAny(id, " \n") {
+	switch {
+	case err == nil && id == "":
+		return access.Result{}, errNoCyfrRunning
+	case err != nil || strings.ContainsAny(id, " \n"):
 		return access.Result{}, errors.New("no one cyfr container to read")
 	}
 	started, err := run([]string{"inspect", "--format", "{{.State.StartedAt}}", id})
