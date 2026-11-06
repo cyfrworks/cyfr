@@ -128,7 +128,7 @@ defmodule Aqua.Loop.Turn do
         brain_options: brain_options,
         narrowed: options["tools"],
         excerpt: if(Keyword.get(opts, :excerpt?, true), do: excerpt(ctx, options), else: nil),
-        attachments: attachments(ctx, turn),
+        attachments: attachments(ctx, turn, capabilities.media_types),
         soul?: soul?
       }
 
@@ -428,9 +428,10 @@ defmodule Aqua.Loop.Turn do
 
   defp excerpt(_ctx, _options), do: nil
 
-  # The initiating message's attachments as typed blocks. A delivered
-  # request's are the request's own, stored under its row in its room.
-  defp attachments(ctx, %{message_id: message_id, thread_id: thread_id})
+  # The initiating message's attachments as blocks the brain takes. A
+  # delivered request's are the request's own, stored under its row in its
+  # room.
+  defp attachments(ctx, %{message_id: message_id, thread_id: thread_id}, media_types)
        when is_binary(message_id) do
     case Tape.message(ctx, message_id) do
       {:ok, row} ->
@@ -438,22 +439,52 @@ defmodule Aqua.Loop.Turn do
 
         ctx
         |> Aqua.Attachments.load(thread_id, refs)
-        |> Enum.map(fn %{"media_type" => media, "data" => data, "filename" => name} ->
-          %{
-            "type" =>
-              if(String.starts_with?(media || "", "image/"), do: "image", else: "document"),
-            "media_type" => media,
-            "data" => data,
-            "filename" => name
-          }
-        end)
+        |> Enum.map(&attachment_block(&1, media_types))
 
       _ ->
         []
     end
   end
 
-  defp attachments(_ctx, _turn), do: []
+  defp attachments(_ctx, _turn, _media_types), do: []
+
+  # A file goes inline, as the image or document block its media type
+  # makes, only when the brain declares that type (its capabilities'
+  # `media_types`); a text file it does not take goes as a text block
+  # under its name; any other file is named as attached and not readable
+  # by this brain. No request carries a block the brain refuses.
+  defp attachment_block(%{"media_type" => media, "data" => data, "filename" => name}, types) do
+    cond do
+      media in types ->
+        %{
+          "type" => if(String.starts_with?(media, "image/"), do: "image", else: "document"),
+          "media_type" => media,
+          "data" => data,
+          "filename" => name
+        }
+
+      text = text(media, data) ->
+        %{"type" => "text", "text" => "The attached file #{name}:\n\n" <> text}
+
+      true ->
+        %{
+          "type" => "text",
+          "text" => "The file #{name} (#{media}) is attached, and this brain cannot read it."
+        }
+    end
+  end
+
+  # The file's text, when its media type is not opaque bytes and its bytes
+  # are UTF-8; nil otherwise.
+  defp text(media, data) do
+    with false <- Prima.MediaType.binary_mime?(media || Prima.MediaType.binary()),
+         {:ok, bytes} <- Base.decode64(data),
+         true <- String.valid?(bytes) do
+      bytes
+    else
+      _opaque -> nil
+    end
+  end
 
   defp stored_under(row, thread_id, refs) do
     case Tape.payload(row) do
