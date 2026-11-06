@@ -223,14 +223,13 @@ defmodule Cyfr.ApplicationTest do
     end
 
     # The auth domain's own tree: what outlives a request that charged a
-    # budget, the sliver's HTTP pool, and the single-flight registry.
-    test "the invoke-budget guard and the auth pool live under the sanctum tree" do
+    # budget, the OAuth refreshes, and the athanors' provisioning.
+    test "the invoke-budget guard lives under the sanctum tree" do
       started = Sanctum.Supervisor |> started_ids()
 
       assert Sanctum.Authority.BudgetGuard in started
       assert Sanctum.OAuth.RefreshTree in started
       assert Sanctum.ProvisioningSupervisor in started
-      assert is_pid(Process.whereis(Sanctum.Auth.Finch))
     end
 
     # Each domain's processes are one subtree of the infra tier, started

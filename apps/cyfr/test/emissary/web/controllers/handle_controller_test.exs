@@ -150,7 +150,7 @@ defmodule Emissary.Web.HandleControllerTest do
           {:get, "/v1/legal/current"},
           {:get, "/v1/namespaces/alice"}
         ] do
-      assert_error_sent 404, fn -> dispatch(conn, @endpoint, method, path, nil) end
+      assert dispatch(conn, @endpoint, method, path, nil).status == 404, "#{method} #{path}"
     end
   end
 end

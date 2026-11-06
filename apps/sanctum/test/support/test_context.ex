@@ -639,17 +639,11 @@ defmodule Sanctum.TestContext do
     end
   end
 
-  # The person's own interactive surface, in the same athanor: where a
-  # confirmation is proven, whatever surface asked for it.
+  # The person's own interactive surface, in the same athanor, from the
+  # authenticated context that asked: where a confirmation is proven,
+  # whatever surface asked for it.
   defp interactive(%Context{} = ctx),
-    do: %{
-      ctx
-      | auth_method: :oidc,
-        client_id: nil,
-        plane: :external,
-        authenticated: true,
-        anonymous: false
-    }
+    do: %{ctx | auth_method: :oidc, client_id: nil, plane: :external, anonymous: false}
 
   @doc """
   The person `user_id`'s account, made once and the same in every process

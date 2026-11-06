@@ -145,12 +145,20 @@ defmodule PrismWeb.SettingsLiveTest do
     ops = test_user()
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
     n = System.unique_integer([:positive])
-    alice = "per_" <> Prima.Digest.sha256_hex("handle-allow-#{n}")
-    bob = "per_" <> Prima.Digest.sha256_hex("handle-deny-#{n}")
+
+    # A handle's answer is read at the directory it names: a scripted one.
+    tls = Sanctum.Test.DirectoryServer.tls()
+    Sanctum.Test.DirectoryServer.listen!()
+    Sanctum.Test.DirectoryServer.seam!(tls)
+    directory = Sanctum.Test.DirectoryServer.start!(tls)
+
+    [alice, bob] =
+      for _name <- 1..2,
+          do: Sanctum.Test.DirectoryServer.account!(directory.dir, directory.url).identifier
 
     registry(nil, %{
-      "alice" => {:held, alice},
-      "bob" => {:held, bob},
+      "alice" => {:held, alice, directory.url},
+      "bob" => {:held, bob, directory.url},
       "down" => :close
     })
 
@@ -342,6 +350,7 @@ defmodule PrismWeb.SettingsLiveTest do
           :free -> RegistryStub.refusal(:handle_not_found)
           :taken -> {200, handle_answer(handle, "per_" <> String.duplicate("a", 64))}
           {:held, identifier} -> {200, handle_answer(handle, identifier)}
+          {:held, identifier, directory} -> {200, handle_answer(handle, identifier, directory)}
           :close -> :close
         end
 
@@ -362,13 +371,13 @@ defmodule PrismWeb.SettingsLiveTest do
     view |> element("button[phx-click=#{button}]") |> render_click()
   end
 
-  defp handle_answer(handle, identifier) do
+  defp handle_answer(handle, identifier, directory \\ RegistryStub.directory()) do
     RegistryStub.answer(%{
       "protocol" => Prima.HandleAnswer.protocol(),
       "registry" => RegistryStub.host(),
       "handle" => handle,
       "identifier" => identifier,
-      "directory" => RegistryStub.directory()
+      "directory" => directory
     })
   end
 end

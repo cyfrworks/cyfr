@@ -1119,16 +1119,28 @@ defmodule Sanctum.Consent.AuthzTest do
       refute record(session_ctx, confirmed.confirmation_id).state == "consumed"
     end
 
-    test "confirmed by a passkey then revoked: the record is void, and asked for again",
+    test "confirmed by a passkey whose key the account then removed: the record is void, and asked for again",
          %{session_ctx: session_ctx} do
       confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+      %{kid: kid, head: head} = record(session_ctx, confirmed.confirmation_id)
+      %{identifier: identifier} = Sanctum.TestContext.account!(session_ctx.user_id)
+      {:ok, cached} = Arca.DirectoryHeads.get(Prima.Actor.system(), identifier)
+      assert cached.head_hash == head
 
-      %{passkey_id: passkey_id} =
-        record(session_ctx, confirmed.confirmation_id)
-        |> then(&%{passkey_id: &1.confirmed_passkey_id})
-
-      {:ok, %{voided_confirmation_ids: voided}} =
-        Arca.Passkeys.revoke(Prima.Actor.system(), passkey_id)
+      # A refresh that read the key's removal walks it as the head moves.
+      {:ok, %{retired: %{confirmation_ids: voided}}} =
+        Arca.DirectoryHeads.advance(
+          Prima.Actor.system(),
+          identifier,
+          head,
+          %{
+            genesis: cached.genesis,
+            directory_url: cached.directory_url,
+            head_hash: Prima.Digest.sha256("the head after the removal"),
+            state: cached.state
+          },
+          [{:remove_key, kid}]
+        )
 
       assert ref(confirmed.confirmation_id) in voided
 
@@ -1353,11 +1365,11 @@ defmodule Sanctum.Consent.AuthzRaceTest do
       end)
     end)
 
-    certificate = certificate!(user_id, athanor_id, client_id, device_key)
-
     ctx =
       unboxed(fn ->
         person!(user_id, athanor_id, n, now)
+        account = Sanctum.TestContext.account!(user_id)
+        certificate = certificate!(account, athanor_id, client_id, device_key)
         paired!(user_id, athanor_id, client_id, device_key, certificate, now)
 
         # What `Sanctum.DeviceCerts` hands establish once a request under
@@ -1372,7 +1384,8 @@ defmodule Sanctum.Consent.AuthzRaceTest do
               client: client,
               user: standing.user,
               athanor: standing.athanor,
-              platform_admin: standing.platform_admin
+              platform_admin: standing.platform_admin,
+              identifier: account.identifier
             },
             []
           )
@@ -1429,16 +1442,16 @@ defmodule Sanctum.Consent.AuthzRaceTest do
 
   # The certificate the device stands under. Establishing a context checks
   # that the rows agree with it, not its signature: the verifier did that.
-  defp certificate!(user_id, athanor_id, client_id, device_key) do
+  defp certificate!(account, athanor_id, client_id, device_key) do
     now = System.os_time(:millisecond)
     {_public, signer} = :crypto.generate_key(:eddsa, :ed25519)
 
     {:ok, certificate} =
       DeviceCert.new(
-        device_key: device_key,
+        kid: Prima.Identity.Key.kid(device_key),
         client_id: client_id,
-        subject: %{kind: :local, user_id: user_id},
-        issuer: Sanctum.origin(),
+        identifier: account.identifier,
+        head: account.head,
         audience: Sanctum.origin(),
         athanor: athanor_id,
         not_before: now,
@@ -1459,6 +1472,8 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           source_kind: "device_cert",
           source_id: client_id,
           device_public_key: device_key,
+          kid: certificate.kid,
+          head: certificate.head,
           standing: "active",
           inserted_at: now,
           updated_at: now
@@ -1474,9 +1489,11 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           athanor_id: athanor_id,
           paired_client_id: client_id,
           user_id: user_id,
-          subject_kind: "local",
+          identifier: certificate.identifier,
+          kid: certificate.kid,
+          head: certificate.head,
           device_public_key: device_key,
-          issuing_home: certificate.issuer,
+          issuing_home: certificate.audience,
           audience_home: certificate.audience,
           not_before: usec(DateTime.from_unix!(certificate.not_before, :millisecond)),
           expires_at: usec(DateTime.from_unix!(certificate.expires_at, :millisecond)),
