@@ -82,6 +82,9 @@ defmodule Sanctum.Caller do
       refreshed from their directory (`Sanctum.IdentityFreshness`). Their
       work pauses and the session stands: retryable, never a sign-out and
       never a denial.
+    * `:identity_gone` — a session of a person whose account its
+      directory answered gone: the mark retired every session of theirs,
+      and nothing of theirs stands again.
     * `:company_login_required` — a person who stands in every other way
       at a CYFR that requires a company sign-in they have not given, or
       given too long ago or under another company configuration
@@ -92,24 +95,21 @@ defmodule Sanctum.Caller do
       the refusal only when nothing else refuses, and the session stands
       for the company sign-in alone (`Sanctum.CompanyLogin.held/1`).
 
-  ## A remote person's session
+  ## An account's session
 
-  A session of a person whose identity provenance is `remote` stands, at
-  every establish and every revalidation alike, only on that identity's
-  fresh head (`Sanctum.IdentityFreshness.fresh?/2`) and only while the
-  session's `identity_key_epoch` is that head's `key_epoch`. A session
-  bound to another epoch, or to none, is revoked there and then and
-  refused as `:unauthenticated`; a head that cannot be confirmed fresh
-  pauses the work as `:identity_stale`. A refresh that moves the head to
-  a new `key_epoch` has already deleted the sessions bound to the old one
-  in its own transaction, and their memos are dropped once it committed
-  (`drop_retired/2`). A local person's session never reads a directory.
+  A session of a person admitted by their account (identity provenance
+  `remote`) stands, at every establish and every revalidation alike, only
+  on that account's fresh head (`Sanctum.IdentityFreshness.fresh?/2`): a
+  head that cannot be confirmed fresh pauses the work as `:identity_stale`,
+  and an account gone is refused `:identity_gone`. A refresh that removes
+  the key a session was signed for, or a recovery, has already deleted the
+  sessions it retired in its own transaction, and their memos are dropped
+  once it committed (`drop_retired/2`). A local person's session never
+  reads a directory.
 
   Inside a caller's transaction (a revalidation a write makes under its
   locks) the check reads the cached head alone and writes nothing: a head
-  past its bound pauses the work without a directory read, and a session
-  bound to another epoch is refused without being revoked there, which
-  the next revalidation outside a transaction does.
+  past its bound pauses the work without a directory read.
   """
 
   alias Sanctum.Context
@@ -131,6 +131,7 @@ defmodule Sanctum.Caller do
           | :not_found
           | :unavailable
           | :identity_stale
+          | :identity_gone
           | :company_login_required
 
   @typedoc """
@@ -564,11 +565,10 @@ defmodule Sanctum.Caller do
       and its allowlist admits `client_ip:`.
 
   A session source of a remote person stands, as the session itself does
-  (the module doc), only on that person's fresh identity head and while
-  bound to its `key_epoch`. The head is read after the locked check and
-  outside its transaction, since a head past its bound reads the
-  directory. A head that cannot be confirmed fresh pauses the credential
-  as `:identity_stale`; a session bound to another epoch is revoked and
+  (the module doc), only on that person's fresh account head. The head is
+  read after the locked check and outside its transaction, since a head
+  past its bound reads the directory. A head that cannot be confirmed
+  fresh pauses the credential as `:identity_stale`; an account gone is
   refused as a retired source is, `:not_standing`.
 
   The person is held, last, to the company sign-in this CYFR may require
@@ -614,8 +614,8 @@ defmodule Sanctum.Caller do
   end
 
   # A session source is its person's: a remote person's stands on their
-  # identity's fresh head, as their session does at its revalidation. A
-  # key source is the athanor's channel and survives a `key_epoch` change.
+  # account's fresh head, as their session does at its revalidation. A
+  # key source is the athanor's channel and survives a removed key.
   defp derived_identity(%{source_kind: :session, user_id: user_id} = claims, standing) do
     with {:session, hash} when hash != <<>> <- source_row(claims),
          :ok <- identity_current(user_id, hash) do
@@ -763,6 +763,7 @@ defmodule Sanctum.Caller do
           | :not_member
           | :unavailable
           | :identity_stale
+          | :identity_gone
           | :company_login_required
 
   @doc """
@@ -796,13 +797,14 @@ defmodule Sanctum.Caller do
     * `:identity_stale` — a remote person's identity head could not be
       confirmed fresh (the module doc): the work pauses, and the session
       stands.
+    * `:identity_gone` — the person's account is gone at its directory.
     * `:company_login_required` — the person stands but for the company
       sign-in this CYFR requires (the module doc), checked last. A key's
       creator and a device's person are held to it the same way.
 
-  A remote person's session is held to their identity's fresh head as
-  well, as the module doc says: one bound to a `key_epoch` the fresh head
-  does not name is revoked here and refused as `:unauthenticated`.
+  A remote person's session is held to their account's fresh head as
+  well, as the module doc says: an account gone is refused
+  `:identity_gone`.
 
   An API-key context is held to its key the same way: the key row, its
   creator and its athanor are reread under the same lock — the key
@@ -971,19 +973,18 @@ defmodule Sanctum.Caller do
     {:error, refusal}
   end
 
-  # A remote person's session stands only on their identity's fresh head
+  # A remote person's session stands only on their account's fresh head
   # (`Sanctum.IdentityFreshness.fresh?/2`): past the bound with the
   # directory unable to refresh it, the work pauses as `:identity_stale`,
-  # and the session stays. A session bound to another `key_epoch` than
-  # the fresh head's, or to none, is revoked here and then: a refresh that
-  # retired its epoch deleted it already, and one minted against an epoch
-  # the head no longer names never stands. A local person's session reads
-  # no directory. A person's identity row is minted with their person row,
-  # so a person without one stands on nothing.
+  # and the session stays; an account gone is refused `:identity_gone`.
+  # The walk of a refresh retired a session its removed key signed for. A
+  # local person's session reads no directory. A person's identity row is
+  # minted with their person row, so a person without one stands on
+  # nothing.
   defp identity_current(user_id, hash) when is_binary(user_id) and is_binary(hash) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
-        remote_current(identifier, hash)
+        account_current(identifier)
 
       {:ok, %{provenance: "remote"}} ->
         {:error, :unauthenticated}
@@ -1003,40 +1004,11 @@ defmodule Sanctum.Caller do
 
   defp identity_current(_user_id, _hash), do: {:error, :unauthenticated}
 
-  defp remote_current(identifier, hash) do
+  defp account_current(identifier) do
     case Sanctum.IdentityFreshness.fresh?(identifier, []) do
-      {:ok, %{key_epoch: epoch}} -> session_epoch(hash, epoch)
-      {:refused, :identity_stale} -> {:error, :identity_stale}
+      {:ok, _head} -> :ok
+      {:refused, reason} -> {:error, reason}
       {:error, :unavailable} -> {:error, :unavailable}
-    end
-  end
-
-  defp session_epoch(hash, epoch) do
-    case Arca.SessionStorage.get_session(hash) do
-      {:ok, %{identity_key_epoch: ^epoch}} when is_binary(epoch) ->
-        :ok
-
-      # Refused either way. Revoked only outside a transaction: a caller's
-      # transaction is no place to delete a session and announce it, so the
-      # next revalidation outside one revokes it.
-      {:ok, _retired_or_unbound} ->
-        if Arca.in_transaction?() do
-          {:error, :unauthenticated}
-        else
-          Logger.warning(
-            "[Sanctum.Caller] a remote person's session is bound to no key_epoch, or to " <>
-              "one the fresh head no longer names; revoking it"
-          )
-
-          _ = Session.destroy_by_hash(hash)
-          {:error, :unauthenticated}
-        end
-
-      {:error, :not_found} ->
-        {:error, :unauthenticated}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
     end
   end
 
@@ -1117,11 +1089,7 @@ defmodule Sanctum.Caller do
   defp device_identity(user_id) when is_binary(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
-        case Sanctum.IdentityFreshness.fresh?(identifier, []) do
-          {:ok, _head} -> :ok
-          {:refused, :identity_stale} -> {:error, :identity_stale}
-          {:error, :unavailable} -> {:error, :unavailable}
-        end
+        account_current(identifier)
 
       {:ok, %{provenance: "remote"}} ->
         {:error, :not_standing}
@@ -1316,9 +1284,10 @@ defmodule Sanctum.Caller do
   end
 
   @doc """
-  Let go of the sessions a refreshed identity head retired: the head's
-  advance deleted every session bound to the `key_epoch` it replaced, in
-  its own transaction (`Arca.DirectoryHeads`), and once that committed
+  Let go of the sessions a refreshed account head retired: the head's
+  walk deleted every session bound to a key it removed, and a recovery's
+  every session of the person, in its own transaction
+  (`Arca.DirectoryHeads`), and once that committed
   each one's memo is dropped on this member and announced to the rest
   (`invalidate_hash/1`), and the revocation is announced for each person
   in `user_ids`, so their mounted views let go. Called by
