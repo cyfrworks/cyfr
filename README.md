@@ -975,7 +975,7 @@ the web tier, whose crashes restart it alone, never restarts the rest.
 
 ### Headless servers
 
-`CYFR_HEADLESS=true` makes a server Codex-only: `/mcp`, `/api` and public
+`CYFR_HEADLESS=on` makes a server Codex-only: `/mcp`, `/api` and public
 tinctures under `/t` are served, and every browser page — sign-in, the chat,
 Prism — answers 404. Its first person is set up with `cyfr login --setup`,
 which `cyfr up` names while no one is set up; it takes their name (`--name`,

@@ -38,7 +38,7 @@ func init() {
 	loginCmd.Flags().BoolVar(&flagLoginSetup, "setup", false,
 		"Set up this CYFR's first person at this terminal, with this command line as their device, with CYFR_SETUP_TOKEN from .env in this directory")
 	loginCmd.Flags().BoolVar(&flagLoginJoin, "join", false,
-		"Join this CYFR as a new person with this command line as your device, through its open door or --invitation")
+		"Join this CYFR as a new person with this command line as your device, by its open admission or --invitation")
 	loginCmd.Flags().StringVar(&flagLoginInvitation, "invitation", "",
 		"With --join: the code of the invitation that admits you")
 	loginCmd.Flags().StringVar(&flagLoginName, "name", "",
@@ -115,7 +115,7 @@ line as their device, from the directory cyfr init set up, which holds
 CYFR_SETUP_TOKEN in .env: the terminal's way, beside the setup link's
 passkey in a browser, and a headless CYFR's (CYFR_HEADLESS=on) only way,
 since it serves no setup page. --join makes you a new person at a CYFR
-whose door is open to you, or with --invitation, by an invitation's code.
+whose admission is open to you, or with --invitation, by an invitation's code.
 Each shows your recovery code, as a QR code and as text, until you press
 Enter to say you saved it.
 
