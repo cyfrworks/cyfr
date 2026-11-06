@@ -165,6 +165,24 @@ defmodule PrismWeb.AdmissionScreens do
     view |> render() |> tap(&refute_vocabulary/1)
   end
 
+  @doc """
+  The options the page in `mode` answers label the passkey for `name`, as
+  a password manager lists it: the site CYFR, the account `@name` and the
+  shown name `CYFR @name`.
+  """
+  def labelled!(view, mode, name) do
+    render_hook(view, "#{mode}_start", %{})
+
+    assert_reply(view, %{
+      public_key: %{
+        "rp" => %{"name" => "CYFR"},
+        "user" => %{"name" => user, "displayName" => shown}
+      }
+    })
+
+    assert {user, shown} == {"@" <> name, "CYFR @" <> name}
+  end
+
   @doc "The browser's ceremony under the options the page in `mode` answered."
   def ceremony(view, mode) do
     render_hook(view, "#{mode}_start", %{})

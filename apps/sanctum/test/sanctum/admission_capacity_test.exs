@@ -47,7 +47,7 @@ defmodule Sanctum.AdmissionCapacityTest do
   end
 
   defp registration do
-    {:ok, options} = Sanctum.Passkeys.newcomer_options()
+    {:ok, options} = Sanctum.Passkeys.newcomer_options("newcomer")
     Authenticator.registration(Authenticator.new("cap|#{System.unique_integer()}"), options)
   end
 

@@ -20,7 +20,7 @@ defmodule Sanctum.Passkeys do
   ## Registration
 
   A newcomer's first passkey is registered by their admission
-  (`Sanctum.Newcomer`): `newcomer_options/0`, `verify_newcomer/1` with no
+  (`Sanctum.Newcomer`): `newcomer_options/1`, `verify_newcomer/1` with no
   transaction open, and `write_newcomer/2` inside the admission's
   transaction. A person who exists registers through `register/2`.
 
@@ -245,7 +245,7 @@ defmodule Sanctum.Passkeys do
       challenge = registration_challenge(user_id, nonce, expires_at)
 
       public_key = %{
-        "rp" => %{"id" => rp_id(), "name" => rp_id()},
+        "rp" => %{"id" => rp_id(), "name" => "CYFR"},
         "user" => %{
           "id" => Encoding.b64(user_handle(user_id)),
           "name" => name,
@@ -283,17 +283,19 @@ defmodule Sanctum.Passkeys do
   (`Sanctum.Newcomer.admit/2`). A person id is drawn for them now
   (`Prima.PersonId.prefix/0`), and the registration token names it beside
   its nonce and expiry, so the ceremony's challenge is bound to that id as
-  a signed-in person's is to theirs. Answers what `register/2` answers
-  without a credential.
+  a signed-in person's is to theirs. `name` is the name the person typed
+  for themselves, or the one a readmitted person holds, whether or not
+  cyfr.run has it yet: the passkey is labelled with it (`labels/1`).
+  Answers what `register/2` answers without a credential.
   """
-  @spec newcomer_options() :: {:ok, map()} | {:error, term()}
-  def newcomer_options do
+  @spec newcomer_options(String.t()) :: {:ok, map()} | {:error, term()}
+  def newcomer_options(name) when is_binary(name) do
     user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
-    creation_options(user_id, {"Me", "Me"}, [], %{"user" => user_id})
+    creation_options(user_id, labels(name), [], %{"user" => user_id})
   end
 
   @doc """
-  Verify a newcomer's registration (`newcomer_options/0`), with no
+  Verify a newcomer's registration (`newcomer_options/1`), with no
   transaction open: the ceremony, the token's expiry and the challenge
   bound to the person id the token names. Answers that id and the
   verified credential `write_newcomer/2` stores. `:registration_refused`
@@ -601,17 +603,39 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  # What the authenticator shows the person: their email, or their name.
+  # The labels of a passkey the person `user_id` registers (`labels/1`):
+  # their cyfr.run name once it is theirs (`namespace`), else the name
+  # their enrollment wants registered, else, for a person who names none,
+  # their email or display name beside CYFR.
   defp names(user_id) do
     case Sanctum.Tenancy.Users.get(user_id) do
       {:ok, user} ->
-        name = present(user[:email]) || present(user[:display_name]) || user_id
-        {name, present(user[:display_name]) || name}
+        case present(user[:namespace]) || enrolled_name(user_id) do
+          name when is_binary(name) ->
+            labels(name)
+
+          nil ->
+            who = present(user[:email]) || present(user[:display_name]) || user_id
+            {who, "CYFR " <> who}
+        end
 
       {:error, _unanswered} ->
-        {user_id, user_id}
+        {user_id, "CYFR"}
     end
   end
+
+  defp enrolled_name(user_id) do
+    case Arca.IdentityAttempts.enrollment(Prima.Actor.system(), user_id) do
+      {:ok, %{name: name}} -> present(name)
+      _none_or_unanswered -> nil
+    end
+  end
+
+  # What a password manager lists a passkey of the person named `name`
+  # under, beside the site (`rp.name`, "CYFR"): `user.name` is the name
+  # with its at sign, and `user.displayName` CYFR and that name, so one
+  # CYFR's passkey is told from another's on the same host.
+  defp labels(name), do: {"@" <> name, "CYFR @" <> name}
 
   defp present(value) when is_binary(value) and value != "", do: value
   defp present(_value), do: nil
