@@ -4,22 +4,21 @@
 defmodule Emissary.Web.AccountControllerTest do
   @moduledoc """
   The account pages the directory's writer serves, through the endpoint,
-  from fixture files standing for the bundle: exactly the five pages at
-  their names without the extension, the service worker, script and
-  style, and `config.json` naming this CYFR as directory and registry
-  with no policy; every answer with the pages' referrer policy, cache
-  policy and content security policy, and an ETag of its body that a
-  revalidation is answered `304` by; anything else under `/account`, and
-  every page on a node that is not the directory's writer, `404`.
+  from the bundle embedded when the controller compiled: exactly the five
+  pages at their names without the extension, the service worker, script
+  and style, each the built file's bytes, and `config.json` naming this
+  CYFR as directory and registry with no policy; every answer with the
+  pages' referrer policy, cache policy and content security policy, and an
+  ETag of its body that a revalidation is answered `304` by; anything else
+  under `/account`, and every page on a node that is not the directory's
+  writer, `404`.
   """
 
-  # The directory setting, this node's public URL and the bundle's root are
-  # process-wide.
+  # The directory setting and this node's public URL are process-wide.
   use CyfrWeb.ConnCase, async: false
 
-  @moduletag :tmp_dir
-
   @directory "https://dir.example"
+  @root Path.join(:code.priv_dir(:cyfr), "static/account")
   @pages ~w(new sign add recover devices)
   @assets [
     {"sw.js", "text/javascript"},
@@ -27,15 +26,14 @@ defmodule Emissary.Web.AccountControllerTest do
     {"account.css", "text/css"}
   ]
 
-  setup %{tmp_dir: root} do
-    for page <- @pages, do: File.write!(Path.join(root, page <> ".html"), "<p>#{page}</p>")
-    for {asset, _type} <- @assets, do: File.write!(Path.join(root, asset), "/* #{asset} */")
-
-    Prima.Test.Env.put_app_env(:cyfr, :account_pages_root, root)
+  setup do
     Prima.Test.Env.put_app_env(:sanctum, :public_url, @directory)
     Cyfr.Test.Settings.put("directory_serve", "writer")
-    %{root: root}
+    :ok
   end
+
+  # The built file's bytes, as the bundle holds them.
+  defp built(name), do: File.read!(Path.join(@root, name))
 
   defp assert_headers(conn) do
     assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
@@ -53,7 +51,7 @@ defmodule Emissary.Web.AccountControllerTest do
     for page <- @pages do
       served = get(build_conn(), "/account/#{page}")
       assert served.status == 200, page
-      assert served.resp_body == "<p>#{page}</p>"
+      assert served.resp_body == built(page <> ".html")
       assert content_type(served) =~ "text/html"
       assert_headers(served)
     end
@@ -65,7 +63,7 @@ defmodule Emissary.Web.AccountControllerTest do
     for {asset, type} <- @assets do
       served = get(build_conn(), "/account/#{asset}")
       assert served.status == 200, asset
-      assert served.resp_body == "/* #{asset} */"
+      assert served.resp_body == built(asset)
       assert content_type(served) =~ type
       assert_headers(served)
     end
@@ -83,8 +81,7 @@ defmodule Emissary.Web.AccountControllerTest do
     assert_headers(served)
   end
 
-  test "each answer names its body's digest as ETag, and a revalidation naming it is a 304",
-       %{root: root} do
+  test "each answer names its body's digest as ETag, and a revalidation naming it is a 304" do
     for name <- ["new", "sw.js", "config.json"] do
       served = get(build_conn(), "/account/#{name}")
       assert served.status == 200, name
@@ -105,26 +102,23 @@ defmodule Emissary.Web.AccountControllerTest do
       end
     end
 
-    # A body that changed answers itself whole, under its new tag.
+    # A revalidation naming another body's tag answers the body whole,
+    # under its own tag.
     old = ~s(") <> Base.encode16(:crypto.hash(:sha256, "<p>new</p>"), case: :lower) <> ~s(")
-    File.write!(Path.join(root, "new.html"), "<p>new, again</p>")
-
     changed = build_conn() |> put_req_header("if-none-match", old) |> get("/account/new")
     assert changed.status == 200
-    assert changed.resp_body == "<p>new, again</p>"
+    assert changed.resp_body == built("new.html")
 
     assert get_resp_header(changed, "etag") ==
              [
                ~s(") <>
-                 Base.encode16(:crypto.hash(:sha256, "<p>new, again</p>"), case: :lower) <> ~s(")
+                 Base.encode16(:crypto.hash(:sha256, built("new.html")), case: :lower) <> ~s(")
              ]
 
     assert_headers(changed)
   end
 
-  test "nothing else is served under /account", %{root: root} do
-    File.write!(Path.join(root, "secret.txt"), "not the bundle's")
-
+  test "nothing else is served under /account" do
     for name <- ["new.html", "secret.txt", "index", "sw", "..", "%2e%2e%2fconfig.exs"] do
       refused = get(build_conn(), "/account/#{name}")
       assert refused.status == 404, name
@@ -142,11 +136,6 @@ defmodule Emissary.Web.AccountControllerTest do
     get(build_conn(), path).status
   rescue
     error -> Plug.Exception.status(error)
-  end
-
-  test "a page the bundle does not hold is 404", %{root: root} do
-    File.rm!(Path.join(root, "devices.html"))
-    assert get(build_conn(), "/account/devices").status == 404
   end
 
   test "a node that is not its directory's writer serves no page" do

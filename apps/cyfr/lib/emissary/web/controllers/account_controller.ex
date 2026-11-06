@@ -33,16 +33,42 @@ defmodule Emissary.Web.AccountController do
   quoted lowercase hex SHA-256 of its bytes), and a request whose
   `If-None-Match` names it, or `*`, is answered `304` with no body and the
   same headers: a revalidation never sends the bundle again.
+
+  The bundle is embedded when this module compiles, each file with its
+  ETag computed then, and nothing reads the disk at runtime: each file is
+  an `@external_resource`, so a rebuilt bundle recompiles the module. A
+  file the build had not produced when it compiled answers `404`.
   """
 
   use Emissary.Web, :controller
 
-  @pages ~w(new sign add recover devices)
-  @assets %{
-    "sw.js" => "text/javascript",
-    "account.js" => "text/javascript",
-    "account.css" => "text/css"
-  }
+  @root Path.join(:code.priv_dir(:cyfr), "static/account")
+
+  # Each name served, its file in the bundle and its type.
+  @names [
+    {"new", "new.html", "text/html"},
+    {"sign", "sign.html", "text/html"},
+    {"add", "add.html", "text/html"},
+    {"recover", "recover.html", "text/html"},
+    {"devices", "devices.html", "text/html"},
+    {"sw.js", "sw.js", "text/javascript"},
+    {"account.js", "account.js", "text/javascript"},
+    {"account.css", "account.css", "text/css"}
+  ]
+
+  for {_name, file, _type} <- @names, do: @external_resource(Path.join(@root, file))
+
+  # Mix recompiles the module when a file changes; runtime never reads
+  # the disk for the bundle.
+  @bundle (for {name, file, type} <- @names,
+               # arca:bypass-ok=C — compile-time embed of the built bundle.
+               path = Path.join(@root, file),
+               File.exists?(path),
+               body = File.read!(path),
+               into: %{} do
+             etag = ~s(") <> Base.encode16(:crypto.hash(:sha256, body), case: :lower) <> ~s(")
+             {name, %{body: body, type: type, etag: etag}}
+           end)
 
   plug :served
 
@@ -53,14 +79,13 @@ defmodule Emissary.Web.AccountController do
     body =
       Jason.encode!(%{"directory" => directory, "registry" => directory, "policy" => nil})
 
-    answer(conn, body, "application/json")
+    answer(conn, body, "application/json", etag(body))
   end
 
-  def show(conn, %{"name" => page}) when page in @pages,
-    do: file(conn, page <> ".html", "text/html")
-
-  def show(conn, %{"name" => asset}) when is_map_key(@assets, asset),
-    do: file(conn, asset, Map.fetch!(@assets, asset))
+  def show(conn, %{"name" => name}) when is_map_key(@bundle, name) do
+    %{body: body, type: type, etag: etag} = Map.fetch!(@bundle, name)
+    answer(conn, body, type, etag)
+  end
 
   def show(conn, _params), do: not_found(conn)
 
@@ -88,18 +113,10 @@ defmodule Emissary.Web.AccountController do
     )
   end
 
-  # A file of the bundle, by a name from the lists above: a bundle not
-  # built here answers 404.
-  defp file(conn, name, type) do
-    case File.read(Path.join(root(), name)) do
-      {:ok, body} -> answer(conn, body, type)
-      {:error, _absent} -> not_found(conn)
-    end
-  end
+  defp etag(body), do: ~s(") <> Base.encode16(:crypto.hash(:sha256, body), case: :lower) <> ~s(")
 
   # The body with its digest as ETag, or 304 to a revalidation naming it.
-  defp answer(conn, body, type) do
-    etag = ~s(") <> Base.encode16(:crypto.hash(:sha256, body), case: :lower) <> ~s(")
+  defp answer(conn, body, type, etag) do
     conn = conn |> put_resp_content_type(type) |> put_resp_header("etag", etag)
 
     if revalidated?(conn, etag),
@@ -120,13 +137,5 @@ defmodule Emissary.Web.AccountController do
     conn
     |> put_resp_content_type("text/plain")
     |> send_resp(404, "Not Found")
-  end
-
-  # Where the asset build puts the bundle. The suite points it at fixture
-  # files through `:cyfr, :account_pages_root`, a test seam no
-  # configuration file sets.
-  defp root do
-    Application.get_env(:cyfr, :account_pages_root) ||
-      Application.app_dir(:cyfr, "priv/static/account")
   end
 end

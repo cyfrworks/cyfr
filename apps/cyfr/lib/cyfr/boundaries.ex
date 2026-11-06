@@ -2667,10 +2667,6 @@ defmodule Cyfr.Boundaries do
     # The issuer's side of a company sign-in (`Sanctum.Auth.OIDC`): a test
     # stands in its own for the token exchange.
     oidc_reauth_client: :seam,
-    # Where the account pages' bundle is read from
-    # (`Emissary.Web.AccountController`): a suite points it at a bundle of
-    # its own; a release never sets it, so the built bundle is served.
-    account_pages_root: :seam,
     # WorkOS's API base URL (`Sanctum.Auth.WorkOS`), which a suite points at
     # its scripted WorkOS on loopback; a release never sets it, so the
     # company sign-in reaches https://api.workos.com.
