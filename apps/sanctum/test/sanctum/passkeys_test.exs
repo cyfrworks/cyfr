@@ -402,13 +402,36 @@ defmodule Sanctum.PasskeysTest do
       assert {:ok, %{public_key: options, registration: token, expires_at: %DateTime{}}} =
                Passkeys.register(ctx, %{})
 
-      assert options["rp"]["id"] == Passkeys.rp_id()
+      assert options["rp"] == %{"id" => Passkeys.rp_id(), "name" => "CYFR"}
       assert options["authenticatorSelection"]["userVerification"] == "required"
       assert options["authenticatorSelection"]["residentKey"] == "required"
       assert options["attestation"] == "none"
       assert byte_size(Base.url_decode64!(options["challenge"], padding: false)) == 32
       assert is_binary(token) and token != ""
       refute options["user"]["id"] == Base.url_encode64(ctx.user_id, padding: false)
+    end
+
+    test "the passkey is labelled with CYFR and the person's name, else their email beside CYFR" do
+      %{ctx: ctx, user: user} = person!()
+
+      assert {:ok, %{public_key: %{"user" => unnamed}}} = Passkeys.register(ctx, %{})
+      assert {unnamed["name"], unnamed["displayName"]} == {user.email, "CYFR " <> user.email}
+
+      Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user.id),
+        set: [namespace: "mira#{System.unique_integer([:positive])}"]
+      )
+
+      %{namespace: name} = Arca.Repo.get!(Arca.Schemas.User, user.id)
+      assert {:ok, %{public_key: %{"user" => named}}} = Passkeys.register(ctx, %{})
+      assert {named["name"], named["displayName"]} == {"@" <> name, "CYFR @" <> name}
+    end
+
+    test "a newcomer's passkey is labelled with the name they typed" do
+      assert {:ok, %{public_key: %{"rp" => rp, "user" => user}}} =
+               Passkeys.newcomer_options("mira")
+
+      assert rp == %{"id" => Passkeys.rp_id(), "name" => "CYFR"}
+      assert {user["name"], user["displayName"]} == {"@mira", "CYFR @mira"}
     end
 
     test "a first passkey is confirmed by a verified email a code can reach, however recent the local sign-in" do
