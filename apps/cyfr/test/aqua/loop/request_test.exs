@@ -268,7 +268,15 @@ defmodule Aqua.Loop.RequestTest do
         crew(6, "planner", "Write the plan?",
           addressee: "aqua",
           reply_to: "msg_3",
-          outcome: "needs_you"
+          outcome: "needs_you",
+          status: "pending"
+        ),
+        # A notice decided with its card waits for no one, and is not said.
+        crew(7, "planner", "Delete the draft?",
+          addressee: "aqua",
+          reply_to: "msg_3",
+          outcome: "needs_you",
+          status: "approved"
         )
       ]
 
@@ -285,6 +293,7 @@ defmodule Aqua.Loop.RequestTest do
       assert Enum.any?(texts, &(&1 =~ "usr_a asked builder (request msg_4, answered)"))
       assert Enum.any?(texts, &(&1 =~ "builder replied to request msg_4: done]\nLogs are clean."))
       assert Enum.any?(texts, &(&1 =~ "planner needs the person on request msg_3"))
+      refute Enum.any?(texts, &(&1 =~ "Delete the draft?"))
 
       # In the member's thread the soul's task is said to the member.
       assert [%{"role" => "user", "content" => [%{"text" => "[aqua]\nplan it"}]}] =
