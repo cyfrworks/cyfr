@@ -152,11 +152,13 @@ helpers:
 
 `device.mjs` is a test device: a client of a home's device channel a proof
 drives frame by frame, its key made in the proof's process and never sent
-anywhere. `newDevice()` makes the key and its code, `pair()` completes a
-pairing through `pairing.complete` with it, `connectDevice()` and
-`channel()` open the channel (renewing a certificate the home will not
-take), whose `intent()` sends one intent, and whose log holds every frame
-by type and each close with its code. A proof uses it where the channel
+anywhere. `newDevice()` makes the key and shows its `pub` and `kid`, which
+the proof lists on an account; `helloDevice()` opens its first connection
+with its hello, answers the sign-in request and connects under the
+certificate it is admitted with; `connectDevice()` and `channel()` open the
+channel (renewing a certificate the home will not take), whose `intent()`
+sends one intent, and whose log holds every frame by type and each close
+with its code. A proof uses it where the channel
 itself is what a step proves; a person's own command line is the real
 `cyfr` binary.
 

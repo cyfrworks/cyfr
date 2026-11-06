@@ -63,7 +63,6 @@ defmodule Arca.PairedClients do
 
   @required ~w(user_id source_kind source_id)a
   @optional ~w(device_public_key holder_kind display_name kid head)a
-  @max_display_name 64
 
   @typedoc "A paired client row, as a plain map."
   @type row :: %{
@@ -552,18 +551,18 @@ defmodule Arca.PairedClients do
   end
 
   # What holds a protected device's key, and the name it shows, are a
-  # device client's alone, and only as reported.
+  # device client's alone, and only as its hello reported them
+  # (`Prima.Device`). A passkey's platform holder is projected from its
+  # credential (`project_passkey!/1`), never recorded as a device.
   defp validate_holder(changeset) do
     changeset =
       changeset
-      # A passkey's platform holder is projected from its credential
-      # (`project_passkey!/1`), never recorded as a device.
-      |> Ecto.Changeset.validate_inclusion(
-        :holder_kind,
-        PairedClient.holder_kinds() -- ["platform"]
-      )
-      |> Ecto.Changeset.validate_length(:display_name, min: 1, max: @max_display_name)
-      |> Ecto.Changeset.validate_format(:display_name, ~r/\A[^\p{Cc}]+\z/u)
+      |> Ecto.Changeset.validate_inclusion(:holder_kind, Prima.Device.holder_kinds())
+      |> Ecto.Changeset.validate_change(:display_name, fn :display_name, name ->
+        if Prima.Device.display_name?(name),
+          do: [],
+          else: [display_name: "is non-empty text of at most 64 bytes"]
+      end)
 
     reported? = Enum.any?([:holder_kind, :display_name], &Ecto.Changeset.get_field(changeset, &1))
 

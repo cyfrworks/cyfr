@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// A test device: a client of a home's device channel (`/device/websocket`,
+// A test device: a client of a CYFR's device channel (`/device/websocket`,
 // the wire `cyfr login` and a box's screen speak, `Emissary.Web.DeviceChannel`)
 // that a proof drives frame by frame, in the proof's own process. It makes
-// an Ed25519 key in memory, which never leaves this process, pairs it
-// through `pairing.complete` as a software-held device (an honest client's
-// report: the home cannot see where a key is held), connects under the
-// certificate the pairing answered, renews it when the home will not take
-// it, and sends intents. Every frame either way, and the close with its
-// code, is logged by type; no signature, nonce or argument is kept in the
-// log. A proof reaches the home as the browsers do: an HTTP CONNECT through
-// the run's proxy to the home's name, TLS under the run's authority
+// an Ed25519 key in memory, which never leaves this process, and shows its
+// `pub` and `kid` so the proof puts the key on an account's log. Its first
+// connection is its hello (`Prima.Device`, tests/fixtures/device.json): it
+// names its kid, the account and, when it brings one, the setup token or
+// an invitation's code, as a software-held device (an honest client's
+// report: the CYFR cannot see where a key is held); it answers the CYFR's
+// sign-in request with Ed25519 over the request's digest
+// (tests/fixtures/sign_in.json), takes the client and certificate it is
+// admitted with, and connects under them on the same connection. It
+// renews the certificate when the CYFR will not take it, and sends
+// intents. Every frame either way, and the close with its code, is logged
+// by type; no signature, nonce, token, code or argument is kept in the
+// log. A proof reaches the CYFR as the browsers do: an HTTP CONNECT through
+// the run's proxy to the CYFR's name, TLS under the run's authority
 // (/authority/authority.pem), then the request or the WebSocket upgrade.
 //
 // The proof uses it where a device's channel is what is proven (an intent's
@@ -38,9 +44,9 @@ export function canonical(value) {
   return JSON.stringify(value);
 }
 
-// The digest of a device key, the code a new device shows: SHA-256 over
-// its 32 raw bytes, unpadded base64url.
-export const keyDigest = (raw) => b64url(createHash("sha256").update(raw).digest());
+// A key's kid as an account's log lists it: `sha256:` and the lowercase
+// hex of SHA-256 over its 32 raw bytes.
+export const kidOf = (raw) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
 
 // A TLS connection to the home `host` through the proxy at `proxyPort`.
 function tunnel(proxyPort, host) {
@@ -75,8 +81,8 @@ async function fetchVia(proxyPort, base, path, { method = "GET", headers = {}, b
   });
 }
 
-// A tool called anonymously over the home's `/mcp`, as the command line's
-// own client asks `pairing.complete`: its result, or `{error}`.
+// A tool called anonymously over the CYFR's `/mcp`, as the command line's
+// own client calls one: its result, or `{error}`.
 export async function mcpCall(proxyPort, base, tool, args) {
   // The request metadata the protocol version asks of every request, as
   // the command line's client sends it.
@@ -104,42 +110,34 @@ export async function mcpCall(proxyPort, base, tool, args) {
   return result.isError ? { error: parsed } : parsed;
 }
 
-// A new test device: its key, made here and held in memory alone.
+// A new test device: its key, made here and held in memory alone. `pub`
+// (unpadded base64url of the 32 raw bytes) and `kid` are what an account's
+// `add_key` names; `name` is the name its hello shows.
 export function newDevice({ name = "proof test device" } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const raw = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64url");
-  const digest = keyDigest(raw);
-  return {
-    name, privateKey, publicKey: b64url(raw), digest, code: digest.match(/.{1,4}/g).join(" "),
-    clientId: null, certificate: null,
-  };
+  const pub = b64url(raw);
+  return { name, privateKey, pub, kid: kidOf(raw), clientId: null, certificate: null };
 }
 
 // The challenge `challenge`, held to what this device asked for, signed:
 // its fields and `sig` over their JCS bytes.
 export function prove(device, challenge, expect) {
-  for (const [field, value] of Object.entries({ protocol: PROOF_PROTOCOL, device_key: device.publicKey, ...expect })) {
+  for (const [field, value] of Object.entries({ protocol: PROOF_PROTOCOL, device_key: device.pub, ...expect })) {
     if (challenge[field] !== value) throw new Error(`the home's ${challenge.purpose} challenge names another ${field}`);
   }
   const sig = edSign(null, Buffer.from(canonical(challenge)), device.privateKey);
   return { ...challenge, sig: b64url(sig) };
 }
 
-// The pairing the invitation `secret` opens, completed with this device's
-// key: the pair challenge, signed, then the client and certificate.
-export async function pair(device, { proxyPort, base, secret }) {
-  const args = {
-    action: "complete", invitation_secret: secret, device_key: device.publicKey, key_digest: device.digest,
-    holder_kind: "software", display_name: device.name,
-  };
-  const asked = await mcpCall(proxyPort, base, "pairing", args);
-  if (!asked.challenge) return { error: asked.error || asked };
-  const proof = prove(device, asked.challenge, { purpose: "pair", home: base });
-  const paired = await mcpCall(proxyPort, base, "pairing", { ...args, proof });
-  if (!paired.certificate) return { error: paired.error || paired };
-  device.clientId = paired.client_id;
-  device.certificate = paired.certificate;
-  return paired;
+// The device's answer to the CYFR's sign-in request `request`, held to
+// what this device asked for: Ed25519 over SHA-256 of the request's JCS
+// bytes, by this device's key, named by its kid.
+export function answer(device, request, { home }) {
+  if (request.purpose !== "sign_in") throw new Error(`the CYFR asked a ${request.purpose} request of a hello`);
+  if (request.audience !== home) throw new Error("the CYFR's sign-in request names another audience");
+  const digest = createHash("sha256").update(canonical(request)).digest();
+  return { challenge: request.challenge, kid: device.kid, sig: b64url(edSign(null, digest, device.privateKey)) };
 }
 
 // The WebSocket upgrade of `/device/websocket`, through the proxy.
@@ -173,14 +171,19 @@ function frame(opcode, payload) {
 }
 
 // A device channel: `purpose` `connect` (or `renew`) under the device's
-// certificate, its challenge held to the home `home` names (`base` unless
-// named: a proof that presents a certificate at another home names the one
-// it was issued for, so that home's verdict is the one recorded), answered when the home stands it (`opened`) or closes it
-// (`closed`, the close code). `intent` sends one and answers `{ok, result,
-// error, ms}`; `asleep` stops reading frames, so nothing is answered,
-// until `wake`. `log` holds every frame by direction and type, and each
-// close and wake.
-export function channel(device, { proxyPort, base, purpose = "connect", home = base }) {
+// certificate, its challenge held to the CYFR `home` names (`base` unless
+// named: a proof that presents a certificate at another CYFR names the one
+// it was issued for, so that CYFR's verdict is the one recorded), answered
+// when the CYFR stands it (`opened`) or closes it (`closed`, the close
+// code). With `hello` (`{identifier, admission}`, the account the device's
+// key is listed in and the setup token or invitation code it brings, as
+// `{setup: token}` or `{invitation: code}`, or none) the connection opens
+// with the device's hello instead, answers the sign-in request, keeps the
+// client and certificate `admitted` names, and connects under them.
+// `intent` sends one and answers `{ok, result, error, ms}`; `asleep` stops
+// reading frames, so nothing is answered, until `wake`. `log` holds every
+// frame by direction and type, and each close and wake.
+export function channel(device, { proxyPort, base, purpose = "connect", home = base, hello = null }) {
   const log = [];
   const waiting = new Map();
   let socket = null;
@@ -214,6 +217,21 @@ export function channel(device, { proxyPort, base, purpose = "connect", home = b
           socket.end();
           closedWith("challenge refused");
         }
+        break;
+      case "sign_in_request":
+        // A request this device would not sign ends the connection here.
+        try {
+          send({ type: "sign_in_answer", answer: answer(device, m.request, { home }) });
+        } catch (error) {
+          log.push({ at: at(), event: "request_refused", error: error.message });
+          socket.end();
+          closedWith("request refused");
+        }
+        break;
+      case "admitted":
+        device.clientId = m.client_id;
+        device.certificate = m.certificate;
+        send({ type: "connect", client_id: device.clientId, certificate: device.certificate });
         break;
       case "certificate":
         device.certificate = m.certificate;
@@ -273,7 +291,14 @@ export function channel(device, { proxyPort, base, purpose = "connect", home = b
       if (!asleep) closedWith(null);
     });
     socket.on("error", () => closedWith(null));
-    send({ type: purpose, client_id: device.clientId, certificate: device.certificate });
+    if (hello) {
+      send({
+        type: "hello", kid: device.kid, identifier: hello.identifier, holder_kind: "software",
+        display_name: device.name, ...(hello.admission ? { admission: hello.admission } : {}),
+      });
+    } else {
+      send({ type: purpose, client_id: device.clientId, certificate: device.certificate });
+    }
     read();
   })().catch((error) => { log.push({ at: at(), event: "error", error: error.message }); closedWith(null); });
 
@@ -300,8 +325,17 @@ export function channel(device, { proxyPort, base, purpose = "connect", home = b
   };
 }
 
+// The device's first connection (`channel/2` with `hello`): admitted to
+// the account `identifier` under `admission`, connected on the same
+// connection; answers the channel that stands, or the code that closed it.
+export async function helloDevice(device, { identifier, admission = null, ...options }) {
+  const ch = channel(device, { ...options, purpose: "connect", hello: { identifier, admission } });
+  const outcome = await Promise.race([ch.opened.then(() => "open"), ch.closed]);
+  return outcome === "open" ? { channel: ch } : { code: outcome, log: ch.log };
+}
+
 // A channel opened for this device: `connect` first, and `renew` on a new
-// connection when the home will not take the certificate (4408), as a
+// connection when the CYFR will not take the certificate (4408), as a
 // device renews; answers the channel that stands, or the code that closed
 // the last.
 export async function connectDevice(device, options) {

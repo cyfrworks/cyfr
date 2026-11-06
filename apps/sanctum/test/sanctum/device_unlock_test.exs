@@ -24,7 +24,7 @@ defmodule Sanctum.DeviceUnlockTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{PairedClient, Session, User}
+  alias Arca.Schemas.{Session, User}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceUnlock}
   alias Sanctum.Test.{DirectoryServer, Devices}
@@ -91,7 +91,6 @@ defmodule Sanctum.DeviceUnlockTest do
   end
 
   defp session_row(session_id), do: Arca.Repo.get(Session, session_id)
-  defp client_row(client_id), do: Arca.Repo.get!(PairedClient, client_id)
 
   # The client's current certificate revoked through its store, the one
   # revocation statement every transition runs.

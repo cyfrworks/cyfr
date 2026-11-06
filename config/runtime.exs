@@ -569,7 +569,7 @@ if config_env() != :test do
   # variable, never the value.
   {:ok, setup_token} = Prima.EnvValue.text(getenv, "CYFR_SETUP_TOKEN")
 
-  unless is_nil(setup_token) or Sanctum.setup_token?(setup_token) do
+  unless is_nil(setup_token) or Prima.Device.setup_token?(setup_token) do
     raise "[Cyfr] FATAL: CYFR_SETUP_TOKEN must be exactly 64 lowercase hexadecimal " <>
             "characters (32 random bytes)."
   end

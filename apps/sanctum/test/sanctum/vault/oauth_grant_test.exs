@@ -137,7 +137,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     assert {:error, :unavailable} = OAuthGrant.complete(state, "code", @redirect)
   end
 
-  test "a remote person whose identity cannot be confirmed fresh is paused as unavailable" do
+  test "a person whose account cannot be confirmed fresh is paused as unavailable" do
     ctx = person!()
     state = for_context(ctx)
     stale_remote!(ctx.user_id)
@@ -156,47 +156,12 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
            )
   end
 
-  # `user_id` made a person whose keys are at another home: their identity
-  # row `remote`, their head cached but past its bound, and their directory
-  # a loopback port this home cannot reach.
+  # `user_id`'s account head (`Sanctum.TestContext.account!/1`) past its
+  # bound, at the suite's directory, which this CYFR cannot reach, on a
+  # public CYFR, which pauses a head it cannot refresh.
   defp stale_remote!(user_id) do
-    directory = "https://localhost:1"
-    Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user_id))
-
-    {live, _} = :crypto.generate_key(:eddsa, :ed25519)
-    {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
-    {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
-
-    {:ok, genesis} =
-      Prima.Identity.Entry.genesis(
-        live_key: live,
-        operational_key: operational_pub,
-        recovery_keys: [recovery],
-        directory: directory
-      )
-
-    genesis = Prima.Identity.sign(genesis, operational)
-    identifier = Prima.Identity.identifier(genesis)
-    head = Prima.Identity.hash(genesis)
-
-    {:ok, _} =
-      Arca.PersonIdentities.create(Prima.Actor.system(), %{
-        user_id: user_id,
-        provenance: "remote",
-        identifier: identifier,
-        directory_url: directory
-      })
-
-    {:ok, _} =
-      Arca.DirectoryHeads.put(Prima.Actor.system(), %{
-        identifier: identifier,
-        genesis: Prima.Identity.canonical(genesis),
-        directory_url: directory,
-        head_hash: head,
-        key_epoch: head,
-        recovery_epoch: head,
-        state: ~s({"head":"#{head}"})
-      })
+    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    %{identifier: identifier} = Sanctum.TestContext.account!(user_id)
 
     Arca.Repo.update_all(
       from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),

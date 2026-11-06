@@ -420,7 +420,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   # A value held, checked by the reader the boot checks it with: the root
   # decoded as it stands (`config/runtime.exs`), the setup token trimmed and
-  # held to `Sanctum.setup_token?/1`, an island key through
+  # held to `Prima.Device.setup_token?/1`, an island key through
   # `Prima.EnvValue.hex_key/2`, which trims it. Whitespace alone is
   # refused: it is a value of none of them.
   defp held(name, text) do
@@ -435,7 +435,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
       name == @setup ->
         {:ok, token} = Prima.EnvValue.text(fn _ -> text end, name)
 
-        if Sanctum.setup_token?(token),
+        if Prima.Device.setup_token?(token),
           do: :ok,
           else:
             {:error,

@@ -101,17 +101,52 @@ defmodule Sanctum.DeviceHelloTest do
                  skew: 0
                )
 
-      assert [%{kid: kid, device_public_key: ^pub, standing: "active"}] =
-               clients(admitted.user.id)
+      assert [
+               %{
+                 kid: kid,
+                 device_public_key: ^pub,
+                 standing: "active",
+                 holder_kind: "software",
+                 display_name: "Test device"
+               }
+             ] = clients(admitted.user.id)
 
       assert kid == certificate.kid
+    end
+
+    test "the holder and name a hello reports reach the paired client, in the hello's grammar",
+         %{account: account} do
+      hello = Devices.hello(account, device(account), {:setup, @token})
+      client_id = Prima.UUID7.generate_id("pcl")
+
+      for {field, value} <- [
+            holder_kind: "platform",
+            holder_kind: nil,
+            display_name: "",
+            display_name: "a\nb",
+            display_name: String.duplicate("é", 33)
+          ] do
+        assert {:error, {:invalid_argument, _sentence}} =
+                 DeviceUnlock.hello(client_id, Map.put(hello, field, value)),
+               inspect({field, value})
+      end
+
+      # 64 bytes in 32 characters is a name; the row keeps it as reported.
+      name = String.duplicate("é", 32)
+
+      admitted =
+        Devices.admitted!(account, device(account), {:setup, @token}, %{
+          holder_kind: "chip",
+          display_name: name
+        })
+
+      assert [%{holder_kind: "chip", display_name: ^name}] = clients(admitted.user.id)
     end
 
     test "a capability that admits nobody refuses before anything is held or written", %{
       account: account
     } do
-      {pub, _priv} = device(account)
-      hello = %{kid: Key.kid(pub), identifier: account.identifier}
+      hello = Devices.hello(account, device(account))
       client_id = Prima.UUID7.generate_id("pcl")
 
       assert {:error, :setup_closed} =

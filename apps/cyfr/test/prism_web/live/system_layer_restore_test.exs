@@ -57,6 +57,13 @@ defmodule PrismWeb.SystemLayerRestoreTest do
   alias PrismWeb.SystemLayerRestoreTest.Host
   alias Sanctum.TestContext.Authenticator
 
+  # The deployment's directory, whose account pages a passkey's proof
+  # hops to.
+  setup do
+    Sanctum.Test.Newcomers.directory!()
+    :ok
+  end
+
   # ---- fixtures ------------------------------------------------------------------
 
   defp layer(view), do: with_target(view, "#system-layer")

@@ -79,12 +79,8 @@ defmodule Prima.Device do
   @max_names 64
   @name ~r/\A[a-z][a-z0-9_]{0,31}\z/
   @continuous ~w(stream frames chunks samples continuous)
-  # What holds a device's key, and the name it shows, as a paired client
-  # records them (`Arca.PairedClients`); `platform` is a passkey's.
   @holder_kinds ~w(chip software)
   @max_display_name 64
-  # The setup token's form (`Sanctum.setup_token?/1`) and an invitation
-  # code's length (`Sanctum.Invitations.code_hash/1`).
   @setup_token ~r/\A[0-9a-f]{64}\z/
   @invitation_code_bytes 32
   @standing [client_id: :id, athanor: :id, expires_at: :ms]
@@ -194,6 +190,35 @@ defmodule Prima.Device do
 
   def from_key_code(_text), do: :error
 
+  @doc """
+  What holds a device's key under its local unlock, as a hello names it
+  and a paired client records it: a TPM `chip` or a passphrase-wrapped
+  `software` file.
+  """
+  @spec holder_kinds() :: [String.t()]
+  def holder_kinds, do: @holder_kinds
+
+  @doc """
+  Whether `value` is a name a device shows: non-empty UTF-8 of at most 64
+  bytes with no control character.
+  """
+  @spec display_name?(term()) :: boolean()
+  def display_name?(value), do: Encoding.text?(value, @max_display_name)
+
+  @doc """
+  Whether `value` is spelled as an installation's setup token is: exactly
+  64 lowercase hexadecimal characters, 32 random bytes. The token admits
+  the installation's first person; it is never a platform setting or a
+  log value.
+  """
+  @spec setup_token?(term()) :: boolean()
+  def setup_token?(value), do: is_binary(value) and Regex.match?(@setup_token, value)
+
+  @doc "Whether `value` is spelled as an invitation's code is: unpadded base64url of 32 bytes."
+  @spec invitation_code?(term()) :: boolean()
+  def invitation_code?(value),
+    do: match?({:ok, _bytes}, Encoding.unb64(value, @invitation_code_bytes))
+
   @doc "The fields that mark an intent as carrying continuous data."
   @spec continuous_fields() :: [String.t()]
   def continuous_fields, do: @continuous
@@ -299,18 +324,14 @@ defmodule Prima.Device do
   defp get(:kid, value), do: ok_if(Encoding.digest?(value), value)
   defp get(:identifier, value), do: ok_if(Encoding.identifier?(value), value)
   defp get(:holder_kind, value), do: ok_if(value in @holder_kinds, value)
-  defp get(:display_name, value), do: ok_if(Encoding.text?(value, @max_display_name), value)
+  defp get(:display_name, value), do: ok_if(display_name?(value), value)
 
   # Exactly one capability: the setup token or an invitation's code.
   defp get(:admission, %{"setup" => token} = admission) when map_size(admission) == 1,
-    do: ok_if(is_binary(token) and Regex.match?(@setup_token, token), {:setup, token})
+    do: ok_if(setup_token?(token), {:setup, token})
 
   defp get(:admission, %{"invitation" => code} = admission) when map_size(admission) == 1,
-    do:
-      ok_if(
-        match?({:ok, _bytes}, Encoding.unb64(code, @invitation_code_bytes)),
-        {:invitation, code}
-      )
+    do: ok_if(invitation_code?(code), {:invitation, code})
 
   defp get(:admission, _value), do: :error
 

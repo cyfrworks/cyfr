@@ -232,7 +232,9 @@ defmodule Arca.PairedClientsTest do
       for {field, value} <- [
             {:holder_kind, "platform"},
             {:display_name, "a\nb"},
-            {:display_name, String.duplicate("x", 65)}
+            {:display_name, String.duplicate("x", 65)},
+            # 33 characters, 66 bytes: the bound is the hello's, in bytes.
+            {:display_name, String.duplicate("é", 33)}
           ] do
         assert {:error, {:invalid, _}} =
                  PairedClients.record(

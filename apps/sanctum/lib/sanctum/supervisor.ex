@@ -66,7 +66,7 @@ defmodule Sanctum.Supervisor do
   defp setup_token!(nil), do: :ok
 
   defp setup_token!(token) do
-    if Sanctum.setup_token?(token),
+    if Prima.Device.setup_token?(token),
       do: :ok,
       else:
         raise(

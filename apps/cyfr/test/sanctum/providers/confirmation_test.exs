@@ -35,6 +35,9 @@ defmodule Sanctum.Providers.ConfirmationTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Prima.Test.RateLimiter.reset!()
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
+    # The deployment's directory, whose account pages a passkey's answer
+    # comes from.
+    Sanctum.Test.Newcomers.directory!()
     signed_in!()
   end
 

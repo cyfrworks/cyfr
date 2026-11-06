@@ -657,12 +657,6 @@ defmodule Prima.Refusal do
   defp row({:shared_thread, :not_together}),
     do: {:invalid_argument, "You can only pair with someone you already share a thread with"}
 
-  defp row({:shared_thread, :recovering_from_restore}),
-    do:
-      {:forbidden,
-       "This CYFR was restored from a backup, and someone in this thread has not yet " <>
-         "recovered their sign-in: no one is added until everyone has"}
-
   defp row({:limit_reached, :max_shared_threads_per_person, _limit}),
     do: {:rate_limited, "You have made as many threads as this CYFR allows — archive one first"}
 
@@ -965,15 +959,6 @@ defmodule Prima.Refusal do
       {:unauthenticated,
        "Your first passkey needs a recent sign-in here: sign in again, then register it."}
 
-  # An installation reserved for a restore: its first person comes back
-  # through the restore, so no ordinary first sign-in is admitted, whoever
-  # signs in. Not a denial of the person.
-  defp row(:restore_reserved),
-    do:
-      {:forbidden,
-       "This installation is waiting for its owner to restore their identity; no one signs " <>
-         "in here until that restore finishes or the operator ends it."}
-
   # The setup token past its person's first sign-in method: it opens
   # nothing, whoever presents it.
   defp row(:setup_closed),
@@ -982,7 +967,7 @@ defmodule Prima.Refusal do
        "This CYFR is set up. Sign in with your passkey, a device you connected, or a " <>
          "sign-in method you linked."}
 
-  # An admission other than setup or a restore onto a CYFR with no person:
+  # An admission other than setup onto a CYFR with no person:
   # its first person is its administrator, made only by its setup.
   defp row(:not_set_up),
     do: {:setup_required, "This CYFR is not set up yet. Its operator opens the setup link first."}

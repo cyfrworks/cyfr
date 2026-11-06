@@ -359,6 +359,25 @@ defmodule Sanctum.DoorTest do
   end
 
   describe "an entry made from a handle" do
+    # A handle's answer is read at the directory it names: a scripted one.
+    setup do
+      tls = Sanctum.Test.DirectoryServer.tls()
+      Sanctum.Test.DirectoryServer.listen!()
+      Sanctum.Test.DirectoryServer.seam!(tls)
+      %{directory: Sanctum.Test.DirectoryServer.start!(tls)}
+    end
+
+    # An account at the scripted directory, held by no person here.
+    defp account_at!(directory),
+      do: Sanctum.Test.DirectoryServer.account!(directory.dir, directory.url).identifier
+
+    # The person `remote_at!/2` makes, and the identifier of their account.
+    defp held_at!(directory, n) do
+      user = remote_at!(directory, n)
+      {:ok, identifier} = Sanctum.Tenancy.Users.identifier(user.id)
+      {user, identifier}
+    end
+
     defp door(action, value, note \\ nil) do
       operator = Sanctum.Context.build(user_id: "usr_operator", authenticated: true)
       args = %{"action" => action, "value" => value}
@@ -366,49 +385,53 @@ defmodule Sanctum.DoorTest do
       Sanctum.Provider.handle("door", operator, args)
     end
 
-    test "a handle reassigned after an allow was made from it moves no access" do
-      first = remote!(40)
-      second = remote!(41)
+    test "a handle reassigned after an allow was made from it moves no access", %{
+      directory: directory
+    } do
+      {first, a} = held_at!(directory, 40)
+      {second, b} = held_at!(directory, 41)
 
-      RegistryStub.handles!(%{"alice" => identifier(40)})
+      RegistryStub.handles!(%{"alice" => a}, directory.url)
       assert {:ok, allowed} = door("allow", "@alice")
       assert %{kind: "identifier", label: "alice"} = allowed
-      assert allowed.value == identifier(40)
+      assert allowed.value == a
 
       # The registry gives the handle to someone else.
-      RegistryStub.handles!(%{"alice" => identifier(41)})
-      assert {:ok, identifier(41)} == Sanctum.Handle.identifier("alice")
+      RegistryStub.handles!(%{"alice" => b}, directory.url)
+      assert {:ok, b} == Sanctum.Handle.identifier("alice")
 
       assert [%{kind: "identifier", effect: "allow", label: "alice"} = entry] = Store.list()
-      assert entry.value == identifier(40)
+      assert entry.value == a
       assert {:ok, :allowed} = Door.admit_person(first)
       assert {:error, :not_allowed} = Door.admit_person(second)
-      assert {:error, :not_allowed} = Door.admit_identifier(identifier(41))
+      assert {:error, :not_allowed} = Door.admit_identifier(b)
     end
 
-    test "a deny by handle writes the identifier the handle names, and a platform administrator's is refused" do
-      carol = remote!(42)
-      operator = local!(43)
-      enrolled!(operator, 43)
+    test "a deny by handle writes the identifier the handle names, and a platform administrator's is refused",
+         %{directory: directory} do
+      {carol, c} = held_at!(directory, 42)
+      {operator, o} = held_at!(directory, 43)
       {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
       {:ok, _} = Store.allow("wildcard", "*", "ops")
 
-      RegistryStub.handles!(%{"carol" => identifier(42), "ops" => identifier(43)})
+      RegistryStub.handles!(%{"carol" => c, "ops" => o}, directory.url)
       assert {:ok, %{effect: "deny", label: "carol", ejected: 1}} = door("deny", "@carol")
       assert {:error, :denied} = Door.admit_person(carol)
 
       assert {:error, {:invalid_argument, _}} = door("deny", "@ops")
-      refute Enum.any?(Store.list(), &(&1.value == identifier(43)))
+      refute Enum.any?(Store.list(), &(&1.value == o))
     end
 
-    test "each write states the label anew: another handle relabels, the identifier clears it" do
-      {:ok, entry} = Store.allow("identifier", identifier(44), "ops", label: "alice")
+    test "each write states the label anew: another handle relabels, the identifier clears it",
+         %{directory: directory} do
+      x = account_at!(directory)
+      {:ok, entry} = Store.allow("identifier", x, "ops", label: "alice")
       assert entry.label == "alice"
 
-      {:ok, entry} = Store.deny("identifier", identifier(44), "ops", label: "alicia")
+      {:ok, entry} = Store.deny("identifier", x, "ops", label: "alicia")
       assert %{effect: "deny", label: "alicia"} = entry
 
-      {:ok, entry} = Store.allow("identifier", identifier(44), "ops", note: "back")
+      {:ok, entry} = Store.allow("identifier", x, "ops", note: "back")
       assert %{effect: "allow", label: nil, note: "back"} = entry
       assert [%{label: nil}] = Store.list()
 
@@ -420,9 +443,9 @@ defmodule Sanctum.DoorTest do
                Store.allow("identifier", identifier(45), "ops", label: "Not A Handle")
 
       # Through the operation: by handle, then by the identifier itself.
-      RegistryStub.handles!(%{"alice" => identifier(44)})
+      RegistryStub.handles!(%{"alice" => x}, directory.url)
       assert {:ok, %{label: "alice"}} = door("allow", "@alice")
-      assert {:ok, shown} = door("allow", identifier(44))
+      assert {:ok, shown} = door("allow", x)
       refute Map.has_key?(shown, :label)
     end
 
@@ -458,17 +481,20 @@ defmodule Sanctum.DoorTest do
       assert Store.list() == []
     end
 
-    test "the resolution writes nothing: no entry exists until the write" do
-      RegistryStub.handles!(%{"alice" => identifier(46)})
+    test "the resolution writes nothing: no entry exists until the write", %{
+      directory: directory
+    } do
+      x = account_at!(directory)
+      RegistryStub.handles!(%{"alice" => x}, directory.url)
 
-      assert {:ok, identifier(46)} == Sanctum.Handle.identifier("alice")
+      assert {:ok, x} == Sanctum.Handle.identifier("alice")
       assert_received {:registry_request, %{path: "/v1/handles/alice"}}
       assert Store.list() == []
-      assert {:error, :not_allowed} = Door.admit_identifier(identifier(46))
+      assert {:error, :not_allowed} = Door.admit_identifier(x)
 
       assert {:ok, _} = door("allow", "@alice")
       assert [%{label: "alice"} = entry] = Store.list()
-      assert entry.value == identifier(46)
+      assert entry.value == x
     end
   end
 

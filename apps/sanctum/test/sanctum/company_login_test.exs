@@ -987,13 +987,15 @@ defmodule Sanctum.CompanyLoginTest do
       %{directory: DirectoryServer.start!(tls)}
     end
 
-    # The seated person made this CYFR's remote person of an identity the
-    # directory serves, their head cached as verified now, and a session
-    # of theirs minted bound to that head's key_epoch.
+    # The seated person made this CYFR's member by an account the
+    # directory serves, their head cached as verified now, and a session of
+    # theirs, on a public CYFR, which pauses a head it cannot refresh past
+    # its bound.
     defp remote_session!(%{user: user, athanor: athanor, directory: directory}) do
-      identity = DirectoryServer.identity!(directory.dir, directory.url)
-      :ok = DirectoryServer.remote_person!(user.id, identity)
-      %{identifier: identity.identifier, token: session!(user, athanor)}
+      put_env!(:sanctum, :access_mode, :public)
+      account = DirectoryServer.account!(directory.dir, directory.url)
+      :ok = DirectoryServer.account_person!(user.id, account)
+      %{identifier: account.identifier, token: session!(user, athanor)}
     end
 
     # The cached head's verification moved a day back, far past the bound;

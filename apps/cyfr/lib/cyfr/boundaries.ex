@@ -525,7 +525,8 @@ defmodule Cyfr.Boundaries do
         Sanctum Sanctum.Caller Sanctum.Catalog
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts
-        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Directory.Handles Sanctum.Egress
+        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Directory.Handles Sanctum.Door
+        Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Refusals Sanctum.Resources
         Sanctum.RunningTasks Sanctum.TinctureAccess
@@ -556,8 +557,9 @@ defmodule Cyfr.Boundaries do
           "damaged head), for the flows the tincture's ingress declares to the origins " <>
           "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
           "decisions, the handle registry's beside it `Sanctum.Directory.Handles`'s, the " <>
-          "account pages' served only by the directory's writer, a protected device's " <>
-          "enrollment `Sanctum.DeviceUnlock`'s, and the device channel checks each " <>
+          "account pages' served only by the directory's writer, a device's hello and " <>
+          "its admission `Sanctum.DeviceUnlock`'s, whose door refusal the channel words " <>
+          "as `Sanctum.Door` does, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts` and slides, and at its end " <>
           "retires, the sessions its unlocks reserved and holds its device's storage report " <>
           "through `Sanctum.DeviceUnlock`. " <>
@@ -2022,7 +2024,6 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       origin: 0,
       registry_base_url: 1,
-      setup_token?: 1,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
@@ -2122,7 +2123,14 @@ defmodule Cyfr.Boundaries do
       refused: 3
     ],
     "Sanctum.DeviceCerts" => [challenge_key: 2, verify_connect: 3, verify_request: 2],
-    "Sanctum.DeviceUnlock" => [closed: 3, redeem: 1, report_storage: 2, slide: 2],
+    "Sanctum.DeviceUnlock" => [
+      admit: 2,
+      closed: 3,
+      hello: 2,
+      redeem: 1,
+      report_storage: 2,
+      slide: 2
+    ],
     "Sanctum.Directory" => [
       append: 2,
       from: 1,
