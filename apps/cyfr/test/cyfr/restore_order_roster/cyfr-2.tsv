@@ -26,7 +26,7 @@ apps/cyfr/test/compendium/provider_test.exs	12	pending
 apps/cyfr/test/compendium/providers/aqua_list_test.exs	2	pending
 apps/cyfr/test/compendium/providers/canvas_test.exs	1	pending
 apps/cyfr/test/compendium/providers/layout_test.exs	1	pending
-apps/cyfr/test/compendium/providers/registry_test.exs	5	pending
+apps/cyfr/test/compendium/providers/registry_test.exs	3	pending
 apps/cyfr/test/compendium/providers/source_test.exs	1	pending
 apps/cyfr/test/compendium/register_mints_nothing_test.exs	1	pending
 apps/cyfr/test/compendium/registry/client_sync_test.exs	7	pending

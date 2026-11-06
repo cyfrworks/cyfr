@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 apps/sanctum/test/sanctum/admission_capacity_test.exs	1	pending
-apps/sanctum/test/sanctum/api_key_test.exs	2	pending
+apps/sanctum/test/sanctum/api_key_test.exs	1	pending
 apps/sanctum/test/sanctum/auth/workos_test.exs	1	pending
 apps/sanctum/test/sanctum/auth_tenant_resolution_test.exs	5	pending
 apps/sanctum/test/sanctum/caller_freshness_test.exs	10	pending
@@ -16,7 +16,6 @@ apps/sanctum/test/sanctum/directory_test.exs	2	pending
 apps/sanctum/test/sanctum/door_test.exs	1	pending
 apps/sanctum/test/sanctum/handle_test.exs	1	pending
 apps/sanctum/test/sanctum/network_private_policy_test.exs	9	pending
-apps/sanctum/test/sanctum/pairing_test.exs	1	pending
 apps/sanctum/test/sanctum/policy/ceiling_test.exs	5	pending
 apps/sanctum/test/sanctum/tenancy/caps_test.exs	1	pending
 apps/sanctum/test/sanctum/tenancy_test.exs	5	pending

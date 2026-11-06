@@ -141,42 +141,15 @@ defmodule Compendium.Registry.Client do
     "publisher.verify" => "/v1/namespaces/publisher/verify"
   }
 
-  @typedoc """
-  Why a signed operation did not complete: `:remote`, since this CYFR
-  holds no key of the person's to sign with, the registry's
-  (`Prima.RegistryRequest.refusals/0`, `policy_required` carrying the
-  version the registry requires), `:registry_unavailable` for no usable
-  answer, and `:malformed_answer` for an answer that cannot be read.
-  """
-  @type signed_refusal ::
-          Prima.RegistryRequest.refusal()
-          | {:policy_required, String.t() | nil}
-          | :no_registry
-          | :not_enrolled
-          | :remote
-          | :not_found
-          | :unavailable
-          | :registry_unavailable
-          | :malformed_answer
-          | {:invalid_argument, String.t()}
-
   @doc """
-  Send `operation` with `body`, signed for the person `user_id`, to the
-  route the registry takes it at. Answers the registry's decoded answer,
-  or a refusal (`t:signed_refusal/0`). Nothing is written here: what the
-  answer means is the caller's.
-
-  This CYFR holds no key of the person's (`ARCHITECTURE.md` §9.1), so it
-  signs nothing for them and every request is refused `:remote` before
-  anything is sent. *Not built yet:* a request signed by the person's
-  device or by their passkey at the account pages, carried here.
-
-  The request runs in the calling process, so it stops with it; a
-  registry that cannot be reached, or answers 5xx, is
-  `:registry_unavailable` and a `POST` is never replayed after the
-  registry may have acted on it (`Compendium.Registry.Transport`).
+  A request `operation` with `body` that a key of the person `user_id`'s
+  account signs, for the route the registry takes it at. This CYFR holds
+  no key of the person's (`ARCHITECTURE.md` §9.1), so it signs nothing
+  for them: every request is refused `:remote` and nothing is sent or
+  written. *Not built yet:* a request signed by the person's device or by
+  their passkey at the account pages, carried here.
   """
-  @spec signed(String.t(), String.t(), map()) :: {:ok, map()} | {:error, signed_refusal()}
+  @spec signed(String.t(), String.t(), map()) :: {:error, :remote}
   def signed(user_id, operation, body)
       when is_binary(user_id) and is_map_key(@routes, operation) and is_map(body) do
     Logger.warning("[Compendium.Registry.Client] #{operation} refused — :remote")
