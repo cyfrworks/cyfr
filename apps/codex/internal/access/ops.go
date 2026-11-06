@@ -101,9 +101,10 @@ func (e *Engine) doStop(ctx context.Context, cause string, all bool) (Receipt, e
 	if _, err := e.readEnv(); all || err != nil {
 		services = nil
 		if headErr == nil && all {
-			// compose down removes the project's networks as well;
-			// whatever it leaves running the sweep below stops.
-			if args, err := e.composeArgsFor(ctx, h, "down", "--remove-orphans"); err == nil {
+			// Compose stops services in dependency order; the sweep removes
+			// every project container, including orphans, and keeps networks.
+			// A release that changes a network's subnet needs its own teardown.
+			if args, err := e.composeArgsFor(ctx, h, "stop"); err == nil {
 				e.docker.Run(ctx, Call{Args: args, Deadline: StopDeadline})
 			}
 		}

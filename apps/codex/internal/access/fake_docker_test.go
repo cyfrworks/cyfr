@@ -549,10 +549,10 @@ func (f *fakeDocker) compose(c *fakeCall) fakeAnswer {
 			}
 		}
 		return fail(1, "service %q is not running", svcName)
-	case "down":
-		for n, ct := range f.st.Containers {
-			if !ct.Join {
-				delete(f.st.Containers, n)
+	case "stop":
+		for _, ct := range f.st.Containers {
+			if _, selected := cfg.Services[ct.Service]; selected && !ct.Join {
+				ct.State = "exited"
 			}
 		}
 		return fakeAnswer{}
