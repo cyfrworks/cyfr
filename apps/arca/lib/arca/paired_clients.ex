@@ -88,6 +88,15 @@ defmodule Arca.PairedClients do
         }
 
   @typedoc """
+  A row `revoke/2` answers: the row, and the token hashes of the sessions
+  its revocation ended.
+  """
+  @type revoked :: %{
+          required(:revoked_session_hashes) => [binary()],
+          optional(atom()) => term()
+        }
+
+  @typedoc """
   What `list/2` narrows by: `user_id` (one person's clients) and
   `standing` (`:active`, the default, `:suspended`, `:revoked` or `:all`).
   """
@@ -289,7 +298,7 @@ defmodule Arca.PairedClients do
   revoking a revoked row answers it as it is, with none.
   """
   @spec revoke(Prima.Actor.t(), String.t()) ::
-          {:ok, row()}
+          {:ok, revoked()}
           | {:error, :not_found | :no_athanor | :database_error}
   def revoke(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
