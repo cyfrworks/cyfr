@@ -614,7 +614,6 @@
 10.0	apps/cyfr/test/prism_web/live/shell_prompts_test.exs
 0.1	apps/cyfr/test/prism_web/live/shell_redirect_test.exs
 2.0	apps/cyfr/test/prism_web/live/shell_tincture_url_test.exs
-4.4	apps/cyfr/test/prism_web/live/system_layer_pairing_test.exs
 5.7	apps/cyfr/test/prism_web/live/system_layer_recovery_test.exs
 0.2	apps/cyfr/test/prism_web/live/system_layer_share_test.exs
 47.8	apps/cyfr/test/prism_web/live/system_layer_test.exs
@@ -713,7 +712,6 @@
 0.8	apps/cyfr/test/sanctum/providers/decision_test.exs
 0.2	apps/cyfr/test/sanctum/providers/invitation_test.exs
 0.8	apps/cyfr/test/sanctum/providers/mcp_log_test.exs
-2.5	apps/cyfr/test/sanctum/providers/pairing_test.exs
 0.7	apps/cyfr/test/sanctum/providers/person_rotation_test.exs
 1.5	apps/cyfr/test/sanctum/providers/person_test.exs
 0.6	apps/cyfr/test/sanctum/providers/policy_log_test.exs

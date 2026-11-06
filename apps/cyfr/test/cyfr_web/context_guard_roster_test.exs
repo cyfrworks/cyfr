@@ -24,7 +24,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     RootRedirectLive ChatRedirectLive ChatLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
     MyReportsLive BuildsLive VaultLive ApiKeysLive WebhooksLive
-    SchedulesLive SettingsLive ProgramsLive ShellLive LegalLive DeviceAddLive
+    SchedulesLive SettingsLive ProgramsLive ShellLive LegalLive
   )
 
   # The sign-in page, the pairing page, the restore page and the
@@ -34,7 +34,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # as a nested view does. Nor does the company page hold one: it reads
   # the browser's session only as the owner of one refused for the company
   # sign-in alone (`Sanctum.CompanyLogin.held/1`).
-  @public ~w(LoginLive PairLive RestoreLive SetupLive InviteLive CompanyLoginLive)
+  @public ~w(LoginLive RestoreLive SetupLive InviteLive CompanyLoginLive)
 
   # Rendered by the layout or a page with `live_render/3`; each mounts the guard itself.
   @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive SharedThreadLive)

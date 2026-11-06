@@ -5697,8 +5697,8 @@ defmodule PrismWeb.SystemLayerTest do
              subject: %{entry_id: "vlt_k", name: "probe", threads: []}
            }, "Offer this key to everyone on this CYFR or to one of your threads"},
         pairing:
-          {%{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
-           "Pair a phone or another browser with this CYFR"},
+          {%{id: "k-pairing", kind: :pairing, action: :pairing_revocation, subject: %{}},
+           "Revoke a device you paired"},
         confirmation: {confirmation, "A client of yours asked for a change"},
         kit:
           {%{

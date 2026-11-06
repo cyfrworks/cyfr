@@ -708,33 +708,33 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # Drivers: the device channel
   # ==========================================================================
 
-  # A glass connects under a certificate, is challenged, and proves its key;
-  # the verifier refuses the proof, and the refusal is the decision under
-  # the call id the channel assigned the proof. The transport still
-  # delivers what arrives before the peer's close: the connect's deadline
-  # and more frames record nothing, so the connection, counted by its
-  # request id, holds that one decision.
+  # A glass connects under a certificate naming a client this home does
+  # not hold, so no challenge can be bound to its key: the refusal is the
+  # decision under the call id the channel assigned the connect. The
+  # transport still delivers what arrives before the peer's close: more
+  # frames record nothing, so the connection, counted by its request id,
+  # holds that one decision.
   def device_channel_unproven(_conn, _ctx) do
-    {device_key, device_private} = :crypto.generate_key(:eddsa, :ed25519)
-    {_live_key, live_private} = :crypto.generate_key(:eddsa, :ed25519)
-    home = Sanctum.origin()
+    {device_key, _device_private} = :crypto.generate_key(:eddsa, :ed25519)
+    {_public, installation} = Sanctum.Cipher.installation_key()
+    {:ok, home} = Sanctum.SignIn.audience()
     now = System.system_time(:millisecond)
     client_id = Prima.UUID7.generate_id("pcl")
 
     {:ok, cert} =
       Prima.DeviceCert.new(
-        device_key: device_key,
+        kid: Prima.Identity.Key.kid(device_key),
         client_id: client_id,
-        subject: %{kind: :local, user_id: Prima.UUID7.generate_id("usr")},
-        issuer: home,
-        audience: home,
+        identifier: "per_" <> String.duplicate("a", 64),
+        head: "sha256:" <> String.duplicate("b", 64),
         athanor: Prima.UUID7.generate_id("ath"),
+        audience: home,
         not_before: now,
         expires_at: now + 3_600_000
       )
 
     connect =
-      {:connect, %{client_id: client_id, certificate: Prima.DeviceCert.sign(cert, live_private)}}
+      {:connect, %{client_id: client_id, certificate: Prima.DeviceCert.sign(cert, installation)}}
 
     {:ok, state} =
       DeviceChannel.connect(%{
@@ -747,21 +747,11 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
     {:ok, state} = DeviceChannel.init(state)
 
-    {:reply, :ok, {:text, json}, state} =
-      DeviceChannel.handle_in({device_frame(connect), [opcode: :text]}, state)
-
-    {:ok, {:challenge, %{challenge: challenge}}} =
-      Prima.Device.decode(Jason.decode!(json), :home)
-
-    proof = {:proof, %{proof: Prima.DeviceCert.Proof.sign(challenge, device_private)}}
-    {deadline, _timer} = state.deadline
-
     assert {:stop, :normal, {4401, "unauthenticated"}, closed} =
-             DeviceChannel.handle_in({device_frame(proof), [opcode: :text]}, state)
+             DeviceChannel.handle_in({device_frame(connect), [opcode: :text]}, state)
 
     after_close = [
-      fn -> DeviceChannel.handle_info({DeviceChannel, :deadline, deadline}, closed) end,
-      fn -> DeviceChannel.handle_in({device_frame(proof), [opcode: :text]}, closed) end,
+      fn -> DeviceChannel.handle_in({device_frame(connect), [opcode: :text]}, closed) end,
       fn -> DeviceChannel.handle_in({"{}", [opcode: :text]}, closed) end
     ]
 
