@@ -131,8 +131,17 @@ defmodule Emissary.Web.AccountControllerTest do
       assert_headers(refused)
     end
 
-    assert_error_sent 404, fn -> get(build_conn(), "/account/new/extra") end
-    assert_error_sent 404, fn -> get(build_conn(), "/account") end
+    # No route serves these: the endpoint's fallback answers 404.
+    for path <- ["/account/new/extra", "/account"] do
+      assert status(path) == 404, path
+    end
+  end
+
+  # The status the endpoint answers, whether a route answers or none does.
+  defp status(path) do
+    get(build_conn(), path).status
+  rescue
+    error -> Plug.Exception.status(error)
   end
 
   test "a page the bundle does not hold is 404", %{root: root} do
