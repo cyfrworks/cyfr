@@ -226,10 +226,6 @@ defmodule Arca.Users do
       (`Arca.Schemas.User.admissions/0`), recorded on their row.
     * `restore:` — the installation claim a restore's mint names
       (`%{request_id: …, token_digest: …}`), never a caller's argument.
-    * `rp_id:` and `home:` (required for `setup`) — the home's current
-      WebAuthn RP ID and home URL, the address at which a passkey or a
-      certified device of setup's person still works
-      (`Arca.InstallationClaims.guard!/3`).
     * `verify:` — the higher owner's check (`ARCHITECTURE.md` §4.4), run
       inside the transaction after the installation guard and before any
       row is written. A zero-arity function answering `:ok` or
@@ -244,19 +240,16 @@ defmodule Arca.Users do
       call.
 
   The installation guard runs first, inside the same transaction
-  (`Arca.InstallationClaims.guard!/3`): the installation's first person is
+  (`Arca.InstallationClaims.guard!/2`): the installation's first person is
   made only by `setup` or a restore, and is written with the platform
   administrator's mark (`users.platform_admin_at`) in this transaction; no
-  other mint writes it. Every other
-  admission onto an empty node is `:not_set_up`; a pending restore claim,
-  or a node with no person whose installed mode is `:restore_reserved`,
-  refuses everything but its restore (`:restore_reserved`); a restore is
-  `:not_claimed` unless its claim is pending exactly as named, and
-  `:not_empty` on a node that holds a person; a `setup` once its person
-  holds a method at that address (`Arca.InstallationClaims`) is `:setup_closed`. A
-  `setup` on a node whose person setup made holds none mints nothing and
-  answers `{:error, {:readmit, person}}`: that person is admitted again
-  through `readmit/3`. A node whose boot installed no mode raises
+  other mint writes it. Every other admission onto an empty node is
+  `:not_set_up`; a pending restore claim, or a node with no person whose
+  installed mode is `:restore_reserved`, refuses everything but its
+  restore (`:restore_reserved`); a restore is `:not_claimed` unless its
+  claim is pending exactly as named, and `:not_empty` on a node that
+  holds a person; a `setup` on a node that holds a person is
+  `:setup_closed`. A node whose boot installed no mode raises
   `Arca.InstallationClaims.NotInstalledError` and mints nothing.
 
   `identity_attrs` is the sign-in method linked with the person, or nil
@@ -273,7 +266,6 @@ defmodule Arca.Users do
              | :not_set_up
              | :setup_closed
              | :not_owner
-             | {:readmit, map()}
              | term()}
           | refusal()
           | write_refusal()
@@ -295,7 +287,6 @@ defmodule Arca.Users do
 
   defp mint_guarded(actor, admission, user_attrs, identity_attrs, opts) do
     restore = Keyword.get(opts, :restore)
-    here = if admission == "setup", do: here(opts)
     verify = Keyword.get(opts, :verify, fn -> :ok end)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
     user_attrs = user_attrs |> Map.new() |> Map.put(:admission, admission)
@@ -305,10 +296,7 @@ defmodule Arca.Users do
         identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
 
     Arca.Repo.owned("Arca.Users.mint", fn ->
-      case Arca.InstallationClaims.guard!(admission, restore, here) do
-        {:readmit, %User{} = user} ->
-          {:error, {:readmit, Arca.Data.project(user)}}
-
+      case Arca.InstallationClaims.guard!(admission, restore) do
         {:error, _reason} = refusal ->
           refusal
 
@@ -339,46 +327,6 @@ defmodule Arca.Users do
         lost_the_race(actor, identity_attrs && identity_attrs[:key], reason)
     end
   end
-
-  @doc """
-  Admit again the person `setup` made, `user_id`, while they hold no
-  method at `rp_id:` and `home:` (required, the home's current address): the
-  installation guard decides it again under the order row
-  (`Arca.InstallationClaims.guard!/3`), as `mint/4` decided it, so a
-  method registered since refuses `:setup_closed`. `also:` runs in that
-  transaction, handed the person, with `mint/4`'s contract. A member that
-  lost its slot is refused `:not_owner`.
-  """
-  @spec readmit(Prima.Actor.t(), String.t(), keyword()) ::
-          {:ok, map()}
-          | {:error, :setup_closed | :restore_reserved | :not_owner | term()}
-  def readmit(%Prima.Actor{scope: :platform}, user_id, opts)
-      when is_binary(user_id) and is_list(opts) do
-    here = here(opts)
-    also = Keyword.get(opts, :also, fn _user -> :ok end)
-
-    Arca.Repo.owned("Arca.Users.readmit", fn ->
-      case Arca.InstallationClaims.guard!("setup", nil, here) do
-        {:readmit, %User{id: ^user_id} = user} ->
-          with :ok <- also_ran(also.(Arca.Data.project(user))), do: {:ok, user}
-
-        {:readmit, %User{}} ->
-          {:error, :setup_closed}
-
-        {:error, _reason} = refusal ->
-          refusal
-
-        _first_or_open ->
-          {:error, :setup_closed}
-      end
-    end)
-  end
-
-  def readmit(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
-
-  # The home's current address a setup names (`Arca.InstallationClaims`):
-  # its RP ID and its home URL, both required.
-  defp here(opts), do: %{rp_id: Keyword.fetch!(opts, :rp_id), home: Keyword.fetch!(opts, :home)}
 
   # The installation's first person is born with the platform
   # administrator's mark, on the row itself and past every changeset.

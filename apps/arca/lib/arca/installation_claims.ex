@@ -33,7 +33,7 @@ defmodule Arca.InstallationClaims do
 
   ## The guard
 
-  `guard!/3` is the check every person mint runs inside its own
+  `guard!/2` is the check every person mint runs inside its own
   transaction (`Arca.Users.mint/4`), naming the mint's admission. The
   installation's first person is made only by `setup` or by a restore,
   and is its platform administrator: every other admission needs an
@@ -42,29 +42,10 @@ defmodule Arca.InstallationClaims do
 
     * A restore's mint names its claim, and is admitted only while that
       claim is pending, exactly as bound, on a node with no person.
-    * A `setup` mint is admitted on a node with no person. Once its person
-      exists, `setup` answers that person again while they hold no
-      method at the home's current address (`t:here/0`, which Sanctum
-      reads from the home): no passkey at its RP ID
-      (`Sanctum.Passkeys.rp_id/0`) that is active or that a restore
-      suspended, no paired client that is active or that a restore
-      suspended and holds a certificate this home recorded for its
-      current address as the audience (`Sanctum.Person.home/0`), and no
-      linked sign-in method. The certificate is read as recorded, its
-      audience alone: one that expired, or that a restore or a key
-      rotation revoked, still closes setup while its client stands, so
-      neither expiry nor rotation reopens it; the client's standing says
-      whether it is still a method. A passkey bound to an RP ID the home
-      has left, a client certified only for an address it has left, a
-      pending or revoked passkey, a revoked client and the first-method
-      mark on their identity row do not close it, so an administrator
-      whose home moved is let in again at the new address. A suspended
-      one closes it: the restore's own path re-enables it, and the backup
-      the restore came from carried the setup token. It is read under
-      their lock, the one a device's enrollment and a pairing take before
-      they write a client, and is `:setup_closed` from the commit that
-      gave them such a method on, and on a node whose people setup did
-      not make.
+    * A `setup` mint is admitted on a node with no person, and refused
+      `:setup_closed` on one that holds a person, whoever made them: the
+      setup token binds the installation to its first account and then
+      opens nothing.
     * Every other mint is refused `:restore_reserved` while a claim is
       pending, whatever the mode, and on a node with no person while the
       mode is `:restore_reserved`; `setup` is refused the same way.
@@ -86,15 +67,7 @@ defmodule Arca.InstallationClaims do
 
   alias Arca.QueryHelpers
 
-  alias Arca.Schemas.{
-    DeviceCertificate,
-    ExternalIdentity,
-    InstallationClaim,
-    PairedClient,
-    Passkey,
-    ServerMeta,
-    User
-  }
+  alias Arca.Schemas.{InstallationClaim, ServerMeta, User}
 
   defmodule NotInstalledError do
     @moduledoc """
@@ -112,12 +85,6 @@ defmodule Arca.InstallationClaims do
 
   @typedoc "The installation mode the boot installs."
   @type mode :: :ordinary | :restore_reserved
-
-  @typedoc """
-  The home's current address, which a `setup` names: its passkey RP ID
-  and its home URL, the audience a device certificate records.
-  """
-  @type here :: %{required(:rp_id) => String.t(), required(:home) => String.t()}
 
   @typedoc "What a restore names its claim by."
   @type claim_ref :: %{required(:request_id) => String.t(), required(:token_digest) => String.t()}
@@ -175,22 +142,20 @@ defmodule Arca.InstallationClaims do
 
   @typedoc """
   What the guard admits: `:first`, the installation's first person, who
-  is its platform administrator; `:ok`, another person; `{:readmit,
-  user}`, the person setup made, answered again.
+  is its platform administrator, or `:ok`, another person.
   """
-  @type admitted :: :first | :ok | {:readmit, User.t()}
+  @type admitted :: :first | :ok
 
   @doc false
-  @spec guard!(String.t(), claim_ref() | nil, here() | nil) ::
+  @spec guard!(String.t(), claim_ref() | nil) ::
           admitted()
           | {:error, :restore_reserved | :not_claimed | :not_empty | :not_set_up | :setup_closed}
   # The first-person guard, inside the caller's locking transaction
-  # (`Arca.Users.mint/4`): the mint's admission, the claim a restore's
-  # mint names, and the address a setup's names, the home's current one.
-  # Answers what it admits or the refusal the caller rolls back with. Reads
-  # the installed mode, which raises when none is.
+  # (`Arca.Users.mint/4`): the mint's admission and the claim a restore's
+  # mint names. Answers what it admits or the refusal the caller rolls
+  # back with. Reads the installed mode, which raises when none is.
   # arca:db-raise-ok a transaction step: the mint that runs it rescues around its transaction.
-  def guard!("restore", claim, _rp_id) do
+  def guard!("restore", claim) do
     _mode = mode()
     lock_order!()
 
@@ -207,105 +172,41 @@ defmodule Arca.InstallationClaims do
     end
   end
 
-  def guard!("setup", _claim, %{rp_id: rp_id, home: home} = here)
-      when is_binary(rp_id) and is_binary(home) do
+  def guard!(admission, _claim) when is_binary(admission) do
     mode = mode()
     lock_order!()
-    decide("setup", mode, here, :locked)
-  end
-
-  def guard!(admission, _claim, _rp_id) when is_binary(admission) and admission != "setup" do
-    mode = mode()
-    lock_order!()
-    decide(admission, mode, nil, :locked)
+    decide(admission, mode)
   end
 
   @doc """
-  What a `setup` naming `here` would be answered now: `:first`, `{:readmit,
-  person}` or `:closed`. The guard's own decision (`guard!/3`) read outside
-  any transaction and without its locks, for a surface that says setup is
-  closed, or whom it lets in again, before it starts a ceremony. The mint
-  decides again under the order row, so this answer is advice and never
-  authority.
+  What a `setup` would be answered now: `:first` or `:closed`. The guard's
+  own decision (`guard!/2`) read outside any transaction and without its
+  locks, for a surface that says setup is closed before it starts. The
+  mint decides again under the order row, so this answer is advice and
+  never authority.
   """
-  @spec setup(Prima.Actor.t(), here()) ::
-          {:ok, :first | {:readmit, map()} | :closed}
-          | {:error, :cross_tenant | :database_error}
-  def setup(%Prima.Actor{scope: :platform}, %{rp_id: rp_id, home: home} = here)
-      when is_binary(rp_id) and is_binary(home) do
+  @spec setup(Prima.Actor.t()) ::
+          {:ok, :first | :closed} | {:error, :cross_tenant | :database_error}
+  def setup(%Prima.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.InstallationClaims.setup", fn ->
-      case decide("setup", mode(), here, :unlocked) do
+      case decide("setup", mode()) do
         :first -> {:ok, :first}
-        {:readmit, user} -> {:ok, {:readmit, Arca.Data.project(user)}}
         {:error, _closed} -> {:ok, :closed}
       end
     end)
   end
 
-  def setup(%Prima.Actor{}, _here), do: {:error, :cross_tenant}
+  def setup(%Prima.Actor{}), do: {:error, :cross_tenant}
 
-  defp decide(admission, mode, here, lock) do
+  defp decide(admission, mode) do
     cond do
       pending() != nil -> {:error, :restore_reserved}
       empty?() and mode == :restore_reserved -> {:error, :restore_reserved}
       empty?() and admission == "setup" -> :first
       empty?() -> {:error, :not_set_up}
-      admission == "setup" -> readmitted(here, lock)
+      admission == "setup" -> {:error, :setup_closed}
       true -> :ok
     end
-  end
-
-  # The person setup made, while they hold no method at the home's current
-  # address: no passkey at its RP ID that is active or suspended, no
-  # active or suspended client that a certificate recorded for its home
-  # names, and no linked sign-in method. Under the guard, read under their
-  # lock, which every write that gives them one takes before it writes (a
-  # passkey registered or activated active, in `Arca.Passkeys`, a client
-  # enrolled or paired, in `Arca.Users.mint/4`'s and `readmit/3`'s
-  # transaction and `Arca.PairingInvitations`, and a link, in
-  # `Arca.Users.link_identity/4`), so a method committed first is seen and
-  # one that starts later waits for this decision. A suspension and a
-  # re-enabling move a passkey or a client between the two states that
-  # close it.
-  defp readmitted(%{rp_id: rp_id, home: home}, lock) do
-    case Arca.Repo.one(from(u in User, where: u.admission == "setup", select: u.id)) do
-      nil ->
-        {:error, :setup_closed}
-
-      user_id ->
-        if lock == :locked, do: Arca.DirectoryHeads.lock_person!(user_id)
-        user = Arca.Repo.get!(User, user_id)
-
-        holds_method? =
-          Arca.Repo.exists?(
-            from(p in Passkey,
-              where:
-                p.user_id == ^user_id and p.state in ["active", "suspended"] and
-                  p.rp_id == ^rp_id
-            )
-          ) or device_here?(user_id, home) or
-            Arca.Repo.exists?(from(i in ExternalIdentity, where: i.user_id == ^user_id))
-
-        if user.status == "active" and not holds_method?,
-          do: {:readmit, user},
-          else: {:error, :setup_closed}
-    end
-  end
-
-  # A client of the person that stands, active or suspended, certified by
-  # a certificate this home recorded for `home`: its audience as recorded,
-  # whatever its expiry or state, so neither reopens setup.
-  # arca:unscoped-ok the setup person's own clients, in whichever athanor they hold them.
-  defp device_here?(user_id, home) do
-    Arca.Repo.exists?(
-      from(p in PairedClient,
-        join: c in DeviceCertificate,
-        on: c.paired_client_id == p.id and c.athanor_id == p.athanor_id,
-        where:
-          p.user_id == ^user_id and p.standing in ["active", "suspended"] and
-            c.audience_home == ^home
-      )
-    )
   end
 
   @doc """
