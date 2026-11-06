@@ -170,12 +170,9 @@ defmodule Sanctum.Providers.Confirmation do
          {:ok, _row} <- own(Context.actor(ctx), ref, user_id),
          {:ok, binding, _opts} <- binding(ctx, user_id),
          {:ok, answer} <- answer(answer) do
-      case Sanctum.SignIn.answer(answer, binding) do
+      case Sanctum.SignIn.answer(answer, binding, ref: ref) do
         {:ok, %{purpose: :confirm, ref: ^ref}} ->
           confirmed(ctx, ref)
-
-        {:ok, _another} ->
-          {:error, refusal(:answer_refused)}
 
         {:error, reason} ->
           {:error, refusal(reason)}

@@ -365,7 +365,9 @@ defmodule Sanctum.SignIn do
   (the module doc). `answer`
   is a passkey's answer as its fragment, or a decoded
   `Prima.SignIn.PasskeyAnswer` or `Prima.SignIn.DeviceAnswer`. `opts`:
-  `:now`, the clock in milliseconds, the system's by default.
+  `:ref`, the confirmation the answer must be for, so an answer to any
+  other request is refused before it does anything; `:now`, the clock in
+  milliseconds, the system's by default.
 
   Refusals: `:answer_refused`, `:identity_stale`, `:identity_gone`,
   `:stale_head`, `{:door, reason}`, `:invitation_invalid`,
@@ -395,6 +397,7 @@ defmodule Sanctum.SignIn do
 
     with {:ok, held} <- spent(answer.challenge),
          :ok <- bound(held.binding, binding),
+         :ok <- expected(held, opts),
          :ok <- current(held.request, now),
          {:ok, identifier} <- answering(answer, held),
          {:ok, head, state} <- account(identifier),
@@ -424,6 +427,15 @@ defmodule Sanctum.SignIn do
   end
 
   defp bound(_held, _delivered), do: refused(:wrong_binding)
+
+  # The confirmation the caller names, when it names one: an answer to any
+  # other request does nothing.
+  defp expected(held, opts) do
+    case Keyword.fetch(opts, :ref) do
+      :error -> :ok
+      {:ok, ref} -> if Map.get(held, :ref) == ref, do: :ok, else: refused(:wrong_record)
+    end
+  end
 
   # Unexpired and for this CYFR, before any log is read for it.
   defp current(%Prima.SignIn{expires_at: expires_at, audience: audience}, now) do

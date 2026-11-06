@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 apps/cyfr/test/sanctum/api_key_capability_test.exs	1	pending
-apps/cyfr/test/sanctum/auth/oidc_reauth_test.exs	5	pending
 apps/cyfr/test/sanctum/cipher/cipher_integration_test.exs	1	pending
 apps/cyfr/test/sanctum/consent/accounts_test.exs	1	pending
 apps/cyfr/test/sanctum/consent/agent_consent_test.exs	1	pending
@@ -32,7 +31,6 @@ apps/cyfr/test/sanctum/gate/request_log_test.exs	2	pending
 apps/cyfr/test/sanctum/provider_test.exs	1	pending
 apps/cyfr/test/sanctum/provider_vault_profile_test.exs	1	pending
 apps/cyfr/test/sanctum/providers/athanor_member_door_tools_test.exs	1	pending
-apps/cyfr/test/sanctum/providers/confirmation_test.exs	11	pending
 apps/cyfr/test/sanctum/providers/person_test.exs	2	pending
 apps/cyfr/test/sanctum/providers/profile_grants_test.exs	1	pending
 apps/cyfr/test/sanctum/provisioning_closure_test.exs	4	pending
@@ -42,5 +40,5 @@ apps/cyfr/test/sanctum/restore_kit_proof_test.exs	1	pending
 apps/cyfr/test/sanctum/tenancy/archive_test.exs	4	pending
 apps/cyfr/test/sanctum/tincture_access_test.exs	1	pending
 apps/cyfr/test/sanctum/vault/oauth_grant_test.exs	2	pending
-apps/cyfr/test/sanctum/vault/oauth_redirect_uri_test.exs	5	pending
+apps/cyfr/test/sanctum/vault/oauth_redirect_uri_test.exs	3	pending
 apps/cyfr/test/sanctum/webhook_test.exs	2	pending
