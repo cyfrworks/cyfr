@@ -382,10 +382,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(types max_depth reasons shapes canonical spellings times values results)},
       {"apps/prima/test/prima/manifest/results_test.exs", ~w(values results)}
     ],
-    "carry.json" => [
-      {"apps/cyfr/assets/test/carrier/carry.test.mjs",
-       ~w(fragments.parse fragments.valid max_fragment_bytes payload returns)}
-    ],
     "component_refs.json" => [
       {"apps/codex/internal/ref/ref_fixture_test.go", ~w(cases version_ordering)},
       {"apps/cyfr/assets/test/sdk/wire.test.mjs", ~w(tincture_urls)},
@@ -543,8 +539,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/release-boot/boot.sh", ~w(boot)}
     ],
     "recovery_code.json" => [
-      {"apps/cyfr/assets/test/system_layer/recovery.test.mjs", ~w(refused valid)},
-      {"apps/cyfr/assets/test/system_layer/recovery_code.test.mjs", ~w(refused spellings valid)},
       {"apps/prima/test/prima/recovery_code_test.exs", ~w(protocol refused spellings valid)}
     ],
     # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
@@ -568,11 +562,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/codex/cmd/restore_test.go", ~w(barred_exit declare_expr declared_prefix name)},
       {"apps/cyfr/test/cyfr/platform_settings_roster_test.exs", ~w(name)},
       {"tests/compose-proof/run.sh", ~w()}
-    ],
-    "restore_kit.json" => [
-      {"apps/cyfr/assets/test/system_layer/recovery.test.mjs",
-       ~w(challenge_bytes kit other_kit protocol refused valid)},
-      {"apps/cyfr/test/sanctum/restore_kit_proof_test.exs", ~w(kit refused valid)}
     ],
     "runner_control.json" => [
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
