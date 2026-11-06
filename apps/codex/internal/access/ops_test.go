@@ -141,18 +141,23 @@ func TestRecoveryStopsEveryAccessService(t *testing.T) {
 	}
 }
 
-// Every stop closes Serve first: `cyfr down`'s compose down never runs
+// Every stop closes Serve first: `cyfr down`'s compose stop never runs
 // while Serve still forwards to the home.
-func TestStopClosesServeBeforeComposeDown(t *testing.T) {
+func TestStopClosesServeBeforeComposeStop(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	h.toTailnet(1, testKey, false)
-	downs := 0
+	h.fake.st.Containers["home-orphan-1"] = &fakeContainer{Name: "home-orphan-1", Service: "orphan", State: "running"}
+	h.fake.st.Containers["home-caddy-1"] = &fakeContainer{Name: "home-caddy-1", Service: "caddy", State: "running"}
+	stops := 0
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		if c.Args[0] == "compose" && slices.Contains(c.Args, "down") {
-			downs++
+			t.Error("stop ran compose down")
+		}
+		if c.Args[0] == "compose" && slices.Contains(c.Args, "stop") {
+			stops++
 			if data, _ := os.ReadFile(h.e.servePath()); string(data) != serveClosed {
-				t.Errorf("compose down ran while Serve held %s", data)
+				t.Errorf("compose stop ran while Serve held %s", data)
 			}
 		}
 		return nil
@@ -160,8 +165,11 @@ func TestStopClosesServeBeforeComposeDown(t *testing.T) {
 	if _, err := h.e.Stop(bg, "down", true); err != nil {
 		t.Fatal(err)
 	}
-	if downs != 1 {
-		t.Errorf("compose down ran %d times", downs)
+	if stops != 1 {
+		t.Errorf("compose stop ran %d times", stops)
+	}
+	if len(h.fake.st.Containers) != 0 {
+		t.Errorf("stop left project containers: %v", h.fake.st.Containers)
 	}
 }
 

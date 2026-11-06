@@ -8,7 +8,9 @@ package access
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"maps"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -214,7 +216,10 @@ func boxProject(t *testing.T, compose, env string) (string, string) {
 		if ids := strings.Fields(string(out)); len(ids) > 0 {
 			exec.Command("docker", append([]string{"rm", "-f"}, ids...)...).Run()
 		}
-		exec.Command("docker", "network", "rm", name+"_default").Run()
+		out, _ = exec.Command("docker", "network", "ls", "-q", "--filter", "label=com.docker.compose.project="+name).Output()
+		if ids := strings.Fields(string(out)); len(ids) > 0 {
+			exec.Command("docker", append([]string{"network", "rm"}, ids...)...).Run()
+		}
 	})
 	return dir, name
 }
@@ -252,7 +257,8 @@ func TestRealComposeCallHoldsTheLock(t *testing.T) {
 // A stack shaped like the product's, on busybox: the one start path runs
 // real compose on the materialized file, its explicit selection and
 // cyfr's Docker health; a switch then starts the public profile's proxy;
-// a full stop leaves nothing running and no materialized file.
+// a full stop removes every project container, including an orphan, and
+// keeps the networks unchanged; a start serves the published port again.
 func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
 	requireCompose(t)
 	requireDocker(t)
@@ -260,14 +266,17 @@ func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
   cyfr:
     image: busybox:latest
     init: true
-    command: ["sleep", "600"]
+    command: ["sh", "-c", "mkdir -p /tmp/www; printf 'ready\\n' > /tmp/www/index.html; exec httpd -f -p 4000 -h /tmp/www"]
+    ports:
+      - "127.0.0.1::4000"
+    networks: [default, edge]
     env_file:
       - .env
     environment:
       - CYFR_BIND_ADDRESS=172.16.230.2
       - CYFR_LOCAL_INGRESS_ASSERTED=true
     healthcheck:
-      test: ["CMD", "true"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4000/"]
       interval: 1s
       start_period: 1s
   proxy:
@@ -275,6 +284,10 @@ func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
     init: true
     command: ["sleep", "600"]
     profiles: ["public"]
+    networks: [edge]
+networks:
+  default: {}
+  edge: {}
 `
 	dir, name := boxProject(t, compose, "CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n")
 	e, err := Open(dir, nil)
@@ -322,15 +335,60 @@ func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
 	if !strings.Contains(string(out), "CYFR_ACCESS=public\n") || !strings.Contains(string(out), "CYFR_HOST=home.example.com\n") {
 		t.Errorf("cyfr started with\n%s", out)
 	}
+	networks := func() []string {
+		t.Helper()
+		out, err := exec.Command("docker", "network", "ls", "--no-trunc", "--filter", "label=com.docker.compose.project="+name, "--format", "{{.Name}} {{.ID}}").CombinedOutput()
+		if err != nil {
+			t.Fatalf("list project networks: %v\n%s", err, out)
+		}
+		rows := strings.Split(strings.TrimSpace(string(out)), "\n")
+		slices.Sort(rows)
+		return rows
+	}
+	before := networks()
+	if len(before) != 2 {
+		t.Fatalf("project networks are %v, want two", before)
+	}
+	published := func() {
+		t.Helper()
+		out, err := exec.Command("docker", "port", name+"-cyfr-1", "4000/tcp").CombinedOutput()
+		if err != nil {
+			t.Fatalf("read published port: %v\n%s", err, out)
+		}
+		client := &http.Client{Timeout: time.Second}
+		response, err := client.Get("http://" + strings.TrimSpace(string(out)) + "/")
+		if err != nil {
+			t.Fatalf("published port: %v", err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil || response.StatusCode != http.StatusOK || string(body) != "ready\n" {
+			t.Fatalf("published port answered %d %q, %v", response.StatusCode, body, err)
+		}
+	}
+	published()
+	if out, err := exec.Command("docker", "run", "-d", "--label", labelProject+"="+name, "--label", labelService+"=old-proxy", "busybox:latest", "sleep", "600").CombinedOutput(); err != nil {
+		t.Fatalf("start project orphan: %v\n%s", err, out)
+	}
 	if rc, err := e.Stop(bg, "down", true); err != nil || rc.Outcome != "ok" {
 		t.Fatalf("stop answered %+v, %v", rc, err)
 	}
 	if got := services(); len(got) != 0 {
 		t.Errorf("running %v after the stop", got)
 	}
+	if cs, err := e.observe(bg); err != nil || len(cs) != 0 {
+		t.Errorf("project containers after the stop: %v, %v", cs, err)
+	}
+	if after := networks(); !slices.Equal(before, after) {
+		t.Errorf("stop changed project networks: before %v, after %v", before, after)
+	}
 	if left, _ := filepath.Glob(filepath.Join(dir, stateDir, resolvedGlob)); len(left) != 0 {
 		t.Errorf("materialized files are left: %v", left)
 	}
+	if rc, err := e.Start(bg, "up"); err != nil || rc.Outcome != "ok" {
+		t.Fatalf("restart answered %+v, %v", rc, err)
+	}
+	published()
 }
 
 // Compose's own diagnostics quote .env's text: a malformed line holding a
