@@ -67,12 +67,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
       (`PrismWeb.SystemLayer.Pairing`);
     * `:confirmation` — one pending confirmation as `confirmation.pending`
       lists it: its public `ref`, the `operation` and `action` it confirms,
-      the `preview` and `asker` the home stored, its `expires_at`, the
-      `webauthn` request options a passkey proves it with, the `methods`
-      the person can prove it by, for a person whose keys are at another
-      home `at_home`, what their browser carries there for it, `enroll`,
-      whether they must add a passkey or a device first, and `own`,
-      whether this client asked for it. A client that asked but cannot read the list carries
+      the `preview` and `asker` the CYFR stored, its `expires_at`, the
+      `methods` this client proves it by, and `own`, whether this client
+      asked for it. A client that asked but cannot read the list carries
       the ref, operation and expiry alone, the rest `nil`. The secret the
       asking request was answered never enters a prompt;
     * `:kit` and `:holder` — recovery material, each under the action
@@ -96,7 +93,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
   @field_name ~r/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/
   @prefill_keys [:athanor_id, :provider, :hosts, :paths, :disclose_needed, :return]
 
-  @methods ~w(passkey oidc email home device)
+  @methods ~w(passkey device)
 
   @typedoc "What a prompt asks for."
   @type kind ::
@@ -172,10 +169,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
         :preview,
         :asker,
         :expires_at,
-        :webauthn,
-        :methods,
-        :at_home,
-        :enroll
+        :methods
       ])
       |> Map.put(:action, Map.get(entry, :action))
       |> Map.put(:own, own)
@@ -284,7 +278,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
        do:
          {:ok,
           Map.merge(
-            %{action: nil, preview: nil, asker: nil, webauthn: nil, methods: nil},
+            %{action: nil, preview: nil, asker: nil, methods: nil},
             subject
           )},
        else: {:error, :invalid_prompt}
@@ -363,15 +357,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
   defp optional_field?({:action, action}), do: is_binary(action)
   defp optional_field?({:preview, %{"operation" => op}}), do: is_binary(op)
   defp optional_field?({:asker, %{"kind" => kind}}), do: is_binary(kind)
-  defp optional_field?({:webauthn, %{"challenge" => challenge}}), do: is_binary(challenge)
 
   defp optional_field?({:methods, methods}),
     do: is_list(methods) and Enum.all?(methods, &(&1 in @methods))
-
-  defp optional_field?({:at_home, %{audience: audience, ref: ref}}),
-    do: is_binary(audience) and is_binary(ref)
-
-  defp optional_field?({:enroll, enroll}), do: is_boolean(enroll)
 
   defp optional_field?(_field), do: false
 

@@ -240,30 +240,24 @@ defmodule PrismWeb.SystemLayerTest do
     secret
   end
 
-  # A passkey's proof given on this client: the ceremony the layer asks
-  # for, answered by the person's authenticator over the record's digest.
+  # A passkey's proof given from this client: the layer opens the account
+  # pages in a new tab with the record's `confirm` request, the person's
+  # passkey of their account answers it there, and the answer returns to
+  # `/login` in that tab, which takes it under this browser's session.
   defp prove_here!(view, ref, authenticator) do
     view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
 
-    # The ceremony names the layer that asks for it: every hook on a page
+    # The hop names the layer that asks for it: every hook on a page
     # hears every push.
-    assert_push_event(view, "webauthn:get", %{
-      layer: "system-layer",
-      purpose: "confirmation",
-      id: ^ref,
-      public_key: %{"challenge" => challenge}
-    })
+    assert_push_event(view, "system_layer:hop", %{layer: "system-layer", url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+    ctx = view_context(view)
+    account = Sanctum.TestContext.account!(ctx.user_id)
+    answer = Authenticator.answer(authenticator, request, account.identifier)
 
-    {:ok, digest} = Prima.Identity.Encoding.unb64(challenge, 32)
-    credential = Authenticator.assertion(authenticator, digest)
-
-    view
-    |> layer()
-    |> render_hook("webauthn_result", %{
-      "purpose" => "confirmation",
-      "id" => ref,
-      "credential" => credential
-    })
+    assert {:ok, %{purpose: :confirm, ref: ^ref}} =
+             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
   end
 
   # Another session of the same person, in the same athanor.
@@ -4891,7 +4885,7 @@ defmodule PrismWeb.SystemLayerTest do
       end_views()
     end
 
-    test "an assertion that does not prove the record is refused, and the prompt still waits",
+    test "an answer that does not prove the record confirms nothing, and the prompt still waits",
          %{view: view, ctx: ctx} do
       other = other_session!(ctx)
 
@@ -4906,18 +4900,26 @@ defmodule PrismWeb.SystemLayerTest do
       ref = Prima.Confirmation.ref(id)
       wait_until(fn -> open_prompt(view) == Prompt.confirmation_id(ref) end, 2_000, "opened")
 
-      # An assertion this person's passkey never made is refused, and the
-      # prompt says so.
-      view
-      |> layer()
-      |> render_hook("webauthn_result", %{
-        "purpose" => "confirmation",
-        "id" => ref,
-        "credential" => %{"id" => "nobody", "response" => %{}}
-      })
+      # The layer opens the account pages with the record's request; an
+      # answer by a passkey the person's account does not list, returned
+      # under this browser's session, confirms nothing.
+      view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
+      assert_push_event(view, "system_layer:hop", %{layer: "system-layer", url: url})
+      [_page, fragment] = String.split(url, "#", parts: 2)
 
-      assert render(view) =~ ~s(role="alert")
+      {:ok, request} =
+        fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+
+      held = view_context(view)
+      account = Sanctum.TestContext.account!(held.user_id)
+      stranger = Authenticator.new("stranger-#{System.unique_integer([:positive])}")
+      answer = Authenticator.answer(stranger, request, account.identifier)
+
+      assert {:error, :answer_refused} =
+               Sanctum.SignIn.answer(answer, {:session, held.session_token_hash})
+
       assert render(view) =~ ~s(data-status="pending")
+      assert {:ok, %{state: "pending"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
       end_views()
     end
   end
@@ -5114,8 +5116,7 @@ defmodule PrismWeb.SystemLayerTest do
             },
             asker: %{"kind" => "session", "name" => "github"},
             expires_at: DateTime.add(DateTime.utc_now(), 300),
-            webauthn: %{"challenge" => "AAAA"},
-            methods: ["passkey", "oidc", "email"]
+            methods: ["passkey"]
           },
           false
         )
@@ -5126,8 +5127,6 @@ defmodule PrismWeb.SystemLayerTest do
       assert html =~ ~s(data-standing="none")
       assert has_element?(view, ~s([data-test="confirmation-preview"]), "vault.create")
       refute has_element?(view, ~s([data-test="confirm-passkey"]))
-      refute has_element?(view, ~s([data-test="confirm-reauth"]))
-      refute has_element?(view, ~s([data-test="confirm-email"]))
     end
   end
 

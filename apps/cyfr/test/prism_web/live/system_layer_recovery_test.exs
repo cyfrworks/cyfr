@@ -162,25 +162,21 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
     secret
   end
 
+  # A passkey's proof given from this client: the layer opens the account
+  # pages in a new tab with the record's `confirm` request, and the answer
+  # the person's passkey of their account signs there returns to `/login`
+  # in that tab, which takes it under this browser's session.
   defp prove_here!(view, ref, authenticator) do
     view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
+    assert_push_event(view, "system_layer:hop", %{layer: "system-layer", url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+    ctx = :sys.get_state(view.pid).socket.assigns.context
+    account = Sanctum.TestContext.account!(ctx.user_id)
+    answer = Authenticator.answer(authenticator, request, account.identifier)
 
-    assert_push_event(view, "webauthn:get", %{
-      layer: "system-layer",
-      purpose: "confirmation",
-      id: ^ref,
-      public_key: %{"challenge" => challenge}
-    })
-
-    {:ok, digest} = Encoding.unb64(challenge, 32)
-
-    view
-    |> layer()
-    |> render_hook("webauthn_result", %{
-      "purpose" => "confirmation",
-      "id" => ref,
-      "credential" => Authenticator.assertion(authenticator, digest)
-    })
+    assert {:ok, %{purpose: :confirm, ref: ^ref}} =
+             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
   end
 
   defp outcome(id) do

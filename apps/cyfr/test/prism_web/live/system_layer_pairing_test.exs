@@ -60,18 +60,6 @@ defmodule PrismWeb.SystemLayerPairingTest.BareHost do
   end
 end
 
-defmodule PrismWeb.SystemLayerPairingTest.Issuer do
-  @moduledoc false
-  # The re-authentication's stand-in for the identity provider: it answers
-  # the URL a person would be sent to, and redeems nothing here.
-  def authorize_url(request),
-    do:
-      {:ok,
-       "https://issuer.pairing.example/authorize?state=" <> URI.encode_www_form(request.state)}
-
-  def redeem(_code, _request), do: {:error, :reauth_refused}
-end
-
 defmodule PrismWeb.SystemLayerPairingTest do
   @moduledoc """
   The system layer's pairing prompt: the person's paired devices, each
@@ -84,12 +72,9 @@ defmodule PrismWeb.SystemLayerPairingTest do
   once the record reads confirmed, wherever it was proven. The code it
   then draws is `pairing.begin`'s `invitation_url`, as a QR code and as
   the link, beside the device's code, and that link's code completes a
-  pairing from the glass holding that key. Once the person holds a
-  passkey, the pairing's record says it takes a passkey or a paired
-  device's proof. A proof is a passkey,
-  a code sent to the person's email, or a fresh sign-in at their identity
-  provider, which opens in a new tab; a client with no person behind it
-  is offered a request for confirmation instead.
+  pairing from the glass holding that key. A person's browser proves the
+  record with a passkey of their account, at the account pages; a client
+  with no person behind it is offered a request for confirmation instead.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -98,9 +83,8 @@ defmodule PrismWeb.SystemLayerPairingTest do
 
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
-  alias PrismWeb.SystemLayerPairingTest.{BareHost, Host, Issuer}
+  alias PrismWeb.SystemLayerPairingTest.{BareHost, Host}
   alias Sanctum.Context
-  alias Sanctum.TestContext.MailSink
 
   setup %{conn: conn} do
     Prima.Test.RateLimiter.reset!()
@@ -284,26 +268,6 @@ defmodule PrismWeb.SystemLayerPairingTest do
       refute has_element?(view, ~s([data-test="pairing-qr"]))
       Cyfr.Test.Sandbox.end_views()
     end
-
-    test "a code sent to the person's email confirms it from the prompt",
-         %{conn: conn, athanor: athanor, ctx: ctx} do
-      view = host!(conn, athanor)
-      open_pairing!(view)
-      begin!(view, device_key!().code)
-      ref = open_record!(ctx, "pairing.begin")
-
-      # No passkey or device yet: not restricted, and the code is offered.
-      refute has_element?(view, ~s([data-test="confirmation-restricted"]))
-      view |> element(~s([data-test="confirm-email"])) |> render_click()
-      assert_receive {:confirmation_code_mail, mail}, 2_000
-      assert has_element?(view, ~s([data-test="confirm-code"]))
-
-      view |> form("#system-layer-code", %{"code" => MailSink.code(mail)}) |> render_submit()
-
-      wait_until(fn -> has_element?(view, ~s([data-test="pairing-qr"])) end, 2_000, "the code")
-      assert {:ok, %{state: "consumed"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
-      Cyfr.Test.Sandbox.end_views()
-    end
   end
 
   describe "the code the new device shows" do
@@ -362,7 +326,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "once the person holds a passkey, the pairing's record says it takes a passkey or a paired device",
+    test "the pairing's record is proven by a passkey of the person's account",
          %{conn: conn, athanor: athanor, ctx: ctx, user: user} do
       Sanctum.TestContext.passkey!(user.user_id)
       view = host!(conn, athanor)
@@ -372,10 +336,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       ref = open_record!(ctx, "pairing.begin")
       html = render(view)
       assert html =~ ~s(data-ref="#{ref}")
-
-      assert has_element?(view, ~s([data-test="confirmation-restricted"]), "your passkey")
-      assert has_element?(view, ~s([data-test="confirm-passkey"]))
-      refute has_element?(view, ~s([data-test="confirm-email"]))
+      assert has_element?(view, ~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"]))
       Cyfr.Test.Sandbox.end_views()
     end
   end
@@ -427,98 +388,10 @@ defmodule PrismWeb.SystemLayerPairingTest do
     end
   end
 
-  describe "a passkey in the one list" do
-    test "is listed as Passkey beside the devices, saying whether it may sync and what revoking ends",
-         %{conn: conn, athanor: athanor, ctx: ctx} do
-      # The person's passkey, registered as the fixtures register one: its
-      # platform holder is one entry of the list.
-      _authenticator = Sanctum.TestContext.passkey!(ctx.user_id)
-
-      {:ok, %{clients: clients}} = PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
-      assert [%{client_id: holder, holder_kind: "platform", synced: synced}] = clients
-
-      view = host!(conn, athanor)
-      open_pairing!(view)
-
-      entry = ~s([data-test="pairing-client"][data-client="#{holder}"])
-
-      assert view |> element(entry <> ~s( [data-test="pairing-client-name"])) |> render() =~
-               "Passkey"
-
-      scope = view |> element(entry <> ~s( [data-test="pairing-scope"])) |> render()
-
-      if synced,
-        do: assert(scope =~ "every one of them"),
-        else: assert(scope =~ "Revoking it ends it there")
-
-      assert has_element?(view, entry <> ~s( [data-test="pairing-revoke"]))
-      refute has_element?(view, entry <> ~s( [data-test="pairing-storage"]))
-      Cyfr.Test.Sandbox.end_views()
-    end
-  end
-
   # The ids `pairing.list` answers for the person.
   defp listed(ctx) do
     {:ok, %{clients: clients}} = PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
     Enum.map(clients, & &1.client_id)
-  end
-
-  describe "a fresh sign-in" do
-    setup do
-      issuer = "https://issuer.pairing.example"
-
-      previous = {
-        Application.get_env(:sanctum, :oidc_issuer),
-        Application.get_env(:sanctum, :oidc_reauth_client),
-        Application.get_env(:ueberauth, Ueberauth)
-      }
-
-      Application.put_env(:sanctum, :oidc_issuer, issuer)
-      Application.put_env(:sanctum, :oidc_reauth_client, Issuer)
-
-      Application.put_env(:ueberauth, Ueberauth,
-        providers: [
-          oidcc:
-            {Ueberauth.Strategy.Oidcc,
-             issuer: :cyfr_oidc, client_id: "cid", client_secret: "csec"}
-        ]
-      )
-
-      on_exit(fn ->
-        {oidc, client, ueberauth} = previous
-        restore(:sanctum, :oidc_issuer, oidc)
-        restore(:sanctum, :oidc_reauth_client, client)
-        restore(:ueberauth, Ueberauth, ueberauth)
-      end)
-
-      %{issuer: issuer}
-    end
-
-    test "opens the identity provider in a new tab, so this page stays",
-         %{conn: conn, issuer: issuer} do
-      user =
-        test_user(
-          identity:
-            Sanctum.Auth.Identity.key(:oidcc, issuer, "sub-#{System.unique_integer([:positive])}")
-        )
-
-      conn = log_in_user(conn, user)
-      athanor = seated_athanor()
-
-      view = host!(conn, athanor)
-      open_pairing!(view)
-      begin!(view, device_key!().code)
-
-      view |> element(~s([data-test="confirm-reauth"])) |> render_click()
-
-      assert has_element?(
-               view,
-               ~s(a[data-test="confirm-reauth-open"][target="_blank"][rel="noopener noreferrer"])
-             )
-
-      assert render(view) =~ "https://issuer.pairing.example/authorize?state="
-      assert render(view) =~ ~s(data-status="waiting")
-    end
   end
 
   describe "a client with no person behind it" do
