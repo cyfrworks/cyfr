@@ -105,7 +105,6 @@ type device interface {
 	Decide(ctx context.Context, ref string, confirm bool, secret []byte)
 	Unlocked() bool
 	Lock(why string)
-	Reenable(ctx context.Context, code string, secret []byte)
 }
 
 // openDevice is how a command opens this command line's device: its shell
@@ -174,7 +173,7 @@ func deviceShell(o deviceOptions) (*shell.Shell, error) {
 		DisplayName: deviceName(),
 		Invitation:  o.invitation,
 		HomeHere:    homeHere(o.address),
-		Tokens:      func() (string, string) { return o.setupToken, "" },
+		Tokens:      func() string { return o.setupToken },
 		Restart:     o.locked,
 	})
 }

@@ -463,14 +463,14 @@ func (c *screenChrome) restart() {
 	}
 }
 
-// screenTokens reads .env's setup and restore tokens as the server reads
-// them, each time a page needs one, so neither travels in an argument.
-func screenTokens() (string, string) {
+// screenTokens reads .env's setup token as the server reads it, each time
+// a page needs it, so it never travels in an argument.
+func screenTokens() string {
 	values, err := access.ReadEnvValues(".env")
 	if err != nil {
-		return "", ""
+		return ""
 	}
-	return strings.TrimSpace(values[setupTokenVar]), strings.TrimSpace(values["CYFR_RESTORE_TOKEN"])
+	return strings.TrimSpace(values[setupTokenVar])
 }
 
 // screenReachable is whether the home answers now, within two seconds.

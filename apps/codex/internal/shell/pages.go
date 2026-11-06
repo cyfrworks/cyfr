@@ -27,15 +27,11 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <p>This screen opens CYFR once it answers. If it does not, run <code>cyfr up</code> in CYFR's directory; Ctrl+Alt+F2 opens a terminal.</p>
 {{else if eq .Answer "answered"}}
 <h1>Done</h1><p>This window closes by itself.</p><script>{{.Close}}</script>
-{{else if or (eq .Page "setup") (eq .Page "restore")}}
+{{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
-{{if eq .Page "setup"}}<h1>Set up CYFR</h1>
+<h1>Set up CYFR</h1>
 <form method="post" action="/setup">
 <label>Your name, yours for life<input name="name" autocomplete="off" autofocus required></label>
-{{else}}<h1>Restore onto this box</h1>
-<form method="post" action="/restore">
-<label>Your recovery code<input name="code" autocomplete="off" autofocus required></label>
-{{end}}
 {{if .Digits}}
 <label>Choose a six-digit PIN<input name="secret" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
 <label>The same PIN again<input name="again" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
@@ -46,14 +42,13 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <label>The passphrase<input name="secret" type="password" autocomplete="off" required></label>
 <label>The passphrase again<input name="again" type="password" autocomplete="off" required></label>
 {{end}}
-<button>{{if eq .Page "setup"}}Set up{{else}}Restore{{end}}</button>
+<button>Set up</button>
 </form>
 {{else if eq .Page "finish"}}
 <h1>Finish setting up</h1>
 <p>CYFR's answer did not arrive. Enter your {{if .Digits}}PIN{{else}}passphrase{{end}} to finish setting up.</p>
 <form method="post" action="/finish">
-{{if .Restore}}<label>Your recovery code, again<input name="code" autocomplete="off" autofocus required></label>
-{{else}}<label>Your name, as you gave it<input name="name" autocomplete="off" autofocus></label>{{end}}
+<label>Your name, as you gave it<input name="name" autocomplete="off" autofocus></label>
 <label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" required></label>
 <button>Finish</button></form>
 {{else if eq .Page "locked"}}
@@ -61,14 +56,6 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <form method="post" action="/unlock">
 <label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" autofocus required></label>
 <button>Unlock</button></form>
-{{if .Kit}}
-<h1>Restored from a backup?</h1>
-<p>A restore of CYFR from a backup suspends this screen. Your recovery code brings it back.</p>
-<form method="post" action="/kit">
-<label>Your recovery code<input name="code" autocomplete="off" required></label>
-<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" required></label>
-<button>Bring this screen back</button></form>
-{{end}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 {{else if eq .Page "name"}}
 <h1>Your name</h1>

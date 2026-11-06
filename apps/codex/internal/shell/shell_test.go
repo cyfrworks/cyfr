@@ -40,7 +40,7 @@ func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	b.now.Store(time.Now().UnixNano())
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
-		Tokens:  func() (string, string) { return home.setupToken, home.restoreToken },
+		Tokens:  func() string { return home.setupToken },
 		Restart: func() { b.restarts.Add(1) },
 		Detect:  func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
 		Now:     func() time.Time { return time.Unix(0, b.now.Load()) },
@@ -304,14 +304,14 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	for b.shell.Unlocked() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "your recovery code below brings it back") {
+	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "a restore from a backup suspended it, or it was removed") {
 		t.Fatal("a revoked pairing did not lock the box")
 	}
 	home.mu.Lock()
 	home.closeWith = 4403
 	home.mu.Unlock()
 	b.post("/unlock", url.Values{"secret": {p}})
-	if !strings.Contains(b.page(), "your recovery code below brings it back") || b.shell.Unlocked() {
+	if !strings.Contains(b.page(), "a restore from a backup suspended it, or it was removed") || b.shell.Unlocked() {
 		t.Fatal("a revoked box unlocked")
 	}
 	_ = websocket.StatusNormalClosure
@@ -410,34 +410,5 @@ func TestConfirm_ALockedBoxFetchesNothing(t *testing.T) {
 	w := b.do(http.MethodGet, "/confirm?ref=cnr_1", "", nil)
 	if len(home.opsSeen()) != ops || !strings.Contains(body(w), "Unlock this screen first") {
 		t.Fatal("a locked box fetched a confirmation")
-	}
-}
-
-// A replacement box restores under the restore token and the recovery
-// code, and enrolls a key of its own: never the old box's.
-func TestRestore_EnrollsANewKeyUnderTheRestoreSession(t *testing.T) {
-	home := newFakeHome(t)
-	old := newBox(t, home, t.TempDir())
-	setUpAndOpen(t, home, old)
-	oldRec, _ := holder.Load(old.record)
-
-	home.restoreToken = strings.Repeat("ab", 32)
-	b := newBox(t, home, t.TempDir())
-	p := b.passphrase()
-	if !strings.Contains(b.page(), "Restore onto this box") {
-		t.Fatal("no restore page")
-	}
-	b.post("/restore", url.Values{"code": {"CYFR-WRONG"}, "secret": {p}, "again": {p}})
-	if _, err := os.Stat(b.record); !os.IsNotExist(err) || !strings.Contains(b.page(), "restores no one here") {
-		t.Fatal("a wrong code made a key, or was not said")
-	}
-	w := b.post("/restore", url.Values{"code": {"CYFR-RIGHT-CODE"}, "secret": {p}, "again": {p}})
-	ticketOf(t, w, home)
-	rec, _ := holder.Load(b.record)
-	if rec.Admission != "restore" || string(rec.PublicKey) == string(oldRec.PublicKey) || len(home.enrolled) != 2 {
-		t.Fatalf("restore enrolled %+v", rec)
-	}
-	if home.heard(p) || home.heard(strings.ReplaceAll(p, " ", "+")) {
-		t.Fatal("CYFR heard the passphrase")
 	}
 }

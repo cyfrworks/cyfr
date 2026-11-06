@@ -155,20 +155,12 @@ var actions = map[string]action{
 		srv.Shell.Setup(ctx, string(f.get("name")), f.get("secret"), f.get("again"))
 		srv.onward(ctx, w, r)
 	}},
-	"/restore": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Restore(ctx, string(f.get("code")), f.get("secret"), f.get("again"))
-		srv.onward(ctx, w, r)
-	}},
 	"/finish": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Finish(ctx, string(f.get("name")), string(f.get("code")), f.get("secret"))
 		srv.onward(ctx, w, r)
 	}},
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Unlock(ctx, f.get("secret"))
-		srv.onward(ctx, w, r)
-	}},
-	"/kit": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Reenable(ctx, string(f.get("code")), f.get("secret"))
 		srv.onward(ctx, w, r)
 	}},
 	"/name": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
@@ -233,7 +225,7 @@ type pageData struct {
 func (srv *Server) page(w http.ResponseWriter, v View, answer string) {
 	d := pageData{View: v, Answer: answer, Print: template.JS(printScript), Close: template.JS(closeScript)}
 	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && v.Passphrase == "")
-	if (v.Page == PageSetup || v.Page == PageRestore || v.Page == PageLocked) && srv.Reachable != nil && !srv.Reachable() {
+	if (v.Page == PageSetup || v.Page == PageLocked) && srv.Reachable != nil && !srv.Reachable() {
 		d.Waiting = true
 	}
 	d.Warn = warnings(v.Storage)

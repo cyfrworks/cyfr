@@ -50,9 +50,9 @@ type Config struct {
 	// DataDir is the home's actual data directory, whose volume the
 	// detection reads.
 	DataDir string
-	// Tokens reads .env's setup and restore tokens when a page needs one,
-	// so neither travels in an argument.
-	Tokens func() (setup, restore string)
+	// Tokens reads .env's setup token when a page needs it, so it never
+	// travels in an argument.
+	Tokens func() (setup string)
 	// Restart starts Chrome again on the lock page, after a lock.
 	Restart func()
 	// DisplayName is the name Devices lists this screen by.
@@ -112,10 +112,6 @@ type Shell struct {
 	// another name.
 	nameWaits bool
 	confirm   *PendingConfirm
-	// standingEnded is a home that refused this screen's standing at its
-	// last unlock: revoked, or suspended by a declared backup restore,
-	// which the recovery code can re-enable.
-	standingEnded bool
 }
 
 // New is a shell over cfg's holder record, locked.
@@ -126,8 +122,8 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	// No request follows a redirect: the setup token, a restore's session
-	// and bearer and every proof are for the home they were read for, and
+	// No request follows a redirect: the setup token and every proof are
+	// for the home they were read for, and
 	// a redirect elsewhere is refused as the home's answer.
 	client := http.Client{}
 	if cfg.Client != nil {
@@ -148,7 +144,7 @@ func New(cfg Config) (*Shell, error) {
 		cfg.Restart = func() {}
 	}
 	if cfg.Tokens == nil {
-		cfg.Tokens = func() (string, string) { return "", "" }
+		cfg.Tokens = func() string { return "" }
 	}
 	if cfg.Noun == "" {
 		cfg.Noun = "screen"
@@ -179,7 +175,6 @@ type Page string
 
 const (
 	PageSetup    Page = "setup"
-	PageRestore  Page = "restore"
 	PageFinish   Page = "finish" // a key made, its enrollment not answered yet
 	PageLocked   Page = "locked"
 	PageRecovery Page = "recovery"
@@ -199,13 +194,8 @@ type View struct {
 	Recovery   *Recovery
 	Name       string
 	Confirm    *PendingConfirm
-	// Kit offers to re-enable this screen with the recovery code.
-	Kit bool
-	// Restore is a restore's enrollment to finish, which takes the
-	// recovery code again.
-	Restore bool
 	// Admission is how the key in hand was, or is being, admitted:
-	// setup, restore, invitation, open, or pair for a device paired to a
+	// setup, invitation, open, or pair for a device paired to a
 	// person who exists.
 	Admission string
 	// Digest is the key's digest while it is not enrolled yet: the code a
@@ -225,18 +215,14 @@ func (s *Shell) View() View {
 	v := View{Notice: s.notice, Storage: s.cfg.Detect(s.cfg.DataDir), Chip: s.cfg.Chip()}
 	switch {
 	case s.rec == nil:
-		_, restore := s.cfg.Tokens()
 		v.Page = PageSetup
-		if restore != "" {
-			v.Page = PageRestore
-		}
 		if !v.Chip || s.passphrase != "" {
 			v.Passphrase = s.newPassphrase()
 		}
 	case s.key == nil && len(s.rec.Certificate) == 0:
-		v.Page, v.Kind, v.Restore = PageFinish, s.rec.Kind, s.rec.Admission == "restore"
+		v.Page, v.Kind = PageFinish, s.rec.Kind
 	case s.key == nil:
-		v.Page, v.Kind, v.Kit = PageLocked, s.rec.Kind, s.standingEnded
+		v.Page, v.Kind = PageLocked, s.rec.Kind
 	case s.confirm != nil:
 		v.Page, v.Kind, v.Confirm = PageConfirm, s.rec.Kind, s.confirm
 	case s.naming != "":
@@ -297,7 +283,7 @@ func sentence(err error, noun string) string {
 	case errors.Is(err, holder.ErrLockedOut):
 		return "Too many wrong PINs: this " + noun + "'s chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
-		return "CYFR does not take this " + noun + " any more: a restore from a backup suspended it, or it was removed. If it was suspended, your recovery code below brings it back."
+		return "CYFR does not take this " + noun + " any more: a restore from a backup suspended it, or it was removed."
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
@@ -339,7 +325,7 @@ func (s *Shell) Setup(ctx context.Context, name string, secret, again []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret, again)
-	setup, _ := s.cfg.Tokens()
+	setup := s.cfg.Tokens()
 	if s.rec != nil || setup == "" {
 		return
 	}
@@ -354,51 +340,6 @@ func (s *Shell) Setup(ctx context.Context, name string, secret, again []byte) {
 	}
 	extra := map[string]any{"name": name, "recovery_secret": RecoverySecret()}
 	s.enroll(ctx, rec, SetupAdmission(s.cfg.Client, setup), secret, extra, false)
-}
-
-// Restore restores the person whose recovery code this is onto this
-// replacement box and enrolls a new key for its screen: a new seed under
-// this box's own chip or passphrase, never the old box's.
-func (s *Shell) Restore(ctx context.Context, code string, secret, again []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(secret, again)
-	_, token := s.cfg.Tokens()
-	if s.rec != nil || token == "" {
-		return
-	}
-	// The entries are checked before the restore spends the code at the
-	// home.
-	if _, err := s.checkSecret(secret, again); err != nil {
-		return
-	}
-	a, err := Restore(ctx, s.cfg.Client, s.cfg.Address, token, strings.TrimSpace(code))
-	if err != nil {
-		s.say("%s", restoreSentence(err))
-		return
-	}
-	rec, err := s.newRecord("restore", secret, again)
-	if err != nil {
-		return
-	}
-	s.enroll(ctx, rec, a, secret, nil, false)
-}
-
-func restoreSentence(err error) string {
-	var home *HomeError
-	if errors.As(err, &home) {
-		switch home.Code {
-		case "setup_closed":
-			return "CYFR is set up already, so this box cannot set it up again. Restore with your recovery code instead."
-		case "not_a_code", "typo":
-			return "That is not a recovery code, or it has a typo. Check it and try again."
-		case "unknown_identity", "not_a_holder":
-			return "That recovery code restores no one here."
-		case "invalid_token", "restore_disabled":
-			return "This box is not set up for a restore."
-		}
-	}
-	return sentence(err, "screen")
 }
 
 // checkSecret checks the secret given twice before anything is made or
@@ -461,11 +402,6 @@ func (s *Shell) newRecord(admission string, secret, again []byte) (*holder.Recor
 
 // Finish completes an enrollment a previous run began: the same key,
 // opened by its PIN, proven under the same request, through resume first.
-//
-// A restore's enrollment is admitted by the restore session, which no file
-// keeps: Finish asks for the recovery code again and proves it through the
-// restore ingress (a completed restore answers by its reproof) before
-// proving the same key.
 func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -473,7 +409,7 @@ func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
 	if s.rec == nil || len(s.rec.Certificate) != 0 {
 		return
 	}
-	setup, restore := s.cfg.Tokens()
+	setup := s.cfg.Tokens()
 	var a Admission
 	var extra map[string]any
 	switch {
@@ -482,16 +418,6 @@ func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
 		// A setup whose complete never arrived needs its name again: the
 		// home recorded none, so the page asks for it with the PIN.
 		extra = map[string]any{"name": strings.TrimSpace(name), "recovery_secret": RecoverySecret()}
-	case s.rec.Admission == "restore" && restore != "":
-		// The saved key is proven through the resume first, under the
-		// restore token: a restore whose enrollment committed finds its
-		// client there. Only a resume that finds nothing committed asks
-		// the home to restore again, proven by the recovery code.
-		a = Admission{Kind: "restore", Client: s.cfg.Client, header: http.Header{},
-			resume: http.Header{"Authorization": {"Bearer " + restore}},
-			reprove: func(ctx context.Context) (Admission, error) {
-				return Restore(ctx, s.cfg.Client, s.cfg.Address, restore, strings.TrimSpace(code))
-			}}
 	case s.rec.Admission == "invitation" || s.rec.Admission == "open":
 		// A new person's enrollment, under the same admission: the
 		// invitation's code, given again, or the open door.
@@ -744,7 +670,7 @@ func (s *Shell) Saved(ctx context.Context) {
 func (s *Shell) admission(kind, code string) (Admission, bool) {
 	switch kind {
 	case "setup":
-		setup, _ := s.cfg.Tokens()
+		setup := s.cfg.Tokens()
 		return SetupAdmission(s.cfg.Client, setup), true
 	case "invitation":
 		if code == "" {
@@ -871,11 +797,9 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 	}
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
-		s.standingEnded = errors.Is(err, ErrRevoked)
 		s.say("%s", s.sentence(err))
 		return
 	}
-	s.standingEnded = false
 	if s.rec.RequestID != "" {
 		got, err := resume(ctx, s.cfg.Address, a, s.binding(), s.rec.RequestID, key)
 		switch {
@@ -891,50 +815,6 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 			s.lock("CYFR could not show your recovery code again: " + s.sentence(err))
 		}
 	}
-}
-
-// Reenable brings this screen back after a declared backup restore
-// suspended it: the PIN opens its key here first, then the recovery code's
-// own key proves the person to the home (POST /restore/kit) and
-// pairing.reenable restores this screen's client, and the screen unlocks.
-// A screen the home revoked stays revoked: the re-enable refuses it.
-func (s *Shell) Reenable(ctx context.Context, code string, secret []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(secret)
-	if s.rec == nil || s.rec.ClientID == "" || s.key != nil || !s.standingEnded {
-		return
-	}
-	// The key opens first, so a wrong PIN spends nothing at the home.
-	key, err := s.rec.Open(secret)
-	if err != nil {
-		s.say("%s", s.sentence(err))
-		return
-	}
-	if err := reenable(ctx, s.cfg.Client, s.cfg.Address, strings.TrimSpace(code), s.rec.ClientID); err != nil {
-		key.Erase()
-		s.say("%s", kitSentence(err))
-		return
-	}
-	if err := s.connect(ctx, key); err != nil {
-		key.Erase()
-		s.say("%s", s.sentence(err))
-		return
-	}
-	s.standingEnded = false
-}
-
-func kitSentence(err error) string {
-	var home *HomeError
-	switch {
-	case errors.Is(err, ErrNotACode), errors.Is(err, ErrTypo):
-		return "That is not a recovery code, or it has a typo. Check it and try again."
-	case errors.As(err, &home) && home.Code == "not_recovering":
-		return "CYFR is not recovering from a backup, so this screen was removed, not suspended: set it up again."
-	case errors.As(err, &home) && home.Code == "not_a_holder":
-		return "That recovery code is not yours here."
-	}
-	return "This screen could not be brought back: " + sentence(err, "screen")
 }
 
 // Ticket reserves one session at the home (reserve) and answers where

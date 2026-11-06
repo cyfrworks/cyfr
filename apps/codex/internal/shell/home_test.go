@@ -33,14 +33,14 @@ type fakeHome struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu           sync.Mutex
-	received     bytes.Buffer
-	setupToken   string
-	restoreToken string
-	held         map[string]map[string]any // by nonce
-	enrolled     map[string]*enrollment    // by request id
-	completes    int
-	resumes      int
+	mu         sync.Mutex
+	received   bytes.Buffer
+	setupToken string
+
+	held      map[string]map[string]any // by nonce
+	enrolled  map[string]*enrollment    // by request id
+	completes int
+	resumes   int
 	// dropComplete commits the next complete and loses its answer;
 	// downComplete refuses to reach it, committing nothing.
 	dropComplete, downComplete bool
@@ -59,10 +59,6 @@ type fakeHome struct {
 	closeWith                  websocket.StatusCode
 	stalled                    chan struct{}
 	fields                     httpFields
-	kitPublic                  []byte // the recovering person's recovery key
-	kitHeld                    map[string]string
-	reenabled                  []string
-	restores                   int
 	shapes                     []string            // entries whose fields were not the fixture's
 	invitationCode             string              // the invitation a new person joins by
 	openDoor                   bool                // whether the open door admits
@@ -154,10 +150,6 @@ func newFakeHome(t *testing.T) *fakeHome {
 	mux.HandleFunc("POST /device/enrollment/challenge", h.challengeEntry(false))
 	mux.HandleFunc("POST /device/enrollment/complete", h.complete)
 	mux.HandleFunc("POST /device/enrollment/resume", h.resumeEntry)
-	mux.HandleFunc("POST /restore", h.restore)
-	mux.HandleFunc("POST /restore/kit/challenge", h.kitChallenge)
-	mux.HandleFunc("POST /restore/kit", h.kitProof)
-	mux.HandleFunc("POST /restore/kit/reenable", h.kitReenable)
 	mux.HandleFunc("/device/websocket", h.channel)
 	mux.HandleFunc("POST /device/session", h.deviceSession)
 	h.srv = httptest.NewServer(mux)
@@ -191,12 +183,6 @@ func (h *fakeHome) admitted(r *http.Request, admission string, resume bool) bool
 	switch admission {
 	case "setup":
 		return r.Header.Get("X-Cyfr-Setup-Token") == h.setupToken
-	case "restore":
-		if resume {
-			return r.Header.Get("Authorization") == "Bearer "+h.restoreToken
-		}
-		c, err := r.Cookie("restore_session")
-		return err == nil && c.Value == "restored"
 	case "invitation":
 		return h.invitationCode != "" && r.Header.Get("X-Cyfr-Invitation") == h.invitationCode
 	case "open":
@@ -351,23 +337,6 @@ func (h *fakeHome) resumeEntry(w http.ResponseWriter, r *http.Request) {
 		rec = e.recovery
 	}
 	reply(w, 200, map[string]any{"certificate": h.certificate(e), "recovery": rec})
-}
-
-func (h *fakeHome) restore(w http.ResponseWriter, r *http.Request) {
-	m := h.body(r)
-	h.mu.Lock()
-	h.restores++
-	h.mu.Unlock()
-	if r.Header.Get("Authorization") != "Bearer "+h.restoreToken || h.restoreToken == "" {
-		reply(w, 401, map[string]any{"error": "invalid_token"})
-		return
-	}
-	if stringOf(m, "recovery_code") != "CYFR-RIGHT-CODE" {
-		reply(w, 422, map[string]any{"error": "not_a_holder"})
-		return
-	}
-	http.SetCookie(w, &http.Cookie{Name: "restore_session", Value: "restored", Path: "/", HttpOnly: true})
-	reply(w, 200, map[string]any{"status": "completed", "identifier": "per_1"})
 }
 
 func mustKey(s string) []byte { k, _ := unb64(s); return k }
@@ -627,52 +596,6 @@ func (h *fakeHome) opsSeen() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.ops...)
-}
-
-func (h *fakeHome) kitChallenge(w http.ResponseWriter, r *http.Request) {
-	m := h.body(r)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.kitPublic == nil {
-		reply(w, 404, map[string]any{"error": "not_recovering"})
-		return
-	}
-	c := b64(random(32))
-	if h.kitHeld == nil {
-		h.kitHeld = map[string]string{}
-	}
-	h.kitHeld[c] = stringOf(m, "identifier")
-	reply(w, 200, map[string]any{"challenge": c, "restore_id": "rst_1", "expires_at": 1})
-}
-
-func (h *fakeHome) kitProof(w http.ResponseWriter, r *http.Request) {
-	m := h.body(r)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	proof, _ := m["proof"].(map[string]any)
-	c := stringOf(proof, "challenge")
-	id, held := h.kitHeld[c]
-	delete(h.kitHeld, c)
-	msg, _ := Canonical(without(proof, "sig"))
-	sig, _ := unb64(stringOf(proof, "sig"))
-	if !held || id != stringOf(proof, "identifier") || proof["protocol"] != kitProtocol || !ed25519.Verify(h.kitPublic, msg, sig) {
-		reply(w, 409, map[string]any{"error": "not_a_holder"})
-		return
-	}
-	reply(w, 200, map[string]any{"credential": "cred_1", "expires_at": 1})
-}
-
-func (h *fakeHome) kitReenable(w http.ResponseWriter, r *http.Request) {
-	m := h.body(r)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if r.Header.Get("Authorization") != "Bearer cred_1" || m["operation"] != "pairing.reenable" {
-		reply(w, 401, map[string]any{"error": "invalid_credential"})
-		return
-	}
-	h.reenabled = append(h.reenabled, stringOf(m, "client_id"))
-	h.closeWith = 0
-	reply(w, 200, map[string]any{"reenabled": m["client_id"]})
 }
 
 // deviceSession is POST /device/session: the unlock's ticket spent once

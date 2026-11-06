@@ -215,7 +215,7 @@ func (d *loginDriver) run(ctx context.Context) error {
 		d.sh.Begin()
 		var err error
 		switch v.Page {
-		case shell.PageSetup, shell.PageRestore:
+		case shell.PageSetup:
 			err = d.begin(ctx, v)
 		case shell.PageFinish:
 			err = d.finish(ctx, v)
@@ -378,35 +378,13 @@ func (d *loginDriver) finish(ctx context.Context, v shell.View) error {
 	return nil
 }
 
-// unlock opens this command line with its secret. A home that refused its
-// standing (a restore from a backup suspended it, or it was removed)
-// offers the recovery code here, as the screen's lock page does: the
-// code re-enables this command line's client before the secret, asked
-// again, opens the key. An empty
-// code leaves it locked with the home's sentence.
+// unlock opens this command line with its secret.
 func (d *loginDriver) unlock(ctx context.Context, v shell.View) error {
 	secret, err := d.askSecret(ctx, v, "Unlock this command line with its")
 	if err != nil {
 		return err
 	}
 	d.sh.Unlock(ctx, secret)
-	after := d.sh.View()
-	if after.Page != shell.PageLocked || !after.Kit {
-		return nil
-	}
-	fmt.Fprintln(d.c.out, after.Notice)
-	code, err := d.c.secret(ctx, "Your recovery code, to bring this command line back (Enter to leave it): ")
-	if err != nil {
-		return err
-	}
-	defer clear(code)
-	if len(bytes.TrimSpace(code)) == 0 {
-		return errors.New(after.Notice)
-	}
-	if secret, err = d.askSecret(ctx, after, "Then this command line's"); err != nil {
-		return err
-	}
-	d.sh.Reenable(ctx, string(code), secret)
 	return nil
 }
 

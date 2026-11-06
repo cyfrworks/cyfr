@@ -34,7 +34,6 @@ const (
 	Oauth              = "oauth"
 	Pairing            = "pairing"
 	Passkey            = "passkey"
-	Person             = "person"
 	PolicyLog          = "policy_log"
 	Profile            = "profile"
 	Record             = "record"
@@ -179,16 +178,10 @@ const (
 	OauthList               = "list"
 	OauthSetClient          = "set_client"
 	PairingList             = "list"
-	PairingReenable         = "reenable"
 	PairingRenew            = "renew"
 	PairingRevoke           = "revoke"
 	PasskeyList             = "list"
 	PasskeyRevoke           = "revoke"
-	PersonCloseRecovery     = "close_recovery"
-	PersonRecoveryCode      = "recovery_code"
-	PersonRecoveryCodeAdd   = "recovery_code_add"
-	PersonRecoveryCodeSaved = "recovery_code_saved"
-	PersonStatus            = "status"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
@@ -214,7 +207,6 @@ const (
 	RegistryMembersList     = "members_list"
 	RegistryMembersRemove   = "members_remove"
 	RegistryMembersUpdate   = "members_update"
-	RegistryRegister        = "register"
 	RegistryReport          = "report"
 	RegistrySync            = "sync"
 	RegistryTokensIssue     = "tokens_issue"
@@ -328,13 +320,12 @@ var Actions = map[string][]string{
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"list", "reenable", "renew", "revoke"},
+	"pairing":             {"list", "renew", "revoke"},
 	"passkey":             {"list", "revoke"},
-	"person":              {"close_recovery", "recovery_code", "recovery_code_add", "recovery_code_saved", "status"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "register", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -2586,24 +2577,9 @@ func (args PairingListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PairingList, fields: fields(args)})
 }
 
-// PairingReenableArgs carries arguments for pairing.reenable.
-type PairingReenableArgs struct {
-	// The paired client (pcl_…) (renew, revoke, reenable)
-	ClientId string `json:"client_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PairingReenableArgs) MarshalJSON() ([]byte, error) {
-	type fields PairingReenableArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PairingReenable, fields: fields(args)})
-}
-
 // PairingRenewArgs carries arguments for pairing.renew.
 type PairingRenewArgs struct {
-	// The paired client (pcl_…) (renew, revoke, reenable)
+	// The paired client (pcl_…) (renew, revoke)
 	ClientId string `json:"client_id"`
 	// renew: the device's public key, unpadded base64url
 	DeviceKey string `json:"device_key"`
@@ -2645,7 +2621,7 @@ func (args *PairingRenewArgsProof) UnmarshalJSON(data []byte) error {
 
 // PairingRevokeArgs carries arguments for pairing.revoke.
 type PairingRevokeArgs struct {
-	// The paired client (pcl_…) (renew, revoke, reenable)
+	// The paired client (pcl_…) (renew, revoke)
 	ClientId string `json:"client_id"`
 }
 
@@ -2684,99 +2660,6 @@ func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PasskeyRevoke, fields: fields(args)})
-}
-
-// PersonCloseRecoveryArgs carries arguments for person.close_recovery.
-type PersonCloseRecoveryArgs struct {
-	// close_recovery: the person whose recovery from the restore ends; what it suspended stays suspended
-	UserId string `json:"user_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCloseRecoveryArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCloseRecoveryArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCloseRecovery, fields: fields(args)})
-}
-
-// PersonRecoveryCodeArgs carries arguments for person.recovery_code.
-type PersonRecoveryCodeArgs struct {
-	// The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)
-	AttemptId string `json:"attempt_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRecoveryCodeArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRecoveryCodeArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRecoveryCode, fields: fields(args)})
-}
-
-// PersonRecoveryCodeAddArgs carries arguments for person.recovery_code_add.
-type PersonRecoveryCodeAddArgs struct {
-	// recovery_code_add: a recovery code you hold, which signs the change
-	RecoveryCode string `json:"recovery_code"`
-	// recovery_code_add: the new code's secret
-	Holder PersonRecoveryCodeAddArgsHolder `json:"holder"`
-	// The attempt's request id: a retry under the same id resumes the same attempt (recovery_code_add)
-	RequestId string `json:"request_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRecoveryCodeAddArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRecoveryCodeAddArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRecoveryCodeAdd, fields: fields(args)})
-}
-
-type PersonRecoveryCodeAddArgsHolder struct {
-	// The new code's secret, drawn by the trusted form (32 bytes, unpadded base64url)
-	RecoverySecret string `json:"recovery_secret"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *PersonRecoveryCodeAddArgsHolder) UnmarshalJSON(data []byte) error {
-	type fields PersonRecoveryCodeAddArgsHolder
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = PersonRecoveryCodeAddArgsHolder(value)
-	return nil
-}
-
-// PersonRecoveryCodeSavedArgs carries arguments for person.recovery_code_saved.
-type PersonRecoveryCodeSavedArgs struct {
-	// The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)
-	AttemptId string `json:"attempt_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRecoveryCodeSavedArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRecoveryCodeSavedArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRecoveryCodeSaved, fields: fields(args)})
-}
-
-// PersonStatusArgs carries arguments for person.status.
-type PersonStatusArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonStatusArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonStatusArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonStatus, fields: fields(args)})
 }
 
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.
@@ -3751,21 +3634,6 @@ func (args RegistryMembersUpdateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryMembersUpdate, fields: fields(args)})
-}
-
-// RegistryRegisterArgs carries arguments for registry.register.
-type RegistryRegisterArgs struct {
-	// register: another name to take, in place of the one chosen at creation (after cyfr.run refused it as taken or reserved)
-	Name Field[string] `json:"name,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryRegisterArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryRegisterArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryRegister, fields: fields(args)})
 }
 
 // RegistryReportArgs carries arguments for registry.report.

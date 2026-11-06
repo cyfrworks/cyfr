@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"strconv"
 	"strings"
 	"time"
@@ -62,21 +61,15 @@ type Holder struct {
 }
 
 // Admission is how an enrollment is admitted: the setup token for the
-// installation's first person, a restore session for a restored one, an
-// invitation's code or the open door for a new person. Its credentials
-// travel in headers alone (and a restore's session in its cookie), never
-// in a URL or a body.
+// installation's first person, an invitation's code or the open door for
+// a new person. Its credentials travel in headers alone, never in a URL
+// or a body.
 type Admission struct {
-	Kind   string // "setup", "restore", "invitation" or "open"
+	Kind   string // "setup", "invitation" or "open"
 	Client *http.Client
 	// header is the credential of the enrollment's entries; resume is the
 	// one its resume takes.
 	header, resume http.Header
-	// reprove, when set, gives the admission its entries need, asked only
-	// once a resume found nothing committed: a finished restore's session
-	// is proven again by the recovery code, never before the saved key had
-	// its chance to find its committed client.
-	reprove func(context.Context) (Admission, error)
 }
 
 // SetupAdmission admits the first person under the installation's setup
@@ -99,32 +92,6 @@ func OpenAdmission(client *http.Client) Admission {
 	return Admission{Kind: "open", Client: client, header: http.Header{}, resume: http.Header{}}
 }
 
-// Restore restores the person whose recovery code this is onto this empty
-// installation (POST /restore, the installation's restore token as its
-// bearer), and answers the admission its restore session carries: that
-// session's cookie, held in this process alone, admits the enrollment, and
-// the restore token resumes it.
-func Restore(ctx context.Context, client *http.Client, address, token, code string) (Admission, error) {
-	jar, _ := cookiejar.New(nil)
-	c := *client
-	c.Jar = jar
-	bearer := http.Header{"Authorization": {"Bearer " + token}}
-	a := Admission{Kind: "restore", Client: &c, header: http.Header{}, resume: bearer}
-	err := post(ctx, &c, address, "/restore", bearer, map[string]any{"recovery_code": code}, nil)
-	var refused *HomeError
-	if errors.As(err, &refused) && refused.Code == "restored" {
-		// The restore completed in an earlier run whose session this
-		// process never held: a reproof gives a new one.
-		var ch struct {
-			Challenge json.RawMessage `json:"challenge"`
-		}
-		if err = post(ctx, &c, address, "/restore/challenge", bearer, map[string]any{}, &ch); err == nil {
-			err = post(ctx, &c, address, "/restore/reproof", bearer, map[string]any{"recovery_code": code, "challenge": ch.Challenge}, nil)
-		}
-	}
-	return a, err
-}
-
 // Enroll enrolls key under a: the home's enroll challenge for this
 // admission, key and request, checked and signed, then completed with
 // extra (a setup's name and a recovery secret drawn here). A complete
@@ -136,17 +103,11 @@ func Enroll(ctx context.Context, address string, a Admission, b Binding, d Holde
 	if resumed {
 		got, err := resume(ctx, address, a, b, requestID, key)
 		// Only the resume's explicit answer that nothing was committed
-		// (404 not_found) leads to a new enrollment, and to a restore's
-		// reproof; any other refusal is the resume's own, and sends no
-		// recovery code.
+		// (404 not_found) leads to a new enrollment; any other refusal is
+		// the resume's own.
 		var refused *HomeError
 		if err == nil || !errors.As(err, &refused) || refused.Status != http.StatusNotFound || refused.Code != "not_found" {
 			return got, err
-		}
-		if a.reprove != nil {
-			if a, err = a.reprove(ctx); err != nil {
-				return Enrolled{}, err
-			}
 		}
 	}
 	proof, err := enrollProof(ctx, address, "/device/enrollment/challenge", a.header, a, b, requestID, key,

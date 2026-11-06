@@ -37,7 +37,7 @@ func init() {
 var restoreCmd = &cobra.Command{
 	Use:   "restore <snapshot>",
 	Short: "Put a snapshot from backups/ back with the whole cluster stopped, and declare the restore",
-	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential and method the backup carried until its owner re-enables it.
+	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential the backup carried until its owner re-enables it.
 
 1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
@@ -415,7 +415,7 @@ func (r *restorer) run() error {
 	if err := r.lowerBarrier(); err != nil {
 		return fmt.Errorf("The restore %s is declared, but %s could not be taken out of .env (%v); take that line out of .env and start the stack with 'cyfr up'", r.restoreID, restoreBarrier, err)
 	}
-	fmt.Fprintf(r.out, "Declared restore %s; the first start suspends every credential and method the backup carried until its owner re-enables it.\n", r.restoreID)
+	fmt.Fprintf(r.out, "Declared restore %s; the first start suspends every credential the backup carried until its owner re-enables it.\n", r.restoreID)
 	// The record of the machine's last tailnet join is this home's before
 	// the restore: the snapshot's .env names its own node, which the start
 	// validates against the machine before Serve opens.
