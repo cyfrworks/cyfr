@@ -1050,7 +1050,7 @@ defmodule PrismWeb.VaultLive do
               class="text-xs text-gray-500"
               data-test="entry-disclosure"
             >
-              login: holds nothing secret; it mounts the program's kept home, where the
+              login: holds nothing secret; it mounts the program's kept folder, where the
               program keeps its own sign-in. Sign in and reset it on the Programs page.
             </div>
             <div

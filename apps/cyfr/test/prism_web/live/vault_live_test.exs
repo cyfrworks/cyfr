@@ -216,8 +216,10 @@ defmodule PrismWeb.VaultLiveTest do
     assert has_element?(
              view,
              ~s([data-test="entry-disclosure"]),
-             "it mounts the program's kept home"
+             "it mounts the program's kept folder"
            )
+
+    refute html =~ "kept home"
   end
 
   # A secret no rendered page holds by accident: a LiveView's element id and
