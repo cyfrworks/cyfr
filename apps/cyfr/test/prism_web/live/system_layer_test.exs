@@ -173,6 +173,13 @@ defmodule PrismWeb.SystemLayerTest do
   alias Sanctum.Context
   alias Sanctum.TestContext.Authenticator
 
+  # The deployment's directory, whose account pages a passkey's proof
+  # hops to.
+  setup do
+    Sanctum.Test.Newcomers.directory!()
+    :ok
+  end
+
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------

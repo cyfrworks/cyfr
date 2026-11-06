@@ -101,7 +101,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions CompanyAuthorizations CompanyLoginAttempts
-          DeviceCertificates DeviceCertifications DirectoryHeads IdentityLog
+          DeviceCertificates DeviceCertifications DirectoryHandles DirectoryHeads IdentityLog
           Invitations PairingInvitations Passkeys PendingConfirmations PersonIdentities
           RequestRateWindows),
        "the identity, device, passkey, confirmation, carry, " <>
@@ -164,13 +164,15 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Refusals),
        "the gate's refusal classification and renderer, which the layers above answer " <>
          "a refusal with"},
-      {~w(Directory.Client IdentityFreshness Person),
-       "the person's keys, the directory client and identity freshness, which the " <>
-         "identity domain composes and the host's suites drive"},
-      {~w(Providers.Assertion Providers.Confirmation Providers.Pairing Providers.Passkey
-          Providers.Person),
-       "the person, pairing, passkey and confirmation operations, declared here and " <>
-         "driven by the host's suites through their handlers"},
+      {~w(Directory.Client IdentityFreshness),
+       "the directory client and identity freshness, which the identity domain composes " <>
+         "and the host's suites drive"},
+      {~w(Directory.Handles),
+       "the handle registry a CYFR serving a directory serves beside it, whose routes " <>
+         "Emissary's handle controller answers, rostered in `Cyfr.Boundaries`' surface rows"},
+      {~w(Providers.Confirmation Providers.Pairing Providers.Passkey),
+       "the pairing, passkey and confirmation operations, declared here and driven by " <>
+         "the host's suites through their handlers"},
       {~w(Consent.Accounts),
        "the assistant's read of which named accounts an app's own ingress binds and " <>
          "which entry a name resolves to, never a value, never a write"},
