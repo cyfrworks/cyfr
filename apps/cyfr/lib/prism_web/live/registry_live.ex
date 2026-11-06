@@ -16,17 +16,17 @@ defmodule PrismWeb.RegistryLive do
   `/v1/components?namespace=<slug>` on cyfr.run) and merge results into a
   single flat list, keyed by `{namespace, type, name, version}`.
 
-  The person's registry acts here are each a request their identity signs
-  (`registry.sync`, `registry.legal_accept`, `registry.appeal`); no
-  identity provider is asked. A sync mints push tokens, so it is asked
-  through the system layer (`PrismWeb.SystemLayer.call/5`): a session
-  alone is answered `confirmation_required`, which the layer shows, and
-  the page repeats the sync once it is confirmed.
+  The person's registry acts here are each a request a passkey of their
+  account signs (`registry.sync`, `registry.legal_accept`,
+  `registry.appeal`); no identity provider is asked. The action answers
+  the request to sign, and the page opens the account pages with it in a
+  new tab (`system_layer:hop`), so this page stays; the answer returns to
+  the sign-in page in that tab, which completes the act and says what it
+  did (`PrismWeb.LoginLive`).
   """
 
   use PrismWeb, :live_view
 
-  @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
 
   alias Phoenix.LiveView.JS
@@ -66,10 +66,6 @@ defmodule PrismWeb.RegistryLive do
     |> assign(:appeal_error, nil)
   end
 
-  # A sync this page asked for was confirmed: asked again, once.
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_repeat(:sync, _tool, _args, socket), do: {:noreply, sync(socket)}
-
   @impl true
   def handle_event("open-deprecate", %{"reference" => reference}, socket) do
     {:noreply, assign(socket, :deprecate_pending, reference)}
@@ -88,9 +84,9 @@ defmodule PrismWeb.RegistryLive do
   end
 
   # ---- Appeal flow ----
-  # An appeal of a takedown is a request the person's identity signs
-  # (`registry.appeal`); the registry binds it to the action's rightful
-  # appellant by that identity.
+  # An appeal of a takedown is a request a passkey of the person's account
+  # signs (`registry.appeal`); the registry binds it to the action's
+  # rightful appellant by that account.
   def handle_event("open-appeal", %{"id" => id}, socket) do
     {:noreply, socket |> assign_appeal_idle() |> assign(:appeal_pending, id)}
   end
@@ -117,11 +113,14 @@ defmodule PrismWeb.RegistryLive do
           "argument" => argument
         }
 
-        case call_tool(socket, "registry/appeal", args) do
-          {:ok, _answer} ->
+        case sign(socket, "registry/appeal", args) do
+          {:ok, socket} ->
             {:noreply,
              socket
-             |> put_flash(:info, "Appeal filed for #{component_id}. Moderators will review.")
+             |> put_flash(
+               :info,
+               "Sign the appeal for #{component_id} with your passkey in the new tab."
+             )
              |> assign_appeal_idle()}
 
           {:error, err} ->
@@ -137,12 +136,14 @@ defmodule PrismWeb.RegistryLive do
   def handle_event("sync", _params, socket), do: {:noreply, sync(socket)}
 
   def handle_event("accept-policy", %{"version" => version}, socket) when is_binary(version) do
-    case call_tool(socket, "registry/legal_accept", %{"policy_version" => version}) do
-      {:ok, _answer} ->
+    case sign(socket, "registry/legal_accept", %{"policy_version" => version}) do
+      {:ok, socket} ->
         {:noreply,
-         socket
-         |> put_flash(:info, "Accepted the registry's policies (version #{version}).")
-         |> load_policy()}
+         put_flash(
+           socket,
+           :info,
+           "Sign your acceptance of version #{version} with your passkey in the new tab."
+         )}
 
       {:error, err} ->
         {:noreply, put_flash(socket, :error, "Accepting failed: #{error_message(err)}")}
@@ -226,15 +227,24 @@ defmodule PrismWeb.RegistryLive do
   end
 
   defp sync(socket) do
-    case SystemLayer.call(socket, :sync, "registry/sync", %{}) do
-      {:ok, _synced, socket} ->
-        socket |> put_flash(:info, "Your push tokens are synced.") |> load_registry()
+    case sign(socket, "registry/sync", %{}) do
+      {:ok, socket} -> put_flash(socket, :info, "Sign the sync with your passkey in the new tab.")
+      {:error, reason} -> put_flash(socket, :error, "Sync failed: #{error_message(reason)}")
+    end
+  end
 
-      {:asked, socket} ->
-        put_flash(socket, :info, "Confirm the sync to mint your push tokens.")
+  # The request a registry act answers, signed at the account pages in a
+  # new tab through this page's layer.
+  defp sign(socket, tool, args) do
+    case call_tool(socket, tool, args) do
+      {:ok, %{url: url}} when is_binary(url) ->
+        {:ok, push_event(socket, "system_layer:hop", %{layer: SystemLayer.layer_id(), url: url})}
 
-      {:error, reason, socket} ->
-        put_flash(socket, :error, "Sync failed: #{error_message(reason)}")
+      {:ok, _no_page} ->
+        {:error, :unavailable}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

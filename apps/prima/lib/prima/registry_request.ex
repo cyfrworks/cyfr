@@ -279,6 +279,17 @@ defmodule Prima.RegistryRequest do
           {:ok, t()} | {:error, :request_malformed | :wrong_protocol | :unknown_operation}
   def to_sign(map), do: checked(map, :to_sign)
 
+  @doc """
+  Read a signed request from its JSON map as `verify/4` reads one before it
+  checks anything against a log: exact keys and their types, the protocol,
+  and a known operation with exactly its body's keys and valid values.
+  Whether the signature is the signer's is the registry's check
+  (`verify/4`), never this one's.
+  """
+  @spec decode(term()) ::
+          {:ok, t()} | {:error, :request_malformed | :wrong_protocol | :unknown_operation}
+  def decode(map), do: checked(map, :signed)
+
   defp checked(map, mode) when is_map(map) and not is_struct(map) do
     with {:ok, request} <- read(map, mode),
          :ok <- body(request),

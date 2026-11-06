@@ -774,6 +774,115 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
   end
 
+  # A registry request a key of the person's account signed is sent as its
+  # bytes, to the route the registry takes its operation at, with no bearer;
+  # the answer is decoded, and each refusal the registry answers in its
+  # envelope reaches the caller as its protocol name.
+  describe "signed/2" do
+    setup :point_at_bypass
+
+    @bytes ~s({"operation":"policy.accept"})
+
+    test "sends the signed bytes as they are to the operation's route, under no bearer", %{
+      bypass: bypass
+    } do
+      for {operation, path} <- [
+            {"policy.accept", "/v1/legal/accept"},
+            {"tokens.mint", "/v1/tokens/mint"},
+            {"appeal.file", "/v1/appeals"},
+            {"publisher.claim", "/v1/namespaces/publisher/claim"},
+            {"publisher.verify", "/v1/namespaces/publisher/verify"},
+            {"handle.claim", "/v1/namespaces/personal/claim"}
+          ] do
+        Bypass.expect_once(bypass, "POST", path, fn conn ->
+          assert auth_header(conn) == nil
+          {:ok, raw, conn} = Plug.Conn.read_body(conn)
+          assert raw == @bytes
+          json_resp(conn, 201, %{"accepted" => true})
+        end)
+
+        log =
+          capture_log(fn ->
+            assert {:ok, %{"accepted" => true}} = Client.signed(operation, @bytes)
+          end)
+
+        refute log =~ "refused"
+      end
+    end
+
+    test "the registry's refusals reach the caller by their protocol names", %{bypass: bypass} do
+      # A 429 says the registry did not act, so the transport asks again:
+      # the registry answers every attempt the same.
+      {:ok, refusal} = Agent.start_link(fn -> nil end)
+
+      Bypass.expect(bypass, "POST", "/v1/legal/accept", fn conn ->
+        {status, body} = Agent.get(refusal, & &1)
+
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(status, body)
+      end)
+
+      for {name, extra, expected} <- [
+            {:unknown_identity, %{}, :unknown_identity},
+            {:bad_signature, %{}, :bad_signature},
+            {:replayed, %{}, :replayed},
+            {:policy_required, %{"required_version" => "2026-09"}, {:policy_required, "2026-09"}},
+            {:policy_required, %{}, {:policy_required, nil}},
+            {:directory_unavailable, %{}, :directory_unavailable},
+            {:rate_limited, %{}, :rate_limited},
+            {:dns_timeout, %{}, :dns_timeout}
+          ] do
+        Agent.update(refusal, fn _ -> Sanctum.Test.RegistryStub.refusal(name, extra) end)
+
+        capture_log(fn ->
+          assert Client.signed("policy.accept", @bytes) == {:error, expected}, inspect(name)
+        end)
+      end
+    end
+
+    test "an answer that cannot be read is malformed, and a gateway's is no answer", %{
+      bypass: bypass
+    } do
+      for {status, body, expected} <- [
+            {200, "not json", :malformed_answer},
+            {200, "[]", :malformed_answer},
+            {400, ~s({"error":"bad"}), :malformed_answer},
+            {503, "Bad Gateway", :registry_unavailable}
+          ] do
+        Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
+          Plug.Conn.resp(conn, status, body)
+        end)
+
+        capture_log(fn ->
+          assert Client.signed("policy.accept", @bytes) == {:error, expected}, body
+        end)
+      end
+    end
+
+    test "a registry that does not answer is unavailable", %{bypass: bypass} do
+      Bypass.down(bypass)
+
+      log =
+        capture_log(fn ->
+          assert Client.signed("policy.accept", @bytes) == {:error, :registry_unavailable}
+        end)
+
+      assert log =~ "policy.accept refused"
+    end
+
+    test "a token's answer is logged redacted", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/tokens/mint", fn conn ->
+        json_resp(conn, 200, %{"memberships" => [], "token" => "cyfr_pt_SIGNED_SECRET"})
+      end)
+
+      log = with_info_log(fn -> {:ok, _} = Client.signed("tokens.mint", @bytes) end)
+
+      assert log =~ "[REDACTED]"
+      refute log =~ "cyfr_pt_SIGNED_SECRET"
+    end
+  end
+
   # Providers answer typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.

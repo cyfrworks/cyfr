@@ -411,13 +411,10 @@ defmodule Prima.Refusal do
        "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
 
   # A registry operation the person signs (`Prima.RegistryRequest`), refused
-  # before it is sent: the person has no identifier to sign under, their
-  # keys are held by another CYFR, or this deployment names no registry.
+  # before it is sent: the person has no identifier to sign under, or this
+  # deployment names no registry.
   defp row(:not_enrolled),
     do: {:setup_required, "This needs your identity: enroll it in Settings, then try again."}
-
-  defp row(:remote),
-    do: {:forbidden, "Your keys are held by your own CYFR; do this there."}
 
   defp row(:no_registry),
     do: {:setup_required, "No registry is configured on this server (CYFR_REGISTRY_URL=none)."}
@@ -485,7 +482,7 @@ defmodule Prima.Refusal do
       {:forbidden,
        "The registry accepts only identities its own directory orders; this one names another."}
 
-  defp row(:unknown_identity), do: {:not_found, "The directory does not know this identity."}
+  defp row(:unknown_identity), do: {:not_found, "cyfr.run does not know this account."}
 
   defp row(:directory_unavailable), do: {:unavailable, "cyfr.run did not answer. Try again."}
 

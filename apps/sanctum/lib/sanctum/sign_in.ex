@@ -39,7 +39,16 @@ defmodule Sanctum.SignIn do
       the record's digest, which the system layer previewed before the
       hop, and `back` is where the browser returns to.
     * `:registry` — the `Prima.RegistryRequest` the caller is asked to
-      sign, without signer and signature, and `back`.
+      sign, without signer and signature, which this CYFR composes for the
+      operation and body asked: this deployment's registry
+      (`Sanctum.registry_host/0`), the caller's identifier, a fresh nonce,
+      and the request's own expiry, so the registry takes it as long as
+      this CYFR takes its answer; and `back`. It is found by its nonce
+      too, which a terminal's signed request carries in place of the
+      challenge.
+
+  `binding/1` is what a person's own client binds a request to: a
+  protected device by its channel, a browser by its session.
 
   ## The answer
 
@@ -92,18 +101,30 @@ defmodule Sanctum.SignIn do
        * `:registry` requires the answer's identifier to be the caller's,
          and answers the signed request's bytes
          (`Prima.SignIn.registry_bytes/2`) for the registry client to
-         send.
+         send, with the registry request they sign.
 
-  Every refusal of steps 1, 2 and 4 is `:answer_refused`, with no detail:
-  the precise reason is logged by its shape. A request held on another
-  member, or after this one restarted, is unknown here.
+  A terminal signs a `:registry` request's registry request itself, with
+  its own key as `signer` (`Prima.RegistryRequest`), and answers with
+  that signed request (`answer/3` takes it decoded). Its nonce names the
+  request held for it, which is taken and so spent; it must be bound to
+  what delivered the answer and unexpired, as above, and be exactly the
+  registry request held, every field but `signer` and `sig` equal, so it
+  names the caller's identifier, the operation and the body this CYFR
+  composed. Whether the signature is a key of that account's is the
+  registry's check, which reads the log itself; its bytes are answered as
+  a passkey's are.
+
+  Every refusal of steps 1, 2 and 4, and of a terminal's request that is
+  not the one held, is `:answer_refused`, with no detail: the precise
+  reason is logged by its shape. A request held on another member, or
+  after this one restarted, is unknown here.
 
   ## Registry answers
 
-  `record_claim/2` and `record_namespace/2`: the namespace lands on the
-  `users` row the moment the registry's answer to a claim or a token mint
-  names it, before, and regardless of, the push tokens. That row is what
-  every request reads (`Sanctum.Namespace`).
+  `record_namespace/2`: the namespace lands on the `users` row the moment
+  the registry's answer to a token mint names it, before, and regardless
+  of, the push tokens. That row is what every request reads
+  (`Sanctum.Namespace`).
   """
 
   require Logger
@@ -146,7 +167,13 @@ defmodule Sanctum.SignIn do
           %{purpose: :sign_in, user: Users.user(), session_token: String.t()}
           | %{purpose: :sign_in, user: Users.user(), kid: String.t()}
           | %{purpose: :confirm, ref: String.t(), back: String.t() | nil}
-          | %{purpose: :registry, user_id: String.t(), signed: binary(), back: String.t() | nil}
+          | %{
+              purpose: :registry,
+              user_id: String.t(),
+              signed: binary(),
+              back: String.t() | nil,
+              registry_request: Prima.RegistryRequest.t()
+            }
 
   # ---- the request -------------------------------------------------------------
 
@@ -160,7 +187,8 @@ defmodule Sanctum.SignIn do
     * `:ctx` — the asking context, for `:confirm` and `:registry`: a person
       signed in, in an athanor;
     * `:ref` — `:confirm`'s pending confirmation;
-    * `:registry_request` — `:registry`'s `Prima.RegistryRequest`;
+    * `:operation` and `:body` — `:registry`'s registry operation and its
+      body, which the registry request this CYFR composes carries;
     * `:back` — where a browser returns after a `:confirm` or `:registry`
       answer: a path on this CYFR;
     * `:identifier` — the account a channel speaks for, for a
@@ -169,7 +197,8 @@ defmodule Sanctum.SignIn do
       answered by.
 
   Refusals: `:no_directory` (a browser's request with no directory to
-  send it to), `{:not_found, "confirmation", ref}`, `:not_pending`,
+  send it to), `:no_registry` (a registry request where this deployment
+  names no registry), `{:not_found, "confirmation", ref}`, `:not_pending`,
   `:unauthenticated`, `{:invalid_argument, sentence}`, `:unavailable`.
   """
   @spec request(Prima.SignIn.purpose(), binding(), keyword()) ::
@@ -197,6 +226,37 @@ defmodule Sanctum.SignIn do
 
   defp binding(_binding, _opts),
     do: {:error, {:invalid_argument, "A request is bound to a browser or a device's channel"}}
+
+  @doc """
+  What a request the caller's own client asks for is bound to, and its
+  answer taken under, with the options `request/3` takes for it: a
+  protected device's own channel, with the account it speaks for
+  (`identifier:`), or the person's browser by their session.
+  `:unauthenticated` for any other caller, `:unavailable` when the store
+  cannot answer.
+  """
+  @spec binding(Context.t()) ::
+          {:ok, binding(), keyword()} | {:error, :unauthenticated | :unavailable}
+  def binding(%Context{auth_method: :device, client_id: client_id, user_id: user_id})
+      when is_binary(client_id) and is_binary(user_id) do
+    with {:ok, identifier} <- account_of(user_id),
+         do: {:ok, {:channel, client_id}, [identifier: identifier]}
+  end
+
+  def binding(%Context{session_token_hash: hash}) when is_binary(hash) and hash != "",
+    do: {:ok, {:session, hash}, []}
+
+  def binding(%Context{}), do: {:error, :unauthenticated}
+
+  # The account a person here speaks for: none is a caller who cannot.
+  defp account_of(user_id) do
+    case Users.identifier(user_id) do
+      {:ok, identifier} when is_binary(identifier) -> {:ok, identifier}
+      {:ok, nil} -> {:error, :unauthenticated}
+      {:error, :not_found} -> {:error, :unauthenticated}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
 
   @doc """
   This CYFR's origin in its one spelling (`Sanctum.origin/0`, its scheme
@@ -256,26 +316,50 @@ defmodule Sanctum.SignIn do
   end
 
   defp held(:registry, opts) do
-    with {:ok, ctx} <- person(opts[:ctx]) do
-      case Keyword.get(opts, :registry_request) do
-        %Prima.RegistryRequest{signer: nil, sig: nil} = registry ->
-          {:ok,
-           %{
-             registry_request: registry,
-             user_id: ctx.user_id,
-             identifier: opts[:identifier],
-             back: back(opts[:back])
-           }}
-
-        _other ->
-          {:error,
-           {:invalid_argument, "A registry request to sign names no signer and carries no sig"}}
-      end
+    with {:ok, ctx} <- person(opts[:ctx]),
+         {:ok, identifier} <- account_of(ctx.user_id),
+         {:ok, registry} <- registry_request(identifier, opts) do
+      {:ok,
+       %{
+         registry_request: registry,
+         user_id: ctx.user_id,
+         identifier: identifier,
+         back: back(opts[:back])
+       }}
     end
   end
 
   defp held(_purpose, _opts),
     do: {:error, {:invalid_argument, "A request is for sign_in, confirm or registry"}}
+
+  # The registry request a `:registry` request carries, which expires with
+  # it: the registry allows an expiry this far ahead
+  # (`Prima.RegistryRequest.max_ahead_ms/0`), and a request this CYFR
+  # still takes an answer to is one the registry still takes.
+  defp registry_request(identifier, opts) do
+    with {:ok, registry} <- Sanctum.registry_host() do
+      %{
+        "protocol" => Prima.RegistryRequest.protocol(),
+        "registry" => registry,
+        "operation" => opts[:operation],
+        "identifier" => identifier,
+        "nonce" => Encoding.b64(:crypto.strong_rand_bytes(Prima.RegistryRequest.nonce_bytes())),
+        "expires_at" => System.system_time(:millisecond) + Prima.SignIn.lifetime_ms(),
+        "body" => opts[:body]
+      }
+      |> Prima.RegistryRequest.to_sign()
+      |> case do
+        {:ok, request} ->
+          {:ok, request}
+
+        {:error, :unknown_operation} ->
+          {:error, {:invalid_argument, "The registry knows no such operation"}}
+
+        {:error, _malformed} ->
+          {:error, {:invalid_argument, "The registry request's arguments are not valid"}}
+      end
+    end
+  end
 
   # A person signed in, in an athanor, off the guest plane.
   defp person(%Context{plane: plane, user_id: user_id, athanor_id: athanor_id} = ctx)
@@ -368,14 +452,28 @@ defmodule Sanctum.SignIn do
 
   defp hold(request, binding, held) do
     entry = Map.merge(held, %{request: request, binding: binding})
+    lifetime = Prima.SignIn.lifetime_ms()
 
-    case Arca.Cache.put(key(request.challenge), entry, Prima.SignIn.lifetime_ms()) do
-      :ok -> :ok
+    with :ok <- Arca.Cache.put(key(request.challenge), entry, lifetime),
+         :ok <- by_nonce(request, lifetime) do
+      :ok
+    else
       {:error, _unavailable} -> {:error, :unavailable}
     end
   end
 
+  # A terminal answers a registry request with the registry request it
+  # signed, which names no challenge: its nonce finds the challenge.
+  defp by_nonce(
+         %Prima.SignIn{purpose: :registry, registry_request: registry} = request,
+         lifetime
+       ),
+       do: Arca.Cache.put(nonce_key(registry.nonce), request.challenge, lifetime)
+
+  defp by_nonce(_request, _lifetime), do: :ok
+
   defp key(challenge), do: {:sign_in_request, challenge}
+  defp nonce_key(nonce), do: {:sign_in_registry_nonce, nonce}
 
   # ---- the answer --------------------------------------------------------------
 
@@ -386,9 +484,12 @@ defmodule Sanctum.SignIn do
   (the module doc). `answer`
   is a passkey's answer as its fragment, or a decoded
   `Prima.SignIn.PasskeyAnswer` or `Prima.SignIn.DeviceAnswer`. `opts`:
-  `:ref`, the confirmation the answer must be for, so an answer to any
-  other request is refused before it does anything; `:now`, the clock in
-  milliseconds, the system's by default.
+  `:ref`, the confirmation the answer must be for, and `:operation` with
+  `:body`, the registry operation and body it must be for, so an answer
+  to any other request is refused before it does anything; `:now`, the
+  clock in milliseconds, the system's by default. A terminal's answer to
+  a `:registry` request is the `Prima.RegistryRequest` it signed (the
+  module doc).
 
   Refusals: `:answer_refused`, `:identity_stale`, `:identity_gone`,
   `:stale_head`, `{:door, reason}`, `:invitation_invalid`,
@@ -396,7 +497,7 @@ defmodule Sanctum.SignIn do
   refusals (`Sanctum.Newcomer.admit/2`), `:unavailable`.
   """
   @spec answer(
-          String.t() | PasskeyAnswer.t() | DeviceAnswer.t(),
+          String.t() | PasskeyAnswer.t() | DeviceAnswer.t() | Prima.RegistryRequest.t(),
           binding() | [binding()],
           keyword()
         ) ::
@@ -426,6 +527,19 @@ defmodule Sanctum.SignIn do
     end
   end
 
+  def answer(%Prima.RegistryRequest{} = signed, binding, opts) when is_list(opts) do
+    now = Keyword.get_lazy(opts, :now, fn -> System.system_time(:millisecond) end)
+
+    with {:ok, held} <- spent_by_nonce(signed.nonce),
+         :ok <- bound(held.binding, binding),
+         :ok <- expected(held, opts),
+         :ok <- current(held.request, now),
+         :ok <- composed(held.request, signed),
+         {:ok, bytes} <- sent(signed) do
+      {:ok, registry_outcome(held, bytes)}
+    end
+  end
+
   def answer(_answer, _binding, _opts), do: refused(:invalid_answer)
 
   # Taken, so spent on this answer whatever the rest says.
@@ -434,6 +548,30 @@ defmodule Sanctum.SignIn do
       {:ok, %{request: %Prima.SignIn{}} = held} -> {:ok, held}
       _miss -> refused(:unknown_challenge)
     end
+  end
+
+  defp spent_by_nonce(nonce) do
+    case Arca.Cache.take(nonce_key(nonce)) do
+      {:ok, challenge} when is_binary(challenge) -> spent(challenge)
+      _miss -> refused(:unknown_challenge)
+    end
+  end
+
+  # A terminal's signed request is the registry request held, signed: every
+  # field but its signer and signature is the one this CYFR composed.
+  defp composed(%Prima.SignIn{purpose: :registry, registry_request: held}, signed) do
+    if %{signed | signer: nil, sig: nil} == held, do: :ok, else: refused(:wrong_request)
+  end
+
+  defp composed(_request, _signed), do: refused(:wrong_purpose)
+
+  # The bytes the registry is sent, bounded as a signer's are.
+  defp sent(signed) do
+    bytes = signed |> Prima.RegistryRequest.encode() |> Encoding.jcs!()
+
+    if byte_size(bytes) > Prima.RegistryRequest.max_bytes(),
+      do: refused(:request_malformed),
+      else: {:ok, bytes}
   end
 
   # What delivered the answer holds a binding of the held one's kind, and
@@ -448,14 +586,25 @@ defmodule Sanctum.SignIn do
 
   defp bound(_held, _delivered), do: refused(:wrong_binding)
 
-  # The confirmation the caller names, when it names one: an answer to any
-  # other request does nothing.
+  # The confirmation, or the registry operation and body, the caller names
+  # when it names one: an answer to any other request does nothing.
   defp expected(held, opts) do
-    case Keyword.fetch(opts, :ref) do
-      :error -> :ok
-      {:ok, ref} -> if Map.get(held, :ref) == ref, do: :ok, else: refused(:wrong_record)
+    cond do
+      Keyword.has_key?(opts, :ref) and Map.get(held, :ref) != opts[:ref] ->
+        refused(:wrong_record)
+
+      Keyword.has_key?(opts, :operation) and not for_operation?(held.request, opts) ->
+        refused(:wrong_request)
+
+      true ->
+        :ok
     end
   end
+
+  defp for_operation?(%Prima.SignIn{purpose: :registry, registry_request: registry}, opts),
+    do: registry.operation == opts[:operation] and registry.body == opts[:body]
+
+  defp for_operation?(_request, _opts), do: false
 
   # Unexpired and for this CYFR, before any log is read for it.
   defp current(%Prima.SignIn{expires_at: expires_at, audience: audience}, now) do
@@ -626,13 +775,20 @@ defmodule Sanctum.SignIn do
   defp done(%{request: %{purpose: :registry} = request} = held, answer, identifier, _key, _head) do
     with :ok <- theirs(held.user_id, identifier) do
       case Prima.SignIn.registry_bytes(request, answer) do
-        {:ok, signed} ->
-          {:ok, %{purpose: :registry, user_id: held.user_id, signed: signed, back: held.back}}
-
-        {:error, reason} ->
-          refused(reason)
+        {:ok, signed} -> {:ok, registry_outcome(held, signed)}
+        {:error, reason} -> refused(reason)
       end
     end
+  end
+
+  defp registry_outcome(held, signed) do
+    %{
+      purpose: :registry,
+      user_id: held.user_id,
+      signed: signed,
+      back: held.back,
+      registry_request: held.request.registry_request
+    }
   end
 
   # The person a confirmation or a registry request is for, as their
@@ -781,62 +937,6 @@ defmodule Sanctum.SignIn do
   end
 
   # ---- registry answers --------------------------------------------------------
-
-  @doc """
-  Record the registry's answer to the caller's handle claim
-  (`%{"handle" => slug, "identifier" => identifier}`), only while the
-  caller stands: their standing is read again first
-  (`Sanctum.Caller.revalidate_session/1`), so a session, key or device
-  revoked while the registry answered records nothing; the answer must
-  name the identifier the caller signed the claim under
-  (`:malformed_answer` otherwise: it answered for someone else); then the
-  slug is recorded (`record_namespace/2`). Answers the context as it was
-  read again, for the writes that follow under it. A store that cannot
-  answer, or a remote person whose identity could not be confirmed fresh,
-  is `:unavailable` or `:identity_stale` and the session stands; any
-  other standing refusal is `:unauthenticated`.
-  """
-  @spec record_claim(Context.t(), map()) ::
-          {:ok, Context.t()}
-          | {:error,
-             :unauthenticated
-             | :unavailable
-             | :identity_stale
-             | :malformed_answer
-             | :not_found
-             | :invalid_slug
-             | :namespace_owned_by_another_identity
-             | term()}
-  def record_claim(%Context{user_id: user_id} = ctx, %{
-        "handle" => slug,
-        "identifier" => identifier
-      })
-      when is_binary(user_id) and is_binary(slug) and is_binary(identifier) do
-    case Sanctum.Caller.revalidate_session(ctx) do
-      {:ok, fresh} ->
-        with :ok <- claimed_by(user_id, identifier),
-             {:ok, _user} <- record_namespace(user_id, slug),
-             do: {:ok, fresh}
-
-      {:error, reason} when reason in [:unavailable, :identity_stale] ->
-        {:error, reason}
-
-      {:error, _reason} ->
-        {:error, :unauthenticated}
-    end
-  end
-
-  def record_claim(%Context{}, _answer), do: {:error, :malformed_answer}
-
-  # The answer names the identifier the person's own identity row holds.
-  defp claimed_by(user_id, identifier) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{identifier: ^identifier}} -> :ok
-      {:ok, _another} -> {:error, :malformed_answer}
-      {:error, :not_found} -> {:error, :malformed_answer}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
 
   @doc """
   Record the person's cyfr.run namespace, as a registry answer names it:

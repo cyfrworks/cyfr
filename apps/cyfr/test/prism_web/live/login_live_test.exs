@@ -101,6 +101,124 @@ defmodule PrismWeb.LoginLiveTest do
     assert "/auth/passkey/complete/" <> _ticket = path
   end
 
+  describe "a registry signature's return" do
+    # The first person signed in in this browser, and the registry request
+    # their session asked for through the registry tool, as the registry
+    # page asks: the browser's conn, the request, and the account.
+    defp asked!(conn, dir, args) do
+      %{account: account, user: user} = first!(dir)
+      {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
+
+      {:ok, session} =
+        Sanctum.TestContext.create_session(
+          Sanctum.Context.build(
+            user_id: user.id,
+            athanor_id: athanor_id,
+            provider: "passkey",
+            permissions: Sanctum.Context.person_permissions(),
+            auth_method: :oidc,
+            authenticated: true
+          )
+        )
+
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor_id, refresh: false)
+
+      {:ok, %{request: map, url: url}} = Compendium.Providers.Registry.handle(ctx, args)
+      assert String.starts_with?(url, dir.url <> "/account/sign#")
+      {:ok, request} = Prima.SignIn.decode(map)
+
+      %{
+        conn: Plug.Test.init_test_session(conn, %{session_key() => session.token}),
+        ctx: ctx,
+        request: request,
+        account: account
+      }
+    end
+
+    defp signed_at_pages(%{request: request, account: account}) do
+      request
+      |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
+      |> Prima.SignIn.fragment()
+    end
+
+    # The registry, checking each request as the registry does under the
+    # account's log, and answering `answer.(request)`.
+    defp registry(account, answer) do
+      {:ok, state} = Prima.Identity.verify_chain(account.log)
+
+      Sanctum.Test.RegistryStub.start!(fn %{body: body} = request ->
+        case Prima.RegistryRequest.verify(
+               body,
+               state,
+               %{host: Sanctum.Test.RegistryStub.host(), directory: account.url},
+               System.system_time(:millisecond)
+             ) do
+          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
+          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
+        end
+      end)
+    end
+
+    test "completes the sync the passkey signed, under the session that asked, and says so",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "sync"})
+
+      registry(asked.account, fn %{path: "/v1/tokens/mint"} ->
+        {200,
+         Sanctum.Test.RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => "page-person", "token" => "cyfr_pt_page"},
+           "memberships" => []
+         })}
+      end)
+
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+      render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+
+      assert {"/", %{"info" => "Your push tokens are synced."}} = assert_redirect(view)
+      assert_received {:registry_request, %{method: "POST", path: "/v1/tokens/mint"}}
+
+      assert {:ok, %{token: "cyfr_pt_page"}} =
+               Compendium.Registry.CredentialStore.get(
+                 asked.ctx,
+                 Compendium.RegistryHost.canonical_host(),
+                 "page-person"
+               )
+
+      assert {:ok, %{namespace: "page-person"}} = Sanctum.Tenancy.Users.get(asked.ctx.user_id)
+    end
+
+    test "a registry's refusal is the flash the browser returns with, in a person's words",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+
+      registry(asked.account, fn _request ->
+        Sanctum.Test.RegistryStub.refusal(:unknown_identity)
+      end)
+
+      {:ok, view, _html} = live(asked.conn, ~p"/login")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+      end)
+
+      assert {"/", %{"error" => message}} = assert_redirect(view)
+      assert message =~ "cyfr.run does not know this account."
+      refute_vocabulary(message)
+    end
+
+    test "returned in a browser without the session that asked, it is sent nowhere",
+         %{conn: conn, dir: dir} do
+      asked = asked!(conn, dir, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+      registry(asked.account, fn _request -> flunk("nothing is sent") end)
+
+      {:ok, view, _html} = live(conn, ~p"/login")
+      html = render_hook(view, "account_answer", %{"answer" => signed_at_pages(asked)})
+
+      assert html =~ "nobody was signed in"
+      refute_received {:registry_request, _}
+    end
+  end
+
   test "an answer the page cannot take signs no one in and says so", %{conn: conn, dir: dir} do
     first!(dir)
     {:ok, view, _html} = live(conn, ~p"/login")

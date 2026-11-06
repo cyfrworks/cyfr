@@ -151,7 +151,7 @@ defmodule Sanctum.Providers.Confirmation do
   def handle(%Context{} = ctx, %{"action" => "request", "ref" => ref}) when is_binary(ref) do
     with {:ok, user_id} <- person(ctx),
          {:ok, _row} <- own(Context.actor(ctx), ref, user_id),
-         {:ok, binding, opts} <- binding(ctx, user_id) do
+         {:ok, binding, opts} <- Sanctum.SignIn.binding(ctx) do
       case Sanctum.SignIn.request(:confirm, binding, [ctx: ctx, ref: ref] ++ opts) do
         {:ok, %{request: request, url: url}} ->
           {:ok, Prima.MapUtil.put_present(%{request: Prima.SignIn.encode(request)}, :url, url)}
@@ -168,7 +168,7 @@ defmodule Sanctum.Providers.Confirmation do
       when is_binary(ref) do
     with {:ok, user_id} <- person(ctx),
          {:ok, _row} <- own(Context.actor(ctx), ref, user_id),
-         {:ok, binding, _opts} <- binding(ctx, user_id),
+         {:ok, binding, _opts} <- Sanctum.SignIn.binding(ctx),
          {:ok, answer} <- answer(answer) do
       case Sanctum.SignIn.answer(answer, binding, ref: ref) do
         {:ok, %{purpose: :confirm, ref: ^ref}} ->
@@ -229,31 +229,6 @@ defmodule Sanctum.Providers.Confirmation do
     do: {:error, {:unknown_action, "confirmation.#{action}"}}
 
   def handle(_ctx, _args), do: {:error, :action_missing}
-
-  # What a request and its answer are bound to: a protected device's own
-  # channel, with the account it speaks for, or the person's session.
-  defp binding(%Context{auth_method: :device, client_id: client_id}, user_id)
-       when is_binary(client_id) do
-    case Sanctum.Tenancy.Users.identifier(user_id) do
-      {:ok, identifier} when is_binary(identifier) ->
-        {:ok, {:channel, client_id}, [identifier: identifier]}
-
-      {:ok, nil} ->
-        {:error, :unauthenticated}
-
-      {:error, :not_found} ->
-        {:error, :unauthenticated}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp binding(%Context{session_token_hash: hash}, _user_id)
-       when is_binary(hash) and hash != "",
-       do: {:ok, {:session, hash}, []}
-
-  defp binding(%Context{}, _user_id), do: {:error, :unauthenticated}
 
   # A passkey's answer as the fragment the account pages returned, or a
   # device's as its JSON.

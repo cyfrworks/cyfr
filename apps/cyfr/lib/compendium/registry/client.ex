@@ -10,10 +10,11 @@ defmodule Compendium.Registry.Client do
   This module talks the wire protocol; the other two own local state.
 
   Handles search, discover, component metadata, namespace, tokens and
-  members endpoints (`/v1/*`), and every operation a person signs
-  (`signed/3`, `Prima.RegistryRequest`): no identity provider's token is
-  ever sent. Push and pull use OCI protocol through the gateway
-  (`registry.cyfr.run/v2/`) via `Compendium.OCI.Client`.
+  members endpoints (`/v1/*`), and sends every operation a key of the
+  person's account signed (`signed/2`, `Prima.RegistryRequest`): no
+  identity provider's token is ever sent. Push and pull use OCI protocol
+  through the gateway (`registry.cyfr.run/v2/`) via
+  `Compendium.OCI.Client`.
 
   Works against both the apex cyfr.run and a self-hosted cyfr.run — the
   REST host is sourced from `:cyfr, :registry_url` and is build-agnostic.
@@ -141,20 +142,86 @@ defmodule Compendium.Registry.Client do
     "publisher.verify" => "/v1/namespaces/publisher/verify"
   }
 
-  @doc """
-  A request `operation` with `body` that a key of the person `user_id`'s
-  account signs, for the route the registry takes it at. This CYFR holds
-  no key of the person's (`ARCHITECTURE.md` §9.1), so it signs nothing
-  for them: every request is refused `:remote` and nothing is sent or
-  written. *Not built yet:* a request signed by the person's device or by
-  their passkey at the account pages, carried here.
+  # The operations whose answer carries a push token: their log line is
+  # redacted.
+  @token_answers ["tokens.mint", "publisher.verify"]
+
+  @typedoc """
+  Why a signed operation did not complete: the registry's refusals
+  (`Prima.RegistryRequest.refusals/0`, `policy_required` carrying the
+  version the registry requires; `unknown_identity` among them for an
+  account the registry's directory no longer serves), `:no_registry` when
+  this deployment names none, `:registry_unavailable` for no usable
+  answer, and `:malformed_answer` for an answer that cannot be read.
   """
-  @spec signed(String.t(), String.t(), map()) :: {:error, :remote}
-  def signed(user_id, operation, body)
-      when is_binary(user_id) and is_map_key(@routes, operation) and is_map(body) do
-    Logger.warning("[Compendium.Registry.Client] #{operation} refused — :remote")
-    {:error, :remote}
+  @type signed_refusal ::
+          Prima.RegistryRequest.refusal()
+          | {:policy_required, String.t() | nil}
+          | :no_registry
+          | :registry_unavailable
+          | :malformed_answer
+
+  @doc """
+  Send `bytes`, a registry request for `operation` that a key of the
+  person's account signed (`Prima.RegistryRequest`; this CYFR holds no
+  key of anyone's, `Sanctum.SignIn` takes the signature), to the route the
+  registry takes it at. Answers the registry's decoded answer, or a
+  refusal (`t:signed_refusal/0`). Nothing is written here: what the
+  answer means is the caller's.
+
+  The request runs in the calling process, so it stops with it; a
+  registry that cannot be reached, or answers 5xx, is
+  `:registry_unavailable`, and a `POST` is never replayed after the
+  registry may have acted on it (`Compendium.Registry.Transport`).
+  """
+  @spec signed(String.t(), binary()) :: {:ok, map()} | {:error, signed_refusal()}
+  def signed(operation, bytes) when is_map_key(@routes, operation) and is_binary(bytes) do
+    result =
+      :post
+      |> Transport.request(url(Map.fetch!(@routes, operation)), json_headers(), bytes)
+      |> signed_answer()
+
+    log_signed(operation, result)
+    result
   end
+
+  defp signed_answer({:ok, status, _headers, body}) when status in 200..299 do
+    case Jason.decode(body) do
+      {:ok, %{} = answer} -> {:ok, answer}
+      _unreadable -> {:error, :malformed_answer}
+    end
+  end
+
+  defp signed_answer({:ok, status, _headers, body}) do
+    case Prima.RegistryRequest.refusal(body) do
+      {:ok, :policy_required} -> {:error, {:policy_required, required_version(body)}}
+      {:ok, refusal} -> {:error, refusal}
+      {:error, :malformed_answer} when status >= 500 -> {:error, :registry_unavailable}
+      {:error, :malformed_answer} -> {:error, :malformed_answer}
+    end
+  end
+
+  defp signed_answer({:error, %Errors{reason: :registry_unconfigured}}),
+    do: {:error, :no_registry}
+
+  defp signed_answer({:error, %Errors{}}), do: {:error, :registry_unavailable}
+
+  # The version a `POLICY_ACCEPTANCE_REQUIRED` envelope carries beside its
+  # errors, when it is text.
+  defp required_version(body) do
+    case Jason.decode(body) do
+      {:ok, %{"required_version" => version}} when is_binary(version) -> version
+      _none -> nil
+    end
+  end
+
+  defp log_signed(operation, {:ok, answer}) when operation in @token_answers,
+    do: log_token_returning_result(operation, {:ok, answer})
+
+  defp log_signed(_operation, {:ok, _answer}), do: :ok
+
+  defp log_signed(operation, {:error, reason}),
+    do: Logger.warning("[Compendium.Registry.Client] #{operation} refused — #{inspect(reason)}")
 
   @doc """
   Call `GET /v1/namespaces/{slug}`. Public endpoint, no auth required.

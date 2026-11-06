@@ -187,7 +187,6 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
     {:not_enrolled, :setup_required},
-    {:remote, :forbidden},
     {:no_registry, :setup_required},
     {:registry_unavailable, :unavailable},
     {:registry_token_missing, :unauthenticated},
@@ -665,6 +664,10 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message(:no_attempt) ==
                "There is no unfinished name and recovery code to finish here."
+    end
+
+    test "an account the registry does not know, a closed one among them, is named as an account" do
+      assert Refusal.message(:unknown_identity) == "cyfr.run does not know this account."
     end
 
     test "a push with no usable token names the sync that mints one" do

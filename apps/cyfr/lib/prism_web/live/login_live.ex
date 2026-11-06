@@ -23,7 +23,12 @@ defmodule PrismWeb.LoginLive do
   ticket bound to this browser to `GET /auth/passkey/complete/:ticket`,
   which sets the session's cookie (`PrismWeb.PasskeyController`). A
   confirmation or a registry signature, answered in the tab the system
-  layer opened, sends the browser back where its request named.
+  layer opened, sends the browser back where its request named, or to `/`.
+  A registry signature is completed here first, under the session it was
+  bound to (`Compendium.complete_registry/2`): the signed request sent to
+  the registry and what its success does done, as the `registry` tool
+  completes a terminal's; the outcome is the flash the browser returns
+  with.
 
   A CYFR with no person yet offers nothing but the way to set up.
   """
@@ -31,6 +36,8 @@ defmodule PrismWeb.LoginLive do
   use PrismWeb, :live_view
 
   require Logger
+
+  alias PrismWeb.Ops
 
   # Requests per address: the page is reached over the LiveView socket,
   # which passes no rate-limit plug, so this is its per-address bound, per
@@ -53,6 +60,9 @@ defmodule PrismWeb.LoginLive do
      # on that browser, and a person's session the one their requests for
      # a confirmation are bound to.
      |> assign(:bindings, bindings(session))
+     # The session a registry signature completes under: the one its
+     # request was bound to, which the answer was just taken under.
+     |> assign(:session_token, session[to_string(CyfrWeb.SignInResponse.session_key())])
      |> assign(:browser_binding, session["_csrf_token"])
      # `connect_info` is readable only here, so the address a request is
      # charged to is captured at mount and carried.
@@ -112,12 +122,51 @@ defmodule PrismWeb.LoginLive do
     redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
   end
 
+  defp answered(socket, {:ok, %{purpose: :registry} = outcome}) do
+    {kind, message} = registered(socket, outcome)
+    socket |> put_flash(kind, message) |> redirect(to: outcome.back || ~p"/")
+  end
+
   defp answered(socket, {:ok, %{back: back}}) when is_binary(back),
     do: redirect(socket, to: back)
 
   defp answered(socket, {:ok, _confirmed}), do: redirect(socket, to: ~p"/")
 
   defp answered(socket, {:error, reason}), do: assign(socket, :error, sentence(reason))
+
+  defp registered(socket, outcome) do
+    with {:ok, ctx} <-
+           Sanctum.Caller.establish({:session, socket.assigns.session_token}, refresh: false),
+         {:ok, result} <- Compendium.complete_registry(ctx, outcome) do
+      {:info, done(outcome.registry_request, result)}
+    else
+      {:error, reason} -> {:error, "That did not go through: " <> Ops.error_message(reason)}
+    end
+  end
+
+  # What a completed registry request did, in the person's words.
+  defp done(%{operation: "tokens.mint"}, _result), do: "Your push tokens are synced."
+
+  defp done(%{operation: "policy.accept", body: %{"policy_version" => version}}, _result),
+    do: "You accepted the policies, version #{version}."
+
+  defp done(%{operation: "appeal.file"}, _result),
+    do: "Your appeal is filed. Moderators review every appeal."
+
+  defp done(%{operation: "publisher.claim", body: %{"slug" => slug}}, %{
+         "txt_record_key" => key,
+         "txt_value" => value
+       })
+       when is_binary(key) and is_binary(value),
+       do:
+         "To prove #{slug} is yours, add a DNS TXT record #{key} with the value #{value}, " <>
+           "then verify it."
+
+  defp done(%{operation: "publisher.claim", body: %{"slug" => slug}}, _result),
+    do: "Your claim of #{slug} is filed."
+
+  defp done(%{operation: "publisher.verify", body: %{"slug" => slug}}, _result),
+    do: "#{slug} is verified."
 
   # What each refusal reads as. A refusal of the answer itself says only
   # that this browser holds no sign-in to finish.
