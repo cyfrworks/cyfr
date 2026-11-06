@@ -28,6 +28,11 @@ defmodule Emissary.Web.AccountController do
   script-src 'self'; style-src 'self'; connect-src 'self' <registry>`,
   the registry being this CYFR's own origin. No session is read and no
   cookie set: the pages take their input from the fragment.
+
+  Every file and `config.json` is answered with an `ETag` of its body (the
+  quoted lowercase hex SHA-256 of its bytes), and a request whose
+  `If-None-Match` names it, or `*`, is answered `304` with no body and the
+  same headers: a revalidation never sends the bundle again.
   """
 
   use Emissary.Web, :controller
@@ -44,7 +49,11 @@ defmodule Emissary.Web.AccountController do
   @doc "`GET /account/:name`."
   def show(conn, %{"name" => "config.json"}) do
     directory = conn.assigns.account_directory
-    json(conn, %{"directory" => directory, "registry" => directory, "policy" => nil})
+
+    body =
+      Jason.encode!(%{"directory" => directory, "registry" => directory, "policy" => nil})
+
+    answer(conn, body, "application/json")
   end
 
   def show(conn, %{"name" => page}) when page in @pages,
@@ -82,15 +91,29 @@ defmodule Emissary.Web.AccountController do
   # A file of the bundle, by a name from the lists above: a bundle not
   # built here answers 404.
   defp file(conn, name, type) do
-    path = Path.join(root(), name)
-
-    if File.regular?(path) do
-      conn
-      |> put_resp_content_type(type)
-      |> send_file(200, path)
-    else
-      not_found(conn)
+    case File.read(Path.join(root(), name)) do
+      {:ok, body} -> answer(conn, body, type)
+      {:error, _absent} -> not_found(conn)
     end
+  end
+
+  # The body with its digest as ETag, or 304 to a revalidation naming it.
+  defp answer(conn, body, type) do
+    etag = ~s(") <> Base.encode16(:crypto.hash(:sha256, body), case: :lower) <> ~s(")
+    conn = conn |> put_resp_content_type(type) |> put_resp_header("etag", etag)
+
+    if revalidated?(conn, etag),
+      do: send_resp(conn, 304, ""),
+      else: send_resp(conn, 200, body)
+  end
+
+  # `If-None-Match` names the tag, weakly or not, or names `*`.
+  defp revalidated?(conn, etag) do
+    conn
+    |> get_req_header("if-none-match")
+    |> Enum.flat_map(&String.split(&1, ","))
+    |> Enum.map(&(&1 |> String.trim() |> String.replace_prefix("W/", "")))
+    |> Enum.any?(&(&1 == etag or &1 == "*"))
   end
 
   defp not_found(conn) do
