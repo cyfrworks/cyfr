@@ -16,8 +16,11 @@ defmodule Prima.RegistryRequest do
   every key but `sig`: an Ed25519 signature over those bytes for a device
   or recovery key (`sign/2`), or a passkey's `Prima.Identity.WebAuthn`
   assertion whose challenge is their SHA-256 (`challenge/1`, `attach/2`).
-  `policy.accept` precedes a person's first `handle.claim`; at an
-  account's birth both are signed by its recovery key.
+  Whoever signs chooses the signer, as in the log: a CYFR hands the
+  account pages the request without `signer` and `sig` (`to_sign/1`), and
+  the passkey's kid is set before it signs. `policy.accept` precedes a
+  person's first `handle.claim`; at an account's birth both are signed by
+  its recovery key.
 
   Each operation's body holds exactly its keys:
 
@@ -169,7 +172,7 @@ defmodule Prima.RegistryRequest do
           registry: String.t(),
           operation: operation(),
           identifier: String.t(),
-          signer: String.t(),
+          signer: String.t() | nil,
           nonce: binary(),
           expires_at: non_neg_integer(),
           body: %{String.t() => term()},
@@ -251,7 +254,7 @@ defmodule Prima.RegistryRequest do
   def new(attrs) do
     attrs = Map.new(attrs)
 
-    unsigned(
+    checked(
       Encoding.compact(%{
         "protocol" => @protocol,
         "registry" => attrs[:registry],
@@ -261,23 +264,28 @@ defmodule Prima.RegistryRequest do
         "nonce" => is_binary(attrs[:nonce]) && Encoding.b64(attrs[:nonce]),
         "expires_at" => attrs[:expires_at],
         "body" => attrs[:body]
-      })
+      }),
+      :unsigned
     )
   end
 
   @doc """
-  Read an unsigned request from its JSON map, held as `new/1` holds its
-  fields: the request a passkey or a terminal is asked to sign.
+  Read the request a CYFR hands a passkey to sign from its JSON map: held
+  as `new/1` holds its fields, but without `signer` and `sig`. Whoever
+  signs chooses the signer, as in the log, and sets it before signing
+  (`Prima.SignIn`'s `registry` purpose).
   """
-  @spec unsigned(term()) ::
+  @spec to_sign(term()) ::
           {:ok, t()} | {:error, :request_malformed | :wrong_protocol | :unknown_operation}
-  def unsigned(map) when is_map(map) and not is_struct(map) do
-    with {:ok, request} <- read(map, false),
+  def to_sign(map), do: checked(map, :to_sign)
+
+  defp checked(map, mode) when is_map(map) and not is_struct(map) do
+    with {:ok, request} <- read(map, mode),
          :ok <- body(request),
          do: {:ok, request}
   end
 
-  def unsigned(_value), do: {:error, :request_malformed}
+  defp checked(_value, _mode), do: {:error, :request_malformed}
 
   @doc "The JSON map of a request; `sig` is absent while unsigned."
   @spec encode(t()) :: map()
@@ -345,7 +353,7 @@ defmodule Prima.RegistryRequest do
   def verify(bytes, %State{} = head, %{host: host, directory: directory}, now)
       when is_binary(bytes) and is_integer(now) do
     with {:ok, map} <- parse(bytes),
-         {:ok, request} <- read(map, true),
+         {:ok, request} <- read(map, :signed),
          :ok <- same(request.registry, host, :wrong_registry),
          :ok <- body(request),
          :ok <- expiry(request.expires_at, now),
@@ -367,8 +375,15 @@ defmodule Prima.RegistryRequest do
 
   # Steps 1 and 2: exact keys and their types over the whole map, inside
   # JCS's domain, then the protocol.
-  defp read(map, signed?) do
-    fields = if signed?, do: @envelope ++ ["sig"], else: @envelope
+  # A signed request, an unsigned one, or one to sign, which has no
+  # signer yet.
+  defp read(map, mode) do
+    fields =
+      case mode do
+        :signed -> @envelope ++ ["sig"]
+        :unsigned -> @envelope
+        :to_sign -> @envelope -- ["signer"]
+      end
 
     with :ok <- Encoding.fields(map, fields, []),
          {:ok, _bytes} <- Encoding.jcs(map),
@@ -376,11 +391,11 @@ defmodule Prima.RegistryRequest do
          {:ok, registry} <- Encoding.check(map, "registry", &Encoding.host?/1),
          {:ok, operation} <- Encoding.check(map, "operation", &is_binary/1),
          {:ok, identifier} <- Encoding.check(map, "identifier", &Encoding.identifier?/1),
-         {:ok, signer} <- Encoding.check(map, "signer", &signer?/1),
+         {:ok, signer} <- signer(map, mode),
          {:ok, nonce} <- Encoding.binary(map, "nonce", @nonce_bytes),
          {:ok, expires_at} <- Encoding.check(map, "expires_at", &Encoding.ms?/1),
          {:ok, body} <- Encoding.check(map, "body", &is_map/1),
-         {:ok, sig} <- signature(map, signed?) do
+         {:ok, sig} <- signature(map, mode == :signed) do
       if protocol == @protocol do
         {:ok,
          %__MODULE__{
@@ -400,6 +415,9 @@ defmodule Prima.RegistryRequest do
       {:error, _reason} -> {:error, :request_malformed}
     end
   end
+
+  defp signer(_map, :to_sign), do: {:ok, nil}
+  defp signer(map, _mode), do: Encoding.check(map, "signer", &signer?/1)
 
   defp signer?(value), do: is_binary(value) and Regex.match?(@signer, value)
 

@@ -71,15 +71,20 @@ defmodule Prima.SignInTest do
   test "every request reads and writes back, and has its digest and its fragment" do
     v = vectors()
 
-    for {name, %{"request" => map, "digest" => digest}} <- v["requests"] do
+    for {name, %{"request" => map} = vector} <- v["requests"] do
       assert {:ok, request} = SignIn.decode(map), name
       assert SignIn.encode(request) == map, name
 
-      # The digest, spelled independently of Prima.SignIn.
-      signed = if map["purpose"] == "registry", do: map["registry_request"], else: map
-      {:ok, bytes} = Prima.JCS.encode(signed)
-      assert :crypto.hash(:sha256, bytes) == unb64(digest), name
-      assert SignIn.digest(request) == unb64(digest), name
+      # The digest, spelled independently of Prima.SignIn. A registry
+      # request's is its passkey answer's, over the signer it chose.
+      if digest = vector["digest"] do
+        {:ok, bytes} = Prima.JCS.encode(map)
+        assert :crypto.hash(:sha256, bytes) == unb64(digest), name
+        assert SignIn.digest(request) == unb64(digest), name
+      else
+        assert map["purpose"] == "registry", name
+        refute Map.has_key?(map["registry_request"], "signer"), name
+      end
 
       fragment = v["fragments"]["requests"][name]
       {:ok, jcs} = Prima.JCS.encode(map)
@@ -114,13 +119,25 @@ defmodule Prima.SignInTest do
           assert SignIn.fragment(answer) == fragment, name
           assert SignIn.parse_fragment(fragment) == {:ok, map}, name
 
+          if digest = vector["digest"] do
+            registry =
+              Map.put(v["requests"][req]["request"]["registry_request"], "signer", map["signer"])
+
+            {:ok, bytes} = Prima.JCS.encode(registry)
+            assert :crypto.hash(:sha256, bytes) == unb64(digest), name
+            assert SignIn.digest(request(v, req), answer.signer) == unb64(digest), name
+          end
+
         "device" ->
           assert DeviceAnswer.encode(answer) == map, name
-          seed = unb64(v["keys"][vector["signer"]]["seed"])
-          digest = unb64(v["requests"][req]["digest"])
-          sig = :crypto.sign(:eddsa, :none, digest, [seed, :ed25519])
-          assert answer.sig == sig, name
-          assert DeviceAnswer.sign(request(v, req), answer.kid, seed) == answer, name
+
+          if signer = vector["signer"] do
+            seed = unb64(v["keys"][signer]["seed"])
+            digest = unb64(v["requests"][req]["digest"])
+            sig = :crypto.sign(:eddsa, :none, digest, [seed, :ed25519])
+            assert answer.sig == sig, name
+            assert DeviceAnswer.sign(request(v, req), answer.kid, seed) == answer, name
+          end
       end
     end
   end
@@ -150,7 +167,8 @@ defmodule Prima.SignInTest do
     assert {:ok, key} =
              SignIn.verify(answer, request, state, home: v["home"], now: output["now_ms"])
 
-    assert key.kid == request.registry_request.signer
+    assert key.kid == answer.signer
+    assert request.registry_request.signer == nil
     assert SignIn.registry_bytes(request, answer) == {:ok, output["bytes"]}
 
     registry = %{host: output["registry"]["host"], directory: output["registry"]["directory"]}

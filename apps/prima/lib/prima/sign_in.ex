@@ -16,8 +16,10 @@ defmodule Prima.SignIn do
     * `sign_in` — nothing more.
     * `confirm` — `subject`, the pending confirmation's digest
       (`Prima.Confirmation.digest/1`).
-    * `registry` — `registry_request`, the complete unsigned
-      `Prima.RegistryRequest` the person is asked to sign.
+    * `registry` — `registry_request`, the `Prima.RegistryRequest` the
+      person is asked to sign, without `signer` and `sig`: whoever signs
+      chooses the signer, as in the log, so the account pages set it to the
+      chosen passkey's kid before signing (`Prima.RegistryRequest.to_sign/1`).
 
   `audience` is the minting CYFR's origin, `challenge` 32 random bytes,
   `expires_at` `lifetime_ms/0` after the mint on its clock, and `return` a
@@ -27,10 +29,11 @@ defmodule Prima.SignIn do
 
   ## The digest
 
-  What a signer signs (`digest/1`): SHA-256 of the request's JCS bytes for
-  `sign_in` and `confirm`, and of the registry request's for `registry`, so
-  the registry receives exactly `Prima.RegistryRequest`'s signature over
-  its own request (`registry_bytes/2`). A passkey signs it as its WebAuthn
+  What a signer signs: SHA-256 of the request's JCS bytes for `sign_in`
+  and `confirm` (`digest/1`), and for `registry` of the registry request's
+  with `signer` set to the signing passkey's kid (`digest/2`), so the
+  registry receives exactly `Prima.RegistryRequest`'s signature over its
+  own request (`registry_bytes/2`). A passkey signs it as its WebAuthn
   challenge; a device signs its 32 bytes with Ed25519.
 
   ## The answers
@@ -38,7 +41,8 @@ defmodule Prima.SignIn do
     * `Prima.SignIn.PasskeyAnswer`, from the account pages:
       `{challenge, identifier, credential_id, authenticator_data,
       client_data, signature}`, the identifier the passkey's user handle
-      names (`Prima.Identity.identifier_for_user_id/1`).
+      names (`Prima.Identity.identifier_for_user_id/1`), and `signer`, the
+      passkey's kid, for a `registry` request.
     * `Prima.SignIn.DeviceAnswer`, over the device channel:
       `{challenge, kid, sig}`. A device answers `sign_in` and `confirm`; for
       `registry` a terminal signs the registry request itself.
@@ -92,6 +96,7 @@ defmodule Prima.SignIn do
           | :wrong_identifier
           | :unknown_key
           | :wrong_purpose
+          | :wrong_signer
           | :bad_signature
           | WebAuthn.reason()
 
@@ -184,16 +189,18 @@ defmodule Prima.SignIn do
     })
   end
 
-  @doc """
-  The 32 bytes a signer signs: SHA-256 of the request's JCS bytes, or of
-  its registry request's for `registry`.
-  """
+  @doc "The 32 bytes a signer of a `sign_in` or `confirm` request signs: SHA-256 of its JCS bytes."
   @spec digest(t()) :: binary()
-  def digest(%__MODULE__{purpose: :registry, registry_request: request}),
-    do: RegistryRequest.challenge(request)
-
-  def digest(%__MODULE__{} = request),
+  def digest(%__MODULE__{purpose: purpose} = request) when purpose in [:sign_in, :confirm],
     do: :crypto.hash(:sha256, request |> encode() |> Encoding.jcs!())
+
+  @doc """
+  The 32 bytes a passkey signs for a `registry` request: SHA-256 of the
+  registry request's JCS bytes with `signer` set to its kid.
+  """
+  @spec digest(t(), String.t()) :: binary()
+  def digest(%__MODULE__{purpose: :registry, registry_request: request}, signer),
+    do: RegistryRequest.challenge(%{request | signer: signer})
 
   @doc "The fragment that carries a request or an answer: unpadded base64url of its JCS bytes."
   @spec fragment(t() | PasskeyAnswer.t()) :: String.t()
@@ -239,10 +246,12 @@ defmodule Prima.SignIn do
   (`:expired`); the request's audience is this CYFR (`:wrong_audience`);
   then, for a passkey's answer, the state is the answer's identifier's
   (`:wrong_identifier`), a passkey it lists has the answer's credential id
-  (`:unknown_key`) and its assertion verifies over `digest/1` at the
-  state's directory (`Prima.Identity.WebAuthn.verify/5`'s refusals), and a
-  `registry` answer's identifier is the registry request's
-  (`:wrong_identifier`); for a device's answer, the purpose is `sign_in`
+  (`:unknown_key`), a `registry` answer names a signer (`:wrong_signer`),
+  its assertion verifies over the digest at the state's directory
+  (`Prima.Identity.WebAuthn.verify/5`'s refusals), a `registry` answer's
+  identifier is the registry request's (`:wrong_identifier`), and its
+  `signer` is the kid of the passkey that made the assertion while any
+  other answer names none (`:wrong_signer`); for a device's answer, the purpose is `sign_in`
   or `confirm` (`:wrong_purpose`), the state lists a device key with the
   answer's `kid` (`:unknown_key`) and its Ed25519 signature over
   `digest/1` verifies (`:bad_signature`). Answers the key that signed.
@@ -263,16 +272,11 @@ defmodule Prima.SignIn do
   defp signed(%PasskeyAnswer{} = answer, request, state) do
     with :ok <- same(answer.identifier, state.identifier, :wrong_identifier),
          {:ok, key} <- found(State.passkey(state, answer.credential_id)),
+         {:ok, digest} <- passkey_digest(request, answer),
          {origin, host} = Encoding.directory_origin(state.directory),
-         :ok <-
-           WebAuthn.verify(
-             PasskeyAnswer.assertion(answer),
-             key.pub,
-             digest(request),
-             origin,
-             host
-           ),
-         :ok <- registry_identifier(request, answer) do
+         :ok <- WebAuthn.verify(PasskeyAnswer.assertion(answer), key.pub, digest, origin, host),
+         :ok <- registry_identifier(request, answer),
+         :ok <- signer(request, answer, key) do
       {:ok, key}
     end
   end
@@ -295,6 +299,22 @@ defmodule Prima.SignIn do
   defp found(nil), do: {:error, :unknown_key}
   defp found(key), do: {:ok, key}
 
+  defp passkey_digest(%__MODULE__{purpose: :registry}, %PasskeyAnswer{signer: nil}),
+    do: {:error, :wrong_signer}
+
+  defp passkey_digest(%__MODULE__{purpose: :registry} = request, answer),
+    do: {:ok, digest(request, answer.signer)}
+
+  defp passkey_digest(request, _answer), do: {:ok, digest(request)}
+
+  # A registry answer's signer is the kid of the passkey that made its
+  # assertion, the key the registry looks up; no other answer names one.
+  defp signer(%__MODULE__{purpose: :registry}, answer, key),
+    do: same(answer.signer, key.kid, :wrong_signer)
+
+  defp signer(_request, %PasskeyAnswer{signer: nil}, _key), do: :ok
+  defp signer(_request, _answer, _key), do: {:error, :wrong_signer}
+
   defp registry_identifier(%__MODULE__{purpose: :registry, registry_request: registry}, answer),
     do: same(answer.identifier, registry.identifier, :wrong_identifier)
 
@@ -305,12 +325,15 @@ defmodule Prima.SignIn do
 
   @doc """
   The signed registry request a passkey's answer to a `registry` request
-  makes: the registry request with the answer's assertion as its `sig`,
-  as the bytes the registry is sent (`Prima.RegistryRequest.attach/2`).
+  makes, once `verify/4` accepted it: the registry request with the
+  answer's `signer` and its assertion as `sig`, as the bytes the registry
+  is sent (`Prima.RegistryRequest.attach/2`).
   """
   @spec registry_bytes(t(), PasskeyAnswer.t()) :: {:ok, binary()} | {:error, :request_malformed}
-  def registry_bytes(%__MODULE__{purpose: :registry} = request, %PasskeyAnswer{} = answer),
-    do: RegistryRequest.attach(request.registry_request, PasskeyAnswer.assertion(answer))
+  def registry_bytes(%__MODULE__{purpose: :registry} = request, %PasskeyAnswer{} = answer) do
+    %{request.registry_request | signer: answer.signer}
+    |> RegistryRequest.attach(PasskeyAnswer.assertion(answer))
+  end
 
   defp purpose(map) do
     case Map.fetch(map, "purpose") do
@@ -326,7 +349,7 @@ defmodule Prima.SignIn do
   end
 
   defp registry_request(%{"registry_request" => map}) do
-    case RegistryRequest.unsigned(map) do
+    case RegistryRequest.to_sign(map) do
       {:ok, request} -> {:ok, request}
       {:error, _reason} -> {:error, {:invalid_field, "registry_request"}}
     end
@@ -342,9 +365,10 @@ defmodule Prima.SignIn.PasskeyAnswer do
   @moduledoc """
   The account pages' answer to a request, from the passkey the person
   chose: `{challenge, identifier, credential_id, authenticator_data,
-  client_data, signature}`, each binary unpadded base64url. `identifier`
-  is the one the assertion's user handle names
-  (`Prima.Identity.identifier_for_user_id/1`).
+  client_data, signature}`, each binary unpadded base64url, and for a
+  `registry` request `signer`, the chosen passkey's kid, which the
+  registry request it signed carries. `identifier` is the one the
+  assertion's user handle names (`Prima.Identity.identifier_for_user_id/1`).
   """
 
   alias Prima.Identity.{Encoding, WebAuthn}
@@ -358,7 +382,8 @@ defmodule Prima.SignIn.PasskeyAnswer do
           credential_id: binary(),
           authenticator_data: binary(),
           client_data: binary(),
-          signature: binary()
+          signature: binary(),
+          signer: String.t() | nil
         }
 
   @enforce_keys [
@@ -369,18 +394,19 @@ defmodule Prima.SignIn.PasskeyAnswer do
     :client_data,
     :signature
   ]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [signer: nil]
 
   @doc "Read an answer from its JSON map."
   @spec decode(term()) :: {:ok, t()} | {:error, Encoding.reason()}
   def decode(map) when is_map(map) and not is_struct(map) do
-    with :ok <- Encoding.fields(map, @fields, []),
+    with :ok <- Encoding.fields(map, @fields, ["signer"]),
          {:ok, challenge} <- Encoding.binary(map, "challenge", Prima.SignIn.challenge_bytes()),
          {:ok, identifier} <- Encoding.check(map, "identifier", &Encoding.identifier?/1),
          {:ok, credential_id} <- bytes(map, "credential_id", 1023),
          {:ok, authenticator_data} <- bytes(map, "authenticator_data", @max_bytes),
          {:ok, client_data} <- bytes(map, "client_data", @max_bytes),
-         {:ok, signature} <- bytes(map, "signature", @max_bytes) do
+         {:ok, signature} <- bytes(map, "signature", @max_bytes),
+         {:ok, signer} <- Encoding.optional(map, "signer", &Encoding.digest?/1) do
       {:ok,
        %__MODULE__{
          challenge: challenge,
@@ -388,7 +414,8 @@ defmodule Prima.SignIn.PasskeyAnswer do
          credential_id: credential_id,
          authenticator_data: authenticator_data,
          client_data: client_data,
-         signature: signature
+         signature: signature,
+         signer: signer
        }}
     end
   end
@@ -404,8 +431,10 @@ defmodule Prima.SignIn.PasskeyAnswer do
     |> Map.merge(%{
       "challenge" => Encoding.b64(answer.challenge),
       "identifier" => answer.identifier,
-      "credential_id" => Encoding.b64(answer.credential_id)
+      "credential_id" => Encoding.b64(answer.credential_id),
+      "signer" => answer.signer
     })
+    |> Encoding.compact()
   end
 
   @doc "The answer's WebAuthn assertion."
