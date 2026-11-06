@@ -118,7 +118,7 @@ defmodule Arca.IdentityLog do
   @spec tombstone(Prima.Actor.t(), String.t()) :: :ok | {:error, term()}
   def tombstone(%Prima.Actor{scope: :platform, system: true}, identifier)
       when is_binary(identifier) do
-    case write("Arca.IdentityLog.tombstone", fn -> tombstone_in(identifier) end) do
+    case Arca.Repo.owned("Arca.IdentityLog.tombstone", fn -> tombstone_in(identifier) end) do
       {:ok, :gone} -> :ok
       {:error, _reason} = error -> error
     end
@@ -439,7 +439,7 @@ defmodule Arca.IdentityLog do
   defp write(tag, decide) do
     case Arca.Repo.owned(tag, decide) do
       {:ok, {row, result}} when is_atom(result) -> {:ok, row, result}
-      other -> other
+      {:error, _reason} = refusal -> refusal
     end
   end
 end

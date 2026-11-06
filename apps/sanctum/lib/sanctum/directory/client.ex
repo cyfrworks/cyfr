@@ -174,7 +174,7 @@ defmodule Sanctum.Directory.Client do
 
   def entries_after(identifier, directory, hash, seq, opts)
       when is_binary(hash) and is_integer(seq) and seq >= 0 do
-    with true <- Encoding.digest?(hash) || {:error, :invalid_locator},
+    with :ok <- locator(Encoding.digest?(hash)),
          {:ok, ctx} <- context(identifier, directory, opts),
          {:ok, body} <- call(ctx, :get, "/#{identifier}/from/#{hash}", nil),
          {:ok, page} <- page(body, identifier, seq) do
@@ -205,12 +205,13 @@ defmodule Sanctum.Directory.Client do
 
   defp entry(_value), do: {:error, :invalid_entry}
 
+  defp locator(true), do: :ok
+  defp locator(false), do: {:error, :invalid_locator}
+
   defp context(identifier, directory, opts) do
     opts = options!(opts)
 
-    with true <-
-           (Encoding.identifier?(identifier) and Encoding.directory_url?(directory)) ||
-             {:error, :invalid_locator},
+    with :ok <- locator(Encoding.identifier?(identifier) and Encoding.directory_url?(directory)),
          {:ok, base, origin} <- target(directory) do
       {:ok,
        %{
