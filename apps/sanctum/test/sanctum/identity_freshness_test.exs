@@ -459,6 +459,53 @@ defmodule Sanctum.IdentityFreshnessTest do
       end
     end
 
+    test "only a directory that did not answer is an outage: a transport failure, a 5xx or a 429",
+         %{dir: dir, account: alice} do
+      member!(alice)
+      head = DirectoryServer.head(alice)
+      mode!(:local)
+
+      outages = [
+        {503, [], ~s({"error":"unavailable"})},
+        {503, [], ~s({"error":"capacity"})},
+        {502, [], ""},
+        {429, [{"retry-after", "1"}], ~s({"error":"rate_limited"})}
+      ]
+
+      for answer <- outages do
+        DirectoryServer.answer_reads(dir.dir, alice.identifier, answer)
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+        aged!(alice.identifier)
+
+        capture_log(fn ->
+          assert {:ok, %{head_hash: ^head}} = IdentityFreshness.fresh?(alice.identifier),
+                 inspect(answer)
+        end)
+      end
+
+      # An answering directory that served no log this home can verify
+      # pauses the work in a local home too.
+      answered = [
+        {500, [], ~s({"error":"corrupt"})},
+        {200, [], "not a page"},
+        {302, [{"location", "https://elsewhere.test/"}], ""},
+        {400, [], ~s({"error":"bad_request"})}
+      ]
+
+      for answer <- answered do
+        DirectoryServer.answer_reads(dir.dir, alice.identifier, answer)
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+        aged!(alice.identifier)
+
+        capture_log(fn ->
+          assert {:refused, :identity_stale} = IdentityFreshness.fresh?(alice.identifier),
+                 inspect(answer)
+        end)
+      end
+
+      assert cached(alice.identifier).head_hash == head
+    end
+
     test "a member that found it unreachable reads nothing for 15 seconds", %{
       dir: dir,
       account: alice

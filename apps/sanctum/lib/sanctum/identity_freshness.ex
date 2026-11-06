@@ -49,7 +49,7 @@ defmodule Sanctum.IdentityFreshness do
   ## An unreachable directory
 
   Past the bound with the directory not answering (unreachable, timed
-  out, refused by the address policy, shedding or unavailable), or inside
+  out, refused by the address policy, shedding, a 5xx or a 429), or inside
   a transaction, or within 15 seconds of finding it so on this member
   (`Arca.Cache.Keys.identity_unreachable/1`), the answer follows how this
   home is reached (`Sanctum.access_mode/0`):
@@ -65,8 +65,10 @@ defmodule Sanctum.IdentityFreshness do
       (`ARCHITECTURE.md` §1.3).
 
   An identifier never read refuses in every mode. A directory that
-  answers but serves a log that does not verify pauses the work in every
-  mode: that is no outage. A store that cannot answer is `{:error,
+  answers but serves no log this home can verify (a redirect, a body too
+  large or unreadable, its own store's corruption, any other status, a
+  log that does not verify or does not hold the cached head) pauses the
+  work in every mode: that is no outage. A store that cannot answer is `{:error,
   :unavailable}`, never a verdict.
 
   Inside a transaction nothing is read and nothing written: the
@@ -384,14 +386,14 @@ defmodule Sanctum.IdentityFreshness do
     end
   end
 
-  defp outage?(reason) when reason in [:unreachable, :timeout, :egress_refused, :redirected],
-    do: true
-
-  defp outage?(reason) when reason in [:response_too_large, :invalid_response, :corrupt],
-    do: true
-
+  # Only a directory that did not answer is an outage: a transport failure,
+  # a 5xx or a 429 (this member's own shed among them). A directory that
+  # answered, with a redirect, a body too large or unreadable, its own
+  # store's corruption or any other status, served no log this home can
+  # verify, and that pauses the work in every mode.
+  defp outage?(reason) when reason in [:unreachable, :timeout, :egress_refused], do: true
   defp outage?({tag, _seconds}) when tag in [:rate_limited, :capacity, :unavailable], do: true
-  defp outage?({:status, _status}), do: true
+  defp outage?({:status, status}) when status in 500..599, do: true
   defp outage?(_reason), do: false
 
   # The directory answered gone: every binding of the account retires with

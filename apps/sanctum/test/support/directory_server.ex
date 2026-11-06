@@ -200,7 +200,9 @@ defmodule Sanctum.Test.DirectoryServer do
   """
   @spec start!(keyword(), String.t()) :: %{url: String.t(), server: map(), dir: pid()}
   def start!(tls, host \\ "dir-a.test") do
-    {:ok, dir} = Agent.start_link(fn -> %{logs: %{}, next: %{}, gone: MapSet.new()} end)
+    {:ok, dir} =
+      Agent.start_link(fn -> %{logs: %{}, next: %{}, gone: MapSet.new(), reads: %{}} end)
+
     server = Server.start(tls[:server_config], handler(dir), self())
     on_exit(fn -> Server.stop(server) end)
     %{url: "https://#{host}:#{server.port}", server: server, dir: dir}
@@ -228,6 +230,14 @@ defmodule Sanctum.Test.DirectoryServer do
   """
   @spec next(pid(), String.t(), term()) :: :ok
   def next(dir, identifier, mode), do: Agent.update(dir, &put_in(&1, [:next, identifier], mode))
+
+  @doc """
+  Answer every read of `identifier`'s log with `answer`, an HTTP answer
+  `{status, headers, body}`, until it is set back to nil.
+  """
+  @spec answer_reads(pid(), String.t(), {pos_integer(), list(), binary()} | nil) :: :ok
+  def answer_reads(dir, identifier, answer),
+    do: Agent.update(dir, &put_in(&1, [:reads, identifier], answer))
 
   @doc "The requests the server has reported to the calling test, oldest first."
   @spec requests() :: [map()]
@@ -263,11 +273,17 @@ defmodule Sanctum.Test.DirectoryServer do
   end
 
   defp served(dir, identifier, answer) do
-    case Agent.get(dir, &{MapSet.member?(&1.gone, identifier), get_in(&1, [:logs, identifier])}) do
-      {true, _log} -> json(410, %{"error" => "gone"})
-      {false, nil} -> json(404, %{"error" => "not_found"})
-      {false, log} -> answer.(log)
+    case Agent.get(dir, &read_state(&1, identifier)) do
+      {_gone, _log, {_status, _headers, _body} = scripted} -> scripted
+      {true, _log, nil} -> json(410, %{"error" => "gone"})
+      {false, nil, nil} -> json(404, %{"error" => "not_found"})
+      {false, log, nil} -> answer.(log)
     end
+  end
+
+  defp read_state(state, identifier) do
+    {MapSet.member?(state.gone, identifier), get_in(state, [:logs, identifier]),
+     get_in(state, [:reads, identifier])}
   end
 
   defp after_hash(log, identifier, hash) do
