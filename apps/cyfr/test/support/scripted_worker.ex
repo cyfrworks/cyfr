@@ -714,7 +714,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         "provider" => "scripted",
         "tools" => true,
         "provider_tools" => [],
-        "media_types" => ["image/png"],
+        "media_types" => ["image/png", "application/pdf"],
         "streaming" => true,
         "defaults" => %{}
       },
