@@ -168,6 +168,21 @@ defmodule Sanctum.IdentityFreshness do
   end
 
   @doc """
+  Remove at most `batch` cached heads no one here holds: a head an answer
+  to a sign-in request read for an account this CYFR then admitted
+  nowhere, once it was last verified longer ago than a request lives
+  (`Prima.SignIn.lifetime_ms/0`, `Arca.DirectoryHeads.sweep/3`). A head a
+  person or a pending invitation here names stays. Answers how many went.
+  """
+  @spec sweep(pos_integer()) :: {:ok, non_neg_integer()} | {:error, :unavailable}
+  def sweep(batch) when is_integer(batch) and batch > 0 do
+    case Arca.DirectoryHeads.sweep(system(), Prima.SignIn.lifetime_ms(), batch) do
+      {:ok, count} -> {:ok, count}
+      {:error, _reason} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
   The verified state a cached head holds, held to the head's identifier
   and hash: `{:ok, state}`, or `{:error, :corrupt}` for a row whose stored
   state does not decode to them.

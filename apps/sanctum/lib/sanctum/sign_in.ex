@@ -360,7 +360,9 @@ defmodule Sanctum.SignIn do
 
   @doc """
   Check an answer against the request held for its challenge, delivered
-  by `binding`, and do what its purpose does (the module doc). `answer`
+  by `binding` (or by any binding of a list, as a browser holds its
+  forgery token and its session together), and do what its purpose does
+  (the module doc). `answer`
   is a passkey's answer as its fragment, or a decoded
   `Prima.SignIn.PasskeyAnswer` or `Prima.SignIn.DeviceAnswer`. `opts`:
   `:now`, the clock in milliseconds, the system's by default.
@@ -370,7 +372,11 @@ defmodule Sanctum.SignIn do
   `:setup_closed`, `:not_set_up`, `:not_standing`, the newcomer's own
   refusals (`Sanctum.Newcomer.admit/2`), `:unavailable`.
   """
-  @spec answer(String.t() | PasskeyAnswer.t() | DeviceAnswer.t(), binding(), keyword()) ::
+  @spec answer(
+          String.t() | PasskeyAnswer.t() | DeviceAnswer.t(),
+          binding() | [binding()],
+          keyword()
+        ) ::
           {:ok, outcome()} | {:error, term()}
   def answer(answer, binding, opts \\ [])
 
@@ -405,6 +411,12 @@ defmodule Sanctum.SignIn do
       {:ok, %{request: %Prima.SignIn{}} = held} -> {:ok, held}
       _miss -> refused(:unknown_challenge)
     end
+  end
+
+  # What delivered the answer holds a binding of the held one's kind, and
+  # it is the same: a browser hands every binding its session cookie holds.
+  defp bound(held, delivered) when is_list(delivered) do
+    if Enum.any?(delivered, &(bound(held, &1) == :ok)), do: :ok, else: refused(:wrong_binding)
   end
 
   defp bound({kind, held}, {kind, delivered}) when is_binary(delivered) do

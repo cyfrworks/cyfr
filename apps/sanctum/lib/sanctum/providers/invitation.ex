@@ -89,7 +89,7 @@ defmodule Sanctum.Providers.Invitation do
        %{
          invitation: render(invitation),
          code: code,
-         invitation_url: Sanctum.Person.home() <> "/invite#" <> code
+         invitation_url: Sanctum.origin() <> "/invite#" <> code
        }}
     end
   end
