@@ -974,7 +974,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	if local := (startedLocally{}); startErr != nil && !errors.As(startErr, &local) {
 		startErr = withBootFatal(ctx, e, head, startErr)
 	}
-	firstStart := startErr == nil && readFirstPerson(ctx, e, head) == personNoneRunning
+	firstStart := startErr == nil && readSetUp(ctx, e, head) == setUpNone
 	release()
 	select {
 	case <-interrupts:
@@ -1048,44 +1048,46 @@ func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startEr
 }
 
 // notSetUpMarker begins the line the boot of a CYFR with no person yet
-// logs (Cyfr.Application.not_set_up_marker/0).
-const notSetUpMarker = "[Cyfr] Not set up:"
-
-// firstPerson is what a command can tell of whether anyone is set up on
-// the CYFR in the working directory, and whether its cyfr runs: it decides
-// whether the setup link is the next step. The boot's line says who was
-// set up at cyfr's current start, so a person set up since that start
-// still reads as none; the setup link then opens Prism, or lets the
-// administrator in again.
-type firstPerson int
-
+// logs (Cyfr.Application.not_set_up_marker/0); setUpMarker begins the line
+// CYFR logs once it gains its first person
+// (Cyfr.Application.set_up_marker/0), after which the boot's line no
+// longer stands.
 const (
-	// personUnknown: nothing read says whether anyone is set up.
-	personUnknown firstPerson = iota
-	// personNoneRunning: cyfr runs, and its boot logged that no one was
-	// set up on it at its start.
-	personNoneRunning
-	// personNoneNew: cyfr has never booted here, so there is no database
-	// and no one in it.
-	personNoneNew
-	// personRunning: cyfr runs, and its boot logged no such line.
-	personRunning
+	notSetUpMarker = "[Cyfr] Not set up:"
+	setUpMarker    = "[Cyfr] Set up:"
 )
 
-// readFirstPerson reads firstPerson for the CYFR at head: from the cyfr
-// service's log since its current start, read under the lock, and when no
-// cyfr runs to read, from whether its boot ever made a database.
-func readFirstPerson(ctx context.Context, e stackEngine, head access.Head) firstPerson {
+// setUp is what the cyfr service's log since its current start says of
+// whether anyone is set up on the CYFR in the working directory.
+type setUp int
+
+const (
+	// setUpUnknown: cyfr runs, and its log could not be read.
+	setUpUnknown setUp = iota
+	// setUpStopped: no cyfr runs, so there is no log of this start.
+	setUpStopped
+	// setUpNone: the boot's not-set-up line, and no set-up line after it.
+	setUpNone
+	// setUpDone: a set-up line, or a log since the start that holds
+	// neither, since the boot logs its line only when no one exists.
+	setUpDone
+)
+
+// readSetUp reads setUp for the CYFR at head from the cyfr service's log
+// since its current start, under the lock.
+func readSetUp(ctx context.Context, e stackEngine, head access.Head) setUp {
 	res, err := cyfrLogSinceStart(ctx, e, head)
 	switch {
-	case err == nil && res.ExitCode == 0 && strings.Contains(string(res.Stdout)+"\n"+string(res.Stderr), notSetUpMarker):
-		return personNoneRunning
-	case err == nil && res.ExitCode == 0:
-		return personRunning
-	case neverBooted():
-		return personNoneNew
+	case errors.Is(err, errNoCyfrRunning):
+		return setUpStopped
+	case err != nil || res.ExitCode != 0:
+		return setUpUnknown
 	}
-	return personUnknown
+	log := string(res.Stdout) + "\n" + string(res.Stderr)
+	if notSet := strings.LastIndex(log, notSetUpMarker); notSet >= 0 && !strings.Contains(log[notSet:], setUpMarker) {
+		return setUpNone
+	}
+	return setUpDone
 }
 
 // upThenSetup is the next step of a CYFR that never booted, with .env's
@@ -1117,6 +1119,10 @@ func neverBooted() bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
+// errNoCyfrRunning is cyfrLogSinceStart's answer when no cyfr container
+// runs.
+var errNoCyfrRunning = errors.New("no cyfr container runs")
+
 // cyfrLogSinceStart is the cyfr service's log since its container's
 // current start (its StartedAt), so a notice an earlier boot logged is
 // never read as this one's.
@@ -1135,7 +1141,10 @@ func cyfrLogSinceStart(ctx context.Context, e stackEngine, head access.Head) (ac
 		return access.Result{}, err
 	}
 	id, err := run(args)
-	if err != nil || id == "" || strings.ContainsAny(id, " \n") {
+	switch {
+	case err == nil && id == "":
+		return access.Result{}, errNoCyfrRunning
+	case err != nil || strings.ContainsAny(id, " \n"):
 		return access.Result{}, errors.New("no one cyfr container to read")
 	}
 	started, err := run([]string{"inspect", "--format", "{{.State.StartedAt}}", id})

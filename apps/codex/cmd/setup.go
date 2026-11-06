@@ -38,7 +38,7 @@ cyfr setup serves the pages on 127.0.0.1, at a port of its own, before anything 
 
 A step that fails shows why, in the command line's own sentence; a start that fails offers to try it again. Once CYFR is up, the pages show its setup link, <CYFR address>/setup#<token>, the token being CYFR_SETUP_TOKEN from .env, with a Copy button, and move the browser there: the link sets up CYFR's first person, who administers it, with a passkey. The program stops serving the pages once they have read that, or a minute after. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
 
-Run in a project whose .env exists, cyfr setup serves no pages and says the next step instead: while CYFR runs and no one is set up on it, the setup link, as 'cyfr up' says it, opened in the default browser on a machine with a display unless --no-open is given or CYFR has tailnet access; while CYFR is stopped, 'cyfr up' first; once its first person is set up, 'cyfr open'.
+Run in a project whose .env exists, cyfr setup serves no pages and says the next step instead, from cyfr's log since its start: with no one set up, the setup link, as 'cyfr up' says it; once its first person is set up, 'cyfr open'; when the log cannot be read, the setup link alone. The link opens in the default browser on a machine with a display unless --no-open is given or CYFR has tailnet access. While CYFR is stopped, 'cyfr up' comes first.
 
 Exit status 1: CYFR was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
@@ -165,13 +165,13 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 }
 
 // setupNextHere is cyfr setup in a project whose .env exists: the next
-// step of the CYFR set up here, read under the stack's lock as cyfr up
-// reads it. While cyfr runs with no one set up, setupNext's step, its
-// setup link opened in the default browser on a machine with a display
-// unless noOpen, as cyfr open opens Prism; a tailnet address opens on the
-// person's devices with Tailscale on, not here. While cyfr is stopped,
-// cyfr up first, then the setup link when cyfr never booted here. Once
-// its first person is set up, cyfr open.
+// step of the CYFR set up here, read from cyfr's log under the stack's
+// lock (readSetUp). With no one set up, setupNext's step; its first
+// person set up, cyfr open; a log that cannot be read, the setup link
+// alone. The link opens in the default browser on a machine with a
+// display unless noOpen, as cyfr open opens Prism; a tailnet address
+// opens on the person's devices with Tailscale on, not here. While cyfr
+// is stopped, cyfr up first, then the setup link when cyfr never booted.
 func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
 	if _, err := existingAccess(".env"); err != nil {
 		return err
@@ -185,9 +185,9 @@ func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
 		return engineFailure(err)
 	}
 	head, err := e.Head()
-	person := personUnknown
+	read := setUpUnknown
 	if err == nil {
-		person = readFirstPerson(ctx, e, head)
+		read = readSetUp(ctx, e, head)
 	}
 	unlock()
 	if err != nil {
@@ -195,15 +195,24 @@ func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
 	}
 	values, _ := access.ReadEnvValues(".env")
 	link := setupLink(access.Describe(head).Address, values)
-	switch person {
-	case personNoneRunning:
-		setupNext(out, head)
+	opened := func() {
 		if head.Mode != access.ModeTailnet && !headless(values) && openOnDisplay(link, noOpen, out) {
 			fmt.Fprintln(out, "Opened it in your browser.")
 		}
-	case personRunning:
+	}
+	switch {
+	case read == setUpNone:
+		setupNext(out, head)
+		opened()
+	case read == setUpDone:
 		fmt.Fprintln(out, "CYFR is set up and has its first person. cyfr open opens it.")
-	case personNoneNew:
+	case read == setUpUnknown && headless(values):
+		// A headless CYFR serves no setup page to point at.
+		fmt.Fprintln(out, "Run cyfr login --setup here if no one is set up yet. cyfr open opens CYFR.")
+	case read == setUpUnknown:
+		fmt.Fprintf(out, "Open %s.\n", hyperlink(out, link))
+		opened()
+	case neverBooted():
 		fmt.Fprintln(out, "CYFR is already set up here. "+upThenSetup(values, hyperlink(out, link)))
 	default:
 		fmt.Fprintln(out, "CYFR is already set up here. Next: cyfr up.")

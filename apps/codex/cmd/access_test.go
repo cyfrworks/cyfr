@@ -878,3 +878,45 @@ func TestNoOpenIsAnAccessFlag(t *testing.T) {
 		}
 	}
 }
+
+// On a running CYFR, cyfr's log since its start decides the list: the
+// boot's not-set-up line with no set-up line after it leaves the list out,
+// and after the change the setup link at the new address is the next
+// step; a set-up line after it, or neither line, keeps the list and the
+// passkeys line, as a log that cannot be read does.
+func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
+	const startedAt = "2026-10-28T00:01:02.123456789Z"
+	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
+	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
+	list := "The address changes, so:\n  1. Pair every device again.\nYour CYFR identity does not change.\n"
+	done := "Done. CYFR is reached from this computer at http://localhost:4000.\n"
+	passkeys := "Passkeys made at the old address no longer sign anyone in. Open http://localhost:4000/setup#" + token + " to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n"
+	for _, c := range []struct {
+		name, log, exit, want string
+	}{
+		{"no one set up", "booting\n" + notSetUp, "0", lead + done + "Open http://localhost:4000/setup#" + token + " to set up its first person, or run cyfr login --setup here.\n"},
+		{"set up since the boot", notSetUp + setUp, "0", lead + list + done + passkeys},
+		{"set up at the boot", "booting\n", "0", lead + list + done + passkeys},
+		{"a log unread", notSetUp, "1", lead + list + done + passkeys},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.edit(".env", scenarioEnv+"CYFR_SETUP_TOKEN="+token+"\n")
+			s.engine.addressChanges = []string{"Pair every device again."}
+			s.answer("ps.out", "c0ffee\n")
+			s.answer("inspect.out", startedAt+"\n")
+			s.answer("logs.out", c.log)
+			s.answer("logs.exit", c.exit)
+			stubLauncher(t, true, nil)
+			var out bytes.Buffer
+			if err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, "", &out); err != nil {
+				t.Fatalf("cyfr access local: %v\n%s", err, out.String())
+			}
+			if out.String() != c.want {
+				t.Errorf("cyfr access printed\n%s\nwant\n%s", out.String(), c.want)
+			}
+		})
+	}
+}

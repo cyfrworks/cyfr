@@ -31,8 +31,9 @@ defmodule Cyfr.NotSetUpNoticeTest do
   defp restore(app, key, {:ok, value}), do: Application.put_env(app, key, value)
   defp restore(app, key, :error), do: Application.delete_env(app, key)
 
-  test "the marker is the one `cyfr up` reads" do
+  test "the markers are the ones `cyfr` reads" do
     assert Cyfr.Application.not_set_up_marker() == "[Cyfr] Not set up:"
+    assert Cyfr.Application.set_up_marker() == "[Cyfr] Set up:"
   end
 
   test "a CYFR with pages names the setup link, never its token" do

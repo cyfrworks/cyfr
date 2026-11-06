@@ -147,17 +147,21 @@ func TestSetupOffersTheStartAgain(t *testing.T) {
 // In a project whose .env exists, cyfr setup serves nothing and writes
 // nothing: it says the next step of the CYFR set up there, read under the
 // stack's lock as cyfr up reads it, and exits 0. While cyfr runs with no
-// one set up, the setup link, opened on a machine with a display; with
-// its first person, cyfr open; while it is stopped, cyfr up first, then
-// the setup link when it never booted. A .env that says nothing of how
+// one set up (the boot's not-set-up line and no set-up line after it),
+// the setup link, opened on a machine with a display; with its first
+// person, cyfr open; with a log that cannot be read, the link alone;
+// while it is stopped, cyfr up first, then the setup link when it never
+// booted. A .env that says nothing of how
 // CYFR is reached is refused with its sentence.
 func TestSetupInASetUpProjectSaysTheNextStep(t *testing.T) {
 	const startedAt = "2026-10-28T00:01:02.123456789Z"
 	const marker = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
+	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
 	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	link := "https://cyfr.example.com/setup#" + token
 	for _, c := range []struct {
 		name, container, log string
+		exit                 string
 		noDatabase           bool
 		want                 string
 		opened               []string
@@ -167,6 +171,11 @@ func TestSetupInASetUpProjectSaysTheNextStep(t *testing.T) {
 			opened: []string{link}},
 		{name: "running, its first person set up", container: "c0ffee", log: "booting\n",
 			want: "CYFR is set up and has its first person. cyfr open opens it.\n"},
+		{name: "running, its first person set up since the boot", container: "c0ffee", log: "booting\n" + marker + setUp,
+			want: "CYFR is set up and has its first person. cyfr open opens it.\n"},
+		{name: "running, its log unread", container: "c0ffee", log: marker, exit: "1",
+			want:   "Open " + link + ".\nOpened it in your browser.\n",
+			opened: []string{link}},
 		{name: "stopped", want: "CYFR is already set up here. Next: cyfr up.\n"},
 		{name: "never booted", noDatabase: true,
 			want: "CYFR is already set up here. Next: cyfr up. Then open " + link + " to set up its first person.\n"},
@@ -184,6 +193,9 @@ func TestSetupInASetUpProjectSaysTheNextStep(t *testing.T) {
 			s.answer("ps.out", c.container+"\n")
 			s.answer("inspect.out", startedAt+"\n")
 			s.answer("logs.out", c.log)
+			if c.exit != "" {
+				s.answer("logs.exit", c.exit)
+			}
 			l := stubLauncher(t, true, nil)
 			before := read(t, ".env")
 			var out bytes.Buffer
