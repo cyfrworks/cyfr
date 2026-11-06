@@ -29,15 +29,20 @@
 # the stand-in's one directory: --directory URL, else its own directory
 # routes at http://A:P. The registry it names is A, the host CYFR asks.
 #
-# The directory (the shapes of tests/fixtures/directory_wire.json):
-#   POST /directory/v1/genesis, GET /directory/v1/{identifier}?after=N,
-#   POST /directory/v1/{identifier}/entries (a rotation) and
-#   POST /directory/v1/{identifier}/recover (a recovery).
-# An exact repeat of a write answers as the first did. It decides every
+# The directory (the shapes of tests/fixtures/directory_wire.json,
+# cyfr-directory/v2 over cyfr-identity/v2 entries):
+#   POST /directory/v1/register, POST /directory/v1/{identifier}/append,
+#   GET /directory/v1/{identifier}?after=N and
+#   GET /directory/v1/{identifier}/from/{hash}.
+# A write answers its result: created, accepted, or exists for an entry
+# already the one after its prev, with the current head. It decides every
 # refusal the vectors name that needs no signature: stale_head,
-# request_id_reused, stale_policy, wrong_identifier, wrong_directory (a
-# genesis naming another directory than its own), a body over 16 KiB
-# (413) and not_found.
+# duplicate_key (it lists each log's kids from its entries), broken_link,
+# an entry of the wrong kind for its route, wrong_directory (a genesis
+# naming another directory than its own), a body over 16 KiB (413),
+# not_found and gone. POST /stand-in/tombstone/{identifier} is its
+# operator's tombstone, the stand-in's alone: cyfr.run's is an
+# administrator's action, a CYFR's the operation directory.tombstone.
 #
 # Forwarding, for the dev loop alone: with --upstream URL a GET of a route
 # it does not own goes to that URL with only Accept and User-Agent copied,
@@ -46,7 +51,7 @@
 # nothing leaves the machine.
 #
 # The state file holds the policy acceptances, the names, the logs and the
-# recorded recoveries, written after every write, and the directory URL
+# tombstoned identifiers, written after every write, and the directory URL
 # the stand-in serves under "directory", recorded when the file is made; a
 # start naming another directory than the file's refuses.
 
@@ -67,8 +72,8 @@ MAX_ENTRY = 16_384
 PAGE_BYTES = 65_536 - 1_024
 MAX_POSITION = 2_147_483_647
 POLICY_VERSION = "stand-in-1"
-PROTOCOL = "cyfr-identity/v1"
-REQUEST_PROTOCOL = "cyfr-registry-request/v1"
+PROTOCOL = "cyfr-identity/v2"
+REQUEST_PROTOCOL = "cyfr-registry-request/v2"
 HANDLE_PROTOCOL = "cyfr-handle/v1"
 REDIRECTED = "cyfr.run answered with a redirect, which the stand-in does not follow."
 
@@ -76,10 +81,15 @@ IDENTIFIER = re.compile(r"^per_[0-9a-f]{64}$")
 HANDLE = re.compile(r"^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 POSITION = re.compile(r"^-?[0-9]{1,10}$")
-ENVELOPE = ["body", "expires_at", "identifier", "key_epoch", "nonce", "operation", "protocol", "registry", "sig"]
-GENESIS = ["protocol", "kind", "live_key", "operational_key", "recovery_keys", "directory", "revision", "sig"]
-ROTATE = ["protocol", "kind", "prev", "live_key", "sig"]
-RECOVER = ["protocol", "identifier", "directory", "live_key", "operational_key", "expected_revision", "request_id", "sig"]
+ENVELOPE = ["body", "expires_at", "identifier", "nonce", "operation", "protocol", "registry", "sig", "signer"]
+COMMON = ["protocol", "kind", "seq", "at", "signer"]
+KINDS = {
+    "genesis": ["directory", "recovery"],
+    "add_key": ["prev", "key"],
+    "remove_key": ["prev", "kid"],
+    "recover": ["prev", "keys", "recovery"],
+    "add_recovery": ["prev", "recovery"],
+}
 
 
 def jcs(value):
@@ -131,7 +141,7 @@ class State:
                     % (path, self.data.get("directory"), directory)
                 )
         else:
-            self.data = {"directory": directory, "accepted": {}, "names": {}, "logs": {}}
+            self.data = {"directory": directory, "accepted": {}, "names": {}, "logs": {}, "gone": []}
             self.save()
 
     def save(self):
@@ -214,7 +224,9 @@ class StandIn:
 
     # ---- the directory ------------------------------------------------------
 
-    def entry_body(self, raw):
+    def entry(self, raw):
+        """A posted entry, held to its kind's fields in Prima.Identity's
+        order; its signature is not checked."""
         if len(raw) > MAX_BODY:
             raise Refused(413, {})
         try:
@@ -229,146 +241,134 @@ class StandIn:
             raise invalid("missing_field", "protocol")
         if value["protocol"] != PROTOCOL:
             raise invalid("wrong_protocol")
-        return value
-
-    def entry(self, raw, kind):
-        value = self.entry_body(raw)
         if "kind" not in value:
             raise invalid("missing_field", "kind")
-        if value["kind"] not in ("genesis", "rotate", "recover"):
+        if value["kind"] not in KINDS:
             raise invalid("unknown_kind")
-        if value["kind"] != kind:
-            raise invalid("not_" + kind)
-        if kind == "genesis":
-            fields(value, GENESIS)
-            if not isinstance(value["directory"], str):
-                raise invalid("invalid_field", "directory")
-            if value["revision"] != 0 or isinstance(value["revision"], bool):
-                raise invalid("invalid_field", "revision")
-        else:
-            fields(value, ROTATE)
-            if not isinstance(value["prev"], str) or not DIGEST.match(value["prev"]):
-                raise invalid("invalid_field", "prev")
+        fields(value, COMMON + KINDS[value["kind"]] + ["sig"])
+        if value["kind"] == "genesis" and not isinstance(value["directory"], str):
+            raise invalid("invalid_field", "directory")
+        if value["kind"] != "genesis" and (not isinstance(value["prev"], str) or not DIGEST.match(value["prev"])):
+            raise invalid("invalid_field", "prev")
         return value
 
     def log(self, identifier):
-        log = self.state.data["logs"].get(identifier) if IDENTIFIER.match(identifier) else None
+        if not IDENTIFIER.match(identifier):
+            raise Refused(404, {"error": "not_found"})
+        if identifier in self.state.data["gone"]:
+            raise Refused(410, {"error": "gone"})
+        log = self.state.data["logs"].get(identifier)
         if log is None:
             raise Refused(404, {"error": "not_found"})
         return log
 
     @staticmethod
-    def accepted(identifier, log, seq, with_entry=False):
-        body = '{"entry_hash":%s,"identifier":%s,"seq":%d' % (
-            json.dumps(log["hashes"][seq]),
-            json.dumps(identifier),
-            seq,
-        )
-        if with_entry:
-            body += ',"entry":' + log["entries"][seq]
-        return 200, body + "}"
+    def wrote(identifier, log, seq, result):
+        body = {"identifier": identifier, "seq": seq, "entry_hash": log["hashes"][seq], "result": result}
+        if result == "exists":
+            body["head"] = log["hashes"][-1]
+        return 200, jcs(body)
 
-    def genesis(self, raw):
-        genesis = self.entry(raw, "genesis")
+    def register(self, raw):
+        genesis = self.entry(raw)
+        if genesis["kind"] != "genesis":
+            raise invalid("not_genesis")
         if genesis["directory"] != self.directory:
             raise Refused(422, {"error": "wrong_directory"})
         canonical = jcs(genesis)
-        digest = sha256(canonical)
-        identifier = "per_" + digest
+        identifier = "per_" + sha256(canonical)
         with self.state.lock:
+            if identifier in self.state.data["gone"]:
+                raise Refused(410, {"error": "gone"})
             logs = self.state.data["logs"]
-            if identifier not in logs:
-                logs[identifier] = {
-                    "entries": [canonical],
-                    "hashes": ["sha256:" + digest],
-                    "revision": 0,
-                    "directory": genesis["directory"],
-                    "requests": {},
-                }
-                self.state.save()
-            return self.accepted(identifier, logs[identifier], 0)
+            if identifier in logs:
+                return self.wrote(identifier, logs[identifier], 0, "exists")
+            logs[identifier] = {"entries": [canonical], "hashes": ["sha256:" + sha256(canonical)], "kids": []}
+            self.state.save()
+            return self.wrote(identifier, logs[identifier], 0, "created")
 
-    def rotate(self, identifier, raw):
+    def append(self, identifier, raw):
         with self.state.lock:
             log = self.log(identifier)
-            rotation = self.entry(raw, "rotate")
-            canonical = jcs(rotation)
-            entry_hash = "sha256:" + sha256(canonical)
+            entry = self.entry(raw)
+            if entry["kind"] == "genesis":
+                raise invalid("unexpected_genesis")
+            canonical = jcs(entry)
+            # An entry already the one after its prev answers as it did.
+            if entry["prev"] in log["hashes"]:
+                after = log["hashes"].index(entry["prev"]) + 1
+                if after < len(log["entries"]) and log["entries"][after] == canonical:
+                    return self.wrote(identifier, log, after, "exists")
             head = log["hashes"][-1]
-            # An exact retry of the head answers as the first append did.
-            if entry_hash == head:
-                return self.accepted(identifier, log, len(log["hashes"]) - 1)
-            if rotation["prev"] != head:
+            if entry["prev"] != head:
                 raise Refused(409, {"error": "stale_head", "head": head})
+            if entry["seq"] != len(log["hashes"]):
+                raise Refused(422, {"error": "unverified", "reason": "broken_link"})
+            kids = self.kids_after(log["kids"], entry)
             log["entries"].append(canonical)
-            log["hashes"].append(entry_hash)
+            log["hashes"].append("sha256:" + sha256(canonical))
+            log["kids"] = kids
             self.state.save()
-            return self.accepted(identifier, log, len(log["hashes"]) - 1)
+            return self.wrote(identifier, log, len(log["hashes"]) - 1, "accepted")
 
-    def recover(self, identifier, raw):
+    @staticmethod
+    def kids_after(kids, entry):
+        """The kids the log lists after `entry`, or duplicate_key."""
+        if entry["kind"] == "add_key":
+            kid = entry["key"].get("kid") if isinstance(entry["key"], dict) else None
+            if kid in kids:
+                raise Refused(409, {"error": "duplicate_key"})
+            return kids + [kid]
+        if entry["kind"] == "remove_key":
+            return [k for k in kids if k != entry["kid"]]
+        if entry["kind"] == "recover":
+            listed = [k.get("kid") for k in entry["keys"] if isinstance(k, dict)]
+            if len(set(listed)) != len(listed):
+                raise Refused(409, {"error": "duplicate_key"})
+            return listed
+        return kids
+
+    def tombstone(self, identifier):
         with self.state.lock:
-            log = self.log(identifier)
-            request = self.entry_body(raw)
-            fields(request, RECOVER, ["recovery_keys"])
-            if not isinstance(request["expected_revision"], int) or isinstance(request["expected_revision"], bool) \
-                    or request["expected_revision"] < 0:
-                raise invalid("invalid_field", "expected_revision")
-            if not isinstance(request["request_id"], str) or not request["request_id"]:
-                raise invalid("invalid_field", "request_id")
-            if request["identifier"] != identifier:
-                raise Refused(422, {"error": "wrong_identifier"})
-            digest = sha256(jcs(request))
-            recorded = log["requests"].get(request["request_id"])
-            if recorded is not None:
-                if recorded["digest"] != digest:
-                    raise Refused(409, {"error": "request_id_reused"})
-                if recorded["outcome"] == "accepted":
-                    return self.accepted(identifier, log, recorded["seq"], with_entry=True)
-                raise Refused(409, {"error": "stale_policy", "recorded": recorded["body"]})
-            if request["directory"] != log["directory"]:
-                raise Refused(422, {"error": "unverified", "reason": "directory_changed"})
-            expected, revision = request["expected_revision"], log["revision"]
-            if expected > revision:
-                raise Refused(422, {"error": "unverified", "reason": "stale_revision"})
-            if expected < revision:
-                body = {"outcome": "stale_policy", "expected_revision": expected, "revision": revision}
-                log["requests"][request["request_id"]] = {"digest": digest, "outcome": "stale_policy", "body": body}
-                self.state.save()
-                raise Refused(409, {"error": "stale_policy", "recorded": body})
-            entry = jcs({"protocol": PROTOCOL, "kind": "recover", "prev": log["hashes"][-1], "request": request})
-            log["entries"].append(entry)
-            log["hashes"].append("sha256:" + sha256(entry))
-            log["revision"] = revision + 1
-            seq = len(log["hashes"]) - 1
-            log["requests"][request["request_id"]] = {"digest": digest, "outcome": "accepted", "seq": seq}
+            self.log(identifier)
+            self.state.data["gone"].append(identifier)
             self.state.save()
-            return self.accepted(identifier, log, seq, with_entry=True)
+        return 200, jcs({"identifier": identifier, "result": "gone"})
+
+    def page_after(self, identifier, after):
+        log = self.log(identifier)
+        entries, used = [], 0
+        for entry in log["entries"][after + 1:]:
+            size = len(entry.encode("utf-8")) + 1
+            if entries and used + size > PAGE_BYTES:
+                break
+            entries.append(entry)
+            used += size
+        last = after + len(entries)
+        head_seq = len(log["hashes"]) - 1
+        body = '{"entries":[%s],"from":%d,"head":%s,"identifier":%s,"length":%d,"next":%s}' % (
+            ",".join(entries),
+            after + 1,
+            json.dumps(log["hashes"][-1]),
+            json.dumps(identifier),
+            head_seq + 1,
+            json.dumps(last if last < head_seq else None),
+        )
+        return 200, body
 
     def page(self, identifier, query):
         after = query.get("after", ["-1"])
         if len(after) != 1 or not POSITION.match(after[0]) or not -1 <= int(after[0]) <= MAX_POSITION:
             raise invalid("invalid_field", "after")
-        after = int(after[0])
+        with self.state.lock:
+            return self.page_after(identifier, int(after[0]))
+
+    def page_from(self, identifier, entry_hash):
         with self.state.lock:
             log = self.log(identifier)
-            entries, used = [], 0
-            for entry in log["entries"][after + 1:]:
-                size = len(entry.encode("utf-8")) + 1
-                if entries and used + size > PAGE_BYTES:
-                    break
-                entries.append(entry)
-                used += size
-            last = after + len(entries)
-            head_seq = len(log["hashes"]) - 1
-            body = '{"entries":[%s],"from":%d,"head":%s,"identifier":%s,"length":%d,"next":%s}' % (
-                ",".join(entries),
-                after + 1,
-                json.dumps(log["hashes"][-1]),
-                json.dumps(identifier),
-                head_seq + 1,
-                json.dumps(last if last < head_seq else None),
-            )
-        return 200, body
+            if entry_hash not in log["hashes"]:
+                raise Refused(404, {"error": "not_found"})
+            return self.page_after(identifier, log["hashes"].index(entry_hash))
 
     # ---- routing ------------------------------------------------------------
 
@@ -381,17 +381,19 @@ class StandIn:
             ("v1", "legal", "version"): ("GET", lambda: (200, jcs({"policies": [], "policy_version": POLICY_VERSION}))),
             ("v1", "legal", "accept"): ("POST", lambda: self.accept(read_body())),
             ("v1", "namespaces", "personal", "claim"): ("POST", lambda: self.claim(read_body())),
-            ("directory", "v1", "genesis"): ("POST", lambda: self.genesis(read_body())),
+            ("directory", "v1", "register"): ("POST", lambda: self.register(read_body())),
         }
         owned = routes.get(tuple(parts))
         if owned is None and len(parts) == 3 and parts[:2] == ["v1", "handles"]:
             owned = ("GET", lambda: self.handle(parts[2]))
-        if owned is None and len(parts) == 3 and parts[:2] == ["directory", "v1"] and parts[2] != "genesis":
+        if owned is None and len(parts) == 3 and parts[:2] == ["directory", "v1"] and parts[2] != "register":
             owned = ("GET", lambda: self.page(parts[2], query))
-        if owned is None and len(parts) == 4 and parts[:2] == ["directory", "v1"] and parts[3] == "entries":
-            owned = ("POST", lambda: self.rotate(parts[2], read_body()))
-        if owned is None and len(parts) == 4 and parts[:2] == ["directory", "v1"] and parts[3] == "recover":
-            owned = ("POST", lambda: self.recover(parts[2], read_body()))
+        if owned is None and len(parts) == 4 and parts[:2] == ["directory", "v1"] and parts[3] == "append":
+            owned = ("POST", lambda: self.append(parts[2], read_body()))
+        if owned is None and len(parts) == 5 and parts[:2] == ["directory", "v1"] and parts[3] == "from":
+            owned = ("GET", lambda: self.page_from(parts[2], parts[4]))
+        if owned is None and len(parts) == 3 and parts[:2] == ["stand-in", "tombstone"]:
+            owned = ("POST", lambda: self.tombstone(parts[2]))
         if owned is None:
             return None
         if method != owned[0]:

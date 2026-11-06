@@ -11,8 +11,9 @@
 #     --directory names that URL;
 #   - the directory: every scenario of tests/fixtures/directory_wire.json but
 #     the three of production limits, each step but those whose expected
-#     answer is `unverified` (the stand-in checks no signature, and a step
-#     refused that way changes nothing at a directory);
+#     answer is `unverified` for a signature (the stand-in checks none, and
+#     a step refused that way changes nothing at a directory), a tombstone
+#     step made through the stand-in's own operator route;
 #   - forwarding against a local fake upstream that records every header it
 #     receives: a GET copies only Accept and User-Agent, an upstream 3xx
 #     answers 502 and is not followed, any other method on a route the
@@ -22,6 +23,7 @@
 #     start on a state file that names another directory.
 # Usage: python3 -I tests/registry-stand-in/standin_test.py
 
+import hashlib
 import http.client
 import http.server
 import json
@@ -182,8 +184,14 @@ def directory_checks():
         standin = StandIn("directory-%d" % DIRECTORY["scenarios"].index(scenario), "--directory", DIRECTORY["directory"])
         problems = []
         for index, step in enumerate(scenario["steps"], 1):
+            if "tombstone" in step:
+                status, text, _ = standin.request("POST", "/stand-in/tombstone/" + step["tombstone"])
+                if status != 200:
+                    problems.append("step %d, tombstone: status %d: %s" % (index, status, text[:200]))
+                continue
             expect = step["expect"]
-            if expect.get("body", {}).get("error") == "unverified":
+            body = expect.get("body", {})
+            if body.get("error") == "unverified" and body.get("reason") != "broken_link":
                 continue
             request = step["request"]
             path = request["path"]
@@ -204,7 +212,7 @@ def directory_checks():
             for header, value in expect.get("headers", {}).items():
                 if headers.get(header.lower()) != value:
                     problems.append("%s: header %s is %r" % (where, header, headers.get(header.lower())))
-            for entry in answer.get("entries", []) + ([answer["entry"]] if "entry" in answer else []):
+            for entry in answer.get("entries", []):
                 if jcs(entry) not in text:
                     problems.append("%s: an entry is not on the wire as its canonical bytes" % where)
         check(not problems, "directory: " + name, "\n  ".join(problems))
@@ -286,11 +294,12 @@ def lifecycle_checks():
     state = os.path.join(scratch, "restart-state.json")
     first = StandIn("restart-1", "--directory", "https://dir.test", state=state)
     genesis = json.loads(DIRECTORY["entries"]["genesis-alice"])
-    first.request("POST", "/directory/v1/genesis", genesis)
+    alice = "per_" + hashlib.sha256(DIRECTORY["entries"]["genesis-alice"].encode()).hexdigest()
+    first.request("POST", "/directory/v1/register", genesis)
     version = json.loads(first.request("GET", "/v1/legal/version")[1])["policy_version"]
     first.request("POST", "/v1/legal/accept", request_of("policy_accept", policy_version=version))
     first.request("POST", "/v1/namespaces/personal/claim", request_of("handle_claim"))
-    log = first.request("GET", "/directory/v1/per_778af29253df902c12fff9d3999243709f16f1e4147d49df4465057a599b5dd9")
+    log = first.request("GET", "/directory/v1/" + alice)
     code = first.stop(signal.SIGTERM)
     check(code == 0, "the stand-in stops on SIGTERM", code)
     saved = json.load(open(state))
@@ -300,7 +309,7 @@ def lifecycle_checks():
     second = StandIn("restart-2", "--directory", "https://dir.test", state=state)
     status, text, _ = second.request("GET", "/v1/handles/alice")
     check(status == 200 and json.loads(text)["handle"] == "alice", "a restart from the state file keeps the names", (status, text))
-    again = second.request("GET", "/directory/v1/per_778af29253df902c12fff9d3999243709f16f1e4147d49df4465057a599b5dd9")
+    again = second.request("GET", "/directory/v1/" + alice)
     check(again[:2] == log[:2], "a restart from the state file keeps the logs", (again[:2], log[:2]))
     second.stop()
 
