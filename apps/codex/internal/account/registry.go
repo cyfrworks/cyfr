@@ -80,7 +80,13 @@ func ComposeRegistryRequest(registry, operation, identifier, signer string, now 
 // request whose bytes would pass the registry's bound is refused here as
 // the registry would refuse it (request_malformed).
 func SignRegistryRequest(request map[string]any, key ed25519.PrivateKey) ([]byte, error) {
-	signed, err := Sign(normal(request), key)
+	return SignRegistryRequestBy(request, func(msg []byte) []byte { return ed25519.Sign(key, msg) })
+}
+
+// SignRegistryRequestBy is SignRegistryRequest for a key a holder keeps,
+// which signs without handing its seed out.
+func SignRegistryRequestBy(request map[string]any, sign func([]byte) []byte) ([]byte, error) {
+	signed, err := SignedBy(normal(request), sign)
 	if err != nil {
 		return nil, refused("request_malformed")
 	}
