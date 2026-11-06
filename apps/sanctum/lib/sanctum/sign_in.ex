@@ -49,17 +49,21 @@ defmodule Sanctum.SignIn do
     1. the answer's challenge names a request held here, which is taken
        and so spent whichever way the rest goes (`:answer_refused`
        otherwise: unknown, spent, or past its lifetime);
-    2. the request is bound to what delivered the answer, unexpired and
-       for this audience (`:answer_refused`): a replayed answer meets a
-       spent request, and an answer from another browser or channel, or
-       one past the request's expiry, signs no one in;
+    2. the request is bound to what delivered the answer, is for the
+       confirmation the caller names when it names one (`:ref`), and is
+       unexpired and for this audience (`:answer_refused`): a replayed
+       answer meets a spent request, and an answer from another browser
+       or channel, or one past the request's expiry, signs no one in;
     3. the answering account's log, read within freshness's policy
        (`Sanctum.IdentityFreshness`): the cached head within its bound, or
        for an account this CYFR never read, its whole log at this
        deployment's directory (`:identity_stale`, `:identity_gone`,
        `:unavailable`);
     4. the signature over the request's digest by a key the log lists
-       (`Prima.SignIn.verify/4`, `:answer_refused`);
+       (`Prima.SignIn.verify/4`, `:answer_refused`); a key the cached log
+       does not list yet is looked for once more in the log read now
+       (`Sanctum.IdentityFreshness.fresh!/2`), so a passkey or device just
+       added to the account answers at once;
     5. what the purpose does:
        * `:sign_in` asks about the identifier's person here. A person this
          CYFR holds is asked about by the door (`Sanctum.Door.sign_in/1`);
@@ -400,8 +404,7 @@ defmodule Sanctum.SignIn do
          :ok <- expected(held, opts),
          :ok <- current(held.request, now),
          {:ok, identifier} <- answering(answer, held),
-         {:ok, head, state} <- account(identifier),
-         {:ok, key} <- verified(answer, held.request, state, now) do
+         {:ok, key, head} <- signed_by(answer, held.request, identifier, now) do
       done(held, answer, identifier, key, head)
     end
   end
@@ -456,26 +459,32 @@ defmodule Sanctum.SignIn do
 
   defp answering(_answer, _held), do: refused(:wrong_answer)
 
-  # The account's log within freshness's policy: the cached head, or for an
-  # account never read here, its whole log at this deployment's directory.
-  defp account(identifier) do
-    fresh =
-      case Arca.DirectoryHeads.get(Prima.Actor.system(), identifier) do
-        {:error, :not_found} ->
-          Sanctum.IdentityFreshness.fresh!(identifier, directory: Sanctum.directory_url())
-
-        {:ok, _cached} ->
-          Sanctum.IdentityFreshness.fresh?(identifier)
-
-        {:error, _unanswered} ->
-          {:error, :unavailable}
+  # The key of the account that signed, read within freshness's policy: the
+  # cached head, or for an account never read here, its whole log at this
+  # deployment's directory. A key the cached log does not list yet is
+  # looked for once more in the log read now, so a passkey or device just
+  # added to the account answers at once.
+  defp signed_by(answer, request, identifier, now) do
+    with {:ok, head, state, read} <- account(identifier) do
+      case verify(answer, request, state, now) do
+        {:ok, key} -> {:ok, key, head}
+        {:error, :unknown_key} when read == :cached -> signed_now(answer, request, head, now)
+        {:error, reason} -> refused(reason)
       end
+    end
+  end
 
-    case fresh do
+  defp signed_now(answer, request, cached, now) do
+    case Sanctum.IdentityFreshness.fresh!(cached.identifier) do
+      {:ok, %{head_hash: same}} when same == cached.head_hash ->
+        refused(:unknown_key)
+
       {:ok, head} ->
-        case Sanctum.IdentityFreshness.state(head) do
-          {:ok, state} -> {:ok, head, state}
-          {:error, :corrupt} -> {:error, :unavailable}
+        with {:ok, state} <- state(head) do
+          case verify(answer, request, state, now) do
+            {:ok, key} -> {:ok, key, head}
+            {:error, reason} -> refused(reason)
+          end
         end
 
       {:refused, reason} ->
@@ -486,12 +495,47 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp verified(answer, request, state, now) do
-    with {:ok, home} <- home() do
-      case Prima.SignIn.verify(answer, request, state, home: home, now: now) do
-        {:ok, key} -> {:ok, key}
-        {:error, reason} -> refused(reason)
+  defp account(identifier) do
+    fresh =
+      case Arca.DirectoryHeads.get(Prima.Actor.system(), identifier) do
+        {:error, :not_found} ->
+          read(
+            Sanctum.IdentityFreshness.fresh!(identifier, directory: Sanctum.directory_url()),
+            :read
+          )
+
+        {:ok, _cached} ->
+          read(Sanctum.IdentityFreshness.fresh?(identifier), :cached)
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
       end
+
+    case fresh do
+      {:ok, head, read} ->
+        with {:ok, state} <- state(head), do: {:ok, head, state, read}
+
+      {:refused, reason} ->
+        {:error, reason}
+
+      {:error, _reason} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp read({:ok, head}, read), do: {:ok, head, read}
+  defp read(other, _read), do: other
+
+  defp state(head) do
+    case Sanctum.IdentityFreshness.state(head) do
+      {:ok, state} -> {:ok, state}
+      {:error, :corrupt} -> {:error, :unavailable}
+    end
+  end
+
+  defp verify(answer, request, state, now) do
+    with {:ok, home} <- home() do
+      Prima.SignIn.verify(answer, request, state, home: home, now: now)
     end
   end
 
