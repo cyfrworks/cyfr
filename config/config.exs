@@ -79,6 +79,11 @@ config :sanctum,
 # `config/runtime.exs` writes the access settings'.
 config :sanctum, :proxy_trust, :none
 
+# How the home is reached (`Sanctum.access_mode/0`): a local home's, as
+# every boot that resolves no access mode is. `config/runtime.exs` writes
+# the access settings'.
+config :sanctum, :access_mode, :local
+
 # Whose HSTS a response carries (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`):
 # none, a local home's. `config/runtime.exs` writes the access settings': the
 # endpoint's on the proxy listener in a tailnet home, Caddy's in a public

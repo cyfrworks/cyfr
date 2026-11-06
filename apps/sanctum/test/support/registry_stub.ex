@@ -17,8 +17,9 @@ defmodule Sanctum.Test.RegistryStub do
   them and stops the listener on exit; `handles!/1` is one that answers
   handles alone.
 
-  `person!/0` and `enroll!/1` make an enrolled local person whose head
-  `state/1` reads back; `verify/2` checks a request as the registry does
+  `person!/0` makes a person and `account!/1` gives them an account,
+  answering its verified head and the keys that may sign for it;
+  `verify/2` checks a request as the registry does
   (`Prima.RegistryRequest.verify/4`); `refusal/2` and `answer/1` are the
   registry's envelope and an answer's bytes, by the protocol's own table.
   """
@@ -34,7 +35,7 @@ defmodule Sanctum.Test.RegistryStub do
   @doc "The canonical host a request to the stub is signed for."
   def host, do: @host
 
-  @doc "The directory every identity `enroll!/1` makes names."
+  @doc "The directory every account `account!/1` makes names."
   def directory, do: @directory
 
   @doc "Serve `handler` and point the registry at it (the module doc)."
@@ -60,11 +61,12 @@ defmodule Sanctum.Test.RegistryStub do
 
   @doc """
   A registry that answers handles alone (`start!/1`): each handle of
-  `handles` with the answer naming its identifier and no address, `:close`
-  for one whose connection drops unanswered, and every other handle as
-  one no one holds.
+  `handles` with the answer naming its identifier, the directory
+  `directory` (`directory/0` by default) and no address, `:close` for one
+  whose connection drops unanswered, and every other handle as one no one
+  holds.
   """
-  def handles!(handles) when is_map(handles) do
+  def handles!(handles, directory \\ @directory) when is_map(handles) do
     start!(fn %{method: "GET", path: "/v1/handles/" <> handle} ->
       case Map.get(handles, handle) do
         nil ->
@@ -80,7 +82,7 @@ defmodule Sanctum.Test.RegistryStub do
              "registry" => @host,
              "handle" => handle,
              "identifier" => identifier,
-             "directory" => @directory
+             "directory" => directory
            })}
       end
     end)
@@ -217,60 +219,54 @@ defmodule Sanctum.Test.RegistryStub do
   end
 
   @doc """
-  Enroll `user_id` at `directory/0`: their genesis over their own keys,
-  opened and accepted, so their identity row holds the identifier and the
-  head. Answers the head as the registry would verify it.
+  Give `user_id` an account at `directory/0`: a genesis signed by a fresh
+  recovery key and one device key added, the person's identity row naming
+  it, as an admission by that account leaves it. Answers `%{state,
+  recovery, device}`: the verified head as the registry reads it, and the
+  recovery and device key pairs `{public, private}` that may sign for it.
   """
-  def enroll!(user_id) do
-    actor = %Prima.Actor{user_id: user_id}
-    row = identity_row(user_id)
-    {:ok, {recovery, _}} = Identity.derive_recovery_key(:crypto.strong_rand_bytes(32))
+  def account!(user_id) do
+    {recovery_pub, recovery_priv} = recovery = :crypto.generate_key(:eddsa, :ed25519)
+    {device_pub, _} = device = :crypto.generate_key(:eddsa, :ed25519)
+    signer = Identity.recovery_signer(recovery_pub)
+    at = System.os_time(:millisecond)
 
     {:ok, genesis} =
-      Entry.genesis(
-        live_key: row.live_public_key,
-        operational_key: row.operational_public_key,
-        recovery_keys: [recovery],
-        directory: @directory
+      Entry.new(
+        kind: :genesis,
+        seq: 0,
+        at: at,
+        signer: signer,
+        directory: @directory,
+        recovery: [recovery_pub]
       )
 
-    {:ok, attempt} =
-      Arca.IdentityAttempts.open(actor, %{
-        kind: "enrollment",
-        request_id: "req_#{System.unique_integer([:positive])}",
+    genesis = Identity.sign(genesis, recovery_priv)
+    {:ok, key} = Prima.Identity.Key.new(alg: :ed25519, kind: :device, pub: device_pub)
+
+    {:ok, added} =
+      Entry.new(
+        kind: :add_key,
+        prev: Identity.hash(genesis),
+        seq: 1,
+        at: at,
+        signer: signer,
+        key: key
+      )
+
+    {:ok, state} = Identity.verify_chain([genesis, Identity.sign(added, recovery_priv)])
+
+    {:ok, _row} =
+      Arca.PersonIdentities.create(Prima.Actor.system(), %{
         user_id: user_id,
-        identifier: Identity.identifier(genesis),
+        provenance: "remote",
+        identifier: state.identifier,
         directory_url: @directory,
-        genesis: Identity.canonical(genesis),
-        request_digest: Identity.hash(genesis),
-        kit_seed_sealed: "sealed-kit-seed"
+        head_hash: state.head
       })
 
-    {:ok, _} = Arca.IdentityAttempts.advance(actor, attempt.id, "staged", "submitted")
-    {:ok, _} = Arca.IdentityAttempts.advance(actor, attempt.id, "submitted", "accepted")
-    state(user_id, genesis.recovery_keys)
+    %{state: state, recovery: recovery, device: device}
   end
-
-  @doc "The verified head of `user_id`'s one-entry log, from their identity row."
-  def state(user_id, recovery_keys \\ []) do
-    row = identity_row(user_id)
-
-    %Identity.State{
-      identifier: row.identifier,
-      directory: @directory,
-      head: row.head_hash,
-      key_epoch: row.head_hash,
-      recovery_epoch: row.head_hash,
-      live_key: row.live_public_key,
-      operational_key: row.operational_public_key,
-      recovery_keys: recovery_keys,
-      revision: 0,
-      length: 1
-    }
-  end
-
-  defp identity_row(user_id),
-    do: Arca.Repo.get_by!(Arca.Schemas.PersonIdentity, user_id: user_id)
 
   # ---- the wire ------------------------------------------------------------------
 

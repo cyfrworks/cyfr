@@ -182,6 +182,22 @@ defmodule Sanctum do
   end
 
   @doc """
+  How this home is reached, `:local`, `:tailnet` or `:public`: the access
+  mode `config/runtime.exs` resolves from `CYFR_ACCESS`
+  (`Cyfr.RuntimeConfig.resolve_access/1`); a boot that resolves none, as a
+  test's does, is a local home's (`config/config.exs`). It decides what
+  freshness answers while a directory cannot be read
+  (`Sanctum.IdentityFreshness`).
+  """
+  @spec access_mode() :: :local | :tailnet | :public
+  def access_mode do
+    case Application.fetch_env!(:sanctum, :access_mode) do
+      mode when mode in [:local, :tailnet, :public] -> mode
+      other -> raise ArgumentError, "unknown access mode #{inspect(other)}"
+    end
+  end
+
+  @doc """
   The directory this deployment enrolls its local people at
   (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`; unset, it is
   `https://cyfr.run` in production and none in development), or `nil` when

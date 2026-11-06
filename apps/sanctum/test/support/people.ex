@@ -59,17 +59,20 @@ defmodule Sanctum.Test.People do
   @doc """
   The remote person the CYFR sign-in identity `info.id` names, made the
   first time as the remote admission makes one: admission `remote`, no
-  keys and no athanor, the identity linked and an identity row of
-  provenance `remote` naming `remote.identifier` and its directory
-  (`remote.genesis_hash` and `remote.head_hash` when given). Made without
+  keys and no athanor, the identity linked and the account's identity row
+  naming `remote.identifier`, its directory and `remote.head_hash`, the
+  head read. Made without
   the door and without a directory read; a test of the remote admission
   goes through `Sanctum.Newcomer`. The same key again answers the same
   person, with the contact fields rewritten as `linked/1` rewrites them.
   Answers `{:ok, user}` as `Sanctum.Tenancy.Users.get/1` reads it.
   """
   @spec remote(map(), map()) :: {:ok, Sanctum.Tenancy.Users.user()}
-  def remote(%{id: key} = info, %{identifier: identifier, directory_url: directory} = remote)
-      when is_binary(key) and is_binary(identifier) and is_binary(directory) do
+  def remote(
+        %{id: key} = info,
+        %{identifier: identifier, directory_url: directory, head_hash: head}
+      )
+      when is_binary(key) and is_binary(identifier) and is_binary(directory) and is_binary(head) do
     case Sanctum.Tenancy.Users.get_by_identity(key) do
       {:ok, user} ->
         {:ok, _} = Arca.Users.update(Prima.Actor.system(), user.id, contact(info))
@@ -84,8 +87,7 @@ defmodule Sanctum.Test.People do
                 provenance: "remote",
                 identifier: identifier,
                 directory_url: directory,
-                genesis_hash: remote[:genesis_hash],
-                head_hash: remote[:head_hash]
+                head_hash: head
               })
 
             :ok

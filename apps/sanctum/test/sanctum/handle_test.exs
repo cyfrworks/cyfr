@@ -6,8 +6,10 @@ defmodule Sanctum.HandleTest do
   A handle resolved at the registry this deployment names: one exact
   handle asked of `GET /v1/handles/{handle}`, its answer read as
   `cyfr-handle/v1` for the handle and registry asked, and every other
-  answer a typed refusal. The answers are the shared vector file's
-  (`tests/fixtures/registry_wire.json`), rehosted on the stub's host.
+  answer a typed refusal; then the account it names read at the directory
+  it names, where an account gone resolves to nothing. The malformed
+  answers are the shared vector file's (`tests/fixtures/registry_wire.json`),
+  rehosted on the stub's host.
   """
 
   # The registry's address is process-wide configuration.
@@ -17,7 +19,19 @@ defmodule Sanctum.HandleTest do
 
   alias Prima.HandleAnswer
   alias Sanctum.Handle
-  alias Sanctum.Test.RegistryStub
+  alias Sanctum.Test.{DirectoryServer, RegistryStub}
+
+  setup_all do
+    %{tls: DirectoryServer.tls()}
+  end
+
+  setup %{tls: tls} = tags do
+    Arca.Test.Sandbox.setup!(tags)
+    DirectoryServer.listen!()
+    DirectoryServer.seam!(tls)
+    dir = DirectoryServer.start!(tls)
+    %{dir: dir, account: DirectoryServer.account!(dir.dir, dir.url)}
+  end
 
   @vectors "../../../../tests/fixtures/registry_wire.json"
            |> Path.expand(__DIR__)
@@ -31,16 +45,45 @@ defmodule Sanctum.HandleTest do
     String.replace(bytes, ~s("registry":"cyfr.run"), ~s("registry":"#{RegistryStub.host()}"))
   end
 
-  test "an answer names the identifier and its directory" do
-    RegistryStub.start!(fn _ -> {200, rehosted("an answer")} end)
+  test "an answer names the account, whose keys are read at the directory it names", %{
+    dir: dir,
+    account: alice
+  } do
+    RegistryStub.handles!(%{"alice" => alice.identifier}, dir.url)
 
     assert {:ok, %HandleAnswer{} = answer} = Handle.resolve("alice")
     assert answer.handle == "alice"
     assert answer.registry == RegistryStub.host()
-    assert answer.directory == "https://cyfr.run"
-    assert "per_" <> _ = answer.identifier
+    assert answer.directory == dir.url
+    assert answer.identifier == alice.identifier
+    assert {:ok, alice.identifier} == Handle.identifier("alice")
 
     assert_received {:registry_request, %{method: "GET", path: "/v1/handles/alice", body: ""}}
+    assert {:ok, head} = Arca.DirectoryHeads.get(Prima.Actor.system(), alice.identifier)
+    assert head.head_hash == DirectoryServer.head(alice)
+  end
+
+  test "an account gone at its directory resolves to nothing, not to an outage", %{
+    dir: dir,
+    account: alice
+  } do
+    RegistryStub.handles!(%{"alice" => alice.identifier}, dir.url)
+    DirectoryServer.tombstone(dir.dir, alice.identifier)
+
+    capture_log(fn ->
+      assert {:error, :not_found} = Handle.resolve("alice")
+      assert {:error, :handle_not_found} = Handle.identifier("alice")
+    end)
+  end
+
+  test "a directory that cannot be read is unavailable", %{dir: dir, account: alice} do
+    RegistryStub.handles!(%{"alice" => alice.identifier}, dir.url)
+    DirectoryServer.Server.stop(dir.server)
+
+    capture_log(fn ->
+      assert {:error, :registry_unavailable} = Handle.resolve("alice")
+      assert {:error, :registry_unavailable} = Handle.identifier("alice")
+    end)
   end
 
   test "an answer for another handle or registry, carrying an address, or outside its grammar, is malformed" do

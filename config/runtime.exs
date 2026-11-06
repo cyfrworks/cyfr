@@ -387,6 +387,10 @@ if config_env() != :test do
   config :sanctum, :public_url, access.head["public_url"]
   config :sanctum, :fallback_origin, access.origin
 
+  # What freshness answers while a directory cannot be read follows the
+  # mode (`Sanctum.IdentityFreshness`).
+  config :sanctum, :access_mode, access.mode
+
   if config_env() == :prod do
     secret_key_base =
       env_key_base ||
