@@ -7,3 +7,5 @@ import Config
 # (scripts/wasm-tools.sh); `CYFR_WASM_TOOLS` names another for a cyfr
 # release run outside its image.
 config :prima, :wasm_tools, "/usr/local/bin/wasm-tools"
+
+config :cyfr, CyfrWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
