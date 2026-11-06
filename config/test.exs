@@ -52,12 +52,6 @@ config :cyfr,
 # suite keeps no reserve directory.
 config :cyfr, :storage_reserve_bytes, 64 * 1024 * 1024
 
-# A one-time confirmation code's transport: the tree ships none, so the
-# suite captures each code where the test that asked for it reads it
-# (`Sanctum.TestContext.MailSink`); a home without one refuses the email
-# method (`Sanctum.Auth.EmailVerification`).
-config :sanctum, :confirmation_code_transport, Sanctum.TestContext.MailSink
-
 # The consent proof store: the suite's is the ETS store, and
 # proof_db_test.exs exercises the durable adapter directly.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory

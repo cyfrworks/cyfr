@@ -326,45 +326,39 @@ defmodule Sanctum.TestContext do
 
     * the context is given a real person when it names none
       (`person!/2`);
-    * the person's software passkey (`Sanctum.TestContext.Authenticator`)
-      is registered once, as `Sanctum.Passkeys.register/2` has the person
-      register their first (`passkey!/1`): confirmed with the code mailed
-      to their verified email, or, for a person who holds no fresh method,
-      at once under the local first-method rule;
+    * the person is given an account (`account!/1`): a log at the suite's
+      test directory listing the person's software passkey
+      (`Sanctum.TestContext.Authenticator`), whose head this CYFR has
+      read, and the person's identity row naming it;
     * the record is opened by `Sanctum.Consent.Authz.check/3` under
       `ctx`, so `ctx`'s own credential is its opener and alone repeats
-      the change, and proven by the passkey's assertion over its digest
-      (`Sanctum.Passkeys.assert/3`), from the person's interactive
-      surface, whatever surface `ctx` itself is: a key's context repeats
-      the change it asked for once its person proved it in Prism.
+      the change, and confirmed by the passkey's answer to the record's
+      `confirm` request (`Sanctum.SignIn`), whatever surface `ctx` itself
+      is: a key's context repeats the change it asked for once its person
+      proved it.
 
-  A person whose first method was ever used, who holds no fresh method
-  and no passkey this helper made, raises: a test that needs that path
-  drives it itself. A person without standing (denied, or no longer a
-  member where the registration is asked) can prove nothing: the context
-  is answered without a confirmation, and the deciding site refuses them
-  as it would, which is what a test of their ejection asserts.
+  A person without standing (no athanor, or no longer a person here)
+  can prove nothing: the context is answered without a confirmation, and
+  the deciding site refuses them as it would, which is what a test of
+  their ejection asserts.
   """
   @spec confirmed(Context.t(), atom(), map()) :: Context.t()
   def confirmed(%Context{} = ctx, action, change) do
     ctx = %{person_ctx!(ctx) | confirmation_id: nil}
+    _account = account!(ctx.user_id)
 
-    case passkey(ctx.user_id) do
-      {:ok, authenticator} ->
-        case Sanctum.Consent.Authz.check(ctx, action, change) do
-          {:error, {:confirmation_required, %{id: id}}} ->
-            prove!(ctx, id, authenticator)
-            %{ctx | confirmation_id: id}
-
-          other ->
-            raise "confirmed/3: #{change.operation} asked no confirmation: #{inspect(other)}"
+    case Sanctum.Consent.Authz.check(ctx, action, change) do
+      {:error, {:confirmation_required, %{id: id}}} ->
+        case prove(ctx, id) do
+          {:ok, _row} -> %{ctx | confirmation_id: id}
+          {:error, :no_standing} -> ctx
         end
 
-      {:error, {:no_standing, _refusal}} ->
+      {:error, _refused} ->
         ctx
 
-      {:error, other} ->
-        raise "confirmed/3: #{ctx.user_id}'s passkey could not be made: #{inspect(other)}"
+      other ->
+        raise "confirmed/3: #{change.operation} asked no confirmation: #{inspect(other)}"
     end
   end
 
@@ -379,11 +373,11 @@ defmodule Sanctum.TestContext do
   @spec confirming(Context.t(), (Context.t() -> term())) :: term()
   def confirming(%Context{} = ctx, fun) when is_function(fun, 1) do
     ctx = %{person_ctx!(ctx) | confirmation_id: nil}
-    authenticator = passkey!(ctx.user_id)
+    _account = account!(ctx.user_id)
 
     case fun.(ctx) do
       {:error, {:confirmation_required, %{id: id}}} ->
-        prove!(ctx, id, authenticator)
+        prove!(ctx, id)
         fun.(%{ctx | confirmation_id: id})
 
       other ->
@@ -591,165 +585,174 @@ defmodule Sanctum.TestContext do
     %{in_flight: in_flight, cap: cap}
   end
 
+  # The directory the suite's accounts live at: what their passkeys'
+  # assertions name as origin and host. No request reaches it: this CYFR
+  # holds each account's head as read.
+  @test_directory "https://dir.example"
+
   @doc """
   Prove the pending confirmation whose secret `id` the signal answered
-  (or, given a `cnr_` ref, the record it names) of `ctx`'s person with
-  the software passkey `authenticator` (`passkey!/1`'s by default), from
-  the person's interactive surface in `ctx`'s athanor, naming the record
-  by its ref as any client of the person does. Answers the confirmed
-  record.
+  (or, given a `cnr_` ref, the record it names) of `ctx`'s person with the
+  passkey of their account (`account!/1`): this CYFR mints the record's
+  `confirm` request and the passkey's answer to it confirms the record
+  (`Sanctum.SignIn`), from the person's interactive surface in `ctx`'s
+  athanor. Answers the confirmed record. The third argument is no longer
+  read.
   """
-  def prove!(%Context{} = ctx, id, authenticator \\ nil) do
-    authenticator = authenticator || passkey!(ctx.user_id)
+  def prove!(%Context{} = ctx, id, _authenticator \\ nil) do
+    case prove(ctx, id) do
+      {:ok, row} -> row
+      {:error, reason} -> raise "prove!/3: the confirmation was not proven: #{inspect(reason)}"
+    end
+  end
+
+  defp prove(%Context{} = ctx, id) do
+    account = account!(ctx.user_id)
     ref = if Prima.Confirmation.ref?(id), do: id, else: Prima.Confirmation.ref(id)
-    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
-    "sha256:" <> hex = row.digest
+    binding = {:channel, "test-context-proof"}
 
-    assertion =
-      Sanctum.TestContext.Authenticator.assertion(
-        authenticator,
-        Base.decode16!(hex, case: :lower)
-      )
+    case Sanctum.SignIn.request(:confirm, binding,
+           ctx: interactive(ctx),
+           ref: ref,
+           identifier: account.identifier
+         ) do
+      {:ok, %{request: request}} ->
+        answer =
+          Sanctum.TestContext.Authenticator.answer(
+            account.authenticator,
+            request,
+            account.identifier
+          )
 
-    {:ok, confirmed} = Sanctum.Passkeys.assert(interactive(ctx), ref, assertion)
-    confirmed
+        with {:ok, %{purpose: :confirm}} <- Sanctum.SignIn.answer(answer, binding) do
+          Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+        end
+
+      {:error, :unauthenticated} ->
+        {:error, :no_standing}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   # The person's own interactive surface, in the same athanor: where a
   # confirmation is proven, whatever surface asked for it.
   defp interactive(%Context{} = ctx),
-    do: %{ctx | auth_method: :oidc, client_id: nil, plane: :external}
+    do: %{
+      ctx
+      | auth_method: :oidc,
+        client_id: nil,
+        plane: :external,
+        authenticated: true,
+        anonymous: false
+    }
 
   @doc """
-  The person `user_id`'s software passkey, registered at this home once,
-  as `Sanctum.Passkeys.register/2` has the person register their first.
-  Answers the authenticator.
-
-  A person who holds a fresh method here confirms the registration. A
-  fixture person (`person!/2`) holds one: a verified email, whose code the
-  suite's transport (`MailSink`) delivers to the asking process. The
-  registration is asked and confirmed on a new session of a local door
-  focused on an athanor the person sits in, and the code mailed to them
-  proves it. A person who holds no
-  fresh method (one with no email) registers it at once under the local
-  first-method rule; a test of that rule builds such a person itself.
+  The person `user_id`'s account, made once and the same in every process
+  of a test: a genesis at the suite's test directory signed by a recovery
+  key, and the person's software passkey
+  (`Sanctum.TestContext.Authenticator.for_person/1`) the recovery key
+  added, both derived from the person's id. This CYFR caches the account's
+  head as a first read leaves it, and the person's identity row names the
+  account in place of any row they held. Answers `%{identifier,
+  authenticator, head}`.
   """
-  def passkey!(user_id) when is_binary(user_id) do
-    case passkey(user_id) do
-      {:ok, authenticator} ->
-        authenticator
+  def account!(user_id) when is_binary(user_id) do
+    alias Prima.Identity
+    alias Prima.Identity.{Entry, Key}
 
-      {:error, {:no_standing, refusal}} ->
-        raise "passkey!/1: #{user_id} has no standing to register a passkey: #{inspect(refusal)}"
-
-      {:error, other} ->
-        raise "passkey!/1: #{user_id}'s first passkey was not registered: #{inspect(other)}"
-    end
-  end
-
-  # `passkey!/1` without the raise: `{:error, {:no_standing, refusal}}`
-  # when the person cannot register one here (denied, or without an
-  # athanor of their own), `{:error, other}` for anything else.
-  @standing_refusals [:not_standing, :unauthenticated, :denied, :not_member]
-  defp passkey(user_id) do
     authenticator = Sanctum.TestContext.Authenticator.for_person(user_id)
-    credential_id = Base.url_encode64(authenticator.credential_id, padding: false)
 
-    case Arca.Passkeys.get_by_credential(
-           Prima.Actor.system(),
-           Sanctum.Passkeys.rp_id(),
-           credential_id
-         ) do
-      {:ok, %{state: "active", user_id: ^user_id}} ->
-        {:ok, authenticator}
+    {recovery_pub, recovery_priv} =
+      :crypto.generate_key(
+        :eddsa,
+        :ed25519,
+        :crypto.hash(:sha256, ["cyfr-test-recovery|", user_id])
+      )
 
-      _none ->
-        person = Context.build(user_id: user_id, auth_method: :oidc, authenticated: true)
+    signer = Identity.recovery_signer(recovery_pub)
+    at = 1_700_000_000_000
 
-        registered =
-          if Sanctum.Passkeys.fresh_method?(person),
-            do: confirmed_passkey(user_id, authenticator),
-            else: first_passkey(user_id, authenticator)
+    {:ok, genesis} =
+      Entry.new(
+        kind: :genesis,
+        seq: 0,
+        at: at,
+        signer: signer,
+        directory: @test_directory,
+        recovery: [recovery_pub]
+      )
 
-        case registered do
-          {:ok, _} = ok ->
-            ok
+    genesis = Identity.sign(genesis, recovery_priv)
 
-          {:error, refusal} when refusal in @standing_refusals ->
-            {:error, {:no_standing, refusal}}
+    {:ok, key} =
+      Key.new(
+        alg: :es256,
+        kind: :passkey,
+        pub: authenticator.public_key,
+        credential_id: authenticator.credential_id
+      )
 
-          {:error, {refusal, _}} when refusal in @standing_refusals ->
-            {:error, {:no_standing, refusal}}
+    {:ok, added} =
+      Entry.new(
+        kind: :add_key,
+        prev: Identity.hash(genesis),
+        seq: 1,
+        at: at,
+        signer: signer,
+        key: key
+      )
 
-          {:error, _} = error ->
-            error
+    added = Identity.sign(added, recovery_priv)
+    {:ok, state} = Identity.verify_chain([genesis, added])
+    held!(user_id, state, Identity.canonical(genesis))
+    %{identifier: state.identifier, authenticator: authenticator, head: state.head}
+  end
 
-          other ->
-            {:error, other}
-        end
+  # The account's head cached here and the person's identity row naming
+  # it, unless both already stand.
+  defp held!(user_id, state, genesis) do
+    import Ecto.Query, only: [from: 2]
+
+    system = Prima.Actor.system()
+
+    case Arca.DirectoryHeads.put(system, %{
+           identifier: state.identifier,
+           genesis: genesis,
+           directory_url: @test_directory,
+           head_hash: state.head,
+           state: state |> Prima.Identity.State.encode() |> Jason.encode!()
+         }) do
+      {:ok, _head} -> :ok
+      {:error, :exists} -> :ok
+    end
+
+    case Arca.PersonIdentities.get(system, user_id) do
+      {:ok, %{identifier: identifier}} when identifier == state.identifier ->
+        :ok
+
+      _other ->
+        Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user_id))
+
+        {:ok, _row} =
+          Arca.PersonIdentities.create(system, %{
+            user_id: user_id,
+            provenance: "remote",
+            identifier: state.identifier,
+            directory_url: @test_directory,
+            head_hash: state.head
+          })
+
+        :ok
     end
   end
 
-  # The local first-method rule, on a session focused nowhere: a passkey is
-  # the person's, and the write rechecks the session and the person alone,
-  # whatever athanor a fixture's person holds or lacks.
-  defp first_passkey(user_id, authenticator) do
-    session = %{session!(user_id) | athanor_id: nil}
-
-    with {:ok, options} <- Sanctum.Passkeys.register(session, %{}),
-         credential = Sanctum.TestContext.Authenticator.registration(authenticator, options),
-         {:ok, %{status: "active"}} <-
-           Sanctum.Passkeys.register(session, %{credential: credential}) do
-      {:ok, authenticator}
-    end
-  end
-
-  # The registration a fresh method confirms, asked on a session focused on
-  # the person's own athanor (a confirmation is opened in an athanor) and
-  # proven with the code mailed to their verified email.
-  defp confirmed_passkey(user_id, authenticator) do
-    with {:ok, athanor_id} <- own_athanor(user_id),
-         session = session!(user_id, "local", athanor_id),
-         {:ok, options} <- Sanctum.Passkeys.register(session, %{}),
-         credential = Sanctum.TestContext.Authenticator.registration(authenticator, options),
-         {:error, {:confirmation_required, %{id: id}}} <-
-           Sanctum.Passkeys.register(session, %{credential: credential}),
-         :ok <- mailed_proof(session, Prima.Confirmation.ref(id)),
-         {:ok, %{status: "active"}} <-
-           Sanctum.Passkeys.register(%{session | confirmation_id: id}, %{credential: credential}) do
-      {:ok, authenticator}
-    else
-      {:ok, %{status: "active"}} -> {:ok, authenticator}
-      other -> other
-    end
-  end
-
-  # The confirmation `ref` proven with the code the suite's transport
-  # delivers to this process.
-  defp mailed_proof(session, ref) do
-    with {:ok, %{method: "email"}} <- Sanctum.Auth.EmailVerification.send_code(session, ref) do
-      receive do
-        {:confirmation_code_mail, mail} ->
-          code = Sanctum.TestContext.MailSink.code(mail)
-
-          case Sanctum.Auth.EmailVerification.verify_code(session, ref, code) do
-            {:ok, %{state: "confirmed"}} -> :ok
-            other -> other
-          end
-      after
-        5_000 -> {:error, :no_code_mailed}
-      end
-    end
-  end
-
-  # The athanor the person owns, where the registration can be asked. A
-  # person who owns none has no standing.
-  defp own_athanor(user_id) do
-    case Sanctum.Tenancy.Athanors.get_by_owner(user_id) do
-      {:ok, %{id: id}} -> {:ok, id}
-      {:error, _none} -> {:error, :not_standing}
-    end
-  end
+  @doc """
+  The person `user_id`'s software passkey, the one their account lists
+  (`account!/1`). Answers the authenticator.
+  """
+  def passkey!(user_id) when is_binary(user_id), do: account!(user_id).authenticator
 
   @doc """
   A context loaded from a new session of the person `user_id`, as the
@@ -770,30 +773,6 @@ defmodule Sanctum.TestContext do
     {:ok, session} = Sanctum.Session.create(base, generation_snapshot: snapshot!(base))
     {:ok, loaded} = Sanctum.Session.load(session.token)
     loaded
-  end
-
-  defmodule MailSink do
-    @moduledoc """
-    The suite's transport for one-time confirmation codes
-    (`:sanctum, :confirmation_code_transport` in `config/test.exs`): each
-    message is sent to the process that asked for it, and to the
-    processes it was asked on behalf of, as
-    `{:confirmation_code_mail, %{to:, subject:, text:}}`.
-    """
-
-    @doc false
-    def deliver(%{to: _, subject: _, text: _} = message) do
-      for pid <- [self() | Process.get(:"$callers", [])],
-          do: send(pid, {:confirmation_code_mail, message})
-
-      :ok
-    end
-
-    @doc "The code a captured message carries."
-    def code(%{text: text}) do
-      [code] = Regex.run(~r/\b(\d{6})\b/, text, capture: :all_but_first)
-      code
-    end
   end
 
   defmodule Authenticator do
@@ -820,8 +799,7 @@ defmodule Sanctum.TestContext do
     def for_person(user_id), do: new("person|" <> user_id)
 
     @doc """
-    The browser's answer to `options` (`Sanctum.Passkeys.register/2`'s
-    answer without a credential). `opts`: `:origin`, `:rp_id`, `:uv`
+    The browser's answer to a registration's `options`. `opts`: `:origin`, `:rp_id`, `:uv`
     (default `true`), `:backup_eligible` (default `false`: a credential
     that may sync), `:count` (default `0`), `:challenge` (in place of the
     options').
@@ -838,7 +816,7 @@ defmodule Sanctum.TestContext do
         Jason.encode!(%{
           "type" => "webauthn.create",
           "challenge" => challenge,
-          "origin" => Keyword.get(opts, :origin, Sanctum.Passkeys.origin()),
+          "origin" => Keyword.get(opts, :origin, "https://dir.example"),
           "crossOrigin" => false
         })
 
@@ -866,8 +844,44 @@ defmodule Sanctum.TestContext do
     end
 
     @doc """
+    The account pages' answer to `request` (`Prima.SignIn`) by this
+    passkey, of the account `identifier`: an assertion over the request's
+    digest at the suite's test directory, with user presence and
+    verification.
+    """
+    def answer(%__MODULE__{} = auth, %Prima.SignIn{} = request, identifier) do
+      digest = Prima.SignIn.digest(request)
+
+      client_data =
+        Jason.encode!(%{
+          "type" => "webauthn.get",
+          "challenge" => b64(digest),
+          "origin" => "https://dir.example"
+        })
+
+      authenticator_data = :crypto.hash(:sha256, "dir.example") <> <<0x05, 0::32>>
+
+      signature =
+        :crypto.sign(
+          :ecdsa,
+          :sha256,
+          authenticator_data <> :crypto.hash(:sha256, client_data),
+          [auth.private_key, :secp256r1]
+        )
+
+      %Prima.SignIn.PasskeyAnswer{
+        challenge: request.challenge,
+        identifier: identifier,
+        credential_id: auth.credential_id,
+        authenticator_data: authenticator_data,
+        client_data: client_data,
+        signature: signature
+      }
+    end
+
+    @doc """
     The browser's answer to a request whose challenge is `challenge`
-    (raw bytes). `opts`: `:origin`, `:rp_id` (default this home's), `:uv`
+    (raw bytes). `opts`: `:origin`, `:rp_id` (default the test directory's), `:uv`
     (default `true`), `:count` (default `0`), `:type` (default
     `"webauthn.get"`).
     """
@@ -876,12 +890,12 @@ defmodule Sanctum.TestContext do
         Jason.encode!(%{
           "type" => Keyword.get(opts, :type, "webauthn.get"),
           "challenge" => b64(challenge),
-          "origin" => Keyword.get(opts, :origin, Sanctum.Passkeys.origin()),
+          "origin" => Keyword.get(opts, :origin, "https://dir.example"),
           "crossOrigin" => false
         })
 
       auth_data =
-        :crypto.hash(:sha256, Keyword.get(opts, :rp_id, Sanctum.Passkeys.rp_id())) <>
+        :crypto.hash(:sha256, Keyword.get(opts, :rp_id, "dir.example")) <>
           <<flags(opts, 0)::8, Keyword.get(opts, :count, 0)::32>>
 
       signature =

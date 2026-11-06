@@ -6,6 +6,10 @@ defmodule Emissary.Web.DirectoryWireTest do
   The directory's shared HTTP scenarios through the endpoint. The same
   literal requests and expected answers hold cyfr.run's Go writer to this
   wire contract, including canonical entry bytes inside JSON responses.
+  A scenario's tombstone step is the operator's own path: the platform
+  administrator's `directory.tombstone` through the gate, under their
+  fresh confirmation; without the confirmation, or asked by anyone else,
+  it leaves the log as it was.
   """
   use CyfrWeb.ConnCase, async: false
 
@@ -69,10 +73,31 @@ defmodule Emissary.Web.DirectoryWireTest do
     end
   end
 
-  # A tombstone is the operator's, made through `Sanctum.Directory`, never
-  # over the wire.
-  defp run_step(_scenario, %{"tombstone" => identifier}, _index),
-    do: assert(:ok = Sanctum.Directory.tombstone(identifier))
+  test "a tombstone without its confirmation, or asked by someone who is not the platform administrator, leaves the log as it was" do
+    identifier = registered!()
+    admin = administrator!()
+
+    assert {:error, _waits} = tombstone(admin, identifier)
+    assert {:ok, %{length: 1}} = page(identifier)
+
+    {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    refute person.platform_admin
+
+    assert {:error, _refused} = Sanctum.TestContext.confirming(person, &tombstone(&1, identifier))
+    assert {:ok, %{length: 1}} = page(identifier)
+
+    # Under the administrator's confirmation it is gone.
+    assert {:ok, _gone} = Sanctum.TestContext.confirming(admin, &tombstone(&1, identifier))
+    assert {:error, :gone} = page(identifier)
+  end
+
+  # A tombstone is the operator's: the platform administrator's
+  # `directory.tombstone` through the gate under their fresh confirmation,
+  # never over the wire.
+  defp run_step(_scenario, %{"tombstone" => identifier}, _index) do
+    assert {:ok, _gone} =
+             Sanctum.TestContext.confirming(administrator!(), &tombstone(&1, identifier))
+  end
 
   defp run_step(scenario, step, index) do
     request = step["request"]
@@ -123,6 +148,50 @@ defmodule Emissary.Web.DirectoryWireTest do
     else
       send.()
     end
+  end
+
+  defp tombstone(ctx, identifier),
+    do:
+      Sanctum.Gate.call_external("directory", ctx, %{
+        "action" => "tombstone",
+        "identifier" => identifier
+      })
+
+  # The installation's platform administrator, signed in.
+  defp administrator! do
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    {:ok, _row} = Sanctum.TestContext.ensure_platform(user.id)
+    %{person | platform_admin: true}
+  end
+
+  defp page(identifier),
+    do: Sanctum.Directory.resolve(%{identifier: identifier, after: -1, source: "203.0.113.9"})
+
+  # An account registered at this CYFR's directory: a genesis naming its
+  # origin, signed by a recovery key.
+  defp registered! do
+    {:ok, directory} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+    {pub, priv} = :crypto.generate_key(:eddsa, :ed25519)
+
+    {:ok, genesis} =
+      Prima.Identity.Entry.new(
+        kind: :genesis,
+        seq: 0,
+        at: System.os_time(:millisecond),
+        signer: Prima.Identity.recovery_signer(pub),
+        directory: directory,
+        recovery: [pub]
+      )
+
+    genesis = Prima.Identity.sign(genesis, priv)
+
+    {:ok, %{identifier: identifier, result: :created}} =
+      Sanctum.Directory.register(%{
+        genesis: Prima.Identity.Entry.encode(genesis),
+        source: "203.0.113.9"
+      })
+
+    identifier
   end
 
   defp assert_field(actual, %{"min" => min, "max" => max}, "retry_after", context),
