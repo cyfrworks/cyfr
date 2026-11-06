@@ -283,7 +283,8 @@ func TestSetup_ATakenNameAsksAnother(t *testing.T) {
 
 // Where the account service names terms, setting up without accepting
 // them makes nothing and shows them; accepted, the acceptance precedes the
-// name's claim.
+// name's claim, and newer terms the registry asks for meanwhile are asked
+// again before it.
 func TestSetup_TheTermsAreAcceptedFirst(t *testing.T) {
 	home := newFakeHome(t)
 	home.accounts.Policy = &account.Policy{Version: "2026-10", URL: "https://cyfr.example/terms"}
@@ -297,10 +298,15 @@ func TestSetup_TheTermsAreAcceptedFirst(t *testing.T) {
 		t.Fatal("setting up without the terms made a key, or said nothing")
 	}
 	b.post("/setup", url.Values{"name": {"alice"}, "secret": {p}, "again": {p}, "accept": {"yes"}})
-	ticketOf(t, b.post("/saved", nil), home)
+	home.accounts.Policy = &account.Policy{Version: "2026-11", URL: "https://cyfr.example/terms"}
+	b.post("/saved", nil)
+	if page := b.page(); !strings.Contains(page, "terms changed") || !strings.Contains(page, `name="accept"`) {
+		t.Fatalf("newer terms are not asked:\n%s", page)
+	}
+	ticketOf(t, b.post("/saved", url.Values{"accept": {"yes"}}), home)
 	rec, _ := holder.Load(b.record)
-	if home.accounts.Accepted(rec.Identifier) != "2026-10" {
-		t.Fatal("the terms were not accepted")
+	if home.accounts.Accepted(rec.Identifier) != "2026-11" || home.accounts.Holder("alice") != rec.Identifier {
+		t.Fatal("the newer terms were not accepted before the name")
 	}
 }
 

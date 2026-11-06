@@ -50,7 +50,7 @@ var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 var screenCmd = &cobra.Command{
 	Use:   "screen",
 	Short: "Show CYFR on this machine's own screen, or stop showing it",
-	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip), shows your recovery code, then opens Prism; it locks after five minutes without use, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
+	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without use, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
 }
 
 var screenOnCmd = &cobra.Command{

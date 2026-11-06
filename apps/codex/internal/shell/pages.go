@@ -67,7 +67,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{else if eq .Page "account"}}
 <h1>Your account is not finished</h1>
 <p>Nothing is lost: try again.</p>
-<form method="post" action="/saved">{{template "terms" .}}<button autofocus>Try again</button></form>
+<form method="post" action="/saved">{{if .Accept}}{{template "terms" .}}{{end}}<button autofocus>Try again</button></form>
 {{else if eq .Page "resume"}}
 <h1>Finish your account</h1>
 <p>This box began making the account @{{.Name}}. Type its recovery code to finish it.</p>

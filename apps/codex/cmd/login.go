@@ -426,9 +426,8 @@ func (d *loginDriver) saved(ctx context.Context, v shell.View) error {
 // finish submits the account again after an answer that did not come,
 // asking for the terms again when the service changed them.
 func (d *loginDriver) finish(ctx context.Context) error {
-	v := d.sh.View()
 	accepted := ""
-	if v.Terms != "" && strings.Contains(v.Notice, "terms") {
+	if d.sh.View().Accept {
 		var err error
 		if accepted, err = d.accept(ctx); err != nil {
 			return err

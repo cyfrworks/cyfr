@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"unicode/utf8"
 )
 
 // Refusal is a shape refused as Prima refuses it: Reason is Prima's name
@@ -120,14 +119,4 @@ func fields(m map[string]any, required, optional []string) *Refusal {
 		}
 	}
 	return nil
-}
-
-// isText is whether v is non-empty UTF-8 of at most max bytes with no
-// control character.
-func isText(v any, max int) bool {
-	s, ok := v.(string)
-	if !ok || s == "" || len(s) > max || !utf8.ValidString(s) {
-		return false
-	}
-	return !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }

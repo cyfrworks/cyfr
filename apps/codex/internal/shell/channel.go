@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -122,30 +121,6 @@ func (e *IntentError) Error() string {
 		return "CYFR refused it: " + m.Class
 	}
 	return "CYFR refused it"
-}
-
-// class is the refusal's class, which every refusal on the channel
-// carries (with its sentence) where it carries no reason: "unavailable"
-// for a home or a cyfr.run that did not answer.
-func (e *IntentError) class() string {
-	var m struct {
-		Class string `json:"class"`
-	}
-	_ = json.Unmarshal(e.Raw, &m)
-	return m.Class
-}
-
-// says is whether the refusal names one of reasons, as its tag, reason
-// or code.
-func (e *IntentError) says(reasons ...string) bool {
-	var m map[string]any
-	_ = json.Unmarshal(e.Raw, &m)
-	for _, k := range []string{"tag", "reason", "code", "error"} {
-		if v, ok := m[k].(string); ok && slices.Contains(reasons, v) {
-			return true
-		}
-	}
-	return false
 }
 
 // Dialer opens the home's device channel: its address and the HTTP client

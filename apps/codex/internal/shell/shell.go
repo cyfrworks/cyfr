@@ -331,8 +331,10 @@ type View struct {
 	RecoveryCode string
 	Name         string
 	// Terms is the address of the policy a new account accepts, once the
-	// directory named one.
+	// directory named one, and Accept whether the account being made
+	// waits for them to be accepted (again).
 	Terms   string
+	Accept  bool
 	Confirm *PendingConfirm
 	// Code is the key's short code while no account lists it, AddURL the
 	// account page that adds it (a QR code's text), and Key its public
@@ -367,6 +369,7 @@ func (s *Shell) View() View {
 		v.Page, v.Name = PageName, m.attempt.Name
 	case m != nil:
 		v.Page, v.Name = PageAccount, m.attempt.Name
+		v.Accept = s.terms != nil && m.attempt.Accepted == ""
 	case s.rec.Identifier == "" && s.unfinished != nil:
 		v.Page, v.Name = PageResume, s.unfinished.Name
 	case s.rec.Identifier == "":
