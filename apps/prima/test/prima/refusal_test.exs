@@ -667,6 +667,10 @@ defmodule Prima.RefusalTest do
                "There is no unfinished name and recovery code to finish here."
     end
 
+    test "an account the registry does not know, a closed one among them, is named as an account" do
+      assert Refusal.message(:unknown_identity) == "cyfr.run does not know this account."
+    end
+
     test "a push with no usable token names the sync that mints one" do
       assert Refusal.message(:registry_token_missing) =~ "`cyfr registry sync`"
     end
