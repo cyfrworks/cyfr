@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 CYFR Works Inc. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Use your passkey</title>
+<link rel="stylesheet" href="account.css">
+<script src="account.js" defer></script>
+</head>
+<body data-page="sign">
+<header><span class="mark">CYFR</span></header>
+<main>
+<section id="refused" hidden>
+<h1>This page cannot continue</h1>
+<p id="refused-text"></p>
+</section>
+<section id="ask" hidden>
+<h1 id="what"></h1>
+<p>Your browser will ask for your passkey.</p>
+<div class="actions"><button type="button" class="primary" id="use-passkey">Use your passkey</button></div>
+<p class="error" id="ask-error" role="alert" hidden></p>
+</section>
+</main>
+</body>
+</html>

@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 CYFR Works Inc. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Add a device</title>
+<link rel="stylesheet" href="account.css">
+<script src="account.js" defer></script>
+</head>
+<body data-page="add">
+<header><span class="mark">CYFR</span></header>
+<main>
+<section id="refused" hidden>
+<h1>This page cannot continue</h1>
+<p id="refused-text"></p>
+</section>
+<section id="ask" hidden>
+<h1>Add this device to your account?</h1>
+<p>Check that your device shows this code:</p>
+<p class="code" id="device-code"></p>
+<div class="actions"><button type="button" class="primary" id="add">Add with your passkey</button></div>
+<p class="error" id="ask-error" role="alert" hidden></p>
+</section>
+<section id="sending" hidden>
+<h1>Adding the device</h1>
+<p class="error" id="sending-error" role="alert" hidden></p>
+<div class="actions"><button type="button" class="primary" id="retry">Try again</button></div>
+</section>
+<section id="added" hidden>
+<h1>Added</h1>
+<p>Your device continues on its own in a moment.</p>
+</section>
+</main>
+</body>
+</html>

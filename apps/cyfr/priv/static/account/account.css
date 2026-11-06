@@ -1,0 +1,185 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 CYFR Works Inc. */
+
+/* The account pages' one stylesheet: plain, readable on a phone, light or
+   dark as the system is, and a printout that holds the recovery code alone. */
+
+:root {
+  color-scheme: light dark;
+  --text: #16181d;
+  --muted: #5b6270;
+  --surface: #ffffff;
+  --line: #d6d9e0;
+  --accent: #127a8a;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e8eaee;
+    --muted: #a2a9b6;
+    --surface: #111317;
+    --line: #2c313a;
+    --accent: #3fb6c6;
+    --accent-text: #0b1316;
+    --danger: #f97066;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header {
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mark {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 12px;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 28px 0 8px;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin: 16px 0 6px;
+}
+
+.check label {
+  display: inline;
+  font-weight: 400;
+}
+
+input[type="text"],
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 1.05rem;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+button {
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.keys {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.keys li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+@media print {
+  header,
+  h1,
+  p:not(.code),
+  .actions,
+  label,
+  textarea {
+    display: none !important;
+  }
+
+  .code {
+    border: none;
+    font-size: 14pt;
+  }
+}

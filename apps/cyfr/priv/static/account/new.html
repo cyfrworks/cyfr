@@ -1,0 +1,77 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 CYFR Works Inc. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Create your account</title>
+<link rel="stylesheet" href="account.css">
+<script src="account.js" defer></script>
+</head>
+<body data-page="new">
+<header><span class="mark">CYFR</span></header>
+<main>
+<section id="refused" hidden>
+<h1>This page cannot continue</h1>
+<p id="refused-text"></p>
+</section>
+<section id="resume" hidden>
+<h1>Finish creating your account</h1>
+<p>You started creating the account <strong id="resume-name"></strong> in this browser. Type the recovery code you saved to finish.</p>
+<label for="resume-code">Recovery code</label>
+<textarea id="resume-code" rows="3" autocomplete="off" autocapitalize="characters" spellcheck="false"></textarea>
+<div class="actions">
+<button type="button" class="primary" id="resume-continue">Continue</button>
+<button type="button" id="resume-new">Create a different account</button>
+</div>
+<p class="error" id="resume-error" role="alert" hidden></p>
+</section>
+<section id="choose" hidden>
+<h1>Create your account</h1>
+<label for="name">Your name</label>
+<div class="name"><span>@</span><input id="name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="39"></div>
+<p class="hint">Your name is yours for life. Lowercase letters, digits and hyphens.</p>
+<p class="check" id="acceptance"><input type="checkbox" id="accept"> <label for="accept">I accept the <a id="policy-link" target="_blank" rel="noopener noreferrer">terms</a></label></p>
+<div class="actions"><button type="button" class="primary" id="create">Create your account</button></div>
+<p class="error" id="choose-error" role="alert" hidden></p>
+</section>
+<section id="show-code" hidden>
+<h1>Save your recovery code</h1>
+<p>This code is the only way back into your account if you lose your passkeys. Keep it somewhere safe and private. Nobody else holds it, and nobody can make you another.</p>
+<p class="code" id="code"></p>
+<div class="actions">
+<button type="button" id="copy">Copy</button>
+<button type="button" id="print">Print</button>
+<button type="button" class="primary" id="saved">I saved it</button>
+</div>
+<p class="error" id="code-error" role="alert" hidden></p>
+</section>
+<section id="working" hidden>
+<h1>Creating your account</h1>
+<p>This takes a moment.</p>
+<p class="error" id="working-error" role="alert" hidden></p>
+<div class="actions"><button type="button" class="primary" id="retry" hidden>Try again</button></div>
+</section>
+<section id="rename" hidden>
+<h1>Choose another name</h1>
+<p>Your account is made, but someone else took that name meanwhile.</p>
+<label for="rename-name">Your name</label>
+<div class="name"><span>@</span><input id="rename-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="39"></div>
+<div class="actions"><button type="button" class="primary" id="rename-submit">Use this name</button></div>
+<p class="error" id="rename-error" role="alert" hidden></p>
+</section>
+<section id="done" hidden>
+<h1>Your account is ready</h1>
+<p>Your passkey signs you in at any CYFR that admits you.</p>
+</section>
+<section id="done-return" hidden>
+<h1>Your account is ready</h1>
+<p>Your browser will ask for your passkey once more to sign you in.</p>
+<div class="actions"><button type="button" class="primary" id="continue">Continue</button></div>
+<p class="error" id="return-error" role="alert" hidden></p>
+</section>
+</main>
+</body>
+</html>
