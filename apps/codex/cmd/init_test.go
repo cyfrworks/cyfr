@@ -69,15 +69,17 @@ func setupTokenOf(t *testing.T) string {
 // holds.
 func setupLinkLine(t *testing.T, address string) string {
 	t.Helper()
-	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person.\n"
+	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person with a passkey in your browser, or run cyfr login --setup at this terminal.\n"
 }
 
-// initAs is init as the setup pages run it, answered c: initProject, its
-// mode applied as the engine's switch (applyInitAccess).
-func initAs(ctx context.Context, c accessChoice, out io.Writer) error {
-	return initProject(ctx, initOptions{noPull: true}, initFace{choice: c, apply: func(ctx context.Context, c accessChoice) (access.Head, error) {
-		return applyInitAccess(ctx, c, joinChoice{}, out)
-	}}, out, out)
+// initThenPublic is a new CYFR from init, then made public at
+// cyfr.example.com, with acmeEmail, by cyfr access: the engine's switch of
+// its stopped stack.
+func initThenPublic(ctx context.Context, acmeEmail string, out io.Writer) error {
+	if err := initProject(ctx, initOptions{noPull: true}, nil, out, out); err != nil {
+		return err
+	}
+	return runAccess(ctx, access.ModePublic, accessOptions{domain: "cyfr.example.com", acmeEmail: acmeEmail}, true, "", out)
 }
 
 // nothingWritten fails unless the working directory holds exactly names.
@@ -191,22 +193,6 @@ func TestInitFollowsTheTemplatesPort(t *testing.T) {
 	}
 }
 
-// A switch the setup pages' answer made, whose start left the home on
-// this machine only, is no success: init answers tailnet_node_mismatch's
-// sentence alone, which exits 3, and never says the home stayed local,
-// since the switch was made.
-func TestInitReportsAStartOnThisMachineOnly(t *testing.T) {
-	newInitProject(t)
-	s := useFakeEngine(t)
-	local := startedLocalReceipt("switch")
-	s.switchReceipt = &local
-	var out bytes.Buffer
-	err := initAs(context.Background(), accessChoice{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}}, &out)
-	if want := access.Refuse("tailnet_node_mismatch", mismatch()).Message(); err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally {
-		t.Fatalf("init answered %v (exit %d), want %q and exit 3", err, ExitStatus(err), want)
-	}
-}
-
 // Run again on a .env that does not say how its home is reached, init
 // refuses with access_missing's sentence and writes nothing.
 func TestInitRefusesAnExistingEnvWithoutAccessAndWritesNothing(t *testing.T) {
@@ -260,21 +246,19 @@ func TestInitOnADevBuildSaysWhereTheScaffoldComesFrom(t *testing.T) {
 	}
 }
 
-// init as the setup pages run it, through the access engine itself and
-// this host's Docker: the engine's docker calls run through its watchdog
-// re-exec, `cyfr internal docker-run`, which here is this test binary
-// (TestMain), and the switch of the stopped stack writes the public head
-// into .env.
-func TestInitSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
+// A new CYFR made public through the access engine itself and this host's
+// Docker: the engine's docker calls run through its watchdog re-exec,
+// `cyfr internal docker-run`, which here is this test binary (TestMain),
+// and the switch of the stopped stack writes the public head into .env.
+func TestANewCYFRSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
 	requireCompose(t)
 	newInitProject(t)
 	useRealEngine(t, nil)
 	var out bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	err := initAs(ctx, accessChoice{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com", acmeEmail: "ops@example.com"}}, &out)
-	if err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
+	if err := initThenPublic(ctx, "ops@example.com", &out); err != nil {
+		t.Fatalf("init, then access public: %v\n%s", err, out.String())
 	}
 	f := projectEnv(t)
 	for k, want := range map[string]string{"CYFR_ACCESS": "public", "CYFR_HOST": "cyfr.example.com", "CYFR_PUBLIC_URL": "https://cyfr.example.com", "CADDY_ACME_EMAIL": "ops@example.com"} {
@@ -332,8 +316,7 @@ func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 // machine at address, up to its next step.
 func localEnding(address string) string {
 	return "CYFR is reached from this machine, at " + address + ".\n" +
-		"To reach it from your phone and laptop too: cyfr access tailnet. From the internet: cyfr access public --domain <your domain>.\n" +
-		"A new address costs every passkey; the setup link gets the administrator back in.\n"
+		"To reach it from your phone and laptop too, run cyfr access tailnet before its first person is set up, since passkeys belong to the address. From the internet: cyfr access public --domain <your domain>.\n"
 }
 
 // Without the screen, init's last line on a machine with no display is
@@ -371,7 +354,7 @@ func TestInitEndsWithTheSSHLineOnAMachineWithNoDisplay(t *testing.T) {
 // cyfr up, and no setup link, since a headless CYFR serves no page.
 func TestInitPrintsLoginSetupForAHeadlessCYFR(t *testing.T) {
 	const notice = "\nCYFR is reached from this machine, at http://localhost:4000.\n" +
-		"To reach it from your phone and laptop too: cyfr access tailnet. From the internet: cyfr access public --domain <your domain>.\n" +
+		"To reach it from your phone and laptop too, run cyfr access tailnet before its first person is set up, since passkeys belong to the address. From the internet: cyfr access public --domain <your domain>.\n" +
 		"CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.\n"
 	for _, c := range []struct {
 		assignment string

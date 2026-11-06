@@ -762,7 +762,7 @@ func TestHelpNamesTheExitStatuses(t *testing.T) {
 			t.Errorf("cyfr's help lacks %q", want)
 		}
 	}
-	for _, c := range []*cobra.Command{upCmd, updateCmd, restoreCmd, accessCmd, setupCmd} {
+	for _, c := range []*cobra.Command{upCmd, updateCmd, restoreCmd, accessCmd} {
 		if !strings.Contains(c.Long, "Exit status 3: ") || !strings.Contains(c.Long, "on this machine only, because the tailnet machine is not ready to serve it") {
 			t.Errorf("cyfr %s's help does not say what exit status 3 means for it", c.Name())
 		}

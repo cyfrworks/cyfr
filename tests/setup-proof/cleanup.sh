@@ -3,18 +3,16 @@
 #
 # The setup proof's teardown, sourced by tests/setup-proof/run.sh and by its
 # regression (tests/setup-proof/cleanup-test.sh). It reads the run's
-# PROOF_PID, SETUP_PID, PROJECTS, STANDIN_IMAGE, IMAGE, WORK and OUT, and
+# PROOF_PID, SETUP_PID, PROJECTS, IMAGE, WORK and OUT, and
 # calls `compose_in`, which run.sh defines, and the browser harness's
 # `stop_proof_container` (tests/browser/harness.sh).
 #
 # What runs goes first, each awaited before what it depends on goes: the
 # proof's browser, whose container outlives the shell that started it
 # (`stop_proof_container`), then `cyfr setup`, asked to stop as an
-# interrupt asks it, so a waiting join is cancelled and a start runs to its
-# end under the stack's lock, killed only past 300 s. Then each project
-# goes whole, its volumes with it: its join containers (labelled by the
-# engine), the stack and the join network; then the stand-in image and the
-# scratch directory. The asks and answers go on every exit; the record
+# interrupt asks it, so a start runs to its end under the stack's lock,
+# killed only past 300 s. Then each project's stack goes whole, its volumes
+# with it; then the scratch directory. The asks and answers go on every exit; the record
 # stays. A removal is tried three times, and one that still fails fails the
 # run.
 
@@ -30,7 +28,7 @@ cleanup_retry() {
 }
 
 cleanup() {
-  local code=$? failed="" project id closes taken=1
+  local code=$? failed="" project closes taken=1
   if [ -n "$PROOF_PID" ]; then
     kill "$PROOF_PID" 2>/dev/null || true
   fi
@@ -57,19 +55,10 @@ cleanup() {
   for project in ${PROJECTS[@]+"${PROJECTS[@]}"}; do
     if [ "$code" -ne 0 ]; then
       echo "----- $project: the last lines of the stack's logs -----" >&2
-      compose_in "$project" logs --no-color --tail 60 cyfr tailscale >&2 2>/dev/null || true
+      compose_in "$project" logs --no-color --tail 60 cyfr >&2 2>/dev/null || true
     fi
-    for id in $(docker ps -aq --filter "label=com.cyfr.access.project=$project" 2>/dev/null || true); do
-      cleanup_retry docker rm --force "$id" || failed=1
-    done
     cleanup_retry compose_in "$project" down --volumes --remove-orphans --timeout 30 || failed=1
-    if docker network inspect "${project}_tailnet-join" >/dev/null 2>&1; then
-      cleanup_retry docker network rm "${project}_tailnet-join" || failed=1
-    fi
   done
-  if docker image inspect "$STANDIN_IMAGE" >/dev/null 2>&1; then
-    cleanup_retry docker image rm --force "$STANDIN_IMAGE" || failed=1
-  fi
   # The entrypoint gave data/ to the image's user; it is taken back first.
   if [ ${#PROJECTS[@]} -gt 0 ]; then
     cleanup_retry docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-chown-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --volume "$WORK:/work" \

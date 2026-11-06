@@ -20,55 +20,13 @@
   <section data-screen="welcome" hidden>
     <img class="logo" src="/logo.png" alt="The CYFR capybara">
     <h1>Welcome to CYFR</h1>
-    <button type="button" class="primary" data-go="how">Set up CYFR</button>
-  </section>
-
-  <section data-screen="how" hidden>
-    <h1>How will you reach CYFR?</h1>
-    <button type="button" class="choice" data-mode="tailnet">
-      <span class="label">My phone and laptop, via Tailscale</span>
-      <span class="badge">Recommended</span>
-    </button>
-    <button type="button" class="choice" data-mode="local">
-      <span class="label">Only this device</span>
-    </button>
-    <button type="button" class="choice" data-mode="public">
-      <span class="label">Advanced: a public domain</span>
-    </button>
-    <p class="sentence" role="alert" data-error="how"></p>
-    <button type="button" class="back" data-go="welcome">Back</button>
-  </section>
-
-  <section data-screen="public" hidden>
-    <h1>A public domain</h1>
-    <label for="domain">The domain CYFR is reached at; its DNS names this machine</label>
-    <input id="domain" type="text" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="cyfr.example.com">
-    <label for="acme-email">Email for the certificate authority's notices (optional)</label>
-    <input id="acme-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false">
-    <p class="sentence" role="alert" data-error="public"></p>
-    <button type="button" class="primary" data-action="public-start">Start</button>
-    <button type="button" class="back" data-go="how">Back</button>
+    <p class="sentence" role="alert" data-error="welcome"></p>
+    <button type="button" class="primary" data-action="start">Set up CYFR</button>
   </section>
 
   <section data-screen="progress" hidden>
     <h1>Setting up CYFR</h1>
     <ol class="steps" data-steps></ol>
-    <p class="joined" data-joined hidden></p>
-    <div class="approval" data-approval hidden>
-      <p>Scan this with your phone, or open the link, and approve this machine on your tailnet.</p>
-      <div class="qr" data-qr></div>
-      <div class="copyrow">
-        <p class="link" data-link></p>
-        <button type="button" class="copy" data-copy="[data-link]">Copy link</button>
-      </div>
-      <label for="name">This machine's name on your tailnet, part of CYFR's address; certificate names are public</label>
-      <div class="row">
-        <input id="name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false">
-        <button type="button" data-action="rename">Use this name</button>
-      </div>
-      <p class="sentence" role="alert" data-error="approval"></p>
-      <button type="button" class="back" data-action="cancel">Use only this device instead</button>
-    </div>
   </section>
 
   <section data-screen="problem" hidden>
@@ -76,13 +34,11 @@
     <p class="sentence" data-sentence></p>
     <p class="sentence" role="alert" data-error="problem"></p>
     <button type="button" class="primary" data-offer="retry" hidden>Try again</button>
-    <button type="button" data-offer="local" hidden>Start on this device only</button>
   </section>
 
   <section data-screen="done" hidden>
     <img class="logo small" src="/logo.png" alt="">
     <h1>CYFR is ready</h1>
-    <p data-headless hidden>This CYFR serves no pages. Its first person, who administers it, runs <code>cyfr login --setup</code> in its directory.</p>
     <div class="setup" data-setup hidden>
       <p>This setup link sets up CYFR's first person, who administers it, with a passkey.</p>
       <div class="copyrow">
@@ -90,8 +46,6 @@
         <button type="button" class="copy" data-copy="[data-setup-url]">Copy link</button>
       </div>
     </div>
-    <p class="sentence" data-sentence></p>
-    <p data-tailnet hidden>This link opens on your phone and laptop on your tailnet, and on this device in a browser that uses CYFR's proxy at 127.0.0.1:1055.</p>
     <button type="button" class="primary" data-action="open">Set up with a passkey</button>
   </section>
 

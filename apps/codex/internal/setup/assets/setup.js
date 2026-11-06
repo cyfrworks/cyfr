@@ -1,31 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The setup pages. Before the start the screens are the page's own; from
-// the start on, the program's state (/api/state, read every second) says
-// which screen shows. Every refusal shown is the program's sentence.
+// The setup pages. Before the start the page shows its welcome; from the
+// start on, the program's state (/api/state, read every second) says which
+// screen shows. Every refusal shown is the program's sentence.
 "use strict";
 
 (() => {
   const token = location.hash.slice(1);
-  const answers = { mode: "", domain: "", acme_email: "" };
   const stepNames = {
-    files: () => "Getting CYFR's files",
-    settings: () => "Writing its settings",
-    access: (mode) => (mode === "public" ? "Setting up its public address" : "Joining your tailnet"),
-    images: () => "Downloading CYFR",
+    files: "Getting CYFR's files",
+    settings: "Writing its settings",
+    images: "Downloading CYFR",
+    start: "Starting CYFR",
   };
-  // The start step names the mode it starts CYFR in.
-  const startNames = {
-    local: "Starting CYFR on this device only",
-    tailnet: "Starting CYFR on your tailnet",
-    public: "Starting CYFR at its public address",
-  };
-  let screen = "welcome";
-  let phase = "answering";
   let busy = false;
   let moved = false;
-  let nameEdited = false;
   let setupURL = "";
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -80,19 +70,11 @@
     }
   }
 
-  function go(name) {
-    screen = name;
-    if (phase === "answering") show(name);
-    if (name === "public") $("#domain").focus();
-  }
-
   function render(state) {
-    phase = state.phase;
-    if (phase === "answering") {
-      show(screen);
-      return;
-    }
-    if (phase === "running" || phase === "approval") {
+    const phase = state.phase;
+    if (phase === "ready") {
+      show("welcome");
+    } else if (phase === "running") {
       renderProgress(state);
       show("progress");
     } else if (phase === "problem") {
@@ -112,65 +94,27 @@
   }
 
   function renderProgress(state) {
-    const list = $("[data-steps]");
     const steps = state.steps || [];
     const current = steps.indexOf(state.step);
-    list.replaceChildren(
+    $("[data-steps]").replaceChildren(
       ...steps.map((step, i) => {
         const li = document.createElement("li");
-        li.textContent = step === "start" ? startNames[state.starting] || "Starting CYFR" : (stepNames[step] || (() => step))(state.mode);
+        li.textContent = stepNames[step] || step;
         li.className = i < current ? "done" : i === current ? "current" : "";
         return li;
       }),
     );
-    const joined = $("[data-joined]");
-    joined.hidden = !state.joined;
-    joined.textContent = state.joined ? `This machine is on your tailnet as ${state.joined}.` : "";
-
-    const approval = $("[data-approval]");
-    const waiting = state.phase === "approval" && !!state.auth_url;
-    approval.hidden = !waiting;
-    list.hidden = waiting;
-    if (!waiting) {
-      nameEdited = false;
-      return;
-    }
-    // The QR code is the program's own drawing of the link, an SVG image
-    // carrying no text of its own.
-    const qr = $("[data-qr]");
-    if (qr.dataset.drawn !== state.auth_url) {
-      qr.innerHTML = state.qr || "";
-      qr.dataset.drawn = state.auth_url;
-      const svg = $("svg", qr);
-      if (svg) {
-        svg.setAttribute("role", "img");
-        svg.setAttribute("aria-label", "QR code of the approval link");
-      }
-    }
-    // Set only when it changes: each poll would end a selection of it.
-    const link = $("[data-link]");
-    if (link.textContent !== state.auth_url) link.textContent = state.auth_url;
-    const name = $("#name");
-    if (!nameEdited && document.activeElement !== name) name.value = state.name || "";
   }
 
+  // renderDone shows the setup link and moves the browser there.
   function renderDone(state) {
     const section = $('[data-screen="done"]');
     setupURL = state.setup_url || "";
     const link = $("[data-setup-url]", section);
     if (link.textContent !== setupURL) link.textContent = setupURL;
     $("[data-setup]", section).hidden = !setupURL;
-    $("[data-headless]", section).hidden = !state.headless;
-    $("[data-sentence]", section).textContent = state.sentence || "";
-    let tailnet = false;
-    try {
-      tailnet = new URL(state.address || "").hostname.endsWith(".ts.net");
-    } catch {
-      tailnet = false;
-    }
-    $("[data-tailnet]", section).hidden = !(tailnet && setupURL && !state.sentence);
     $('[data-action="open"]', section).hidden = !setupURL;
-    if (state.moves && setupURL && !moved) {
+    if (setupURL && !moved) {
       moved = true;
       setTimeout(() => location.assign(setupURL), 1500);
     }
@@ -236,43 +180,8 @@
   }
 
   function wire() {
-    for (const b of $$("[data-go]")) b.addEventListener("click", () => go(b.dataset.go));
-    for (const b of $$("[data-mode]")) {
-      b.addEventListener("click", () => {
-        answers.mode = b.dataset.mode;
-        answers.domain = "";
-        answers.acme_email = "";
-        if (answers.mode === "public") {
-          go("public");
-        } else {
-          act("how", async () => render(await api("/api/start", answers)));
-        }
-      });
-    }
     const on = (action, fn) => $(`[data-action="${action}"]`).addEventListener("click", fn);
-    on("public-start", () =>
-      act("public", async () => {
-        answers.domain = $("#domain").value.trim();
-        answers.acme_email = $("#acme-email").value.trim();
-        render(await api("/api/start", answers));
-      }),
-    );
-    $("#name").addEventListener("input", () => {
-      nameEdited = true;
-      setError("approval", "");
-    });
-    // A refusal shown under a field goes once the field is typed in again.
-    for (const [field, where] of [["#domain", "public"], ["#acme-email", "public"]]) {
-      $(field).addEventListener("input", () => setError(where, ""));
-    }
-    on("rename", () =>
-      act("approval", async () => {
-        const state = await api("/api/name", { name: $("#name").value.trim() });
-        nameEdited = false;
-        render(state);
-      }),
-    );
-    on("cancel", () => act("approval", async () => render(await api("/api/cancel", {}))));
+    on("start", () => act("welcome", async () => render(await api("/api/start", {}))));
     for (const b of $$("[data-offer]")) {
       b.addEventListener("click", () => act("problem", async () => render(await api("/api/choose", { offer: b.dataset.offer }))));
     }
@@ -287,7 +196,7 @@
     return;
   }
   wire();
-  show(screen);
+  show("welcome");
   poll();
   polling = setInterval(poll, 1000);
 })();

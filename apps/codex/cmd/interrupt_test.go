@@ -14,7 +14,6 @@ import (
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/prompt"
-	"github.com/cyfr/codex/internal/version"
 )
 
 // blockAfter is a terminal's input that holds the lines answered and then
@@ -154,25 +153,5 @@ func TestAFormEndsWithTheContext(t *testing.T) {
 	})
 	if !errors.Is(err, prompt.ErrAborted) || ExitStatus(err) != exitInterrupted {
 		t.Errorf("the form answered %v", err)
-	}
-}
-
-// A release's download that fails with a warning lays down no
-// .env.example, so no .env is written, and init as the setup pages run it
-// says the mode they answered was not applied.
-func TestInitSaysAnAnsweredModeWasNotAppliedWithoutATemplate(t *testing.T) {
-	t.Chdir(t.TempDir())
-	s := useFakeEngine(t)
-	savedVersion, savedDownload := version.Version, downloadScaffold
-	t.Cleanup(func() { version.Version, downloadScaffold = savedVersion, savedDownload })
-	version.Version = "0.6.0-alpha.1"
-	downloadScaffold = func(string) error { return errors.New("the release is offline") }
-	var out bytes.Buffer
-	err := initAs(context.Background(), accessChoice{mode: access.ModeTailnet}, &out)
-	if err == nil || err.Error() != "CYFR was not set up to be reached as answered (tailnet): there is no .env.example to write .env from" {
-		t.Fatalf("init answered %v\n%s", err, out.String())
-	}
-	if fileExists(".env") || len(s.joins) != 0 || len(s.switches) != 0 {
-		t.Errorf("init wrote .env (%v), joined %v or switched %v", fileExists(".env"), s.joins, s.switches)
 	}
 }

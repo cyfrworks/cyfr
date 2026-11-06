@@ -1597,9 +1597,9 @@ jobs:
         run: tests/compose-proof/run.sh --case restore
       # The setup proof (tests/setup-proof/run.sh) on the same image:
       # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
-      # the browser harness, set up a local home and open its sign-in page,
-      # refuse a project whose .env exists, and join a tailnet home under a
-      # new name through the stand-in, which then serves it.
+      # the browser harness, ask nothing, set up a CYFR reached from this
+      # device and move to its setup link, where a passkey makes the first
+      # person, and refuse a project whose .env exists.
       # The setup proof's teardown on a run that fails while its browser
       # and its cyfr setup run: the browser's container stopped, both
       # awaited, the scratch gone.

@@ -1766,7 +1766,6 @@ echo "ok: what a killed proof named after its run under the gate's prefix is rem
 for spec in 'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-' \
   'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
   'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-' \
-  'tests/setup-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
   'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-' \
   'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-' \
   'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \

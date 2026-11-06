@@ -129,13 +129,13 @@ func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 		after                string
 	}{
 		{name: "public", env: scenarioEnv, log: "booting\n" + line, exit: "0", container: true, display: true,
-			after: "\nOpen https://cyfr.example.com/setup#" + token + " to set up its first person.\n"},
+			after: "\nOpen https://cyfr.example.com/setup#" + token + " to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n"},
 		{name: "tailnet", env: tailnet, log: line, exit: "0", container: true,
-			after: "\nOpen https://cyfr.tail1234.ts.net/setup#" + token + " on your phone or laptop, with Tailscale on, to set up its first person.\n"},
+			after: "\nOpen https://cyfr.tail1234.ts.net/setup#" + token + " on your phone or laptop, with Tailscale on, to set up its first person with a passkey, or run cyfr login --setup here.\n"},
 		{name: "local with a display", env: local, log: line, exit: "0", container: true, display: true,
-			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person.\n"},
+			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n"},
 		{name: "local with no display", env: local, log: line, exit: "0", container: true,
-			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person.\n" +
+			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n" +
 				"From another computer: ssh -L 4123:127.0.0.1:4123 " + account.Username + "@" + host + ", then open the link there.\n"},
 		{name: "a screen to reboot into", env: local, log: line, exit: "0", container: true, enabled: true,
 			after: "\nNow run sudo reboot. This screen opens setup at power-on.\n"},
