@@ -91,7 +91,7 @@
       },
       "error": "invalid_field",
       "field": "purpose",
-      "name": "a purpose outside connect, renew and pair"
+      "name": "a purpose outside connect and renew"
     },
     {
       "challenge": {
@@ -169,26 +169,6 @@
       "protocol": "cyfr-device-proof/v1",
       "purpose": "connect"
     },
-    "pair": {
-      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
-      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-      "expires_at": 1790000060000,
-      "home": "https://alice.example",
-      "nonce": "VOIni5mC-dwrWf68woY_bs_k5sZ-R5r2g9r-lY6ztjY",
-      "protocol": "cyfr-device-proof/v1",
-      "purpose": "pair"
-    },
-    "pair_other_client": {
-      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8094",
-      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-      "expires_at": 1790000060000,
-      "home": "https://alice.example",
-      "nonce": "VOIni5mC-dwrWf68woY_bs_k5sZ-R5r2g9r-lY6ztjY",
-      "protocol": "cyfr-device-proof/v1",
-      "purpose": "pair"
-    },
     "renew": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
@@ -200,7 +180,7 @@
       "purpose": "renew"
     }
   },
-  "comment": "The vectors pinning Prima.DeviceCert (cyfr-device-cert/v2) and its challenge and proof (cyfr-device-proof/v1): every side re-signs each certificate whose signer is named with that installation key and reproduces its sig, checks each certificate under the named key's public key with the given home (the CYFR's origin), head (the one its paired-client row names), clock (Unix milliseconds) and clock tolerance, and reaches the named result or refusal in the order signature, audience, head, not-before, expiry; refuses each malformed certificate and challenge; and holds each proof to the challenge held for the connection at the given time, a mismatch naming the first field that differs in the order purpose, home, athanor, client_id, device_key, nonce, expires_at. A refusal that names a field carries it as field, as each side's typed result does. A certificate's kid is sha256:<hex> over the device key the account's log lists. Expiry is strict: at or after expires_at a certificate is refused whatever the tolerance, which applies to not_before only. A challenge lives lifetime_ms from issue. A pair challenge binds the prospective client id the pairing invitation reserved; a proof of one purpose is refused for every other.",
+  "comment": "The vectors pinning Prima.DeviceCert (cyfr-device-cert/v2) and its challenge and proof (cyfr-device-proof/v1): every side re-signs each certificate whose signer is named with that installation key and reproduces its sig, checks each certificate under the named key's public key with the given home (the CYFR's origin), head (the one its paired-client row names), clock (Unix milliseconds) and clock tolerance, and reaches the named result or refusal in the order signature, audience, head, not-before, expiry; refuses each malformed certificate and challenge; and holds each proof to the challenge held for the connection at the given time, a mismatch naming the first field that differs in the order purpose, home, athanor, client_id, device_key, nonce, expires_at. A refusal that names a field carries it as field, as each side's typed result does. A certificate's kid is sha256:<hex> over the device key the account's log lists. Expiry is strict: at or after expires_at a certificate is refused whatever the tolerance, which applies to not_before only. A challenge lives lifetime_ms from issue. A proof of one purpose is refused for every other.",
   "issued_at": 1790000000000,
   "keys": {
     "device_1": {
@@ -255,53 +235,6 @@
       "name": "a renewal proof offered for a connect",
       "now": 1790000001000,
       "proof": "renew"
-    },
-    {
-      "held": "pair",
-      "name": "a pairing proof for the held pairing challenge",
-      "now": 1790000001000,
-      "proof": "pair",
-      "result": "ok"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "connect",
-      "name": "a pairing proof offered for a connect",
-      "now": 1790000001000,
-      "proof": "pair"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "renew",
-      "name": "a pairing proof offered for a renewal",
-      "now": 1790000001000,
-      "proof": "pair"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "pair",
-      "name": "a connect proof offered for a pairing",
-      "now": 1790000001000,
-      "proof": "connect"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "pair",
-      "name": "a renewal proof offered for a pairing",
-      "now": 1790000001000,
-      "proof": "renew"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "client_id",
-      "held": "pair_other_client",
-      "name": "a pairing proof for another reserved client id",
-      "now": 1790000001000,
-      "proof": "pair"
     },
     {
       "error": "challenge_mismatch",
@@ -389,17 +322,6 @@
       "purpose": "connect",
       "sig": "g3lBIhGJx_7PvDD00JFehPPYrvu9bv7z5mryErWr-qkf7nlkf4WX0n7zcGqeED5KB3sa1J3QbYe1as3TMCfFCg"
     },
-    "pair": {
-      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
-      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-      "expires_at": 1790000060000,
-      "home": "https://alice.example",
-      "nonce": "VOIni5mC-dwrWf68woY_bs_k5sZ-R5r2g9r-lY6ztjY",
-      "protocol": "cyfr-device-proof/v1",
-      "purpose": "pair",
-      "sig": "EEu7WFzfeFGgUXVItQCdhudV6jFXvQf90grfWPE4DzeNiVw5D7tuzs_m8hv4eRf6_gbgEXW1phSLyCGofQdnCw"
-    },
     "renew": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
@@ -414,8 +336,7 @@
   },
   "purposes": [
     "connect",
-    "renew",
-    "pair"
+    "renew"
   ],
   "refusals": [
     {
@@ -642,10 +563,6 @@
       "field": "sig",
       "name": "a signature of 63 bytes"
     }
-  ],
-  "reserved_client_ids": [
-    "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
-    "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8094"
   ],
   "verify": [
     {

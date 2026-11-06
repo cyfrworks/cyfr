@@ -9,15 +9,23 @@ defmodule Prima.Device do
   fields; a listener refuses any other version and reads no further.
   `tests/fixtures/device.json` holds its vectors.
 
+  A device that is not yet a client of this home opens its first
+  connection with `hello`; the home answers `sign_in_request`, the device
+  `sign_in_answer` after its local unlock, and the home `admitted`. From
+  then on the device connects under the certificate it was given.
+
   From the glass to the home:
 
-    * `pair_request` — `invitation_secret`, the 16-byte secret from the
-      pairing QR, named so `Prima.Sanitizer` redacts it wherever a message
-      is logged; `device_key`, the public key the glass generated before
-      the invitation opened and never exports; and `key_digest`, that
-      key's digest (`key_digest/1`), the one the glass showed and the
-      invitation was opened for. A `key_digest` that is not the digest of
-      `device_key` is refused by its shape.
+    * `hello` — the first connection: `kid`, the device key's kid as the
+      account's log lists it; `identifier`, the account it is a key of;
+      `holder_kind`, what holds the key under its local unlock, `chip` or
+      `software`; `display_name`, the name it shows, text of at most 64
+      bytes; and, when it brings one, `admission`, what admits a person
+      new here: `{"setup": token}`, the installation's setup token (64
+      lowercase hexadecimal characters), or `{"invitation": code}`, an
+      invitation's code (unpadded base64url of 32 bytes).
+    * `sign_in_answer` — `answer`, the device's answer to the request
+      (`Prima.SignIn.DeviceAnswer`).
     * `connect` — `client_id` and the `certificate` (`Prima.DeviceCert`)
       the glass connects under.
     * `renew` — `client_id`, and optionally the old `certificate`, which
@@ -33,9 +41,13 @@ defmodule Prima.Device do
 
   From the home to the glass:
 
-    * `pair_answer` — the paired `client_id` and its first `certificate`.
+    * `sign_in_request` — `request`, the `Prima.SignIn` request a hello is
+      answered with, bound to this channel.
+    * `admitted` — the device's paired `client_id`, its first
+      `certificate`, and `standing`, the client's standing as the
+      `standing` message carries it.
     * `challenge` — the `challenge` (`Prima.DeviceCert.Challenge`), for
-      `connect`, `renew` or `pair`.
+      `connect` or `renew`.
     * `standing` — the client's standing: `client_id`, `athanor` and
       `expires_at`, the expiry of the certificate it stands under.
     * `certificate` — a renewed `certificate`.
@@ -57,28 +69,46 @@ defmodule Prima.Device do
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Prima.Manifest.Tincture
+  alias Prima.SignIn
+  alias Prima.SignIn.DeviceAnswer
 
   @protocol "cyfr-device/v1"
-  @invitation_bytes 16
   @digest_bytes 32
   @code_group 4
   @max_args_bytes 65_536
   @max_names 64
   @name ~r/\A[a-z][a-z0-9_]{0,31}\z/
   @continuous ~w(stream frames chunks samples continuous)
+  # What holds a device's key, and the name it shows, as a paired client
+  # records them (`Arca.PairedClients`); `platform` is a passkey's.
+  @holder_kinds ~w(chip software)
+  @max_display_name 64
+  # The setup token's form (`Sanctum.setup_token?/1`) and an invitation
+  # code's length (`Sanctum.Invitations.code_hash/1`).
+  @setup_token ~r/\A[0-9a-f]{64}\z/
+  @invitation_code_bytes 32
+  @standing [client_id: :id, athanor: :id, expires_at: :ms]
 
   # type => {sender, required fields, optional fields}, each field with its codec
   @types %{
-    pair_request:
-      {:glass, [invitation_secret: :invitation, device_key: :key, key_digest: :digest], []},
+    hello:
+      {:glass,
+       [
+         kid: :kid,
+         identifier: :identifier,
+         holder_kind: :holder_kind,
+         display_name: :display_name
+       ], [admission: :admission]},
+    sign_in_answer: {:glass, [answer: :device_answer], []},
     connect: {:glass, [client_id: :id, certificate: :certificate], []},
     renew: {:glass, [client_id: :id], [certificate: :certificate]},
     proof: {:glass, [proof: :proof], []},
     capabilities: {:glass, [capabilities: :names], []},
     intent: {:glass, [id: :id, operation: :operation, args: :args], [confirmation_id: :id]},
-    pair_answer: {:home, [client_id: :id, certificate: :certificate], []},
+    sign_in_request: {:home, [request: :request], []},
+    admitted: {:home, [client_id: :id, certificate: :certificate, standing: :standing], []},
     challenge: {:home, [challenge: :challenge], []},
-    standing: {:home, [client_id: :id, athanor: :id, expires_at: :ms], []},
+    standing: {:home, @standing, []},
     certificate: {:home, [certificate: :certificate], []},
     answer: {:home, [id: :id], [result: :json, error: :object]},
     grant:
@@ -91,13 +121,15 @@ defmodule Prima.Device do
 
   @type sender :: :glass | :home
   @type type ::
-          :pair_request
+          :hello
+          | :sign_in_answer
           | :connect
           | :renew
           | :proof
           | :capabilities
           | :intent
-          | :pair_answer
+          | :sign_in_request
+          | :admitted
           | :challenge
           | :standing
           | :certificate
@@ -126,9 +158,7 @@ defmodule Prima.Device do
 
   @doc """
   The digest of the device public key `device_key` (32 raw bytes):
-  SHA-256 over those bytes, as unpadded base64url. The glass shows it
-  before an invitation opens, `pairing.begin` names it, and only the key
-  it is the digest of completes that invitation.
+  SHA-256 over those bytes, as unpadded base64url.
   """
   @spec key_digest(binary()) :: String.t()
   def key_digest(device_key) when is_binary(device_key) and byte_size(device_key) == 32,
@@ -170,8 +200,9 @@ defmodule Prima.Device do
 
   @doc """
   Read a message `sender` sent: `{type, body}`, the body's fields as atoms
-  and its values decoded (keys and the invitation as raw bytes, a
-  certificate, challenge or proof as its struct).
+  and its values decoded (a certificate, challenge, proof, request or
+  device answer as its struct, an admission as `{:setup, token}` or
+  `{:invitation, code}`, and a standing as its fields).
   """
   @spec decode(term(), sender()) :: {:ok, message()} | {:error, reason()}
   def decode(map, sender) when is_map(map) and not is_struct(map) and sender in [:glass, :home] do
@@ -256,24 +287,41 @@ defmodule Prima.Device do
       else: {:error, {:invalid_field, "result"}}
   end
 
-  # A pairing request names the digest of the key it carries, so a key the
-  # invitation was not opened for is refused before anything is read.
-  defp one_outcome(:pair_request, %{device_key: device_key, key_digest: key_digest}) do
-    if key_digest(device_key) == key_digest,
-      do: :ok,
-      else: {:error, {:invalid_field, "key_digest"}}
-  end
-
   defp one_outcome(_type, _body), do: :ok
 
   defp get(:id, value), do: ok_if(Encoding.id?(value), value)
   defp get(:ms, value), do: ok_if(Encoding.ms?(value), value)
-  defp get(:key, value), do: Encoding.unb64(value, Encoding.key_bytes())
-  defp get(:invitation, value), do: Encoding.unb64(value, @invitation_bytes)
 
   defp get(:digest, value) do
     with {:ok, _bytes} <- Encoding.unb64(value, @digest_bytes), do: {:ok, value}
   end
+
+  defp get(:kid, value), do: ok_if(Encoding.digest?(value), value)
+  defp get(:identifier, value), do: ok_if(Encoding.identifier?(value), value)
+  defp get(:holder_kind, value), do: ok_if(value in @holder_kinds, value)
+  defp get(:display_name, value), do: ok_if(Encoding.text?(value, @max_display_name), value)
+
+  # Exactly one capability: the setup token or an invitation's code.
+  defp get(:admission, %{"setup" => token} = admission) when map_size(admission) == 1,
+    do: ok_if(is_binary(token) and Regex.match?(@setup_token, token), {:setup, token})
+
+  defp get(:admission, %{"invitation" => code} = admission) when map_size(admission) == 1,
+    do:
+      ok_if(
+        match?({:ok, _bytes}, Encoding.unb64(code, @invitation_code_bytes)),
+        {:invitation, code}
+      )
+
+  defp get(:admission, _value), do: :error
+
+  defp get(:request, value), do: SignIn.decode(value)
+  defp get(:device_answer, value), do: DeviceAnswer.decode(value)
+
+  defp get(:standing, value) when is_map(value) and not is_struct(value) do
+    with :ok <- Encoding.fields(value, names([], @standing), []), do: body(value, @standing)
+  end
+
+  defp get(:standing, _value), do: :error
 
   defp get(:certificate, value), do: DeviceCert.decode(value)
   defp get(:challenge, value), do: Challenge.decode(value)
@@ -308,8 +356,16 @@ defmodule Prima.Device do
   defp ok_if(true, value), do: {:ok, value}
   defp ok_if(false, _value), do: :error
 
-  defp put(:key, bytes), do: Encoding.b64(bytes)
-  defp put(:invitation, bytes), do: Encoding.b64(bytes)
+  defp put(:admission, {kind, value}), do: %{Atom.to_string(kind) => value}
+  defp put(:request, request), do: SignIn.encode(request)
+  defp put(:device_answer, answer), do: DeviceAnswer.encode(answer)
+
+  defp put(:standing, standing) do
+    for {field, codec} <- @standing,
+        into: %{},
+        do: {Atom.to_string(field), put(codec, Map.fetch!(standing, field))}
+  end
+
   defp put(:certificate, cert), do: DeviceCert.encode(cert)
   defp put(:challenge, challenge), do: Challenge.encode(challenge)
   defp put(:proof, proof), do: Proof.encode(proof)

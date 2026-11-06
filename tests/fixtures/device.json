@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. A pairing request names the digest of the key it carries (key_digest: SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces; one naming another digest is refused. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's, and sign-in requests and device answers tests/fixtures/sign_in.json's. A device's first connection is hello, sign_in_request, sign_in_answer and admitted: the hello names device_1's kid and the certificate's account, the request is sign_in.json's sign_in request, the answer is device_1's Ed25519 signature over that request's digest, which every side re-signs from keys.device_1's seed, and admitted carries the certificate issued for that kid and the standing message's fields. A hello's admission is {\"setup\": the setup token, 64 lowercase hexadecimal characters} or {\"invitation\": an invitation's code, unpadded base64url of 32 bytes}, or absent; its holder_kind is chip or software, and its display_name non-empty UTF-8 of at most 64 bytes with no control character. key_digest is a device key's digest (SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
   "continuous_fields": [
     "stream",
     "frames",
@@ -12,39 +12,13 @@
     "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
     "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
   },
+  "keys": {
+    "device_1": {
+      "public": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+      "seed": "hPjHx49w0ykVOYcQZ0iVPlNO6POWt7R3sjJ1djlv06k"
+    }
+  },
   "messages": [
-    {
-      "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
-        "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "a pairing request",
-      "sender": "glass"
-    },
-    {
-      "message": {
-        "certificate": {
-          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-          "audience": "https://alice.example",
-          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-          "expires_at": 1790003600000,
-          "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
-          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
-          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
-          "not_before": 1790000000000,
-          "protocol": "cyfr-device-cert/v2",
-          "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
-        },
-        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_answer"
-      },
-      "name": "a pairing answer",
-      "sender": "home"
-    },
     {
       "message": {
         "certificate": {
@@ -327,6 +301,103 @@
       },
       "name": "a revoked pairing",
       "sender": "home"
+    },
+    {
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a first hello under the setup token",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "admission": {
+          "invitation": "kWv9JM-SnFKinXOrSQ1Vln_O2Arkef-2GgvR8NdiTd4"
+        },
+        "display_name": "laptop",
+        "holder_kind": "software",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a first hello under an invitation's code",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "display_name": "laptop",
+        "holder_kind": "software",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a first hello bringing no admission, which the door decides",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "protocol": "cyfr-device/v1",
+        "request": {
+          "audience": "https://alice.example",
+          "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+          "expires_at": 1790000300000,
+          "protocol": "cyfr-sign-in/v1",
+          "purpose": "sign_in",
+          "return": "https://alice.example/sign-in/return"
+        },
+        "type": "sign_in_request"
+      },
+      "name": "the sign-in request a hello is answered with",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "answer": {
+          "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "sig": "1-pxLfD6kP1ahimj32T3aOi10GEiVtE_1Je7krLEpG0cbOWcEc1F5rQdEbdRBLhT7-KVFSgIsBGacnbiZs2kDQ"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "sign_in_answer"
+      },
+      "name": "the device's answer to it, signed by device_1",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000,
+          "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v2",
+          "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "standing": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000
+        },
+        "type": "admitted"
+      },
+      "name": "the device admitted, with its first certificate",
+      "sender": "home"
     }
   ],
   "protocol": "cyfr-device/v1",
@@ -360,6 +431,7 @@
     },
     {
       "error": "missing_field",
+      "field": "protocol",
       "message": {
         "args": {
           "fields": {
@@ -376,6 +448,7 @@
     },
     {
       "error": "missing_field",
+      "field": "type",
       "message": {
         "args": {
           "fields": {
@@ -473,6 +546,7 @@
     },
     {
       "error": "unknown_field",
+      "field": "priority",
       "message": {
         "args": {
           "fields": {
@@ -491,6 +565,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "args",
       "message": {
         "args": [
           "github"
@@ -505,6 +580,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "operation",
       "message": {
         "args": {
           "fields": {
@@ -558,6 +634,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "result",
       "message": {
         "error": {},
         "id": "int_1",
@@ -570,6 +647,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "result",
       "message": {
         "id": "int_1",
         "protocol": "cyfr-device/v1",
@@ -580,41 +658,7 @@
     },
     {
       "error": "invalid_field",
-      "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "oCNvVXi2nEs",
-        "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "an invitation of 8 bytes",
-      "sender": "glass"
-    },
-    {
-      "error": "invalid_field",
-      "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
-        "key_digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "a pairing request naming another key's digest",
-      "sender": "glass"
-    },
-    {
-      "error": "missing_field",
-      "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "a pairing request naming no key digest",
-      "sender": "glass"
-    },
-    {
-      "error": "invalid_field",
+      "field": "certificate",
       "message": {
         "certificate": {
           "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
@@ -636,6 +680,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "capabilities",
       "message": {
         "capabilities": [
           "display",
@@ -649,6 +694,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "subject",
       "message": {
         "expires_at": 1790000000000,
         "grant_id": "sgr_1",
@@ -667,25 +713,497 @@
       "args_filler_length": 65537,
       "error": "too_large",
       "name": "intent args over 64 KiB"
+    },
+    {
+      "error": "wrong_sender",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello sent by a home",
+      "sender": "home"
+    },
+    {
+      "error": "unknown_field",
+      "field": "name",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "name": "laptop",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello with a field it does not carry",
+      "sender": "glass"
+    },
+    {
+      "error": "unknown_field",
+      "field": "name",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "name": "laptop",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello with a field it does not carry and without one it does",
+      "sender": "glass"
+    },
+    {
+      "error": "missing_field",
+      "field": "display_name",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello naming no display name",
+      "sender": "glass"
+    },
+    {
+      "error": "missing_field",
+      "field": "identifier",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello naming no account",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "kid",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello whose kid is the raw key",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "identifier",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "usr_01a09fee-045b-770b-b745-a62792bb8798",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello naming a local person id",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "holder_kind",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "platform",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a hello whose key a passkey's platform holds",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "display_name",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a display name of 65 bytes",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "display_name",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "laptop\n",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a display name with a control character",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "display_name",
+      "message": {
+        "admission": {
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "an empty display name",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "admission",
+      "message": {
+        "admission": {
+          "invitation": "kWv9JM-SnFKinXOrSQ1Vln_O2Arkef-2GgvR8NdiTd4",
+          "setup": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "an admission naming the setup token and an invitation",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "admission",
+      "message": {
+        "admission": {
+          "open": true
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "an admission naming the open door",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "admission",
+      "message": {
+        "admission": {},
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "an empty admission",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "admission",
+      "message": {
+        "admission": "cecbed951b80a5b68527d15648e29589d35b499fa5e03874774b848fa44c5f47",
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a bare setup token for an admission",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "admission",
+      "message": {
+        "admission": {
+          "setup": "CECBED951B80A5B68527D15648E29589D35B499FA5E03874774B848FA44C5F47"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "a setup token in capitals",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "admission",
+      "message": {
+        "admission": {
+          "invitation": "kWv9JM-SnFKinXOrSQ1Vlg"
+        },
+        "display_name": "CYFR screen",
+        "holder_kind": "chip",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "protocol": "cyfr-device/v1",
+        "type": "hello"
+      },
+      "name": "an invitation code of 16 bytes",
+      "sender": "glass"
+    },
+    {
+      "error": "wrong_sender",
+      "message": {
+        "protocol": "cyfr-device/v1",
+        "request": {
+          "audience": "https://alice.example",
+          "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+          "expires_at": 1790000300000,
+          "protocol": "cyfr-sign-in/v1",
+          "purpose": "sign_in",
+          "return": "https://alice.example/sign-in/return"
+        },
+        "type": "sign_in_request"
+      },
+      "name": "a sign-in request sent by a glass",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "request",
+      "message": {
+        "protocol": "cyfr-device/v1",
+        "request": {
+          "audience": "https://alice.example",
+          "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+          "expires_at": 1790000300000,
+          "protocol": "cyfr-sign-in/v1",
+          "purpose": "sign_in",
+          "return": "https://hub.example/sign-in/return"
+        },
+        "type": "sign_in_request"
+      },
+      "name": "a sign-in request returning off its audience",
+      "sender": "home"
+    },
+    {
+      "error": "wrong_sender",
+      "message": {
+        "answer": {
+          "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "sig": "1-pxLfD6kP1ahimj32T3aOi10GEiVtE_1Je7krLEpG0cbOWcEc1F5rQdEbdRBLhT7-KVFSgIsBGacnbiZs2kDQ"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "sign_in_answer"
+      },
+      "name": "a device answer sent by a home",
+      "sender": "home"
+    },
+    {
+      "error": "invalid_field",
+      "field": "answer",
+      "message": {
+        "answer": {
+          "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "sig": "1-pxLfD6kP1ahimj32T3aOi10GEiVtE_1Je7krLEpG0cbOWcEc1F5rQdEbdRBLhT7-KVFSgIsBGacnbiZs2k"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "sign_in_answer"
+      },
+      "name": "a device answer whose signature is 63 bytes",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "field": "answer",
+      "message": {
+        "answer": {
+          "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "sig": "1-pxLfD6kP1ahimj32T3aOi10GEiVtE_1Je7krLEpG0cbOWcEc1F5rQdEbdRBLhT7-KVFSgIsBGacnbiZs2kDQ"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "sign_in_answer"
+      },
+      "name": "a device answer carrying an identifier",
+      "sender": "glass"
+    },
+    {
+      "error": "wrong_sender",
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000,
+          "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v2",
+          "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "standing": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000
+        },
+        "type": "admitted"
+      },
+      "name": "an admission reply sent by a glass",
+      "sender": "glass"
+    },
+    {
+      "error": "missing_field",
+      "field": "standing",
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000,
+          "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v2",
+          "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "type": "admitted"
+      },
+      "name": "an admission reply naming no standing",
+      "sender": "home"
+    },
+    {
+      "error": "invalid_field",
+      "field": "standing",
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000,
+          "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v2",
+          "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "standing": {
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000
+        },
+        "type": "admitted"
+      },
+      "name": "an admission reply whose standing names no athanor",
+      "sender": "home"
+    },
+    {
+      "error": "invalid_field",
+      "field": "standing",
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000,
+          "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v2",
+          "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "standing": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "expires_at": 1790003600000,
+          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a"
+        },
+        "type": "admitted"
+      },
+      "name": "an admission reply whose standing carries a field the standing does not",
+      "sender": "home"
     }
   ],
   "types": {
     "glass": [
       "capabilities",
       "connect",
+      "hello",
       "intent",
-      "pair_request",
       "proof",
-      "renew"
+      "renew",
+      "sign_in_answer"
     ],
     "home": [
+      "admitted",
       "answer",
       "certificate",
       "challenge",
       "event",
       "grant",
-      "pair_answer",
       "revoke",
+      "sign_in_request",
       "standing"
     ]
   }
