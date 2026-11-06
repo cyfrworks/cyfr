@@ -8,7 +8,7 @@ defmodule Cyfr.EgressInventoryTest do
 
   Outbound HTTP is where SSRF, credential leakage and unbounded buffering
   live, so each site must be a classified, deliberate act: the control
-  plane's pinned transport, the object store, the IdP sliver, a guest's
+  plane's pinned transport, the object store, a guest's
   fetch through the worker service's relay and its attached request
   through the control plane, the worker wire's two sides, and the builds
   wire's client.
@@ -45,9 +45,6 @@ defmodule Cyfr.EgressInventoryTest do
     "apps/sanctum/lib/sanctum/egress.ex" => :pinned_owner,
     # S3-compatible object store — operator-configured endpoint, SigV4.
     "apps/arca/lib/arca/adapters/s3.ex" => :object_store,
-    # The IdP OAuth device-flow sliver: GitHub/Google fixed hosts, its own
-    # Finch pool, budgeted by the device-poll rate limits.
-    "apps/sanctum/lib/sanctum/auth/device_flow.ex" => :idp_sliver,
     # Guest HTTP (cyfr:http/fetch and cyfr:http/streaming), connected by
     # the worker service for its runners, which have no network: a pin CYFR
     # granted the attempt, the attempt's edge and limits checked again, the

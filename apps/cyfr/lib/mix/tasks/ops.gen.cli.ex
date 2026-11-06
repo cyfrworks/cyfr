@@ -11,8 +11,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   Each argument struct serializes its declared action discriminator.
 
   The file also carries the rosters the CLI validates and classifies by,
-  read from their owners: the credential kinds (`Prima.CredentialKinds`)
-  and the sign-in and device-flow providers (`Prima.SignInProviders`).
+  read from their owners: the credential kinds (`Prima.CredentialKinds`).
 
       mix ops.gen.cli
       mix ops.gen.cli --check

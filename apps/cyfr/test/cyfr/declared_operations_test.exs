@@ -18,7 +18,6 @@ defmodule Cyfr.DeclaredOperationsTest do
   end
 
   @seed String.duplicate("A", 43)
-  @digest "sha256:" <> String.duplicate("ab", 32)
 
   defp operation(tool, action) do
     {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
@@ -55,30 +54,17 @@ defmodule Cyfr.DeclaredOperationsTest do
             {"passkey", "list"},
             {"confirmation", "pending"},
             {"person", "recovery_code"},
-            {"person", "carry_list"},
             {"person", "status"}
           ] do
         assert operation(tool, action).kind == :read, "#{tool}.#{action}"
       end
 
-      # A carry is cancelled and listed as it is completed: on the same
-      # plane and consent class, the list a read.
-      for action <- ~w(carry_cancel carry_complete recovery_code_saved recovery_code_add) do
+      for action <- ~w(recovery_code_saved recovery_code_add) do
         assert operation("person", action).kind == :write, "person.#{action}"
       end
 
-      assert operation("passkey", "recover_admin").scope == :platform
       assert operation("pairing", "revoke").kind == :destructive
       assert operation("passkey", "revoke").kind == :destructive
-    end
-
-    test "a platform-scoped one refuses an ordinary member before its handler", %{ctx: ctx} do
-      assert {:error, %Prima.Refusal{class: :forbidden, reason: :platform_admin_required}} =
-               call(ctx, "passkey", "recover_admin", %{
-                 "user_id" => "usr_1",
-                 "passkey_id" => "psk_1",
-                 "registration_digest" => @digest
-               })
     end
 
     test "a recovery secret and a recovery code are fields the redaction vocabulary keeps out of every log" do

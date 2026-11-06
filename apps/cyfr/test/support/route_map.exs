@@ -514,7 +514,6 @@
           ":put_secure_browser_headers",
           "CyfrWeb.Plugs.BrowserCSP"
         ],
-        "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "device_unlock_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
@@ -730,24 +729,6 @@
           pipe_through: ["browser"]
         },
         %{
-          verb: "GET",
-          path: "/auth/:provider",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":request",
-          auth: "browser_oauth_start",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/:provider/callback",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":callback",
-          auth: "browser_oauth_callback",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
           verb: "POST",
           path: "/auth/company",
           plug: "PrismWeb.AuthController",
@@ -764,24 +745,6 @@
           auth: "browser_oauth_callback",
           live_view: nil,
           pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/auth/cyfr/callback",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":cyfr_callback",
-          auth: "browser_cyfr_callback",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/cyfr/start",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":cyfr_start",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
         },
         %{
           verb: "GET",
@@ -802,24 +765,6 @@
           pipe_through: ["sign_in_identity", "auth_browser", "device_unlock_throttle"]
         },
         %{
-          verb: "GET",
-          path: "/auth/device/complete/:ticket",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":device_complete",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "device_complete_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/auth/link/oidcc",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":link_start",
-          auth: "browser_session",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
-        },
-        %{
           verb: "POST",
           path: "/auth/logout",
           plug: "PrismWeb.AuthController",
@@ -830,39 +775,12 @@
         },
         %{
           verb: "GET",
-          path: "/auth/oidcc/reauth",
-          plug: "PrismWeb.ReauthController",
-          plug_opts: ":callback",
-          auth: "browser_oauth_callback",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/auth/oidcc/reauth",
-          plug: "PrismWeb.ReauthController",
-          plug_opts: ":decide",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "GET",
           path: "/auth/passkey/complete/:ticket",
           plug: "PrismWeb.PasskeyController",
           plug_opts: ":complete",
           auth: "browser_oauth_flow",
           live_view: nil,
           pipe_through: ["sign_in_identity", "auth_browser", "passkey_complete_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/carry",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.CarryLive",
-          pipe_through: ["browser"]
         },
         %{
           verb: "GET",
@@ -880,15 +798,6 @@
           plug_opts: ":index",
           auth: "browser_company_login",
           live_view: "PrismWeb.CompanyLoginLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/confirm",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.HomeConfirmLive",
           pipe_through: ["browser"]
         },
         %{

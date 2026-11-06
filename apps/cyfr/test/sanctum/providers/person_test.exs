@@ -441,70 +441,11 @@ defmodule Sanctum.Providers.PersonTest do
     end
   end
 
-  describe "the sign-in carry" do
-    test "begins at this home for one other, and its outcome is recorded once" do
-      person = enrolled!()
-
-      assert {:ok, %{action_id: action_id, fragment: fragment, return_url: return_url}} =
-               call(person.ctx, %{
-                 "action" => "carry_begin",
-                 "destination" => "https://hub.example"
-               })
-
-      assert return_url == Sanctum.Person.home() <> "/carry"
-      assert {:ok, _} = Prima.Carry.parse_fragment(fragment)
-
-      complete = %{
-        "action" => "carry_complete",
-        "action_id" => action_id,
-        "outcome" => "admitted"
-      }
-
-      assert {:ok, %{phase: "completed", outcome: "admitted"}} = call(person.ctx, complete)
-      assert {:ok, %{phase: "completed", outcome: "admitted"}} = call(person.ctx, complete)
-
-      assert %Prima.Refusal{class: :conflict} =
-               refusal(call(person.ctx, %{complete | "outcome" => "refused"}))
-    end
-  end
-
-  describe "the doors" do
-    test "a door is linked by its ticket alone, and a made-up one links nothing" do
-      person = seated!()
-
-      args = %{
-        "action" => "link_door",
-        "provider" => "oidcc",
-        "ticket" => Encoding.b64(:crypto.strong_rand_bytes(32))
-      }
-
-      assert %Prima.Refusal{class: :invalid_argument, message: message} =
-               refusal(call(person.ctx, args))
-
-      assert message =~ "sign in with that sign-in method again"
-
-      assert %Prima.Refusal{class: :invalid_argument} =
-               refusal(call(person.ctx, %{args | "provider" => "email"}))
-    end
-
-    test "the last door stays while the person holds no passkey here" do
-      person = seated!()
-      {:ok, [door]} = Arca.Users.identities(Prima.Actor.system(), person.user.id)
-
-      assert %Prima.Refusal{class: :conflict, message: message} =
-               refusal(call(person.ctx, %{"action" => "unlink_door", "door" => door.key}))
-
-      assert message =~ "hold no passkey"
-      assert message =~ "link another sign-in method"
-    end
-  end
-
   test "no declared person action answers that it is not built" do
     person = seated!()
     %{operations: operations} = Sanctum.Providers.Person.definition()
 
-    # `assert` is `Sanctum.Providers.Assertion`'s, which the CYFR door fills.
-    for %{action: action} <- operations, action != "assert" do
+    for %{action: action} <- operations do
       {result, _log} =
         with_log(fn -> Sanctum.Providers.Person.handle(person.ctx, %{"action" => action}) end)
 

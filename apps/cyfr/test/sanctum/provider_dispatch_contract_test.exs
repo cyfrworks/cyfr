@@ -68,23 +68,16 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "status",
       "recovery_code",
       "recovery_code_saved",
-      "link_door",
-      "unlink_door",
       "recovery_code_add",
-      "carry_begin",
-      "carry_complete",
-      "carry_cancel",
-      "carry_list",
       "certify",
       "close_recovery",
       "renew_certificate",
-      "assert",
       "assert_confirmation"
     ],
     "pairing" => ["begin", "complete", "renew", "revoke", "list", "reenable"],
     "pin" => ["enroll"],
-    "passkey" => ["register", "list", "revoke", "reenable", "recover_admin"],
-    "confirmation" => ["confirm", "reauth", "pending", "cancel"],
+    "passkey" => ["list", "revoke"],
+    "confirmation" => ["request", "confirm", "pending", "cancel"],
     "share" => ["create", "list", "set_audience", "set_caps", "revoke", "usage", "offered"]
   }
 

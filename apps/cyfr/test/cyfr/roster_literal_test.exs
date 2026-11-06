@@ -3,25 +3,18 @@
 
 defmodule Cyfr.RosterLiteralTest do
   @moduledoc """
-  The credential kinds and the sign-in providers each have one owner, and
-  no library source spells them again.
+  The credential kinds have one owner, and no library source spells them
+  again.
 
-  `Prima.CredentialKinds` owns the kinds (`all/0`, `shareable/0`) and
-  `Prima.SignInProviders` the sign-in providers (`all/0`, `device_flow/0`);
-  the identity domain's `Sanctum.Auth.DeviceFlow.providers/0` derives
-  from it. A second
-  spelling is a roster that stays behind when the owner moves: a surface
-  offering a kind the vault refuses, or an operation enum refusing a
-  provider sign-in accepts.
+  `Prima.CredentialKinds` owns the kinds (`all/0`, `shareable/0`). A
+  second spelling is a roster that stays behind when the owner moves: a
+  surface offering a kind the vault refuses.
 
   The scan reads every app's `lib/` as code, not text: a `~w` sigil or a
   list of strings naming a roster's whole set, in any order, a string
   naming its members in a row ("api_key | oauth | bundle | login"), and a
   map keyed by every credential kind, whose policy per kind derives from
-  the owner's list. A map keyed by sign-in providers is no roster: it
-  holds each provider's own facts (an issuer, an endpoint), which the
-  module that speaks to that provider keeps. Documentation and comments
-  may name the members.
+  the owner's list. Documentation and comments may name the members.
   """
   use ExUnit.Case, async: true
 
@@ -31,33 +24,22 @@ defmodule Cyfr.RosterLiteralTest do
   # them.
   @kinds ~w(api_key oauth bundle login)
   @shareable_kinds ~w(api_key bundle login)
-  @sign_in ~w(github google oidcc)
-  @device_flow ~w(github google)
 
   @rosters [
     {"credential kinds", @kinds},
-    {"shareable credential kinds", @shareable_kinds},
-    {"sign-in providers", @sign_in},
-    {"device-flow providers", @device_flow}
+    {"shareable credential kinds", @shareable_kinds}
   ]
 
   @owners %{
     "apps/prima/lib/prima/credential_kinds.ex" => [
       "credential kinds",
       "shareable credential kinds"
-    ],
-    "apps/prima/lib/prima/sign_in_providers.ex" => [
-      "sign-in providers",
-      "device-flow providers"
     ]
   }
 
   test "the owners answer the rosters" do
     assert Prima.CredentialKinds.all() == @kinds
     assert Prima.CredentialKinds.shareable() == @shareable_kinds
-    assert Prima.SignInProviders.all() == @sign_in
-    assert Prima.SignInProviders.device_flow() == @device_flow
-    assert Sanctum.Auth.DeviceFlow.providers() == @device_flow
   end
 
   test "no library source spells a roster outside its owner" do
@@ -74,7 +56,7 @@ defmodule Cyfr.RosterLiteralTest do
     assert offenders == [],
            """
            These sources spell a roster its owner declares; read the owner instead
-           (Prima.CredentialKinds, Prima.SignInProviders):
+           (Prima.CredentialKinds):
 
            #{Enum.join(offenders, "\n")}
            """
@@ -91,12 +73,8 @@ defmodule Cyfr.RosterLiteralTest do
       {~S'def k(x) when x in ~w(api_key bundle login), do: x', "shareable credential kinds"},
       {~S'def k, do: Arg.new("kind", :string, enum: ["api_key", "bundle", "login"])',
        "shareable credential kinds"},
-      {~S'@p ~w(github google oidcc)', "sign-in providers"},
-      {~S'def p, do: ["github", "google", "oidcc"]', "sign-in providers"},
-      {~S'def p(x) when x in ["github", "google"], do: x', "device-flow providers"},
       {~S'def m, do: {:error, "create requires name and kind (api_key | oauth | bundle | login)"}',
        "credential kinds"},
-      {~S'def m(x), do: "#{x} takes github or google"', "device-flow providers"},
       {~S'@m %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes, "login" => nil}',
        "credential kinds"}
     ]
@@ -111,26 +89,16 @@ defmodule Cyfr.RosterLiteralTest do
     for line <- [
           ~S'@k ~w(api_key oauth)',
           ~S'@k ~w(api_key bundle)',
-          ~S'def p, do: ["github"]',
           ~S'@doc "A kind: api_key | oauth | bundle | login."',
-          ~S'def m, do: "api_key oauth bundle login"',
-          ~S'@i %{"github" => "https://github.com", "google" => "https://accounts.google.com"}'
+          ~S'def m, do: "api_key oauth bundle login"'
         ] do
       assert refused("lib/planted.ex", module_with(line)) == [], "#{line} is refused"
     end
 
-    # An owner spells its roster and nothing else.
-    owner = "apps/prima/lib/prima/sign_in_providers.ex"
-    assert refused(owner, module_with(~S'@p ~w(github google oidcc)')) == []
-    assert refused(owner, module_with(~S'@d ~w(github google)')) == []
-    assert [_] = refused(owner, module_with(~S'@k ~w(api_key bundle login)'))
-
-    # The identity domain derives its rosters and spells none.
-    assert [_] =
-             refused(
-               "apps/sanctum/lib/sanctum/atoms.ex",
-               module_with(~S'@p ~w(github google oidcc)')
-             )
+    # The owner spells its rosters.
+    owner = "apps/prima/lib/prima/credential_kinds.ex"
+    assert refused(owner, module_with(~S'@k ~w(api_key oauth bundle login)')) == []
+    assert refused(owner, module_with(~S'@s ~w(api_key bundle login)')) == []
   end
 
   defp module_with(line), do: "defmodule Planted do\n  @moduledoc false\n  #{line}\nend\n"

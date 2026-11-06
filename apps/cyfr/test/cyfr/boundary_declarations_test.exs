@@ -136,9 +136,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "handler and the overlay port it installs"}
     ],
     Sanctum => [
-      {~w(ApiKey Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
-          Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
-          Cipher.Rotation ClientIp CompanyLogin Consent.Loader Consent.Proof
+      {~w(ApiKey Auth Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller
+          Cipher Cipher.Rotation ClientIp CompanyLogin Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement PolicyLog Provisioning Session SignIn Tenancy Tenancy.Athanors
@@ -169,9 +168,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Refusals),
        "the gate's refusal classification and renderer, which the layers above answer " <>
          "a refusal with"},
-      {~w(Carry Directory.Client IdentityFreshness Person),
-       "the person's keys, the directory client, identity freshness and the sign-in " <>
-         "carry, which the identity domain composes and the host's suites drive"},
+      {~w(Directory.Client IdentityFreshness Person),
+       "the person's keys, the directory client and identity freshness, which the " <>
+         "identity domain composes and the host's suites drive"},
       {~w(Providers.Assertion Providers.Confirmation Providers.Pairing Providers.Passkey
           Providers.Person),
        "the person, pairing, passkey and confirmation operations, declared here and " <>

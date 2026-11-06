@@ -21,7 +21,6 @@
   "Sanctum" => [
     "Sanctum.Annotations",
     "Sanctum.Attach",
-    "Sanctum.Auth.CyfrDoor",
     "Sanctum.Consent",
     "Sanctum.Decisions",
     "Sanctum.DeviceCerts",

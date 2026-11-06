@@ -306,7 +306,6 @@ expect_checks fail "the shipped edge network moved onto slot 0's backends subnet
 # own.
 want_id=wrk_local
 derived() { printf 'cyfr-locus/v1/runtime\n%s' "$want_id" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$1" 2>/dev/null | sed 's/^.*= //'; }
-example_id="$(sed -n 's/^CYFR_GITHUB_CLIENT_ID=//p' "$ROOT/.env.example")"
 # value K NAME: slot K's NAME.
 value() { slot_env "$1" | sed -n "s/^$2=//p"; }
 # host_free K: nothing on this host listens on slot K's ports, its
@@ -481,8 +480,7 @@ root_a="$(printf 'ab%.0s' {1..32})"
 setup_a="$(printf '5e%.0s' {1..32})"
 key_b="$(printf 'b1%.0s' {1..32})"
 key_c="$(printf 'c2%.0s' {1..32})"
-complete="CYFR_GITHUB_CLIENT_ID=$example_id
-CYFR_SETUP_TOKEN=$setup_a
+complete="CYFR_SETUP_TOKEN=$setup_a
 CYFR_LOCUS_RUNTIME_ROOT=$root_a
 CYFR_LOCUS_BACKENDS_KEY=$key_b
 CYFR_LOCUS_BUILDS_KEY=$key_c
@@ -695,8 +693,7 @@ case_provision() {
   # The builds key, which a boot refuses without its URL, is the run's
   # alone: the builder's and the server's, never .env's.
   builds="$(record docker.calls | sed -n 's/^.* up .*|CYFR_LOCUS_BUILDS_KEY=\([0-9a-f]*\)|.*$/\1/p')"
-  [ "$(cat "$case_dir/.env")" = "CYFR_GITHUB_CLIENT_ID=$example_id
-CYFR_SETUP_TOKEN=$setup
+  [ "$(cat "$case_dir/.env")" = "CYFR_SETUP_TOKEN=$setup
 CYFR_LOCUS_RUNTIME_ROOT=$root
 CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$case_dir/.env")")"
   for key in "$setup" "$root" "$backends" "$builds"; do
@@ -706,7 +703,7 @@ CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$
   # The one secret printed: the setup link, as `cyfr init` prints it.
   grep -qxF "dev-stack: set up its first person, who administers it, at http://localhost:$port/setup#$setup" "$case_dir/out" ||
     echo "the run did not print the setup link: $(cat "$case_dir/out")"
-  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_GITHUB_CLIENT_ID, CYFR_SETUP_TOKEN, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY." "$case_dir/out" ||
+  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_SETUP_TOKEN, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY." "$case_dir/out" ||
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$slot_a" "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
   [ "$(record image.calls)" = "$(image_calls "$slot_a")" ] || echo "image.sh was handed: $(record image.calls)"
