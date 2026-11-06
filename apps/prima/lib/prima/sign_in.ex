@@ -52,7 +52,8 @@ defmodule Prima.SignIn do
   The request travels to the account pages, and a passkey's answer back to
   `return`, in a URL fragment (`fragment/1`, `parse_fragment/1`): the
   unpadded base64url of the object's JCS bytes, at most
-  `max_fragment_bytes/0`, checked before it is decoded.
+  `max_fragment_bytes/0`, checked before it is decoded. Any other spelling
+  of the same object is refused, so a fragment has one spelling.
 
   ## Verification
 
@@ -213,16 +214,18 @@ defmodule Prima.SignIn do
   @doc """
   The JSON object a fragment carries, its length checked before it is
   decoded: `:too_large` past `max_fragment_bytes/0`, `:invalid_fragment`
-  for anything that is not unpadded base64url of a JSON object in its one
-  spelling. The object is then read as a request (`decode/1`) or an answer
-  (`PasskeyAnswer.decode/1`).
+  for anything that is not unpadded base64url, in its one spelling, of a
+  JSON object's JCS bytes: whitespace, another key order, a repeated key
+  or a number JCS does not write are each refused. The object is then read
+  as a request (`decode/1`) or an answer (`PasskeyAnswer.decode/1`).
   """
   @spec parse_fragment(term()) :: {:ok, map()} | {:error, :too_large | :invalid_fragment}
   def parse_fragment(fragment) when is_binary(fragment) do
     with :ok <- bounded(fragment),
          {:ok, bytes} <- Base.url_decode64(fragment, padding: false),
          ^fragment <- Encoding.b64(bytes),
-         {:ok, %{} = object} <- Prima.Json.decode(bytes) do
+         {:ok, %{} = object} <- Prima.Json.decode(bytes),
+         {:ok, ^bytes} <- Encoding.jcs(object) do
       {:ok, object}
     else
       {:error, :too_large} -> {:error, :too_large}

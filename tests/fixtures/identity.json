@@ -358,6 +358,7 @@
         "genesis_at_seq_one"
       ],
       "error": {
+        "field": "seq",
         "index": 0,
         "reason": "invalid_field"
       },
@@ -368,6 +369,7 @@
         "genesis_with_a_prev"
       ],
       "error": {
+        "field": "prev",
         "index": 0,
         "reason": "unknown_field"
       },
@@ -378,6 +380,7 @@
         "genesis_with_a_label"
       ],
       "error": {
+        "field": "label",
         "index": 0,
         "reason": "unknown_field"
       },
@@ -388,6 +391,7 @@
         "genesis_without_a_signature"
       ],
       "error": {
+        "field": "sig",
         "index": 0,
         "reason": "missing_field"
       },
@@ -398,6 +402,7 @@
         "genesis_with_no_recovery_key"
       ],
       "error": {
+        "field": "recovery",
         "index": 0,
         "reason": "invalid_field"
       },
@@ -408,6 +413,7 @@
         "genesis_with_nine_recovery_keys"
       ],
       "error": {
+        "field": "recovery",
         "index": 0,
         "reason": "invalid_field"
       },
@@ -418,6 +424,7 @@
         "genesis_with_a_recovery_key_twice"
       ],
       "error": {
+        "field": "recovery",
         "index": 0,
         "reason": "invalid_field"
       },
@@ -428,6 +435,7 @@
         "genesis_with_a_directory_ending_in_a_slash"
       ],
       "error": {
+        "field": "directory",
         "index": 0,
         "reason": "invalid_field"
       },
@@ -449,6 +457,7 @@
       ],
       "error": {
         "index": 0,
+        "kind": "rotate",
         "reason": "unknown_kind"
       },
       "name": "a rotation of the first version"
@@ -563,6 +572,7 @@
         "add_key_of_an_ed25519_passkey"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -575,6 +585,7 @@
         "add_key_of_an_es256_device"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -587,6 +598,7 @@
         "add_key_whose_kid_is_not_its_key"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -599,6 +611,7 @@
         "add_key_of_a_passkey_without_its_credential_id"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -611,6 +624,7 @@
         "add_key_of_a_device_with_a_credential_id"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -623,6 +637,7 @@
         "add_key_of_a_passkey_with_a_credential_id_of_1024_bytes"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -635,6 +650,7 @@
         "add_key_of_a_compressed_point"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -647,6 +663,7 @@
         "add_key_of_a_point_not_in_uncompressed_form"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -659,6 +676,7 @@
         "add_key_with_a_label"
       ],
       "error": {
+        "field": "key",
         "index": 2,
         "reason": "invalid_field"
       },
@@ -893,6 +911,7 @@
         "remove_key_of_a_key_the_log_does_not_list"
       ],
       "error": {
+        "field": "kid",
         "index": 3,
         "reason": "invalid_field"
       },
@@ -945,6 +964,7 @@
         "recover_listing_65_keys"
       ],
       "error": {
+        "field": "keys",
         "index": 3,
         "reason": "invalid_field"
       },
@@ -971,6 +991,7 @@
         "add_recovery_that_drops_a_recovery_key"
       ],
       "error": {
+        "field": "recovery",
         "index": 3,
         "reason": "invalid_field"
       },
@@ -984,6 +1005,7 @@
         "add_recovery_that_adds_nothing"
       ],
       "error": {
+        "field": "recovery",
         "index": 3,
         "reason": "invalid_field"
       },
@@ -1039,7 +1061,7 @@
       "name": "add key by a recovery key the recovery replaced"
     }
   ],
-  "comment": "The vectors pinning Prima.Identity (cyfr-identity/v2), read by CYFR, by cyfr.run and by the account pages. Every side derives each Ed25519 public key from its seed and each P-256 point from its private scalar, and each kid as sha256:<hex> over the public key's bytes; re-signs every entry whose signer is an Ed25519 key and reproduces its sig byte for byte over the JCS bytes of the entry without sig (a passkey's signature is randomised, so an es256 signer's entries are verified, never re-signed); reproduces every hash and identifier as SHA-256 over the entry's JCS bytes; maps each identifier to its 32 user_id bytes (a passkey's WebAuthn user.id) and back; walks every chain to its state, or to the index and reason of the first entry refused; and checks every webauthn case's assertion over its challenge at its origin and relying party, reaching ok or a refusal named by the check that fails first, in the order type, challenge, origin, crossOrigin, authenticator data, rpIdHash, user presence, user verification, signature. In a chain every WebAuthn refusal is wrong_signer. A signer of null was altered after signing or is not signed by any key the vectors hold.",
+  "comment": "The vectors pinning Prima.Identity (cyfr-identity/v2), read by CYFR, by cyfr.run and by the account pages. Every side derives each Ed25519 public key from its seed and each P-256 point from its private scalar, and each kid as sha256:<hex> over the public key's bytes; re-signs every entry whose signer is an Ed25519 key and reproduces its sig byte for byte over the JCS bytes of the entry without sig (a passkey's signature is randomised, so an es256 signer's entries are verified, never re-signed); reproduces every hash and identifier as SHA-256 over the entry's JCS bytes; maps each identifier to its 32 user_id bytes (a passkey's WebAuthn user.id) and back; walks every chain to its state, or to the index and reason of the first entry refused; and checks every webauthn case's assertion over its challenge at its origin and relying party, reaching ok or a refusal named by the check that fails first, in the order type, challenge, origin, crossOrigin, authenticator data, rpIdHash, user presence, user verification, signature. In a chain every WebAuthn refusal is wrong_signer, and a refusal that names a field or a kind carries it as field or kind, as each side's typed result does. A signer of null was altered after signing or is not signed by any key the vectors hold.",
   "directory": "https://directory.example",
   "entries": {
     "a_device_signature_in_passkey_form": {

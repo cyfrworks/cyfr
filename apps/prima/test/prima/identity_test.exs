@@ -39,12 +39,21 @@ defmodule Prima.IdentityTest do
     )
   end
 
-  defp tag({:error, {index, reason}}) when is_integer(index),
-    do: %{"index" => index, "reason" => tag(reason)}
+  defp tag({:error, reason}) when is_atom(reason), do: Atom.to_string(reason)
 
-  defp tag({:error, reason}), do: tag(reason)
-  defp tag({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
-  defp tag(reason) when is_atom(reason), do: Atom.to_string(reason)
+  # A chain's refusal as Prima answers it, its field or kind included.
+  defp refusal(%{"index" => index, "reason" => reason} = error) do
+    reason = String.to_existing_atom(reason)
+
+    detail =
+      case error do
+        %{"field" => field} -> {reason, field}
+        %{"kind" => kind} -> {reason, kind}
+        _ -> reason
+      end
+
+    {:error, {index, detail}}
+  end
 
   defp entries(names), do: Enum.map(names, &vectors()["entries"][&1]["entry"])
 
@@ -159,7 +168,7 @@ defmodule Prima.IdentityTest do
           assert State.encode(verified) == state, name
 
         %{"error" => error} ->
-          assert tag(result) == error, name
+          assert result == refusal(error), name
       end
     end
   end
