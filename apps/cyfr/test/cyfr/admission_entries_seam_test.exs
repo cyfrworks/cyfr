@@ -91,8 +91,10 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.ExecutionEventsController, :stream} => :execution_events_unknown,
     {Emissary.Web.DirectoryController, :register} => :directory_register_unserved,
     {Emissary.Web.DirectoryController, :resolve} => :directory_resolve_bad_position,
+    {Emissary.Web.DirectoryController, :from} => :directory_from_unserved,
     {Emissary.Web.DirectoryController, :append} => :directory_append_unserved,
-    {Emissary.Web.DirectoryController, :recover} => :directory_recover_unserved,
+    {Emissary.Web.HandleController, :resolve} => :handle_resolve_unserved,
+    {Emissary.Web.HandleController, :claim} => :handle_claim_unserved,
     {Emissary.Web.DeviceEnrollmentController, :challenge} => :device_enrollment_no_token,
     {Emissary.Web.DeviceEnrollmentController, :complete} => :device_enrollment_no_proof,
     {Emissary.Web.DeviceEnrollmentController, :resume} => :device_enrollment_resume_no_token,
@@ -518,20 +520,27 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     conn =
       build_conn()
       |> put_req_header("content-type", "application/json")
-      |> dispatch(@endpoint, method, path, "{}")
+      |> dispatch(@endpoint, method, path, if(method == :post, do: "{}"))
 
     assert json_response(conn, 404) == %{"error" => "not_served"}
     {request_id_of(conn), refused("not_found", :none)}
   end
 
   def directory_register_unserved(_conn, _ctx),
-    do: directory_unserved(:post, "/directory/v1/genesis")
+    do: directory_unserved(:post, "/directory/v1/register")
+
+  def directory_from_unserved(_conn, _ctx),
+    do: directory_unserved(:get, "/directory/v1/per_seam/from/sha256:seam")
 
   def directory_append_unserved(_conn, _ctx),
-    do: directory_unserved(:post, "/directory/v1/per_seam/entries")
+    do: directory_unserved(:post, "/directory/v1/per_seam/append")
 
-  def directory_recover_unserved(_conn, _ctx),
-    do: directory_unserved(:post, "/directory/v1/per_seam/recover")
+  # The handle registry beside the directory, which a node serving none
+  # answers as the directory does.
+  def handle_resolve_unserved(_conn, _ctx), do: directory_unserved(:get, "/v1/handles/seam")
+
+  def handle_claim_unserved(_conn, _ctx),
+    do: directory_unserved(:post, "/v1/namespaces/personal/claim")
 
   def directory_resolve_bad_position(_conn, _ctx) do
     conn = get(build_conn(), "/directory/v1/per_seam?after=x")

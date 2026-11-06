@@ -3,10 +3,11 @@
 
 defmodule Emissary.Web.DirectoryControllerTest do
   @moduledoc """
-  The identity directory's routes, through the endpoint: each answer and
-  each refusal on the wire, the body bounded before it is decoded, and the
-  home's client (`Sanctum.Directory.Client`) speaking to them over HTTPS,
-  end to end.
+  The directory's routes, `cyfr-directory/v2`, through the endpoint: each
+  answer and each refusal on the wire, the body bounded before it is
+  decoded, a log read after an entry's hash, a tombstoned account gone,
+  and the home's client and freshness (`Sanctum.Directory.Client`,
+  `Sanctum.IdentityFreshness`) speaking to them over HTTPS, end to end.
   """
 
   # The directory setting, this node's public URL, this member's rate
@@ -17,7 +18,7 @@ defmodule Emissary.Web.DirectoryControllerTest do
   import Ecto.Query, only: [from: 2]
 
   alias Prima.Identity
-  alias Prima.Identity.{Entry, RecoverRequest}
+  alias Prima.Identity.{Entry, Key}
   alias Sanctum.Directory.Client
 
   @directory "https://dir.example"
@@ -32,73 +33,64 @@ defmodule Emissary.Web.DirectoryControllerTest do
 
   # This node's public URL, and so the directory it serves
   # (`Sanctum.origin/0`), restored when the test ends.
-  defp serve_at(url) do
-    previous = Application.fetch_env(:sanctum, :public_url)
-
-    on_exit(fn ->
-      case previous do
-        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
-        :error -> Application.delete_env(:sanctum, :public_url)
-      end
-    end)
-
-    Application.put_env(:sanctum, :public_url, url)
-  end
+  defp serve_at(url), do: Prima.Test.Env.put_app_env(:sanctum, :public_url, url)
 
   # ---- fixtures ----------------------------------------------------------------
 
   defp keypair, do: :crypto.generate_key(:eddsa, :ed25519)
+  defp now, do: System.os_time(:millisecond)
 
-  defp person(directory \\ @directory) do
-    {live, _} = keypair()
-    {op_pub, op_priv} = keypair()
-    {rec_pub, rec_priv} = keypair()
+  defp device_key(pub) do
+    {:ok, key} = Key.new(alg: :ed25519, kind: :device, pub: pub)
+    key
+  end
+
+  # An account as its pages hold it: the recovery key pair, the genesis
+  # naming `directory`, and the head and position it has reached.
+  defp account(directory \\ @directory) do
+    {pub, priv} = recovery = keypair()
 
     {:ok, genesis} =
-      Entry.genesis(
-        live_key: live,
-        operational_key: op_pub,
-        recovery_keys: [rec_pub],
-        directory: directory
+      Entry.new(
+        kind: :genesis,
+        seq: 0,
+        at: now(),
+        signer: Identity.recovery_signer(pub),
+        directory: directory,
+        recovery: [pub]
       )
 
-    genesis = Identity.sign(genesis, op_priv)
+    genesis = Identity.sign(genesis, priv)
 
     %{
       genesis: genesis,
       identifier: Identity.identifier(genesis),
-      operational: op_priv,
-      recovery: rec_priv,
-      recovery_key: rec_pub,
+      recovery: recovery,
       directory: directory,
       head: Identity.hash(genesis),
-      revision: 0
+      seq: 0
     }
   end
 
-  defp rotation(person, signer \\ nil) do
-    {live, _} = keypair()
-    {:ok, entry} = Entry.rotate(person.head, live)
-    Identity.sign(entry, signer || person.operational)
-  end
+  # An entry after the account's head, signed by its recovery key, or by
+  # `private` under the same signer.
+  defp entry(account, fields, private \\ nil) do
+    {pub, priv} = account.recovery
 
-  defp request(person, opts \\ []) do
-    {live, _} = keypair()
-    {op, _} = keypair()
-
-    {:ok, request} =
-      RecoverRequest.new(
-        identifier: Keyword.get(opts, :identifier, person.identifier),
-        directory: Keyword.get(opts, :directory, person.directory),
-        live_key: live,
-        operational_key: op,
-        recovery_keys: Keyword.get(opts, :recovery_keys),
-        expected_revision: Keyword.get(opts, :revision, person.revision),
-        request_id: Keyword.get(opts, :request_id, "req_#{System.unique_integer([:positive])}")
+    {:ok, entry} =
+      Entry.new(
+        [
+          prev: account.head,
+          seq: account.seq + 1,
+          at: now(),
+          signer: Identity.recovery_signer(pub)
+        ] ++ fields
       )
 
-    Identity.sign(request, person.recovery)
+    Identity.sign(entry, private || priv)
   end
+
+  defp added(account), do: entry(account, kind: :add_key, key: device_key(elem(keypair(), 0)))
 
   defp from_ip(conn, ip), do: %{conn | remote_ip: ip}
 
@@ -108,53 +100,60 @@ defmodule Emissary.Web.DirectoryControllerTest do
     |> post(path, if(is_binary(body), do: body, else: Jason.encode!(body)))
   end
 
-  defp register(conn, person),
-    do: post_json(conn, "/directory/v1/genesis", Entry.encode(person.genesis))
+  defp register(conn, account),
+    do: post_json(conn, "/directory/v1/register", Entry.encode(account.genesis))
 
-  defp register!(conn, person) do
-    assert %{"seq" => 0} = json_response(register(conn, person), 200)
-    person
+  defp register!(conn, account) do
+    assert %{"seq" => 0, "result" => "created"} = json_response(register(conn, account), 200)
+    account
   end
 
-  defp append(conn, person, entry),
-    do: post_json(conn, "/directory/v1/#{person.identifier}/entries", Entry.encode(entry))
+  defp append(conn, account, entry),
+    do: post_json(conn, "/directory/v1/#{account.identifier}/append", Entry.encode(entry))
 
-  defp recover(conn, identifier, request),
-    do: post_json(conn, "/directory/v1/#{identifier}/recover", RecoverRequest.encode(request))
+  defp append!(account, entry) do
+    assert %{"result" => "accepted", "seq" => seq, "entry_hash" => hash} =
+             json_response(append(build_conn(), account, entry), 200)
+
+    %{account | head: hash, seq: seq}
+  end
 
   # ---- the answers -------------------------------------------------------------
 
-  describe "POST /directory/v1/genesis" do
-    test "answers the identifier the genesis hashes to; the same genesis again is 200, one log",
+  describe "POST /directory/v1/register" do
+    test "answers the identifier the genesis hashes to, created; the same genesis again exists, naming the head",
          %{conn: conn} do
-      alice = person()
+      alice = account()
 
-      assert %{"identifier" => id, "seq" => 0, "entry_hash" => hash} =
+      assert %{"identifier" => id, "seq" => 0, "entry_hash" => hash, "result" => "created"} =
                json_response(register(conn, alice), 200)
 
       assert id == alice.identifier and hash == alice.head
+      alice = append!(alice, added(alice))
 
       assert json_response(register(build_conn(), alice), 200) == %{
                "identifier" => id,
                "seq" => 0,
-               "entry_hash" => hash
+               "entry_hash" => hash,
+               "result" => "exists",
+               "head" => alice.head
              }
 
-      assert %{"entries" => [_one], "length" => 1, "next" => nil} =
+      assert %{"entries" => [_genesis, _added], "length" => 2, "next" => nil} =
                json_response(get(build_conn(), "/directory/v1/#{id}"), 200)
     end
 
     test "a genesis naming another directory, or this host on another port or under a path, " <>
            "is 422 wrong_directory and stores nothing",
          %{conn: conn} do
-      register!(conn, person())
+      register!(conn, account())
 
       for directory <- [
             "https://elsewhere.example",
             "https://dir.example:8443",
             "https://dir.example/directory"
           ] do
-        stranger = person(directory)
+        stranger = account(directory)
 
         assert {^directory, %{"error" => "wrong_directory"}} =
                  {directory, json_response(register(build_conn(), stranger), 422)}
@@ -169,21 +168,21 @@ defmodule Emissary.Web.DirectoryControllerTest do
         assert %{"error" => "invalid"} =
                  conn
                  |> from_ip({198, 51, 100, 5})
-                 |> post_json("/directory/v1/genesis", %{})
+                 |> post_json("/directory/v1/register", %{})
                  |> json_response(422)
       end
 
-      refused = build_conn() |> from_ip({198, 51, 100, 5}) |> register(person())
+      refused = build_conn() |> from_ip({198, 51, 100, 5}) |> register(account())
 
       assert %{"error" => "rate_limited", "retry_after" => seconds} = json_response(refused, 429)
       assert get_resp_header(refused, "retry-after") == [Integer.to_string(seconds)]
     end
 
     test "is 503 at the identity quota, retryable after a minute", %{conn: conn} do
-      register!(conn, person())
+      register!(conn, account())
       Cyfr.Test.Settings.put("directory_max_identities", 1)
 
-      refused = register(build_conn(), person())
+      refused = register(build_conn(), account())
       assert %{"error" => "capacity", "exhausted" => "identities"} = json_response(refused, 503)
       assert get_resp_header(refused, "retry-after") == ["60"]
     end
@@ -193,11 +192,13 @@ defmodule Emissary.Web.DirectoryControllerTest do
       body = ~s({"pad":") <> String.duplicate("x", Prima.Identity.max_entry_bytes()) <> ~s("})
 
       # The router drops empty segments, so each of these reaches the
-      # directory's routes and must meet its limit.
+      # directory's routes, or the registry's beside it, and must meet the limit.
       for path <- [
-            "/directory/v1/genesis",
-            "http://www.example.com//directory/v1/genesis",
-            "http://www.example.com//directory//v1/#{person().identifier}/entries"
+            "/directory/v1/register",
+            "http://www.example.com//directory/v1/register",
+            "http://www.example.com//directory//v1/#{account().identifier}/append",
+            "/v1/namespaces/personal/claim",
+            "http://www.example.com//v1//namespaces/personal/claim"
           ] do
         assert_error_sent 413, fn -> post_json(conn, path, body) end
       end
@@ -218,36 +219,35 @@ defmodule Emissary.Web.DirectoryControllerTest do
   describe "GET /directory/v1/:identifier" do
     test "answers the stored canonical entries in pages of at most 64 KiB, linked by next",
          %{conn: conn} do
-      # Recoveries naming 301 recovery keys each, about 14 KiB an entry.
-      alice = register!(conn, person())
+      # Recoveries listing 64 device keys each, about 10 KiB an entry.
+      alice = register!(conn, account())
+      {recovery_pub, _} = alice.recovery
 
       alice =
-        Enum.reduce(0..5, alice, fn revision, person ->
-          big = [person.recovery_key | for(_ <- 1..300, do: elem(keypair(), 0))]
-          req = request(person, recovery_keys: big)
-          answer = json_response(recover(build_conn(), person.identifier, req), 200)
-          %{person | head: answer["entry_hash"], revision: revision + 1}
+        Enum.reduce(1..9, alice, fn _, account ->
+          keys = for _ <- 1..64, do: device_key(elem(keypair(), 0))
+          append!(account, entry(account, kind: :recover, keys: keys, recovery: [recovery_pub]))
         end)
 
       first = get(build_conn(), "/directory/v1/#{alice.identifier}")
       assert byte_size(first.resp_body) <= 65_536
 
-      assert %{"from" => 0, "next" => 4, "length" => 7, "head" => head} =
+      assert %{"from" => 0, "next" => next, "length" => 10, "head" => head} =
                page = json_response(first, 200)
 
+      assert is_integer(next)
       assert head == alice.head
 
-      second = get(build_conn(), "/directory/v1/#{alice.identifier}?after=4")
-      assert %{"from" => 5, "next" => nil, "entries" => rest} = json_response(second, 200)
-
-      assert {:ok, %{head: ^head, length: 7}} = Identity.verify_chain(page["entries"] ++ rest)
+      second = get(build_conn(), "/directory/v1/#{alice.identifier}?after=#{next}")
+      assert %{"next" => nil, "entries" => rest} = json_response(second, 200)
+      assert {:ok, %{head: ^head, seq: 9}} = Identity.verify_chain(page["entries"] ++ rest)
     end
 
     test "an unknown identifier is 404, and a position that is not one is 422", %{conn: conn} do
       assert %{"error" => "not_found"} =
-               json_response(get(conn, "/directory/v1/#{person().identifier}"), 404)
+               json_response(get(conn, "/directory/v1/#{account().identifier}"), 404)
 
-      alice = register!(build_conn(), person())
+      alice = register!(build_conn(), account())
 
       for position <- ["x", "-2", "2147483648", "99999999999999999999999"] do
         refused =
@@ -267,113 +267,127 @@ defmodule Emissary.Web.DirectoryControllerTest do
     end
   end
 
-  describe "POST /directory/v1/:identifier/entries" do
-    test "appends a rotation; one on a stale head is 409 with the current head", %{conn: conn} do
-      alice = register!(conn, person())
-      entry = rotation(alice)
+  describe "GET /directory/v1/:identifier/from/:hash" do
+    test "answers the entries after an entry's hash, none at the head, and 404 for a hash the log does not hold",
+         %{conn: conn} do
+      alice = register!(conn, account())
+      at = alice.head
+      alice = append!(alice, added(alice))
 
-      assert %{"seq" => 1, "entry_hash" => hash} =
-               json_response(append(build_conn(), alice, entry), 200)
+      assert %{"from" => 1, "entries" => [entry], "next" => nil, "length" => 2} =
+               json_response(
+                 get(build_conn(), "/directory/v1/#{alice.identifier}/from/#{at}"),
+                 200
+               )
 
-      assert hash == Identity.hash(entry)
+      assert {:ok, %Entry{kind: :add_key}} = Entry.decode(entry)
 
-      assert %{"error" => "stale_head", "head" => ^hash} =
-               json_response(append(build_conn(), alice, rotation(alice)), 409)
+      assert %{"from" => 2, "entries" => []} =
+               json_response(
+                 get(build_conn(), "/directory/v1/#{alice.identifier}/from/#{alice.head}"),
+                 200
+               )
+
+      for hash <- [Prima.Digest.sha256("elsewhere"), "sha256:nope"] do
+        assert %{"error" => "not_found"} =
+                 json_response(
+                   get(build_conn(), "/directory/v1/#{alice.identifier}/from/#{hash}"),
+                   404
+                 )
+      end
+    end
+  end
+
+  describe "POST /directory/v1/:identifier/append" do
+    test "appends an entry; the same entry again exists; one on a stale head is 409 with the current head",
+         %{conn: conn} do
+      alice = register!(conn, account())
+      first = added(alice)
+      moved = append!(alice, first)
+
+      assert %{"result" => "exists", "seq" => 1, "head" => head} =
+               json_response(append(build_conn(), alice, first), 200)
+
+      assert head == moved.head
+
+      assert %{"error" => "stale_head", "head" => ^head} =
+               json_response(append(build_conn(), alice, added(alice)), 409)
     end
 
-    test "a rotation past the identifier's 100 a day is 503 capacity until its window ends",
+    test "a key listed twice is 409 duplicate_key, and an entry whose chain does not verify is 422",
          %{conn: conn} do
-      alice = register!(conn, person())
+      alice = register!(conn, account())
+      {pub, _} = keypair()
+      alice = append!(alice, entry(alice, kind: :add_key, key: device_key(pub)))
+
+      assert %{"error" => "duplicate_key"} =
+               json_response(
+                 append(build_conn(), alice, entry(alice, kind: :add_key, key: device_key(pub))),
+                 409
+               )
+
+      {_pub, stranger} = keypair()
+
+      assert %{"error" => "unverified", "reason" => "wrong_signer"} =
+               json_response(
+                 append(
+                   build_conn(),
+                   alice,
+                   entry(alice, [kind: :add_key, key: device_key(elem(keypair(), 0))], stranger)
+                 ),
+                 422
+               )
+
+      assert %{"error" => "invalid", "reason" => "unexpected_genesis"} =
+               json_response(append(build_conn(), alice, alice.genesis), 422)
+    end
+
+    test "a listed key's write past the identifier's 100 a day is 503 capacity writes until its window ends",
+         %{conn: conn} do
+      alice = register!(conn, account())
+      {device_pub, device_priv} = keypair()
+      alice = append!(alice, entry(alice, kind: :add_key, key: device_key(device_pub)))
 
       for _ <- 1..100 do
         :ok =
           Arca.RequestRateWindows.claim(
             Prima.Actor.system(),
-            :directory_rotation_daily,
+            :directory_writes_daily,
             alice.identifier,
             100,
             86_400_000
           )
       end
 
-      refused = append(build_conn(), alice, rotation(alice))
+      {:ok, by_device} =
+        Entry.new(
+          prev: alice.head,
+          seq: alice.seq + 1,
+          at: now(),
+          signer: Key.kid(device_pub),
+          kind: :add_key,
+          key: device_key(elem(keypair(), 0))
+        )
 
-      assert %{"error" => "capacity", "exhausted" => "rotations"} = json_response(refused, 503)
+      refused = append(build_conn(), alice, Identity.sign(by_device, device_priv))
+
+      assert %{"error" => "capacity", "exhausted" => "writes"} = json_response(refused, 503)
       assert [seconds] = get_resp_header(refused, "retry-after")
       assert String.to_integer(seconds) in 86_000..86_400
 
-      assert %{"seq" => 1} =
-               json_response(recover(build_conn(), alice.identifier, request(alice)), 200)
-    end
-
-    test "an entry whose chain does not verify is 422", %{conn: conn} do
-      alice = register!(conn, person())
-      {_pub, stranger} = keypair()
-
-      assert %{"error" => "unverified", "reason" => "wrong_signer"} =
-               json_response(append(build_conn(), alice, rotation(alice, stranger)), 422)
-    end
-  end
-
-  describe "POST /directory/v1/:identifier/recover" do
-    test "a lost accepted answer is answered the same", %{conn: conn} do
-      alice = register!(conn, person())
-      req = request(alice)
-
-      assert %{"seq" => 1, "entry" => entry} =
-               first = json_response(recover(build_conn(), alice.identifier, req), 200)
-
-      assert json_response(recover(build_conn(), alice.identifier, req), 200) == first
-      assert {:ok, %Entry{kind: :recover, request: ^req}} = Entry.decode(entry)
-    end
-
-    test "a stale revision is 409 with its recorded refusal, the same for the same request id",
-         %{conn: conn} do
-      alice = register!(conn, person())
-      assert json_response(recover(build_conn(), alice.identifier, request(alice)), 200)
-      late = request(alice)
-
-      assert %{"error" => "stale_policy", "recorded" => recorded} =
-               json_response(recover(build_conn(), alice.identifier, late), 409)
-
-      assert recorded == %{"outcome" => "stale_policy", "expected_revision" => 0, "revision" => 1}
-
-      assert %{"error" => "stale_policy", "recorded" => ^recorded} =
-               json_response(recover(build_conn(), alice.identifier, late), 409)
-    end
-
-    test "a request naming another directory is 422", %{conn: conn} do
-      alice = register!(conn, person())
-
-      assert %{"error" => "unverified", "reason" => "directory_changed"} =
-               json_response(
-                 recover(
-                   build_conn(),
-                   alice.identifier,
-                   request(alice, directory: "https://other.example")
-                 ),
-                 422
-               )
-    end
-
-    test "a request whose signed identifier is not the path's is 422", %{conn: conn} do
-      alice = register!(conn, person())
-      bob = register!(build_conn(), person())
-
-      assert %{"error" => "wrong_identifier"} =
-               json_response(recover(build_conn(), bob.identifier, request(alice)), 422)
+      # A recovery key's write is exempt from the day.
+      assert %{"seq" => 2} = json_response(append(build_conn(), alice, added(alice)), 200)
     end
   end
 
   describe "serving" do
     test "a mirror answers 405 to every write and serves reads", %{conn: conn} do
-      alice = register!(conn, person())
+      alice = register!(conn, account())
       Cyfr.Test.Settings.put("directory_serve", "mirror")
 
       for refused <- [
-            register(build_conn(), person()),
-            append(build_conn(), alice, rotation(alice)),
-            recover(build_conn(), alice.identifier, request(alice))
+            register(build_conn(), account()),
+            append(build_conn(), alice, added(alice))
           ] do
         assert %{"error" => "read_only"} = json_response(refused, 405)
         assert get_resp_header(refused, "allow") == ["GET"]
@@ -386,10 +400,24 @@ defmodule Emissary.Web.DirectoryControllerTest do
     test "a node that serves no directory answers 404 not_served", %{conn: conn} do
       Cyfr.Test.Settings.put("directory_serve", "off")
 
-      assert %{"error" => "not_served"} = json_response(register(conn, person()), 404)
+      assert %{"error" => "not_served"} = json_response(register(conn, account()), 404)
 
       assert %{"error" => "not_served"} =
-               json_response(get(build_conn(), "/directory/v1/#{person().identifier}"), 404)
+               json_response(get(build_conn(), "/directory/v1/#{account().identifier}"), 404)
+    end
+
+    test "a tombstoned account is 410 gone to every read and write", %{conn: conn} do
+      alice = register!(conn, account())
+      :ok = Sanctum.Directory.tombstone(alice.identifier)
+
+      for refused <- [
+            get(build_conn(), "/directory/v1/#{alice.identifier}"),
+            get(build_conn(), "/directory/v1/#{alice.identifier}/from/#{alice.head}"),
+            append(build_conn(), alice, added(alice)),
+            register(build_conn(), alice)
+          ] do
+        assert json_response(refused, 410) == %{"error" => "gone"}
+      end
     end
   end
 
@@ -527,17 +555,8 @@ defmodule Emissary.Web.DirectoryControllerTest do
         })
 
       front = Front.start(tls[:server_config], self())
-      targets = Application.fetch_env(:sanctum, :private_egress_targets)
-      Application.put_env(:sanctum, :private_egress_targets, ["dir-a.test", "dir-b.test"])
-
-      on_exit(fn ->
-        Front.stop(front)
-
-        case targets do
-          {:ok, value} -> Application.put_env(:sanctum, :private_egress_targets, value)
-          :error -> Application.delete_env(:sanctum, :private_egress_targets)
-        end
-      end)
+      on_exit(fn -> Front.stop(front) end)
+      Prima.Test.Env.put_app_env(:sanctum, :private_egress_targets, ["dir-a.test", "dir-b.test"])
 
       %{
         port: front.port,
@@ -545,64 +564,66 @@ defmodule Emissary.Web.DirectoryControllerTest do
       }
     end
 
-    test "registers, rotates, recovers and resolves, verifying and caching each head",
+    test "registers, appends and reads after a hash; freshness reads the log and walks it",
          %{port: port, opts: opts} do
-      alice = person("https://dir-a.test:#{port}")
-      genesis = Entry.encode(alice.genesis)
+      alice = account("https://dir-a.test:#{port}")
       serve_at(alice.directory)
+      Prima.Test.Env.put_app_env(:sanctum, :directory_client, opts)
 
-      assert {:ok, %{seq: 0}} = Client.register(alice.identifier, genesis, opts)
+      assert {:ok, %{seq: 0, result: :created}} = Client.register(alice.genesis, opts)
+      assert {:ok, %{result: :exists, head: head}} = Client.register(alice.genesis, opts)
+      assert head == alice.head
 
-      assert {:ok, %{state: %{length: 1}, head: first}} =
-               Client.resolve(alice.identifier, genesis, opts)
+      assert {:ok, first} =
+               Sanctum.IdentityFreshness.fresh!(alice.identifier, directory: alice.directory)
 
-      rotated = rotation(alice)
-      another = Identity.canonical(rotation(alice))
+      assert first.head_hash == alice.head
 
-      assert {:ok, %{seq: 1}} =
-               Client.append(alice.identifier, genesis, Identity.canonical(rotated), opts)
+      {device_pub, _} = keypair()
+      add = entry(alice, kind: :add_key, key: device_key(device_pub))
 
-      assert {:error, {:stale_head, head}} =
-               Client.append(alice.identifier, genesis, another, opts)
+      assert {:ok, %{seq: 1, result: :accepted}} =
+               Client.append(alice.identifier, alice.directory, add, opts)
 
-      assert head == Identity.hash(rotated)
+      assert {:ok, %{result: :exists}} =
+               Client.append(alice.identifier, alice.directory, add, opts)
 
-      req = request(alice)
+      alice = %{alice | head: Identity.hash(add), seq: 1}
 
-      assert {:ok, %{seq: 2, entry: %Entry{request: ^req}} = recovered} =
-               Client.recover(alice.identifier, genesis, req, opts)
+      # An entry built on the genesis meets the moved head.
+      stale =
+        entry(%{alice | head: first.head_hash, seq: 0},
+          kind: :add_key,
+          key: device_key(elem(keypair(), 0))
+        )
 
-      assert {:ok, ^recovered} = Client.recover(alice.identifier, genesis, req, opts)
+      current = alice.head
 
-      late = request(alice)
+      assert {:error, {:stale_head, ^current}} =
+               Client.append(alice.identifier, alice.directory, stale, opts)
 
-      assert {:error, {:stale_policy, %{"revision" => 1}}} =
-               Client.recover(alice.identifier, genesis, late, opts)
+      removal = entry(alice, kind: :remove_key, kid: Key.kid(device_pub))
+      assert {:ok, %{seq: 2}} = Client.append(alice.identifier, alice.directory, removal, opts)
 
-      assert {:ok, %{state: state, head: moved}} = Client.resolve(alice.identifier, genesis, opts)
-      assert state.length == 3 and state.revision == 1
-      assert state.operational_key == req.operational_key
-      assert moved.head_hash == recovered.entry_hash
-      assert moved.key_epoch != first.key_epoch
-      assert {:ok, %{state: ^state}} = Client.cached(alice.identifier)
+      assert {:ok, %{entries: [_add, _removal], length: 3}} =
+               Client.entries_after(alice.identifier, alice.directory, first.head_hash, 0, opts)
+
+      assert {:ok, moved} = Sanctum.IdentityFreshness.fresh!(alice.identifier)
+      assert moved.head_hash == Identity.hash(removal)
+      assert {:ok, %{keys: []}} = Sanctum.IdentityFreshness.state(moved)
     end
 
-    test "two people on two directories each resolve at their own", %{port: port, opts: opts} do
-      alice = person("https://dir-a.test:#{port}")
-      bob = person("https://dir-b.test:#{port}")
+    test "two people on two directories each read at their own", %{port: port, opts: opts} do
+      alice = account("https://dir-a.test:#{port}")
+      bob = account("https://dir-b.test:#{port}")
 
       # One endpoint answers under both names, as two nodes sharing one
       # store would: each genesis is registered while it serves the
       # directory that genesis names.
       for someone <- [alice, bob] do
-        genesis = Entry.encode(someone.genesis)
         serve_at(someone.directory)
-        assert {:ok, _} = Client.register(someone.identifier, genesis, opts)
-
-        assert {:ok, %{head: %{directory_url: url}}} =
-                 Client.resolve(someone.identifier, genesis, opts)
-
-        assert url == someone.directory
+        assert {:ok, _} = Client.register(someone.genesis, opts)
+        assert {:ok, %{length: 1}} = Client.log(someone.identifier, someone.directory, opts)
       end
 
       reads = fronted()

@@ -35,7 +35,10 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   `//directory/…` included) take requests no session
   stands behind, so their bodies are bounded to the largest entry
   (`Prima.Identity.max_entry_bytes/0`, 16 KiB) here, before any byte of
-  them is decoded: a larger body is refused 413 the same way. Their raw
+  them is decoded: a larger body is refused 413 the same way. So are the
+  routes of the handle registry served beside it (`/v1/…`), whose largest
+  body is a signed request of the same size
+  (`Prima.RegistryRequest.max_bytes/0`). Their raw
   bytes are not cached. The restore ingress (`/restore…`), which takes a
   recovery code before any person exists, is bounded the same way, and so
   is a certified device's renewal (`/certify…`), which a device sends
@@ -126,8 +129,8 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   (`Prima.HostAPI.max_body_bytes/0`) for a caller no pipeline has
   authenticated, the attachment allowance (28 MB) for one its pipeline
   has; never more than the webhook cap under `/hooks/*`, nor the
-  directory's 16 KiB write-body limit under `/directory/*`, `/restore*`
-  and `/certify/*`. `{:error, message}` when the webhook cap's
+  directory's 16 KiB write-body limit under `/directory/*`, `/v1/*`,
+  `/restore*` and `/certify/*`. `{:error, message}` when the webhook cap's
   configuration is out of its range.
   """
   @spec cap(Plug.Conn.t()) :: {:ok, pos_integer()} | {:error, String.t()}
@@ -201,7 +204,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   defp hooks_path?(_), do: false
 
   defp directory_path?(%Plug.Conn{path_info: [family | _]})
-       when family in ["directory", "restore", "certify"],
+       when family in ["directory", "v1", "restore", "certify"],
        do: true
 
   defp directory_path?(_), do: false

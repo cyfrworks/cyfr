@@ -102,7 +102,7 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
   describe "the directory's write-body limit" do
     test "caps a /directory/* body at 16 KiB, whatever the endpoint allows, and caches nothing" do
       body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes() + 1)
-      conn = build_conn(:post, "/directory/v1/genesis", body)
+      conn = build_conn(:post, "/directory/v1/register", body)
 
       assert {:more, chunk, conn} = RawBodyReader.read_body(conn, length: 28_000_000)
       assert byte_size(chunk) == Prima.Identity.max_entry_bytes()
@@ -111,7 +111,7 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
 
     test "reads a /directory/* body at the limit whole" do
       body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes())
-      conn = build_conn(:post, "/directory/v1/per_x/entries", body)
+      conn = build_conn(:post, "/directory/v1/per_x/append", body)
 
       assert {:ok, ^body, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
     end
@@ -120,14 +120,30 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
       body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes() + 1)
 
       for url <- [
-            "http://www.example.com//directory/v1/genesis",
-            "http://www.example.com///directory//v1/per_x/entries"
+            "http://www.example.com//directory/v1/register",
+            "http://www.example.com///directory//v1/per_x/append"
           ] do
         conn = build_conn(:post, url, body)
         assert ["directory" | _] = conn.path_info
 
         assert {:more, chunk, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
         assert byte_size(chunk) == Prima.Identity.max_entry_bytes()
+      end
+    end
+
+    test "caps the handle registry's bodies beside the directory the same way" do
+      body = :binary.copy(<<?x>>, Prima.RegistryRequest.max_bytes() + 1)
+
+      for url <- [
+            "/v1/namespaces/personal/claim",
+            "http://www.example.com//v1//namespaces/personal/claim"
+          ] do
+        conn = build_conn(:post, url, body)
+        assert ["v1" | _] = conn.path_info
+
+        assert {:more, chunk, conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+        assert byte_size(chunk) == Prima.RegistryRequest.max_bytes()
+        refute Map.has_key?(conn.assigns, :raw_body)
       end
     end
 
@@ -164,7 +180,7 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
     end
 
     test "never raises a smaller cap set upstream" do
-      conn = build_conn(:post, "/directory/v1/per_x/recover", :binary.copy(<<?x>>, 200))
+      conn = build_conn(:post, "/directory/v1/per_x/append", :binary.copy(<<?x>>, 200))
 
       assert {:more, chunk, _conn} = RawBodyReader.read_body(conn, length: 100)
       assert byte_size(chunk) == 100
@@ -185,7 +201,7 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
       body = :binary.copy(<<?{>>, Prima.Identity.max_entry_bytes() + 1)
 
       assert_raise Plug.Parsers.RequestTooLargeError, fn ->
-        Plug.Parsers.call(build_conn(:post, "/directory/v1/genesis", body), opts)
+        Plug.Parsers.call(build_conn(:post, "/directory/v1/register", body), opts)
       end
 
       # The same bytes elsewhere reach the decoder.
@@ -218,7 +234,7 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
             {"/auth/logout", Prima.HostAPI.max_body_bytes()},
             {"/mcp", Prima.HostAPI.max_body_bytes()},
             {"/no-route-matches-this", Prima.HostAPI.max_body_bytes()},
-            {"/directory/v1/genesis", Prima.Identity.max_entry_bytes()}
+            {"/directory/v1/register", Prima.Identity.max_entry_bytes()}
           ] do
         conn = build_conn(:post, path, :binary.copy(<<?x>>, cap + 1))
         assert RawBodyReader.cap(conn) == {:ok, cap}, path

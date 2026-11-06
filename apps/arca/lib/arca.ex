@@ -160,6 +160,7 @@ defmodule Arca do
       DeviceCertificates,
       DeviceCertifications,
       DevicePinEvaluators,
+      DirectoryHandles,
       DirectoryHeads,
       Doors,
       Execution,

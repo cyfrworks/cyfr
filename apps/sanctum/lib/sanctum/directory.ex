@@ -285,6 +285,45 @@ defmodule Sanctum.Directory do
     end
   end
 
+  # ---- beside the directory -----------------------------------------------------
+
+  @doc false
+  # The gate every request to the registry served beside this directory
+  # passes first (`Sanctum.Directory.Handles`): served for `need` as the
+  # directory is, and admitted to the directory's per-source and
+  # per-installation windows.
+  @spec gate(source(), :read | :write) :: :ok | {:error, reason()}
+  def gate(source, need) when is_binary(source) and need in [:read, :write] do
+    with :ok <- serving(need), do: admit(every_request(source))
+  end
+
+  @doc false
+  # Whether this node is its directory's writer, the node that serves the
+  # account pages beside it (`Emissary.Web.AccountController`).
+  @spec writer?() :: boolean()
+  def writer?, do: mode() == {:ok, :writer}
+
+  @doc false
+  # The directory this node serves, in the one spelling a genesis names
+  # it, or `:error` for an origin that is no home.
+  @spec served() :: {:ok, String.t()} | :error
+  def served do
+    case Encoding.canonical_home(Sanctum.origin()) do
+      {:ok, directory} -> {:ok, directory}
+      _other -> :error
+    end
+  end
+
+  @doc false
+  # The verified state `identifier`'s head stores here: `:not_found` for an
+  # identifier this directory does not hold, `:gone` for a tombstoned one.
+  @spec state(String.t()) :: {:ok, State.t()} | {:error, reason()}
+  def state(identifier) when is_binary(identifier) do
+    with :ok <- known(identifier),
+         {:ok, head} <- head(identifier),
+         do: head_state(identifier, head)
+  end
+
   # ---- serving -----------------------------------------------------------------
 
   defp serving(need) do

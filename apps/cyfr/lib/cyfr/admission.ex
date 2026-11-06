@@ -93,6 +93,7 @@ defmodule Cyfr.Admission do
     "Emissary.Web.WebhookController",
     "Emissary.Web.ExecutionEventsController",
     "Emissary.Web.DirectoryController",
+    "Emissary.Web.HandleController",
     "Emissary.Web.RestoreController",
     "Emissary.Web.DeviceEnrollmentController",
     "Emissary.Web.DevicePinController",

@@ -211,6 +211,15 @@
         },
         %{
           verb: "GET",
+          path: "/account/:name",
+          plug: "Emissary.Web.AccountController",
+          plug_opts: ":show",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: []
+        },
+        %{
+          verb: "GET",
           path: "/api/executions/:id/events",
           plug: "Emissary.Web.ExecutionEventsController",
           plug_opts: ":stream",
@@ -451,6 +460,24 @@
           auth: "tincture_handler_auth",
           live_view: nil,
           pipe_through: ["tincture_asset"]
+        },
+        %{
+          verb: "GET",
+          path: "/v1/handles/:handle",
+          plug: "Emissary.Web.HandleController",
+          plug_opts: ":resolve",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: ["directory"]
+        },
+        %{
+          verb: "POST",
+          path: "/v1/namespaces/personal/claim",
+          plug: "Emissary.Web.HandleController",
+          plug_opts: ":claim",
+          auth: "directory_signed",
+          live_view: nil,
+          pipe_through: ["directory"]
         }
       ]
     },

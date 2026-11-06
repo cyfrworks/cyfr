@@ -473,7 +473,12 @@ defmodule Arca.UnscopedQuerySeamTest do
       "the directory's log, keyed by the person identifier it orders; a directory holds " <>
         "no athanor",
     "Arca.Schemas.DirectoryHead" =>
-      "this home's cache of another person's head, keyed by their identifier",
+      "this home's cache of an account's head, keyed by its identifier",
+    "Arca.Schemas.DirectoryHandle" =>
+      "a personal handle of the registry beside this node's directory, keyed by the handle " <>
+        "and the account's identifier; a directory holds no athanor",
+    "Arca.Schemas.DirectoryNonce" =>
+      "a nonce a signed registry request spent, keyed by the account's identifier",
     "Arca.Schemas.CarryAction" =>
       "a person's sign-in carry and a relying home's login receipt, keyed by the person " <>
         "and the action; a carry moves a person between homes, never inside an athanor",

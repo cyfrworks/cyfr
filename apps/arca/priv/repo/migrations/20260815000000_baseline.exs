@@ -28,7 +28,8 @@ defmodule Arca.Repo.Migrations.Baseline do
   server's own facts and the rest the cell's, and a cell has no athanor.
   A person's identity, keys, identity attempts, carries, passkeys,
   post-restore period, company sign-in and company sign-in attempts, the
-  directory's log, the cached heads of other
+  directory's log and the handles and spent nonces of the registry beside
+  it, the cached heads of other
   people's logs, the installation claim and the pre-authentication rate
   windows are not an athanor's either (`people/0`), and neither is a
   command line's pending sign-in (`identity/0`), which no one owns until
@@ -727,6 +728,27 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:identity_log_entries, [:identifier, :entry_hash],
              name: :identity_log_entries_hash_index
            )
+
+    # The handle registry a CYFR serving a directory serves beside it
+    # (`Arca.DirectoryHandles`): one personal handle per account of that
+    # directory, and one per handle, for good; and the nonce of every
+    # signed request it accepted, spent once, with the request's expiry.
+    create table(:directory_handles, primary_key: false) do
+      add :handle, :string, primary_key: true, null: false
+      add :identifier, :string, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:directory_handles, [:identifier])
+
+    create table(:directory_nonces, primary_key: false) do
+      add :identifier, :string, null: false
+      add :nonce, :binary, null: false
+      add :expires_at, :utc_datetime_usec, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:directory_nonces, [:identifier, :nonce])
 
     # A home's verified cache of an account's head: the genesis it was
     # verified from and the directory it names, both immutable, and the

@@ -80,6 +80,7 @@ defmodule Sanctum do
       DeviceUnlock,
       Directory,
       Directory.Client,
+      Directory.Handles,
       Door,
       Door.Store,
       Egress,

@@ -526,7 +526,7 @@ defmodule Cyfr.Boundaries do
         Sanctum Sanctum.Caller Sanctum.Catalog
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.DevicePin
-        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Egress
+        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Directory.Handles Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
         Sanctum.RunningTasks Sanctum.TinctureAccess
@@ -556,7 +556,8 @@ defmodule Cyfr.Boundaries do
           "the loader reads a stored head (`admitted_blob/3`, with its one reading of a " <>
           "damaged head), for the flows the tincture's ingress declares to the origins " <>
           "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
-          "decisions, the restore ingress `Sanctum.Recovery`'s, a protected device's " <>
+          "decisions, the handle registry's beside it `Sanctum.Directory.Handles`'s, the " <>
+          "account pages' served only by the directory's writer, the restore ingress `Sanctum.Recovery`'s, a protected device's " <>
           "enrollment `Sanctum.DeviceUnlock`'s, a locked device's PIN evaluation and " <>
           "reset `Sanctum.DevicePin`'s, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts` and slides, and at its end " <>
@@ -2024,7 +2025,15 @@ defmodule Cyfr.Boundaries do
       resume: 2,
       slide: 2
     ],
-    "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
+    "Sanctum.Directory" => [
+      append: 2,
+      from: 1,
+      register: 1,
+      resolve: 1,
+      served: 0,
+      writer?: 0
+    ],
+    "Sanctum.Directory.Handles" => [claim: 1, resolve: 1],
     "Sanctum.Door" => [refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0, wildcard: 0],
     "Sanctum.Egress" => [pinned_request: 5],
@@ -2339,15 +2348,16 @@ defmodule Cyfr.Boundaries do
     public_directory: %{
       admits: :nothing,
       why:
-        "the identity directory's reads and a genesis registration, which any caller may " <>
-          "make: a log is public history, and a genesis names its own keys and is its own " <>
-          "identifier. No session; every request is bounded per source and per installation"
+        "the identity directory's reads, a genesis registration, a handle's answer and the " <>
+          "account pages, which any caller may ask: a log and a handle are public, a genesis " <>
+          "names its own keys and is its own identifier, and the pages are static. No " <>
+          "session; every directory and handle request is bounded per source and per installation"
     },
     directory_signed: %{
       admits: :credential,
       why:
-        "a directory entry or recovery, signed by a key the identifier's verified chain " <>
-          "authorizes and verified against that chain before anything is written; no session"
+        "a directory entry, or a handle claim, signed by a key the identifier's verified " <>
+          "chain lists and verified against that chain before anything is written; no session"
     },
     device_key_proof: %{
       admits: :credential,
@@ -2435,17 +2445,20 @@ defmodule Cyfr.Boundaries do
   }
 
   @public_routes [
+    {:get, "/account/:name"},
     {:get, "/api/health"},
     {:get, "/api/health/ready"},
     {:get, "/auth/:provider"},
     {:post, "/auth/logout"},
     {:get, "/directory/v1/:identifier"},
-    {:post, "/directory/v1/genesis"},
+    {:get, "/directory/v1/:identifier/from/:hash"},
+    {:post, "/directory/v1/register"},
     {:get, "/invite"},
     {:get, "/login"},
     {:get, "/pair"},
     {:get, "/restore"},
-    {:get, "/setup"}
+    {:get, "/setup"},
+    {:get, "/v1/handles/:handle"}
   ]
 
   @doc """
@@ -2967,8 +2980,14 @@ defmodule Cyfr.Boundaries do
     # identifier's own chain authorizes each write.
     %{module: Emissary.Web.DirectoryController, site: :register, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :resolve, plane: :external, origin: :none},
+    %{module: Emissary.Web.DirectoryController, site: :from, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :append, plane: :external, origin: :none},
-    %{module: Emissary.Web.DirectoryController, site: :recover, plane: :external, origin: :none},
+    # The handle registry beside the directory, which
+    # `Sanctum.Directory.Handles` decides: a node serving no directory, a
+    # handle no one holds, a claim its account's log does not verify, the
+    # directory's windows. The account's own chain authorizes a claim.
+    %{module: Emissary.Web.HandleController, site: :resolve, plane: :external, origin: :none},
+    %{module: Emissary.Web.HandleController, site: :claim, plane: :external, origin: :none},
     # Restore, an entry path because no person exists yet to admit an
     # operation, and the recovery kit, its own ingress: the installation
     # capability, the kit, its proof and the kit credential. The kit

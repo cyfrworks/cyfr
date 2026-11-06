@@ -138,6 +138,9 @@ defmodule Arca.TenantTables do
   # their carries, which are not an athanor's to delete: a person's keys
   # and identifier outlive their athanor, a directory orders
   # identifiers, and a carry moves a person between homes.
+  # `directory_handles` and `directory_nonces` are the handle registry a
+  # directory serves beside it: an account's name and the requests it
+  # spent, which no athanor holds.
   #
   # `passkeys` are a person's own credentials at this home, revoked with
   # the person (`Arca.SecurityTransitions`), never with an athanor.
@@ -175,6 +178,8 @@ defmodule Arca.TenantTables do
     "identity_attempts",
     "identity_log_entries",
     "directory_heads",
+    "directory_handles",
+    "directory_nonces",
     "carry_actions",
     "passkeys",
     "company_authorizations",

@@ -401,6 +401,26 @@ defmodule Emissary.Router do
           metadata: %{auth: :directory_signed}
       end
 
+      # The handle registry a CYFR serving a directory serves beside it
+      # (`Sanctum.Directory.Handles`): a handle's answer and a personal
+      # handle's signed claim, and no other registry route. Bounded and
+      # metered as the directory is.
+      scope "/v1", Emissary.Web do
+        pipe_through :directory
+
+        get "/handles/:handle", HandleController, :resolve, metadata: %{auth: :public_directory}
+
+        post "/namespaces/personal/claim", HandleController, :claim,
+          metadata: %{auth: :directory_signed}
+      end
+
+      # The account pages the directory's writer serves beside it
+      # (`Emissary.Web.AccountController`): the static bundle and its
+      # `config.json`, with their own headers, no session and no cookie.
+      scope "/account", Emissary.Web do
+        get "/:name", AccountController, :show, metadata: %{auth: :public_directory}
+      end
+
       # A certified device's renewal (`person.renew_certificate`), from the
       # device itself.
       scope "/certify/v1", Emissary.Web do
