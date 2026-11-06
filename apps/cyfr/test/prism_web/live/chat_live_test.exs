@@ -356,17 +356,15 @@ defmodule PrismWeb.ChatLiveTest do
     ctx = member_ctx(alice, home)
     thread = settled_thread!(ctx)
 
-    # The files rode the model request as typed blocks on the task.
+    # The files rode the model request on the task: text files the brain
+    # does not take inline (it takes PNG and PDF) as text blocks under
+    # their names.
     [request] = model_requests()
+    blocks = Enum.flat_map(request["messages"], & &1["content"])
 
-    attached =
-      request["messages"]
-      |> Enum.flat_map(& &1["content"])
-      |> Enum.filter(&(&1["type"] == "document"))
-      |> Enum.sort_by(& &1["filename"])
-
-    assert [%{"filename" => "note.txt", "data" => data}, %{"filename" => "plan.md"}] = attached
-    assert Base.decode64!(data) == "hi there"
+    assert %{"type" => "text", "text" => "The attached file note.txt:\n\nhi there"} in blocks
+    assert %{"type" => "text", "text" => "The attached file plan.md:\n\nsecond"} in blocks
+    refute Enum.any?(blocks, &(&1["type"] == "document"))
 
     [msg | _] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
     refs = msg |> Aqua.attachment_refs() |> Enum.sort_by(& &1["filename"])

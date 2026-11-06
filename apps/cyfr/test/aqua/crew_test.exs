@@ -877,6 +877,27 @@ defmodule Aqua.CrewTest do
     refute Enum.any?(blocks, &(&1["type"] == "document"))
   end
 
+  test "a text file a brain takes goes inline as a document block", %{ctx: ctx, room: room} do
+    blocks =
+      delivered_blocks(
+        ctx,
+        room,
+        [
+          %{
+            "filename" => "river-note.txt",
+            "media_type" => "text/plain",
+            "bytes" => "Seven stones."
+          }
+        ],
+        media_types: ["text/plain"]
+      )
+
+    assert %{"type" => "document", "media_type" => "text/plain", "filename" => "river-note.txt"} =
+             Enum.find(blocks, &(&1["data"] == Base.encode64("Seven stones.")))
+
+    refute Enum.any?(blocks, &(&1["type"] == "text" and &1["text"] =~ "Seven stones."))
+  end
+
   test "a file the brain neither takes nor can read as text is named as attached and not " <>
          "readable",
        %{ctx: ctx, room: room} do
@@ -897,9 +918,10 @@ defmodule Aqua.CrewTest do
   end
 
   # The blocks a member's chat call carries for a request delivered with
-  # `files` attached.
-  defp delivered_blocks(ctx, room, files) do
-    script!([reply("Read.")])
+  # `files` attached, to a brain described with `worker` (its
+  # `media_types`, say).
+  defp delivered_blocks(ctx, room, files, worker \\ []) do
+    start_supervised!({ScriptedWorker, [ref: @model, script: [reply("Read.")]] ++ worker})
     message_id = Prima.UUID7.generate_id("msg")
     {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, files)
 
