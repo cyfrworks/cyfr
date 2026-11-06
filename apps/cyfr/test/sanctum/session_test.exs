@@ -401,4 +401,51 @@ defmodule Sanctum.SessionTest do
       assert sessions(local.user_id) == []
     end
   end
+
+  # `fun`'s answer, and the calls this process made to `mfas` while it ran,
+  # in order. A process's call trace is not delivered to itself, so a
+  # collector takes it; every trace message is delivered before the
+  # collector is asked for what it holds.
+  defp traced(mfas, fun) do
+    test = self()
+    collector = spawn_link(fn -> collect(test, []) end)
+
+    on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+    # A pattern applies only to a loaded module, so each is loaded first,
+    # and one that matched nothing fails here rather than tracing nothing.
+    for {module, _function, _arity} = mfa <- mfas do
+      Code.ensure_loaded!(module)
+      assert :erlang.trace_pattern(mfa, true, [:global]) == 1
+    end
+
+    :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+    answer =
+      try do
+        fun.()
+      after
+        :erlang.trace(test, false, [:call])
+      end
+
+    delivered = :erlang.trace_delivered(test)
+    assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+    send(collector, {:done, delivered})
+    assert_receive {:collected, ^delivered, calls}, 5_000
+    {answer, calls}
+  end
+
+  defp collect(test, calls) do
+    receive do
+      {:trace, ^test, :call, call} -> collect(test, [call | calls])
+      {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+    end
+  end
+
+  defp started_refresh?(calls) do
+    Enum.any?(calls, fn
+      {Task.Supervisor, :start_child, [Sanctum.TaskSupervisor | _]} -> true
+      _ -> false
+    end)
+  end
 end

@@ -28,10 +28,6 @@ defmodule Sanctum.Consent.AuthzTest do
   """
   use ExUnit.Case, async: true
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query
 
   alias Sanctum.Consent.Authz
@@ -128,54 +124,11 @@ defmodule Sanctum.Consent.AuthzTest do
     %{key_ctx: key_ctx, key_name: name, key_digest: digest, key_capability: key_capability}
   end
 
-  # A device paired to that person through the ceremony, and the context
-  # its channel mints once it proves its key.
+  # A device of that person's account paired here, and the context its
+  # channel mints once it proves its key.
   defp paired_device(%{session_ctx: session_ctx}) do
     source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
-    glass = Context.build(%{authenticated: false, client_ip: source})
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    digest = Prima.Device.key_digest(device_key)
-
-    confirmed =
-      Sanctum.TestContext.confirmed(
-        session_ctx,
-        :device_pairing,
-        Sanctum.Pairing.invitation_change(digest)
-      )
-
-    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{"key_digest" => digest})
-
-    {:ok, %{challenge: challenge}} =
-      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
-        holder: @holder,
-        device_key: device_key
-      })
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
-        holder: @holder,
-        device_key: device_key,
-        proof: Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
-      })
-
-    {:ok, connect} =
-      Prima.DeviceCert.Challenge.new(
-        purpose: :connect,
-        home: certificate.audience,
-        athanor: certificate.athanor,
-        client_id: client_id,
-        device_key: device_key,
-        nonce: :crypto.strong_rand_bytes(32),
-        now: System.system_time(:millisecond)
-      )
-
-    {:ok, device_ctx} =
-      Sanctum.DeviceCerts.verify_connect(
-        %{client_id: client_id, certificate: certificate, source: source},
-        Prima.DeviceCert.Proof.sign(connect, private),
-        connect
-      )
-
+    %{ctx: device_ctx} = Sanctum.Test.Devices.paired!(session_ctx.user_id, source)
     %{device_ctx: device_ctx}
   end
 

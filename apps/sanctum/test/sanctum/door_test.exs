@@ -484,8 +484,8 @@ defmodule Sanctum.DoorTest do
 
     defp remote_at!(directory, n) do
       user = local!(n)
-      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
-      :ok = Sanctum.Test.DirectoryServer.remote_person!(user.id, identity)
+      account = Sanctum.Test.DirectoryServer.account!(directory.dir, directory.url)
+      :ok = Sanctum.Test.DirectoryServer.account_person!(user.id, account)
       user
     end
 

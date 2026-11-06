@@ -28,13 +28,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
   use ExUnit.Case, async: false
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query, only: [from: 2]
 
-  alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Pairing, ProviderCredentials}
 
   alias Sanctum.Consent.Authz
@@ -115,47 +110,11 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A device paired through the ceremony, and its context once a request
-  # under its certificate verified.
+  # A device of the person's account paired here, and its context once a
+  # request under its certificate verified.
   defp paired!(session_ctx) do
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    digest = Prima.Device.key_digest(device_key)
-
-    {:ok, invitation} =
-      session_ctx
-      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{"key_digest" => digest})
-
-    glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{holder: @holder, device_key: device_key}
-
-    {:ok, %{challenge: pairing}} =
-      Pairing.complete(glass, invitation.invitation_secret, submission)
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Pairing.complete(
-        glass,
-        invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.encode(Proof.sign(pairing, private)))
-      )
-
-    {:ok, challenge} =
-      Challenge.new(
-        purpose: :connect,
-        home: certificate.audience,
-        athanor: certificate.athanor,
-        client_id: client_id,
-        device_key: certificate.device_key,
-        nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
-        now: System.system_time(:millisecond)
-      )
-
-    {:ok, ctx} =
-      DeviceCerts.verify_connect(
-        %{client_id: client_id, certificate: certificate, source: @source},
-        Proof.sign(challenge, private),
-        challenge
-      )
+    %{client_id: client_id, certificate: certificate, ctx: ctx} =
+      Sanctum.Test.Devices.paired!(session_ctx.user_id, @source)
 
     {:ok, ctx} = DeviceCerts.verify_request(certificate, ctx)
     {client_id, ctx}

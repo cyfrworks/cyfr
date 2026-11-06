@@ -27,7 +27,7 @@ defmodule Sanctum.IssuanceTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{ApiKey, DeviceCertificate, PersonIdentity}
+  alias Arca.Schemas.{ApiKey, DeviceCertificate}
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Issuance, Pairing}
@@ -89,16 +89,6 @@ defmodule Sanctum.IssuanceTest do
       Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx}
-  end
-
-  # A pairing begun for the digest of the device key the glass made first,
-  # under a confirmation the person proved: only that key completes it.
-  defp begin!(session_ctx, device_key) do
-    digest = Prima.Device.key_digest(device_key)
-
-    session_ctx
-    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-    |> Pairing.begin(%{"key_digest" => digest})
   end
 
   # A `pairing.begin` confirmation of the person `user_id` in `actor`'s
@@ -173,23 +163,11 @@ defmodule Sanctum.IssuanceTest do
     |> Pairing.revoke(client_id)
   end
 
-  # A device paired through the ceremony: its key pair, its client and its
-  # first certificate.
+  # A device of the person's account paired here: its key pair, its client
+  # and its first certificate.
   defp pair!(session_ctx) do
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, invitation} = begin!(session_ctx, device_key)
-    glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{holder: @holder, device_key: device_key}
-
-    {:ok, %{challenge: challenge}} =
-      Pairing.complete(glass, invitation.invitation_secret, submission)
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Pairing.complete(
-        glass,
-        invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
-      )
+    %{client_id: client_id, certificate: certificate, key: {device_key, private}} =
+      Sanctum.Test.Devices.paired!(session_ctx.user_id, @source)
 
     %{client_id: client_id, certificate: certificate, device_key: device_key, private: private}
   end
@@ -1091,214 +1069,6 @@ defmodule Sanctum.IssuanceTest do
 
       assert {:error, :not_found} =
                Arca.VaultStorage.get_by_name(Context.actor(ctx), "glass-tool-entry")
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # A person whose keys are at another home
-  # ---------------------------------------------------------------------------
-
-  describe "a device of a person whose keys are at another home" do
-    setup %{session_ctx: session_ctx, user: user, athanor: athanor} do
-      alias Sanctum.Test.DirectoryServer
-
-      tls = DirectoryServer.tls()
-      DirectoryServer.listen!()
-      DirectoryServer.seam!(tls)
-
-      on_exit(fn ->
-        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      end)
-
-      directory = DirectoryServer.start!(tls)
-      identity = DirectoryServer.identity!(directory.dir, directory.url)
-
-      # Paired at this home under their home's certificate: the invitation
-      # opened under the person's proof here, then they are remote.
-      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-      {:ok, invitation} = begin!(session_ctx, device_key)
-      :ok = DirectoryServer.remote_person!(user.id, identity)
-      certificate = remote_certificate(identity, invitation.client_id, device_key, athanor)
-      glass = Context.build(%{authenticated: false, client_ip: @source})
-      submission = %{holder: @holder, device_key: device_key, certificate: certificate}
-
-      {:ok, %{challenge: challenge}} =
-        Pairing.complete(glass, invitation.invitation_secret, submission)
-
-      {:ok, %{client_id: client_id}} =
-        Pairing.complete(
-          glass,
-          invitation.invitation_secret,
-          Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
-        )
-
-      device = %{
-        client_id: client_id,
-        certificate: certificate,
-        device_key: device_key,
-        private: private
-      }
-
-      %{directory: directory, identity: identity, device: device}
-    end
-
-    defp remote_certificate(identity, client_id, device_key, athanor) do
-      now = System.os_time(:millisecond)
-
-      {:ok, certificate} =
-        DeviceCert.new(
-          device_key: device_key,
-          client_id: client_id,
-          subject: %{
-            kind: :identity,
-            identifier: identity.identifier,
-            key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
-          },
-          issuer: "https://a.example",
-          audience: Sanctum.origin(),
-          athanor: athanor.id,
-          not_before: now,
-          expires_at: now + 3_600_000
-        )
-
-      DeviceCert.sign(certificate, elem(identity.live, 1))
-    end
-
-    test "carries the identity row it was resolved by, and mints while that row names them", %{
-      device: device,
-      identity: identity,
-      user: user
-    } do
-      ctx = verified!(device)
-      expected = %{user_id: user.id, provenance: "remote", identifier: identity.identifier}
-
-      assert ctx.credential_binding.identity == expected
-      assert {:ok, %{identity: ^expected}} = Issuance.expectation(ctx, [])
-
-      assert {:ok, attrs} = mint(ctx)
-      assert minted?(attrs)
-    end
-
-    test "refuses once the identity row no longer names the person", %{
-      device: device,
-      user: user
-    } do
-      ctx = verified!(device)
-      another = "per_" <> Prima.Digest.sha256_hex("another-#{System.unique_integer()}")
-
-      {1, _} =
-        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^user.id),
-          set: [identifier: another]
-        )
-
-      assert {{:error, :not_standing}, renamed} = mint(ctx)
-      refute minted?(renamed)
-
-      {1, _} = Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
-      assert {{:error, :not_standing}, gone} = mint(ctx)
-      refute minted?(gone)
-    end
-
-    test "a head that moved retired its certificate, and with it the issuance", %{
-      device: device,
-      directory: directory,
-      identity: identity
-    } do
-      ctx = verified!(device)
-      Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
-      {:ok, _} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
-
-      assert {{:error, :not_standing}, attrs} = mint(ctx)
-      refute minted?(attrs)
-    end
-
-    # Their home certifies the glass again, rather than this home renewing
-    # it (`devices-guide.md`): the glass connects here with the replacement,
-    # which this home verifies against their head and keeps no row for. The
-    # device stands, and nothing was revoked.
-    test "a replacement certificate from their home, verified here, mints", %{
-      device: device,
-      identity: identity,
-      athanor: athanor
-    } do
-      now = System.os_time(:millisecond)
-
-      {:ok, unsigned} =
-        DeviceCert.new(
-          device_key: device.device_key,
-          client_id: device.client_id,
-          subject: %{
-            kind: :identity,
-            identifier: identity.identifier,
-            key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
-          },
-          issuer: "https://a.example",
-          audience: Sanctum.origin(),
-          athanor: athanor.id,
-          not_before: now,
-          expires_at: now + 1_800_000
-        )
-
-      replacement = DeviceCert.sign(unsigned, elem(identity.live, 1))
-      ctx = verified!(%{device | certificate: replacement})
-
-      assert ctx.credential_deadline ==
-               DateTime.from_unix!(replacement.expires_at, :millisecond)
-
-      assert ctx.credential_binding.key_epoch == Sanctum.Test.DirectoryServer.key_epoch(identity)
-      assert {:ok, attrs} = mint(ctx)
-      assert minted?(attrs)
-    end
-
-    test "a head that moves inside the window refuses the issuance: nothing is minted", %{
-      device: device,
-      directory: directory,
-      identity: identity
-    } do
-      ctx = verified!(device)
-
-      # The request is held once its certificate was verified against the
-      # head (`remote_subject/3`) and as its paired client is read; the head
-      # moves there, through `Arca.DirectoryHeads.advance/4`. The client's
-      # standing is read once before the certificate is checked
-      # (`Sanctum.DeviceCerts`), so the read after the verification is the
-      # second.
-      reads = :counters.new(1, [])
-
-      client_read_after_verification = fn
-        [:arca, :repo, :query], %{source: "paired_clients"} ->
-          :counters.add(reads, 1, 1)
-          :counters.get(reads, 1) == 2
-
-        _event, _metadata ->
-          false
-      end
-
-      result =
-        in_window(
-          client_read_after_verification,
-          fn ->
-            {:ok, verified} = DeviceCerts.verify_request(device.certificate, ctx)
-            mint(verified)
-          end,
-          fn ->
-            Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
-            {:ok, _moved} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
-          end
-        )
-
-      assert {{:error, :not_standing}, attrs} = result
-      refute minted?(attrs)
-    end
-
-    test "a revoked client still refuses", %{device: device} do
-      ctx = verified!(device)
-
-      assert {:ok, %{standing: "revoked"}} =
-               Arca.PairedClients.revoke(Prima.Actor.in_athanor(ctx.athanor_id), device.client_id)
-
-      assert {{:error, :not_standing}, attrs} = mint(ctx)
-      refute minted?(attrs)
     end
   end
 end

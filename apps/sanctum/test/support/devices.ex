@@ -63,17 +63,46 @@ defmodule Sanctum.Test.Devices do
     challenge
   end
 
-  @doc "The device's channel context, as a connect proof establishes it."
-  def connected!(%{certificate: certificate, key: {_pub, priv}} = admitted) do
+  @doc "The device's channel context, as a connect proof from `source` establishes it."
+  def connected!(
+        %{certificate: certificate, key: {_pub, priv}} = admitted,
+        source \\ "198.51.100.40"
+      ) do
     challenge = challenge(admitted)
 
     {:ok, ctx} =
       Sanctum.DeviceCerts.verify_connect(
-        %{client_id: certificate.client_id, certificate: certificate, source: "198.51.100.40"},
+        %{client_id: certificate.client_id, certificate: certificate, source: source},
         Proof.sign(challenge, priv),
         challenge
       )
 
     ctx
+  end
+
+  @doc """
+  A new device of the person `user_id` paired here, as a hello pairs a key
+  of their account this CYFR admitted them by: their account
+  (`Sanctum.TestContext.account!/1`), the device's client in their own
+  athanor with its first certificate under the head cached here
+  (`Sanctum.DeviceUnlock`), and its channel's context from `source`.
+  Answers `%{client_id, certificate, key, ctx}`, `key` the device's key
+  pair.
+  """
+  def paired!(user_id, source \\ "198.51.100.40") when is_binary(user_id) do
+    account = Sanctum.TestContext.account!(user_id)
+    {pub, priv} = :crypto.generate_key(:eddsa, :ed25519)
+    {:ok, key} = Key.new(alg: :ed25519, kind: :device, pub: pub)
+    client_id = Prima.UUID7.generate_id("pcl")
+    :ok = Sanctum.DeviceUnlock.pair(%{id: user_id}, client_id, key, account.head)
+
+    {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
+
+    {:ok, %{certificate: bytes}} =
+      Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor_id), client_id)
+
+    {:ok, certificate} = bytes |> Jason.decode!() |> Prima.DeviceCert.decode()
+    paired = %{client_id: client_id, certificate: certificate, key: {pub, priv}}
+    Map.put(paired, :ctx, connected!(paired, source))
   end
 end

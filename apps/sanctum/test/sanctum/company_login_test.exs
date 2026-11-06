@@ -41,16 +41,11 @@ defmodule Sanctum.CompanyLoginTest do
   # application's environment: one case at a time.
   use ExUnit.Case, async: false
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.{CompanyAuthorization, CompanyLoginAttempt}
   alias Arca.Test.QueryCounter
-  alias Prima.DeviceCert.Proof
-  alias Sanctum.{Caller, CompanyLogin, Context, Pairing}
+  alias Sanctum.{Caller, CompanyLogin, Context}
   alias Sanctum.Tenancy.Users
 
   @issuer "https://idp.example.com"
@@ -217,35 +212,17 @@ defmodule Sanctum.CompanyLoginTest do
     %{issuer: session_ctx, name: name, raw: raw, ctx: key_ctx}
   end
 
-  # A device paired through the ceremony under the person's session, and
-  # what `Sanctum.DeviceCerts` hands `Caller.establish_device/2` once it
+  # A device of the person's account paired here, and what
+  # `Sanctum.DeviceCerts` hands `Caller.establish_device/2` once it
   # verified it: the certificate and the rows it read.
   defp device!(session_ctx) do
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     Prima.Test.RateLimiter.reset!()
 
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    digest = Prima.Device.key_digest(device_key)
+    %{client_id: client_id, certificate: certificate} =
+      Sanctum.Test.Devices.paired!(session_ctx.user_id, @source)
 
-    {:ok, invitation} =
-      session_ctx
-      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{"key_digest" => digest})
-
-    glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{holder: @holder, device_key: device_key}
-
-    {:ok, %{challenge: challenge}} =
-      Pairing.complete(glass, invitation.invitation_secret, submission)
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Pairing.complete(
-        glass,
-        invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
-      )
-
-    user_id = certificate.subject.user_id
+    user_id = session_ctx.user_id
 
     {:ok, client} =
       Sanctum.DeviceCerts.paired_client(certificate.athanor, user_id, client_id)
