@@ -64,8 +64,12 @@ defmodule PrismWeb.AdmissionCard do
   @ticket_ttl_ms 60_000
   @held :cyfr_admission
 
-  @no_registry "This CYFR does not reach cyfr.run, so it cannot make your name. Ask whoever " <>
-                 "runs this CYFR."
+  # The sentences of a CYFR that reaches no cyfr.run, and of a refused
+  # identity, end on asking whoever runs this CYFR, unless the reader is
+  # that person (setup's first person, `runs_cyfr`).
+  @no_registry_fact "This CYFR does not reach cyfr.run, so it cannot make your name."
+  @ask " Ask whoever runs this CYFR."
+  @no_registry @no_registry_fact <> @ask
   @invalid "A name is lowercase letters and digits joined by single hyphens, at most 39 " <>
              "characters."
 
@@ -204,12 +208,21 @@ defmodule PrismWeb.AdmissionCard do
   closed door) before it asks this.
   """
   @spec refusal(term()) :: String.t()
-  def refusal(:no_directory), do: @no_registry
+  def refusal(reason), do: refusal(reason, false)
 
-  def refusal(:registration_refused),
+  @doc """
+  `refusal/1` for a reader who runs this CYFR when `runs_cyfr` (setup's
+  first person): a CYFR that reaches no cyfr.run is said without asking
+  whoever runs it.
+  """
+  @spec refusal(term(), boolean()) :: String.t()
+  def refusal(:no_directory, true), do: @no_registry_fact
+  def refusal(:no_directory, false), do: @no_registry
+
+  def refusal(:registration_refused, _runs_cyfr),
     do: "That passkey could not be registered here. Try again."
 
-  def refusal(reason), do: Ops.error_message(reason)
+  def refusal(reason, _runs_cyfr), do: Ops.error_message(reason)
 
   @doc "The sentence a ceremony that did not finish reads as on screen 1."
   @spec ceremony_failed() :: String.t()
@@ -498,10 +511,13 @@ defmodule PrismWeb.AdmissionCard do
   attr :name, :string, default: nil
   attr :error, :string, default: nil
   attr :target, :any, default: nil
+  attr :runs_cyfr, :boolean, default: false
   slot :code
 
   @doc """
-  Screen 2 in `state`. Its `code` state shows, by default, the place the
+  Screen 2 in `state`. `runs_cyfr` is a reader who runs this CYFR (setup's
+  first person), whom the refused and no-registry states do not tell to
+  ask whoever runs it. Its `code` state shows, by default, the place the
   hook draws the code into, Copy and "I saved it"; the `code` slot
   replaces them (Settings' "Show your recovery code").
   """
@@ -576,14 +592,17 @@ defmodule PrismWeb.AdmissionCard do
       </div>
 
       <p :if={@state == :refused} class="text-sm text-gray-300">
-        cyfr.run refused this identity. Ask whoever runs this CYFR.
+        {refused(@runs_cyfr)}
       </p>
       <p :if={@state == :no_registry} class="text-sm text-gray-300">
-        {no_registry()}
+        {refusal(:no_directory, @runs_cyfr)}
       </p>
     </section>
     """
   end
+
+  defp refused(true), do: "cyfr.run refused this identity."
+  defp refused(false), do: "cyfr.run refused this identity." <> @ask
 
   @doc "The sentence a CYFR that reaches no cyfr.run reads as."
   @spec no_registry() :: String.t()
