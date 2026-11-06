@@ -876,16 +876,9 @@ defmodule Compendium.Registry.ClientSyncTest do
         json_resp(conn, 200, %{"memberships" => [], "token" => "cyfr_pt_SIGNED_SECRET"})
       end)
 
-      original = Logger.level()
+      log = with_info_log(fn -> {:ok, _} = Client.signed("tokens.mint", @bytes) end)
 
-      log =
-        try do
-          Logger.configure(level: :info)
-          capture_log([level: :info], fn -> {:ok, _} = Client.signed("tokens.mint", @bytes) end)
-        after
-          Logger.configure(level: original)
-        end
-
+      assert log =~ "[REDACTED]"
       refute log =~ "cyfr_pt_SIGNED_SECRET"
     end
   end
