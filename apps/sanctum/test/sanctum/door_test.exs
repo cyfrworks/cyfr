@@ -57,7 +57,7 @@ defmodule Sanctum.DoorTest do
           updated_at: now
         },
         %{
-          key: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier(n)),
+          key: "cyfr|https://dir.example|" <> identifier(n),
           provider: "cyfr",
           issuer: "https://dir.example",
           subject: identifier(n),

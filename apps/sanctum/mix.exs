@@ -62,12 +62,12 @@ defmodule Sanctum.MixProject do
       {:arca, in_umbrella: true},
       {:jason, "~> 1.4"},
       # Contexts are established at the authentication boundary, which is
-      # a `Plug.Conn`, and the identity providers are Ueberauth strategies.
+      # a `Plug.Conn`.
       {:plug, "~> 1.14"},
-      {:ueberauth, "~> 0.11.0"},
+      # The company sign-in's OpenID Connect issuer: the provider
+      # configuration worker its exchange names (`Sanctum.Auth.OIDC.Oidcc`).
       {:ueberauth_oidcc, "~> 0.4.2"},
-      # The auth sliver's own HTTP: the device-flow pool
-      # (`Sanctum.Auth.Finch`) and the OAuth token exchange.
+      # The OAuth token exchange's HTTP.
       {:finch, "~> 0.19"},
       {:req, "~> 0.5"},
       {:telemetry, "~> 1.0"},

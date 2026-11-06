@@ -122,8 +122,6 @@ defmodule Sanctum.Test.People do
     {:ok, %{id: user_id}} =
       Arca.Users.mint(Prima.Actor.system(), user_attrs, nil,
         admission: "setup",
-        rp_id: Sanctum.Passkeys.rp_id(),
-        home: Sanctum.Person.home(),
         also: fn person ->
           with :ok <- Sanctum.Person.mint_keys(person),
                {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person),
@@ -146,8 +144,7 @@ defmodule Sanctum.Test.People do
   # The person row of `admission` and the identity `info.id` linked, then
   # `also` handed the person, in one transaction.
   defp insert(%{id: key} = info, admission, also) do
-    {:ok, %{provider: provider, issuer: issuer, subject: subject}} =
-      Sanctum.Auth.Identity.parse(key)
+    [provider, issuer, subject] = String.split(key, "|", parts: 3)
 
     now = DateTime.utc_now()
     user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())

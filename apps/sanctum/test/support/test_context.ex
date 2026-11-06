@@ -516,7 +516,9 @@ defmodule Sanctum.TestContext do
       not Prima.PersonId.person?(user_id) ->
         # A fixture's bare name reads as a local door's identity.
         key =
-          if Sanctum.Auth.Identity.key?(user_id), do: user_id, else: "local|local|" <> user_id
+          if match?([_, _, _], String.split(user_id, "|", parts: 3)),
+            do: user_id,
+            else: "local|local|" <> user_id
 
         {person, _user} = person!(%{ctx | user_id: key})
         person

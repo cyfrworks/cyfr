@@ -5,8 +5,7 @@ defmodule Arca.Schemas.ExternalIdentity do
   @moduledoc """
   How an identity provider names a person this server knows: one row per
   IdP identity, keyed by the composite `<provider>|<issuer>|<subject>`
-  (`Sanctum.Auth.Identity.key/3`) and pointing at the person's `users`
-  row. A person may be named by several; an identity names one person.
+  and pointing at the person's `users` row. A person may be named by several; an identity names one person.
   """
 
   use Ecto.Schema

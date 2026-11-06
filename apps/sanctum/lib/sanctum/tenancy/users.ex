@@ -36,8 +36,8 @@ defmodule Sanctum.Tenancy.Users do
 
   @typedoc """
   What a linked sign-in method's provider said at an unlock: `id` is the
-  method's identity key (`Sanctum.Auth.Identity.key/3`), never a person's
-  own id.
+  method's identity key (`provider|issuer|subject`), never a person's own
+  id.
   """
   @type provider_info :: %{
           required(:id) => String.t(),

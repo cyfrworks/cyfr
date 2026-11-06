@@ -522,25 +522,6 @@ if config_env() != :test do
   # http catalyst fetches.
   config :sanctum, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
-  # GitHub and Google sign in by device flow (CLI and Prism), each offered
-  # exactly when it is configured: GitHub needs only a client ID; Google
-  # needs a client ID and secret.
-  github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
-  google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
-  google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
-
-  # Device Flow credentials for Google. `google_client_id` is sent on both
-  # the device-code request and the token exchange; `google_client_secret`
-  # is sent only on the token exchange (required per Google OAuth spec for
-  # all device-flow clients).
-  if google_id do
-    config :sanctum, :google_client_id, google_id
-  end
-
-  if google_secret do
-    config :sanctum, :google_client_secret, google_secret
-  end
-
   # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
   # Default in production: `registry_url` is `"cyfr.run"` and
   # `oci_registry_url` derives as `"registry.#{registry_url}"`. In
@@ -616,47 +597,31 @@ if config_env() != :test do
 
   config :cyfr, :oci_registry_url, oci_registry_url_config
 
-  # GitHub device flow needs only its client ID (read above).
-  if github_id do
-    config :sanctum, :github_client_id, github_id
-  end
-
-  # The OpenID Connect issuer, offered exactly when all three of its
-  # settings are set; a partly set issuer refuses the boot. Its issuer is
-  # also pinned at `:sanctum, :oidc_issuer` — the single source both the
-  # boot reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`)
-  # and the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
+  # The OpenID Connect issuer of a company's sign-in, offered exactly when
+  # all three of its settings are set; a partly set issuer refuses the
+  # boot. Its issuer is pinned at `:sanctum, :oidc_issuer`, the single
+  # source the boot reserved-host check
+  # (`Cyfr.Application.validate_oidc_issuer_config!/0`) and the company
+  # sign-in (`Sanctum.Auth.OIDC`) read.
   oidc =
     case Cyfr.RuntimeConfig.oidc_config(getenv) do
       {:ok, oidc} -> oidc
       {:error, message} -> raise message
     end
 
-  # A headless node has no browser page, and the OIDC issuer signs people
-  # in through one: an issuer configured there could never be used.
+  # A headless node has no browser page, and a company's sign-in goes
+  # through one: an issuer configured there could never be used.
   if headless? and oidc do
     raise "CYFR_HEADLESS=on cannot be combined with CYFR_OIDC_ISSUER: " <>
-            "an OIDC issuer signs in through the browser page a headless node refuses"
+            "a company's sign-in goes through the browser page a headless node refuses"
   end
 
   if oidc do
     config :sanctum, :oidc_issuer, oidc.issuer
+    config :sanctum, :oidc_client, %{client_id: oidc.client_id, client_secret: oidc.client_secret}
+    # The issuer's provider configuration worker, `:cyfr_oidc`, which the
+    # company sign-in's exchange names (`Sanctum.Auth.OIDC.Oidcc`).
     config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
-
-    # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
-    # canonical `oidcc|<iss>|<sub>` id form. The callback is the home's own
-    # address (`Sanctum.origin/0`), named here so no request header
-    # chooses it: unnamed, Ueberauth builds it from the request's
-    # X-Forwarded-Proto and X-Forwarded-Host, which any client can send.
-    config :ueberauth, Ueberauth,
-      providers: [
-        oidcc:
-          {Ueberauth.Strategy.Oidcc,
-           issuer: :cyfr_oidc,
-           client_id: oidc.client_id,
-           client_secret: oidc.client_secret,
-           callback_url: access.origin <> "/auth/oidcc/callback"}
-      ]
   end
 
   # The company sign-in this CYFR may require of every person

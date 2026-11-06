@@ -240,10 +240,6 @@ config :tailwind,
     cd: Path.expand("../apps/cyfr/assets", __DIR__)
   ]
 
-# Ueberauth base configuration
-# Provider strategies are configured at runtime based on environment.
-config :ueberauth, Ueberauth, providers: []
-
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

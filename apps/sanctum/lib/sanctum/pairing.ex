@@ -1020,15 +1020,6 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  # A passkey's platform holder is revoked with its credential, wherever
-  # it synced, under the passkey's own revocation (`Sanctum.Passkeys.revoke/2`).
-  defp revoke_client(ctx, %{source_kind: "passkey", source_id: passkey_id} = client) do
-    with {:ok, _passkey} <- Sanctum.Passkeys.revoke(ctx, passkey_id) do
-      :ok = Sanctum.Telemetry.sessions_revoked(client.user_id)
-      {:ok, %{client | standing: "revoked"}}
-    end
-  end
-
   defp revoke_client(ctx, %{id: client_id}) do
     with :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{

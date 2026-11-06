@@ -38,10 +38,6 @@ defmodule Sanctum.Supervisor do
         # without running its `after` (the brutal-kill cancel/timeout
         # paths).
         Sanctum.Authority.BudgetGuard,
-        # The auth sliver's own Finch pool for IdP OAuth Device-Flow HTTP
-        # calls (GitHub / Google). Caller-selected destinations use
-        # Sanctum.Egress's pinned connections instead of this fixed-host pool.
-        {Finch, name: Sanctum.Auth.Finch},
         # OAuth refresh single-flight (see `Sanctum.OAuth.RefreshLock`):
         # the registry and the task pool whose leaders register in it
         # restart together.

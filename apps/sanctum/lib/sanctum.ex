@@ -12,30 +12,19 @@ defmodule Sanctum do
 
   ## People and signing in
 
-  A person is made only by an admission (`Sanctum.Newcomer`): setup, an
-  invitation (`Sanctum.Invitations`), an open door, a verified CYFR
-  sign-in, or a restore. Every session is
+  A person signs in with their account: this CYFR mints a request, a key
+  of the account signs it (a passkey at the account pages, or a device
+  over its channel) and the answer is verified against the account's log
+  (`Sanctum.SignIn`). A person is made only by an admission of an account
+  by its identifier (`Sanctum.Newcomer`): setup, an invitation
+  (`Sanctum.Invitations`), the door, or a restore. Every session is
   minted by `Sanctum.Session`, on one of these paths:
 
-  - an admission that brings its credential (`Sanctum.Newcomer`);
-  - the OpenID Connect browser flow — `PrismWeb.AuthController.callback/2`
-    unlocks the person who linked the identity `Sanctum.Auth.OIDC` proves
-    (`Sanctum.SignIn.unlock/1`, which asks the door about them);
-  - the GitHub and Google device flows —
-    `Sanctum.Auth.DeviceFlow.poll_for_session/3` behind the sign-in page,
-    which unlock the same way;
+  - a sign-in's answer (`Sanctum.SignIn`), which asks the door about the
+    person (`Sanctum.Door`) or admits a new one;
   - a protected device's unlock (`Sanctum.DeviceUnlock`), redeemed by its
     browser or its command line;
-  - the CYFR sign-in (`Sanctum.Auth.CyfrDoor`), which unlocks a person
-    admitted before or admits a remote newcomer, and a passkey
-    (`Sanctum.Passkeys`), which asks the door about the person;
   - the installation-authorized restore (`Sanctum.Recovery`).
-
-  A sign-in method proves who someone is; it never makes a person and
-  never mints a session itself. The methods offered are the ones
-  configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`,
-  `Sanctum.Auth.OIDC.issuer/0`); passkeys, paired devices and the CYFR
-  sign-in are always offered.
 
   A CYFR may also require a company sign-in of every person here
   (`Sanctum.CompanyLogin`): a standing condition, never a sign-in method,
@@ -49,16 +38,11 @@ defmodule Sanctum do
       ApiKey,
       Attach,
       Auth,
-      Auth.CyfrDoor,
-      Auth.DeviceFlow,
-      Auth.EmailVerification,
-      Auth.Identity,
       Auth.OIDC,
       Authority,
       Authority.BudgetCounter,
       BearerToken,
       Caller,
-      Carry,
       Catalog,
       Catalog.NotLoadedError,
       Cipher,

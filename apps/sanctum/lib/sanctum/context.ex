@@ -203,7 +203,7 @@ defmodule Sanctum.Context do
     # identifier as :api_key_id, and what `session.logout` needs to retire
     # exactly the session that called it.
     :session_token_hash,
-    # The identity key (`Sanctum.Auth.Identity.key/3`) of the door that
+    # The identity key (`provider|issuer|subject`) of the door that
     # admitted a sign-in, on the context that door built, or nil. The
     # sign-in's binding names it (`Sanctum.Tenancy.resolve_status/2`), so
     # the session is issued only while that door is still the person's: a
@@ -231,9 +231,7 @@ defmodule Sanctum.Context do
     :frame,
     # The caller's resolved address, where the ingress knew one
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
-    # is what an anonymous, per-action budget can be charged to: the
-    # `/mcp` device flows charge their per-address sign-in budget to it
-    # (`Sanctum.Providers.Session`, `Sanctum.Auth.DeviceFlow`).
+    # is what an anonymous, per-action budget can be charged to.
     :client_ip,
     # The paired client the device channel authenticated this request
     # through (`auth_method: :device`), or nil for every other ingress.

@@ -159,13 +159,7 @@ defmodule Sanctum.CompanyLoginTest do
   # The `oidcc` provider's registration: the client id a binding is made
   # under.
   defp client!(client_id) do
-    put_env!(:ueberauth, Ueberauth,
-      providers: [
-        oidcc:
-          {Ueberauth.Strategy.Oidcc,
-           issuer: :cyfr_oidc, client_id: client_id, client_secret: "csec"}
-      ]
-    )
+    put_env!(:sanctum, :oidc_client, %{client_id: client_id, client_secret: "csec"})
   end
 
   # The establish memo on, and what it kept dropped after the case.

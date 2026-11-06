@@ -473,6 +473,7 @@ defmodule Sanctum.SignIn do
 
   defp refused(reason) do
     Logger.info("[Sanctum.SignIn] an answer was refused: " <> Prima.LoggerContext.shape(reason))
+    Sanctum.Telemetry.auth_event(:unknown, :failure, %{reason: :answer_refused})
     {:error, :answer_refused}
   end
 
@@ -648,6 +649,7 @@ defmodule Sanctum.SignIn do
     with {:ok, ctx} <-
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
          {:ok, session} <- Sanctum.Session.create(ctx, kid: key.kid, head: head.head_hash) do
+      Sanctum.Telemetry.auth_event(key.kind, :success)
       {:ok, session.token}
     else
       {:error, reason} when reason in [:stale_head, :unavailable, :not_owner] ->

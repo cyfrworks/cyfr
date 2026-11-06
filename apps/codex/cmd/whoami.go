@@ -162,14 +162,9 @@ func renderWhoami(composed map[string]any, registryErr error) {
 	}
 }
 
-// providerLabels names each provider of ops.SignInProviders for a person.
-var providerLabels = map[string]string{"github": "GitHub", "google": "Google", "oidcc": "OIDC"}
-
-// prettyProvider renders the machine-name provider as a user-facing label.
+// prettyProvider renders how the session was signed for: the server's own
+// word for it (passkey, device), or "unknown" when it names none.
 func prettyProvider(p string) string {
-	if label, ok := providerLabels[p]; ok {
-		return label
-	}
 	if p == "" {
 		return "unknown"
 	}

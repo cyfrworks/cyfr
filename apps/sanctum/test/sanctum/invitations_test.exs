@@ -91,7 +91,7 @@ defmodule Sanctum.InvitationsTest do
     {:ok, user} =
       Sanctum.Test.People.remote(
         %{
-          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          id: "cyfr|https://dir.example|" <> identifier,
           provider: "cyfr"
         },
         %{identifier: identifier, directory_url: "https://dir.example"}
@@ -136,6 +136,18 @@ defmodule Sanctum.InvitationsTest do
       user_id: user.id,
       open: true
     })
+  end
+
+  # The invitation `code` opens, redeemed by `user_id` as an admission's
+  # transaction redeems it.
+  defp redeemed(code, user_id) do
+    {:ok, hash} = Invitations.code_hash(code)
+    Arca.Invitations.redeem(Prima.Actor.system(), hash, user_id)
+  end
+
+  # Whether the invitation `code` opens would admit an account now.
+  defp redeemable(code) do
+    with {:ok, hash} <- Invitations.code_hash(code), do: Invitations.redeemable_hash(hash)
   end
 
   describe "create/3" do
@@ -269,7 +281,7 @@ defmodule Sanctum.InvitationsTest do
       alice = person!()
       thread = thread!(alice)
       {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
-      {:ok, _} = Invitations.redeem(code, person!().id)
+      {:ok, _} = redeemed(code, person!().id)
 
       assert {:error, {:invalid_argument, _}} = Invitations.revoke(ctx(alice), invitation.id)
       assert row(invitation.id).revoked_at == nil
@@ -289,7 +301,7 @@ defmodule Sanctum.InvitationsTest do
       {:ok, %{invitation: expired}} = Invitations.create(ctx(alice), thread.id)
       expire!(expired.id)
       {:ok, %{invitation: redeemed, code: code}} = Invitations.create(ctx(alice), thread.id)
-      {:ok, _} = Invitations.redeem(code, person!().id)
+      {:ok, _} = redeemed(code, person!().id)
       {:ok, %{invitation: bobs}} = Invitations.create(ctx(bob), thread.id)
       {:ok, %{invitation: admins}} = Invitations.create(ctx(admin), nil)
 
@@ -372,7 +384,7 @@ defmodule Sanctum.InvitationsTest do
 
       expire!(expired.id)
       {:ok, %{code: redeemed_code}} = Invitations.create(ctx(alice), thread.id)
-      {:ok, _} = Invitations.redeem(redeemed_code, person!().id)
+      {:ok, _} = redeemed(redeemed_code, person!().id)
 
       {:ok, %{invitation: revoked, code: revoked_code}} =
         Invitations.create(ctx(alice), thread.id)
@@ -382,7 +394,7 @@ defmodule Sanctum.InvitationsTest do
 
       for code <- [expired_code, redeemed_code, revoked_code, unknown, "not a code", "", nil] do
         assert {:error, :invitation_invalid} = Invitations.lookup(code)
-        assert {:error, :invitation_invalid} = Invitations.redeemable(code)
+        assert {:error, :invitation_invalid} = redeemable(code)
       end
     end
 
@@ -403,11 +415,11 @@ defmodule Sanctum.InvitationsTest do
 
       for code <- [left, denied] do
         assert {:error, :invitation_invalid} = Invitations.lookup(code)
-        assert {:error, :invitation_invalid} = Invitations.redeemable(code)
+        assert {:error, :invitation_invalid} = redeemable(code)
       end
     end
 
-    test "redeemable_hash/1 agrees with redeemable/1, and refuses what is no hash" do
+    test "redeemable_hash/1 answers the code's hash, and refuses what is no hash" do
       alice = person!()
       bob = person!()
       thread = thread!(alice, [bob])
@@ -424,14 +436,14 @@ defmodule Sanctum.InvitationsTest do
 
       {:ok, _} = Invitations.revoke(ctx(alice), revoked.id)
       {:ok, %{code: redeemed_code}} = Invitations.create(ctx(alice), thread.id)
-      {:ok, _} = Invitations.redeem(redeemed_code, person!().id)
+      {:ok, _} = redeemed(redeemed_code, person!().id)
       {:ok, _} = SharedThreads.leave(bob.id, thread.id)
 
-      assert :ok = Invitations.redeemable(open)
+      assert :ok = redeemable(open)
       assert :ok = Invitations.redeemable_hash(hash(open))
 
       for code <- [left, expired_code, revoked_code, redeemed_code] do
-        assert {:error, :invitation_invalid} = Invitations.redeemable(code)
+        assert {:error, :invitation_invalid} = redeemable(code)
         assert {:error, :invitation_invalid} = Invitations.redeemable_hash(hash(code))
       end
 
@@ -558,14 +570,14 @@ defmodule Sanctum.InvitationsTest do
       refute seated?(dave, thread)
       assert door(carol.identifier) == [identifier_deny]
       assert door(dave.identifier) == []
-      assert :ok = Invitations.redeemable(code)
+      assert :ok = redeemable(code)
     end
 
     test "a spent, revoked or expired invitation writes no seat and no allow" do
       alice = person!()
       thread = thread!(alice)
       {:ok, %{code: spent}} = Invitations.create(ctx(alice), thread.id)
-      {:ok, _} = Invitations.redeem(spent, person!().id)
+      {:ok, _} = redeemed(spent, person!().id)
 
       {:ok, %{invitation: revoked, code: revoked_code}} =
         Invitations.create(ctx(alice), thread.id)
@@ -599,7 +611,7 @@ defmodule Sanctum.InvitationsTest do
       refute seated?(carol, thread)
       assert people_rows(thread) == 1
       assert door(carol.identifier) == []
-      assert :ok = Invitations.redeemable(code)
+      assert :ok = redeemable(code)
     end
 
     test "a thread a declared restore holds refuses it, the invitation unspent and no seat" do
@@ -612,7 +624,7 @@ defmodule Sanctum.InvitationsTest do
       # Bob still recovers from a declared restore: the thread admits no
       # one new, though the invitation itself still opens.
       recovering!(bob)
-      assert :ok = Invitations.redeemable(code)
+      assert :ok = redeemable(code)
 
       assert {:error, :recovering_from_restore} = Invitations.redeem_for(hash(code), carol.id)
 
@@ -620,7 +632,7 @@ defmodule Sanctum.InvitationsTest do
       refute seated?(carol, thread)
       assert people_rows(thread) == 2
       assert door(carol.identifier) == []
-      assert :ok = Invitations.redeemable(code)
+      assert :ok = redeemable(code)
     end
   end
 end
@@ -661,7 +673,7 @@ defmodule Sanctum.InvitationsRaceTest do
     n = System.unique_integer([:positive])
     key = "github|https://github.com|invitations-race-#{n}"
     identifier = "per_" <> Prima.Digest.sha256_hex("invitations-race-#{n}")
-    remote_key = Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier)
+    remote_key = "cyfr|https://dir.example|" <> identifier
     on_exit(fn -> unboxed(fn -> cleanup!([key, remote_key], identifier) end) end)
 
     unboxed(fn ->

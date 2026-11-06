@@ -43,7 +43,7 @@ defmodule Sanctum.SharedThreadsTest do
     {:ok, user} =
       Sanctum.Test.People.remote(
         %{
-          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          id: "cyfr|https://dir.example|" <> identifier,
           provider: "cyfr"
         },
         %{identifier: identifier, directory_url: "https://dir.example"}

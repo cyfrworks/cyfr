@@ -87,10 +87,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   def rosters do
     [
       {"CredentialKinds", "every credential kind a manifest need may name",
-       Prima.CredentialKinds.all()},
-      {"SignInProviders", "every sign-in provider", Prima.SignInProviders.all()},
-      {"DeviceFlowProviders", "the sign-in providers a device flow starts with",
-       Prima.SignInProviders.device_flow()}
+       Prima.CredentialKinds.all()}
     ]
   end
 

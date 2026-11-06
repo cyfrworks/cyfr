@@ -5,9 +5,7 @@ defmodule Sanctum.Providers.Person do
   @moduledoc """
   The `person` tool: a person's identity at their own home — the recovery
   code their admission enrolled them with, another recovery code added by
-  one the person holds, the doors they sign in through, a device
-  certificate for another home, and the sign-in carry that begins and
-  completes here. The carry stores no saved-home list.
+  one the person holds, and a device certificate for another home.
 
   Every action but one is on the external plane, through an interactive
   session (`consent: :interactive`): a person's own, or, for
@@ -17,12 +15,10 @@ defmodule Sanctum.Providers.Person do
   a device at another home renews here holding no session of this home's,
   and the proof of its device key over this home's challenge is its only
   credential (`Sanctum.RemoteCertification`). Showing the recovery code
-  and adding one touch recovery material; linking and unlinking change
-  the sign-in methods;
-  certifying a device pairs it: each is a sensitive change Sanctum decides
-  where it is made (`Sanctum.Pairing`). `person.assert` and
-  `person.assert_confirmation` are declared with the tool by
-  `Sanctum.Providers.Assertion`, which handles them.
+  and adding one touch recovery material; certifying a device pairs it:
+  each is a sensitive change Sanctum decides where it is made
+  (`Sanctum.Pairing`). `person.assert_confirmation` is declared with the
+  tool by `Sanctum.Providers.Assertion`, which handles it.
 
   A recovery secret the trusted form draws is the field `recovery_secret`
   wherever it appears, the added code's `holder` included; a recovery code
@@ -47,19 +43,6 @@ defmodule Sanctum.Providers.Person do
       the added code's attempt (`attempt_id`, `request_id`, `phase`,
       `identifier`), its `code` until it is saved, and the new
       `key_epoch`. A recovery code the person holds signs it.
-    * `person.link_door` and `person.unlink_door`
-      (`Sanctum.SignIn.link_door/3`, `unlink_door/2`) — the door linked or
-      unlinked, by its key, provider, issuer and subject.
-    * `person.carry_begin` and `person.carry_complete`
-      (`Sanctum.Carry.begin/2`, `complete/3`) — the pending carry, its
-      envelope, payload and fragment; then its recorded outcome and the
-      destination this home's row names.
-    * `person.carry_list` (`Sanctum.Carry.pending/1`) — `%{actions: [...]}`,
-      the person's unexpired pending carries, each its `action_id`,
-      `destination`, `phase`, `expires_at`, `began_at` and `key_epoch`;
-      never a challenge, assertion, envelope or payload.
-    * `person.carry_cancel` (`Sanctum.Carry.cancel/2`) — the carry's
-      `action_id` and `phase: "cancelled"`.
     * `person.certify` (`Sanctum.RemoteCertification.certify/2`) —
       `%{certificate: _}`, a device certificate with an identity subject
       for another home, after the `device_pairing` confirmation, recorded
@@ -77,7 +60,7 @@ defmodule Sanctum.Providers.Person do
   """
 
   alias Prima.{Arg, Operation}
-  alias Sanctum.{Carry, Context, Recovery, RemoteCertification, SignIn}
+  alias Sanctum.{Context, Recovery, RemoteCertification}
   alias Sanctum.Providers.Assertion
 
   @doc false
@@ -87,7 +70,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own CYFR: read its status, show the recovery code and say it is saved, add another recovery code, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
+        "A person's identity at their own CYFR: read its status, show the recovery code and say it is saved, add another recovery code, and certify a device for another CYFR and renew that certificate.",
       title: "Person"
     )
   end
@@ -115,41 +98,6 @@ defmodule Sanctum.Providers.Person do
       ),
       Operation.new(
         "person",
-        "link_door",
-        "Link a sign-in method",
-        [
-          Arg.new("provider", :string,
-            required: true,
-            description: "link_door: the sign-in method to link, as its provider name"
-          ),
-          Arg.new("ticket", :string,
-            required: true,
-            description:
-              "link_door: the single-use ticket a completed sign-in with that sign-in method answered, proving control of its subject"
-          )
-        ],
-        kind: :write,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
-        "unlink_door",
-        "Unlink a sign-in method",
-        [
-          Arg.new("door", :string,
-            required: true,
-            description:
-              "unlink_door: the linked sign-in method's identity key (provider|issuer|subject)"
-          )
-        ],
-        reduces_authority: true,
-        kind: :destructive,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
         "recovery_code_add",
         "Add another recovery code",
         [
@@ -166,50 +114,6 @@ defmodule Sanctum.Providers.Person do
           request_id()
         ],
         kind: :write,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
-        "carry_begin",
-        "Begin a sign-in carry to another CYFR",
-        [
-          Arg.new("destination", :string,
-            required: true,
-            description: "carry_begin: the CYFR to sign in at, as its origin"
-          )
-        ],
-        kind: :write,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
-        "carry_complete",
-        "Record a sign-in carry's outcome",
-        [
-          carry_action_id(),
-          Arg.new("outcome", :string,
-            required: true,
-            enum: ["admitted", "refused"],
-            description: "carry_complete: the navigation outcome the destination returned"
-          )
-        ],
-        kind: :write,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
-        "carry_cancel",
-        "Cancel a pending sign-in carry",
-        [carry_action_id()],
-        kind: :write,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new("person", "carry_list", "List the pending sign-in carries", [],
-        kind: :read,
         planes: [:external],
         consent: :interactive
       ),
@@ -279,15 +183,6 @@ defmodule Sanctum.Providers.Person do
     ]
   end
 
-  # The same argument as `person.assert`'s, in the same words: one tool,
-  # one schema for a name.
-  defp carry_action_id,
-    do:
-      Arg.new("action_id", :string,
-        required: true,
-        description: "The pending sign-in carry, by its action id"
-      )
-
   defp recovery_secret(description),
     do:
       Arg.new("recovery_secret", :string,
@@ -311,8 +206,6 @@ defmodule Sanctum.Providers.Person do
           "The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)"
       )
 
-  def handle(%Context{} = ctx, %{"action" => "assert"} = args), do: Assertion.handle(ctx, args)
-
   def handle(%Context{} = ctx, %{"action" => "assert_confirmation"} = args),
     do: Assertion.handle(ctx, args)
 
@@ -332,52 +225,6 @@ defmodule Sanctum.Providers.Person do
 
   def handle(%Context{} = ctx, %{"action" => "recovery_code_add"} = args),
     do: answer(Recovery.recovery_code_add(ctx, args))
-
-  def handle(%Context{} = ctx, %{"action" => "link_door", "provider" => provider, "ticket" => t})
-      when is_binary(provider) and is_binary(t),
-      do: answer(SignIn.link_door(ctx, provider, t))
-
-  def handle(%Context{}, %{"action" => "link_door"}),
-    do:
-      {:error,
-       {:invalid_argument, "link_door needs the sign-in method's provider and its ticket"}}
-
-  def handle(%Context{} = ctx, %{"action" => "unlink_door", "door" => door}) when is_binary(door),
-    do: answer(SignIn.unlink_door(ctx, door))
-
-  def handle(%Context{}, %{"action" => "unlink_door"}),
-    do: {:error, {:invalid_argument, "unlink_door needs the sign-in method's identity key"}}
-
-  def handle(%Context{} = ctx, %{"action" => "carry_begin", "destination" => destination})
-      when is_binary(destination),
-      do: answer(Carry.begin(ctx, destination))
-
-  def handle(%Context{}, %{"action" => "carry_begin"}),
-    do: {:error, {:invalid_argument, "carry_begin needs the destination CYFR"}}
-
-  def handle(
-        %Context{} = ctx,
-        %{"action" => "carry_complete", "action_id" => action_id, "outcome" => outcome}
-      )
-      when is_binary(action_id) and is_binary(outcome),
-      do: answer(Carry.complete(ctx, action_id, outcome))
-
-  def handle(%Context{}, %{"action" => "carry_complete"}),
-    do: {:error, {:invalid_argument, "carry_complete needs the action_id and its outcome"}}
-
-  def handle(%Context{} = ctx, %{"action" => "carry_list"}) do
-    case Carry.pending(ctx) do
-      {:ok, actions} -> {:ok, %{actions: actions}}
-      {:error, reason} -> {:error, refusal(reason)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "carry_cancel", "action_id" => action_id})
-      when is_binary(action_id),
-      do: answer(Carry.cancel(ctx, action_id))
-
-  def handle(%Context{}, %{"action" => "carry_cancel"}),
-    do: {:error, {:invalid_argument, "carry_cancel needs the action_id"}}
 
   def handle(%Context{} = ctx, %{"action" => "close_recovery"} = args),
     do: answer(Recovery.close_recovery(ctx, Map.get(args, "user_id")))

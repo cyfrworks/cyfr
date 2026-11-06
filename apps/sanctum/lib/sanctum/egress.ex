@@ -22,9 +22,7 @@ defmodule Sanctum.Egress do
   connection of its own (`Opus.Host.AttachedFetch`). Beside that attached
   request, the control plane's other outbound HTTP is a closed inventory
   of sites that connect for themselves: the object store at its
-  configured endpoint (`Arca.Adapters.S3`); the identity provider's device
-  flow, on a pool of its own to the provider's fixed hosts
-  (`Sanctum.Auth.DeviceFlow`); and the signed wires to the worker and
+  configured endpoint (`Arca.Adapters.S3`); and the signed wires to the worker and
   builds services the deployment names (`Opus.WorkerClient`,
   `Compendium.Builds.Client`). `Cyfr.EgressInventoryTest` fails on any
   outbound HTTP site it does not classify.
