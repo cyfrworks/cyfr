@@ -50,7 +50,7 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 </form>
 {{else if eq .Page "finish"}}
 <h1>Finish setting up</h1>
-<p>This screen made its key, but CYFR's answer did not arrive. Enter your {{if .Digits}}PIN{{else}}passphrase{{end}} to finish with the same key.</p>
+<p>CYFR's answer did not arrive. Enter your {{if .Digits}}PIN{{else}}passphrase{{end}} to finish setting up.</p>
 <form method="post" action="/finish">
 {{if .Restore}}<label>Your recovery code, again<input name="code" autocomplete="off" autofocus required></label>
 {{else}}<label>Your name, as you gave it<input name="name" autocomplete="off" autofocus></label>{{end}}

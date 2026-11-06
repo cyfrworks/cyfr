@@ -32,12 +32,16 @@ func newAccessProject(t *testing.T) *fakeStack {
 	return s
 }
 
-// `cyfr access <mode>` shows the change before it makes it: each of the
-// four sentences as before → after, then what changes with the address,
-// and makes it only once confirmed, as a switch bound to both digests the
-// preview showed, under the lock.
+// `cyfr access <mode>` shows the change before it makes it: who will reach
+// CYFR and where, then each other setting that changes, and when the
+// address changes on a CYFR someone may be set up on (its database exists),
+// what changes with it; it makes the change only once confirmed, as a switch
+// bound to both digests the preview showed, under the lock.
 func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	s := newAccessProject(t)
+	if err := os.WriteFile(filepath.Join("data", "cyfr.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	s.addressChanges = []string{"Passkeys at the old address stop working.", "Pair every device again."}
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("yes\n")
@@ -46,28 +50,16 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 		t.Fatalf("cyfr access public: %v\n%s", err, out.String())
 	}
 	text := out.String()
-	for _, line := range []string{
-		"  Who can reach CYFR: only this computer → anyone on the internet, who still has to sign in\n",
-		"  Address: http://localhost:4000 → https://cyfr.example.com\n",
-		"  Certificate email: none → ops@example.com\n",
-		"  Ports opened on this machine: none → 80 and 443\n",
-		"  1. Passkeys at the old address stop working.\n",
-		"  2. Pair every device again.\n",
-		"Your CYFR identity does not change.\n",
-	} {
-		if !strings.Contains(text, line) {
-			t.Errorf("the preview lacks %q:\n%s", line, text)
-		}
-	}
-	if strings.Index(text, "Make this change?") < strings.Index(text, "Ports opened on this machine") {
-		t.Errorf("the confirmation is asked before the change is shown:\n%s", text)
-	}
+	preview := "CYFR will be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
+		"  Certificate email: none → ops@example.com\n" +
+		"The address changes, so:\n  1. Passkeys at the old address stop working.\n  2. Pair every device again.\nYour CYFR identity does not change.\n" +
+		"Make this change? (yes/no) [no]: "
 	// After the change, the setup link at the new address lets the
 	// administrator back in.
-	passkeys := "Done. CYFR is reached as:\n  Who can reach CYFR: anyone on the internet, who still has to sign in\n  Address: https://cyfr.example.com\n  Certificate email: ops@example.com\n  Ports opened on this machine: 80 and 443\n" +
+	passkeys := "Done. CYFR is reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
 		"Passkeys made at the old address no longer sign anyone in. Open https://cyfr.example.com/setup#" + setupTokenOf(t) + " to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n"
-	if !strings.HasSuffix(text, passkeys) {
-		t.Errorf("cyfr access printed:\n%s\nwant it to end on:\n%s", text, passkeys)
+	if text != preview+passkeys {
+		t.Errorf("cyfr access printed:\n%s\nwant:\n%s", text, preview+passkeys)
 	}
 	if len(s.switches) != 1 || s.locks != 1 {
 		t.Fatalf("%d switches under %d locks, want one under the lock", len(s.switches), s.locks)
@@ -85,21 +77,44 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	}
 }
 
-// Unconfirmed, nothing changes: an answer other than yes, and no terminal
-// to ask on without --yes, which refuses before the lock.
+// On a CYFR that never booted, no one can lose a passkey or a paired
+// device to the new address: the preview lists none of it, and after the
+// change the next step is cyfr up and the setup link at the new address.
+func TestAccessListsNoConsequenceWhenNoOneIsSetUp(t *testing.T) {
+	s := newAccessProject(t)
+	s.addressChanges = []string{"Passkeys at the old address stop working.", "Pair every device again."}
+	askTerminal = func() bool { return true }
+	askInput = strings.NewReader("yes\n")
+	var out bytes.Buffer
+	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &out); err != nil {
+		t.Fatalf("cyfr access public: %v\n%s", err, out.String())
+	}
+	want := "CYFR will be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
+		"Make this change? (yes/no) [no]: " +
+		"Done. CYFR is reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
+		"Next: cyfr up. Then open https://cyfr.example.com/setup#" + setupTokenOf(t) + " to set up its first person.\n"
+	if out.String() != want {
+		t.Errorf("cyfr access printed:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
+// Unconfirmed, nothing changes: an answer other than yes, which says so
+// and is no failure, and no terminal to ask on without --yes, which
+// refuses before the lock.
 func TestAccessChangesNothingUnconfirmed(t *testing.T) {
 	s := newAccessProject(t)
 	before := read(t, ".env")
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("no\n")
-	err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "not confirmed. Nothing was changed") {
-		t.Errorf("an unconfirmed change answered %v", err)
+	var declined bytes.Buffer
+	err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &declined)
+	if err != nil || !strings.HasSuffix(declined.String(), "Make this change? (yes/no) [no]: Nothing changed.\n") {
+		t.Errorf("a declined change answered %v:\n%s", err, declined.String())
 	}
 	askTerminal = func() bool { return false }
 	locks := s.locks
 	err = runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "Nothing was changed. Run it again with --yes") || s.locks != locks {
+	if err == nil || !strings.Contains(err.Error(), "Nothing changed: there is no terminal to confirm the change on. Run it again with --yes") || s.locks != locks {
 		t.Errorf("a change with no terminal and no --yes answered %v (locks %d → %d)", err, locks, s.locks)
 	}
 	if len(s.switches) != 0 || read(t, ".env") != before {
@@ -134,16 +149,16 @@ func TestAccessWithoutAConfirmationShowsTheChangeAndMakesNone(t *testing.T) {
 	askInput = noInput{t}
 	var out bytes.Buffer
 	err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, false, "", &out)
-	if err == nil || !strings.Contains(err.Error(), "shown, not made") || !strings.Contains(err.Error(), "Nothing was changed. Run it again with --yes") || ExitStatus(err) != exitFailure {
+	if err == nil || !strings.Contains(err.Error(), "Nothing changed: there is no terminal to confirm the change on. Run it again with --yes") || ExitStatus(err) != exitFailure {
 		t.Errorf("an unconfirmed change answered %v", err)
 	}
-	if !strings.Contains(out.String(), "  Address: http://localhost:4000 → https://cyfr.example.com\n") {
+	if !strings.Contains(out.String(), "CYFR will be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n") {
 		t.Errorf("the change was not shown:\n%s", out.String())
 	}
 	for name, o := range map[string]accessOptions{"a machine not joined": {}, "a new node": {newNode: true}} {
 		out.Reset()
 		err := runAccess(context.Background(), access.ModeTailnet, o, false, "", &out)
-		if err == nil || !strings.Contains(err.Error(), "joins your tailnet before the change can be shown") || !strings.Contains(err.Error(), "Nothing was changed") {
+		if err == nil || !strings.Contains(err.Error(), "Nothing changed: this machine must join your tailnet before the change can be shown") {
 			t.Errorf("%s: an unconfirmed tailnet change answered %v", name, err)
 		}
 		if out.Len() != 0 {
@@ -298,7 +313,7 @@ func TestAccessStatusTakesNoLock(t *testing.T) {
 func TestAccessResumeReportsRecovery(t *testing.T) {
 	s := newAccessProject(t)
 	var out bytes.Buffer
-	if err := runAccessResume(context.Background(), &out); err != nil || !strings.Contains(out.String(), "Nothing was unfinished") || s.locks != 1 {
+	if err := runAccessResume(context.Background(), &out); err != nil || out.String() != "Nothing was left unfinished.\n" || s.locks != 1 {
 		t.Errorf("a resume with nothing unfinished answered %v:\n%s", err, out.String())
 	}
 	s.resume = []access.Receipt{
@@ -357,15 +372,20 @@ func TestAccessResumeReportsRecovery(t *testing.T) {
 	}
 }
 
+// removedOld is how a change declined after a new node's join that removed
+// old.tail1234.ts.net ends: what stands, and that identity to remove.
+const removedOld = "Make this change? (yes/no) [no]: This machine is on your tailnet as cyfr.tail1234.ts.net now, and its old tailnet identity old.tail1234.ts.net was removed: remove old.tail1234.ts.net in the Tailscale admin console too. Nothing else changed; run cyfr access tailnet again when you want CYFR reached there.\n"
+
 // answers is a terminal's input of one answer per line.
 func answers(lines ...string) io.Reader { return strings.NewReader(strings.Join(lines, "\n") + "\n") }
 
 // A tailnet change that needs this machine joined asks about the join
 // before it starts, since the join changes the tailnet whether or not the
-// change follows: declined, nothing runs; confirmed, the machine joins,
-// and a switch then declined says the machine joined and the home's access mode
-// is unchanged, never that nothing was changed. With --new-node it names
-// the identity the join removes before anything runs.
+// change follows: declined, nothing runs and nothing changed is said, as
+// no failure; confirmed, the machine joins, and a switch then declined says
+// the machine stays on the tailnet and how to go on, as no failure either.
+// With --new-node it names the identity the join removes before anything
+// runs, and a switch declined after it says to remove that identity.
 func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 	t.Run("declined", func(t *testing.T) {
 		s := newAccessProject(t)
@@ -373,8 +393,8 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askInput = answers("no")
 		var out bytes.Buffer
 		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{hostname: "home"}, false, "", &out)
-		if err == nil || !strings.Contains(err.Error(), "did not join your tailnet. Nothing was changed") || len(s.joins) != 0 {
-			t.Fatalf("a declined join answered %v and joined %v", err, s.joins)
+		if err != nil || !strings.HasSuffix(out.String(), "Join it? (yes/no) [no]: Nothing changed.\n") || len(s.joins) != 0 {
+			t.Fatalf("a declined join answered %v and joined %v:\n%s", err, s.joins, out.String())
 		}
 		if !strings.Contains(out.String(), "This joins this machine to your tailnet as `home`") {
 			t.Errorf("the join was not described before it was asked:\n%s", out.String())
@@ -384,10 +404,11 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		s := newAccessProject(t)
 		askTerminal = func() bool { return true }
 		askInput = answers("yes", "no")
-		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, false, "", &bytes.Buffer{})
-		want := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed"
-		if err == nil || err.Error() != want || len(s.joins) != 1 || len(s.switches) != 0 {
-			t.Fatalf("a declined change after a join answered %v (joins %d, switches %d), want %q", err, len(s.joins), len(s.switches), want)
+		var out bytes.Buffer
+		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, false, "", &out)
+		want := "Make this change? (yes/no) [no]: Nothing changed. This machine stays on your tailnet as cyfr.tail1234.ts.net; run cyfr access tailnet again when you want CYFR reached there.\n"
+		if err != nil || !strings.HasSuffix(out.String(), want) || len(s.joins) != 1 || len(s.switches) != 0 {
+			t.Fatalf("a declined change after a join answered %v (joins %d, switches %d), want it to end %q:\n%s", err, len(s.joins), len(s.switches), want, out.String())
 		}
 	})
 	t.Run("a new node", func(t *testing.T) {
@@ -397,7 +418,7 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askInput = answers("no")
 		var out bytes.Buffer
 		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, "", &out)
-		if err == nil || len(s.joins) != 0 || len(s.switches) != 0 {
+		if err != nil || !strings.HasSuffix(out.String(), "Nothing changed.\n") || len(s.joins) != 0 || len(s.switches) != 0 {
 			t.Fatalf("a declined new node answered %v, joined %v", err, s.joins)
 		}
 		if !strings.Contains(out.String(), "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, `old.tail1234.ts.net`, which the Tailscale admin console still lists") {
@@ -414,8 +435,8 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askInput = answers("yes", "no")
 		var out bytes.Buffer
 		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, "", &out)
-		want := "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed"
-		if err == nil || err.Error() != want || len(s.joins) != 1 || len(s.switches) != 0 {
+		want := removedOld
+		if err != nil || !strings.HasSuffix(out.String(), want) || len(s.joins) != 1 || len(s.switches) != 0 {
 			t.Fatalf("a declined change after a new node answered %v (joins %d, switches %d), want %q\n%s", err, len(s.joins), len(s.switches), want, out.String())
 		}
 	})
@@ -435,7 +456,7 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 		}
 	}
 	unknown := "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, if it has one; certificate names are public.\n"
-	joinedOnly := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed"
+	joinedOnly := "Make this change? (yes/no) [no]: Nothing changed. This machine stays on your tailnet as cyfr.tail1234.ts.net; run cyfr access tailnet again when you want CYFR reached there.\n"
 	for name, c := range map[string]struct {
 		prepare        func(t *testing.T, s *fakeStack)
 		question, want string
@@ -450,7 +471,7 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 				s.joined[""] = access.Join{Name: "old.tail1234.ts.net", NodeID: "nOLDNODECNTRL"}
 			},
 			question: "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, `old.tail1234.ts.net`, which the Tailscale admin console still lists until you remove it there; certificate names are public.\n",
-			want:     "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed",
+			want:     removedOld,
 		},
 		// A restore leaves the machine's state and its last join as they
 		// were, so .env can name machine A while the engine knows B: the
@@ -484,7 +505,7 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 			askInput = answers("yes", "no")
 			var out bytes.Buffer
 			err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, "", &out)
-			if err == nil || err.Error() != c.want || len(s.joins) != 1 || len(s.switches) != 0 {
+			if err != nil || !strings.HasSuffix(out.String(), c.want) || len(s.joins) != 1 || len(s.switches) != 0 {
 				t.Fatalf("a change declined after a new node's join answered %v (joins %d, switches %d), want %q\n%s", err, len(s.joins), len(s.switches), c.want, out.String())
 			}
 			if !strings.Contains(out.String(), c.question) {
@@ -494,17 +515,18 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 	}
 }
 
-// The preview shows every field of the head that changes, in words: beside
-// the four sentences, a line for each changed field they do not show, the
-// tailnet machine (its name and id), the port on this computer and the
-// builds service, so no change reads as none.
+// The preview shows every field of the head that changes, in words, and
+// only those: after who will reach CYFR and where, a line for each other
+// changed field, the tailnet machine a new node replaces under the same
+// name, the port on this computer and the builds service, so no change
+// reads as none; no node id is shown.
 func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
 	tailnet := access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile, access.ModeTailnet}}
 	for name, c := range map[string]struct {
 		change func(h *access.Head)
 		line   string
 	}{
-		"another node, the same name": {func(h *access.Head) { h.NodeID = "nBBBBBBBBBCNTRL" }, "  Tailnet machine: cyfr.tail1234.ts.net (nAAAAAAAAACNTRL) → cyfr.tail1234.ts.net (nBBBBBBBBBCNTRL)\n"},
+		"another node, the same name": {func(h *access.Head) { h.NodeID = "nBBBBBBBBBCNTRL" }, "  Tailnet machine: cyfr.tail1234.ts.net → a new machine, cyfr.tail1234.ts.net\n"},
 		"the port on this computer":   {func(h *access.Head) { h.Port = 4123 }, "  Port on this computer: 4000 → 4123\n"},
 		"builds turned off": {func(h *access.Head) {
 			h.BuildsURL, h.Profiles = "", []string{access.ModeTailnet}
@@ -518,7 +540,7 @@ func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
 				t.Fatal("the change does not change the head")
 			}
 			var out bytes.Buffer
-			printPreview(&out, access.Preview{Old: tailnet, New: next, OldDigest: tailnet.Digest(), NewDigest: next.Digest(), OldWords: access.Describe(tailnet), NewWords: access.Describe(next)})
+			printPreview(&out, access.Preview{Old: tailnet, New: next, OldDigest: tailnet.Digest(), NewDigest: next.Digest(), OldWords: access.Describe(tailnet), NewWords: access.Describe(next)}, true)
 			if !strings.Contains(out.String(), c.line) {
 				t.Errorf("the preview lacks %q:\n%s", c.line, out.String())
 			}
@@ -530,18 +552,25 @@ func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
 					}
 				}
 			}
-			if changed != 1 {
-				t.Errorf("the preview shows %d changed lines, want the one:\n%s", changed, out.String())
+			if changed != 1 || strings.Contains(out.String(), "CNTRL") {
+				t.Errorf("the preview shows %d changed lines, want the one, and no node id:\n%s", changed, out.String())
 			}
 		})
 	}
-	// A machine joined for the first time is a tailnet machine where there
-	// was none.
+	// A machine joined for the first time shows who will reach CYFR and
+	// where, and nothing that stays as it was.
 	local := access.Head{Mode: access.ModeLocal, Host: "localhost", PublicURL: "http://localhost:4000", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile}}
 	var out bytes.Buffer
-	printPreview(&out, access.Preview{Old: local, New: tailnet, OldWords: access.Describe(local), NewWords: access.Describe(tailnet)})
-	if want := "  Tailnet machine: none → cyfr.tail1234.ts.net (nAAAAAAAAACNTRL)\n"; !strings.Contains(out.String(), want) {
-		t.Errorf("the preview lacks %q:\n%s", want, out.String())
+	printPreview(&out, access.Preview{Old: local, New: tailnet, OldWords: access.Describe(local), NewWords: access.Describe(tailnet), AddressChanges: []string{"Pair every device again."}}, false)
+	if want := "CYFR will be reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n"; out.String() != want {
+		t.Errorf("the preview of a first join on a CYFR no one is set up on is\n%s\nwant\n%s", out.String(), want)
+	}
+	// Leaving public access closes its ports.
+	public := access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, ACMEEmail: "ops@example.com", BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile, access.ModePublic}}
+	out.Reset()
+	printPreview(&out, access.Preview{Old: public, New: local, OldWords: access.Describe(public), NewWords: access.Describe(local)}, true)
+	if want := "CYFR will be reached from this computer at http://localhost:4000.\n  Certificate email: ops@example.com → none\n  Ports opened on this machine: 80 and 443 → none\n"; out.String() != want {
+		t.Errorf("the preview of leaving public access is\n%s\nwant\n%s", out.String(), want)
 	}
 }
 
@@ -698,10 +727,9 @@ func TestAccessTailnetServesAClosedHomeAgain(t *testing.T) {
 		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
 	}
 	for _, want := range []string{
-		"Tailscale Serve is closed, so CYFR answers on this machine only. This checks the machine again and serves CYFR on your tailnet at https://cyfr.tail1234.ts.net:\n",
-		"  Address: https://cyfr.tail1234.ts.net\n",
+		"CYFR answers on this computer only right now. Once the tailnet machine checks out, CYFR will be reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n",
 		"Make this change? (yes/no)",
-		"Done. CYFR is reached as:\n",
+		"Done. CYFR is reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n",
 		"Tailscale now:\n  Serve: open\n",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -848,5 +876,90 @@ func TestNoOpenIsAnAccessFlag(t *testing.T) {
 		if !accessFlags(c).noOpen {
 			t.Errorf("%s --no-open is not read into its options", c.Name())
 		}
+	}
+}
+
+// On a running CYFR, cyfr's log since its start decides the list: the
+// boot's not-set-up line with no set-up line after it leaves the list out,
+// and after the change the setup link at the new address is the next
+// step; a set-up line after it, or neither line, keeps the list and the
+// passkeys line, as a log that cannot be read does.
+func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
+	const startedAt = "2026-10-28T00:01:02.123456789Z"
+	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
+	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
+	list := "The address changes, so:\n  1. Pair every device again.\nYour CYFR identity does not change.\n"
+	done := "Done. CYFR is reached from this computer at http://localhost:4000.\n"
+	passkeys := "Passkeys made at the old address no longer sign anyone in. Open http://localhost:4000/setup#" + token + " to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n"
+	for _, c := range []struct {
+		name, log, exit, want string
+	}{
+		{"no one set up", "booting\n" + notSetUp, "0", lead + done + "Open http://localhost:4000/setup#" + token + " to set up its first person, or run cyfr login --setup here.\n"},
+		{"set up since the boot", notSetUp + setUp, "0", lead + list + done + passkeys},
+		{"set up at the boot", "booting\n", "0", lead + list + done + passkeys},
+		{"a log unread", notSetUp, "1", lead + list + done + passkeys},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.edit(".env", scenarioEnv+"CYFR_SETUP_TOKEN="+token+"\n")
+			s.engine.addressChanges = []string{"Pair every device again."}
+			s.answer("ps.out", "c0ffee\n")
+			s.answer("inspect.out", startedAt+"\n")
+			s.answer("logs.out", c.log)
+			s.answer("logs.exit", c.exit)
+			stubLauncher(t, true, nil)
+			var out bytes.Buffer
+			if err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, "", &out); err != nil {
+				t.Fatalf("cyfr access local: %v\n%s", err, out.String())
+			}
+			if out.String() != c.want {
+				t.Errorf("cyfr access printed\n%s\nwant\n%s", out.String(), c.want)
+			}
+		})
+	}
+}
+
+// With no terminal to confirm on and no --yes, the preview takes no lock,
+// so it cannot read cyfr's log: the consequence list stays, as whenever
+// the read cannot tell, unless CYFR never booted in this directory.
+func TestAccessPreviewWithoutATerminalKeepsTheListUnlessNeverBooted(t *testing.T) {
+	const startedAt = "2026-10-28T00:01:02.123456789Z"
+	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
+	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
+	list := "The address changes, so:\n  1. Pair every device again.\nYour CYFR identity does not change.\n"
+	for _, c := range []struct {
+		name, log string
+		booted    bool
+		want      string
+	}{
+		{"no one set up, which cannot be told without the lock", "booting\n" + notSetUp, true, lead + list},
+		{"set up at the boot", "booting\n", true, lead + list},
+		{"never booted", "", false, lead},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.edit(".env", scenarioEnv)
+			if !c.booted {
+				if err := os.Remove(filepath.Join("data", "cyfr.db")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.engine.addressChanges = []string{"Pair every device again."}
+			s.answer("ps.out", "c0ffee\n")
+			s.answer("inspect.out", startedAt+"\n")
+			s.answer("logs.out", c.log)
+			s.answer("logs.exit", "0")
+			askTerminal = func() bool { return false }
+			var out bytes.Buffer
+			err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, false, "", &out)
+			if err == nil || !strings.Contains(err.Error(), "Nothing changed: there is no terminal to confirm the change on.") {
+				t.Fatalf("cyfr access local with no terminal answered %v\n%s", err, out.String())
+			}
+			if out.String() != c.want {
+				t.Errorf("cyfr access printed\n%s\nwant\n%s", out.String(), c.want)
+			}
+		})
 	}
 }

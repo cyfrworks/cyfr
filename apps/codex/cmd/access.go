@@ -482,11 +482,16 @@ func askJoin(ctx context.Context, in *bufio.Reader, out io.Writer, o accessOptio
 			return interruption{errQuestionInterrupted}
 		}
 		if a = strings.ToLower(a); a != "yes" && a != "y" {
-			return errors.New("The join was not confirmed, so this machine did not join your tailnet. Nothing was changed")
+			fmt.Fprintln(out, "Nothing changed.")
+			return errDeclined
 		}
 		return nil
 	}
 }
+
+// errDeclined is a question answered no: what stands is said already, and
+// the command ends there, as no failure (exit 0).
+var errDeclined = errors.New("declined")
 
 // requestContent is everything a `cyfr access` command was asked, which
 // the engine binds its request id to (access.RequestContent).
@@ -528,36 +533,29 @@ func answerResent(c access.RequestContent, id string, out io.Writer) (sent bool,
 		return true, err
 	}
 	if rec.FinalHead != nil {
-		fmt.Fprintln(out, "Done. CYFR is reached as:")
-		printWords(out, access.Describe(*rec.FinalHead))
+		fmt.Fprintf(out, "Done. CYFR is reached %s.\n", reachedBy(*rec.FinalHead))
 	}
 	return true, nil
 }
 
-// printPreview prints a change before it is made: each of the words as
-// before → after, then each change they do not show (unwordedChanges),
-// then what the person must do when the address changes. A reopen, the
-// tailnet head .env holds already with Serve closed, is the home served on
-// the tailnet again.
-func printPreview(out io.Writer, p access.Preview) {
+// printPreview prints a change before it is made: who will reach CYFR and
+// where (reachedBy), each other setting that changes as before → after
+// (changedRows), and, when the address changes and someone may hold a
+// passkey or a paired device at the old one (consequences), what the
+// person must do. A reopen, the tailnet head .env holds already with Serve
+// closed, is the home served on the tailnet again.
+func printPreview(out io.Writer, p access.Preview, consequences bool) {
 	if p.Reopen {
 		// The head is .env's already: what changes is that the home is
 		// served on the tailnet again, once the machine is checked.
-		fmt.Fprintf(out, "Tailscale Serve is closed, so CYFR answers on this machine only. This checks the machine again and serves CYFR on your tailnet at %s:\n", p.NewWords.Address)
-		printWords(out, p.NewWords)
+		fmt.Fprintf(out, "CYFR answers on this computer only right now. Once the tailnet machine checks out, CYFR will be reached %s.\n", reachedBy(p.New))
 		return
 	}
-	fmt.Fprintln(out, "This changes how CYFR is reached:")
-	before, after := p.OldWords.Sentences(), p.NewWords.Sentences()
-	for i := range before {
-		label, old, _ := strings.Cut(before[i], ": ")
-		_, now, _ := strings.Cut(after[i], ": ")
-		fmt.Fprintf(out, "  %s: %s → %s\n", label, old, now)
-	}
-	for _, line := range unwordedChanges(p.Old, p.New) {
+	fmt.Fprintf(out, "CYFR will be reached %s.\n", reachedBy(p.New))
+	for _, line := range changedRows(p) {
 		fmt.Fprintln(out, "  "+line)
 	}
-	if len(p.AddressChanges) > 0 {
+	if len(p.AddressChanges) > 0 && consequences {
 		fmt.Fprintln(out, "The address changes, so:")
 		for i, change := range p.AddressChanges {
 			fmt.Fprintf(out, "  %d. %s\n", i+1, change)
@@ -566,25 +564,47 @@ func printPreview(out io.Writer, p access.Preview) {
 	}
 }
 
-// unwordedChanges are the head's changes the four sentences do not show,
-// each as before → after: the tailnet machine (its name and node id), the
-// port of cyfr's listener on this computer and the builds service.
-func unwordedChanges(old, next access.Head) []string {
-	machine := func(h access.Head) string {
-		if h.NodeID == "" {
-			return "none"
-		}
-		return h.Host + " (" + h.NodeID + ")"
+// reachedBy is how CYFR at head h is reached, as "CYFR will be reached"
+// and "CYFR is reached" go on: who reaches it and at what address, and for
+// public access the ports it opens on this machine.
+func reachedBy(h access.Head) string {
+	w := access.Describe(h)
+	switch h.Mode {
+	case access.ModeTailnet:
+		return "by your devices on Tailscale at " + w.Address
+	case access.ModePublic:
+		return "by " + w.Who + ", at " + w.Address + ", through ports " + w.Ports + " on this machine"
 	}
+	return "from this computer at " + w.Address
+}
+
+// changedRows are the settings a change makes other than who reaches CYFR
+// and its address, which reachedBy says, each as before → after and only
+// when it changes: the certificate email, the ports opened on this machine
+// unless reachedBy names them, the port of cyfr's listener on this
+// computer, the builds service, and a tailnet machine replaced by a new
+// one, which the address shows only when its name changes too.
+func changedRows(p access.Preview) []string {
 	builds := func(h access.Head) string {
 		if h.BuildsURL == "" {
 			return "off"
 		}
 		return h.BuildsURL
 	}
+	old, next := p.Old, p.New
+	if p.OldWords == (access.Words{}) {
+		// .env held no head to compare with.
+		return nil
+	}
 	var lines []string
-	if old.NodeID != next.NodeID {
-		lines = append(lines, "Tailnet machine: "+machine(old)+" → "+machine(next))
+	if old.NodeID != "" && next.NodeID != "" && old.NodeID != next.NodeID {
+		lines = append(lines, "Tailnet machine: "+old.Host+" → a new machine, "+next.Host)
+	}
+	if p.OldWords.CertificateEmail != p.NewWords.CertificateEmail {
+		lines = append(lines, "Certificate email: "+p.OldWords.CertificateEmail+" → "+p.NewWords.CertificateEmail)
+	}
+	if p.OldWords.Ports != p.NewWords.Ports && next.Mode != access.ModePublic {
+		lines = append(lines, "Ports opened on this machine: "+p.OldWords.Ports+" → "+p.NewWords.Ports)
 	}
 	if old.Port != next.Port {
 		lines = append(lines, fmt.Sprintf("Port on this computer: %d → %d", old.Port, next.Port))
@@ -623,13 +643,13 @@ var accessCmd = &cobra.Command{
   tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
   public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
 
-It shows the change first: who can reach CYFR, its address, the certificate email and the ports opened on this machine, each before → after, with the tailnet machine, the port on this computer and the builds service when they change, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
+It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes for passkeys, paired devices and clients, unless no one is set up on CYFR yet. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
 When CYFR has tailnet access and its Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), 'cyfr access tailnet' serves it on the tailnet again: it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
 
 'cyfr access status' shows how CYFR is reached and what runs, changing nothing. 'cyfr access --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.
 
-Exit status 3: the change was made and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env now names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. A refused or failed change exits 1.`,
+Exit status 3: the change was made and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env now names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. A refused or failed change exits 1. Answering no to "Join it?" or "Make this change?" says what stands and exits 0.`,
 	Example: `  cyfr access tailnet
   cyfr access public --domain cyfr.example.com --acme-email ops@example.com
   cyfr access local --yes
@@ -713,33 +733,40 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 		choice.confirm = askJoin(ctx, in, out, o)
 	}
 	p, join, err := previewTarget(ctx, e, target, id, o, key, out, choice)
+	if errors.Is(err, errDeclined) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	printPreview(out, p)
+	// Whether anyone can lose a passkey or a paired device to a new
+	// address: no one can on a CYFR that never booted, nor on one whose
+	// log says no one is set up (readSetUp). Read before the switch
+	// restarts cyfr; anything else keeps the list.
+	fresh, read := neverBooted(), setUpUnknown
+	if len(p.AddressChanges) > 0 && !fresh {
+		if head, herr := e.Head(); herr == nil {
+			read = readSetUp(ctx, e, head)
+		}
+	}
+	printPreview(out, p, !fresh && read != setUpNone)
 	if !yes {
 		a, err := ask(ctx, in, out, "Make this change? (yes/no)", "no")
 		if err != nil {
 			// What the join before the question did stands; the
 			// change is not made.
-			switch {
-			case join.removed != "":
-				err = fmt.Errorf("Interrupted. This machine's tailnet identity `%s` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `%s`, and how CYFR is reached was not changed.", join.removed, p.New.Host)
-			case join.id != "":
-				err = fmt.Errorf("Interrupted. This machine joined your tailnet as `%s`, and how CYFR is reached was not changed.", p.New.Host)
-			default:
-				err = errQuestionInterrupted
+			if stands := joinStands(join, p.New.Host); stands != "" {
+				return interruption{errors.New("Interrupted. " + stands)}
 			}
-			return interruption{err}
+			return interruption{errQuestionInterrupted}
 		}
 		if a = strings.ToLower(a); a != "yes" && a != "y" {
-			switch {
-			case join.removed != "":
-				return fmt.Errorf("The change was not confirmed. This machine's tailnet identity `%s` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `%s`, and how CYFR is reached was not changed", join.removed, p.New.Host)
-			case join.id != "":
-				return fmt.Errorf("The change was not confirmed. This machine joined your tailnet as `%s`, and how CYFR is reached was not changed", p.New.Host)
+			if stands := joinStands(join, p.New.Host); stands != "" {
+				fmt.Fprintln(out, stands)
+			} else {
+				fmt.Fprintln(out, "Nothing changed.")
 			}
-			return errors.New("the change was not confirmed. Nothing was changed")
+			return nil
 		}
 	}
 
@@ -753,22 +780,41 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 		return err
 	}
 	if err == nil {
-		fmt.Fprintln(out, "Done. CYFR is reached as:")
-		printWords(out, p.NewWords)
+		fmt.Fprintf(out, "Done. CYFR is reached %s.\n", reachedBy(p.New))
 		if p.Reopen {
 			printTailscale(ctx, e, out)
 		}
 	}
 	// .env holds the new head now, CYFR started as it says or on this
-	// machine only: the screen follows it, and passkeys of a new address
-	// begin at its setup link.
+	// machine only: the screen follows it, and setup and the passkeys of a
+	// new address begin at its setup link.
 	screenErr := followScreen()
 	if len(p.AddressChanges) > 0 {
-		if values, verr := access.ReadEnvValues(".env"); verr == nil && !headless(values) {
-			fmt.Fprintf(out, "Passkeys made at the old address no longer sign anyone in. Open %s to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n", hyperlink(out, setupLink(p.NewWords.Address, values)))
+		values, _ := access.ReadEnvValues(".env")
+		link := hyperlink(out, setupLink(p.NewWords.Address, values))
+		switch {
+		case fresh:
+			fmt.Fprintln(out, upThenSetup(values, link))
+		case read == setUpNone:
+			setupNext(out, p.New)
+		case !headless(values):
+			fmt.Fprintf(out, "Passkeys made at the old address no longer sign anyone in. Open %s to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n", link)
 		}
 	}
 	return errors.Join(err, screenErr)
+}
+
+// joinStands is what a join made before a change that was not made leaves
+// standing, as the sentence that says it and the next step; "" when the
+// change needed no join.
+func joinStands(join joined, host string) string {
+	switch {
+	case join.removed != "":
+		return fmt.Sprintf("This machine is on your tailnet as %s now, and its old tailnet identity %s was removed: remove %s in the Tailscale admin console too. Nothing else changed; run cyfr access tailnet again when you want CYFR reached there.", host, join.removed, join.removed)
+	case join.id != "":
+		return fmt.Sprintf("Nothing changed. This machine stays on your tailnet as %s; run cyfr access tailnet again when you want CYFR reached there.", host)
+	}
+	return ""
 }
 
 // printTailscale prints the tailnet machine as the engine sees it now
@@ -791,8 +837,8 @@ func printTailscale(ctx context.Context, e stackEngine, out io.Writer) {
 // preview that needs the machine joined is refused before the join, which
 // would change the tailnet.
 func showUnconfirmed(ctx context.Context, target access.Target, o accessOptions, out io.Writer) error {
-	const again = "Nothing was changed. Run it again with --yes to make the change, or on a terminal to confirm it"
-	joinFirst := errors.New("This machine joins your tailnet before the change can be shown, and there is no terminal to confirm it on. " + again)
+	const again = "Run it again with --yes to make the change, or at a terminal"
+	joinFirst := errors.New("Nothing changed: this machine must join your tailnet before the change can be shown, and there is no terminal to confirm the join on. " + again)
 	if target.Mode == access.ModeTailnet && o.newNode {
 		return joinFirst
 	}
@@ -810,8 +856,12 @@ func showUnconfirmed(ctx context.Context, target access.Target, o accessOptions,
 	if target.Mode == access.ModeTailnet && (o.hostname != "" || o.keyFile != "") {
 		return alreadyJoined(p.New.Host, o)
 	}
-	printPreview(out, p)
-	return errors.New("The change above was shown, not made: cyfr access makes a change only once it is confirmed, and there is no terminal to confirm it on. " + again)
+	// This path takes no lock, and cyfr's log is read only under it
+	// (readSetUp), so whether anyone is set up cannot be told here: the
+	// consequence list stays, as it does whenever the read cannot tell,
+	// unless CYFR never booted in this directory.
+	printPreview(out, p, !neverBooted())
+	return errors.New("Nothing changed: there is no terminal to confirm the change on. " + again)
 }
 
 // runAccessResume is `cyfr access --resume`: the lock and recovery, then the
@@ -825,7 +875,7 @@ func runAccessResume(ctx context.Context, out io.Writer) error {
 	}
 	defer unlock()
 	if len(receipts) == 0 {
-		fmt.Fprintln(out, "Nothing was unfinished: CYFR is as .env says.")
+		fmt.Fprintln(out, "Nothing was left unfinished.")
 	}
 	if err := refuseUnfinished(receipts); err != nil {
 		return err

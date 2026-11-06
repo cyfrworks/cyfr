@@ -163,13 +163,14 @@ func TestScreenOnRefusesAPathTheUnitCouldNotHold(t *testing.T) {
 	}
 }
 
-// A no changes nothing as root, and a failed sudo says to run it again.
+// A no changes nothing as root, says so with the next step and is no
+// failure; a failed sudo says to run it again.
 func TestScreenOnDeclinedOrFailed(t *testing.T) {
 	s := screenProject(t)
 	askInput = strings.NewReader("no\n")
 	var out bytes.Buffer
-	if err := screenOn(context.Background(), true, &out); err == nil || s.applied != nil {
-		t.Fatalf("err = %v, applied %v", err, s.applied)
+	if err := runScreenOn(context.Background(), &out); err != nil || s.applied != nil || !strings.HasSuffix(out.String(), "[no]: Nothing was installed. Run cyfr screen on again when you want to continue.\n") {
+		t.Fatalf("err = %v, applied %v:\n%s", err, s.applied, out.String())
 	}
 	askInput = strings.NewReader("yes\n")
 	s.applyErr = os.ErrPermission

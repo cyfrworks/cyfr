@@ -144,34 +144,104 @@ func TestSetupOffersTheStartAgain(t *testing.T) {
 	}
 }
 
-// A project whose .env exists is refused as init refuses changing an
-// existing CYFR, before anything is served or written, and so is a start
-// once .env exists.
-func TestSetupRefusesAnExistingHome(t *testing.T) {
-	for _, c := range []struct{ env, want string }{
-		{"CYFR_ACCESS=tailnet\n", ".env says CYFR is reached as tailnet, and cyfr setup leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it"},
-		{"CYFR_SECRET_KEY_BASE=kept\n", access.Refuse("access_missing", nil).Message()},
+// In a project whose .env exists, cyfr setup serves nothing and writes
+// nothing: it says the next step of the CYFR set up there, read under the
+// stack's lock as cyfr up reads it, and exits 0. While cyfr runs with no
+// one set up (the boot's not-set-up line and no set-up line after it),
+// the setup link, opened on a machine with a display; with its first
+// person, cyfr open; with a log that cannot be read, the link alone;
+// while it is stopped, cyfr up first, then the setup link when it never
+// booted. A .env that says nothing of how
+// CYFR is reached is refused with its sentence.
+func TestSetupInASetUpProjectSaysTheNextStep(t *testing.T) {
+	const startedAt = "2026-10-28T00:01:02.123456789Z"
+	const marker = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
+	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	link := "https://cyfr.example.com/setup#" + token
+	for _, c := range []struct {
+		name, container, log string
+		exit                 string
+		noDatabase           bool
+		want                 string
+		opened               []string
+	}{
+		{name: "running, no one set up", container: "c0ffee", log: "booting\n" + marker,
+			want:   "Open " + link + " to set up its first person, or run cyfr login --setup here.\nOpened it in your browser.\n",
+			opened: []string{link}},
+		{name: "running, its first person set up", container: "c0ffee", log: "booting\n",
+			want: "CYFR is set up and has its first person. cyfr open opens it.\n"},
+		{name: "running, its first person set up since the boot", container: "c0ffee", log: "booting\n" + marker + setUp,
+			want: "CYFR is set up and has its first person. cyfr open opens it.\n"},
+		{name: "running, its log unread", container: "c0ffee", log: marker, exit: "1",
+			want:   "Open " + link + ".\nOpened it in your browser.\n",
+			opened: []string{link}},
+		{name: "stopped", want: "CYFR is already set up here. Next: cyfr up.\n"},
+		{name: "never booted", noDatabase: true,
+			want: "CYFR is already set up here. Next: cyfr up. Then open " + link + " to set up its first person.\n"},
 	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.edit(".env", scenarioEnv+"CYFR_SETUP_TOKEN="+token+"\n")
+			if c.noDatabase {
+				for _, name := range []string{"cyfr.db", "cyfr.db-wal", "cyfr.db-shm"} {
+					if err := os.Remove("data/" + name); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			s.answer("ps.out", c.container+"\n")
+			s.answer("inspect.out", startedAt+"\n")
+			s.answer("logs.out", c.log)
+			if c.exit != "" {
+				s.answer("logs.exit", c.exit)
+			}
+			l := stubLauncher(t, true, nil)
+			before := read(t, ".env")
+			var out bytes.Buffer
+			if err := runSetup(context.Background(), setupOptions{}, &out); err != nil {
+				t.Fatalf("cyfr setup answered %v\n%s", err, out.String())
+			}
+			if out.String() != c.want {
+				t.Errorf("cyfr setup printed\n%s\nwant\n%s", out.String(), c.want)
+			}
+			if got := l.all(); !slices.Equal(got, c.opened) {
+				t.Errorf("cyfr setup opened %v, want %v", got, c.opened)
+			}
+			if read(t, ".env") != before || fileExists(setupURLFile) {
+				t.Error("cyfr setup in a set-up project wrote .env or served its pages")
+			}
+			if holder := s.engine.held(); holder != "" || s.engine.locks != 1 {
+				t.Errorf("the lock is held by %q after %d locks, want it taken once and released", holder, s.engine.locks)
+			}
+		})
+	}
+
+	t.Run("no CYFR_ACCESS", func(t *testing.T) {
 		newInitProject(t)
 		useFakeEngine(t)
-		if err := os.WriteFile(".env", []byte(c.env), 0600); err != nil {
+		if err := os.WriteFile(".env", []byte("CYFR_SECRET_KEY_BASE=kept\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		var out bytes.Buffer
-		if err := runSetup(context.Background(), setupOptions{noOpen: true}, &out); err == nil || err.Error() != c.want {
-			t.Errorf("setup over %q answered %v, want %q", c.env, err, c.want)
+		if err := runSetup(context.Background(), setupOptions{noOpen: true}, &out); err == nil || err.Error() != access.Refuse("access_missing", nil).Message() {
+			t.Errorf("setup over a .env without CYFR_ACCESS answered %v", err)
 		}
 		if out.Len() != 0 {
 			t.Errorf("a refused setup printed %q", out.String())
 		}
 		nothingWritten(t, ".env", ".env.example")
-	}
+	})
+}
 
+// A start of the pages' run once another command has written .env is
+// refused, and nothing begins.
+func TestSetupRefusesAStartOnceSetUpMeanwhile(t *testing.T) {
 	s, sess, _ := newSetupRun(t)
 	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Start(); err == nil || !strings.Contains(err.Error(), "cyfr setup leaves how an existing CYFR is reached alone") {
+	if err := sess.Start(); !errors.Is(err, errSetUpMeanwhile) {
 		t.Errorf("a start once .env exists answered %v", err)
 	}
 	if st := sess.State(); st.Phase != setup.PhaseReady || s.locks != 0 {
@@ -468,7 +538,7 @@ func TestSetupRefusesWithoutADisplay(t *testing.T) {
 	l := stubLauncher(t, false, nil)
 	var out bytes.Buffer
 	err := runSetup(context.Background(), setupOptions{noPull: true}, &out)
-	if want := "cyfr setup serves pages for a device whose launcher opens them, and this machine has no browser to open them. Run cyfr init here."; err == nil || err.Error() != want {
+	if want := "This machine has no browser for cyfr setup's pages. Run cyfr init here instead."; err == nil || err.Error() != want {
 		t.Fatalf("cyfr setup answered %v, want %q", err, want)
 	}
 	if out.Len() != 0 || len(l.all()) != 0 {

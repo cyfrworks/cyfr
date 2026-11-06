@@ -529,7 +529,7 @@ func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, sec
 	got, err := Enroll(ctx, s.cfg.Address, a, b, d, key, extra, resumed)
 	if err != nil {
 		key.Erase()
-		s.say("Setting up did not finish: %s Your key is kept, so trying again proves the same one.", s.sentence(err))
+		s.say("Setting up did not finish: %s Try again.", s.sentence(err))
 		return
 	}
 	var cert struct {
@@ -547,7 +547,7 @@ func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, sec
 	}
 	if err := rec.Save(s.cfg.Record); err != nil {
 		key.Erase()
-		s.say("This screen could not save its certificate (%v). Try again: CYFR answers the same one.", err)
+		s.say("This screen could not save its certificate (%v). Try again.", err)
 		return
 	}
 	s.recovery = got.Recovery
