@@ -19,8 +19,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     n = System.unique_integer([:positive])
 
-    # Local people, each named by their own id and with their own
-    # athanor; `ops` carries the platform administrator's mark.
+    # People of accounts, each with their own athanor; `ops` carries the
+    # platform administrator's mark.
     [alice, bob, ops] =
       for name <- ["alice", "bob", "ops"] do
         {:ok, user} =
@@ -67,7 +67,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     end
   end
 
-  test "door.* is the operator's: refused for a person, open to an admin; a local person is admitted unless denied",
+  test "door.* is the operator's: refused for a person, open to an admin; a person stands on an entry",
        %{alice: alice, ops: ops, ctx: ctx, n: n} do
     person = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
 
@@ -77,7 +77,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
     assert {:ok, %{entries: []}} = call(admin, "door", %{"action" => "list"})
 
-    # A local person needs no entry: their admission was the admitting act.
+    # A person stands on an entry naming their account, or on `*`: carol's
+    # names none yet.
     {:ok, carol} =
       Sanctum.Test.People.linked(%{
         id: "github|https://github.com|carol-#{n}",
@@ -86,7 +87,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         verified: true
       })
 
-    assert {:ok, :allowed} = Sanctum.Door.admit_person(carol)
+    assert {:error, :not_allowed} = Sanctum.Door.admit_person(carol)
 
     # Allows name an identifier or `*`, never a person or an address.
     identifier = "per_" <> Prima.Digest.sha256_hex("door-op-#{n}")
@@ -98,6 +99,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert {:ok, %{kind: "wildcard"}} =
              call(admin, "door", %{"action" => "allow", "value" => "*"})
+
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(carol)
 
     for value <- [carol.id, "carol#{n}@example.com", "github|https://github.com|carol-#{n}"] do
       assert {:error, {:invalid_argument, _}} =
@@ -151,7 +154,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   end
 
   test "door.remove of an allow through the gate ejects the remote person it admitted, and only them",
-       %{alice: alice, ops: ops, ctx: ctx, n: n} do
+       %{alice: alice, bob: bob, ops: ops, ctx: ctx, n: n} do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
 
     # Two remote people, their heads fresh at this home as the CYFR
@@ -188,8 +191,14 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{effect: "allow"}} =
              call(admin, "door", %{"action" => "allow", "value" => erin_identifier})
 
-    # What the door issued: a session for each; and a local person's
-    # session, which no allow issued.
+    # The people of the setup stand on entries naming their accounts, as
+    # their admissions wrote them.
+    for user_id <- [alice, bob, ops] do
+      {:ok, identifier} = Users.identifier(user_id)
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identifier, ops)
+    end
+
+    # What the door issued: a session for each.
     dave_session = session_for(dave.id, nil)
     erin_session = session_for(erin.id, nil)
     alice_session = session_for(alice, "alice#{n}@example.com")
@@ -202,8 +211,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, :not_allowed} = Sanctum.Door.admit_person(dave)
     assert {:error, :invalid_session} = Sanctum.Session.get(dave_session.token)
 
-    # The person another entry still admits keeps what they hold, and a
-    # local person needs no entry at all.
+    # The people other entries still admit keep what they hold.
     assert {:ok, :allowed} = Sanctum.Door.admit_person(erin)
     assert {:ok, _} = Sanctum.Session.get(erin_session.token)
     assert {:ok, :allowed} = Sanctum.Door.admit_person(%{id: alice})
@@ -297,11 +305,19 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   end
 
   test "door.allow and door.deny take a handle: the entry keeps the identifier it names, labelled with the handle",
-       %{ops: ops, ctx: ctx, n: n} do
+       %{ops: ops, ctx: ctx} do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
-    first = "per_" <> Prima.Digest.sha256_hex("door-handle-#{n}")
-    second = "per_" <> Prima.Digest.sha256_hex("door-handle-second-#{n}")
-    RegistryStub.handles!(%{"alice" => first, "bob" => second})
+
+    # A handle's answer is read at the directory it names: a scripted one.
+    tls = DirectoryServer.tls()
+    DirectoryServer.listen!()
+    DirectoryServer.seam!(tls)
+    directory = DirectoryServer.start!(tls)
+
+    [first, second] =
+      for _n <- 1..2, do: DirectoryServer.account!(directory.dir, directory.url).identifier
+
+    RegistryStub.handles!(%{"alice" => first, "bob" => second}, directory.url)
 
     assert {:ok, %{kind: "identifier", effect: "allow", value: ^first, label: "alice"}} =
              call(admin, "door", %{"action" => "allow", "value" => "@alice"})
@@ -321,7 +337,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     # The registry gives the handle to the second identifier: the entry
     # still names the first, and admits only them.
-    RegistryStub.handles!(%{"alice" => second})
+    RegistryStub.handles!(%{"alice" => second}, directory.url)
     assert {:ok, %{entries: entries}} = call(admin, "door", %{"action" => "list"})
     assert [%{value: ^first}] = Enum.filter(entries, &(&1[:label] == "alice"))
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(first)
