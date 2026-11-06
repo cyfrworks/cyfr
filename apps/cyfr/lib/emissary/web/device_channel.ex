@@ -1093,14 +1093,21 @@ defmodule Emissary.Web.DeviceChannel do
 
   defp close_code(%Prima.Refusal{}), do: @unproven
 
-  # A hello's or its answer's refusal, in the channel's table. A head
-  # that moved while the device was admitted is a refresh that raced the
-  # hello, never a certificate to renew: a pause, after which the device
-  # says hello again.
+  # A hello's or its answer's refusal, in the channel's table, with the
+  # sentence a person reads for it. A head that moved while the device was
+  # admitted is a refresh that raced the hello, never a certificate to
+  # renew: a pause, after which the device says hello again.
   defp admission_refusal(:stale_head),
-    do: %{refusal(:stale_head) | class: :unavailable, message: Prima.Refusal.message(:stale_head)}
+    do: %{refusal(:stale_head) | class: :unavailable, message: admission_sentence(:stale_head)}
 
-  defp admission_refusal(reason), do: refusal(reason)
+  defp admission_refusal(reason), do: %{refusal(reason) | message: admission_sentence(reason)}
+
+  defp admission_sentence(:answer_refused),
+    do: "The device's answer to its sign-in request was refused"
+
+  defp admission_sentence({:door, _reason}), do: Sanctum.Door.refusal_message()
+  defp admission_sentence(:unavailable), do: sentence(:unavailable)
+  defp admission_sentence(reason), do: Sanctum.Refusals.classify(reason).message
 
   defp answer_refused(id, %Prima.Refusal{} = refusal) do
     error = %{"class" => Atom.to_string(refusal.class), "message" => refusal.message}
@@ -1173,13 +1180,6 @@ defmodule Emissary.Web.DeviceChannel do
   defp sentence(:company_login_required), do: Prima.Refusal.message(:company_login_required)
 
   defp sentence(:unavailable), do: "This CYFR could not check the device now; retry shortly"
-
-  defp sentence(:answer_refused), do: "The device's answer to its sign-in request was refused"
-  defp sentence({:door, _reason}), do: Sanctum.Door.refusal_message()
-  defp sentence({:invalid_argument, sentence}) when is_binary(sentence), do: sentence
-
-  defp sentence(reason) when reason in [:setup_closed, :invitation_invalid, :identity_gone],
-    do: Prima.Refusal.message(reason)
 
   defp sentence({:rate_limited, retry_after_ms}),
     do:
