@@ -120,8 +120,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Cache.Epoch),
        "the cache's one epoch rule, which Sanctum's shape derivation and Compendium read " <>
          "beside Cache and Cache.Keys"},
-      {~w(InstallationClaims),
-       "whether this CYFR is set up, which Sanctum's setup check reads"},
+      {~w(InstallationClaims), "whether this CYFR is set up, which Sanctum's setup check reads"},
       {~w(StorageReserve),
        "the storage reserve's latch, which the host's monitor sets and Sanctum's gate reads"},
       {~w(ObjectRevisions),
