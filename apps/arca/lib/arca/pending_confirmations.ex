@@ -172,7 +172,8 @@ defmodule Arca.PendingConfirmations do
   gave it, which must still stand. A key's proof (`passkey` or `device`)
   may name the account key that signed, `:kid`, and the account head it
   was verified under, `:head`, both or neither: the head must be the
-  cached head of the person's account (`:stale_head` otherwise). Succeeds
+  cached head of the person's account (`:stale_head` otherwise). A
+  passkey's proof names its key and head, or the passkey here. Succeeds
   once, before the record's expiry. Refusals: `:not_pending`, `:expired`,
   `:not_found`, `:revoked` (the passkey or client no longer stands),
   `:stale_head`, `{:invalid, errors}`, `:not_owner`, `:no_athanor`,
@@ -741,8 +742,8 @@ defmodule Arca.PendingConfirmations do
       not key_binding?(kind, kid, head) ->
         {:error, {:invalid, %{kid: ["a key's proof names its key and head, both or neither"]}}}
 
-      kind == "passkey" and not (is_binary(passkey_id) and passkey_id != "") ->
-        {:error, {:invalid, %{passkey_id: ["names the passkey that asserted"]}}}
+      kind == "passkey" and is_nil(kid) and not (is_binary(passkey_id) and passkey_id != "") ->
+        {:error, {:invalid, %{kid: ["a passkey's proof names its key, or the passkey here"]}}}
 
       kind != "passkey" and not is_nil(passkey_id) ->
         {:error, {:invalid, %{passkey_id: ["only a passkey proof names one"]}}}

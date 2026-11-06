@@ -348,16 +348,15 @@ defmodule Arca.PendingConfirmationsTest do
                PendingConfirmations.confirm(actor, rec.id, %{proof: "oidc_reauth"})
     end
 
-    test "refuses a proof the vocabulary lacks, and a passkey proof names its passkey", %{
-      actor: actor
-    } do
+    test "refuses a proof the vocabulary lacks, and a passkey proof names its key or its passkey",
+         %{actor: actor} do
       rec = record(actor)
       {:ok, _} = open(actor, rec)
 
       assert {:error, {:invalid, %{proof: _}}} =
                PendingConfirmations.confirm(actor, rec.id, %{proof: "session"})
 
-      assert {:error, {:invalid, %{passkey_id: _}}} =
+      assert {:error, {:invalid, %{kid: _}}} =
                PendingConfirmations.confirm(actor, rec.id, %{proof: "passkey"})
 
       assert {:error, :revoked} =
@@ -397,6 +396,40 @@ defmodule Arca.PendingConfirmationsTest do
                })
 
       assert {:ok, %{state: "pending"}} = PendingConfirmations.get(actor, rec.id)
+    end
+
+    test "a passkey of the person's account confirms by its key at the cached head, with no passkey here",
+         %{actor: actor} do
+      now = DateTime.utc_now()
+      user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+      {:ok, _person} =
+        Arca.Test.People.mint(
+          Prima.Actor.system(),
+          %{id: user_id, first_seen_at: now, last_seen_at: now, created_at: now, updated_at: now},
+          nil
+        )
+
+      %{head: head} = Arca.Test.People.account!(user_id)
+      kid = digest("passkey")
+      rec = record(actor, person: user_id)
+      {:ok, _} = open(actor, rec)
+
+      assert {:error, :stale_head} =
+               PendingConfirmations.confirm(actor, rec.id, %{
+                 proof: "passkey",
+                 kid: kid,
+                 head: digest("moved")
+               })
+
+      assert {:ok, %{state: "confirmed", proof: "passkey", kid: ^kid, head: ^head} = row} =
+               PendingConfirmations.confirm(actor, rec.id, %{
+                 proof: "passkey",
+                 kid: kid,
+                 head: head
+               })
+
+      assert is_nil(row.confirmed_passkey_id)
     end
 
     test "refuses after expiry, and a revoked client confirms nothing", %{actor: actor} do
