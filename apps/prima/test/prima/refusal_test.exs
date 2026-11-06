@@ -316,6 +316,8 @@ defmodule Prima.RefusalTest do
     {:email_unavailable, :unavailable},
     {:reauth_required, :unauthenticated},
     {:identity_stale, :unavailable},
+    {:identity_gone, :forbidden},
+    {:stale_head, :conflict},
     {:restore_reserved, :forbidden},
     {:setup_closed, :forbidden},
     {:not_set_up, :setup_required},
@@ -851,6 +853,20 @@ defmodule Prima.RefusalTest do
       assert message =~ "try again shortly"
       refute message =~ "sign in"
       assert Refusal.reason?(:identity_stale)
+    end
+
+    test "a closed account is denied for good, and a head that moved asks for another try" do
+      assert %Refusal{class: :forbidden, message: gone} = Refusal.classify(:identity_gone)
+      assert gone == "This account has been closed. It can no longer sign in here."
+
+      assert %Refusal{class: :conflict, message: moved} = Refusal.classify(:stale_head)
+      assert moved =~ "Nothing was changed; try again."
+
+      for message <- [gone, moved], word <- ~w(directory home door) do
+        refute message =~ word
+      end
+
+      for reason <- [:identity_gone, :stale_head], do: assert(Refusal.reason?(reason))
     end
 
     test "a binary is internal and keeps its words" do

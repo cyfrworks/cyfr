@@ -1034,6 +1034,20 @@ defmodule Prima.Refusal do
       {:unavailable,
        "Your identity could not be confirmed fresh with its directory just now; try again shortly."}
 
+  # An account its directory answered gone: every binding of it here is
+  # retired and nothing binds again, so it is a denial, never a pause.
+  defp row(:identity_gone),
+    do: {:forbidden, "This account has been closed. It can no longer sign in here."}
+
+  # A write that binds a key named an account head that moved while it was
+  # decided (the issuance fence): nothing was written, and the next try
+  # reads the account as it stands now.
+  defp row(:stale_head),
+    do:
+      {:conflict,
+       "Your account's keys changed while this was being checked. Nothing was changed; try " <>
+         "again."}
+
   defp row(:execution_failed), do: {:internal, "The execution failed"}
 
   # Webhook ingress.
