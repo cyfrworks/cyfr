@@ -977,14 +977,16 @@ defmodule Sanctum.Caller do
   # (`Sanctum.IdentityFreshness.fresh?/2`): past the bound with the
   # directory unable to refresh it, the work pauses as `:identity_stale`,
   # and the session stays; an account gone is refused `:identity_gone`.
-  # The walk of a refresh retired a session its removed key signed for. A
-  # local person's session reads no directory. A person's identity row is
-  # minted with their person row, so a person without one stands on
-  # nothing.
+  # The refresh's walk retires a session its removed key signed for, and
+  # every session of the person on a recovery, so the session is read
+  # again once the head is fresh: a session the refresh just retired
+  # stands for nothing, whatever was loaded before it. A local person's
+  # session reads no directory. A person's identity row is minted with
+  # their person row, so a person without one stands on nothing.
   defp identity_current(user_id, hash) when is_binary(user_id) and is_binary(hash) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
-        account_current(identifier)
+        with :ok <- account_current(identifier), do: session_survives(hash)
 
       {:ok, %{provenance: "remote"}} ->
         {:error, :unauthenticated}
@@ -1003,6 +1005,14 @@ defmodule Sanctum.Caller do
   end
 
   defp identity_current(_user_id, _hash), do: {:error, :unauthenticated}
+
+  defp session_survives(hash) do
+    case Arca.SessionStorage.get_session(hash) do
+      {:ok, _row} -> :ok
+      {:error, :not_found} -> {:error, :unauthenticated}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
 
   defp account_current(identifier) do
     case Sanctum.IdentityFreshness.fresh?(identifier, []) do
@@ -1060,14 +1070,16 @@ defmodule Sanctum.Caller do
   defp standing_athanor(_athanor, _athanor_id), do: {:error, :not_member}
 
   # A paired device's certificate deadline on this node's clock, then its
-  # paired client and its person's athanor, read from the store. Nothing is
-  # rebuilt: everything the context carries is the client row's.
+  # person's account head, then its paired client and its person's
+  # athanor, read from the store after the refresh, whose walk may have
+  # retired the client. Nothing is rebuilt: everything the context carries
+  # is the client row's.
   defp revalidate_device(%Context{credential_deadline: deadline} = ctx) do
     if expired?(deadline) do
       {:error, :unauthenticated}
     else
-      with :ok <- client_stands(ctx),
-           :ok <- device_identity(ctx.user_id),
+      with :ok <- device_identity(ctx.user_id),
+           :ok <- client_stands(ctx),
            :ok <- company(ctx.user_id) do
         {:ok, validated(ctx)}
       end
