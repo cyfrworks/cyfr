@@ -978,6 +978,7 @@
           "ticket_refused": 403,
           "rate_limited": 429
         },
+        "note": "rate_limited is the rate limiter's answer on both routes: its body is {code, message}, not body's {error}.",
         "retry_after": [
           "rate_limited",
           "unavailable"
