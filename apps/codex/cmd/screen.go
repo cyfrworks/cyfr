@@ -298,6 +298,21 @@ const screenIdle = 5 * 60
 // way this device reaches a tailnet address.
 const screenProxy = "socks5://127.0.0.1:1055"
 
+// screenShellConfig is the box's own screen's shell in dir, for the CYFR
+// at address: the box's key and its client there, kept beside the
+// screen's files.
+func screenShellConfig(dir, address string, client *http.Client, host string, restart func()) shell.Config {
+	return shell.Config{
+		Address: address, Client: client, DisplayName: host,
+		Record:    filepath.Join(dir, screenDir, "holder.json"),
+		Clients:   shell.ClientFile(filepath.Join(dir, screenDir, "client.json")),
+		Directory: directoryURL(),
+		DataDir:   filepath.Join(dir, "data"),
+		Tokens:    screenTokens,
+		Restart:   restart,
+	}
+}
+
 // runScreenShell is the screen's session inside labwc: the shell's pages on
 // loopback, the on-screen keyboard, swayidle and Chrome on those pages.
 // The idle watch and a suspend send this process SIGUSR1, which locks;
@@ -305,20 +320,6 @@ const screenProxy = "socks5://127.0.0.1:1055"
 // own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
 // the sessions at the home first, then starts Chrome again, so no page of
 // the unlocked session outlives it.
-// screenShellConfig is the box's own screen's shell in dir, for the home
-// at address. Its home is this machine, so no PIN the home counts is
-// offered or opened there: without a chip the screen keeps a passphrase.
-func screenShellConfig(dir, address string, client *http.Client, host string, restart func()) shell.Config {
-	return shell.Config{
-		Address: address, Client: client, DisplayName: host,
-		Record:   filepath.Join(dir, screenDir, "holder.json"),
-		DataDir:  filepath.Join(dir, "data"),
-		Tokens:   screenTokens,
-		Restart:  restart,
-		HomeHere: true,
-	}
-}
-
 func runScreenShell(ctx context.Context) error {
 	_ = holder.HardenProcess()
 	dir, err := os.Getwd()

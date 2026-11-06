@@ -1,90 +1,144 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package shell is this box's own screen: the pages that set CYFR up,
-// unlock it with the person's PIN (or passphrase) and lock it again, and
-// confirm a sensitive change freshly, served on literal loopback to the
-// screen's Chrome alone; and the certified device channel through which
-// the box proves the person to their home.
+// Package shell is a device of a person's account: the pages that make its
+// key, make the account or add the key to one, unlock it with the person's
+// PIN (or passphrase) and lock it again, and confirm a sensitive change
+// freshly, served on literal loopback to a box's screen; the same states
+// drive cyfr login in a terminal. Through the device channel the device
+// proves the person to a CYFR.
 //
-// The PIN opens the box's key (internal/holder) and goes nowhere else: the
-// home receives only signatures (C1 of the devices plan), never a PIN, a
-// passphrase or anything derived from one. An unlock opens the channel,
-// asks the home to reserve a session (session.unlock), signs that
-// reservation and hands Chrome the home's one-time ticket in a fragment;
-// the shell pre-signs the lock of exactly that session and keeps it in
-// memory. A lock, from the visible Lock, five minutes without local
-// input, a suspend, Chrome's exit or the shell's own, submits those
-// proofs, closes the channel (which ends every session it holds at the
-// home), erases the key and starts Chrome again on the lock page. A shell
-// that dies without locking leaves sessions that expire within 60 seconds
-// at the home, as nothing renews them.
+// The PIN opens the device's key (internal/holder) and goes nowhere else:
+// a CYFR receives only signatures, never a PIN, a passphrase or anything
+// derived from one. One key serves every CYFR; each CYFR admits it once,
+// by its hello, and from then the device connects under the certificate
+// that CYFR issued. An unlock opens the channel, asks the CYFR to reserve
+// a session (session.unlock), signs that reservation and hands the
+// browser the CYFR's one-time ticket in a fragment; the shell pre-signs
+// the lock of exactly that session and keeps it in memory. A lock, from
+// the visible Lock, five minutes without local input, a suspend, the
+// browser's exit or the shell's own, submits those proofs, closes the
+// channel (which ends every session it holds at the CYFR), erases the key
+// and starts the browser again on the lock page. A shell that dies without
+// locking leaves sessions that expire within 60 seconds at the CYFR, as
+// nothing renews them.
 package shell
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/disk"
 	"github.com/cyfr/codex/internal/holder"
 )
 
-// Config is one box's shell.
+// Config is one device's shell at one CYFR.
 type Config struct {
-	// Address is the home's address, as its certificates name it.
+	// Address is the CYFR's origin, as its certificates name it.
 	Address string
-	// Client reaches the home (through the tailnet's proxy when the home
-	// is reached through it).
+	// Client reaches the CYFR, the directory and the registry (through the
+	// tailnet's proxy when the CYFR is reached through it).
 	Client *http.Client
-	// Record is the holder record's path, beside the screen's files.
+	// Record is the device key's record; an account being made is kept
+	// beside it until it is done.
 	Record string
-	// DataDir is the home's actual data directory, whose volume the
+	// Clients keeps the client this device is at this CYFR.
+	Clients ClientStore
+	// Directory is the directory an account is made at and a name is
+	// looked up through: cyfr.run unless CYFR_DIRECTORY_URL names another.
+	Directory string
+	// DataDir is the CYFR's actual data directory, whose volume the
 	// detection reads.
 	DataDir string
-	// Tokens reads .env's setup token when a page needs it, so it never
-	// travels in an argument.
+	// Tokens reads the setup token a first hello brings, when there is
+	// one, so it never travels in an argument.
 	Tokens func() (setup string)
-	// Restart starts Chrome again on the lock page, after a lock.
+	// Invitation is the invitation's code a first hello brings, when
+	// there is one.
+	Invitation string
+	// Restart starts the browser again on the lock page, after a lock.
 	Restart func()
-	// DisplayName is the name Devices lists this screen by.
+	// DisplayName is the name the CYFR lists this device by.
 	DisplayName string
 	// Detect reads the disks; disk.Detect unless a test replaces it.
 	Detect func(dataDir string) disk.Report
 	// Now is the clock; time.Now unless a test replaces it.
 	Now func() time.Time
-	// Chip is whether this box offers a chip to hold its key;
+	// Chip is whether this machine offers a chip to hold its key;
 	// holder.ChipPresent unless a test replaces it, so no test reaches the
 	// machine's own TPM.
 	Chip func() bool
 	// Noun is what the person calls this device in a sentence: "screen"
 	// for a box's own screen (the default), "command line" for cyfr login.
 	Noun string
-	// Pair is pairing.complete at the home, for a device paired to a
-	// person who exists (Prepare, then Pair); nil where nothing pairs.
-	Pair PairCall
-	// Certify obtains, at the person's own home, a certificate for this
-	// device when their identity is kept there: at a pairing, and again
-	// once that home ended the certification; nil where nothing pairs.
-	Certify CertifyCall
-	// Invitation is the invitation's code a new person joins by, asked
-	// again by a resume of that enrollment; empty for any other admission.
-	Invitation string
-	// HomeHere is a home that runs on this same machine, as a box's own
-	// screen's does.
-	HomeHere bool
 }
 
-// PendingConfirm is a confirmation the shell drew: the home's record and
-// challenge, as fetched over the channel, and when it was drawn.
+// ClientRecord is the client a CYFR admitted this device's key as and the
+// certificate it connects under there.
+type ClientRecord struct {
+	ClientID    string          `json:"client_id,omitempty"`
+	Certificate json.RawMessage `json:"certificate,omitempty"`
+}
+
+// ClientStore keeps this device's ClientRecord at one CYFR.
+type ClientStore interface {
+	Load() (ClientRecord, error)
+	Save(ClientRecord) error
+}
+
+// ClientFile keeps a ClientRecord in a file of its own, private to its
+// owner: a box's screen's.
+type ClientFile string
+
+// Load reads the file; none is an empty record.
+func (f ClientFile) Load() (ClientRecord, error) {
+	var c ClientRecord
+	raw, err := os.ReadFile(string(f))
+	if errors.Is(err, fs.ErrNotExist) {
+		return c, nil
+	}
+	if err != nil {
+		return c, err
+	}
+	return c, json.Unmarshal(raw, &c)
+}
+
+// Save replaces the file in one step.
+func (f ClientFile) Save(c ClientRecord) error { return writeJSON(string(f), c) }
+
+// writeJSON replaces path in one step: a private temporary file in the
+// same directory, renamed over it.
+func writeJSON(path string, v any) error {
+	raw, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(raw)
+	if err = errors.Join(err, tmp.Sync(), tmp.Close()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// PendingConfirm is a confirmation the shell drew: the CYFR's record, as
+// fetched over the channel, and when it was drawn.
 type PendingConfirm struct {
 	Ref       string
 	Operation string
@@ -93,28 +147,46 @@ type PendingConfirm struct {
 	drawn     time.Time
 }
 
-// Shell is the screen's state: at most one key unlocked, its channel, the
-// lock proofs of the sessions it holds, and what the next page says.
+// making is an account being made from this device: the attempt, the
+// recovery key (in memory alone), the recovery code shown until it is said
+// saved, and whether its name was taken meanwhile.
+type making struct {
+	attempt account.Attempt
+	key     ed25519.PrivateKey
+	code    string
+	saved   bool
+	taken   bool
+}
+
+// Shell is the device's state: its key record, its client at this CYFR,
+// at most one key open and its channel, the lock proofs of the sessions it
+// holds, an account being made, and what the next page says.
 type Shell struct {
 	cfg Config
 
-	mu         sync.Mutex
-	rec        *holder.Record
+	mu   sync.Mutex
+	rec  *holder.Record
+	here ClientRecord
+	// key is the open key: unlocked while ch stands, or held from a setup
+	// until its first connection.
 	key        *holder.Key
 	ch         *Channel
 	locks      []map[string]any
 	renewal    *time.Timer
 	notice     string
 	passphrase string
-	recovery   *Recovery
-	naming     string // a name cyfr.run refused or could not take yet
-	// nameWaits is a name that waits for cyfr.run to answer, not for
-	// another name.
-	nameWaits bool
-	confirm   *PendingConfirm
+	making     *making
+	// unfinished is an account being made that a run before this one
+	// saved.
+	unfinished *account.Attempt
+	// terms is the policy a new account accepts, once the directory named
+	// one; configured is whether the directory's configuration was read.
+	terms      *account.Policy
+	configured bool
+	confirm    *PendingConfirm
 }
 
-// New is a shell over cfg's holder record, locked.
+// New is a shell over cfg's key record, locked.
 func New(cfg Config) (*Shell, error) {
 	if cfg.Detect == nil {
 		cfg.Detect = disk.Detect
@@ -122,9 +194,9 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	// No request follows a redirect: the setup token and every proof are
-	// for the home they were read for, and
-	// a redirect elsewhere is refused as the home's answer.
+	// No request follows a redirect: the setup token, every proof and
+	// every signed write are for the service they were made for, and a
+	// redirect elsewhere is refused as that service's answer.
 	client := http.Client{}
 	if cfg.Client != nil {
 		client = *cfg.Client
@@ -149,36 +221,99 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Noun == "" {
 		cfg.Noun = "screen"
 	}
+	if cfg.Directory == "" {
+		cfg.Directory = account.DefaultDirectory
+	}
+	if cfg.Clients == nil {
+		cfg.Clients = ClientFile(filepath.Join(filepath.Dir(cfg.Record), "client.json"))
+	}
 	s := &Shell{cfg: cfg}
 	rec, err := holder.Load(cfg.Record)
 	switch {
 	case err == nil:
 		s.rec = rec
 	case !errors.Is(err, fs.ErrNotExist):
-		return nil, fmt.Errorf("the screen's key record %s cannot be read (%v)", cfg.Record, err)
+		return nil, fmt.Errorf("this %s's key record %s cannot be read (%v)", cfg.Noun, cfg.Record, err)
+	}
+	if s.here, err = cfg.Clients.Load(); err != nil {
+		return nil, fmt.Errorf("this %s's standing at %s cannot be read (%v)", cfg.Noun, cfg.Address, err)
+	}
+	var a account.Attempt
+	switch raw, err := os.ReadFile(s.attemptPath()); {
+	case err == nil && json.Unmarshal(raw, &a) == nil && a.Identifier != "":
+		s.unfinished = &a
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("the account this %s was making cannot be read (%v)", cfg.Noun, err)
 	}
 	return s, nil
 }
 
+func (s *Shell) attemptPath() string {
+	return filepath.Join(filepath.Dir(s.cfg.Record), "attempt.json")
+}
+
+func (s *Shell) saveAttempt(a account.Attempt) error {
+	if err := writeJSON(s.attemptPath(), a); err != nil {
+		return err
+	}
+	s.unfinished = &a
+	return nil
+}
+
+// issued is what this CYFR's certificate says of this device's client.
+type issued struct {
+	Kid        string `json:"kid"`
+	Identifier string `json:"identifier"`
+	Athanor    string `json:"athanor"`
+	ClientID   string `json:"client_id"`
+	NotBefore  int64  `json:"not_before"`
+	ExpiresAt  int64  `json:"expires_at"`
+}
+
+func readIssued(cert json.RawMessage) issued {
+	var i issued
+	_ = json.Unmarshal(cert, &i)
+	return i
+}
+
+// certified is whether the certificate held here is for this key and
+// account: one held for a key this machine no longer keeps is not used,
+// and the device says hello again.
+func (s *Shell) certified() bool {
+	i := readIssued(s.here.Certificate)
+	return len(s.here.Certificate) > 0 && i.Kid == account.Kid(s.rec.PublicKey) &&
+		i.Identifier == s.rec.Identifier && i.ClientID == s.here.ClientID
+}
+
 func (s *Shell) binding() Binding {
-	b := Binding{Home: s.cfg.Address, DeviceKey: s.rec.PublicKey}
-	b.Athanor, b.ClientID = s.rec.Athanor, s.rec.ClientID
-	return b
+	return Binding{Home: s.cfg.Address, Athanor: readIssued(s.here.Certificate).Athanor,
+		ClientID: s.here.ClientID, DeviceKey: s.rec.PublicKey}
 }
 
 func (s *Shell) report() []string {
 	return s.cfg.Detect(s.cfg.DataDir).Capabilities()
 }
 
-// Page names what the screen shows now.
+// Page names what the device shows now.
 type Page string
 
 const (
-	PageSetup    Page = "setup"
-	PageFinish   Page = "finish" // a key made, its enrollment not answered yet
-	PageLocked   Page = "locked"
+	// PageSetup is a device with no key.
+	PageSetup Page = "setup"
+	// PageEnroll is a key no account lists yet: its code, the address
+	// that adds it, and the name of the account to add it to.
+	PageEnroll Page = "enroll"
+	// PageRecovery is an account being made, its recovery code shown
+	// until it is said saved; nothing was sent yet.
 	PageRecovery Page = "recovery"
-	PageName     Page = "name"
+	// PageAccount is an account whose submission waits: a try again.
+	PageAccount Page = "account"
+	// PageName is an account whose name someone took meanwhile.
+	PageName Page = "name"
+	// PageResume is an account an earlier run began making: its recovery
+	// code, typed, finishes it.
+	PageResume   Page = "resume"
+	PageLocked   Page = "locked"
 	PageUnlocked Page = "unlocked"
 	PageConfirm  Page = "confirm"
 )
@@ -191,55 +326,60 @@ type View struct {
 	Notice     string
 	Storage    disk.Report
 	Passphrase string
-	Recovery   *Recovery
-	Name       string
-	Confirm    *PendingConfirm
-	// Admission is how the key in hand was, or is being, admitted:
-	// setup, invitation, open, or pair for a device paired to a
-	// person who exists.
-	Admission string
-	// Digest is the key's digest while it is not enrolled yet: the code a
-	// pairing shows.
-	Digest string
-	// NameWaits is a name page whose name waits for cyfr.run to answer,
-	// not for another name.
-	NameWaits bool
+	// RecoveryCode is the code shown on PageRecovery, and Name the name of
+	// the account being made.
+	RecoveryCode string
+	Name         string
+	// Terms is the address of the policy a new account accepts, once the
+	// directory named one.
+	Terms   string
+	Confirm *PendingConfirm
+	// Code is the key's short code while no account lists it, AddURL the
+	// account page that adds it (a QR code's text), and Key its public
+	// half as cyfr device approve takes it.
+	Code   string
+	AddURL string
+	Key    string
 }
 
-// View is the page the screen shows now, and the notice of the last action
-// or lock, which stays until the next action: reading a page changes
-// nothing.
+// View is the page the device shows now, and the notice of the last
+// action or lock, which stays until the next action: reading a page
+// changes nothing.
 func (s *Shell) View() View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := View{Notice: s.notice, Storage: s.cfg.Detect(s.cfg.DataDir), Chip: s.cfg.Chip()}
-	switch {
+	if s.terms != nil {
+		v.Terms = s.terms.URL
+	}
+	if s.rec != nil {
+		v.Kind = s.rec.Kind
+	}
+	switch m := s.making; {
 	case s.rec == nil:
 		v.Page = PageSetup
 		if !v.Chip || s.passphrase != "" {
 			v.Passphrase = s.newPassphrase()
 		}
-	case s.key == nil && len(s.rec.Certificate) == 0:
-		v.Page, v.Kind = PageFinish, s.rec.Kind
-	case s.key == nil:
-		v.Page, v.Kind = PageLocked, s.rec.Kind
+	case m != nil && !m.saved:
+		v.Page, v.RecoveryCode, v.Name = PageRecovery, m.code, m.attempt.Name
+	case m != nil && m.taken:
+		v.Page, v.Name = PageName, m.attempt.Name
+	case m != nil:
+		v.Page, v.Name = PageAccount, m.attempt.Name
+	case s.rec.Identifier == "" && s.unfinished != nil:
+		v.Page, v.Name = PageResume, s.unfinished.Name
+	case s.rec.Identifier == "":
+		kid := account.Kid(s.rec.PublicKey)
+		v.Page, v.Code, v.Key = PageEnroll, account.ShortCode(kid), account.B64(s.rec.PublicKey)
+		v.AddURL = account.Directory{URL: s.cfg.Directory}.Origin() + "/account/add#key=" + v.Key +
+			"&alg=ed25519&kind=device&code=" + v.Code
+	case s.ch == nil:
+		v.Page = PageLocked
 	case s.confirm != nil:
-		v.Page, v.Kind, v.Confirm = PageConfirm, s.rec.Kind, s.confirm
-	case s.naming != "":
-		v.Page, v.Name, v.NameWaits = PageName, s.naming, s.nameWaits
-	case s.recovery != nil:
-		v.Page, v.Recovery = PageRecovery, s.recovery
+		v.Page, v.Confirm = PageConfirm, s.confirm
 	default:
 		v.Page = PageUnlocked
-	}
-	if s.rec != nil {
-		if v.Kind == "" {
-			v.Kind = s.rec.Kind
-		}
-		v.Admission = s.rec.Admission
-		if len(s.rec.Certificate) == 0 {
-			v.Digest = KeyDigest(s.rec.PublicKey)
-		}
 	}
 	return v
 }
@@ -275,76 +415,41 @@ func (s *Shell) sentence(err error) string { return sentence(err, s.cfg.Noun) }
 func sentence(err error, noun string) string {
 	var intent *IntentError
 	var home *HomeError
+	var dir *account.DirectoryRefusal
 	switch {
-	case errors.Is(err, holder.ErrWrongSecret):
-		return "That is not this " + noun + "'s PIN or passphrase. Nothing was sent anywhere."
-	case errors.Is(err, holder.ErrSecretShape):
+	case errors.Is(err, holder.ErrWrongSecret), errors.Is(err, holder.ErrSecretShape):
 		return "That is not this " + noun + "'s PIN or passphrase. Nothing was sent anywhere."
 	case errors.Is(err, holder.ErrLockedOut):
 		return "Too many wrong PINs: this " + noun + "'s chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
-		return "CYFR does not take this " + noun + " any more: a restore from a backup suspended it, or it was removed."
+		return "CYFR does not take this " + noun + " now: it was removed, or CYFR does not admit your account. Unlocking it again asks CYFR again."
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
 		return "CYFR did not accept this " + noun + "'s proof. Nothing was signed for anything else."
 	case errors.Is(err, ErrRenew):
-		// A certificate another home issued ends its channel when it
-		// expires: the session it held is capped by it.
 		return "This " + noun + "'s certificate expired, and with it its session: unlock it again to renew it."
-	case errors.Is(err, ErrCertificationEnded):
-		return "The CYFR that keeps your identity ended this " + noun + "'s certification: pair it again."
+	case errors.Is(err, account.ErrUnreachable):
+		return "Your account could not be reached just now. Try again; nothing is lost."
+	case errors.As(err, &dir) && dir.Code == "gone":
+		return "That account was closed."
+	case errors.As(err, &dir) && dir.Code == "not_found":
+		return "No account is listed by that name."
 	case errors.As(err, &intent):
 		return intent.Error() + "."
-	case errors.As(err, &home) && home.Code == "setup_closed":
-		return "CYFR is set up already: this box cannot set it up again."
-	case errors.As(err, &home) && home.Code == "invitation_invalid":
-		return "That invitation admits no one now: it was used, withdrawn or expired."
-	case errors.As(err, &home) && home.Code == "not_admitted":
-		return "This CYFR does not admit new people without an invitation."
-	case errors.As(err, &home) && home.Code == "limit_reached":
-		return "This CYFR takes no more people just now."
 	case errors.As(err, &home) && home.Code == "rate_limited":
 		return fmt.Sprintf("CYFR is taking too many requests from here. Try again in %d seconds.", max(home.RetryAfter, 1))
 	case errors.As(err, &home) && home.Code == "unavailable":
 		return fmt.Sprintf("CYFR could not answer just now. Try again in %d seconds.", max(home.RetryAfter, 1))
-	case errors.As(err, &home) && home.RetryAfter > 0:
-		return fmt.Sprintf("CYFR is still restoring. Try again in %d seconds.", home.RetryAfter)
 	case errors.As(err, &home):
 		return home.Error() + "."
 	}
 	return err.Error()
 }
 
-// Setup makes this box's key and enrolls it as the installation's first
-// person, named name: the record is written before anything is sent, so a
-// retry proves the same key under the same request. The PIN (or the
-// generated passphrase), given twice, opens the key that signs; neither
-// leaves this process.
-func (s *Shell) Setup(ctx context.Context, name string, secret, again []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(secret, again)
-	setup := s.cfg.Tokens()
-	if s.rec != nil || setup == "" {
-		return
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		s.say("Enter your name: it is yours for life.")
-		return
-	}
-	rec, err := s.newRecord("setup", secret, again)
-	if err != nil {
-		return
-	}
-	extra := map[string]any{"name": name, "recovery_secret": RecoverySecret()}
-	s.enroll(ctx, rec, SetupAdmission(s.cfg.Client, setup), secret, extra, false)
-}
-
-// checkSecret checks the secret given twice before anything is made or
-// sent: the same both times, six digits for the chip, or the passphrase the
-// page showed where there is no chip. It answers whether the chip holds it.
+// checkSecret checks the secret given twice before anything is made: the
+// same both times, six digits for the chip, or the passphrase the page
+// showed where there is no chip. It answers whether the chip holds it.
 func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 	if string(secret) != string(again) {
 		s.say("The two entries differ. Enter the same one twice.")
@@ -358,7 +463,7 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 		return true, nil
 	}
 	if err := holder.CheckPassphrase(secret); err != nil {
-		s.say("Without a chip, this screen needs the six-word passphrase shown, not a short PIN.")
+		s.say("Without a chip, this %s needs the six-word passphrase shown, not a short PIN.", s.cfg.Noun)
 		return false, err
 	}
 	if string(secret) != s.passphrase {
@@ -368,31 +473,41 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 	return false, nil
 }
 
-// newRecord checks the secret given twice and makes the key under the
-// chip, or under the passphrase when the box has no usable chip, and
-// writes it.
-func (s *Shell) newRecord(admission string, secret, again []byte) (*holder.Record, error) {
+// Make makes this device's key under the PIN, or under the passphrase
+// when the machine has no usable chip, given twice, and writes it before
+// anything is shown or sent, so its code, a retry and a lost answer all
+// name the same key.
+func (s *Shell) Make(secret, again []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret, again)
+	if s.rec == nil {
+		_, _ = s.newRecord(secret, again)
+	}
+}
+
+func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 	chip, err := s.checkSecret(secret, again)
 	if err != nil {
 		return nil, err
 	}
 	var rec *holder.Record
 	if chip {
-		rec, err = holder.NewChip(s.cfg.Address, RequestID(), admission, secret)
+		rec, err = holder.NewChip(secret)
 		if errors.Is(err, holder.ErrNoChip) {
 			s.newPassphrase()
-			s.say("This box's chip cannot keep your PIN safely (%v). Use the passphrase below instead.", err)
+			s.say("This machine's chip cannot keep your PIN safely (%v). Use the passphrase below instead.", err)
 			return nil, err
 		}
 	} else {
-		rec, err = holder.NewSoftware(s.cfg.Address, RequestID(), admission, secret)
+		rec, err = holder.NewSoftware(secret)
 	}
 	if err != nil {
-		s.say("This screen could not make its key: %v.", err)
+		s.say("This %s could not make its key: %v.", s.cfg.Noun, err)
 		return nil, err
 	}
 	if err := rec.Save(s.cfg.Record); err != nil {
-		s.say("This screen could not save its key (%v). Nothing was sent to CYFR.", err)
+		s.say("This %s could not save its key (%v). Nothing was sent anywhere.", s.cfg.Noun, err)
 		return nil, err
 	}
 	s.passphrase = ""
@@ -400,104 +515,338 @@ func (s *Shell) newRecord(admission string, secret, again []byte) (*holder.Recor
 	return rec, nil
 }
 
-// Finish completes an enrollment a previous run began: the same key,
-// opened by its PIN, proven under the same request, through resume first.
-func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
+// Setup makes this device's key and an account whose first key it is,
+// named name, its policy accepted when the directory names one: the key is
+// written and held open, and the account's recovery code is shown, before
+// anything is sent (Saved sends it). The held key opens this device's
+// first connection once the account is made.
+func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	defer erase(secret)
-	if s.rec == nil || len(s.rec.Certificate) != 0 {
+	defer erase(secret, again)
+	if s.rec != nil {
 		return
 	}
-	setup := s.cfg.Tokens()
-	var a Admission
-	var extra map[string]any
-	switch {
-	case s.rec.Admission == "setup" && setup != "":
-		a = SetupAdmission(s.cfg.Client, setup)
-		// A setup whose complete never arrived needs its name again: the
-		// home recorded none, so the page asks for it with the PIN.
-		extra = map[string]any{"name": strings.TrimSpace(name), "recovery_secret": RecoverySecret()}
-	case s.rec.Admission == "invitation" || s.rec.Admission == "open":
-		// A new person's enrollment, under the same admission: the
-		// invitation's code, given again, or the open door.
-		var ok bool
-		if a, ok = s.admission(s.rec.Admission, strings.TrimSpace(code)); !ok {
-			s.say("Give the invitation's code again to finish with the same key.")
-			return
-		}
-		extra = map[string]any{"name": strings.TrimSpace(name), "recovery_secret": RecoverySecret()}
-	default:
-		s.say("This %s cannot finish setting up: .env holds no token for it.", s.cfg.Noun)
+	c, ok := s.checkNew(ctx, name, accepted)
+	if !ok {
 		return
 	}
-	s.enroll(ctx, s.rec, a, secret, extra, true)
-}
-
-// enroll opens rec's key, enrolls it under a and, admitted, records the
-// certificate before anything else, then opens the channel.
-func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, secret []byte, extra map[string]any, resumed bool) {
+	rec, err := s.newRecord(secret, again)
+	if err != nil {
+		return
+	}
 	key, err := rec.Open(secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
 		return
 	}
-	b := Binding{Home: s.cfg.Address, DeviceKey: rec.PublicKey}
-	d := Holder{RequestID: rec.RequestID, Kind: string(rec.Kind), DisplayName: s.cfg.DisplayName}
-	got, err := Enroll(ctx, s.cfg.Address, a, b, d, key, extra, resumed)
-	if err != nil {
-		key.Erase()
-		s.say("Setting up did not finish: %s Try again.", s.sentence(err))
+	s.key = key
+	s.begin(c, name, accepted)
+}
+
+// Create makes an account whose first key is this device's, as Setup does,
+// for a key made before.
+func (s *Shell) Create(ctx context.Context, name, accepted string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {
 		return
 	}
-	var cert struct {
-		Athanor  string `json:"athanor"`
-		ClientID string `json:"client_id"`
-	}
-	if json.Unmarshal(got.Certificate, &cert) != nil || cert.ClientID == "" {
-		key.Erase()
-		s.say("CYFR answered no certificate. Try again.")
-		return
-	}
-	rec.Certificate, rec.ClientID, rec.Athanor = got.Certificate, cert.ClientID, cert.Athanor
-	if got.Recovery == nil {
-		rec.RequestID = ""
-	}
-	if err := rec.Save(s.cfg.Record); err != nil {
-		key.Erase()
-		s.say("This screen could not save its certificate (%v). Try again.", err)
-		return
-	}
-	s.recovery = got.Recovery
-	if err := s.connect(ctx, key); err != nil {
-		key.Erase()
-		s.say("%s", s.sentence(err))
-		return
-	}
-	if s.recovery != nil {
-		s.register(ctx, s.recovery.Name)
+	if c, ok := s.checkNew(ctx, name, accepted); ok {
+		s.begin(c, name, accepted)
 	}
 }
 
-// connect opens the certified channel under key and holds both: the box is
-// unlocked from here until a lock. A certificate another home issued is
-// renewed there, never here: first when it is past half its life, and
-// when this home will not take it (4408: expired, or chained to the
-// person's old keys). One that home ended is certified there again
-// (recertify), where this device can ask.
-func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
-	elsewhere := readIssued(s.rec.Certificate).elsewhere()
-	if elsewhere && readIssued(s.rec.Certificate).due(s.cfg.Now()) {
-		if err := s.renewElsewhere(ctx, key, false); err != nil {
-			return err
+// Terms is the policy a new account accepts at this device's directory, or
+// nil where its registry asks for none.
+func (s *Shell) Terms(ctx context.Context) (*account.Policy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.config(ctx)
+	return c.Policy, err
+}
+
+func (s *Shell) config(ctx context.Context) (account.Config, error) {
+	c, err := account.Directory{URL: s.cfg.Directory, Client: s.cfg.Client}.Config(ctx)
+	if err == nil {
+		s.terms, s.configured = c.Policy, true
+	}
+	return c, err
+}
+
+// readTerms reads the directory's configuration once, so a page that
+// makes an account shows the terms it accepts before it is submitted.
+func (s *Shell) readTerms(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.configured {
+		_, _ = s.config(ctx)
+	}
+}
+
+// checkNew reads the directory's configuration and checks a new account's
+// name and acceptance before anything is made.
+func (s *Shell) checkNew(ctx context.Context, name, accepted string) (account.Config, bool) {
+	c, err := s.config(ctx)
+	if err != nil {
+		s.say("The account service could not be reached (%v). Nothing was made; try again.", err)
+		return c, false
+	}
+	if c.Policy != nil && accepted != c.Policy.Version {
+		s.say("To make your account, accept the terms at %s.", c.Policy.URL)
+		return c, false
+	}
+	switch err := account.CheckName(ctx, account.Registry{Origin: c.Registry, Client: s.cfg.Client}, name); {
+	case err == nil:
+		return c, true
+	case errors.Is(err, account.ErrNameTaken):
+		s.say("Someone holds the name @%s. Choose another.", name)
+	case !account.IsHandle(name):
+		s.say("A name is 1 to 39 of a-z, 0-9 and single hyphens inside it.")
+	default:
+		s.say("The name could not be checked (%s). Nothing was made; try again.", s.sentence(err))
+	}
+	return c, false
+}
+
+// begin draws the recovery secret and composes the account with this
+// device's key its first key, and shows the recovery code.
+func (s *Shell) begin(c account.Config, name, accepted string) {
+	a, secret, key, err := account.Begin(c, name, accepted, s.rec.PublicKey, s.cfg.Now().UnixMilli())
+	if err != nil {
+		s.say("Your account could not be composed: %v.", err)
+		return
+	}
+	code, err := account.EncodeRecoveryCode(a.Identifier, secret)
+	clear(secret)
+	if err != nil {
+		s.say("Your account could not be composed: %v.", err)
+		return
+	}
+	s.making = &making{attempt: a, key: key, code: code}
+}
+
+// Saved says the recovery code is saved and submits the account (register,
+// append, then the name), or submits it again after an answer that did
+// not come; accepted is the policy version accepted again when the
+// registry asked for a newer one. Done, the key's record names the account,
+// and a key held from a setup opens this device's first connection.
+func (s *Shell) Saved(ctx context.Context, accepted string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.making
+	if m == nil || m.taken {
+		return
+	}
+	if !m.saved {
+		if err := s.saveAttempt(m.attempt); err != nil {
+			s.say("This %s could not keep the account it is making (%v). Nothing was sent.", s.cfg.Noun, err)
+			return
+		}
+		m.saved, m.code = true, ""
+	}
+	if accepted != "" && accepted != m.attempt.Accepted {
+		m.attempt.Accepted, m.attempt.AcceptDone = accepted, false
+	}
+	s.submit(ctx)
+}
+
+// Resume finishes an account an earlier run began making, with its
+// recovery code, which re-derives the recovery key.
+func (s *Shell) Resume(ctx context.Context, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unfinished == nil || s.making != nil || s.rec == nil || s.rec.Identifier != "" {
+		return
+	}
+	identifier, secret, err := account.DecodeRecoveryCode(code)
+	switch {
+	case errors.Is(err, account.ErrTypo):
+		s.say("That recovery code has a typo. Check it and type it again.")
+		return
+	case err != nil:
+		s.say("That is not a recovery code.")
+		return
+	case identifier != s.unfinished.Identifier:
+		clear(secret)
+		s.say("That is another account's recovery code.")
+		return
+	}
+	s.making = &making{attempt: *s.unfinished, key: account.RecoveryKey(secret), saved: true}
+	clear(secret)
+	s.submit(ctx)
+}
+
+// Rename takes another name for the account being made, whose name
+// someone took meanwhile.
+func (s *Shell) Rename(ctx context.Context, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.making
+	if m == nil || !m.taken {
+		return
+	}
+	name = strings.TrimPrefix(strings.TrimSpace(name), "@")
+	if !account.IsHandle(name) {
+		s.say("A name is 1 to 39 of a-z, 0-9 and single hyphens inside it.")
+		return
+	}
+	m.attempt.Name, m.taken = name, false
+	s.submit(ctx)
+}
+
+func (s *Shell) submit(ctx context.Context) {
+	m := s.making
+	now := func() int64 { return s.cfg.Now().UnixMilli() }
+	err := account.Submit(ctx, &m.attempt, m.key, now, s.cfg.Client, s.saveAttempt)
+	switch {
+	case errors.Is(err, account.ErrNameTaken):
+		m.taken = true
+		s.say("Someone holds the name @%s. Choose another: your account is made, and takes a name once one is free.", m.attempt.Name)
+		return
+	case errors.Is(err, account.ErrPolicyChanged):
+		m.attempt.Accepted = ""
+		c, _ := s.config(ctx)
+		url := "the account service"
+		if c.Policy != nil {
+			url = c.Policy.URL
+		}
+		s.say("The account service's terms changed: accept the terms at %s to finish.", url)
+		return
+	case err != nil:
+		s.say("Your account is not finished: %s", s.sentence(err))
+		return
+	}
+	s.rec.Identifier, s.rec.Directory = m.attempt.Identifier, m.attempt.Directory
+	if err := s.rec.Save(s.cfg.Record); err != nil {
+		s.say("This %s could not save its account (%v). Try again.", s.cfg.Noun, err)
+		return
+	}
+	clear(m.key)
+	s.making, s.unfinished = nil, nil
+	_ = os.Remove(s.attemptPath())
+	s.firstConnection(ctx)
+}
+
+// firstConnection opens the key held since a setup, once its account
+// lists it, or leaves the device locked for its PIN.
+func (s *Shell) firstConnection(ctx context.Context) {
+	if s.key == nil {
+		return
+	}
+	if err := s.connect(ctx, s.key); err != nil {
+		s.key.Erase()
+		s.key = nil
+		s.say("%s", s.sentence(err))
+	}
+}
+
+// pollEvery is how often an enrollment reads the account's log.
+var pollEvery = 2 * time.Second
+
+// Enroll adds this device to the account named name, once a device of the
+// person's approves it: the name is resolved at the registry the
+// directory names, and that account's log is read every pollEvery, for at
+// most wait, until it lists this key. Listed, the key's record names the
+// account.
+func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {
+		return
+	}
+	name = strings.TrimPrefix(strings.TrimSpace(name), "@")
+	if !account.IsHandle(name) {
+		s.say("A name is 1 to 39 of a-z, 0-9 and single hyphens inside it.")
+		return
+	}
+	c, err := s.config(ctx)
+	if err != nil {
+		s.say("The account service could not be reached (%v). Try again.", err)
+		return
+	}
+	found, err := account.Registry{Origin: c.Registry, Client: s.cfg.Client}.Handle(ctx, name)
+	var ref *account.Refusal
+	switch {
+	case errors.As(err, &ref) && ref.Reason == "handle_not_found":
+		s.say("No account is called @%s.", name)
+		return
+	case err != nil:
+		s.say("The name could not be looked up (%s).", s.sentence(err))
+		return
+	}
+	d := account.Directory{URL: found.Directory, Client: s.cfg.Client}
+	kid := account.Kid(s.rec.PublicKey)
+	waiting, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for {
+		state, err := d.Read(waiting, found.Identifier)
+		if err == nil {
+			if _, listed := state.Key(kid); listed {
+				break
+			}
+		}
+		var dir *account.DirectoryRefusal
+		if errors.As(err, &dir) && dir.Code == "gone" {
+			s.say("%s", s.sentence(err))
+			return
+		}
+		select {
+		case <-waiting.Done():
+			s.say("This %s is not on @%s's account yet. Approve it on a device of yours, then try again.", s.cfg.Noun, name)
+			return
+		case <-time.After(pollEvery):
 		}
 	}
-	ch, err := s.dial(ctx, key)
-	if elsewhere && errors.Is(err, ErrRenew) {
-		if err := s.renewElsewhere(ctx, key, true); err != nil {
-			return err
-		}
-		ch, err = s.dial(ctx, key)
+	s.rec.Identifier, s.rec.Directory = found.Identifier, found.Directory
+	if err := s.rec.Save(s.cfg.Record); err != nil {
+		s.say("This %s could not save its account (%v). Try again.", s.cfg.Noun, err)
+		return
+	}
+	s.firstConnection(ctx)
+}
+
+// Unlock opens the key with the PIN (or passphrase) and opens the channel.
+// A wrong PIN is said and never retried.
+func (s *Shell) Unlock(ctx context.Context, secret []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret)
+	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil {
+		return
+	}
+	if s.key != nil {
+		s.key.Erase()
+		s.key = nil
+	}
+	key, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s", s.sentence(err))
+		return
+	}
+	if err := s.connect(ctx, key); err != nil {
+		key.Erase()
+		s.say("%s", s.sentence(err))
+	}
+}
+
+// connect opens the channel under key and holds both: the device is
+// unlocked from here until a lock. A device this CYFR has not certified
+// says hello first; one whose standing ended here keeps no certificate, so
+// its next unlock says hello again.
+func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
+	d := Dialer{Address: s.cfg.Address, Client: s.cfg.Client}
+	var ch *Channel
+	var err error
+	if s.certified() {
+		ch, err = d.Open(ctx, Device{Binding: s.binding(), Certificate: s.here.Certificate}, key, s.report, s.renewed)
+	} else {
+		h := Hello{Key: s.rec.PublicKey, Identifier: s.rec.Identifier, HolderKind: string(s.rec.Kind),
+			DisplayName: s.cfg.DisplayName, Admission: s.admission()}
+		ch, err = d.Hello(ctx, h, key, s.admitted, s.report, s.renewed)
+	}
+	if errors.Is(err, ErrRevoked) {
+		s.forget()
 	}
 	if err != nil {
 		return err
@@ -508,71 +857,57 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	return nil
 }
 
-func (s *Shell) dial(ctx context.Context, key *holder.Key) (*Channel, error) {
-	device := Device{Binding: s.binding(), Certificate: s.rec.Certificate}
-	return Dialer{Address: s.cfg.Address, Client: s.cfg.Client}.Open(ctx, device, key, s.report, s.renewed)
-}
-
-// renewElsewhere renews the certificate another home issued at that home
-// and keeps the replacement before it is used. A certification that home
-// ended is certified there again by the person (cfg.Certify), the
-// replacement kept only when it certifies exactly this device here. An
-// issuer out of reach leaves an unexpired certificate in use, unless this
-// home refused it.
-func (s *Shell) renewElsewhere(ctx context.Context, key *holder.Key, refused bool) error {
-	i := readIssued(s.rec.Certificate)
-	cert, err := RenewAtIssuer(ctx, s.cfg.Client, s.binding(), s.rec.Certificate, key)
-	switch {
-	case err == nil:
-	case errors.Is(err, ErrCertificationEnded) && s.cfg.Certify != nil:
-		asked := Certification{Audience: s.cfg.Address, Athanor: s.rec.Athanor, ClientID: s.rec.ClientID,
-			DeviceKey: s.rec.PublicKey, Issuer: i.Issuer}
-		got, err := s.cfg.Certify(ctx, asked)
-		if err != nil {
-			return err
-		}
-		if err := Elsewhere(got, asked); err != nil {
-			return err
-		}
-		cert = got.Certificate
-	case errors.Is(err, ErrCertificationEnded), refused, s.cfg.Now().UnixMilli() >= i.ExpiresAt:
-		return err
-	default:
+// admission is the capability a first hello brings: none once this CYFR
+// admitted this device (the door decides), else the setup token, else the
+// invitation's code.
+func (s *Shell) admission() map[string]any {
+	if s.here.ClientID != "" {
 		return nil
 	}
-	s.rec.Certificate = cert
-	return s.rec.Save(s.cfg.Record)
+	if t := s.cfg.Tokens(); t != "" {
+		return map[string]any{"setup": t}
+	}
+	if s.cfg.Invitation != "" {
+		return map[string]any{"invitation": s.cfg.Invitation}
+	}
+	return nil
 }
 
-// renewed persists a certificate the home issued. It arrives on the
+// admitted keeps the client and certificate a hello was answered before
+// the connection goes on.
+func (s *Shell) admitted(a Admitted) error {
+	s.here = ClientRecord{ClientID: a.ClientID, Certificate: a.Certificate}
+	return s.cfg.Clients.Save(s.here)
+}
+
+// forget drops the certificate of a standing that ended here, keeping the
+// client id, so the next unlock says hello without a capability.
+func (s *Shell) forget() {
+	s.here.Certificate = nil
+	_ = s.cfg.Clients.Save(s.here)
+}
+
+// renewed persists a certificate the CYFR issued. It arrives on the
 // channel's own goroutine, or during a connect whose caller holds the
-// shell, so it takes the shell's lock on a goroutine of its own. A box that
-// dies before it is written still holds the old certificate, which locates
-// the client for the next renewal.
+// shell, so it takes the shell's lock on a goroutine of its own. A device
+// that dies before it is written still holds the old certificate, which
+// locates the client for the next renewal.
 func (s *Shell) renewed(cert json.RawMessage) {
 	go func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.rec != nil {
-			s.rec.Certificate = cert
-			_ = s.rec.Save(s.cfg.Record)
-		}
+		s.here.Certificate = cert
+		_ = s.cfg.Clients.Save(s.here)
 	}()
 }
 
 // scheduleRenewal renews the certificate over the channel at half its life.
 func (s *Shell) scheduleRenewal() {
-	var cert struct {
-		NotBefore int64 `json:"not_before"`
-		ExpiresAt int64 `json:"expires_at"`
-	}
-	if json.Unmarshal(s.rec.Certificate, &cert) != nil || cert.ExpiresAt <= cert.NotBefore ||
-		readIssued(s.rec.Certificate).elsewhere() {
-		// Another home's certificate is renewed there, at the next unlock;
-		// the channel ends when it expires.
+	i := readIssued(s.here.Certificate)
+	if i.ExpiresAt <= i.NotBefore {
 		return
 	}
-	at := time.UnixMilli(cert.NotBefore + (cert.ExpiresAt-cert.NotBefore)/2)
+	at := time.UnixMilli(i.NotBefore + (i.ExpiresAt-i.NotBefore)/2)
 	wait := max(at.Sub(s.cfg.Now()), time.Second)
 	ch := s.ch
 	s.renewal = time.AfterFunc(wait, func() {
@@ -587,8 +922,9 @@ func (s *Shell) scheduleRenewal() {
 	})
 }
 
-// watch locks the box when its channel ends under it: a revoked pairing
-// or a home gone away ends the unlock, with the reason on the lock page.
+// watch locks the device when its channel ends under it: an ended
+// standing or a CYFR gone away ends the unlock, with the reason on the
+// lock page.
 func (s *Shell) watch(ch *Channel) {
 	<-ch.Done()
 	s.mu.Lock()
@@ -596,230 +932,15 @@ func (s *Shell) watch(ch *Channel) {
 	if s.ch != ch {
 		return
 	}
+	if errors.Is(ch.Err(), ErrRevoked) {
+		s.forget()
+	}
 	s.lock(s.sentence(ch.Err()))
 }
 
-// register takes the person's name at cyfr.run (registry.register), the
-// one the attempt holds first. A name held by someone else asks for
-// another; cyfr.run not answering asks to try again. Neither enrolls
-// anyone again.
-func (s *Shell) register(ctx context.Context, name string) {
-	args := map[string]any{}
-	if s.recovery == nil || name != s.recovery.Name {
-		args["name"] = name
-	}
-	got, err := s.ch.Call(ctx, "registry.register", args)
-	var intent *IntentError
-	switch {
-	case err == nil:
-		var answer struct {
-			Name string `json:"name"`
-		}
-		_ = json.Unmarshal(got, &answer)
-		if answer.Name == "" {
-			answer.Name = name
-		}
-		s.naming, s.nameWaits = "", false
-		if s.recovery != nil {
-			s.recovery.Name = answer.Name
-		}
-	case errors.As(err, &intent) && intent.says("name_taken", "name_reserved"):
-		s.naming, s.nameWaits = name, false
-		s.say("Someone holds the name %s, or cyfr.run keeps it. Choose another.", name)
-	case errors.As(err, &intent) && (intent.says("directory_unavailable", "registry_unavailable") || intent.class() == "unavailable"):
-		s.naming, s.nameWaits = name, true
-		s.say("cyfr.run did not answer. Try again in a moment; you are set up already.")
-	default:
-		s.naming, s.nameWaits = name, false
-		s.say("%s", s.sentence(err))
-	}
-}
-
-// Rename asks cyfr.run for name.
-func (s *Shell) Rename(ctx context.Context, name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ch == nil || s.naming == "" {
-		return
-	}
-	s.register(ctx, strings.TrimSpace(name))
-}
-
-// Saved records the recovery code saved (person.recovery_code_saved),
-// erases it here and finishes setup.
-func (s *Shell) Saved(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ch == nil || s.recovery == nil || s.naming != "" {
-		return
-	}
-	if _, err := s.ch.Call(ctx, "person.recovery_code_saved", map[string]any{"attempt_id": s.recovery.AttemptID}); err != nil {
-		s.say("%s", s.sentence(err))
-		return
-	}
-	s.recovery = nil
-	s.rec.RequestID = ""
-	if err := s.rec.Save(s.cfg.Record); err != nil {
-		s.say("This screen could not save that setup finished (%v).", err)
-	}
-}
-
-// admission is the admission an enrollment of kind is proven under again
-// (a finish or a resume): the setup token as .env holds it, the
-// invitation's code given (none, and there is none), or the open door.
-func (s *Shell) admission(kind, code string) (Admission, bool) {
-	switch kind {
-	case "setup":
-		setup := s.cfg.Tokens()
-		return SetupAdmission(s.cfg.Client, setup), true
-	case "invitation":
-		if code == "" {
-			return Admission{}, false
-		}
-		return InvitationAdmission(s.cfg.Client, code), true
-	case "open":
-		return OpenAdmission(s.cfg.Client), true
-	}
-	return Admission{}, false
-}
-
-// Join makes this device's key and enrolls it as a new person at the home,
-// named name, admitted by the invitation's code, or by the home's open door
-// when there is none: the record is written before anything is sent, as
-// Setup writes it, and the home answers the certificate and the person's
-// recovery code.
-func (s *Shell) Join(ctx context.Context, invitation, name string, secret, again []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(secret, again)
-	if s.rec != nil {
-		return
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		s.say("Enter your name: it is yours for life.")
-		return
-	}
-	kind := "open"
-	if invitation = strings.TrimSpace(invitation); invitation != "" {
-		kind = "invitation"
-	}
-	a, _ := s.admission(kind, invitation)
-	rec, err := s.newRecord(kind, secret, again)
-	if err != nil {
-		return
-	}
-	extra := map[string]any{"name": name, "recovery_secret": RecoverySecret()}
-	s.enroll(ctx, rec, a, secret, extra, false)
-}
-
-// Prepare makes this device's key for a pairing to a person who exists,
-// under the PIN or passphrase given twice, and writes it before its code
-// is shown, so the code, a retry and a lost answer all name the same key.
-// It erases again; the caller keeps secret for Pair and erases it there.
-func (s *Shell) Prepare(secret, again []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(again)
-	if s.rec != nil {
-		return
-	}
-	_, _ = s.newRecord("pair", secret, again)
-}
-
-// Pair completes the pairing of the prepared key by the invitation a
-// device of the person answered once they confirmed its addition: the
-// link, pasted, or its code, typed. The PIN or passphrase opens the key;
-// the home's pair challenge is checked and signed (Pair), the certificate
-// kept before anything else, and the channel opened: this device is
-// unlocked. A completion whose answer was lost is completed again with the
-// same link and key, and the home answers the client it committed.
-func (s *Shell) Pair(ctx context.Context, link string, secret []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(secret)
-	if s.rec == nil || len(s.rec.Certificate) != 0 || s.rec.Admission != "pair" || s.cfg.Pair == nil {
-		return
-	}
-	code, err := InvitationSecret(s.cfg.Address, link)
-	if err != nil {
-		s.say("%s", strings.ToUpper(err.Error()[:1])+err.Error()[1:]+".")
-		return
-	}
-	key, err := s.rec.Open(secret)
-	if err != nil {
-		s.say("%s", s.sentence(err))
-		return
-	}
-	got, err := Pair(ctx, s.cfg.Pair, s.cfg.Certify, Binding{Home: s.cfg.Address, DeviceKey: s.rec.PublicKey},
-		Holder{Kind: string(s.rec.Kind), DisplayName: s.cfg.DisplayName}, code, key)
-	if err != nil {
-		key.Erase()
-		s.say("Pairing did not finish: %s Your key is kept, so giving the link again finishes with the same one.", s.sentence(err))
-		return
-	}
-	s.rec.Certificate, s.rec.ClientID, s.rec.Athanor, s.rec.RequestID = got.Certificate, got.ClientID, got.Athanor, ""
-	if err := s.rec.Save(s.cfg.Record); err != nil {
-		key.Erase()
-		s.say("This %s could not save its certificate (%v). Give the link again: CYFR answers the same one.", s.cfg.Noun, err)
-		return
-	}
-	if err := s.connect(ctx, key); err != nil {
-		key.Erase()
-		s.say("%s", s.sentence(err))
-	}
-}
-
-// Unlock opens the key with the PIN (or passphrase), opens the channel
-// and, for a setup whose recovery code was not said saved yet, fetches it
-// again by resume. A wrong PIN is said and never retried.
-func (s *Shell) Unlock(ctx context.Context, secret []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(secret)
-	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
-		return
-	}
-	key, err := s.rec.Open(secret)
-	if err != nil {
-		s.say("%s", s.sentence(err))
-		return
-	}
-	// An enrollment whose recovery code was never said saved (RequestID
-	// kept) unlocks only to show that code again, under the admission it
-	// was made by; one whose admission is not at hand (an invitation's
-	// code not given again) does not unlock.
-	a, admitted := s.admission(s.rec.Admission, s.cfg.Invitation)
-	if s.rec.RequestID != "" && !admitted {
-		key.Erase()
-		s.say("This %s is not set up yet: your recovery code was never saved. Run cyfr login --join --invitation CODE with the invitation's code to see it again.", s.cfg.Noun)
-		return
-	}
-	if err := s.connect(ctx, key); err != nil {
-		key.Erase()
-		s.say("%s", s.sentence(err))
-		return
-	}
-	if s.rec.RequestID != "" {
-		got, err := resume(ctx, s.cfg.Address, a, s.binding(), s.rec.RequestID, key)
-		switch {
-		case err == nil && got.Recovery != nil:
-			s.recovery = got.Recovery
-			s.register(ctx, got.Recovery.Name)
-		case err == nil:
-			s.rec.RequestID = ""
-			_ = s.rec.Save(s.cfg.Record)
-		default:
-			// No session opens before the code is said saved: the
-			// unlock ends here, and the next one asks again.
-			s.lock("CYFR could not show your recovery code again: " + s.sentence(err))
-		}
-	}
-}
-
-// Ticket reserves one session at the home (reserve) and answers where
-// Chrome goes: the home's completion page with the ticket in its fragment,
-// which no request carries.
+// Ticket reserves one session at the CYFR (reserve) and answers where the
+// browser goes: the CYFR's completion page with the ticket in its
+// fragment, which no request carries.
 func (s *Shell) Ticket(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -830,7 +951,7 @@ func (s *Shell) Ticket(ctx context.Context) (string, error) {
 	return strings.TrimRight(s.cfg.Address, "/") + "/auth/device/complete#" + ticket, nil
 }
 
-// Session reserves one session at the home for this device's own
+// Session reserves one session at the CYFR for this device's own
 // requests (reserve) and spends its ticket for the session's bearer
 // token (POST /device/session), which only the device channel that
 // reserved it keeps alive and whose lock this shell holds. The token is
@@ -854,12 +975,12 @@ func (s *Shell) Session(ctx context.Context) (string, error) {
 	return got.SessionToken, nil
 }
 
-// reserve asks the home for one session (session.unlock), signs that
+// reserve asks the CYFR for one session (session.unlock), signs that
 // reservation, pre-signs the lock of exactly that session and keeps it,
-// and answers the home's one-time ticket for it. The caller holds the
+// and answers the CYFR's one-time ticket for it. The caller holds the
 // shell.
 func (s *Shell) reserve(ctx context.Context) (string, error) {
-	if s.ch == nil || s.recovery != nil || s.naming != "" || s.rec.RequestID != "" {
+	if s.ch == nil {
 		return "", errors.New("locked")
 	}
 	raw, err := s.ch.Call(ctx, "session.unlock", nil)
@@ -872,7 +993,7 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(raw, &asked); err != nil {
 		return "", ErrRefused
 	}
-	c, err := Challenge(asked.Challenge, "unlock", s.binding(), nil)
+	c, err := Challenge(asked.Challenge, "unlock", s.binding())
 	if err != nil {
 		return "", err
 	}
@@ -902,7 +1023,7 @@ func (s *Shell) reserve(ctx context.Context) (string, error) {
 	return got.Ticket, nil
 }
 
-// Lock locks the box, why saying what the lock page tells the person.
+// Lock locks the device, why saying what the lock page tells the person.
 func (s *Shell) Lock(why string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -910,9 +1031,10 @@ func (s *Shell) Lock(why string) {
 }
 
 // lock submits each held session's lock proof, closes the channel, erases
-// the key and every secret the shell held, and starts Chrome again on the
-// lock page, in that order: the sessions end at the home before the page
-// that used them is gone.
+// the key and every secret the shell held, an account's recovery key
+// among them, and starts the browser again on the lock page, in that
+// order: the sessions end at the CYFR before the page that used them is
+// gone.
 func (s *Shell) lock(why string) {
 	if s.renewal != nil {
 		s.renewal.Stop()
@@ -929,8 +1051,11 @@ func (s *Shell) lock(why string) {
 	if s.key != nil {
 		s.key.Erase()
 	}
+	if s.making != nil {
+		clear(s.making.key)
+	}
 	wasOpen := s.ch != nil
-	s.ch, s.key, s.locks, s.recovery, s.naming, s.nameWaits, s.confirm, s.passphrase = nil, nil, nil, nil, "", false, nil, ""
+	s.ch, s.key, s.locks, s.making, s.confirm, s.passphrase = nil, nil, nil, nil, nil, ""
 	if wasOpen {
 		if why != "" {
 			s.notice = why
@@ -939,25 +1064,24 @@ func (s *Shell) lock(why string) {
 	}
 }
 
-// Unlocked is whether a key is open.
+// Unlocked is whether the channel stands.
 func (s *Shell) Unlocked() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.key != nil
+	return s.ch != nil
 }
 
 // confirmWindow is how long a drawn confirmation may wait for the PIN.
 const confirmWindow = 60 * time.Second
 
-// Draw fetches the confirmation ref names from the home over the channel
-// (confirmation.pending), its preview and its confirm challenge, and
-// shows them on this screen's own page. Nothing a browser sent is drawn
-// but the ref.
+// Draw fetches the confirmation ref names from the CYFR over the channel
+// (confirmation.pending), its preview, and shows it on this device's own
+// page. Nothing a browser sent is drawn but the ref.
 func (s *Shell) Draw(ctx context.Context, ref string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ch == nil {
-		s.say("Unlock this screen first, then confirm the change again from the page that asked.")
+		s.say("Unlock this %s first, then confirm the change again from the page that asked.", s.cfg.Noun)
 		return
 	}
 	p, err := s.pending(ctx, ref)
@@ -968,7 +1092,7 @@ func (s *Shell) Draw(ctx context.Context, ref string) {
 	s.confirm = p
 }
 
-// pending reads ref's record from the home: what this device draws
+// pending reads ref's record from the CYFR: what this device draws
 // before it signs.
 func (s *Shell) pending(ctx context.Context, ref string) (*PendingConfirm, error) {
 	raw, err := s.ch.Call(ctx, "confirmation.pending", map[string]any{"request": ref})
@@ -991,48 +1115,40 @@ func (s *Shell) pending(ctx context.Context, ref string) (*PendingConfirm, error
 		drawn: s.cfg.Now()}, nil
 }
 
-// answer confirms the record ref by key (Prima.SignIn): the home's
+// answer confirms the record ref by key (Prima.SignIn): the CYFR's
 // confirm request for it, asked on this device's channel
-// (confirmation.request), held to this home and the confirm purpose, its
-// digest (SHA-256 of its canonical bytes) signed by key, and the answer
-// {challenge, kid, sig} presented (confirmation.confirm).
+// (confirmation.request), held to this CYFR and the confirm purpose, its
+// digest signed by key, and the answer {challenge, kid, sig} presented
+// (confirmation.confirm).
 func (s *Shell) answer(ctx context.Context, ref string, key Signer) error {
 	raw, err := s.ch.Call(ctx, "confirmation.request", map[string]any{"ref": ref})
 	if err != nil {
 		return err
 	}
 	var got struct {
-		Request map[string]any `json:"request"`
+		Request any `json:"request"`
 	}
-	if err := json.Unmarshal(raw, &got); err != nil || got.Request == nil {
+	if err := json.Unmarshal(raw, &got); err != nil {
 		return errors.New("CYFR answered no request to sign")
 	}
-	r := got.Request
-	challenge, ok := r["challenge"].(string)
-	if r["purpose"] != "confirm" || r["audience"] != s.cfg.Address || !ok {
+	r, err := account.ReadRequest(got.Request)
+	if err != nil || r.Purpose != "confirm" || r.Audience != s.cfg.Address {
 		return errors.New("CYFR answered no request to sign")
 	}
-	msg, err := Canonical(r)
+	answer, err := r.Answer(account.Kid(s.rec.PublicKey), key.Sign)
 	if err != nil {
 		return err
-	}
-	digest := sha256.Sum256(msg)
-	pub := sha256.Sum256(s.rec.PublicKey)
-	answer := map[string]any{
-		"challenge": challenge,
-		"kid":       "sha256:" + hex.EncodeToString(pub[:]),
-		"sig":       b64(key.Sign(digest[:])),
 	}
 	_, err = s.ch.Call(ctx, "confirmation.confirm", map[string]any{"ref": ref, "answer": answer})
 	return err
 }
 
 // Decide answers the drawn confirmation: cancelled, timed out or changed
-// at the home since it was drawn, nothing is signed. Otherwise the PIN
+// at the CYFR since it was drawn, nothing is signed. Otherwise the PIN
 // opens the key afresh (the chip authorizes again; a passphrase decrypts
-// again), never the key this unlock holds, and that key signs the home's
-// challenge, which confirmation.confirm presents. The page says what the
-// home answered.
+// again), never the key this unlock holds, and that key signs the CYFR's
+// request, which confirmation.confirm presents. The page says what the
+// CYFR answered.
 func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1074,22 +1190,22 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		s.say("CYFR did not take the confirmation: %s", s.sentence(err))
 		return
 	}
-	s.say("Confirmed on this screen. The page that asked finishes the change and shows its result.")
+	s.say("Confirmed on this %s. The page that asked finishes the change and shows its result.", s.cfg.Noun)
 }
 
-// ConfirmDrawn confirms the change drawn, read from the home through
+// ConfirmDrawn confirms the change drawn, read from the CYFR through
 // another credential of this device's (the command line's session) and
 // shown before the secret was asked: the secret, asked after it, opens
 // the key afresh, which proves this device on a channel of its own; the
-// home's confirm request for that ref is read there, and only when the
+// CYFR's confirm request for that ref is read there, and only when the
 // record behind it is still the one drawn (its operation and preview) is
-// that request answered (confirmation.confirm). The channel
-// is closed and the key erased whatever the outcome; the notice says it.
+// that request answered (confirmation.confirm). The channel is closed and
+// the key erased whatever the outcome; the notice says it.
 func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret)
-	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
+	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil {
 		return
 	}
 	key, err := s.rec.Open(secret)
@@ -1109,9 +1225,7 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 		notice = s.sentence(err) + " Nothing was signed."
 		return
 	}
-	pa, _ := Canonical(now.Preview)
-	pb, _ := Canonical(drawn.Preview)
-	if now.Operation != drawn.Operation || string(pa) != string(pb) {
+	if !same(now, &drawn) {
 		notice = "The change CYFR holds is not the one shown, so nothing was signed."
 		return
 	}
@@ -1122,12 +1236,10 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 	notice = "Confirmed on this " + s.cfg.Noun + "."
 }
 
-// same is whether the confirmation at the home is still the one drawn:
+// same is whether the confirmation at the CYFR is still the one drawn:
 // its operation and preview.
 func same(a, b *PendingConfirm) bool {
-	pa, _ := Canonical(a.Preview)
-	pb, _ := Canonical(b.Preview)
-	return a.Operation == b.Operation && string(pa) == string(pb)
+	return a.Operation == b.Operation && reflect.DeepEqual(a.Preview, b.Preview)
 }
 
 func erase(bufs ...[]byte) {

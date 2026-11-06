@@ -7,7 +7,10 @@
 // Argon2id (the software holder). The home server sees the public key and
 // never the PIN, the passphrase or anything that verifies either.
 //
-// A record holds the protected seed and nothing that opens it. Open asks the
+// A machine keeps one record: its key serves every CYFR the person signs
+// in to, so the record names no CYFR, only the account whose log lists the
+// key once it does. A record holds the protected seed and nothing that
+// opens it. Open asks the
 // chip, or runs Argon2id, on every call; no opened key or authorization
 // outlives the Key it returns. The package keeps no copy of a PIN or
 // passphrase; callers erase their own buffers.
@@ -38,8 +41,9 @@ const (
 
 // recordVersion is the only record format this package reads and writes. The
 // chip holder's parent and sealed-object templates and the software holder's
-// associated-data encoding are part of it.
-const recordVersion = 1
+// associated-data encoding are part of it. Version 1 records were bound to
+// one CYFR and are refused.
+const recordVersion = 2
 
 var (
 	// ErrWrongSecret means the PIN or passphrase does not open the record.
@@ -73,22 +77,19 @@ func (e *ChipRefusedError) Error() string {
 func (e *ChipRefusedError) Is(target error) bool { return target == ErrNoChip }
 
 // Record is a device's key holder as it is stored on disk: the protected
-// seed, its public key and what enrollment fills in later. A chip record
+// seed, its public key and, once the account's log lists the key, that
+// account's identifier and the directory its log lives at. A chip record
 // sets Chip alone; a software record sets Software alone.
 type Record struct {
-	Version   int    `json:"version"`
-	Kind      Kind   `json:"kind"`
-	Home      string `json:"home"`
-	RequestID string `json:"request_id"`
-	Admission string `json:"admission"`
+	Version int  `json:"version"`
+	Kind    Kind `json:"kind"`
 	// PublicKey is the raw 32-byte Ed25519 public key; on disk it is an
 	// unpadded base64url string.
-	PublicKey   []byte          `json:"public_key"`
-	Chip        *ChipBlob       `json:"chip,omitempty"`
-	Software    *SoftwareBlob   `json:"software,omitempty"`
-	ClientID    string          `json:"client_id,omitempty"`
-	Athanor     string          `json:"athanor,omitempty"`
-	Certificate json.RawMessage `json:"certificate,omitempty"`
+	PublicKey  []byte        `json:"public_key"`
+	Chip       *ChipBlob     `json:"chip,omitempty"`
+	Software   *SoftwareBlob `json:"software,omitempty"`
+	Identifier string        `json:"identifier,omitempty"`
+	Directory  string        `json:"directory,omitempty"`
 }
 
 // ChipBlob is a seed sealed by the TPM: the sealed object's TPM2B_PUBLIC and
@@ -234,7 +235,7 @@ func ChipPresent() bool { return chip != nil && chip.present() }
 
 // NewChip creates a fresh key and seals its seed in the TPM under pin. A
 // device without a usable chip reports ErrNoChip or a *ChipRefusedError.
-func NewChip(home, requestID, admission string, pin []byte) (*Record, error) {
+func NewChip(pin []byte) (*Record, error) {
 	if err := CheckPIN(pin); err != nil {
 		return nil, err
 	}
@@ -250,13 +251,12 @@ func NewChip(home, requestID, admission string, pin []byte) (*Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Record{Version: recordVersion, Kind: KindChip, Home: home, RequestID: requestID,
-		Admission: admission, PublicKey: pub, Chip: blob}, nil
+	return &Record{Version: recordVersion, Kind: KindChip, PublicKey: pub, Chip: blob}, nil
 }
 
 // NewSoftware creates a fresh key and encrypts its seed under passphrase,
 // which must pass CheckPassphrase.
-func NewSoftware(home, requestID, admission string, passphrase []byte) (*Record, error) {
+func NewSoftware(passphrase []byte) (*Record, error) {
 	if err := CheckPassphrase(passphrase); err != nil {
 		return nil, err
 	}
@@ -265,8 +265,7 @@ func NewSoftware(home, requestID, admission string, passphrase []byte) (*Record,
 		return nil, err
 	}
 	defer clear(seed)
-	r := &Record{Version: recordVersion, Kind: KindSoftware, Home: home, RequestID: requestID,
-		Admission: admission, PublicKey: pub}
+	r := &Record{Version: recordVersion, Kind: KindSoftware, PublicKey: pub}
 	if r.Software, err = sealSoftware(seed, passphrase, r.aad()); err != nil {
 		return nil, err
 	}

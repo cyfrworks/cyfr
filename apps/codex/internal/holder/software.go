@@ -64,14 +64,11 @@ type SoftwareBlob struct {
 }
 
 // aad is the associated data AES-GCM authenticates with the seed: the record
-// version as a 4-byte big-endian integer, the home's length as a 4-byte
-// big-endian integer, the home's bytes, then the 32-byte public key. A
-// record moved to another home, given another public key or relabelled with
-// another version no longer opens.
+// version as a 4-byte big-endian integer, then the 32-byte public key. A
+// record given another public key or relabelled with another version no
+// longer opens.
 func (r *Record) aad() []byte {
 	b := binary.BigEndian.AppendUint32(nil, uint32(r.Version))
-	b = binary.BigEndian.AppendUint32(b, uint32(len(r.Home)))
-	b = append(b, r.Home...)
 	return append(b, r.PublicKey...)
 }
 

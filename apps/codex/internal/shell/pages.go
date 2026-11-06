@@ -30,27 +30,48 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 <h1>Set up CYFR</h1>
+{{if not .Digits}}<p>This box has no chip to keep a short PIN safe, so it uses this passphrase. Write it down:</p>
+<p class="code">{{.Passphrase}}</p>{{end}}
 <form method="post" action="/setup">
 <label>Your name, yours for life<input name="name" autocomplete="off" autofocus required></label>
-{{if .Digits}}
-<label>Choose a six-digit PIN<input name="secret" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
-<label>The same PIN again<input name="again" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
-<p>The chip in this box keeps your PIN; it allows eight wrong tries, then one every ten minutes.</p>
-{{else}}
-<p>This box has no chip to keep a short PIN safe, so it uses this passphrase. Write it down:</p>
-<p class="code">{{.Passphrase}}</p>
-<label>The passphrase<input name="secret" type="password" autocomplete="off" required></label>
-<label>The passphrase again<input name="again" type="password" autocomplete="off" required></label>
-{{end}}
+{{template "secret" .}}
+{{template "terms" .}}
 <button>Set up</button>
 </form>
-{{else if eq .Page "finish"}}
-<h1>Finish setting up</h1>
-<p>CYFR's answer did not arrive. Enter your {{if .Digits}}PIN{{else}}passphrase{{end}} to finish setting up.</p>
-<form method="post" action="/finish">
-<label>Your name, as you gave it<input name="name" autocomplete="off" autofocus></label>
-<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" required></label>
-<button>Finish</button></form>
+<h1>Already have an account?</h1>
+<p>Add this box to it instead, then approve it on a device of yours.</p>
+<form method="post" action="/make">
+{{template "secret" .}}
+<button class="quiet">Add this box to my account</button>
+</form>
+{{else if eq .Page "enroll"}}
+<h1>Add this box to your account</h1>
+<p>On a device of yours, scan this code or open the address below, and check that it shows <b>{{.Code}}</b>.</p>
+<div class="qr">{{.QR}}</div>
+<p class="code">{{.AddURL}}</p>
+<p>Or run this on a terminal of yours that is unlocked:</p>
+<p class="code">cyfr device approve {{.Key}}</p>
+<form method="post" action="/enroll"><label>Your name: @<input name="name" autocomplete="off" required></label><button>I approved it</button></form>
+<h1>No account yet?</h1>
+<form method="post" action="/create">
+<label>Your name, yours for life<input name="name" autocomplete="off" required></label>
+{{template "terms" .}}
+<button class="quiet">Make my account</button></form>
+{{else if eq .Page "recovery"}}
+<h1>Your recovery code</h1>
+<p>If you ever lose your devices, this code brings your account @{{.Name}} back. Keep it off this box: scan it, or print it.</p>
+<div class="qr">{{.QR}}</div>
+<p class="code">{{.RecoveryCode}}</p>
+<button id="print" type="button" class="quiet">Print</button><script>{{.Print}}</script>
+<form method="post" action="/saved"><button autofocus>I saved it</button></form>
+{{else if eq .Page "account"}}
+<h1>Your account is not finished</h1>
+<p>Nothing is lost: try again.</p>
+<form method="post" action="/saved">{{template "terms" .}}<button autofocus>Try again</button></form>
+{{else if eq .Page "resume"}}
+<h1>Finish your account</h1>
+<p>This box began making the account @{{.Name}}. Type its recovery code to finish it.</p>
+<form method="post" action="/resume"><label>Recovery code<input name="code" type="password" autocomplete="off" autofocus required></label><button>Finish</button></form>
 {{else if eq .Page "locked"}}
 <h1>CYFR is locked</h1>
 <form method="post" action="/unlock">
@@ -60,13 +81,6 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 {{else if eq .Page "name"}}
 <h1>Your name</h1>
 <form method="post" action="/name"><label>A name for life<input name="name" value="{{.Name}}" autocomplete="off" required></label><button>Take it</button></form>
-{{else if eq .Page "recovery"}}
-<h1>Your recovery code</h1>
-<p>If this box is ever lost, this code brings you back. Keep it off this box: scan it, or print it.</p>
-<div class="qr">{{.QR}}</div>
-<p class="code">{{.Recovery.Code}}</p>
-<button id="print" type="button" class="quiet">Print</button><script>{{.Print}}</script>
-<form method="post" action="/saved"><button autofocus>I saved it</button></form>
 {{else if eq .Page "confirm"}}
 <h1>Confirm on this screen</h1>
 <p>CYFR asks to confirm <b>{{.Confirm.Operation}}</b>:</p>
@@ -82,4 +96,13 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <form method="post" action="/open"><button autofocus>Open CYFR</button></form>
 <form method="post" action="/lock"><button class="quiet">Lock</button></form>
 {{end}}
-</main></html>`))
+</main></html>
+{{define "secret"}}{{if .Digits}}
+<label>Choose a six-digit PIN<input name="secret" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
+<label>The same PIN again<input name="again" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label>
+<p>The chip in this box keeps your PIN; it allows eight wrong tries, then one every ten minutes.</p>
+{{else}}
+<label>The passphrase<input name="secret" type="password" autocomplete="off" required></label>
+<label>The passphrase again<input name="again" type="password" autocomplete="off" required></label>
+{{end}}{{end}}
+{{define "terms"}}{{if .Terms}}<label><input type="checkbox" name="accept" value="yes"> I accept the terms at {{.Terms}}</label>{{end}}{{end}}`))

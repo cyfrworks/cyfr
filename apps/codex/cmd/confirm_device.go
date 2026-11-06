@@ -41,19 +41,22 @@ const (
 // could not draw it (notHere).
 type deviceConfirmer func(ctx context.Context, ref string, c *console) (confirmOutcome, error)
 
-// confirmOnDevice is the confirmer of this command line's device paired
-// with the home at address, or nil when it holds none there.
+// confirmOnDevice is the confirmer of this command line's device at the
+// CYFR at address, or nil when that CYFR has not admitted it.
 var confirmOnDevice = func(address string) deviceConfirmer { return confirmOnDeviceBy(address, "") }
 
 // confirmOnDeviceBy is confirmOnDevice reading the change through session,
 // or through cyfr login's shell's when session is empty.
 func confirmOnDeviceBy(address, session string) deviceConfirmer {
-	path, err := deviceRecord(address)
+	path, err := deviceKey()
 	if err != nil {
 		return nil
 	}
 	rec, err := holder.Load(path)
-	if err != nil || len(rec.Certificate) == 0 || !sameAddress(rec.Home, deviceHome(address)) {
+	if err != nil || rec.Identifier == "" {
+		return nil
+	}
+	if here, err := (contextClients{address: address}).Load(); err != nil || len(here.Certificate) == 0 {
 		return nil
 	}
 	return func(ctx context.Context, ref string, c *console) (confirmOutcome, error) {

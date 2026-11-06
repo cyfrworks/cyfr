@@ -7,23 +7,29 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
+	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/shell"
+	"github.com/spf13/cobra"
 )
 
 // The variables cyfr login gives the shell it starts, and only that one:
@@ -49,31 +55,93 @@ func shellSession(address string) (string, bool) {
 	return token, true
 }
 
-// deviceRecord is where this command line keeps its device key for the
-// home at address: one record per home, under ~/.cyfr/devices, named by
-// the digest of the address, so a context that moves to another address
-// finds no key there and pairs again.
-func deviceRecord(address string) (string, error) {
+// deviceKey is where this command line keeps its device key: one key per
+// machine, under ~/.cyfr/device, serving every CYFR the person signs in
+// to. The client each CYFR admitted it as is kept in that CYFR's context
+// (contextClients).
+func deviceKey() (string, error) {
 	dir, err := config.DefaultConfigDir()
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(normalAddress(address)))
-	return filepath.Join(dir, "devices", hex.EncodeToString(sum[:12])+".json"), nil
+	return filepath.Join(dir, "device", "key.json"), nil
 }
 
-// normalAddress is an address as sameAddress compares it: scheme and host
-// folded to lower case, no trailing slash.
-func normalAddress(address string) string {
-	u, err := url.Parse(strings.TrimRight(address, "/"))
-	if err != nil {
-		return address
+// directoryURL is the directory a new account is made at and a name is
+// looked up through: CYFR_DIRECTORY_URL from the environment or from the
+// .env here, as the server reads it, else cyfr.run.
+func directoryURL() string {
+	if v := strings.TrimSpace(os.Getenv(directoryVar)); v != "" {
+		return v
 	}
-	u.Scheme, u.Host = strings.ToLower(u.Scheme), strings.ToLower(u.Host)
-	return u.String()
+	if values, err := access.ReadEnvValues(".env"); err == nil {
+		if v := strings.TrimSpace(values[directoryVar]); v != "" {
+			return v
+		}
+	}
+	return account.DefaultDirectory
 }
 
-// deviceOptions is what a command line's shell is built for: the home's
+const directoryVar = "CYFR_DIRECTORY_URL"
+
+// contextClients keeps the client a CYFR admitted this command line as in
+// the context at that CYFR's address: the context the command names when
+// it is at that address, else the first at it by name, else a new one
+// named by the address's host.
+type contextClients struct{ address string }
+
+func (c contextClients) Load() (shell.ClientRecord, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return shell.ClientRecord{}, err
+	}
+	if _, at := contextAt(cfg, c.address); at != nil {
+		return shell.ClientRecord{ClientID: at.ClientID, Certificate: at.Certificate}, nil
+	}
+	return shell.ClientRecord{}, nil
+}
+
+func (c contextClients) Save(r shell.ClientRecord) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	_, at := contextAt(cfg, c.address)
+	if at == nil {
+		at = &config.Context{URL: c.address}
+		cfg.Contexts[newContextName(cfg, c.address)] = at
+	}
+	at.ClientID, at.Certificate = r.ClientID, r.Certificate
+	return cfg.Save()
+}
+
+func contextAt(cfg *config.Config, address string) (string, *config.Context) {
+	if at := cfg.Contexts[contextName(cfg)]; at != nil && sameAddress(at.URL, address) {
+		return contextName(cfg), at
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Contexts)) {
+		if at := cfg.Contexts[name]; at != nil && sameAddress(at.URL, address) {
+			return name, at
+		}
+	}
+	return "", nil
+}
+
+// newContextName is a context name for address no context holds: its
+// host, numbered when that name is taken.
+func newContextName(cfg *config.Config, address string) string {
+	base := "cyfr"
+	if u, err := url.Parse(address); err == nil && u.Hostname() != "" {
+		base = u.Hostname()
+	}
+	name := base
+	for i := 2; cfg.Contexts[name] != nil; i++ {
+		name = base + "-" + strconv.Itoa(i)
+	}
+	return name
+}
+
+// deviceOptions is what a command line's shell is built for: the CYFR's
 // address, the invitation a new person joins by, the setup token a first
 // person is set up by, and what to do when it locks.
 type deviceOptions struct {
@@ -92,14 +160,15 @@ type deviceOptions struct {
 type device interface {
 	View() shell.View
 	Begin()
-	Setup(ctx context.Context, name string, secret, again []byte)
-	Join(ctx context.Context, invitation, name string, secret, again []byte)
-	Prepare(secret, again []byte)
-	Pair(ctx context.Context, link string, secret []byte)
-	Finish(ctx context.Context, name, code string, secret []byte)
-	Unlock(ctx context.Context, secret []byte)
-	Saved(ctx context.Context)
+	Make(secret, again []byte)
+	Setup(ctx context.Context, name, accepted string, secret, again []byte)
+	Create(ctx context.Context, name, accepted string)
+	Terms(ctx context.Context) (*account.Policy, error)
+	Enroll(ctx context.Context, name string, wait time.Duration)
+	Saved(ctx context.Context, accepted string)
+	Resume(ctx context.Context, code string)
 	Rename(ctx context.Context, name string)
+	Unlock(ctx context.Context, secret []byte)
 	Session(ctx context.Context) (string, error)
 	Draw(ctx context.Context, ref string)
 	Decide(ctx context.Context, ref string, confirm bool, secret []byte)
@@ -133,7 +202,7 @@ var openDevice = func(o deviceOptions) (device, error) {
 // reaches the machine's own TPM.
 var deviceChip = holder.ChipPresent
 
-// deviceHome is the home at address as it names itself in what its
+// deviceHome is the CYFR at address as it names itself in what its
 // device signs: a loopback IP spelled localhost (browserAddress), the
 // address CYFR on this computer serves itself under, which the local
 // context cyfr init saves (http://127.0.0.1:<port>) reaches.
@@ -145,40 +214,33 @@ func deviceHome(address string) string {
 	return browserAddress(u)
 }
 
-// deviceShell is this command line's device for the home at o.address:
-// its key record, a holder made on this machine (the chip, else a
-// passphrase), named by this machine's name, which pairs through the
-// home's pairing.complete, asked anonymously. A record of another home at
-// this path, which no address change makes valid, is not read.
+// deviceShell is this command line's device at the CYFR at o.address: the
+// machine's key, a holder made here (the chip, else a passphrase), named
+// by this machine's name, its client there kept in that CYFR's context.
 func deviceShell(o deviceOptions) (*shell.Shell, error) {
-	path, err := deviceRecord(o.address)
+	path, err := deviceKey()
 	if err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("could not make the directory for this command line's key: %w", err)
 	}
-	home := deviceHome(o.address)
-	if rec, err := holder.Load(path); err == nil && !sameAddress(rec.Home, home) {
-		return nil, fmt.Errorf("the key record %s is for %s, not %s: remove it, then run cyfr login again", path, rec.Home, home)
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("this command line's key record %s cannot be read (%v)", path, err)
-	}
 	return shell.New(shell.Config{
-		Address:     home,
+		Address:     deviceHome(o.address),
 		Record:      path,
+		Clients:     contextClients{address: o.address},
+		Directory:   directoryURL(),
 		DataDir:     filepath.Dir(path),
 		Noun:        "command line",
 		Chip:        deviceChip,
 		DisplayName: deviceName(),
 		Invitation:  o.invitation,
-		HomeHere:    homeHere(o.address),
 		Tokens:      func() string { return o.setupToken },
 		Restart:     o.locked,
 	})
 }
 
-// deviceName is the name Devices lists this command line by: "cyfr on"
+// deviceName is the name CYFR lists this command line by: "cyfr on"
 // and this machine's name, at most 64 bytes.
 func deviceName() string {
 	name := "cyfr on " + machineName()
@@ -289,3 +351,84 @@ var stdinLines = sync.OnceValue(func() <-chan []byte {
 	}()
 	return lines
 })
+
+var deviceCmd = &cobra.Command{
+	Use:     "device",
+	Short:   "Add a device to your account from this command line",
+	GroupID: "identity",
+}
+
+var deviceApproveCmd = &cobra.Command{
+	Use:   "approve <key>",
+	Short: "Add the device whose key a new device shows to your account",
+	Long: `Add a new device to your account: a command line running cyfr login for
+the first time, or a CYFR box's screen, shows its code and this command
+with its key. Check that the code printed here is the one the new device
+shows, then unlock this command line: its key signs the addition, and the
+new device goes on by itself once your account lists it.`,
+	Example: "  cyfr device approve VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return approveDevice(cmd.Context(), newConsole(os.Stdout), strings.TrimSpace(args[0]))
+	},
+}
+
+func init() {
+	deviceCmd.AddCommand(deviceApproveCmd)
+	rootCmd.AddCommand(deviceCmd)
+}
+
+// approveDevice adds the device key text names to the account this
+// command line's key is listed in, signed by that key after its unlock.
+func approveDevice(ctx context.Context, c *console, text string) error {
+	pub, ok := account.UnB64(text, 32, 32)
+	if !ok {
+		return errors.New("That is not a device's key: copy the whole key the new device shows after cyfr device approve.")
+	}
+	path, err := deviceKey()
+	if err != nil {
+		return err
+	}
+	rec, err := holder.Load(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return errors.New("This command line has no key yet: run cyfr login first, then approve the new device from here.")
+	case err != nil:
+		return fmt.Errorf("This command line's key record %s cannot be read (%v).", path, err)
+	case rec.Identifier == "":
+		return errors.New("This command line is not on your account yet: run cyfr login first, then approve the new device from here.")
+	}
+	fmt.Fprintf(c.out, "Adding the device whose code is %s to your account. Check that the new device shows this code.\n", account.ShortCode(account.Kid(pub)))
+	question := "Unlock this command line with its passphrase to add it: "
+	if rec.Kind == holder.KindChip {
+		question = "Unlock this command line with its PIN to add it: "
+	}
+	secret, err := c.secret(ctx, question)
+	if err != nil {
+		return err
+	}
+	key, err := rec.Open(secret)
+	clear(secret)
+	if errors.Is(err, holder.ErrWrongSecret) || errors.Is(err, holder.ErrSecretShape) {
+		return errors.New("That is not this command line's PIN or passphrase. Nothing was added.")
+	}
+	if err != nil {
+		return fmt.Errorf("This command line's key did not open (%v). Nothing was added.", err)
+	}
+	defer key.Erase()
+	d := account.Directory{URL: rec.Directory, Client: &http.Client{}}
+	err = account.Approve(ctx, d, rec.Identifier, rec.PublicKey, key.Sign, pub, time.Now().UnixMilli())
+	switch {
+	case errors.Is(err, account.ErrListed):
+		fmt.Fprintln(c.out, "Your account lists that device already.")
+		return nil
+	case errors.Is(err, account.ErrNotListed):
+		return errors.New("Your account does not list this command line any more, so it cannot add a device. Add it from a device of yours that your account lists.")
+	case errors.Is(err, account.ErrUnreachable):
+		return errors.New("Your account could not be reached just now. Run cyfr device approve again; nothing was added twice.")
+	case err != nil:
+		return fmt.Errorf("The device was not added: %v.", err)
+	}
+	fmt.Fprintln(c.out, "Added. The new device goes on by itself.")
+	return nil
+}

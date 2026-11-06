@@ -6,10 +6,7 @@ package shell
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,30 +15,11 @@ import (
 	"time"
 )
 
-// Enrolled is what an admitted enrollment answers: the certificate the
-// home issued this box's key, and, for a setup, the person's recovery code
-// until it is said saved.
-type Enrolled struct {
-	Certificate json.RawMessage `json:"certificate"`
-	Recovery    *Recovery       `json:"recovery"`
-}
-
-// Recovery is the identity recovery code a setup shows once.
-type Recovery struct {
-	AttemptID  string `json:"attempt_id"`
-	Code       string `json:"code"`
-	Identifier string `json:"identifier"`
-	Name       string `json:"name"`
-}
-
 // HomeError is the home's refusal of an HTTP entry: its status and code.
 type HomeError struct {
 	Status     int
 	Code       string
 	RetryAfter int
-	// NextAllowedAt is when a home that refused a PIN (pin_wait) takes the
-	// next one, in Unix milliseconds.
-	NextAllowedAt int64
 }
 
 func (e *HomeError) Error() string {
@@ -49,112 +27,6 @@ func (e *HomeError) Error() string {
 		return "CYFR refused it (" + e.Code + ")"
 	}
 	return "CYFR refused it (HTTP " + strconv.Itoa(e.Status) + ")"
-}
-
-// Holder is what an enrollment reports of this box's key: its request, the
-// holder that keeps it and the name Devices lists it by (at most 64 bytes),
-// information the home shows and decides nothing by.
-type Holder struct {
-	RequestID   string
-	Kind        string
-	DisplayName string
-}
-
-// Admission is how an enrollment is admitted: the setup token for the
-// installation's first person, an invitation's code or the open door for
-// a new person. Its credentials travel in headers alone, never in a URL
-// or a body.
-type Admission struct {
-	Kind   string // "setup", "invitation" or "open"
-	Client *http.Client
-	// header is the credential of the enrollment's entries; resume is the
-	// one its resume takes.
-	header, resume http.Header
-}
-
-// SetupAdmission admits the first person under the installation's setup
-// token, in X-Cyfr-Setup-Token on every entry, resume included.
-func SetupAdmission(client *http.Client, token string) Admission {
-	h := http.Header{"X-Cyfr-Setup-Token": {token}}
-	return Admission{Kind: "setup", Client: client, header: h, resume: h}
-}
-
-// InvitationAdmission admits a new person by an invitation's code, in
-// X-Cyfr-Invitation on every entry, resume included.
-func InvitationAdmission(client *http.Client, code string) Admission {
-	h := http.Header{"X-Cyfr-Invitation": {code}}
-	return Admission{Kind: "invitation", Client: client, header: h, resume: h}
-}
-
-// OpenAdmission admits a new person through the home's open door: no
-// credential but the device key's proof, the home counting each source.
-func OpenAdmission(client *http.Client) Admission {
-	return Admission{Kind: "open", Client: client, header: http.Header{}, resume: http.Header{}}
-}
-
-// Enroll enrolls key under a: the home's enroll challenge for this
-// admission, key and request, checked and signed, then completed with
-// extra (a setup's name and a recovery secret drawn here). A complete
-// whose answer is lost is recovered by resume, proving the same key, never
-// by enrolling again; resumed says to resume first, for a key a previous
-// run may have enrolled.
-func Enroll(ctx context.Context, address string, a Admission, b Binding, d Holder, key Signer, extra map[string]any, resumed bool) (Enrolled, error) {
-	requestID := d.RequestID
-	if resumed {
-		got, err := resume(ctx, address, a, b, requestID, key)
-		// Only the resume's explicit answer that nothing was committed
-		// (404 not_found) leads to a new enrollment; any other refusal is
-		// the resume's own.
-		var refused *HomeError
-		if err == nil || !errors.As(err, &refused) || refused.Status != http.StatusNotFound || refused.Code != "not_found" {
-			return got, err
-		}
-	}
-	proof, err := enrollProof(ctx, address, "/device/enrollment/challenge", a.header, a, b, requestID, key,
-		map[string]any{"holder_kind": d.Kind, "display_name": d.DisplayName})
-	if err != nil {
-		return Enrolled{}, err
-	}
-	body := map[string]any{"proof": proof}
-	for k, v := range extra {
-		body[k] = v
-	}
-	var got Enrolled
-	err = post(ctx, a.Client, address, "/device/enrollment/complete", a.header, body, &got)
-	var refused *HomeError
-	if err != nil && !errors.As(err, &refused) {
-		return resume(ctx, address, a, b, requestID, key)
-	}
-	return got, err
-}
-
-func resume(ctx context.Context, address string, a Admission, b Binding, requestID string, key Signer) (Enrolled, error) {
-	proof, err := enrollProof(ctx, address, "/device/enrollment/resume", a.resume, a, b, requestID, key, nil)
-	if err != nil {
-		return Enrolled{}, err
-	}
-	var got Enrolled
-	err = post(ctx, a.Client, address, "/device/enrollment/resume", a.resume, map[string]any{"proof": proof}, &got)
-	return got, err
-}
-
-func enrollProof(ctx context.Context, address, path string, h http.Header, a Admission, b Binding, requestID string, key Signer, reported map[string]any) (map[string]any, error) {
-	var ch struct {
-		Challenge json.RawMessage `json:"challenge"`
-	}
-	asked := map[string]any{"admission": a.Kind, "device_key": b64(b.DeviceKey), "request_id": requestID}
-	for k, v := range reported {
-		asked[k] = v
-	}
-	err := post(ctx, a.Client, address, path, h, asked, &ch)
-	if err != nil {
-		return nil, err
-	}
-	c, err := Challenge(ch.Challenge, "enroll", b, Expect{"admission": a.Kind, "request_id": requestID})
-	if err != nil {
-		return nil, err
-	}
-	return Prove(c, key)
 }
 
 // post sends one JSON request and decodes its JSON answer into out. A
@@ -187,16 +59,15 @@ func post(ctx context.Context, client *http.Client, address, path string, h http
 	}
 	if resp.StatusCode != http.StatusOK {
 		var m struct {
-			Error         string `json:"error"`
-			RetryAfter    int    `json:"retry_after"`
-			NextAllowedAt int64  `json:"next_allowed_at"`
+			Error      string `json:"error"`
+			RetryAfter int    `json:"retry_after"`
 		}
 		_ = json.Unmarshal(answer, &m)
 		if m.RetryAfter == 0 {
 			// rate_limited and unavailable say when in Retry-After.
 			m.RetryAfter, _ = strconv.Atoi(resp.Header.Get("Retry-After"))
 		}
-		return &HomeError{Status: resp.StatusCode, Code: m.Error, RetryAfter: m.RetryAfter, NextAllowedAt: m.NextAllowedAt}
+		return &HomeError{Status: resp.StatusCode, Code: m.Error, RetryAfter: m.RetryAfter}
 	}
 	if out == nil {
 		return nil
@@ -205,19 +76,4 @@ func post(ctx context.Context, client *http.Client, address, path string, h http
 		return fmt.Errorf("%w (an answer that is not JSON)", ErrUnavailable)
 	}
 	return nil
-}
-
-// RequestID draws an enrollment's request id: req_ and 32 hex digits.
-func RequestID() string { return "req_" + hex.EncodeToString(random(16)) }
-
-// RecoverySecret draws a new recovery code's secret: 32 bytes, unpadded
-// base64url.
-func RecoverySecret() string { return b64(random(32)) }
-
-func random(n int) []byte {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return b
 }

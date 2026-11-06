@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"io"
@@ -96,7 +97,16 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/" {
-		srv.page(w, srv.Shell.View(), "")
+		v := srv.Shell.View()
+		if v.Page == PageSetup || v.Page == PageEnroll {
+			// Reading the account service's configuration changes nothing:
+			// it names the terms the page asks to be accepted.
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			srv.Shell.readTerms(ctx)
+			cancel()
+			v = srv.Shell.View()
+		}
+		srv.page(w, v, "")
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/lock" {
@@ -152,11 +162,27 @@ type action struct {
 
 var actions = map[string]action{
 	"/setup": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Setup(ctx, string(f.get("name")), f.get("secret"), f.get("again"))
+		srv.Shell.Setup(ctx, string(f.get("name")), srv.accepted(f), f.get("secret"), f.get("again"))
 		srv.onward(ctx, w, r)
 	}},
-	"/finish": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Finish(ctx, string(f.get("name")), string(f.get("code")), f.get("secret"))
+	"/make": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.Shell.Make(f.get("secret"), f.get("again"))
+		srv.onward(ctx, w, r)
+	}},
+	"/create": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.Shell.Create(ctx, string(f.get("name")), srv.accepted(f))
+		srv.onward(ctx, w, r)
+	}},
+	"/enroll": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.Shell.Enroll(ctx, string(f.get("name")), enrollWait)
+		srv.onward(ctx, w, r)
+	}},
+	"/saved": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.Shell.Saved(ctx, srv.accepted(f))
+		srv.onward(ctx, w, r)
+	}},
+	"/resume": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.Shell.Resume(ctx, string(f.get("code")))
 		srv.onward(ctx, w, r)
 	}},
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
@@ -165,10 +191,6 @@ var actions = map[string]action{
 	}},
 	"/name": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Rename(ctx, string(f.get("name")))
-		srv.onward(ctx, w, r)
-	}},
-	"/saved": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Saved(ctx)
 		srv.onward(ctx, w, r)
 	}},
 	"/open": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
@@ -187,6 +209,24 @@ var actions = map[string]action{
 		}
 		srv.page(w, v, "answered")
 	}},
+}
+
+// enrollWait is how long one press of "I approved it" waits for the
+// account's log to list this box, inside a request's minute.
+var enrollWait = 45 * time.Second
+
+// accepted is the version of the terms the page showed, when the person
+// ticked their acceptance.
+func (srv *Server) accepted(f form) string {
+	if string(f.get("accept")) != "yes" {
+		return ""
+	}
+	srv.Shell.mu.Lock()
+	defer srv.Shell.mu.Unlock()
+	if srv.Shell.terms == nil {
+		return ""
+	}
+	return srv.Shell.terms.Version
 }
 
 // onward is where a page goes after its action: into Prism through the
@@ -229,9 +269,13 @@ func (srv *Server) page(w http.ResponseWriter, v View, answer string) {
 		d.Waiting = true
 	}
 	d.Warn = warnings(v.Storage)
-	if v.Recovery != nil {
-		if qr, err := setup.QRSVG(v.Recovery.Code); err == nil {
-			d.QR = template.HTML(qr)
+	qr := v.RecoveryCode
+	if v.Page == PageEnroll {
+		qr = v.AddURL
+	}
+	if qr != "" {
+		if svg, err := setup.QRSVG(qr); err == nil {
+			d.QR = template.HTML(svg)
 		}
 	}
 	if v.Confirm != nil {
@@ -289,7 +333,7 @@ func display(v any) string {
 		}
 		return strings.Join(parts, ", ")
 	}
-	raw, _ := Canonical(v)
+	raw, _ := json.Marshal(v)
 	return string(raw)
 }
 
