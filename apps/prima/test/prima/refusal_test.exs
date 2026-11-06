@@ -667,7 +667,7 @@ defmodule Prima.RefusalTest do
     end
 
     test "an account the registry does not know, a closed one among them, is named as an account" do
-      assert Refusal.message(:unknown_identity) == "cyfr.run does not know this account."
+      assert Refusal.message(:unknown_identity) == "This account is not registered."
     end
 
     test "a push with no usable token names the sync that mints one" do

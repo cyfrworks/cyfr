@@ -202,7 +202,7 @@ defmodule PrismWeb.LoginLiveTest do
       end)
 
       assert {"/", %{"error" => message}} = assert_redirect(view)
-      assert message =~ "cyfr.run does not know this account."
+      assert message =~ "This account is not registered."
       refute_vocabulary(message)
     end
 

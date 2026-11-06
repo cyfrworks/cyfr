@@ -436,7 +436,7 @@ defmodule Compendium.Providers.RegistryTest do
         assert {:error, :unknown_identity = reason} =
                  signed(ctx, device, %{"action" => "legal_accept", "policy_version" => "2026-09"})
 
-        assert Refusals.render(reason) == "cyfr.run does not know this account."
+        assert Refusals.render(reason) == "This account is not registered."
       end)
     end
 

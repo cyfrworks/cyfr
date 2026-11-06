@@ -482,7 +482,7 @@ defmodule Prima.Refusal do
       {:forbidden,
        "The registry accepts only identities its own directory orders; this one names another."}
 
-  defp row(:unknown_identity), do: {:not_found, "cyfr.run does not know this account."}
+  defp row(:unknown_identity), do: {:not_found, "This account is not registered."}
 
   defp row(:directory_unavailable), do: {:unavailable, "cyfr.run did not answer. Try again."}
 
