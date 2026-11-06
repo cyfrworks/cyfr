@@ -841,6 +841,106 @@ defmodule Aqua.CrewTest do
            )
   end
 
+  # The scripted brain takes image/png and application/pdf inline.
+  test "an attachment the brain takes goes inline: an image as an image block, a PDF as a " <>
+         "document block",
+       %{ctx: ctx, room: room} do
+    blocks =
+      delivered_blocks(ctx, room, [
+        %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"},
+        %{"filename" => "page.pdf", "media_type" => "application/pdf", "bytes" => "%PDF-1.7"}
+      ])
+
+    assert %{"type" => "image", "media_type" => "image/png"} =
+             Enum.find(blocks, &(&1["data"] == Base.encode64("PNGBYTES")))
+
+    assert %{"type" => "document", "media_type" => "application/pdf"} =
+             Enum.find(blocks, &(&1["data"] == Base.encode64("%PDF-1.7")))
+  end
+
+  test "a text file the brain does not take goes in as a text block under its name",
+       %{ctx: ctx, room: room} do
+    blocks =
+      delivered_blocks(ctx, room, [
+        %{
+          "filename" => "river-note.txt",
+          "media_type" => "text/plain",
+          "bytes" => "Seven stones across the river.\n"
+        }
+      ])
+
+    assert %{
+             "type" => "text",
+             "text" => "The attached file river-note.txt:\n\nSeven stones across the river.\n"
+           } in blocks
+
+    refute Enum.any?(blocks, &(&1["type"] == "document"))
+  end
+
+  test "a text file a brain takes goes inline as a document block", %{ctx: ctx, room: room} do
+    blocks =
+      delivered_blocks(
+        ctx,
+        room,
+        [
+          %{
+            "filename" => "river-note.txt",
+            "media_type" => "text/plain",
+            "bytes" => "Seven stones."
+          }
+        ],
+        media_types: ["text/plain"]
+      )
+
+    assert %{"type" => "document", "media_type" => "text/plain", "filename" => "river-note.txt"} =
+             Enum.find(blocks, &(&1["data"] == Base.encode64("Seven stones.")))
+
+    refute Enum.any?(blocks, &(&1["type"] == "text" and &1["text"] =~ "Seven stones."))
+  end
+
+  test "a file the brain neither takes nor can read as text is named as attached and not " <>
+         "readable",
+       %{ctx: ctx, room: room} do
+    blocks =
+      delivered_blocks(ctx, room, [
+        %{"filename" => "art.bmp", "media_type" => "image/bmp", "bytes" => <<66, 77, 0, 255>>},
+        %{"filename" => "data.bin", "media_type" => "text/plain", "bytes" => <<0xFF, 0xFE, 0>>}
+      ])
+
+    for {name, media} <- [{"art.bmp", "image/bmp"}, {"data.bin", "text/plain"}] do
+      assert %{
+               "type" => "text",
+               "text" => "The file #{name} (#{media}) is attached, and this brain cannot read it."
+             } in blocks
+    end
+
+    refute Enum.any?(blocks, &(&1["type"] in ["image", "document"]))
+  end
+
+  # The blocks a member's chat call carries for a request delivered with
+  # `files` attached, to a brain described with `worker` (its
+  # `media_types`, say).
+  defp delivered_blocks(ctx, room, files, worker \\ []) do
+    start_supervised!({ScriptedWorker, [ref: @model, script: [reply("Read.")]] ++ worker})
+    message_id = Prima.UUID7.generate_id("msg")
+    {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, files)
+
+    {:ok, %{admitted: :request}} =
+      Runner.send_message(ctx, room.id, "@planner read these", id: message_id, attachments: refs)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    await_status(ctx, delivered_turn(ctx, child, message_id), "completed")
+
+    %{input: %{"params" => %{"messages" => messages}}} =
+      Enum.find(
+        ScriptedWorker.calls(),
+        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.planner")
+      )
+
+    Enum.flat_map(messages, &List.wrap(&1["content"]))
+  end
+
   test "crew.ask refuses brain options that are not named scalars", %{ctx: ctx} do
     assert {:error, {:invalid_argument, _}} =
              Crew.ask(ctx, %{"member" => "planner", "task" => "x", "options" => %{"a" => %{}}})
