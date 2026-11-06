@@ -11,13 +11,6 @@ defmodule Prima.Device do
 
   From the glass to the home:
 
-    * `pair_request` — `invitation_secret`, the 16-byte secret from the
-      pairing QR, named so `Prima.Sanitizer` redacts it wherever a message
-      is logged; `device_key`, the public key the glass generated before
-      the invitation opened and never exports; and `key_digest`, that
-      key's digest (`key_digest/1`), the one the glass showed and the
-      invitation was opened for. A `key_digest` that is not the digest of
-      `device_key` is refused by its shape.
     * `connect` — `client_id` and the `certificate` (`Prima.DeviceCert`)
       the glass connects under.
     * `renew` — `client_id`, and optionally the old `certificate`, which
@@ -33,9 +26,8 @@ defmodule Prima.Device do
 
   From the home to the glass:
 
-    * `pair_answer` — the paired `client_id` and its first `certificate`.
     * `challenge` — the `challenge` (`Prima.DeviceCert.Challenge`), for
-      `connect`, `renew` or `pair`.
+      `connect` or `renew`.
     * `standing` — the client's standing: `client_id`, `athanor` and
       `expires_at`, the expiry of the certificate it stands under.
     * `certificate` — a renewed `certificate`.
@@ -59,7 +51,6 @@ defmodule Prima.Device do
   alias Prima.Manifest.Tincture
 
   @protocol "cyfr-device/v1"
-  @invitation_bytes 16
   @digest_bytes 32
   @code_group 4
   @max_args_bytes 65_536
@@ -69,14 +60,11 @@ defmodule Prima.Device do
 
   # type => {sender, required fields, optional fields}, each field with its codec
   @types %{
-    pair_request:
-      {:glass, [invitation_secret: :invitation, device_key: :key, key_digest: :digest], []},
     connect: {:glass, [client_id: :id, certificate: :certificate], []},
     renew: {:glass, [client_id: :id], [certificate: :certificate]},
     proof: {:glass, [proof: :proof], []},
     capabilities: {:glass, [capabilities: :names], []},
     intent: {:glass, [id: :id, operation: :operation, args: :args], [confirmation_id: :id]},
-    pair_answer: {:home, [client_id: :id, certificate: :certificate], []},
     challenge: {:home, [challenge: :challenge], []},
     standing: {:home, [client_id: :id, athanor: :id, expires_at: :ms], []},
     certificate: {:home, [certificate: :certificate], []},
@@ -91,13 +79,11 @@ defmodule Prima.Device do
 
   @type sender :: :glass | :home
   @type type ::
-          :pair_request
-          | :connect
+          :connect
           | :renew
           | :proof
           | :capabilities
           | :intent
-          | :pair_answer
           | :challenge
           | :standing
           | :certificate
@@ -126,9 +112,7 @@ defmodule Prima.Device do
 
   @doc """
   The digest of the device public key `device_key` (32 raw bytes):
-  SHA-256 over those bytes, as unpadded base64url. The glass shows it
-  before an invitation opens, `pairing.begin` names it, and only the key
-  it is the digest of completes that invitation.
+  SHA-256 over those bytes, as unpadded base64url.
   """
   @spec key_digest(binary()) :: String.t()
   def key_digest(device_key) when is_binary(device_key) and byte_size(device_key) == 32,
@@ -170,8 +154,8 @@ defmodule Prima.Device do
 
   @doc """
   Read a message `sender` sent: `{type, body}`, the body's fields as atoms
-  and its values decoded (keys and the invitation as raw bytes, a
-  certificate, challenge or proof as its struct).
+  and its values decoded (a certificate, challenge or proof as its
+  struct).
   """
   @spec decode(term(), sender()) :: {:ok, message()} | {:error, reason()}
   def decode(map, sender) when is_map(map) and not is_struct(map) and sender in [:glass, :home] do
@@ -256,20 +240,10 @@ defmodule Prima.Device do
       else: {:error, {:invalid_field, "result"}}
   end
 
-  # A pairing request names the digest of the key it carries, so a key the
-  # invitation was not opened for is refused before anything is read.
-  defp one_outcome(:pair_request, %{device_key: device_key, key_digest: key_digest}) do
-    if key_digest(device_key) == key_digest,
-      do: :ok,
-      else: {:error, {:invalid_field, "key_digest"}}
-  end
-
   defp one_outcome(_type, _body), do: :ok
 
   defp get(:id, value), do: ok_if(Encoding.id?(value), value)
   defp get(:ms, value), do: ok_if(Encoding.ms?(value), value)
-  defp get(:key, value), do: Encoding.unb64(value, Encoding.key_bytes())
-  defp get(:invitation, value), do: Encoding.unb64(value, @invitation_bytes)
 
   defp get(:digest, value) do
     with {:ok, _bytes} <- Encoding.unb64(value, @digest_bytes), do: {:ok, value}
@@ -308,8 +282,6 @@ defmodule Prima.Device do
   defp ok_if(true, value), do: {:ok, value}
   defp ok_if(false, _value), do: :error
 
-  defp put(:key, bytes), do: Encoding.b64(bytes)
-  defp put(:invitation, bytes), do: Encoding.b64(bytes)
   defp put(:certificate, cert), do: DeviceCert.encode(cert)
   defp put(:challenge, challenge), do: Challenge.encode(challenge)
   defp put(:proof, proof), do: Proof.encode(proof)

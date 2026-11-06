@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. A pairing request names the digest of the key it carries (key_digest: SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces; one naming another digest is refused. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. key_digest is a device key's digest (SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
   "continuous_fields": [
     "stream",
     "frames",
@@ -13,38 +13,6 @@
     "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
   },
   "messages": [
-    {
-      "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
-        "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "a pairing request",
-      "sender": "glass"
-    },
-    {
-      "message": {
-        "certificate": {
-          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-          "audience": "https://alice.example",
-          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-          "expires_at": 1790003600000,
-          "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
-          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
-          "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
-          "not_before": 1790000000000,
-          "protocol": "cyfr-device-cert/v2",
-          "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
-        },
-        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_answer"
-      },
-      "name": "a pairing answer",
-      "sender": "home"
-    },
     {
       "message": {
         "certificate": {
@@ -581,41 +549,6 @@
     {
       "error": "invalid_field",
       "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "oCNvVXi2nEs",
-        "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "an invitation of 8 bytes",
-      "sender": "glass"
-    },
-    {
-      "error": "invalid_field",
-      "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
-        "key_digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "a pairing request naming another key's digest",
-      "sender": "glass"
-    },
-    {
-      "error": "missing_field",
-      "message": {
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
-        "protocol": "cyfr-device/v1",
-        "type": "pair_request"
-      },
-      "name": "a pairing request naming no key digest",
-      "sender": "glass"
-    },
-    {
-      "error": "invalid_field",
-      "message": {
         "certificate": {
           "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
           "audience": "https://alice.example",
@@ -674,7 +607,6 @@
       "capabilities",
       "connect",
       "intent",
-      "pair_request",
       "proof",
       "renew"
     ],
@@ -684,7 +616,6 @@
       "challenge",
       "event",
       "grant",
-      "pair_answer",
       "revoke",
       "standing"
     ]

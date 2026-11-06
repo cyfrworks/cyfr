@@ -63,13 +63,6 @@ defmodule Prima.DeviceTest do
              Device.decode(by_type["challenge"], :home)
 
     assert {:ok, {:proof, %{proof: %Proof{}}}} = Device.decode(by_type["proof"], :glass)
-
-    assert {:ok,
-            {:pair_request, %{invitation_secret: invitation, device_key: key, key_digest: digest}}} =
-             Device.decode(by_type["pair_request"], :glass)
-
-    assert byte_size(invitation) == 16 and byte_size(key) == 32
-    assert digest == Device.key_digest(key)
   end
 
   test "a key's digest and its code are the fixture's, and the code reads back to the digest" do
