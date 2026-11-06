@@ -1369,7 +1369,7 @@ defmodule Sanctum.Consent.AuthzRaceTest do
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
   alias Prima.DeviceCert
-  alias Sanctum.{DeviceCerts, Person}
+  alias Sanctum.DeviceCerts
   alias Sanctum.Consent.Authz
 
   # SQLite's one writer holds the write lock from a transaction's start: the two never interleave.
@@ -1451,7 +1451,17 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           first_seen_at: now,
           last_seen_at: now
         },
-        also: &Sanctum.Person.mint_keys/1
+        also: fn person ->
+          %{identifier: identifier} = Sanctum.TestContext.account!(person.id)
+
+          ExUnit.Callbacks.on_exit(fn ->
+            unboxed(fn ->
+              Arca.Repo.delete_all(where(Arca.Schemas.DirectoryHead, identifier: ^identifier))
+            end)
+          end)
+
+          :ok
+        end
       )
 
     {:ok, _} =
@@ -1475,8 +1485,8 @@ defmodule Sanctum.Consent.AuthzRaceTest do
         device_key: device_key,
         client_id: client_id,
         subject: %{kind: :local, user_id: user_id},
-        issuer: Person.home(),
-        audience: Person.home(),
+        issuer: Sanctum.origin(),
+        audience: Sanctum.origin(),
         athanor: athanor_id,
         not_before: now,
         expires_at: now + 3_600_000

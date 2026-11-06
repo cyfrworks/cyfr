@@ -249,7 +249,7 @@ defmodule Sanctum.Providers.Key do
 
   def handle(%Context{} = ctx, %{"action" => "reenable", "key_id" => key_id})
       when is_binary(key_id) do
-    case Sanctum.ApiKey.reenable(ctx, key_id, :confirmation) do
+    case Sanctum.ApiKey.reenable(ctx, key_id) do
       {:ok, key} ->
         {:ok, %{reenabled: key}}
 

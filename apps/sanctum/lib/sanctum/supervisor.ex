@@ -18,14 +18,6 @@ defmodule Sanctum.Supervisor do
     # configuration wrote it, and never printed.
     setup_token!(Application.get_env(:sanctum, :setup_token))
 
-    # Who may mint the installation's first person, installed before any
-    # child starts and so before any ingress opens: Sanctum starts before
-    # the host. A configured restore token reserves the first person for
-    # the restore path; without one, setup admits it (`Sanctum.Newcomer`).
-    Arca.InstallationClaims.install_mode!(
-      installation_mode!(Application.get_env(:sanctum, :restore_token))
-    )
-
     # The invoke-budget counters, owned by the application master so they
     # outlive every request that charges them.
     Sanctum.Authority.BudgetCounter.ensure_table()
@@ -71,20 +63,6 @@ defmodule Sanctum.Supervisor do
   # A malformed value refuses the boot naming the key and never the value:
   # the token is a secret, and a URL may carry what an operator did not
   # mean to print.
-  @doc false
-  @spec installation_mode!(String.t() | nil) :: :ordinary | :restore_reserved
-  def installation_mode!(nil), do: :ordinary
-
-  def installation_mode!(token) do
-    if Sanctum.restore_token?(token),
-      do: :restore_reserved,
-      else:
-        raise(
-          "[Sanctum] FATAL: the restore token (:sanctum, :restore_token, from " <>
-            "CYFR_RESTORE_TOKEN) must be exactly 64 lowercase hexadecimal characters"
-        )
-  end
-
   defp setup_token!(nil), do: :ok
 
   defp setup_token!(token) do

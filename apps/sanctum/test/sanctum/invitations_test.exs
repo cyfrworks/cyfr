@@ -19,8 +19,8 @@ defmodule Sanctum.InvitationsTest do
   `redeemable_hash/1` makes the same checks from the code's hash.
   `redeem_for/2` redeems one for a person this CYFR knows, writing their
   seat in the thread and their identifier's allow with the redemption,
-  once; a deny, the thread's people cap and a declared restore's hold on
-  the thread each roll all of it back with the invitation unspent.
+  once; a deny and the thread's people cap each roll all of it back with
+  the invitation unspent.
   """
 
   # Contexts are loaded from sessions, and the caps' settings are
@@ -29,7 +29,7 @@ defmodule Sanctum.InvitationsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{Invitation, RestorePerson, SharedThreadMember}
+  alias Arca.Schemas.{Invitation, SharedThreadMember}
   alias Sanctum.{Invitations, SharedThreads}
   alias Sanctum.Tenancy.Users
   alias Sanctum.TestContext
@@ -130,16 +130,6 @@ defmodule Sanctum.InvitationsTest do
 
     {1, _} =
       Arca.Repo.update_all(from(i in Invitation, where: i.id == ^id), set: [expires_at: past])
-  end
-
-  # A declared restore's hold on every thread `user` sits in: their
-  # recovery from it stays open.
-  defp recovering!(user) do
-    Arca.Repo.insert!(%RestorePerson{
-      restore_id: Prima.UUID7.generate_id("rst"),
-      user_id: user.id,
-      open: true
-    })
   end
 
   # The invitation `code` opens, redeemed by `user_id` as an admission's
@@ -614,27 +604,6 @@ defmodule Sanctum.InvitationsTest do
       assert %{redeemed_at: nil, redeemed_by: nil} = row(invitation.id)
       refute seated?(carol, thread)
       assert people_rows(thread) == 1
-      assert door(carol.identifier) == []
-      assert :ok = redeemable(code)
-    end
-
-    test "a thread a declared restore holds refuses it, the invitation unspent and no seat" do
-      alice = person!()
-      bob = person!()
-      thread = thread!(alice, [bob])
-      carol = remote!()
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
-
-      # Bob still recovers from a declared restore: the thread admits no
-      # one new, though the invitation itself still opens.
-      recovering!(bob)
-      assert :ok = redeemable(code)
-
-      assert {:error, :recovering_from_restore} = Invitations.redeem_for(hash(code), carol.id)
-
-      assert %{redeemed_at: nil, redeemed_by: nil} = row(invitation.id)
-      refute seated?(carol, thread)
-      assert people_rows(thread) == 2
       assert door(carol.identifier) == []
       assert :ok = redeemable(code)
     end

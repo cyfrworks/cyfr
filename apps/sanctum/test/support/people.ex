@@ -6,9 +6,11 @@ defmodule Sanctum.Test.People do
   The suite's people, made with the rows an admission writes.
 
   `linked/1` is a fixture's person: an open admission's person with a
-  sign-in method linked, made without the door and without the
-  installation guard, so a fixture's first person is no administrator and
-  needs no setup person before it. `remote/2` is a remote admission's
+  sign-in method linked and an account at the suite's directory
+  (`Sanctum.TestContext.account!/1`), whose keys only the suite holds,
+  made without the door and without the installation guard, so a
+  fixture's first person is no administrator and needs no setup person
+  before it. `remote/2` is a remote admission's
   person, linked to their CYFR sign-in identity, and `athanor!/1` reads a
   person's own athanor. `first!/1` is the installation's administrator,
   made by the setup admission's own mint
@@ -22,8 +24,8 @@ defmodule Sanctum.Test.People do
   The person the identity key `info.id` names, made the first time:
   `info` is `%{id: identity_key, provider:, email:, verified:, name:}`
   (`email`, `verified` and `name` optional). A new person is minted with
-  admission `open`, their keys (`Sanctum.Person.mint_keys/1`), their own
-  athanor (`Sanctum.Provisioning.mint_personal/1`, past the
+  admission `open`, their account (`Sanctum.TestContext.account!/1`),
+  their own athanor (`Sanctum.Provisioning.mint_personal/1`, past the
   caps) and that identity linked, in one transaction. A second call with
   the same key answers the same person, with the email, its verification
   (`true`, `false`, or nil for none) and the name it carries written over
@@ -99,8 +101,9 @@ defmodule Sanctum.Test.People do
 
   @doc """
   The installation's first person, its platform administrator, made by
-  the setup admission's mint with their keys and their athanor. Raises
-  unless the installation holds no person.
+  the setup admission's mint with their account
+  (`Sanctum.TestContext.account!/1`) and their athanor. Raises unless the
+  installation holds no person.
   """
   @spec first!(map()) :: Sanctum.Tenancy.Users.user()
   def first!(attrs \\ %{}) do
@@ -123,9 +126,9 @@ defmodule Sanctum.Test.People do
       Arca.Users.mint(Prima.Actor.system(), user_attrs, nil,
         admission: "setup",
         also: fn person ->
-          with :ok <- Sanctum.Person.mint_keys(person),
-               {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person),
-               do: :ok
+          _account = Sanctum.TestContext.account!(person.id)
+
+          with {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person), do: :ok
         end
       )
 
@@ -135,7 +138,7 @@ defmodule Sanctum.Test.People do
 
   defp mint(info) do
     insert(info, "open", fn person ->
-      :ok = Sanctum.Person.mint_keys(person)
+      _account = Sanctum.TestContext.account!(person.id)
       {:ok, _athanor} = Sanctum.Provisioning.mint_personal(person)
       :ok
     end)

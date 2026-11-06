@@ -30,7 +30,7 @@ defmodule Sanctum.IssuanceTest do
   alias Arca.Schemas.{ApiKey, DeviceCertificate, PersonIdentity}
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
-  alias Sanctum.{Context, DeviceCerts, Issuance, Pairing, Person}
+  alias Sanctum.{Context, DeviceCerts, Issuance, Pairing}
   alias Sanctum.Tenancy.Users
 
   @source "198.51.100.9"
@@ -117,14 +117,14 @@ defmodule Sanctum.IssuanceTest do
       )
 
     secret = "cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    preview = %{home: Person.home(), athanor: "Elsewhere", operation: "pairing.begin"}
+    preview = %{home: Sanctum.origin(), athanor: "Elsewhere", operation: "pairing.begin"}
     args_digest = Prima.Digest.sha256("pairing-#{System.unique_integer()}")
     opener = "session:pairing-#{System.unique_integer([:positive])}"
 
     {:ok, record} =
       Prima.Confirmation.new(
         id: Prima.Confirmation.ref(secret),
-        home: Person.home(),
+        home: Sanctum.origin(),
         rp_id: Sanctum.Passkeys.rp_id(),
         athanor: actor.athanor_id,
         person: user_id,
@@ -723,7 +723,7 @@ defmodule Sanctum.IssuanceTest do
           secret_hash: secret_hash,
           key_digest: Prima.Device.key_digest(device_key),
           confirmation_ref: consumed_pairing_confirmation!(elsewhere_actor, user.id),
-          audience_home: Person.home(),
+          audience_home: Sanctum.origin(),
           lifetime_ms: 600_000
         },
         fn _rows -> :ok end
@@ -1155,7 +1155,7 @@ defmodule Sanctum.IssuanceTest do
             key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
           },
           issuer: "https://a.example",
-          audience: Person.home(),
+          audience: Sanctum.origin(),
           athanor: athanor.id,
           not_before: now,
           expires_at: now + 3_600_000
@@ -1233,7 +1233,7 @@ defmodule Sanctum.IssuanceTest do
             key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
           },
           issuer: "https://a.example",
-          audience: Person.home(),
+          audience: Sanctum.origin(),
           athanor: athanor.id,
           not_before: now,
           expires_at: now + 1_800_000
@@ -1332,7 +1332,7 @@ defmodule Sanctum.IssuanceRaceTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Prima.DeviceCert
-  alias Sanctum.{DeviceCerts, Issuance, Person}
+  alias Sanctum.{DeviceCerts, Issuance}
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 
@@ -1430,8 +1430,8 @@ defmodule Sanctum.IssuanceRaceTest do
         device_key: device_key,
         client_id: client_id,
         subject: %{kind: :local, user_id: user_id},
-        issuer: Person.home(),
-        audience: Person.home(),
+        issuer: Sanctum.origin(),
+        audience: Sanctum.origin(),
         athanor: athanor_id,
         not_before: now,
         expires_at: now + 3_600_000

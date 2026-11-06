@@ -50,8 +50,6 @@ defmodule Sanctum.Session do
   # each create and refresh. Sessions slide forward on activity (see
   # `refresh_if_stale/1`), so it is an idle timeout, not a hard cap.
   @token_bytes 32
-  # The providers only their own path issues a session under: a restore's.
-  @reserved_providers ~w(restore)
   # Year 9999 — used as expires_at when TTL is 0 (infinite)
   # Microsecond precision so it dumps cleanly into the `:utc_datetime_usec`
   # `expires_at` column on both adapters.
@@ -102,8 +100,7 @@ defmodule Sanctum.Session do
   Create a new session for an authenticated context. Callers are the
   sign-in paths (the module doc of `Sanctum`), after the door admitted
   the person and `Sanctum.Tenancy.resolve_status/2` bound the admitted
-  context, and the installation-authorized restore (`restore:` below);
-  nothing else mints one.
+  context; nothing else mints one.
 
   The session is written in the issuance transaction
   (`Arca.SecurityTransitions.Issuance`): the person and the session's
@@ -118,14 +115,6 @@ defmodule Sanctum.Session do
   building a context by hand does. `{:error, :unauthenticated}` is a
   person or athanor that no longer stands, and
   `{:error, :unavailable}` an idle timeout the store cannot answer.
-
-  The session's provider `restore` is reserved: only the
-  installation-authorized restore issues one, naming in `restore:` the
-  restore attempt that minted this very person and has reached `minted`
-  or `completed` (`Sanctum.Recovery`). Any other request for it is
-  `{:error, :reserved_provider}`, so neither an external identity claim nor
-  an ordinary session request selects the provider whose recent session
-  may initialize a person's first fresh method.
 
   ## The key and the head
 
@@ -142,8 +131,7 @@ defmodule Sanctum.Session do
   """
   @spec create(Context.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def create(%Context{} = ctx, opts \\ []) when is_list(opts) do
-    with :ok <- provider_permitted(ctx, Keyword.get(opts, :restore)),
-         {:ok, binding} <- key_binding(opts),
+    with {:ok, binding} <- key_binding(opts),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, opts) do
       token = generate_token()
 
@@ -251,34 +239,6 @@ defmodule Sanctum.Session do
   rescue
     _unanswered -> {:error, :unavailable}
   end
-
-  # The reserved `restore` provider stands only on the restore attempt that
-  # minted the person, read again here: a context that merely names the
-  # provider, or names another person's attempt, issues nothing.
-  defp provider_permitted(%Context{provider: provider} = ctx, restore) do
-    cond do
-      provider not in @reserved_providers ->
-        :ok
-
-      is_binary(restore) and restored?(restore, ctx.user_id) ->
-        :ok
-
-      true ->
-        {:error, :reserved_provider}
-    end
-  end
-
-  defp restored?(attempt_id, user_id) when is_binary(user_id) do
-    case Arca.IdentityAttempts.get(Prima.Actor.system(), attempt_id) do
-      {:ok, %{kind: "restore", user_id: ^user_id, phase: phase}} ->
-        phase in ["minted", "completed"]
-
-      _other ->
-        false
-    end
-  end
-
-  defp restored?(_attempt_id, _user_id), do: false
 
   # What a session is minted under: its token's hash and first
   # characters, and the step run after the insert in its transaction.

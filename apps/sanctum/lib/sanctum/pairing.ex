@@ -33,15 +33,16 @@ defmodule Sanctum.Pairing do
     * `list/1` — the person's paired clients in the athanor in focus, a
       protected device's with what it reports of its disks
       (`Sanctum.DeviceUnlock.storage/2`).
-    * `reenable/3` — after a declared restore suspended every paired
-      client, the person makes one active again (`:restore_reenable`):
-      while their restore is open, on a confirmation a door this home
-      re-authenticates or an emailed code gave (`restore_confirmed/1`), or
-      with their recovery kit (`kit_confirmed/2`); the re-enabling closes
-      their restore. No certificate is issued here: the device
-      reconnects under its certificate while it is unexpired, or renews
-      through its channel (`renew/2`), which an active client is admitted
-      to again.
+
+  ## After a declared restore
+
+  A declared restore suspends every paired client and revokes every
+  certificate (`Arca.SecurityTransitions`), and nothing re-enables them: a
+  device comes back by a fresh hello, which pairs it anew. What the person
+  re-enables is an API key or a webhook they created
+  (`Sanctum.ApiKey.reenable/2`, `Sanctum.Webhook.reenable/2`), each a
+  sensitive change (`:restore_reenable`); `restore_checklist/1` lists
+  those and what the restore asked for again in their athanor.
 
   ## The action table
 
@@ -57,10 +58,7 @@ defmodule Sanctum.Pairing do
   | `:vault_unlock` | a fresh confirmation |
   | `:home_transfer` | a fresh confirmation |
   | `:pairing_revocation` | a fresh confirmation |
-  | `:recovery_material` | a fresh confirmation |
-  | `:remote_sign_in` | a fresh confirmation |
-  | `:restore_reenable` | a fresh confirmation, from a door or the kit while the person recovers |
-  | `:restore_close` | a fresh confirmation, the platform administrator's |
+  | `:restore_reenable` | a fresh confirmation |
   | `:directory_tombstone` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
@@ -104,10 +102,7 @@ defmodule Sanctum.Pairing do
     vault_unlock: :fresh,
     home_transfer: :fresh,
     pairing_revocation: :fresh,
-    recovery_material: :fresh,
-    remote_sign_in: :fresh,
     restore_reenable: :fresh,
-    restore_close: :fresh,
     directory_tombstone: :fresh
   }
 
@@ -121,17 +116,8 @@ defmodule Sanctum.Pairing do
           | :vault_unlock
           | :home_transfer
           | :pairing_revocation
-          | :recovery_material
-          | :remote_sign_in
           | :restore_reenable
-          | :restore_close
           | :directory_tombstone
-
-  @typedoc """
-  Who gave a consumed confirmation: the passkey whose assertion proved it,
-  the paired client it was given on, or `nil` for neither.
-  """
-  @type confirmer :: {:passkey, String.t()} | {:device, String.t()} | nil
 
   @typedoc "A paired client and the certificate it connects under."
   @type paired :: %{client_id: String.t(), certificate: DeviceCert.t()}
@@ -145,13 +131,6 @@ defmodule Sanctum.Pairing do
           required(:device_key) => binary(),
           required(:proof) => map()
         }
-
-  @typedoc """
-  What a re-enabling after a declared restore rests on: the confirmation
-  `ctx` names (`Sanctum.Consent.Authz`), or a recovery kit's credential,
-  its person and the digest of the credential the kit ingress issued.
-  """
-  @type proof :: :confirmation | {:kit, %{user_id: String.t(), credential_digest: String.t()}}
 
   @typedoc """
   The refusals, beside the ones passed on from the stores, the gate's
@@ -352,152 +331,6 @@ defmodule Sanctum.Pairing do
   end
 
   @doc """
-  Re-enable the paired client `client_id`, which a declared restore
-  suspended, under `proof` (`t:proof/0`). Answers `%{client: %{client_id:,
-  standing: "active"}, recovery_closed:}`, `recovery_closed` true
-  when this closed the person's open restore, as re-enabling a method
-  does (`Arca.PairedClients.reenable/4`).
-
-  With `:confirmation`, `ctx` is the person's own, in the athanor in focus
-  where the client is: a sensitive change (`:restore_reenable`), asked
-  first and consumed in the transaction that writes the client, where,
-  while the person's restore is open, a confirmation a passkey or a paired
-  client gave is refused (`restore_confirmed/1`), so no suspended method
-  approves its own return. With `{:kit, %{user_id:, credential_digest:}}`
-  the kit ingress has verified the person's recovery kit; the client is
-  one of theirs, and the write admits it only while the
-  credential stands under their open restore (`kit_confirmed/2`).
-
-  No certificate is issued: the device reconnects under its certificate
-  while it is unexpired, or renews it through its channel (`renew/2`),
-  which reads the client active again.
-
-  Refusals: `{:not_found, "paired client", id}`, a `t:Prima.Refusal.t/0`
-  with reason `:revoked` (a revoked client is never revived) or
-  `:not_suspended`, `kit_refusal/0` (the kit's credential no longer
-  stands), `restore_source_refusal/0`, the consent signal, and the
-  context's and the stores' own (`:unauthenticated`, `:missing_tenant`,
-  `:unavailable`).
-  """
-  @spec reenable(Context.t(), String.t(), proof()) :: {:ok, map()} | {:error, refusal()}
-  def reenable(%Context{} = ctx, client_id, :confirmation) when is_binary(client_id) do
-    with :ok <- person_focused(ctx),
-         {:ok, client} <- own_client(ctx, client_id),
-         :ok <- reenable_ready(client),
-         change = reenable_change(client),
-         :ok <- Authz.check(ctx, :restore_reenable, change) do
-      verify = fn _row ->
-        with :ok <- Authz.consume(ctx, {:restore_reenable, change}), do: restore_confirmed(ctx)
-      end
-
-      case Arca.PairedClients.reenable(Context.actor(ctx), ctx.user_id, client_id, verify: verify) do
-        {:ok, row} ->
-          Authz.consumed(ctx)
-          {:ok, reenabled(row)}
-
-        {:error, reason} ->
-          {:error, reenable_refusal(reason, client_id)}
-      end
-    end
-  end
-
-  def reenable(
-        %Context{},
-        client_id,
-        {:kit, %{user_id: user_id, credential_digest: digest}}
-      )
-      when is_binary(client_id) and is_binary(user_id) and is_binary(digest) do
-    with {:ok, client} <- persons_client(user_id, client_id) do
-      case Arca.PairedClients.reenable(
-             Prima.Actor.in_athanor(client.athanor_id),
-             user_id,
-             client_id,
-             verify: fn _row -> kit_confirmed(user_id, digest) end
-           ) do
-        {:ok, row} -> {:ok, reenabled(row)}
-        {:error, reason} -> {:error, reenable_refusal(reason, client_id)}
-      end
-    end
-  end
-
-  def reenable(%Context{}, _client_id, _proof),
-    do: {:error, {:invalid_argument, "Name the paired client and how its return is proven"}}
-
-  # Read before anything is asked, so a person is never asked to confirm a
-  # return the write would refuse; the write reads it again under its lock.
-  defp reenable_ready(%{source_kind: "passkey"}),
-    do: {:error, reenable_refusal(:passkey_holder, nil)}
-
-  defp reenable_ready(%{standing: "suspended"}), do: :ok
-  defp reenable_ready(%{standing: "revoked"}), do: {:error, reenable_refusal(:revoked, nil)}
-  defp reenable_ready(_active), do: {:error, reenable_refusal(:not_suspended, nil)}
-
-  defp reenable_change(client) do
-    %{
-      operation: "pairing.reenable",
-      arguments: %{"client_id" => client.id},
-      resource: client.id,
-      details: %{
-        "effect" =>
-          "This device, suspended when this CYFR was restored from a backup, stands for you again"
-      }
-    }
-  end
-
-  # The person's client of that id in whichever athanor holds it, for the
-  # kit, which names no athanor.
-  defp persons_client(user_id, client_id) do
-    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :all) do
-      {:ok, rows} ->
-        case Enum.find(rows, &(&1.id == client_id)) do
-          nil -> {:error, {:not_found, "paired client", client_id}}
-          row -> {:ok, row}
-        end
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp reenabled(row) do
-    %{
-      client: %{client_id: row.id, standing: row.standing},
-      recovery_closed: row.closed_restore_ids != []
-    }
-  end
-
-  defp reenable_refusal(:not_found, client_id), do: {:not_found, "paired client", client_id}
-
-  defp reenable_refusal(:revoked, _client_id),
-    do: %Prima.Refusal{
-      class: :conflict,
-      reason: :revoked,
-      message:
-        "This device's pairing was revoked, and a revoked pairing is never re-enabled: " <>
-          "pair it again"
-    }
-
-  defp reenable_refusal(:not_suspended, _client_id),
-    do: %Prima.Refusal{
-      class: :conflict,
-      reason: :not_suspended,
-      message: "This device is not suspended: there is nothing to re-enable"
-    }
-
-  defp reenable_refusal(:passkey_holder, _client_id),
-    do: %Prima.Refusal{
-      class: :conflict,
-      reason: :passkey_holder,
-      message: "This is a passkey: re-enable the passkey itself, and it returns with it"
-    }
-
-  defp reenable_refusal(reason, _client_id)
-       when reason in [:database_error, :not_owner, :no_athanor],
-       do: :unavailable
-
-  defp reenable_refusal(reason, _client_id), do: reason
-
-  @doc """
   The context person's active paired clients in the athanor in focus,
   oldest first, their passkeys' platform holders among them: each with its
   id, the credential it stands on (`device_cert` or `passkey`), when it was
@@ -597,128 +430,31 @@ defmodule Sanctum.Pairing do
   defp now_ms, do: System.os_time(:millisecond)
 
   # ---------------------------------------------------------------------------
-  # Who confirmed
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Who gave the confirmation `ctx.confirmation_id` names (`t:confirmer/0`),
-  read from its record in the context's athanor: the passkey whose
-  assertion proved it, else the paired client it was given on, else
-  `nil`. A record is attributed once, when it is confirmed, and never
-  again, so the answer read once it is confirmed holds through its
-  consumption. A context that names no record, or a record of another
-  person, is `nil`.
-  """
-  @spec confirmer(Context.t()) :: {:ok, confirmer()} | {:error, :unavailable}
-  def confirmer(%Context{confirmation_id: id, athanor_id: a, user_id: u} = ctx)
-      when is_binary(id) and id != "" and is_binary(a) and a != "" and is_binary(u) do
-    case Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id)) do
-      {:ok, %{user_id: ^u, confirmed_passkey_id: passkey_id}} when is_binary(passkey_id) ->
-        {:ok, {:passkey, passkey_id}}
-
-      {:ok, %{user_id: ^u, confirmed_client_id: client_id}} when is_binary(client_id) ->
-        {:ok, {:device, client_id}}
-
-      {:ok, _unattributed} ->
-        {:ok, nil}
-
-      {:error, :not_found} ->
-        {:ok, nil}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  def confirmer(%Context{}), do: {:ok, nil}
-
-  # ---------------------------------------------------------------------------
   # After a declared restore
   # ---------------------------------------------------------------------------
 
   @doc """
-  Whether the change whose confirmation `ctx` just consumed may be written
-  while the person recovers from a declared restore, inside the
-  transaction that writes it, the person's `restore_people` row locked
-  there (`Arca.SecurityTransitions.restore_open!/1`): while the row is
-  open, only a confirmation no passkey and no paired client here gave — a
-  door this home re-authenticated, a forced-fresh sign-in or an emailed
-  code, none of which a restored row holds — may; once it has closed, any
-  confirmation may. A restored passkey or
-  device is suspended and asserts nothing, so this holds even if one were
-  to stand again some other way before the person recovers.
+  The person's restore checklist, which the system layer draws: every API
+  key and webhook they created that a declared restore holds suspended,
+  each re-enabled by its own operation (`key.reenable`,
+  `webhook.reenable`) under a fresh confirmation, and with them every
+  profile to consent to again and every vault entry to rotate in their
+  athanor (`Arca.SecurityTransitions.restore_checklist/2`). `{:ok, nil}`
+  while no key or webhook of theirs is suspended: only a declared restore
+  suspends one, so a profile or entry blocked for another reason draws no
+  checklist.
   """
-  @spec restore_confirmed(Context.t()) :: :ok | {:error, Prima.Refusal.t() | :unavailable}
-  def restore_confirmed(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
-    case Arca.SecurityTransitions.restore_open!(user_id) do
-      nil ->
-        :ok
-
-      _restore_id ->
-        case confirmer(ctx) do
-          {:ok, nil} -> :ok
-          {:ok, _passkey_or_device} -> {:error, restore_source_refusal()}
-          {:error, reason} -> {:error, reason}
-        end
+  @spec restore_checklist(Context.t()) ::
+          {:ok, map() | nil} | {:error, :unauthenticated | :unavailable}
+  def restore_checklist(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    case Arca.SecurityTransitions.restore_checklist(Prima.Actor.system(), user_id) do
+      {:ok, %{api_keys: [], webhooks: []}} -> {:ok, nil}
+      {:ok, list} -> {:ok, list}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  def restore_confirmed(%Context{}), do: {:error, restore_source_refusal()}
-
-  @doc """
-  Whether a re-enabling the recovery kit proves may be written, inside the
-  transaction that writes it, after the item's lock: the person's
-  `restore_people` row is open, locked there
-  (`Arca.SecurityTransitions.restore_open!/1`), and the kit credential
-  whose digest is `credential_digest` stands under it, unexpired, for a
-  person still in good standing, read again here beside the row and the
-  digest (`Arca.SecurityTransitions.kit_stands!/2`), so a denial between
-  the credential's admission and this write re-enables nothing. Otherwise
-  `kit_refusal/0`: the kit authorizes nothing once the person's restore
-  has closed or the person no longer stands.
-  """
-  @spec kit_confirmed(String.t(), String.t()) :: :ok | {:error, Prima.Refusal.t()}
-  def kit_confirmed(user_id, credential_digest)
-      when is_binary(user_id) and is_binary(credential_digest) do
-    with restore_id when is_binary(restore_id) <-
-           Arca.SecurityTransitions.restore_open!(user_id),
-         {:ok, _restore_id} <- Arca.SecurityTransitions.kit_stands!(user_id, credential_digest) do
-      :ok
-    else
-      _closed_or_spent -> {:error, kit_refusal()}
-    end
-  end
-
-  @doc """
-  The refusal of a recovery kit's credential that no longer stands: it
-  expired, or the person's restore has closed.
-  """
-  @spec kit_refusal() :: Prima.Refusal.t()
-  def kit_refusal do
-    %Prima.Refusal{
-      class: :unauthenticated,
-      reason: :not_standing,
-      message:
-        "Your recovery kit's credential no longer stands here: it expired, or your recovery " <>
-          "from the restore has ended"
-    }
-  end
-
-  @doc """
-  The refusal of a confirmation a passkey or paired device gave while the
-  person recovers from a declared restore, in the one refusal shape every
-  surface renders.
-  """
-  @spec restore_source_refusal() :: Prima.Refusal.t()
-  def restore_source_refusal do
-    %Prima.Refusal{
-      class: :forbidden,
-      reason: :restore_source_required,
-      message:
-        "This CYFR was restored from a backup: until you re-enable a passkey or a device, " <>
-          "confirm with a fresh sign-in, an emailed code or your recovery kit"
-    }
-  end
+  def restore_checklist(%Context{}), do: {:error, :unauthenticated}
 
   # ---------------------------------------------------------------------------
   # The action table

@@ -32,10 +32,7 @@ defmodule Sanctum.PairingTest do
     :vault_unlock,
     :home_transfer,
     :pairing_revocation,
-    :recovery_material,
-    :remote_sign_in,
     :restore_reenable,
-    :restore_close,
     :directory_tombstone
   ]
 

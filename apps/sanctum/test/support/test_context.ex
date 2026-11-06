@@ -503,8 +503,8 @@ defmodule Sanctum.TestContext do
   end
 
   # The context as a person's: an IdP identity key signed in (`person!/2`),
-  # a person id a fixture made up minted as that person with their keys,
-  # a person already here as they are.
+  # a person id a fixture made up minted as that person with their
+  # account (`account!/1`), a person already here as they are.
   defp person_ctx!(%Context{user_id: user_id} = ctx) do
     cond do
       not Prima.PersonId.person?(user_id) ->
@@ -542,7 +542,10 @@ defmodule Sanctum.TestContext do
               first_seen_at: now,
               last_seen_at: now
             },
-            also: &Sanctum.Person.mint_keys/1
+            also: fn person ->
+              _account = account!(person.id)
+              :ok
+            end
           )
 
         ctx

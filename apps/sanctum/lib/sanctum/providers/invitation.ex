@@ -11,7 +11,7 @@ defmodule Sanctum.Providers.Invitation do
   offering its newcomer a `name` their invitation page fills in, and
   answers its
   code once with the link that opens it, `invitation_url`:
-  `<this CYFR's address>/invite#<code>` (`Sanctum.Person.home/0`). The
+  `<this CYFR's address>/invite#<code>` (`Sanctum.origin/0`). The
   code travels in the fragment, so no server log records it; both keys
   are ones the request log redacts (`Prima.Sanitizer`), and the code is
   never stored or shown again. `revoke` closes one still open, as its

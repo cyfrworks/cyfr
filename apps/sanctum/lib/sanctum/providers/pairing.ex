@@ -6,8 +6,7 @@ defmodule Sanctum.Providers.Pairing do
   The `pairing` tool: a person's paired clients in the athanor in focus,
   the devices of their account a hello paired here (`Sanctum.DeviceUnlock`)
   and the passkeys that signed in here: renew a paired device's
-  certificate; revoke one (`pairing_revocation`); re-enable one a
-  declared restore suspended (`restore_reenable`); and list them. Every
+  certificate; revoke one (`pairing_revocation`); and list them. Every
   action is a person's, through an interactive surface (`consent:
   :interactive`); a proof is the field `proof`, which the redaction
   vocabulary (`Prima.Sanitizer`) keeps out of every log.
@@ -21,13 +20,6 @@ defmodule Sanctum.Providers.Pairing do
       its key; any other caller, an ordinary device intent among them, is
       refused.
     * `revoke` answers the client's id and its standing, `revoked`.
-    * `reenable` answers the client's id and standing, `active`,
-      and `recovery_closed`, whether re-enabling it ended the person's
-      recovery from the restore. While the person recovers it is confirmed
-      by a door this home re-authenticates or an emailed code, never by a
-      passkey or a paired device; a recovery kit re-enables through the kit
-      ingress, not here. No certificate is issued: the device reconnects
-      under its own, or renews it through its channel.
     * `list` answers the person's active paired clients, each with what
       holds its key (`holder_kind`) and the name it shows (`display_name`)
       where it reported them, whether its key may sync (`synced`, a passkey's
@@ -74,19 +66,10 @@ defmodule Sanctum.Providers.Pairing do
           kind: :read,
           planes: [:external],
           consent: :interactive
-        ),
-        Operation.new(
-          "pairing",
-          "reenable",
-          "Re-enable a paired device suspended by a restore",
-          [client_id()],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
         )
       ],
       description:
-        "Your paired devices in the athanor in focus: renew or revoke a paired device, re-enable one a restore from a backup suspended, and list them.",
+        "Your paired devices in the athanor in focus: renew or revoke a paired device, and list them.",
       title: "Paired Devices"
     )
   end
@@ -95,7 +78,7 @@ defmodule Sanctum.Providers.Pairing do
     do:
       Arg.new("client_id", :string,
         required: true,
-        description: "The paired client (pcl_…) (renew, revoke, reenable)"
+        description: "The paired client (pcl_…) (renew, revoke)"
       )
 
   # A `Prima.DeviceCert.Proof` as JSON: the challenge's fields and the
@@ -142,17 +125,6 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "reenable", "client_id" => client_id})
-      when is_binary(client_id) do
-    case Pairing.reenable(ctx, client_id, :confirmation) do
-      {:ok, %{client: client, recovery_closed: closed?}} ->
-        {:ok, Map.put(client, :recovery_closed, closed?)}
-
-      {:error, reason} ->
-        {:error, refusal(reason)}
-    end
-  end
-
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     case Pairing.list(ctx) do
       {:ok, clients} -> {:ok, %{clients: Enum.map(clients, &listed/1)}}
@@ -160,7 +132,7 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
-  def handle(_ctx, %{"action" => action}) when action in ~w(revoke reenable),
+  def handle(_ctx, %{"action" => "revoke"}),
     do: {:error, {:invalid_argument, "Missing required argument: client_id"}}
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "pairing.#{action}"}}

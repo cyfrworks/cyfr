@@ -126,8 +126,8 @@ defmodule Sanctum.PlatformHolderTest do
                user_id: user.id,
                subject_kind: "local",
                device_public_key: :crypto.strong_rand_bytes(32),
-               issuing_home: Sanctum.Person.home(),
-               audience_home: Sanctum.Person.home(),
+               issuing_home: Sanctum.origin(),
+               audience_home: Sanctum.origin(),
                not_before: DateTime.utc_now(),
                expires_at: DateTime.add(DateTime.utc_now(), 3600),
                certificate: "{}",
@@ -181,7 +181,7 @@ defmodule Sanctum.PlatformHolderTest do
              Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
   end
 
-  test "the store revokes and re-enables a holder only with its credential", %{
+  test "the store revokes a holder only with its credential", %{
     ctx: ctx,
     user: user
   } do
@@ -191,13 +191,10 @@ defmodule Sanctum.PlatformHolderTest do
 
     assert {:error, :passkey_holder} = Arca.PairedClients.revoke(actor, holder.id)
 
-    assert {:error, :passkey_holder} =
-             Arca.PairedClients.reenable(actor, user.id, holder.id, verify: fn _ -> :ok end)
-
     assert Arca.Repo.get!(PairedClient, holder.id).standing == "active"
   end
 
-  test "a declared restore suspends the holder with its credential, and re-enabling the passkey returns both",
+  test "a declared restore suspends the holder with its credential",
        %{ctx: ctx, user: user} do
     {_auth, passkey} = registered!(ctx)
     [holder] = holders(user.id)
@@ -206,11 +203,7 @@ defmodule Sanctum.PlatformHolderTest do
     assert {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
 
     assert Arca.Repo.get!(PairedClient, holder.id).standing == "suspended"
-
-    {:ok, _active} =
-      Arca.Passkeys.reenable(Prima.Actor.system(), user.id, passkey.id, verify: fn _ -> :ok end)
-
-    assert Arca.Repo.get!(PairedClient, holder.id).standing == "active"
+    assert Arca.Repo.get!(Arca.Schemas.Passkey, passkey.id).state == "suspended"
   end
 
   test "a person deleted with their passkey and its session leaves no client of no one, and a declared restore after it runs",

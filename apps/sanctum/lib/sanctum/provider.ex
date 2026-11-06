@@ -99,7 +99,6 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.Webhook.definition(),
       Sanctum.Providers.Vault.definition(),
       Sanctum.Providers.Profile.definition(),
-      Sanctum.Providers.Person.definition(),
       Sanctum.Providers.Pairing.definition(),
       Sanctum.Providers.Passkey.definition(),
       Sanctum.Providers.Confirmation.definition(),
@@ -134,7 +133,6 @@ defmodule Sanctum.Provider do
   def handle("webhook", ctx, args), do: Sanctum.Providers.Webhook.handle(ctx, args)
   def handle("vault", ctx, args), do: Sanctum.Providers.Vault.handle(ctx, args)
   def handle("profile", ctx, args), do: Sanctum.Providers.Profile.handle(ctx, args)
-  def handle("person", ctx, args), do: Sanctum.Providers.Person.handle(ctx, args)
   def handle("pairing", ctx, args), do: Sanctum.Providers.Pairing.handle(ctx, args)
   def handle("passkey", ctx, args), do: Sanctum.Providers.Passkey.handle(ctx, args)
   def handle("confirmation", ctx, args), do: Sanctum.Providers.Confirmation.handle(ctx, args)

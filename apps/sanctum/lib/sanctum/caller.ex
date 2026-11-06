@@ -293,47 +293,6 @@ defmodule Sanctum.Caller do
     end
   end
 
-  @doc """
-  Establish a recovering person's kit credential (the token
-  `Sanctum.Recovery.kit_proof/2` answered) for exactly `operation`: one of
-  the four re-enable operations (`Sanctum.Recovery.kit_operations/0`). Any
-  other operation is refused `:operation_not_permitted` before the
-  credential is read. The credential is read standing now
-  (`Sanctum.Recovery.kit_grant/1`): its person in good standing and their
-  recovery from a declared restore open.
-
-  The context names the person and nothing else: no athanor, no
-  permission, no auth method and no session, so no other surface or
-  operation admits it and it confirms nothing
-  (`Sanctum.Pairing.can_confirm?/1`). It comes with the grant, which each
-  re-enable reads standing again in its own write.
-  """
-  @spec establish_kit(String.t() | nil, term()) ::
-          {:ok, Context.t(), Sanctum.Recovery.kit_grant()}
-          | {:error, :invalid_credential | :operation_not_permitted | :unavailable}
-  def establish_kit(token, operation) do
-    cond do
-      operation not in Sanctum.Recovery.kit_operations() ->
-        {:error, :operation_not_permitted}
-
-      not is_binary(token) ->
-        {:error, :invalid_credential}
-
-      true ->
-        with {:ok, grant} <- Sanctum.Recovery.kit_grant(token) do
-          ctx =
-            Context.build(
-              user_id: grant.user_id,
-              provider: "restore_kit",
-              permissions: [],
-              authenticated: true
-            )
-
-          {:ok, validated(ctx), grant}
-        end
-    end
-  end
-
   # The key store's answers, in this module's vocabulary. A malformed key
   # and an unknown one read alike, as the store already takes care they do,
   # and a key a declared restore suspended reads as a revoked one.

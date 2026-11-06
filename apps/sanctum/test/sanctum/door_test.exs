@@ -17,7 +17,6 @@ defmodule Sanctum.DoorTest do
 
   alias Sanctum.Door
   alias Sanctum.Door.Store
-  alias Sanctum.Test.People
   alias Sanctum.Test.RegistryStub
 
   setup tags do
@@ -28,17 +27,36 @@ defmodule Sanctum.DoorTest do
   defp uid(n), do: "github|https://github.com|door#{n}"
   defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
 
-  # A person whose keys this server holds, with a sign-in method linked.
+  # A person this server holds no account row for, with a sign-in method
+  # linked: the door reads them as local.
   defp local!(n) do
-    {:ok, user} =
-      People.linked(%{
-        id: uid(n),
-        provider: "github",
-        email: "person#{n}@example.com",
-        verified: true
-      })
+    now = DateTime.utc_now()
 
-    user
+    {:ok, user} =
+      Arca.Test.People.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          email: "person#{n}@example.com",
+          email_verified: true,
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: uid(n),
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "door#{n}",
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    {:ok, _athanor} = Sanctum.Provisioning.mint_personal(user)
+    {:ok, person} = Sanctum.Tenancy.Users.get(user.id)
+    person
   end
 
   # A person whose keys another CYFR holds, named here by their identifier.
@@ -78,12 +96,24 @@ defmodule Sanctum.DoorTest do
     user
   end
 
+  # The local person's row naming the identifier they enrolled under.
   defp enrolled!(user, n) do
+    now = DateTime.utc_now()
+
     {1, _} =
-      Arca.Repo.update_all(
-        Ecto.Query.from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id),
-        set: [identifier: identifier(n)]
-      )
+      Arca.Repo.insert_all(Arca.Schemas.PersonIdentity, [
+        %{
+          id: Prima.UUID7.generate_id("pid"),
+          user_id: user.id,
+          identifier: identifier(n),
+          provenance: "local",
+          enrollment: "enrolled",
+          directory_url: "https://dir.example",
+          revision: 1,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
 
     :ok
   end

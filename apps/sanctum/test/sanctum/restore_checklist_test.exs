@@ -1,28 +1,54 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.RecoveryChecklistTest do
+defmodule Sanctum.RestoreChecklistTest do
   @moduledoc """
-  The restore checklist (`Sanctum.Recovery.checklist/1`) of a person whose
-  share a declared restore revoked. A restore revokes every share and its
-  owner shares the entry again from the Vault page once they have rotated
-  it, so a share is no item of the checklist: a person who has done
-  everything the checklist asks reads none, whatever the restore revoked
-  of theirs.
+  The restore checklist (`Sanctum.Pairing.restore_checklist/1`) of a
+  person a declared restore found with an API key and a shared entry. A
+  restore revokes every share and its owner shares the entry again from
+  the Vault page once they have rotated it, so a share is no item of the
+  checklist. The checklist stands while a key or webhook of theirs is
+  suspended, which only a declared restore does: a person who has
+  re-enabled it reads none, whatever else the restore revoked of theirs.
   """
 
   use ExUnit.Case, async: false
 
   alias Arca.SecurityTransitions
-  alias Sanctum.{Recovery, TestContext}
+  alias Sanctum.{Pairing, TestContext}
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 
-  test "a person whose share the restore revoked reads no checklist once they have " <>
-         "re-enabled their passkey and rotated the entry" do
+  defp key!(athanor_id, user_id) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("key")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.ApiKey, [
+        %{
+          id: id,
+          name: "key-#{System.unique_integer([:positive])}",
+          key_hash: :crypto.strong_rand_bytes(32),
+          key_prefix: "cyfr_sk_rs",
+          type: "service",
+          scope: "[]",
+          revoked: false,
+          suspended: false,
+          created_by: user_id,
+          athanor_id: athanor_id,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  test "lists the suspended key and the entry to rotate, never the share, and stands no " <>
+         "longer once the key is re-enabled" do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
@@ -32,10 +58,11 @@ defmodule Sanctum.RecoveryChecklistTest do
     ctx = %{TestContext.local(:prism) | user_id: user.id, athanor_id: own.id}
     actor = Sanctum.Context.actor(ctx)
 
-    # A passkey the restore suspends opens the person's recovery.
-    _authenticator = TestContext.passkey!(user.id)
+    key_id = key!(own.id, user.id)
     entry = Arca.Test.Shares.entry!(actor)
     share = Arca.Test.Shares.share!(actor, entry.id)
+
+    assert {:ok, nil} = Pairing.restore_checklist(ctx)
 
     {:ok, restore_id} = SecurityTransitions.mark_restore(Prima.Actor.system())
 
@@ -44,26 +71,26 @@ defmodule Sanctum.RecoveryChecklistTest do
 
     assert revoked == [share.id]
 
-    # While they recover, the checklist names the passkey to re-enable and
-    # the entry to rotate, and nothing of the share.
-    assert {:ok, list} = Recovery.checklist(ctx)
-    assert list.restore_id == restore_id
-    assert [%{id: passkey_id}] = list.passkeys
+    assert {:ok, list} = Pairing.restore_checklist(ctx)
+    assert [%{id: ^key_id, athanor_id: athanor_id}] = list.api_keys
+    assert athanor_id == own.id
+    assert list.webhooks == []
     assert Enum.map(list.vault_entries, & &1.id) == [entry.id]
     assert list.profiles == []
     refute inspect(list) =~ share.id
 
-    # Re-enabling the passkey ends the recovery; the entry is rotated.
-    assert {:ok, _passkey} =
-             Arca.Passkeys.reenable(Prima.Actor.system(), user.id, passkey_id,
-               verify: fn _row -> :ok end
-             )
+    # The key re-enabled, nothing a restore alone suspends is left: the
+    # checklist stands no longer, though the entry still waits to be
+    # rotated and the share stays revoked until it is shared again.
+    assert {:ok, _key} =
+             Arca.ApiKeyStorage.reenable(actor, user.id, key_id, verify: fn _row -> :ok end)
 
-    {:ok, _} = Arca.VaultStorage.set_status(actor, entry.id, "active")
-
-    # The share stays revoked until it is shared again, and holds no
-    # checklist open.
-    assert {:ok, nil} = Recovery.checklist(ctx)
+    assert {:ok, nil} = Pairing.restore_checklist(ctx)
     assert Arca.Test.Shares.share_status(actor, share.id) == "revoked"
+  end
+
+  test "a context naming no person reads none" do
+    assert {:error, :unauthenticated} =
+             Pairing.restore_checklist(%{TestContext.local(:prism) | user_id: nil})
   end
 end

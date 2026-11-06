@@ -784,24 +784,10 @@ defmodule Sanctum.ApiKeyTest do
   # ---------------------------------------------------------------------------
 
   # The declared restore as the boot runs it (`Arca.SecurityTransitions`):
-  # every unrevoked key suspended and one open restore row per person.
-  # Answers the restore id.
+  # every unrevoked key suspended. Answers the restore id.
   defp declared_restore! do
     {:ok, restore_id} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
     {:ok, %{restore_id: ^restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
-    restore_id
-  end
-
-  # The person's open restore row, written as the transition writes it,
-  # for the cases that need their passkey still standing beside it.
-  defp open_restore!(user_id) do
-    restore_id = Prima.UUID7.generate_id("rst")
-
-    {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
-        %{restore_id: restore_id, user_id: user_id, open: true}
-      ])
-
     restore_id
   end
 
@@ -824,32 +810,8 @@ defmodule Sanctum.ApiKeyTest do
 
   defp stored_key(id), do: Arca.Repo.get!(Arca.Schemas.ApiKey, id)
 
-  # The kit credential the restore ingress would hand the person: a
-  # challenge put and redeemed under their open row. Answers its digest.
-  defp kit_credential!(user_id, restore_id) do
-    later = DateTime.add(Arca.ServerMetaStorage.now!(), 60_000, :millisecond)
-    challenge = Prima.Digest.sha256("challenge-#{System.unique_integer()}")
-    credential = Prima.Digest.sha256("credential-#{System.unique_integer()}")
-    server = Prima.Actor.system()
-
-    :ok =
-      Arca.SecurityTransitions.put_kit_challenge(server, user_id, restore_id, challenge, later)
-
-    :ok =
-      Arca.SecurityTransitions.redeem_kit_challenge(
-        server,
-        user_id,
-        restore_id,
-        challenge,
-        credential,
-        later
-      )
-
-    credential
-  end
-
   defp reenable_confirmed(ctx, key_id) do
-    Sanctum.TestContext.confirming(ctx, &ApiKey.reenable(&1, key_id, :confirmation))
+    Sanctum.TestContext.confirming(ctx, &ApiKey.reenable(&1, key_id))
   end
 
   describe "a key a declared restore suspended" do
@@ -911,7 +873,7 @@ defmodule Sanctum.ApiKeyTest do
     end
   end
 
-  describe "reenable/3 under a confirmation" do
+  describe "reenable/2" do
     setup %{ctx: ctx} do
       {:ok, %{api_key: raw}} = create_key(ctx, %{name: "held", scope: []})
       id = key_id!(ctx, "held")
@@ -925,7 +887,7 @@ defmodule Sanctum.ApiKeyTest do
       key_id: id
     } do
       assert {:error, {:confirmation_required, _}} =
-               ApiKey.reenable(%{ctx | confirmation_id: nil}, id, :confirmation)
+               ApiKey.reenable(%{ctx | confirmation_id: nil}, id)
 
       assert %{suspended: true} = stored_key(id)
 
@@ -944,7 +906,7 @@ defmodule Sanctum.ApiKeyTest do
         )
 
       assert {:error, :not_found} =
-               ApiKey.reenable(%{other | confirmation_id: nil}, id, :confirmation)
+               ApiKey.reenable(%{other | confirmation_id: nil}, id)
 
       assert %{suspended: true} = stored_key(id)
     end
@@ -956,7 +918,7 @@ defmodule Sanctum.ApiKeyTest do
       :ok = ApiKey.revoke(ctx, "held")
 
       assert {:error, :revoked} =
-               ApiKey.reenable(%{ctx | confirmation_id: nil}, id, :confirmation)
+               ApiKey.reenable(%{ctx | confirmation_id: nil}, id)
 
       assert %{revoked: true} = stored_key(id)
 
@@ -964,62 +926,7 @@ defmodule Sanctum.ApiKeyTest do
       live = key_id!(ctx, "live")
 
       assert {:error, :not_suspended} =
-               ApiKey.reenable(%{ctx | confirmation_id: nil}, live, :confirmation)
-    end
-
-    test "while the person's restore row is open, a passkey's confirmation is refused", %{
-      ctx: ctx,
-      raw: raw,
-      key_id: id
-    } do
-      open_restore!(ctx.user_id)
-
-      assert {:error, %Prima.Refusal{reason: :restore_source_required}} =
-               reenable_confirmed(ctx, id)
-
-      assert %{suspended: true} = stored_key(id)
-      assert {:error, :suspended} = ApiKey.validate(raw, [])
-    end
-  end
-
-  describe "reenable/3 under the kit" do
-    test "re-enables the person's key while their row is open, and nothing once it closed",
-         %{ctx: ctx} do
-      {:ok, %{api_key: first}} = create_key(ctx, %{name: "first", scope: []})
-      {:ok, %{api_key: second}} = create_key(ctx, %{name: "second", scope: []})
-      first_id = key_id!(ctx, "first")
-      second_id = key_id!(ctx, "second")
-      user = ctx.user_id
-
-      restore_id = declared_restore!()
-      credential = kit_credential!(user, restore_id)
-      kit = {:kit, %{user_id: user, credential_digest: credential}}
-
-      # Another credential, or another person's, stands for nothing.
-      assert {:error, Sanctum.Pairing.kit_refusal()} ==
-               ApiKey.reenable(ctx, first_id, {:kit, %{user_id: user, credential_digest: "x"}})
-
-      assert {:error, :not_found} =
-               ApiKey.reenable(
-                 ctx,
-                 first_id,
-                 {:kit, %{user_id: "usr_someone", credential_digest: credential}}
-               )
-
-      assert {:ok, %{id: ^first_id, suspended: false}} = ApiKey.reenable(ctx, first_id, kit)
-      assert {:ok, %{name: "first"}} = ApiKey.validate(first, [])
-
-      # Re-enabling a key closes no row: the kit still stands until the
-      # person re-enables a method, or an administrator closes it.
-      assert {:ok, ^restore_id} =
-               Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user)
-
-      {:ok, _} =
-        Arca.Repo.locking_transaction(fn -> Arca.SecurityTransitions.close_restore!(user) end)
-
-      assert {:error, Sanctum.Pairing.kit_refusal()} == ApiKey.reenable(ctx, second_id, kit)
-      assert %{suspended: true} = stored_key(second_id)
-      assert {:error, :suspended} = ApiKey.validate(second, [])
+               ApiKey.reenable(%{ctx | confirmation_id: nil}, live)
     end
   end
 
@@ -1046,80 +953,5 @@ defmodule Sanctum.ApiKeyTest do
       })
 
     ApiKey.rotate(confirmed, name, issuance)
-  end
-
-  # The re-enable of one kind under a kit, with the row's suspended flag
-  # after it. Two clauses rather than a case inside the generated tests:
-  # each test's kind is a literal there, so the other arm of a case can
-  # never match and the compiler says so.
-  defp reenabled_under_kit(:key, ctx, key_id, _webhook, kit),
-    do: {ApiKey.reenable(ctx, key_id, kit), stored_key(key_id).suspended}
-
-  defp reenabled_under_kit(:webhook, ctx, _key_id, webhook, kit),
-    do:
-      {Sanctum.Webhook.reenable(ctx, webhook.id, kit),
-       Arca.Repo.get!(Arca.Schemas.Webhook, webhook.id).suspended}
-
-  # A member whose slot was taken over by a successor writes nothing: the
-  # re-enable runs under the live ownership fence, a kit's included.
-  for kind <- [:key, :webhook] do
-    test "a member whose slot was taken over re-enables no #{kind} under a kit", %{ctx: ctx} do
-      kind = unquote(kind)
-      {:ok, _} = create_key(ctx, %{name: "held", scope: []})
-      key_id = key_id!(ctx, "held")
-
-      :ok =
-        Arca.WebhookStorage.create_webhook(%{
-          name: "held",
-          slug: "wh_" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
-          target_ref: "f:local.handler",
-          secret_encrypted: :crypto.strong_rand_bytes(64),
-          athanor_id: ctx.athanor_id,
-          created_by: ctx.user_id,
-          profile_id: "prof_kit"
-        })
-
-      {:ok, webhook} = Arca.WebhookStorage.get_by_name(Context.actor(ctx), "held")
-      restore_id = declared_restore!()
-      digest = kit_credential!(ctx.user_id, restore_id)
-      kit = {:kit, %{user_id: ctx.user_id, credential_digest: digest}}
-
-      keys = [
-        {Arca.ControlPlane, :standing},
-        {Arca.ControlPlane, :generation},
-        {Arca.ControlPlane, :slot}
-      ]
-
-      saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
-      claim = Application.get_env(:arca, :control_plane_claim_enabled)
-
-      on_exit(fn ->
-        for {key, value} <- saved do
-          if value == :absent,
-            do: :persistent_term.erase(key),
-            else: :persistent_term.put(key, value)
-        end
-
-        if is_nil(claim),
-          do: Application.delete_env(:arca, :control_plane_claim_enabled),
-          else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
-      end)
-
-      Application.put_env(:arca, :control_plane_claim_enabled, true)
-      node = "kit-reenable-#{System.unique_integer([:positive])}"
-      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
-
-      {1, _} =
-        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
-          set: [owner: "successor", generation: slot.generation + 1]
-        )
-
-      assert :lost = Arca.ControlPlane.check_held(slot)
-
-      {answer, suspended} = reenabled_under_kit(kind, ctx, key_id, webhook, kit)
-
-      assert {:error, :not_owner} = answer
-      assert suspended
-    end
   end
 end

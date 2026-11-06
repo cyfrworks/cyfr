@@ -58,8 +58,8 @@ defmodule Sanctum.Invitations do
   row is open and unexpired, then writes, in that transaction, the seat
   the invitation names, under the thread's lock with its issuer's
   standing and seat read there once more (`issuer_seated/1`), the
-  thread's people cap counted and a declared restore's hold read there
-  too (`Sanctum.SharedThreads.seat_invited/4`), and the identifier's
+  thread's people cap counted there too
+  (`Sanctum.SharedThreads.seat_invited/4`), and the identifier's
   allow (`Sanctum.Door.Store.allow_unless_denied/4`), the row `door.allow`
   writes, added by the issuer, noting the invitation, labelled with the
   person's name here when they have one. A deny of the identifier, even

@@ -380,7 +380,7 @@ defmodule Sanctum.Providers.Webhook do
 
   def handle(%Context{} = ctx, %{"action" => "reenable", "webhook_id" => webhook_id})
       when is_binary(webhook_id) do
-    case Sanctum.Webhook.reenable(ctx, webhook_id, :confirmation) do
+    case Sanctum.Webhook.reenable(ctx, webhook_id) do
       {:ok, hook} ->
         {:ok, %{reenabled: hook}}
 

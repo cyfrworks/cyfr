@@ -17,14 +17,13 @@ defmodule Sanctum do
   over its channel) and the answer is verified against the account's log
   (`Sanctum.SignIn`). A person is made only by an admission of an account
   by its identifier (`Sanctum.Newcomer`): setup, an invitation
-  (`Sanctum.Invitations`), the door, or a restore. Every session is
-  minted by `Sanctum.Session`, on one of these paths:
+  (`Sanctum.Invitations`) or the door. Every session is minted by
+  `Sanctum.Session`, on one of these paths:
 
   - a sign-in's answer (`Sanctum.SignIn`), which asks the door about the
     person (`Sanctum.Door`) or admits a new one;
   - a protected device's unlock (`Sanctum.DeviceUnlock`), redeemed by its
-    browser or its command line;
-  - the installation-authorized restore (`Sanctum.Recovery`).
+    browser or its command line.
 
   A CYFR may also require a company sign-in of every person here
   (`Sanctum.CompanyLogin`): a standing condition, never a sign-in method,
@@ -80,16 +79,13 @@ defmodule Sanctum do
       Notify,
       Pairing,
       Passkeys,
-      Person,
       Policy.Enforcement,
       PolicyLog,
       Providers.Confirmation,
       Providers.Pairing,
       Providers.Passkey,
-      Providers.Person,
       Provisioning,
       Proxy,
-      Recovery,
       Refusals,
       RegistryCredentials,
       RequestLog,
@@ -257,9 +253,7 @@ defmodule Sanctum do
   its people: a directory URL (`Prima.Identity.Encoding.directory_url?/1`)
   served over `https`, or over `http` on a loopback host
   (`loopback_host?/1`), no longer than a confirmation preview's text
-  (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes), since the
-  confirmation that shows a recovery code again names the directory in its
-  preview (`Sanctum.Recovery`).
+  (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes).
 
   Plain HTTP is allowed on loopback alone because TLS protects a network
   path and loopback has none, and because a directory is trusted only for
@@ -290,22 +284,13 @@ defmodule Sanctum do
   end
 
   @doc """
-  Whether `value` is an installation's restore token: exactly 64 lowercase
-  hexadecimal characters, 32 random bytes. The token is optional (unset,
-  restore is disabled) and is never a platform setting or a log value.
-  """
-  @spec restore_token?(term()) :: boolean()
-  def restore_token?(value), do: is_binary(value) and Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
-
-  @doc """
-  Whether `value` is an installation's setup token, in the restore
-  token's form: exactly 64 lowercase hexadecimal characters, 32 random
-  bytes. The token admits the installation's first person
-  (`Sanctum.Newcomer`); unset, setup opens nothing. It is never a
-  platform setting or a log value.
+  Whether `value` is an installation's setup token: exactly 64 lowercase
+  hexadecimal characters, 32 random bytes. The token admits the
+  installation's first person (`Sanctum.Newcomer`); unset, setup opens
+  nothing. It is never a platform setting or a log value.
   """
   @spec setup_token?(term()) :: boolean()
-  def setup_token?(value), do: restore_token?(value)
+  def setup_token?(value), do: is_binary(value) and Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
 
   @doc """
   Server-internal context for background/system operations — sweepers, health
