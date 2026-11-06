@@ -36,7 +36,9 @@ defmodule Arca.ConsentStorage do
   reach, the athanor's own and the source entry of every share they bind,
   in one query over those `{athanor_id, id}` pairs in that order; then on
   every share they bind, in id order. They refuse with nothing written
-  when an entry is not `active` (`{:error, {:entry_unavailable, status}}`)
+  when an entry is not `active`, nor a login entry whose program is not
+  signed in yet (`needs_reauth`, bound before its program signs in)
+  (`{:error, {:entry_unavailable, status}}`)
   or has no row (`{:error, :not_found}`; an athanor's own entry is read in
   the revision's athanor alone), when a share has no row
   (`{:error, :not_found}`) or is not `active`
@@ -407,9 +409,10 @@ defmodule Arca.ConsentStorage do
   # writes the entry row by compare-and-set before it reads the heads that
   # depend on it, waits for this revision or is seen by the digest read
   # again under the lock, and a revoke, which writes the row first, is
-  # refused here by the status. Each must be active, and an own entry that
-  # is gone, or another athanor's, names nothing to bind. Answers each
-  # entry's status and digest by its pair.
+  # refused here by the status. Each must be active, or a login entry
+  # whose program is not signed in yet, and an own entry that is gone, or
+  # another athanor's, names nothing to bind. Answers each entry's status
+  # and digest by its pair.
   # arca:unscoped-ok a revision's entries are its own athanor's and the
   # sources of the shares it binds, each read by its `{athanor_id, id}` pair.
   defp lock_vault_entries(refs, athanor_id, sources) do
@@ -420,19 +423,19 @@ defmodule Arca.ConsentStorage do
         {:ok, %{}}
 
       pairs ->
-        held =
+        rows =
           from(v in Arca.Schemas.VaultEntry,
             where: ^pair_filter(pairs),
             order_by: [v.athanor_id, v.id],
-            select: {{v.athanor_id, v.id}, {v.status, v.binding_digest}}
+            select: {{v.athanor_id, v.id}, v.status, v.kind, v.binding_digest}
           )
           |> Arca.QueryHelpers.for_share()
           |> Arca.Repo.all()
-          |> Map.new()
 
-        statuses = Map.new(held, fn {pair, {status, _digest}} -> {pair, status} end)
+        held = Map.new(rows, fn {pair, status, _kind, digest} -> {pair, {status, digest}} end)
+        statuses = Map.new(rows, fn {pair, status, kind, _digest} -> {pair, {status, kind}} end)
 
-        with {:ok, _} <- all_active(statuses, pairs), do: {:ok, held}
+        with {:ok, _} <- all_bindable(statuses, pairs), do: {:ok, held}
     end
   end
 
@@ -513,13 +516,14 @@ defmodule Arca.ConsentStorage do
     end)
   end
 
-  defp all_active(rows, ids) do
+  defp all_bindable(rows, ids) do
     held = Map.new(rows)
 
     Enum.reduce_while(Enum.sort(ids), {:ok, held}, fn id, acc ->
       case Map.fetch(held, id) do
-        {:ok, "active"} -> {:cont, acc}
-        {:ok, status} -> {:halt, {:error, {:entry_unavailable, status}}}
+        {:ok, {"active", _kind}} -> {:cont, acc}
+        {:ok, {"needs_reauth", "login"}} -> {:cont, acc}
+        {:ok, {status, _kind}} -> {:halt, {:error, {:entry_unavailable, status}}}
         :error -> {:halt, {:error, :not_found}}
       end
     end)

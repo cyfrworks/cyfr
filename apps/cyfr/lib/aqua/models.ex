@@ -418,12 +418,17 @@ defmodule Aqua.Models do
   # What connecting a brain asks of the person: a brain whose every
   # required need mounts a program's own sign-in needs that program signed
   # in and its login entry bound; any other a key.
-  defp to_connect(plan) do
-    required = for need <- plan[:needs] || [], need[:required] != false, do: need
+  defp to_connect(plan), do: if(signs_in?(plan), do: :needs_sign_in, else: :needs_key)
 
-    if required != [] and Enum.all?(required, &(&1[:kind] == "login")),
-      do: :needs_sign_in,
-      else: :needs_key
+  @doc """
+  Whether a brain, as its setup plan (`component.setup_plan`) answers it,
+  runs on a program's own sign-in: every need it requires is a `login`
+  need, met by a login entry rather than a key.
+  """
+  @spec signs_in?(map()) :: boolean()
+  def signs_in?(plan) when is_map(plan) do
+    required = for need <- plan[:needs] || [], need[:required] != false, do: need
+    required != [] and Enum.all?(required, &(&1[:kind] == "login"))
   end
 
   defp head_state(%{consent: %{head_state: state}}), do: state

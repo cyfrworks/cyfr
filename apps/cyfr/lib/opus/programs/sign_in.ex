@@ -15,8 +15,9 @@ defmodule Opus.Programs.SignIn do
   subscriber sends is written to the terminal. It ends — `{Opus.Programs,
   token, {:ended, reason}}` to the subscriber, the session closed and the
   owner released — when the command ends (`:signed_in` when it exited 0
-  and its login entry is active, which makes an entry a restore left
-  `needs_reauth` active again through `Sanctum.Mount.signed_in/2` under the
+  and its login entry is active, which makes an entry whose program was not
+  signed in (`needs_reauth`: a new entry, or one a restore left) active
+  through `Sanctum.Mount.signed_in/2` under the
   interactive context that opened it; `{:exited, code}` for any other end
   of the command, `code` nil for one ended by a signal, the entry left as
   it is; `{:not_signed_in, reason}` when it exited 0 but the entry could not

@@ -40,6 +40,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:model_status, %{})
      |> assign(:brain_options, %{})
      |> assign(:program_offers, %{})
+     |> assign(:signs_in, MapSet.new())
      |> assign(:installing, nil)
      |> assign(:editor_editing_prompt, nil)
      |> assign(:editor_prompt_content, "")
@@ -457,7 +458,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:soul, soul)
     |> assign(:crew, crew)
     |> assign(:model_status, status)
-    |> assign(:program_offers, program_offers(ctx, agents))
+    |> assign_plans(ctx, agents)
     |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
   end
@@ -488,10 +489,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # For each agent's catalyst, the programs its login needs suggest and
-  # the athanor has no row for: each the query of the Programs page's
-  # install form. A plan that cannot be read offers nothing.
-  defp program_offers(ctx, agents) do
+  # Each agent's catalyst, read once through its setup plan: the programs
+  # its login needs offer to install, and whether it runs on a program's
+  # own sign-in (`Aqua.brain_signs_in?/1`), so its card offers to change
+  # the entry, not a key. A plan that cannot be read offers nothing.
+  defp assign_plans(socket, ctx, agents) do
     plans =
       for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
           is_binary(ref),
@@ -501,7 +503,21 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               "reference" => ref
             })
           ],
-          do: {ref, installable(plan)}
+          do: {ref, plan}
+
+    socket
+    |> assign(:program_offers, program_offers(ctx, plans))
+    |> assign(
+      :signs_in,
+      for({ref, plan} <- plans, Aqua.brain_signs_in?(plan), into: MapSet.new(), do: ref)
+    )
+  end
+
+  # For each catalyst, the programs its login needs suggest and the
+  # athanor has no row for: each the query of the Programs page's install
+  # form.
+  defp program_offers(ctx, plans) do
+    plans = for {ref, plan} <- plans, do: {ref, installable(plan)}
 
     names =
       if Enum.any?(plans, fn {_ref, needs} -> needs != [] end) do
@@ -525,6 +541,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       {ref, offers}
     end
   end
+
+  # A ready brain's action changes what it is bound to: a key, or the login
+  # entry its program signs in with, which holds no key.
+  defp change_label({:ready, _}, true), do: "Change the entry"
+  defp change_label({:ready, _}, false), do: "Change the key"
+  defp change_label(_unready, _signs_in?), do: "Connect a model"
 
   defp installable(plan) do
     for need <- plan[:needs] || [],
@@ -790,6 +812,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         installing={@installing}
         athanor={@athanor}
         offers={Map.get(@program_offers, @soul["catalyst_ref"], [])}
+        signs_in?={MapSet.member?(@signs_in, @soul["catalyst_ref"])}
       />
 
       <div :if={@crew != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
@@ -805,6 +828,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           installing={@installing}
           athanor={@athanor}
           offers={Map.get(@program_offers, member["catalyst_ref"], [])}
+          signs_in?={MapSet.member?(@signs_in, member["catalyst_ref"])}
         />
       </div>
 
@@ -871,6 +895,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :installing, :any, default: nil
   attr :athanor, :any, default: nil
   attr :offers, :list, default: []
+  attr :signs_in?, :boolean, default: false
 
   defp agent_card(assigns) do
     assigns =
@@ -1008,7 +1033,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           Not connected — the model has no key yet
         </span>
         <span :if={match?({:needs_sign_in, _}, @model_status)} class="text-amber-300">
-          Not signed in — its program signs in on the Programs page
+          Program not signed in — it signs in on the Programs page
         </span>
         <%!-- A consent that exists but is damaged, or could not be read, is
              no key to connect: no Connect button is offered over it. --%>
@@ -1044,7 +1069,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           phx-value-ref={elem(@model_status, 1)}
           class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
         >
-          {if match?({:ready, _}, @model_status), do: "Change the key", else: "Connect a model"}
+          {change_label(@model_status, @signs_in?)}
         </button>
       </div>
 

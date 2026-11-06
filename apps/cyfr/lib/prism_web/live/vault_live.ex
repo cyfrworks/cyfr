@@ -843,6 +843,11 @@ defmodule PrismWeb.VaultLive do
   defp used_today(count) when is_integer(count), do: "#{count} requests today"
   defp used_today(_unread), do: "-"
 
+  # A login entry has no authorization to renew: one that waits on its
+  # program's sign-in reads so.
+  defp status_label(%{kind: "login", status: "needs_reauth"}), do: "not signed in"
+  defp status_label(entry), do: entry.status
+
   defp status_class("active"), do: "text-emerald-500"
   defp status_class("needs_reauth"), do: "text-amber-500"
   defp status_class(_), do: "text-red-500"
@@ -1050,7 +1055,7 @@ defmodule PrismWeb.VaultLive do
               class="text-xs text-gray-500"
               data-test="entry-disclosure"
             >
-              login: holds nothing secret; it mounts the program's kept home, where the
+              login: holds nothing secret; it mounts the program's kept folder, where the
               program keeps its own sign-in. Sign in and reset it on the Programs page.
             </div>
             <div
@@ -1066,8 +1071,11 @@ defmodule PrismWeb.VaultLive do
             </div>
           </:col>
           <:col :let={entry} label="Status">
-            <span class={["text-xs font-medium", status_class(entry.status)]}>
-              {entry.status}
+            <span
+              class={["text-xs font-medium", status_class(entry.status)]}
+              data-test="entry-status"
+            >
+              {status_label(entry)}
             </span>
           </:col>
           <:col :let={entry} label="Actions">

@@ -204,7 +204,8 @@ func TestRenderPreview_ShowsEveryExitAndItsFlows(t *testing.T) {
 // account, where it may go and whether the component holds the value;
 // then how long it stands. A value the component is not disclosed is one
 // CYFR attaches and the component never holds, and its row says so; a
-// disclosed one's row never does.
+// disclosed one's row never does, and neither does a login entry's, which
+// is mounted into its program's kept folder and attaches nothing.
 func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 	v := loadPreviewVectors(t)
 	var out bytes.Buffer
@@ -228,6 +229,9 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 		"reagent:local.maps uses maps public key, provided by local, the app's public configuration, " +
 			"from reagent:local.weather for its geocode need: sent only to https://geo.maps.example, " +
 			"paths /geocode. The component reads the value itself.",
+		"catalyst:local.coder uses claude-login, an entry of this athanor, from reagent:local.weather " +
+			"for its claude need: mounted into claude's kept folder. " +
+			"Nothing is attached and the component never holds it.",
 		"lifetime: until revoked",
 		"lifetime: until 2026-10-04T13:00:00Z",
 		"lifetime: one run",
@@ -241,11 +245,15 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 	if strings.Contains(text, "choose which entry to use") {
 		t.Errorf("no row of the vectors asks for a choice:\n%s", text)
 	}
-	// The attach claim is each attach-only row's, and no disclosed row's: the
-	// vectors hold three attach-only rows and two disclosed ones.
+	// The attach claim is each attach-only row's, and no disclosed or mounted
+	// row's: the vectors hold three attach-only rows, two disclosed ones and
+	// one login entry mounted into its program's kept folder.
 	attached := "CYFR attaches the value and the component never holds it."
 	if got := strings.Count(text, attached); got != 3 {
 		t.Errorf("%q said %d times, want once per attach-only row (3):\n%s", attached, got, text)
+	}
+	if got := strings.Count(text, "://no host"); got != 0 {
+		t.Errorf("a row says its credential is sent to no host, %d times:\n%s", got, text)
 	}
 	if got := strings.Count(text, "The component never holds the value."); got != 0 {
 		t.Errorf("an attach-only row says the component never holds the value without "+
@@ -787,6 +795,28 @@ func TestCollectDecisions_AsksOnlyWhereAChoiceIsRequired(t *testing.T) {
 	}
 }
 
+// A login entry offered for a login need is mounted into its program's
+// kept folder, never sent to a host.
+func TestAskEntry_ALoginEntryIsMountedIntoItsProgramsKeptFolder(t *testing.T) {
+	need := needRow{name: "claude", kind: "login", program: "claude", required: true,
+		candidates: []map[string]any{{"entry_id": "vlt_login", "name": "claude-login", "source": "own",
+			"destination": map[string]any{"program": "claude"}}}}
+	var labels []string
+	chooser := grantChooser{interactive: true, ask: func(_ string, options []prompt.Option) (string, error) {
+		for _, o := range options {
+			labels = append(labels, o.Label)
+		}
+		return "vlt:vlt_login", nil
+	}}
+	if _, err := askEntry(need, nil, chooser); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"No entry", "claude-login, an entry of this athanor, mounted into claude's kept folder"}
+	if !reflect.DeepEqual(labels, want) {
+		t.Errorf("offered %q, want %q", labels, want)
+	}
+}
+
 // --selection fills a dependency's edge from the plan's row: an entry by
 // its prefix, a lender by its label, the need named when the dependency
 // declares several, with its lifetime; a dependency's required need no
@@ -908,7 +938,10 @@ func TestRenderPlanNeeds(t *testing.T) {
 	newer := strings.Replace(need("model", "api_key", true, "", false), `"need"`, `"newer_shipped":"1.4.0","need"`, 1)
 	provided := `{"need":"geo","kind":"api_key","provider":"maps.example","required":true,"source":"provided",` +
 		`"destination":{"hosts":["geo.maps.example"],"scheme":"https"},"candidates":[],"suggested":null,"choice_required":false}`
-	raw := planWith(list(need("api_key", "api_key", true, "vlt_a", false, "vlt_a"), newer),
+	login := `{"need":"claude","kind":"login","program":"claude","required":true,"source":"own",` +
+		`"candidates":[{"entry_id":"vlt_login","name":"claude-login","source":"own","destination":{"program":"claude"}}],` +
+		`"suggested":{"entry_id":"vlt_login"},"choice_required":false}`
+	raw := planWith(list(need("api_key", "api_key", true, "vlt_a", false, "vlt_a"), newer, login),
 		list(`{"from":"f:local.daily-report","dep":"reagent:local.maps","candidates":[],"needs":`+list(provided)+`}`), `[]`)
 	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
 		t.Fatal(err)
@@ -924,6 +957,8 @@ func TestRenderPlanNeeds(t *testing.T) {
 		"cyfr component pull f:local.daily-report:1.4.0",
 		"reagent:local.maps: geo (api_key for maps.example)",
 		"provided by local, the app's public configuration, sent only to https://geo.maps.example",
+		"f:local.daily-report: claude (login for claude)",
+		"suggested: claude-login, an entry of this athanor",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in\n%s", want, text)
@@ -1586,6 +1621,8 @@ func expected(row map[string]any, field string, value any) []string {
 	case field == "rate_limit":
 		rate := value.(map[string]any)
 		return []string{num(rate["requests"]) + " per " + str(rate["window"])}
+	case field == "destination" && str(value.(map[string]any)["program"]) != "":
+		return []string{"mounted into " + str(value.(map[string]any)["program"]) + "'s kept folder"}
 	case field == "destination":
 		destination := value.(map[string]any)
 		wants := []string{str(destination["scheme"]) + "://"}
@@ -1628,6 +1665,8 @@ func expected(row map[string]any, field string, value any) []string {
 		return []string{"a " + str(value) + " account"}
 	case field == "disclosed" && value == true:
 		return []string{"The component reads the value itself."}
+	case field == "disclosed" && str(row["values"].(map[string]any)["destination"].(map[string]any)["program"]) != "":
+		return []string{"Nothing is attached and the component never holds it."}
 	case field == "disclosed":
 		return []string{"CYFR attaches the value and the component never holds it."}
 	case field == "suggested" && value == true:

@@ -184,6 +184,82 @@ defmodule PrismWeb.AquaLiveTest do
                URI.decode_query(URI.parse(href).query)
     end
 
+    # A brain that mounts a program's own sign-in: bound, it waits on that
+    # sign-in, and only a sign-in whose command exited 0 connects it.
+    test "a crew member whose brain mounts a login reads Program not signed in until its " <>
+           "program signs in, then Model connected",
+         %{conn: conn, ctx: ctx} do
+      ctx = %{ctx | origin: :interactive}
+      actor = Sanctum.Context.actor(ctx)
+      ref = "catalyst:local.harness"
+
+      unit =
+        Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
+          manifest: %{
+            "name" => "harness",
+            "type" => "catalyst",
+            "version" => "1.0.0",
+            "publisher" => "local",
+            "needs" => %{
+              "claude" => %{
+                "type" => "login",
+                "program" => "claude",
+                "reason" => "to run Claude Code on your own plan",
+                "required" => true
+              }
+            }
+          },
+          wasm: Cyfr.Test.Guests.wasm(:catalyst)
+        )
+
+      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+
+      # A soul with no tools, so the member's closure is its brain alone.
+      :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\ntitle: AQUA\n---\n\nsoul\n")
+
+      :ok =
+        Arca.put(
+          actor,
+          Compendium.AquaPath.crew_file("harness"),
+          "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n\nYou run the harness.\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "claude-login",
+          kind: "login",
+          program: "claude"
+        })
+
+      grant!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry.id}]})
+
+      grant!(ctx, Prima.AgentRef.ref("harness"), %{
+        selections: [%{dep: ref, need: "claude", entry_id: entry.id}]
+      })
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, "#aqua-card-harness", "Program not signed in")
+      refute has_element?(view, "#aqua-card-harness", "Model connected")
+
+      # The sign-in whose command exited 0.
+      :ok = Sanctum.Mount.signed_in(ctx, entry.id)
+      send_update_agents(view, load: true)
+
+      assert has_element?(view, "#aqua-card-harness", "Model connected")
+      refute has_element?(view, "#aqua-card-harness", "Program not signed in")
+
+      # A login entry holds no key: its action changes the entry.
+      assert has_element?(
+               view,
+               "#aqua-card-harness button[phx-click=open_consent]",
+               "Change the entry"
+             )
+
+      refute has_element?(view, "#aqua-card-harness", "Change the key")
+    end
+
     test "the soul offers no Delete; a shipped crew member is disabled and enabled from its card",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
@@ -1144,6 +1220,22 @@ defmodule PrismWeb.AquaLiveTest do
   # A section re-reads itself on a message the write sends after it
   # answers, so a card's new state is awaited rather than read at once.
   defp settled(fun, label), do: Prima.Test.Wait.wait_until(fun, 2_000, label)
+
+  # A person's grant of `ref`, walked as their own page walks it.
+  defp grant!(ctx, ref, over) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = Map.merge(%{ref: ref}, over)
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
 
   # The tasks the page itself started on the console's supervisor since `before`
   # was read: a task names the process that started it first in its

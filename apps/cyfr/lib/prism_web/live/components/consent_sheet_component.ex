@@ -1670,11 +1670,11 @@ defmodule PrismWeb.ConsentSheetComponent do
       <div class="consent-sheet__need-what text-xs text-gray-400">{need_words(@need)}</div>
 
       <p
-        :if={(not @provided? and @held_entry) && hosts_words(@need) != ""}
+        :if={(not @provided? and @held_entry) && need_for(@need) != ""}
         class="consent-sheet__held"
         data-test="grant-held"
       >
-        You already have an entry for {hosts_words(@need)}: {@held_entry.name}
+        You already have an entry for {need_for(@need)}: {@held_entry.name}
       </p>
 
       <p :if={@provided?} class="consent-sheet__provided" data-test="grant-provided">
@@ -1760,7 +1760,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         data-test="grant-why"
       >
         {@component} reads the value itself, so only an entry you let it read can meet this
-        need: your entries for {hosts_words(@need)} are attach-only, and it never holds their
+        need: your entries for {need_for(@need)} are attach-only, and it never holds their
         value.
       </p>
 
@@ -1789,7 +1789,7 @@ defmodule PrismWeb.ConsentSheetComponent do
           Add a vault entry
         </.link>
         <span :if={!@athanor_route}>Add a vault entry</span>
-        for {hosts_words(@need)} first.
+        for {need_for(@need)} first.
       </p>
 
       <p :if={is_binary(field(@need, :newer_shipped))} class="consent-sheet__update">
@@ -2611,8 +2611,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         _none -> ""
       end
 
-    "#{used}: #{account}sent only to #{destination_label(values["destination"])}. " <>
-      disclosure_label(values["disclosed"])
+    "#{used}: #{account}#{where_words(values["destination"])}. " <> disclosure_label(values)
   end
 
   # Whose credential a binding is: the athanor's own entry, a key another
@@ -2636,7 +2635,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp need_words(need) do
     if declared?(need) do
-      "#{field(need, :kind)} for #{hosts_words(need)}" <>
+      "#{field(need, :kind)} for #{need_for(need)}" <>
         if(field(need, :required) == true, do: ", required", else: ", optional") <>
         if(reads_itself?(need), do: "; the component reads the value itself", else: "")
     else
@@ -2644,8 +2643,14 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
-  # The hosts a need calls, as it declares them.
-  defp hosts_words(need), do: need |> field(:hosts) |> List.wrap() |> Enum.join(", ")
+  # What a need is for: the program a login need signs in, else the hosts
+  # it calls, as it declares them.
+  defp need_for(need) do
+    case field(need, :program) do
+      program when is_binary(program) -> program
+      _hosts -> need |> field(:hosts) |> List.wrap() |> Enum.join(", ")
+    end
+  end
 
   # Whose an entry is and where it may go; one that meets the need only
   # through a `*.` host says how wide each such host is.
@@ -2654,7 +2659,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
     case field(candidate, :destination) do
       %{} = destination ->
-        "#{whose}, sent only to #{destination_label(destination)}" <>
+        "#{whose}, #{where_words(destination)}" <>
           breadth_words(field(candidate, :fit), destination)
 
       _none ->
@@ -2684,6 +2689,12 @@ defmodule PrismWeb.ConsentSheetComponent do
     "#{dep} uses it through its '#{field(lender, :label)}' profile, which lends #{lends}"
   end
 
+  # Where a credential goes: a login entry is mounted into the kept folder
+  # of the program its destination names, and every other entry is sent
+  # only to its destination.
+  defp where_words(%{"program" => program}), do: "mounted into #{program}'s kept folder"
+  defp where_words(destination), do: "sent only to #{destination_label(destination)}"
+
   # Where a credential may go: its scheme and hosts, its port, and the
   # methods and path prefixes it is limited to, when it is.
   defp destination_label(%{} = destination) do
@@ -2698,10 +2709,13 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp destination_label(_destination), do: ""
 
-  # A value not disclosed to the component is one CYFR attaches to the
-  # requests bound for the entry's destination, and the component never
-  # holds it.
-  defp disclosure_label(true), do: "The component reads the value itself."
+  # A login entry is mounted, never attached or disclosed. A value not
+  # disclosed to the component is one CYFR attaches to the requests bound
+  # for the entry's destination, and the component never holds it.
+  defp disclosure_label(%{"destination" => %{"program" => _program}}),
+    do: "Nothing is attached and the component never holds it."
+
+  defp disclosure_label(%{"disclosed" => true}), do: "The component reads the value itself."
 
   defp disclosure_label(_not_disclosed),
     do: "CYFR attaches the value and the component never holds it."

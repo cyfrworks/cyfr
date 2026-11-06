@@ -186,8 +186,9 @@ defmodule Sanctum.Mount do
   {:another_program, name}}`; a store that cannot answer is
   `{:error, {:unavailable, "Vault"}}`.
 
-  With `for: :sign_in` an entry a restore left `needs_reauth` is admitted
-  too: signing the program in again is how it comes back (`signed_in/2`).
+  With `for: :sign_in` an entry whose program is not signed in
+  (`needs_reauth`: a new entry, or one a restore left) is admitted too:
+  signing the program in is how it becomes active (`signed_in/2`).
   """
   @spec login_entry(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, %{id: String.t(), name: String.t(), status: String.t()}} | {:error, term()}
@@ -206,9 +207,10 @@ defmodule Sanctum.Mount do
 
   @doc """
   A sign-in of the login entry `entry_id` whose command exited 0, in the
-  interactive session that opened it: an entry a restore left
-  `needs_reauth` is active again, the person's own deliberate act, as
-  re-authorizing an OAuth entry is. An active entry stays as it is. Only
+  interactive session that opened it: an entry whose program was not
+  signed in (`needs_reauth`: a new entry, or one a restore left) is
+  active, the person's own deliberate act, as re-authorizing an OAuth
+  entry is. An active entry stays as it is. Only
   the sign-in relay calls it, and nothing else makes a login entry active
   again. Answers `:ok`, or `{:error, reason}` for an entry that is not
   this athanor's login entry or a store that cannot answer.

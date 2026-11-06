@@ -558,20 +558,21 @@ defmodule Emissary.External.Provider do
       hosts: nil
     }
 
-  # A kept stdio row names its login entry, which must be an active login
-  # entry of this athanor naming the row; the refusal names neither the
+  # A kept stdio row names its login entry, which must be a login entry of
+  # this athanor naming the row, active or its program not signed in yet:
+  # the row is how its program signs in. The refusal names neither the
   # entry's material nor why beyond that.
   defp login_entry(_ctx, _name, nil), do: :ok
 
   defp login_entry(ctx, name, entry) do
-    case Sanctum.Mount.login_entry(ctx, entry, name) do
+    case Sanctum.Mount.login_entry(ctx, entry, name, for: :sign_in) do
       {:ok, _entry} ->
         :ok
 
       {:error, _reason} ->
         {:error,
          {:invalid_argument,
-          "config.login_entry_id names no active login entry of this athanor for program '#{name}'"}}
+          "config.login_entry_id names no login entry of this athanor for program '#{name}'"}}
     end
   end
 
@@ -910,8 +911,9 @@ defmodule Emissary.External.Provider do
         "'#{name}' has no sign-in: a program with a kept home and a login command signs in"}}
 
   defp sign_in_entry(ctx, server, entry) do
-    # A sign-in is how an entry a restore left needs_reauth comes back, so it
-    # is admitted here, and only here.
+    # A sign-in is how an entry whose program is not signed in (needs_reauth:
+    # a new entry, or one a restore left) becomes active, so it is admitted
+    # here; a row may name one (`login_entry/3`), and nothing else does.
     case Sanctum.Mount.login_entry(ctx, entry, server.name, for: :sign_in) do
       {:ok, %{id: id}} = found when server.transport == "pipe" or id == server.login_entry_id ->
         found

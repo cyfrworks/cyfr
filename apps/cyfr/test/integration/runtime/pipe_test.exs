@@ -128,9 +128,8 @@ defmodule Locus.Runtime.PipeTest do
 
   defp login!(ctx) do
     {:ok, entry} =
-      Sanctum.TestContext.create_vault(ctx, %{
+      Sanctum.TestContext.create_signed_in_login(ctx, %{
         name: "cat-login-#{System.unique_integer([:positive])}",
-        kind: "login",
         program: @program
       })
 

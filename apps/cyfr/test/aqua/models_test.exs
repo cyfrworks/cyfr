@@ -184,11 +184,13 @@ defmodule Aqua.ModelsTest do
     assert {:consent_unavailable, ^resolved} = status.()
   end
 
-  # A brain that mounts a program's own sign-in reads ready as a keyed one
-  # does: once its login entry is bound on the catalyst's own consent and
-  # on the crew member's edge into it. Before the binding it is one to
-  # connect.
-  test "a crew member whose brain mounts a login reads ready once its login entry is bound" do
+  # A brain that mounts a program's own sign-in reads ready once its login
+  # entry is bound on the catalyst's own consent and on the crew member's
+  # edge into it, and its program has signed in. Before the binding, and
+  # bound but before the sign-in, it waits on that sign-in, and the
+  # readiness every hand-off applies refuses the member.
+  test "a crew member whose brain mounts a login reads ready once its login entry is bound " <>
+         "and its program signed in" do
     ctx = storage_root!("models_login")
     ref = "catalyst:local.loginbrain"
 
@@ -246,7 +248,15 @@ defmodule Aqua.ModelsTest do
       selections: [%{dep: ref, need: "claude", entry_id: entry.id}]
     })
 
+    # Bound, its program not signed in yet: it still waits on the sign-in.
+    assert Aqua.model_status(ctx, member) == %{"harness" => {:needs_sign_in, resolved}}
+    assert Aqua.Crew.ready(ctx, "harness") == {:error, {:crew_unready, "harness", :not_signed_in}}
+
+    # The sign-in whose command exited 0.
+    :ok = Sanctum.Mount.signed_in(ctx, entry.id)
+
     assert Aqua.model_status(ctx, member) == %{"harness" => {:ready, resolved}}
+    assert Aqua.Crew.ready(ctx, "harness") == :ok
   end
 
   # A person's walk, from their own page.

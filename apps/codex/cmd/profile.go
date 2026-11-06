@@ -619,6 +619,7 @@ type needRow struct {
 	name           string
 	kind           string
 	provider       string
+	program        string
 	reason         string
 	required       bool
 	source         string
@@ -627,6 +628,15 @@ type needRow struct {
 	candidates     []map[string]any
 	newerShipped   string
 	destination    any
+}
+
+// needFor is what a need is for: the program a login need signs in, else
+// its provider.
+func (n needRow) needFor() string {
+	if n.program != "" {
+		return n.program
+	}
+	return n.provider
 }
 
 // declared is a need the manifest declares as a credential, unlike the
@@ -644,6 +654,7 @@ func readNeed(raw any) (needRow, bool) {
 		name:           str(m["need"]),
 		kind:           str(m["kind"]),
 		provider:       str(m["provider"]),
+		program:        str(m["program"]),
 		reason:         str(m["reason"]),
 		required:       m["required"] == true,
 		source:         str(m["source"]),
@@ -1112,7 +1123,7 @@ func askEntry(need needRow, lenders []map[string]any, chooser grantChooser) (*id
 	for _, c := range need.candidates {
 		label := str(c["name"]) + ", " + sourceWords(str(c["source"]), "")
 		if destination, ok := c["destination"].(map[string]any); ok {
-			label += ", sent only to " + destinationLabel(destination)
+			label += ", " + whereWords(destination)
 		}
 		if id := str(c["entry_id"]); id != "" {
 			options = append(options, prompt.Option{Label: label, Value: "vlt:" + id})
@@ -1396,7 +1407,7 @@ func needLines(component, from string, need needRow, lenders []map[string]any) [
 		if !need.required {
 			optional = ", optional"
 		}
-		head += fmt.Sprintf(" (%s for %s%s)", need.kind, need.provider, optional)
+		head += fmt.Sprintf(" (%s for %s%s)", need.kind, need.needFor(), optional)
 	} else {
 		head += " (any entry it reads itself, optional)"
 	}
@@ -1753,8 +1764,7 @@ func credentialSentence(node string, values map[string]any) string {
 	if provider := str(values["provider"]); provider != "" {
 		sentence += "a " + provider + " account, "
 	}
-	sentence += "sent only to " + destinationLabel(values["destination"]) + ". " +
-		disclosureLabel(values["disclosed"])
+	sentence += whereWords(values["destination"]) + ". " + disclosureLabel(values)
 	return sentence
 }
 
@@ -1786,6 +1796,16 @@ func publisherOf(node, otherwise string) string {
 	return otherwise
 }
 
+// whereWords says where a credential goes: a login entry is mounted into
+// the kept folder of the program its destination names, and every other
+// entry is sent only to its destination.
+func whereWords(value any) string {
+	if destination, _ := value.(map[string]any); str(destination["program"]) != "" {
+		return "mounted into " + str(destination["program"]) + "'s kept folder"
+	}
+	return "sent only to " + destinationLabel(value)
+}
+
 // destinationLabel spells where a credential may go: its scheme, hosts and
 // port, and the methods and path prefixes it is limited to, when it is.
 func destinationLabel(value any) string {
@@ -1803,11 +1823,15 @@ func destinationLabel(value any) string {
 	return label
 }
 
-// disclosureLabel says whether the component holds the value: a value not
-// disclosed to it is one CYFR attaches to the requests bound for the
+// disclosureLabel says whether the component holds the value: a login
+// entry is mounted, never attached or disclosed; a value not disclosed to
+// the component is one CYFR attaches to the requests bound for the
 // entry's destination, and the component never holds it.
-func disclosureLabel(disclosed any) string {
-	if disclosed == true {
+func disclosureLabel(values map[string]any) string {
+	if destination, _ := values["destination"].(map[string]any); str(destination["program"]) != "" {
+		return "Nothing is attached and the component never holds it."
+	}
+	if values["disclosed"] == true {
 		return "The component reads the value itself."
 	}
 	return "CYFR attaches the value and the component never holds it."

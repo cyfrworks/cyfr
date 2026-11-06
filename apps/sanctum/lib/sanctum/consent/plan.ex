@@ -651,12 +651,21 @@ defmodule Sanctum.Consent.Plan do
          {:ok, shares} <- shares(ctx) do
       {:ok,
        %{
-         own: Enum.filter(entries, &(&1.status == "active")),
+         own: Enum.filter(entries, &bindable?/1),
          shares: shares,
          defaults: defaults
        }}
     end
   end
+
+  # An active entry, or a login entry whose program is not signed in yet:
+  # it is bound before its program signs in, and nothing mounts it for a
+  # run until a sign-in makes it active (`Sanctum.Mount.signed_in/2`).
+  @doc false
+  @spec bindable?(map()) :: boolean()
+  def bindable?(%{status: "active"}), do: true
+  def bindable?(%{kind: "login", status: "needs_reauth"}), do: true
+  def bindable?(_entry), do: false
 
   # A person who does not stand, or no person, is offered no share.
   defp shares(ctx) do

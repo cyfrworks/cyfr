@@ -806,7 +806,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, ~s([data-test="program-hosts"]), "every public host")
   end
 
-  test "the list says each row's transport and home", %{conn: conn, athanor: athanor} do
+  test "the list says each row's transport and folder", %{conn: conn, athanor: athanor} do
     pipe_row!(athanor)
 
     {:ok, _} =
@@ -822,5 +822,9 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, ~s(tr[data-name="claude"] [data-test="transport"]), "pipe")
     assert has_element?(view, ~s(tr[data-name="claude"] [data-test="home"]), "kept")
     assert has_element?(view, ~s(tr[data-name="webby"] [data-test="transport"]), "http")
+
+    # The column a person reads names a folder, never a home.
+    assert has_element?(view, "thead th", "Folder")
+    refute has_element?(view, "thead th", "Home")
   end
 end

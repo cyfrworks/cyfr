@@ -183,7 +183,9 @@ defmodule PrismWeb.VaultLiveTest do
     refute inspect(server) =~ "Authorization"
   end
 
-  test "a login entry shows the program it mounts and holds nothing secret", %{conn: conn} do
+  test "a login entry shows the program it mounts, holds nothing secret, and reads not signed " <>
+         "in until its program signs in",
+       %{conn: conn} do
     user = test_user()
     own = Sanctum.Test.People.athanor!(user.user_id)
 
@@ -197,7 +199,7 @@ defmodule PrismWeb.VaultLiveTest do
         authenticated: true
       )
 
-    {:ok, _} =
+    {:ok, %{entry: %{id: id}}} =
       Sanctum.TestContext.confirming(
         ctx,
         &Sanctum.Gate.call_external("vault", &1, %{
@@ -216,8 +218,18 @@ defmodule PrismWeb.VaultLiveTest do
     assert has_element?(
              view,
              ~s([data-test="entry-disclosure"]),
-             "it mounts the program's kept home"
+             "it mounts the program's kept folder"
            )
+
+    refute html =~ "kept home"
+    assert view |> element(~s([data-test="entry-status"])) |> render() =~ "not signed in"
+
+    # The sign-in whose command exited 0.
+    :ok = Sanctum.Mount.signed_in(ctx, id)
+    {view, _html} = mount_athanor(conn, "/vault", own)
+    status = view |> element(~s([data-test="entry-status"])) |> render()
+    assert status =~ "active"
+    refute status =~ "not signed in"
   end
 
   # A secret no rendered page holds by accident: a LiveView's element id and

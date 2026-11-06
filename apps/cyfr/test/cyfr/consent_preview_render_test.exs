@@ -51,7 +51,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   @vectors Path.expand("../../../../tests/fixtures/consent_preview.json", __DIR__)
   @ref "tincture:local.dashboard"
 
-  # The vectors' five credentials, each as its row's sentence.
+  # The vectors' six credentials, each as its row's sentence.
   @sentences [
     "reagent:local.weather uses weather-api, an entry of this athanor, for its own calls: " <>
       "a weather.example account, sent only to https://api.weather.example. " <>
@@ -70,7 +70,10 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       "CYFR attaches the value and the component never holds it.",
     "reagent:local.maps uses maps public key, provided by local, the app's public " <>
       "configuration, from reagent:local.weather for its geocode need: sent only to " <>
-      "https://geo.maps.example, paths /geocode. The component reads the value itself."
+      "https://geo.maps.example, paths /geocode. The component reads the value itself.",
+    "catalyst:local.coder uses claude-login, an entry of this athanor, from " <>
+      "reagent:local.weather for its claude need: mounted into claude's kept folder. " <>
+      "Nothing is attached and the component never holds it."
   ]
 
   # The vectors' removals, each as its line: the need it was bound for (or
@@ -189,17 +192,28 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     for sentence <- @sentences, do: assert(sentence in sentences, "missing: #{sentence}")
 
     # An attach-only credential's sentence says CYFR attaches the value and
-    # the component never holds it; a disclosed one's never says so.
+    # the component never holds it; a disclosed one's never says so, and
+    # neither does a login entry's, which is mounted into its program's
+    # kept folder and attaches nothing.
     attached = "CYFR attaches the value and the component never holds it."
     credentials = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
 
     for {row, sentence} <- Enum.zip(credentials, sentences) do
-      if row["values"]["disclosed"] == true,
-        do: refute(sentence =~ attached, "a disclosed row says #{attached}: #{sentence}"),
-        else: assert(sentence =~ attached, "an attach-only row does not say it: #{sentence}")
+      cond do
+        mounted?(row) ->
+          refute sentence =~ attached, "a mounted row says #{attached}: #{sentence}"
+          refute sentence =~ "sent only to", "a mounted row names a destination: #{sentence}"
+
+        row["values"]["disclosed"] == true ->
+          refute sentence =~ attached, "a disclosed row says #{attached}: #{sentence}"
+
+        true ->
+          assert sentence =~ attached, "an attach-only row does not say it: #{sentence}"
+      end
     end
 
-    assert Enum.any?(credentials, &(&1["values"]["disclosed"] != true))
+    assert Enum.any?(credentials, &(&1["values"]["disclosed"] != true and not mounted?(&1)))
+    assert Enum.any?(credentials, &mounted?/1)
     assert Enum.any?(credentials, &(&1["values"]["source"] == "own"))
     assert Enum.any?(credentials, &(&1["values"]["source"] == "share"))
 
@@ -212,7 +226,11 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     end
 
     refute text =~ "the component never holds the value"
+    refute text =~ "://no host"
   end
+
+  # A login entry's binding: its destination names the program it mounts into.
+  defp mounted?(row), do: is_binary(row["values"]["destination"]["program"])
 
   # How a value reads in a row: as the row holds it, or in the renderer's
   # words where it names a relation rather than a resource. A credential
@@ -236,6 +254,9 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
   # A credential binding's values, in the renderer's words: whose entry,
   # where it goes, whether the component holds it, how long it stands.
+  defp expected(_row, "destination", %{"program" => program}),
+    do: ["mounted into #{program}'s kept folder"]
+
   defp expected(_row, "destination", destination) do
     port = if destination["port"], do: ["port #{destination["port"]}"], else: []
 
@@ -259,8 +280,11 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "provider", provider), do: ["a #{provider} account"]
   defp expected(_row, "disclosed", true), do: ["The component reads the value itself."]
 
-  defp expected(_row, "disclosed", false),
-    do: ["CYFR attaches the value and the component never holds it."]
+  defp expected(row, "disclosed", false) do
+    if mounted?(row),
+      do: ["Nothing is attached and the component never holds it."],
+      else: ["CYFR attaches the value and the component never holds it."]
+  end
 
   defp expected(_row, "suggested", true), do: ["Suggested"]
   defp expected(_row, "choice_required", true), do: ["Choose which entry to use"]
