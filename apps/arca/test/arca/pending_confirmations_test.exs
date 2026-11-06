@@ -325,20 +325,10 @@ defmodule Arca.PendingConfirmationsTest do
       assert {:ok, []} = PendingConfirmations.list_open(actor, "usr_cnf")
     end
 
-    test "a record of another athanor, or a local person's naming an epoch, is refused", %{
-      actor: actor
-    } do
+    test "a record of another athanor is refused", %{actor: actor} do
       elsewhere = record(actor, athanor: "ath_elsewhere")
 
       assert {:error, :cross_tenant} = open(actor, elsewhere)
-
-      assert {:error, :unexpected_key_epoch} =
-               PendingConfirmations.open(actor, %{
-                 record: record(actor),
-                 opener: @opener,
-                 asker: @asker,
-                 identity_key_epoch: digest("epoch")
-               })
     end
   end
 
@@ -375,6 +365,38 @@ defmodule Arca.PendingConfirmationsTest do
                  proof: "passkey",
                  passkey_id: "psk_x"
                })
+    end
+
+    test "a key's proof names its key and the cached head of the person's account, both or neither",
+         %{actor: actor} do
+      rec = record(actor)
+      {:ok, _} = open(actor, rec)
+      kid = digest("kid")
+
+      assert {:error, {:invalid, %{kid: _}}} =
+               PendingConfirmations.confirm(actor, rec.id, %{
+                 proof: "oidc_reauth",
+                 kid: kid,
+                 head: digest("head")
+               })
+
+      assert {:error, {:invalid, %{kid: _}}} =
+               PendingConfirmations.confirm(actor, rec.id, %{
+                 proof: "passkey",
+                 passkey_id: "psk_x",
+                 kid: kid
+               })
+
+      # The record's person has no account here: no head is theirs to name.
+      assert {:error, :stale_head} =
+               PendingConfirmations.confirm(actor, rec.id, %{
+                 proof: "passkey",
+                 passkey_id: "psk_x",
+                 kid: kid,
+                 head: digest("head")
+               })
+
+      assert {:ok, %{state: "pending"}} = PendingConfirmations.get(actor, rec.id)
     end
 
     test "refuses after expiry, and a revoked client confirms nothing", %{actor: actor} do

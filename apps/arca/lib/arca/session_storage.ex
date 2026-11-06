@@ -11,15 +11,13 @@ defmodule Arca.SessionStorage do
   Tokens are stored as SHA-256 hashes for indexed lookups.
   Session metadata (user_id, email, provider) is stored as plaintext.
 
-  A session of a person whose identity is `remote`
-  (`Arca.PersonIdentities`) records the `identity_key_epoch` of the head
-  verified when it was minted, whichever door admitted it, and a local
-  person's session records none: the insert refuses either the other way
-  round, and refuses an epoch that is not the cached head's current one
-  (`Arca.DirectoryHeads.bindable!/2`, read under the person's lock, so an
-  advance that retires the epoch either retires this session or refuses
-  it). The advance ends every session carrying a `key_epoch` the fresh
-  head retired.
+  A session an account's key signed for records that key's `kid` and the
+  account head it was verified under (`head`), both or neither: the
+  insert refuses a head that is not the cached head of the person's
+  account (`Arca.DirectoryHeads.fence!/2`, read under the person's lock,
+  so an advance that retires the key either retires this session or
+  refuses it). The cached head's walk ends every session bound to a key
+  it removes, and a recovery every bound session (`delete_bound!/2`).
 
   A protected device's unlock reserves a session row that records its
   paired `client_id` and that no token loads (`reserve_client_session/2`),
@@ -54,11 +52,10 @@ defmodule Arca.SessionStorage do
   person or the athanor either commits first and is reread here, or waits
   for this session and then retires it.
 
-  `attrs[:identity_key_epoch]` is required for a person whose identity is
-  `remote` (`{:error, :identity_key_epoch_required}`), must be the cached
-  head's current `key_epoch` (`{:error, :stale_key_epoch}`), and is refused
-  for any other person (`{:error, :unexpected_key_epoch}`).
-  A protected device's session
+  `attrs[:kid]` and `attrs[:head]` name the key that signed for the
+  session and the account head it was verified under, both or neither
+  (`{:error, {:invalid, _}}`); a head that is not the cached head of the
+  person's account is `{:error, :stale_head}`. A protected device's session
   is never created here: its unlock reserves it and its redemption
   activates it (`activate_client_session/3`). A passkey sign-in's names
   `attrs[:client_id]`, the credential's platform holder
@@ -97,7 +94,6 @@ defmodule Arca.SessionStorage do
 
   defp insert_session(token_hash, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    epoch = attrs[:identity_key_epoch]
 
     row = %{
       id: Prima.UUID7.generate_id("ses"),
@@ -110,15 +106,34 @@ defmodule Arca.SessionStorage do
       # before the caller's athanor is resolved. The athanor is resolved
       # again on the next load; nothing is coerced.
       athanor_id: attrs[:athanor_id],
-      identity_key_epoch: epoch,
+      kid: attrs[:kid],
+      head: attrs[:head],
       client_id: attrs[:client_id],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
 
-    with :ok <- Arca.DirectoryHeads.bindable!(attrs.user_id, epoch) do
+    with :ok <- bound(attrs.user_id, attrs) do
       Arca.Repo.insert_all(Session, [row])
       {:ok, %{id: row.id, user_id: row.user_id}}
+    end
+  end
+
+  # The key and head a session binds, fenced under the person's lock; a
+  # session no key signed takes the person's lock alone, the order every
+  # issuance keeps.
+  defp bound(user_id, attrs) do
+    case {attrs[:kid], attrs[:head]} do
+      {nil, nil} ->
+        _locked = Arca.DirectoryHeads.lock_person!(user_id)
+        :ok
+
+      {kid, head} ->
+        if Prima.Identity.Encoding.digest?(kid) and Prima.Identity.Encoding.digest?(head) do
+          with {:ok, _identifier} <- Arca.DirectoryHeads.fence!(user_id, head), do: :ok
+        else
+          {:error, {:invalid, %{kid: ["names the key and the head it was verified under"]}}}
+        end
     end
   end
 
@@ -172,7 +187,8 @@ defmodule Arca.SessionStorage do
             :email,
             :provider,
             :athanor_id,
-            :identity_key_epoch,
+            :kid,
+            :head,
             :client_id,
             :expires_at,
             :inserted_at
@@ -292,8 +308,8 @@ defmodule Arca.SessionStorage do
   the person, athanor, client and certificates are locked and
   reread, the reserved row is locked and, while it is still reserved and
   unexpired on the database's clock, takes the token, the provider
-  `unlock`, `attrs.expires_at` and `attrs.identity_key_epoch` (bound as
-  `create_session/3` binds it). A row a lock retired, the channel's end
+  `unlock`, `attrs.expires_at` and `attrs.kid` and `attrs.head` (bound as
+  `create_session/3` binds them). A row a lock retired, the channel's end
   deleted or that expired is `{:error, :reservation_retired}`, with
   nothing written. The client's lock is taken before the row's, as a lock
   takes it, so a lock that committed first is read here and one that
@@ -321,14 +337,15 @@ defmodule Arca.SessionStorage do
           |> Arca.Repo.one()
 
         with id when is_binary(id) <- reserved || {:error, :reservation_retired},
-             :ok <- Arca.DirectoryHeads.bindable!(attrs.user_id, attrs[:identity_key_epoch]) do
+             :ok <- bound(attrs.user_id, attrs) do
           {1, _} =
             Arca.Repo.update_all(from(s in Session, where: s.id == ^id),
               set: [
                 token_hash: token_hash,
                 token_prefix: attrs[:token_prefix],
                 provider: @unlocked,
-                identity_key_epoch: attrs[:identity_key_epoch],
+                kid: attrs[:kid],
+                head: attrs[:head],
                 expires_at: usec(attrs.expires_at),
                 inserted_at: now
               ]
@@ -475,25 +492,28 @@ defmodule Arca.SessionStorage do
   end
 
   @doc false
-  # End every session of the people `user_ids` that carries `key_epoch`: a
-  # fresh head retired it, and a session minted under a live key the head
-  # no longer names must not outlive the refresh. Answers the token hashes
-  # it ended, for the caller to invalidate after commit. Run in the
-  # caller's transaction (`Arca.DirectoryHeads.advance/4`).
-  @spec delete_key_epoch!([String.t()], String.t()) :: [binary()]
-  def delete_key_epoch!([], _key_epoch), do: []
+  # End every session of the people `user_ids` bound to the key `kid`, or
+  # with `:all` every session bound to any key: a refresh read the key's
+  # removal, or a recovery, and a session that key signed for must not
+  # outlive it. Answers the token hashes it ended, for the caller to
+  # invalidate after commit. Run in the caller's transaction
+  # (`Arca.DirectoryHeads.advance/5`).
+  @spec delete_bound!([String.t()], String.t() | :all) :: [binary()]
+  def delete_bound!([], _kid), do: []
 
-  # arca:unscoped-ok sessions are person-owned; the people and the epoch are the scope.
+  # arca:unscoped-ok sessions are person-owned; the people and the key are the scope.
   # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def delete_key_epoch!(user_ids, key_epoch) when is_list(user_ids) and is_binary(key_epoch) do
-    {_count, hashes} =
-      Arca.Repo.delete_all(
-        from(s in Session,
-          where: s.user_id in ^user_ids and s.identity_key_epoch == ^key_epoch,
-          select: s.token_hash
-        )
-      )
+  def delete_bound!(user_ids, kid) when is_list(user_ids) do
+    query =
+      case kid do
+        :all ->
+          from(s in Session, where: s.user_id in ^user_ids and not is_nil(s.kid))
 
+        kid when is_binary(kid) ->
+          from(s in Session, where: s.user_id in ^user_ids and s.kid == ^kid)
+      end
+
+    {_count, hashes} = Arca.Repo.delete_all(select(query, [s], s.token_hash))
     hashes || []
   end
 

@@ -66,11 +66,12 @@ defmodule Arca.PendingConfirmations do
       client or passkey confirmed, inside the transaction of the standing
       transition or passkey revocation that revokes it.
 
-  A remote person's record carries the `identity_key_epoch` it depends on,
-  which must be the cached head's current one when it opens
-  (`Arca.DirectoryHeads.bindable!/2`, under the person's lock), and a head
-  that retires the epoch voids it (`void_key_epoch!/2`); a local person's
-  carries none.
+  A record a key confirmed carries that key's `kid` and the account head
+  it was verified under (`head`), which must be the cached head of the
+  person's account when it is confirmed (`Arca.DirectoryHeads.fence!/2`,
+  under the person's lock, the first of the standing order); the cached
+  head's walk voids the open records a removed key confirmed, and a
+  recovery every open record a key confirmed (`void_bound!/2`).
 
   Every function takes the actor first, and the athanor comes from the
   actor. Confirming and holding a challenge prove first that this member
@@ -117,11 +118,8 @@ defmodule Arca.PendingConfirmations do
   the secret), `attrs[:opener]` the credential of the context that opens
   it (a non-empty name of at most 255 bytes), `attrs[:asker]` a name for
   the client that asked (a map the deciding site built, stored as JSON
-  and read into by no one here), and `attrs[:identity_key_epoch]` the
-  epoch a remote person's record depends on (required for a remote person
-  and the cached head's current one, `:stale_key_epoch` otherwise;
-  refused for a local one). Every call writes a new record; none answers
-  one that stands. A ref already stored is `:conflict`; a malformed
+  and read into by no one here). Every call writes a new record; none
+  answers one that stands. A ref already stored is `:conflict`; a malformed
   attribute `{:invalid, _}`.
 
   The answer is the new record, with `:voided` the refs of the opener's
@@ -146,15 +144,7 @@ defmodule Arca.PendingConfirmations do
         with {:ok, asker} <- asker(Map.get(attrs, :asker)) do
           Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.open", fn ->
             Arca.Repo.locking_transaction(fn ->
-              Arca.Repo.committed(
-                open_in(
-                  athanor_id,
-                  record,
-                  attrs.opener,
-                  asker,
-                  Map.get(attrs, :identity_key_epoch)
-                )
-              )
+              Arca.Repo.committed(open_in(athanor_id, record, attrs.opener, asker))
             end)
           end)
           |> Arca.Data.project()
@@ -179,10 +169,14 @@ defmodule Arca.PendingConfirmations do
   `"home"` (a remote person's own home certifying their confirmation there,
   `Prima.ConfirmationAssertion`, which names nothing here), and
   `:passkey_id` or `:client_id` name the passkey or paired client that
-  gave it, which must still stand. Succeeds once, before the record's expiry. Refusals:
-  `:not_pending`, `:expired`, `:not_found`, `:revoked` (the passkey or
-  client no longer stands), `{:invalid, errors}`, `:not_owner`,
-  `:no_athanor`, `:database_error`.
+  gave it, which must still stand. A key's proof (`passkey` or `device`)
+  may name the account key that signed, `:kid`, and the account head it
+  was verified under, `:head`, both or neither: the head must be the
+  cached head of the person's account (`:stale_head` otherwise). Succeeds
+  once, before the record's expiry. Refusals: `:not_pending`, `:expired`,
+  `:not_found`, `:revoked` (the passkey or client no longer stands),
+  `:stale_head`, `{:invalid, errors}`, `:not_owner`, `:no_athanor`,
+  `:database_error`.
   """
   @spec confirm(Prima.Actor.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
   def confirm(%Prima.Actor{athanor_id: athanor_id} = actor, ref, proof)
@@ -417,19 +411,21 @@ defmodule Arca.PendingConfirmations do
     do: void_all(from(c in PendingConfirmation, where: c.confirmed_client_id in ^ids))
 
   @doc false
-  @spec void_key_epoch!([String.t()], String.t()) :: [String.t()]
-  # Void the open records of `user_ids` that depend on `key_epoch`, in the
-  # caller's transaction (`Arca.DirectoryHeads.advance/4`).
+  @spec void_bound!([String.t()], String.t() | :all) :: [String.t()]
+  # Void the open records of `user_ids` the key `kid` confirmed, or with
+  # `:all` every open record a key confirmed, in the caller's transaction
+  # (`Arca.DirectoryHeads.advance/5`).
   # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def void_key_epoch!([], _key_epoch), do: []
+  def void_bound!([], _kid), do: []
 
-  def void_key_epoch!(user_ids, key_epoch) when is_list(user_ids) and is_binary(key_epoch) do
-    void_all(
-      from(c in PendingConfirmation,
-        where: c.user_id in ^user_ids and c.identity_key_epoch == ^key_epoch
+  def void_bound!(user_ids, :all) when is_list(user_ids),
+    do:
+      void_all(
+        from(c in PendingConfirmation, where: c.user_id in ^user_ids and not is_nil(c.kid))
       )
-    )
-  end
+
+  def void_bound!(user_ids, kid) when is_list(user_ids) and is_binary(kid),
+    do: void_all(from(c in PendingConfirmation, where: c.user_id in ^user_ids and c.kid == ^kid))
 
   @doc false
   @spec void_all(Ecto.Queryable.t()) :: [String.t()]
@@ -465,39 +461,38 @@ defmodule Arca.PendingConfirmations do
   # ---- internals -------------------------------------------------------------
 
   # A new record, always: none that stands is answered, whoever opened it.
-  # Room is made first, within the opener's bound.
-  defp open_in(athanor_id, record, opener, asker, epoch) do
-    with :ok <- Arca.DirectoryHeads.bindable!(record.person, epoch) do
-      voided = make_room!(athanor_id, record.person, opener)
-      now = Arca.ServerMetaStorage.now!()
+  # The person's lock first, the head of the standing order every write to
+  # their records takes; room is made within the opener's bound.
+  defp open_in(athanor_id, record, opener, asker) do
+    _locked = Arca.DirectoryHeads.lock_person!(record.person)
+    voided = make_room!(athanor_id, record.person, opener)
+    now = Arca.ServerMetaStorage.now!()
 
-      row = %{
-        ref: record.id,
-        athanor_id: athanor_id,
-        user_id: record.person,
-        operation: record.operation,
-        args_digest: record.args_digest,
-        action: record.action,
-        preview: preview_text(record.preview),
-        home: record.home,
-        rp_id: record.rp_id,
-        challenge: record.challenge,
-        digest: Confirmation.digest(record),
-        opener: opener,
-        asker: asker,
-        identity_key_epoch: epoch,
-        state: "pending",
-        email_code_failures: 0,
-        opened_at: now,
-        expires_at: DateTime.from_unix!(record.expires_at * 1000, :microsecond),
-        inserted_at: now,
-        updated_at: now
-      }
+    row = %{
+      ref: record.id,
+      athanor_id: athanor_id,
+      user_id: record.person,
+      operation: record.operation,
+      args_digest: record.args_digest,
+      action: record.action,
+      preview: preview_text(record.preview),
+      home: record.home,
+      rp_id: record.rp_id,
+      challenge: record.challenge,
+      digest: Confirmation.digest(record),
+      opener: opener,
+      asker: asker,
+      state: "pending",
+      email_code_failures: 0,
+      opened_at: now,
+      expires_at: DateTime.from_unix!(record.expires_at * 1000, :microsecond),
+      inserted_at: now,
+      updated_at: now
+    }
 
-      case Arca.Repo.insert_all(PendingConfirmation, [row], on_conflict: :nothing) do
-        {1, _} -> {:ok, {Arca.Repo.get!(PendingConfirmation, record.id), voided}}
-        {0, _} -> {:error, :conflict}
-      end
+    case Arca.Repo.insert_all(PendingConfirmation, [row], on_conflict: :nothing) do
+      {1, _} -> {:ok, {Arca.Repo.get!(PendingConfirmation, record.id), voided}}
+      {0, _} -> {:error, :conflict}
     end
   end
 
@@ -536,6 +531,7 @@ defmodule Arca.PendingConfirmations do
   # to find the confirmer is sound; its state is read again under lock.
   defp confirm_in(actor, ref, proof) do
     with {:ok, person} <- person_of(actor, ref),
+         :ok <- fenced(person, proof),
          :ok <- confirmer_stands(person, proof),
          {:ok, record} <- locked(actor, ref),
          now = Arca.ServerMetaStorage.now!(),
@@ -552,6 +548,8 @@ defmodule Arca.PendingConfirmations do
             proof: proof.proof,
             confirmed_passkey_id: proof.passkey_id,
             confirmed_client_id: proof.client_id,
+            kid: proof.kid,
+            head: proof.head,
             confirmed_at: now,
             updated_at: now
           ]
@@ -573,6 +571,15 @@ defmodule Arca.PendingConfirmations do
       nil -> {:error, :not_found}
       person -> {:ok, person}
     end
+  end
+
+  # A key's proof names the head it was verified under, read under the
+  # person's lock, the first of the standing order; a proof no key gave
+  # binds nothing.
+  defp fenced(_person, %{kid: nil}), do: :ok
+
+  defp fenced(person, %{head: head}) do
+    with {:ok, _identifier} <- Arca.DirectoryHeads.fence!(person.user_id, head), do: :ok
   end
 
   # The paired client, then the passkey, that gave the proof still stands,
@@ -727,8 +734,13 @@ defmodule Arca.PendingConfirmations do
        when kind in ~w(passkey oidc_reauth email_code device home) do
     passkey_id = Map.get(proof, :passkey_id)
     client_id = Map.get(proof, :client_id)
+    kid = Map.get(proof, :kid)
+    head = Map.get(proof, :head)
 
     cond do
+      not key_binding?(kind, kid, head) ->
+        {:error, {:invalid, %{kid: ["a key's proof names its key and head, both or neither"]}}}
+
       kind == "passkey" and not (is_binary(passkey_id) and passkey_id != "") ->
         {:error, {:invalid, %{passkey_id: ["names the passkey that asserted"]}}}
 
@@ -745,12 +757,19 @@ defmodule Arca.PendingConfirmations do
         {:error, {:invalid, %{client_id: ["is malformed"]}}}
 
       true ->
-        {:ok, %{proof: kind, passkey_id: passkey_id, client_id: client_id}}
+        {:ok, %{proof: kind, passkey_id: passkey_id, client_id: client_id, kid: kid, head: head}}
     end
   end
 
   defp proof(_proof),
     do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth, email_code, device or home"]}}}
+
+  defp key_binding?(_kind, nil, nil), do: true
+
+  defp key_binding?(kind, kid, head) when kind in ~w(passkey device),
+    do: Prima.Identity.Encoding.digest?(kid) and Prima.Identity.Encoding.digest?(head)
+
+  defp key_binding?(_kind, _kid, _head), do: false
 
   defp opener?(opener),
     do: is_binary(opener) and byte_size(opener) > 0 and byte_size(opener) <= 255

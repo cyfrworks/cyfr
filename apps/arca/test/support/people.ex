@@ -43,6 +43,40 @@ defmodule Arca.Test.People do
     |> Arca.Data.project()
   end
 
+  @doc """
+  Give the person `user_id` an account at `https://dir.example`: its
+  identity row and this home's cached head of it, at `opts[:head]` (a
+  fresh digest by default), as a first read of its log leaves them.
+  Answers `%{identifier: identifier, head: head}`.
+  """
+  @spec account!(String.t(), keyword()) :: %{identifier: String.t(), head: String.t()}
+  def account!(user_id, opts \\ []) when is_binary(user_id) do
+    n = System.unique_integer([:positive])
+    identifier = Keyword.get(opts, :identifier, "per_" <> Prima.Digest.sha256_hex("account-#{n}"))
+    head = Keyword.get(opts, :head, Prima.Digest.sha256("head-#{n}"))
+    system = Prima.Actor.system()
+
+    {:ok, _row} =
+      Arca.PersonIdentities.create(system, %{
+        user_id: user_id,
+        provenance: "remote",
+        identifier: identifier,
+        directory_url: "https://dir.example",
+        head_hash: head
+      })
+
+    {:ok, _head} =
+      Arca.DirectoryHeads.put(system, %{
+        identifier: identifier,
+        genesis: "genesis-bytes",
+        directory_url: "https://dir.example",
+        head_hash: head,
+        state: "{}"
+      })
+
+    %{identifier: identifier, head: head}
+  end
+
   defp identity(nil, _user_id), do: {:ok, nil}
 
   defp identity(attrs, user_id) do

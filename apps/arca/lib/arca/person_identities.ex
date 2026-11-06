@@ -4,18 +4,22 @@
 defmodule Arca.PersonIdentities do
   @moduledoc """
   A person's identity at this home (`Arca.Schemas.PersonIdentity`): one
-  row beside each person row, carrying the identifier once they are
-  enrolled or admitted, their provenance, and for a local person the live
-  and operational key pairs, the private halves sealed under the person's
-  own frame.
+  row beside each person row.
 
-  ## Provenance
+  ## An account's row
+
+  A person admitted by their account (`remote`) is its identifier, the
+  directory that orders it and the head this home last read
+  (`ARCHITECTURE.md` §9.1): this home holds no key of theirs. The head
+  moves with the cached head's advance (`Arca.DirectoryHeads`), in its
+  transaction.
+
+  ## A local row
 
   `local` rows hold the key set this home minted at the person's first
   admitted sign-in, and no identifier until enrollment is accepted
-  (`Arca.IdentityAttempts`). `remote` rows hold the identifier and the
-  directory another home enrolled the person at, and no key. Provenance is
-  written once and never changes, whatever door the person later uses.
+  (`Arca.IdentityAttempts`). Provenance is written once and never
+  changes.
 
   ## Who reads
 
@@ -53,8 +57,9 @@ defmodule Arca.PersonIdentities do
       no identifier, at a first sign-in; enrolled when a restore mints the
       person, with the `:identifier`, the `:head_hash` its keys belong to,
       the `:directory_url` and optionally the `:genesis_hash`.
-    * `"remote"` — the `:identifier`, the `:directory_url` of its genesis
-      and optionally its `:genesis_hash` and `:head_hash`; no key.
+    * `"remote"` — an account's row: the `:identifier`, the
+      `:directory_url` of its genesis and the `:head_hash` this home read;
+      no key.
 
   Written once per person: a second row is `{:error, :conflict}`. Runs in
   its own locking transaction, nested in a caller's (the `also:` closure a
@@ -298,9 +303,9 @@ defmodule Arca.PersonIdentities do
       |> required(attrs, :user_id, &(is_binary(&1) and &1 != ""))
       |> required(attrs, :identifier, &Prima.Identity.Encoding.identifier?/1)
       |> required(attrs, :directory_url, &Prima.Identity.Encoding.directory_url?/1)
-      |> optional(attrs, :genesis_hash, &Prima.Identity.Encoding.digest?/1)
-      |> optional(attrs, :head_hash, &Prima.Identity.Encoding.digest?/1)
+      |> required(attrs, :head_hash, &Prima.Identity.Encoding.digest?/1)
       |> absent(attrs, [
+        :genesis_hash,
         :live_public_key,
         :operational_public_key,
         :live_key_sealed,
@@ -312,7 +317,6 @@ defmodule Arca.PersonIdentities do
       enrollment: "enrolled",
       identifier: attrs[:identifier],
       directory_url: attrs[:directory_url],
-      genesis_hash: attrs[:genesis_hash],
       head_hash: attrs[:head_hash]
     })
   end

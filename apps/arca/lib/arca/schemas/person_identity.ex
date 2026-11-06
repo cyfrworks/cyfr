@@ -7,9 +7,10 @@ defmodule Arca.Schemas.PersonIdentity do
   `Arca.PersonIdentities`): one row per person this home knows, beside
   their `users` row.
 
-  `provenance` is `local` (this home holds the person's keys) or `remote`
-  (another home does, and admitted them through the CYFR door); it is a
-  fact on the row and never read from the door a person last used.
+  `provenance` is `remote` for a person admitted by their account (the
+  row is its identifier, its directory and the head this home last read)
+  or `local` for the key set this home minted; it is a fact on the row
+  and never read from the door a person last used.
   `enrollment` is `none`, `pending` (an enrollment attempt is open) or
   `enrolled` (the row carries the identifier). The private halves of the
   live and operational keys are sealed bytes Arca never opens.

@@ -5,7 +5,8 @@ defmodule Arca.Schemas.DeviceCertificate do
   @moduledoc """
   Ecto schema for the `device_certificates` table (backs
   `Arca.DeviceCertificates`): one certificate this home issued to a paired
-  client of an athanor, with its signed bytes and digest.
+  client of an athanor, with its signed bytes and digest, the account, the
+  device key's `kid` and the account head it was issued under.
   """
 
   use Ecto.Schema
@@ -14,12 +15,7 @@ defmodule Arca.Schemas.DeviceCertificate do
 
   @type t :: %__MODULE__{}
 
-  @subject_kinds ~w(local identity)
   @states ~w(active revoked)
-
-  @doc "The kinds of certificate subject."
-  @spec subject_kinds() :: [String.t()]
-  def subject_kinds, do: @subject_kinds
 
   @doc "The stored states; `expired` is read from the clock, never stored."
   @spec states() :: [String.t()]
@@ -29,9 +25,9 @@ defmodule Arca.Schemas.DeviceCertificate do
     field :athanor_id, :string
     field :paired_client_id, :string
     field :user_id, :string
-    field :subject_kind, :string
     field :identifier, :string
-    field :key_epoch, :string
+    field :kid, :string
+    field :head, :string
     field :device_public_key, :binary
     field :issuing_home, :string
     field :audience_home, :string

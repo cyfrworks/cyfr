@@ -5,7 +5,8 @@ defmodule Arca.PersonIdentitiesTest do
   @moduledoc """
   A person's identity row: one per person, written beside the person row
   inside the mint's own transaction (`also:`), local with a sealed key set
-  and no identifier, or remote with an identifier and no key; read by the
+  and no identifier, or an account's (remote): its identifier, its
+  directory and the head read, and no key; read by the
   person or the platform, and looked up by identifier only by the
   platform's own actor.
   """
@@ -156,41 +157,44 @@ defmodule Arca.PersonIdentitiesTest do
       assert row.head_hash == head
     end
 
-    test "a remote row names its identifier and directory, and no key" do
+    test "an account's row is its identifier, its directory and the head read, and no key" do
       person = person!()
       id = identifier()
+      head = Prima.Digest.sha256("head-#{id}")
+
+      account = %{
+        user_id: person.id,
+        provenance: "remote",
+        identifier: id,
+        directory_url: "https://dir.example",
+        head_hash: head
+      }
 
       assert {:error, {:invalid, %{live_public_key: _}}} =
-               PersonIdentities.create(server(), %{
-                 user_id: person.id,
-                 provenance: "remote",
-                 identifier: id,
-                 directory_url: "https://dir.example",
-                 live_public_key: key()
-               })
+               PersonIdentities.create(server(), Map.put(account, :live_public_key, key()))
 
-      assert {:ok, row} =
-               PersonIdentities.create(server(), %{
-                 user_id: person.id,
-                 provenance: "remote",
-                 identifier: id,
-                 directory_url: "https://dir.example"
-               })
+      assert {:error, {:invalid, %{genesis_hash: _}}} =
+               PersonIdentities.create(
+                 server(),
+                 Map.put(account, :genesis_hash, Prima.Digest.sha256("genesis"))
+               )
+
+      assert {:error, {:invalid, %{head_hash: _}}} =
+               PersonIdentities.create(server(), Map.delete(account, :head_hash))
+
+      assert {:ok, row} = PersonIdentities.create(server(), account)
 
       assert row.provenance == "remote"
       assert row.enrollment == "enrolled"
+      assert row.head_hash == head
+      assert is_nil(row.genesis_hash)
       assert {:ok, %{user_id: user_id}} = PersonIdentities.lookup_identifier(server(), id)
       assert user_id == person.id
 
       other = person!()
 
       assert {:error, :conflict} =
-               PersonIdentities.create(server(), %{
-                 user_id: other.id,
-                 provenance: "remote",
-                 identifier: id,
-                 directory_url: "https://dir.example"
-               })
+               PersonIdentities.create(server(), %{account | user_id: other.id})
     end
 
     test "only the platform's own actor writes, and provenance is closed" do

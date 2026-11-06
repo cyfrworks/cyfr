@@ -32,12 +32,10 @@ defmodule Arca.SecurityTransitions.Issuance do
   client is read here and refused by the caller's policy, and one that
   starts later waits for the credential, which the revocation does not
   take back. Beside them it reads, without locking, the person's identity
-  row, which a person whose keys are at another home was resolved by, and
-  for such a person their cached head (`Arca.DirectoryHeads`), whose
-  `key_epoch` their certificate stands on: this home keeps no row for a
-  certificate their own home issued them again. Both are read under the
-  person's lock, which `Arca.DirectoryHeads.advance/4` takes before it
-  moves a head, so neither moves while the issuance holds the person.
+  row and their account's cached head (`Arca.DirectoryHeads`), the head
+  their certificate names. Both are read under the person's lock, which
+  `Arca.DirectoryHeads.advance/5` takes before it moves a head, so
+  neither moves while the issuance holds the person.
 
   `verify` is handed plain maps of those rows, each nil when there is no
   such row, and the database's own time read after every lock was won —
@@ -78,9 +76,9 @@ defmodule Arca.SecurityTransitions.Issuance do
   # What a device's policy reads of its rows, and nothing more: no device
   # key, no certificate bytes, no sealed key material.
   @paired_client ~w(id user_id athanor_id source_kind standing)a
-  @device_certificate ~w(id paired_client_id user_id subject_kind identifier key_epoch expires_at state)a
-  @person_identity ~w(user_id provenance identifier)a
-  @directory_head ~w(identifier key_epoch)a
+  @device_certificate ~w(id paired_client_id user_id identifier kid head expires_at state)a
+  @person_identity ~w(user_id identifier)a
+  @directory_head ~w(identifier head_hash gone_at)a
 
   @type source ::
           {:session, binary()}
@@ -223,10 +221,10 @@ defmodule Arca.SecurityTransitions.Issuance do
   # The paired client, then the certificates it holds at the caller's
   # expiry, each locked: the order every standing transition takes, so a
   # revocation waiting on the client never holds a certificate this waits
-  # on. The identity row and then the cached head of a remote person are
-  # read, not locked, under the person's lock: a head moves only under
-  # that lock (`Arca.DirectoryHeads.advance/4` takes the person first), so
-  # neither moves while the issuance holds the person.
+  # on. The identity row and then the account's cached head are read, not
+  # locked, under the person's lock: a head moves only under that lock
+  # (`Arca.DirectoryHeads.advance/5` takes the person first), so neither
+  # moves while the issuance holds the person.
   # arca:unscoped-ok a paired client addressed by its own id, the credential the caller holds; the caller's policy holds it to the person and athanor locked before it.
   defp lock_source({:device, client_id, %DateTime{} = expires_at}, user_id)
        when is_binary(client_id) do
@@ -263,11 +261,10 @@ defmodule Arca.SecurityTransitions.Issuance do
 
   defp lock_source(_source, _user_id), do: nil
 
-  # A remote person's head as this home caches it; a local person's
-  # certificates stand on their rows, and no head is read for them.
-  defp cached_head(%PersonIdentity{provenance: "remote", identifier: identifier})
-       when is_binary(identifier),
-       do: Arca.Repo.one(from(h in DirectoryHead, where: h.identifier == ^identifier))
+  # The account's head as this home caches it; a person with no account
+  # has none.
+  defp cached_head(%PersonIdentity{identifier: identifier}) when is_binary(identifier),
+    do: Arca.Repo.one(from(h in DirectoryHead, where: h.identifier == ^identifier))
 
   defp cached_head(_identity), do: nil
 

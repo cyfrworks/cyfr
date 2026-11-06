@@ -186,6 +186,38 @@ defmodule Arca.PairingInvitationsTest do
 
   defp latch_open?(person), do: PersonIdentities.first_method_open?(server(), person.id)
 
+  # The redemption's certificate, written as a recorded one is stored: the
+  # account and the head it names are not this test's subject.
+  defp certify(actor, client, device_key) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("dct")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.DeviceCertificate, [
+        %{
+          id: id,
+          athanor_id: actor.athanor_id,
+          paired_client_id: client.id,
+          user_id: client.user_id,
+          identifier: "per_" <> Prima.Digest.sha256_hex(client.id),
+          kid: Prima.Identity.Key.kid(device_key),
+          head: Prima.Digest.sha256("head-" <> client.id),
+          device_public_key: device_key,
+          issuing_home: "https://home.example",
+          audience_home: "https://home.example",
+          not_before: now,
+          expires_at: DateTime.add(now, 3600, :second),
+          certificate: "cert-#{System.unique_integer()}",
+          digest: Prima.Digest.sha256("cert-#{System.unique_integer()}"),
+          state: "active",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    DeviceCertificates.get(actor, id)
+  end
+
   # The issuance a redemption runs: the paired client under the reserved
   # id, and its certificate.
   defp issue(actor) do
@@ -200,19 +232,7 @@ defmodule Arca.PairingInvitationsTest do
                source_id: Prima.Digest.sha256(device_key),
                device_public_key: device_key
              }),
-           {:ok, cert} <-
-             DeviceCertificates.record(actor, %{
-               paired_client_id: client.id,
-               user_id: client.user_id,
-               subject_kind: "local",
-               device_public_key: device_key,
-               issuing_home: "https://home.example",
-               audience_home: "https://home.example",
-               not_before: DateTime.utc_now(),
-               expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-               certificate: "cert-#{System.unique_integer()}",
-               digest: Prima.Digest.sha256("cert-#{System.unique_integer()}")
-             }) do
+           {:ok, cert} <- certify(actor, client, device_key) do
         {:ok, %{client: client, certificate: cert}}
       end
     end
@@ -938,6 +958,38 @@ defmodule Arca.PairingInvitationsRaceTest do
     {invitation, Prima.Digest.sha256(secret), key_digest}
   end
 
+  # The redemption's certificate, written as a recorded one is stored: the
+  # account and the head it names are not this test's subject.
+  defp certify(actor, client, device_key) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("dct")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.DeviceCertificate, [
+        %{
+          id: id,
+          athanor_id: actor.athanor_id,
+          paired_client_id: client.id,
+          user_id: client.user_id,
+          identifier: "per_" <> Prima.Digest.sha256_hex(client.id),
+          kid: Prima.Identity.Key.kid(device_key),
+          head: Prima.Digest.sha256("head-" <> client.id),
+          device_public_key: device_key,
+          issuing_home: "https://home.example",
+          audience_home: "https://home.example",
+          not_before: now,
+          expires_at: DateTime.add(now, 3600, :second),
+          certificate: "cert-#{System.unique_integer()}",
+          digest: Prima.Digest.sha256("cert-#{System.unique_integer()}"),
+          state: "active",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    DeviceCertificates.get(actor, id)
+  end
+
   # The issuance a redemption runs: the paired client under the reserved
   # id, and its certificate.
   defp issue(actor) do
@@ -952,19 +1004,7 @@ defmodule Arca.PairingInvitationsRaceTest do
                source_id: Prima.Digest.sha256(device_key),
                device_public_key: device_key
              }),
-           {:ok, cert} <-
-             DeviceCertificates.record(actor, %{
-               paired_client_id: client.id,
-               user_id: client.user_id,
-               subject_kind: "local",
-               device_public_key: device_key,
-               issuing_home: "https://home.example",
-               audience_home: "https://home.example",
-               not_before: DateTime.utc_now(),
-               expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-               certificate: "cert-#{System.unique_integer()}",
-               digest: Prima.Digest.sha256("cert-#{System.unique_integer()}")
-             }) do
+           {:ok, cert} <- certify(actor, client, device_key) do
         {:ok, %{client: client, certificate: cert}}
       end
     end

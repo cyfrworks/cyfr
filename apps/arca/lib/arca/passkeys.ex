@@ -18,22 +18,17 @@ defmodule Arca.Passkeys do
     * **Activation** (`activate/3`) moves a pending credential to active
       only while it is unexpired on the database's clock and still carries
       the registration digest and `recovery_epoch` the activation names,
-      and while the `key_epoch` and `recovery_epoch` it names are the
-      cached head's current ones, read under the person's lock, with an
-      `also:` closure in which the administrator's confirmation is
-      consumed, so activation and authorization commit together.
+      under the person's lock, with an `also:` closure in which the
+      administrator's confirmation is consumed, so activation and
+      authorization commit together.
     * Every credential that becomes active marks the person's
       first-method flag (`Arca.PersonIdentities`), which nothing clears; an
       activation that claims the local first-method exception
       (`first_method: true`) is refused `:first_method_used` once any
       method ever existed.
-    * A remote person's credential names the `identity_recovery_epoch` it
-      was registered under, which must be the cached head's current
-      `recovery_epoch` when it is recorded
-      (`Arca.DirectoryHeads.recovery_bindable!/2`, under the person's
-      lock), and a recovery that moves that epoch revokes it
-      (`revoke_recovery_epoch!/2`); an ordinary rotation does not. A local
-      person's names none.
+    * A credential keeps the `identity_recovery_epoch` it was registered
+      under as it was named: no cached head carries an epoch, so none
+      binds or revokes it.
     * **Suspension** is a declared restore's (`Arca.SecurityTransitions`):
       a suspended credential asserts nothing, since only an active one
       records a use, and only `reenable/4` makes it active again, closing
@@ -75,7 +70,7 @@ defmodule Arca.Passkeys do
   `:possession_verified`, `:backup_eligible` (WebAuthn's flag: the
   credential may sync), `:state` (`"pending"` or `"active"`),
   `:expires_at` (required while pending) and `:identity_recovery_epoch`
-  (required for a remote person, refused for a local one). `opts`:
+  (kept as named). `opts`:
   `first_method: true` claims the local first-method exception, and
   `also:` runs in the transaction with the row as a plain map. A credential
   registered `active` closes its person's open recovery from a declared
@@ -83,8 +78,7 @@ defmodule Arca.Passkeys do
   (`Arca.SecurityTransitions.close_restore!/1`).
 
   Refusals: `:conflict` (the credential is already live at this RP ID),
-  `:first_method_used`, `:identity_key_epoch_required`,
-  `:stale_key_epoch`, `:unexpected_key_epoch`, `:not_owner`, `:cross_tenant`,
+  `:first_method_used`, `:not_owner`, `:cross_tenant`,
   `{:invalid, errors}`, `:database_error`, or the closure's reason. A
   person with no identity row is damage the caller refuses before it
   registers anything (`Sanctum.Passkeys`).
@@ -102,14 +96,11 @@ defmodule Arca.Passkeys do
   @doc """
   Activate the pending credential `id`. `opts`: the
   `:registration_digest` it must still carry, the
-  `:identity_recovery_epoch` it must still name and the
-  `:identity_key_epoch` the authorization was made under (both the cached
-  head's current ones, read under the person's lock, and both nil for a
-  local person), the `:admin_confirmation_id` whose consumption
-  authorizes it, `first_method: true` for the local first-method
-  exception, and `also:`, run after the move in the same transaction.
-  Refusals: `:not_pending`, `:expired`, `:mismatch`, `:stale_key_epoch`
-  (an epoch the cached head no longer names), `:first_method_used`,
+  `:identity_recovery_epoch` it must still name, the
+  `:admin_confirmation_id` whose consumption authorizes it,
+  `first_method: true` for the local first-method exception, and `also:`,
+  run after the move in the same transaction.
+  Refusals: `:not_pending`, `:expired`, `:mismatch`, `:first_method_used`,
   `:not_found`, `:not_owner`, `:cross_tenant`, `:database_error`, or the
   closure's reason.
 
@@ -302,37 +293,14 @@ defmodule Arca.Passkeys do
     Enum.sort(ids || [])
   end
 
-  @doc false
-  @spec revoke_recovery_epoch!([String.t()], String.t()) :: [String.t()]
-  # The credentials of `user_ids` registered under `recovery_epoch`,
-  # revoked when a fresh head's recovery replaced it
-  # (`Arca.DirectoryHeads.advance/4`), with the confirmations they
-  # confirmed voided.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def revoke_recovery_epoch!(user_ids, recovery_epoch)
-      when is_list(user_ids) and is_binary(recovery_epoch) do
-    ids =
-      revoke_all(
-        from(p in Passkey,
-          where: p.user_id in ^user_ids and p.identity_recovery_epoch == ^recovery_epoch
-        )
-      )
-
-    PendingConfirmations.void_confirmed_by!(:passkey, ids)
-
-    for id <- ids,
-        do: _sessions = PairedClients.project_passkey!(Arca.Repo.get!(Passkey, id))
-
-    ids
-  end
-
   # ---- internals -------------------------------------------------------------
 
   defp register_in(row, opts) do
     also = Keyword.get(opts, :also, fn _passkey -> :ok end)
 
-    with :ok <- Arca.DirectoryHeads.recovery_bindable!(row.user_id, row.identity_recovery_epoch),
-         :ok <- first_method(row, opts),
+    _locked = Arca.DirectoryHeads.lock_person!(row.user_id)
+
+    with :ok <- first_method(row, opts),
          :ok <- inserted(row) do
       passkey = Arca.Repo.get!(Passkey, row.id)
       _none = PairedClients.project_passkey!(passkey)
@@ -393,21 +361,7 @@ defmodule Arca.Passkeys do
         {:error, :mismatch}
 
       true ->
-        # The epochs the authorization names are the cached head's current
-        # ones, read under the person's lock an advance also takes: an
-        # authorization made before a rotation or a recovery activates
-        # nothing after it.
-        with :ok <-
-               Arca.DirectoryHeads.recovery_bindable!(
-                 passkey.user_id,
-                 passkey.identity_recovery_epoch
-               ),
-             :ok <-
-               Arca.DirectoryHeads.bindable!(
-                 passkey.user_id,
-                 Keyword.get(opts, :identity_key_epoch)
-               ),
-             :ok <- mark_first(passkey.user_id, Keyword.get(opts, :first_method, false)),
+        with :ok <- mark_first(passkey.user_id, Keyword.get(opts, :first_method, false)),
              :ok <- moved_active(passkey, now, Keyword.get(opts, :admin_confirmation_id)) do
           activated = Arca.Repo.get!(Passkey, passkey.id)
           _none = PairedClients.project_passkey!(activated)

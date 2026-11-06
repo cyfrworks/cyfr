@@ -14,6 +14,16 @@ defmodule Arca.PairedClients do
   Sanctum is the one caller above this layer (`Sanctum.Pairing`); the rows
   are security rows no domain or surface names.
 
+  ## The account key
+
+  A client that is a key of the person's account names it (`kid`) and the
+  account head it was admitted under (`head`), both or neither; a device
+  client's `kid` is its device key's (`Prima.Identity.Key.kid/1`). The
+  head must be the cached head of the person's account when the row is
+  written (`Arca.DirectoryHeads.fence!/2`, under the person's lock), and
+  the cached head's walk revokes the clients a removed key is, or on a
+  recovery every client that is a key (`revoke_bound!/2`).
+
   ## Standing
 
   `active`, `suspended` or `revoked`, and nothing leaves `revoked`.
@@ -52,7 +62,7 @@ defmodule Arca.PairedClients do
   alias Arca.Schemas.{DeviceCertificate, PairedClient}
 
   @required ~w(user_id source_kind source_id)a
-  @optional ~w(device_public_key holder_kind display_name)a
+  @optional ~w(device_public_key holder_kind display_name kid head)a
   @max_display_name 64
 
   @typedoc "A paired client row, as a plain map."
@@ -66,6 +76,8 @@ defmodule Arca.PairedClients do
           standing: String.t(),
           holder_kind: String.t() | nil,
           display_name: String.t() | nil,
+          kid: String.t() | nil,
+          head: String.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
         }
@@ -153,11 +165,14 @@ defmodule Arca.PairedClients do
   `device_cert` client the device's 32-byte `device_public_key`
   (required) and, optionally, the `id` a pairing invitation or an
   enrollment reserved for it, the `holder_kind` a protected device reports
-  and the `display_name` it shows. The row starts `active`.
+  and the `display_name` it shows, and for a client that is an account
+  key its `kid` and the `head` it was admitted under (the module doc).
+  The row starts `active`.
 
   Refused with `:no_athanor` for an actor that names none, `{:invalid,
-  errors}` for a missing or malformed field, `:conflict` for a credential
-  (or a reserved id) the athanor already records a client for,
+  errors}` for a missing or malformed field, `:stale_head` for a head that
+  is not the cached head of the person's account, `:conflict` for a
+  credential (or a reserved id) the athanor already records a client for,
   `:not_owner` on a member that no longer owns its slot, and
   `:database_error` when the store cannot answer.
   """
@@ -175,13 +190,7 @@ defmodule Arca.PairedClients do
 
     if changeset.valid? do
       Arca.Repo.owned("Arca.PairedClients.record", fn ->
-        case Arca.Repo.insert(changeset) do
-          {:ok, row} ->
-            {:ok, row}
-
-          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
-            conflict_or_invalid(errors, changeset)
-        end
+        with :ok <- fenced(changeset), do: inserted(changeset)
       end)
     else
       {:error, Arca.Data.invalid(changeset)}
@@ -228,7 +237,8 @@ defmodule Arca.PairedClients do
       Arca.Repo.owned("Arca.PairedClients.enroll", fn ->
         _locked = Arca.DirectoryHeads.lock_person!(user_id)
 
-        with :ok <- first_method(user_id, first),
+        with :ok <- fenced(changeset),
+             :ok <- first_method(user_id, first),
              {:ok, row} <- inserted(changeset),
              {:ok, _also} <- also.(Arca.Data.project(row)) do
           {:ok, row}
@@ -374,6 +384,35 @@ defmodule Arca.PairedClients do
   end
 
   @doc false
+  @spec revoke_bound!([String.t()], String.t() | :all) :: %{
+          client_ids: [String.t()],
+          certificate_ids: [String.t()],
+          confirmation_ids: [String.t()],
+          session_hashes: [binary()]
+        }
+  # Revoke the clients of `user_ids` that are the account key `kid`, or
+  # with `:all` every client that is an account key, with what stands on
+  # them (`retire_dependents!/1`), in the caller's transaction
+  # (`Arca.DirectoryHeads.advance/5`).
+  def revoke_bound!([], _kid),
+    do: %{client_ids: [], certificate_ids: [], confirmation_ids: [], session_hashes: []}
+
+  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
+  def revoke_bound!(user_ids, kid) when is_list(user_ids) do
+    query =
+      case kid do
+        :all ->
+          from(p in PairedClient, where: p.user_id in ^user_ids and not is_nil(p.kid))
+
+        kid when is_binary(kid) ->
+          from(p in PairedClient, where: p.user_id in ^user_ids and p.kid == ^kid)
+      end
+
+    ids = revoke_all(query)
+    ids |> retire_dependents!() |> Map.put(:client_ids, ids)
+  end
+
+  @doc false
   @spec project_passkey!(map()) :: %{session_hashes: [binary()]}
   # The passkey `passkey` projected as its platform holder, in the caller's
   # transaction, after the credential's own write and under its person's
@@ -509,6 +548,20 @@ defmodule Arca.PairedClients do
     end
   end
 
+  # A client that is an account key names the head it was admitted under,
+  # read under the person's lock, the first of the standing order; a
+  # client that is no key binds none.
+  defp fenced(changeset) do
+    case Ecto.Changeset.get_field(changeset, :head) do
+      nil ->
+        :ok
+
+      head ->
+        user_id = Ecto.Changeset.get_field(changeset, :user_id)
+        with {:ok, _identifier} <- Arca.DirectoryHeads.fence!(user_id, head), do: :ok
+    end
+  end
+
   defp inserted(changeset) do
     case Arca.Repo.insert(changeset) do
       {:ok, row} ->
@@ -532,6 +585,7 @@ defmodule Arca.PairedClients do
     |> Ecto.Changeset.validate_inclusion(:source_kind, PairedClient.source_kinds())
     |> validate_device_key()
     |> validate_holder()
+    |> validate_key_binding()
     |> Ecto.Changeset.unique_constraint([:athanor_id, :source_kind, :source_id])
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_pkey)
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_id_index)
@@ -552,6 +606,28 @@ defmodule Arca.PairedClients do
         if is_nil(key),
           do: changeset,
           else: Ecto.Changeset.add_error(changeset, :device_public_key, "is a device client's")
+    end
+  end
+
+  # An account key's client names its kid and the head it was admitted
+  # under, both or neither, and a device client's kid is its device key's.
+  defp validate_key_binding(changeset) do
+    kid = Ecto.Changeset.get_field(changeset, :kid)
+    head = Ecto.Changeset.get_field(changeset, :head)
+    device_key = Ecto.Changeset.get_field(changeset, :device_public_key)
+
+    cond do
+      is_nil(kid) and is_nil(head) ->
+        changeset
+
+      not (Prima.Identity.Encoding.digest?(kid) and Prima.Identity.Encoding.digest?(head)) ->
+        Ecto.Changeset.add_error(changeset, :kid, "names the key and the head, both or neither")
+
+      is_binary(device_key) and kid != Prima.Identity.Key.kid(device_key) ->
+        Ecto.Changeset.add_error(changeset, :kid, "is the device key's")
+
+      true ->
+        changeset
     end
   end
 

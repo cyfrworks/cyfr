@@ -41,7 +41,8 @@ defmodule Arca.Schemas.PendingConfirmation do
     field :digest, :string
     field :opener, :string
     field :asker, :string
-    field :identity_key_epoch, :string
+    field :kid, :string
+    field :head, :string
     field :state, :string, default: "pending"
     field :proof, :string
     field :confirmed_client_id, :string

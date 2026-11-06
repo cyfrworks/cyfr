@@ -23,7 +23,7 @@ defmodule Arca.PasskeysTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{DirectoryHeads, Passkeys, PendingConfirmations, PersonIdentities, Users}
+  alias Arca.{Passkeys, PendingConfirmations, PersonIdentities, Users}
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -108,35 +108,11 @@ defmodule Arca.PasskeysTest do
   end
 
   defp remote!(identifier) do
-    person!(%{provenance: "remote", identifier: identifier, directory_url: "https://dir.example"})
-  end
-
-  # This home's cached head of `identifier` at `epoch`, its recovery epoch
-  # `recovery` (the same, when none is named): the epoch a remote person's
-  # credential may bind.
-  defp cached!(identifier, epoch, recovery \\ nil) do
-    {:ok, _head} =
-      DirectoryHeads.put(server(), %{
-        identifier: identifier,
-        genesis: "genesis",
-        directory_url: "https://dir.example",
-        head_hash: epoch,
-        key_epoch: epoch,
-        recovery_epoch: recovery || epoch,
-        state: "{}"
-      })
-
-    :ok
-  end
-
-  defp advance!(identifier, old, key_epoch, recovery_epoch) do
-    DirectoryHeads.advance(server(), identifier, old, %{
-      genesis: "genesis",
+    person!(%{
+      provenance: "remote",
+      identifier: identifier,
       directory_url: "https://dir.example",
-      head_hash: key_epoch,
-      key_epoch: key_epoch,
-      recovery_epoch: recovery_epoch,
-      state: "{}"
+      head_hash: digest("head")
     })
   end
 
@@ -223,39 +199,6 @@ defmodule Arca.PasskeysTest do
                  as(person),
                  attrs(person, %{credential_id: first.credential_id, rp_id: "other.example"})
                )
-    end
-
-    test "a remote person's credential names the current recovery_epoch; a local one names none" do
-      identifier = "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
-      remote = remote!(identifier)
-      local = local!()
-      key_epoch = digest("key")
-      recovery = digest("recovery")
-
-      # No head cached: no epoch is current.
-      assert {:error, :stale_key_epoch} =
-               Passkeys.register(as(remote), attrs(remote, %{identity_recovery_epoch: recovery}))
-
-      cached!(identifier, key_epoch, recovery)
-
-      assert {:error, :identity_key_epoch_required} =
-               Passkeys.register(as(remote), attrs(remote, %{}))
-
-      assert {:error, :stale_key_epoch} =
-               Passkeys.register(
-                 as(remote),
-                 attrs(remote, %{identity_recovery_epoch: digest("gone")})
-               )
-
-      # The key epoch is not what a passkey binds.
-      assert {:error, :stale_key_epoch} =
-               Passkeys.register(as(remote), attrs(remote, %{identity_recovery_epoch: key_epoch}))
-
-      assert {:ok, %{identity_recovery_epoch: ^recovery}} =
-               Passkeys.register(as(remote), attrs(remote, %{identity_recovery_epoch: recovery}))
-
-      assert {:error, :unexpected_key_epoch} =
-               Passkeys.register(as(local), attrs(local, %{identity_recovery_epoch: recovery}))
     end
 
     test "a pending registration carries its expiry, and possession is required" do
@@ -381,7 +324,6 @@ defmodule Arca.PasskeysTest do
       identifier = "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
       person = remote!(identifier)
       epoch = digest("epoch")
-      cached!(identifier, epoch)
       expires = DateTime.add(DateTime.utc_now(), 300, :second)
 
       {:ok, pending} =
@@ -400,21 +342,18 @@ defmodule Arca.PasskeysTest do
       assert {:error, :mismatch} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: digest("substituted"),
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch
                )
 
       assert {:error, :mismatch} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: digest("another epoch")
                )
 
       assert {:ok, active} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch,
                  admin_confirmation_id: "cnf_admin"
                )
@@ -426,7 +365,6 @@ defmodule Arca.PasskeysTest do
       assert {:error, :not_pending} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch
                )
     end
@@ -443,7 +381,6 @@ defmodule Arca.PasskeysTest do
       assert {:error, :refused} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch,
                  also: fn _row -> {:error, :refused} end
                )
@@ -453,53 +390,11 @@ defmodule Arca.PasskeysTest do
       assert {:ok, %{state: "active", closed_restore_ids: [^restore_id]}} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch
                )
 
       assert open?(person.id, restore_id) == false
       assert open?(bystander.id, bystanders) == true
-    end
-
-    test "an authorization named under a key epoch the head has moved past activates nothing",
-         %{identifier: identifier, pending: pending, epoch: epoch} do
-      # An ordinary rotation keeps the pending registration, but not an
-      # authorization made under the key epoch it replaced.
-      rotated = digest("rotated")
-      assert {:ok, %{retired: %{passkey_ids: []}}} = advance!(identifier, epoch, rotated, epoch)
-
-      assert {:error, :stale_key_epoch} =
-               Passkeys.activate(server(), pending.id,
-                 registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
-                 identity_recovery_epoch: epoch
-               )
-
-      assert {:ok, %{state: "active"}} =
-               Passkeys.activate(server(), pending.id,
-                 registration_digest: pending.registration_digest,
-                 identity_key_epoch: rotated,
-                 identity_recovery_epoch: epoch
-               )
-    end
-
-    test "a recovery retires the pending registration: nothing it names activates after", %{
-      identifier: identifier,
-      pending: pending,
-      epoch: epoch
-    } do
-      recovered = digest("recovered")
-      pending_id = pending.id
-
-      assert {:ok, %{retired: %{passkey_ids: [^pending_id]}}} =
-               advance!(identifier, epoch, recovered, recovered)
-
-      assert {:error, :not_pending} =
-               Passkeys.activate(server(), pending.id,
-                 registration_digest: pending.registration_digest,
-                 identity_key_epoch: recovered,
-                 identity_recovery_epoch: epoch
-               )
     end
 
     test "an authorization that cannot be consumed activates nothing", %{
@@ -509,7 +404,6 @@ defmodule Arca.PasskeysTest do
       assert {:error, :confirmation_consumed} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch,
                  also: fn _passkey -> {:error, :confirmation_consumed} end
                )
@@ -527,42 +421,9 @@ defmodule Arca.PasskeysTest do
       assert {:error, :expired} =
                Passkeys.activate(server(), pending.id,
                  registration_digest: pending.registration_digest,
-                 identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch
                )
     end
-  end
-
-  test "a recovery that replaces the live key revokes the credentials of the old recovery epoch; a rotation keeps them" do
-    identifier = "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
-    person = remote!(identifier)
-    old = digest("old")
-    cached!(identifier, old)
-
-    {:ok, passkey} =
-      Passkeys.register(as(person), attrs(person, %{identity_recovery_epoch: old}))
-
-    passkey_id = passkey.id
-
-    # An ordinary rotation: the key epoch moves, the recovery epoch stays.
-    rotated = digest("rotated")
-    assert {:ok, %{retired: %{passkey_ids: []}}} = advance!(identifier, old, rotated, old)
-    assert {:ok, %{state: "active"}} = Passkeys.get(server(), passkey.id)
-
-    # A recovery that replaces the live key moves both.
-    recovered = digest("recovered")
-
-    assert {:ok, %{retired: %{passkey_ids: [^passkey_id]}}} =
-             advance!(identifier, rotated, recovered, recovered)
-
-    assert {:ok, %{state: "revoked"}} = Passkeys.get(server(), passkey.id)
-
-    # The retired epoch binds nothing new; the current one does.
-    assert {:error, :stale_key_epoch} =
-             Passkeys.register(as(person), attrs(person, %{identity_recovery_epoch: old}))
-
-    assert {:ok, _} =
-             Passkeys.register(as(person), attrs(person, %{identity_recovery_epoch: recovered}))
   end
 
   test "a revocation voids the confirmations the credential confirmed" do

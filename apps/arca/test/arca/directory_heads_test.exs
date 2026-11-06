@@ -3,15 +3,17 @@
 
 defmodule Arca.DirectoryHeadsTest do
   @moduledoc """
-  A home's verified cache of other people's heads: the genesis and
-  directory binding immutable, the head moved by compare-and-set,
-  freshness read on the database's clock, a changed `key_epoch` retiring,
-  in the same transaction, the sessions, pending confirmations and device
-  certificates bound to the old one, and a changed `recovery_epoch` the
-  passkeys registered under the old one, after which the old epoch binds
-  nothing new. A head no person and no pending invitation here names is
-  swept once it was last verified past the caller's bound; every other
-  stays.
+  A home's verified cache of account heads: the genesis and directory
+  binding immutable, the head moved by compare-and-set, freshness read on
+  the database's clock. An advance walks the entries after the cached
+  head in its own transaction: a removed key's sessions, certificates,
+  confirmations and clients retire, a recovery retires every binding of
+  the account, and a key removed and added again between two reads is
+  retired and then admitted afresh. Every binding names the cached head
+  under the person's lock, `:stale_head` otherwise. An account the
+  directory answered gone retires everything and binds nothing. A head no
+  person and no pending invitation here names is swept once it was last
+  verified past the caller's bound; every other stays.
   """
 
   # Takes the cell's slot, which is process-wide; each case restores it.
@@ -23,11 +25,9 @@ defmodule Arca.DirectoryHeadsTest do
     DeviceCertificates,
     DirectoryHeads,
     PairedClients,
-    Passkeys,
     PendingConfirmations,
     PersonIdentities,
-    SessionStorage,
-    Users
+    SessionStorage
   }
 
   alias Arca.Schemas.{DirectoryHead, Session}
@@ -71,25 +71,23 @@ defmodule Arca.DirectoryHeadsTest do
 
   defp server, do: Prima.Actor.system()
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
+  defp identifier, do: "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
 
-  defp cached!(identifier, key_epoch, recovery_epoch \\ nil) do
-    {:ok, head} =
+  defp cached!(identifier, head) do
+    {:ok, row} =
       DirectoryHeads.put(server(), %{
         identifier: identifier,
         genesis: "genesis-bytes",
         directory_url: "https://dir.example",
-        head_hash: key_epoch,
-        key_epoch: key_epoch,
-        recovery_epoch: recovery_epoch || key_epoch,
-        state: ~s({"head":"#{key_epoch}"})
+        head_hash: head,
+        state: ~s({"head":"#{head}"})
       })
 
-    head
+    row
   end
 
-  defp identifier, do: "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
-
-  defp remote_person!(identifier) do
+  # A person whose identity row names `identifier`, without caching it.
+  defp remote_person!(identifier, head \\ nil) do
     now = DateTime.utc_now()
 
     {:ok, person} =
@@ -97,27 +95,20 @@ defmodule Arca.DirectoryHeadsTest do
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-          provider: "cyfr",
           first_seen_at: now,
           last_seen_at: now,
           created_at: now,
           updated_at: now
         },
-        %{
-          key: "cyfr|https://dir.example|#{identifier}",
-          provider: "cyfr",
-          issuer: "https://dir.example",
-          subject: identifier,
-          first_seen_at: now,
-          last_seen_at: now
-        },
+        nil,
         also: fn person ->
           {:ok, _} =
             PersonIdentities.create(server(), %{
               user_id: person.id,
               provenance: "remote",
               identifier: identifier,
-              directory_url: "https://dir.example"
+              directory_url: "https://dir.example",
+              head_hash: head || digest("read")
             })
 
           :ok
@@ -127,68 +118,77 @@ defmodule Arca.DirectoryHeadsTest do
     person
   end
 
-  # A door the person linked at this home: a GitHub identity beside the
-  # `cyfr` door they were admitted through.
-  defp door!(user_id) do
-    n = System.unique_integer([:positive])
-
-    {:ok, %{identity: door, linked: true}} =
-      Users.link_identity(server(), user_id, %{
-        key: "github|https://github.com|dh-#{n}",
-        provider: "github",
-        issuer: "https://github.com",
-        subject: "dh-#{n}"
-      })
-
-    door
+  # A person with an account this home has read, at `head`.
+  defp account!(head) do
+    id = identifier()
+    cached!(id, head)
+    %{person: remote_person!(id, head), identifier: id}
   end
 
-  defp door_keys(user_id) do
-    {:ok, doors} = Users.identities(server(), user_id)
-    doors |> Enum.map(& &1.key) |> Enum.sort()
-  end
+  defp athanor, do: Prima.Actor.in_athanor("ath_dh_#{System.unique_integer([:positive])}")
 
-  defp session!(user_id, epoch) do
-    hash = :crypto.strong_rand_bytes(32)
-    :ok = try_session(user_id, epoch, hash)
-    hash
-  end
-
-  defp try_session(user_id, epoch, hash \\ :crypto.strong_rand_bytes(32)) do
+  defp try_session(user_id, kid, head, hash \\ :crypto.strong_rand_bytes(32)) do
     SessionStorage.create_session(
       hash,
       %{
         user_id: user_id,
         provider: "cyfr",
-        identity_key_epoch: epoch,
+        kid: kid,
+        head: head,
         expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
       },
       Arca.Test.Actor.issuance(user_id)
     )
   end
 
-  defp other_identifier(person) do
-    {:ok, %{identifier: identifier}} = PersonIdentities.get(server(), person.id)
-    identifier
+  defp session!(user_id, kid, head) do
+    hash = :crypto.strong_rand_bytes(32)
+    :ok = try_session(user_id, kid, head, hash)
+    hash
   end
 
-  defp passkey_attrs(user_id, epoch) do
-    %{
+  defp device_key, do: :crypto.strong_rand_bytes(32)
+
+  defp try_client(athanor, user_id, key, head) do
+    PairedClients.record(athanor, %{
       user_id: user_id,
-      credential_id: "cred-#{System.unique_integer([:positive])}",
-      rp_id: "home.example",
-      relying_home: "https://home.example",
-      public_key: "cose-key",
-      registration_digest: digest("registration"),
-      possession_verified: true,
-      state: "active",
-      identity_recovery_epoch: epoch
+      source_kind: "device_cert",
+      source_id: "req_#{System.unique_integer([:positive])}",
+      device_public_key: key,
+      kid: Prima.Identity.Key.kid(key),
+      head: head
+    })
+  end
+
+  defp client!(athanor, user_id, key, head) do
+    {:ok, client} = try_client(athanor, user_id, key, head)
+    client
+  end
+
+  defp certificate_attrs(client, identifier, head) do
+    now = DateTime.utc_now()
+
+    %{
+      paired_client_id: client.id,
+      user_id: client.user_id,
+      identifier: identifier,
+      kid: client.kid,
+      head: head,
+      device_public_key: client.device_public_key,
+      issuing_home: "https://home.example",
+      audience_home: "https://home.example",
+      not_before: DateTime.add(now, -60, :second),
+      expires_at: DateTime.add(now, 3600, :second),
+      certificate: "cert-#{System.unique_integer()}",
+      digest: digest("cert")
     }
   end
 
-  defp passkey!(user_id, epoch) do
-    {:ok, passkey} = Passkeys.register(server(), passkey_attrs(user_id, epoch))
-    passkey
+  defp certificate!(athanor, client, identifier, head) do
+    {:ok, certificate} =
+      DeviceCertificates.record(athanor, certificate_attrs(client, identifier, head))
+
+    certificate
   end
 
   defp record(athanor, user_id) do
@@ -210,64 +210,58 @@ defmodule Arca.DirectoryHeadsTest do
     record
   end
 
-  defp confirmation!(athanor, user_id, epoch) do
+  defp opened!(athanor, user_id) do
     {:ok, row} =
       PendingConfirmations.open(athanor, %{
         record: record(athanor, user_id),
         opener: "session:directory-heads-test",
-        asker: %{"kind" => "session"},
-        identity_key_epoch: epoch
+        asker: %{"kind" => "session"}
       })
 
     row
   end
 
-  defp device_client!(athanor, user_id) do
-    device_key = :crypto.strong_rand_bytes(32)
-
-    {:ok, client} =
-      PairedClients.record(athanor, %{
-        user_id: user_id,
-        source_kind: "device_cert",
-        source_id: Prima.Digest.sha256(device_key),
-        device_public_key: device_key
-      })
-
-    client
+  # A record the device `client` confirmed, by its key at `head`.
+  defp try_confirm(athanor, ref, client, head) do
+    PendingConfirmations.confirm(athanor, ref, %{
+      proof: "device",
+      client_id: client.id,
+      kid: client.kid,
+      head: head
+    })
   end
 
-  defp certificate_attrs(client, identifier, epoch) do
-    now = DateTime.utc_now()
-
-    %{
-      paired_client_id: client.id,
-      user_id: client.user_id,
-      subject_kind: "identity",
-      identifier: identifier,
-      key_epoch: epoch,
-      device_public_key: client.device_public_key,
-      issuing_home: "https://home.example",
-      audience_home: "https://other.example",
-      not_before: DateTime.add(now, -60, :second),
-      expires_at: DateTime.add(now, 3600, :second),
-      certificate: "cert-#{System.unique_integer()}",
-      digest: digest("cert")
-    }
+  defp confirmed!(athanor, client, head) do
+    row = opened!(athanor, client.user_id)
+    {:ok, _} = try_confirm(athanor, row.ref, client, head)
+    row
   end
 
-  defp certificate!(athanor, client, identifier, epoch) do
-    {:ok, certificate} =
-      DeviceCertificates.record(athanor, certificate_attrs(client, identifier, epoch))
-
-    certificate
+  defp advance(identifier, from, to, steps) do
+    DirectoryHeads.advance(
+      server(),
+      identifier,
+      from,
+      %{
+        genesis: "genesis-bytes",
+        directory_url: "https://dir.example",
+        head_hash: to,
+        state: "{}"
+      },
+      steps
+    )
   end
+
+  defp hashes(user_id),
+    do: Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
 
   test "caches a first head once, and reads its freshness on the database's clock" do
     id = identifier()
-    epoch = digest("epoch")
-    head = cached!(id, epoch)
+    head_hash = digest("head")
+    head = cached!(id, head_hash)
 
     assert head.directory_url == "https://dir.example"
+    assert is_nil(head.gone_at)
     assert {:ok, %{fresh: true, head: ^head}} = DirectoryHeads.fresh(server(), id, 300)
 
     assert {:error, :exists} =
@@ -275,20 +269,16 @@ defmodule Arca.DirectoryHeadsTest do
                identifier: id,
                genesis: "genesis-bytes",
                directory_url: "https://dir.example",
-               head_hash: epoch,
-               key_epoch: epoch,
-               recovery_epoch: epoch,
+               head_hash: head_hash,
                state: "{}"
              })
 
-    assert {:error, {:invalid, %{recovery_epoch: _}}} =
+    assert {:error, {:invalid, %{state: _}}} =
              DirectoryHeads.put(server(), %{
                identifier: identifier(),
                genesis: "genesis-bytes",
                directory_url: "https://dir.example",
-               head_hash: epoch,
-               key_epoch: epoch,
-               state: "{}"
+               head_hash: head_hash
              })
 
     long_ago = DateTime.add(DateTime.utc_now(), -600, :second)
@@ -299,208 +289,244 @@ defmodule Arca.DirectoryHeadsTest do
       )
 
     assert {:ok, %{fresh: false}} = DirectoryHeads.fresh(server(), id, 300)
-    assert {:ok, %{verified_at: touched}} = DirectoryHeads.touch(server(), id, epoch)
+    assert {:ok, %{verified_at: touched}} = DirectoryHeads.touch(server(), id, head_hash)
     assert DateTime.compare(touched, long_ago) == :gt
     assert {:error, :stale} = DirectoryHeads.touch(server(), id, digest("other"))
   end
 
   test "an advance names the cached head, and never moves the genesis or the directory" do
     id = identifier()
-    epoch = digest("epoch")
-    cached!(id, epoch)
+    head = digest("head")
+    cached!(id, head)
     next = digest("next")
 
     attrs = %{
       genesis: "genesis-bytes",
       directory_url: "https://dir.example",
       head_hash: next,
-      key_epoch: epoch,
-      recovery_epoch: epoch,
       state: "{}"
     }
 
-    assert {:error, :stale} = DirectoryHeads.advance(server(), id, digest("wrong"), attrs)
+    assert {:error, :stale} = DirectoryHeads.advance(server(), id, digest("wrong"), attrs, [])
 
     assert {:error, :binding_changed} =
-             DirectoryHeads.advance(server(), id, epoch, %{
-               attrs
-               | directory_url: "https://other.example"
-             })
+             DirectoryHeads.advance(
+               server(),
+               id,
+               head,
+               %{attrs | directory_url: "https://other.example"},
+               []
+             )
 
     assert {:error, :binding_changed} =
-             DirectoryHeads.advance(server(), id, epoch, %{attrs | genesis: "other genesis"})
+             DirectoryHeads.advance(server(), id, head, %{attrs | genesis: "other genesis"}, [])
+
+    assert {:error, {:invalid, %{steps: _}}} =
+             DirectoryHeads.advance(server(), id, head, attrs, [{:add_key, digest("key")}])
 
     assert {:ok, %{head: %{head_hash: ^next}, retired: retired}} =
-             DirectoryHeads.advance(server(), id, epoch, attrs)
+             DirectoryHeads.advance(server(), id, head, attrs, [])
 
     assert retired == %{
              session_hashes: [],
-             passkey_ids: [],
-             confirmation_ids: [],
              certificate_ids: [],
-             door_ids: []
+             confirmation_ids: [],
+             client_ids: []
            }
 
-    assert {:error, :not_found} = DirectoryHeads.advance(server(), identifier(), epoch, attrs)
+    assert {:error, :not_found} = DirectoryHeads.advance(server(), identifier(), head, attrs, [])
   end
 
-  test "a rotation retires what was bound to the old key_epoch, which then binds nothing, and keeps the passkeys and doors" do
-    id = identifier()
+  test "a removed key's bindings retire with the walk, every other key's stand, and the people's rows read the new head" do
     old = digest("old")
     new = digest("new")
-    recovery = digest("recovery")
-    cached!(id, old, recovery)
-    person = remote_person!(id)
-    athanor = Prima.Actor.in_athanor("ath_dh_#{System.unique_integer([:positive])}")
-    other = remote_person!(identifier())
+    %{person: person, identifier: id} = account!(old)
+    athanor = athanor()
 
-    session = session!(person.id, old)
-    passkey = passkey!(person.id, recovery)
-    confirmation = confirmation!(athanor, person.id, old)
-    client = device_client!(athanor, person.id)
+    removed = device_key()
+    kept = device_key()
+    removed_kid = Prima.Identity.Key.kid(removed)
+    kept_kid = Prima.Identity.Key.kid(kept)
+
+    removed_client = client!(athanor, person.id, removed, old)
+    kept_client = client!(athanor, person.id, kept, old)
+    removed_certificate = certificate!(athanor, removed_client, id, old)
+    kept_certificate = certificate!(athanor, kept_client, id, old)
+    removed_session = session!(person.id, removed_kid, old)
+    kept_session = session!(person.id, kept_kid, old)
+    unsigned = session!(person.id, nil, nil)
+    removed_confirmation = confirmed!(athanor, removed_client, old)
+    kept_confirmation = confirmed!(athanor, kept_client, old)
+    pending = opened!(athanor, person.id)
+
+    # Another account's binding to the same key is not this walk's.
+    %{person: other, identifier: other_id} = account!(old)
+    other_athanor = athanor()
+    other_client = client!(other_athanor, other.id, removed, old)
+    other_certificate = certificate!(other_athanor, other_client, other_id, old)
+
+    assert {:ok, %{head: %{head_hash: ^new}, retired: retired}} =
+             advance(id, old, new, [{:remove_key, removed_kid}])
+
+    assert retired.client_ids == [removed_client.id]
+    assert retired.certificate_ids == [removed_certificate.id]
+    assert retired.confirmation_ids == [removed_confirmation.ref]
+    assert removed_session in retired.session_hashes
+    refute kept_session in retired.session_hashes
+
+    assert Enum.sort(hashes(person.id)) == Enum.sort([kept_session, unsigned])
+    assert {:ok, [%{id: kept_id}]} = PairedClients.list(athanor, user_id: person.id)
+    assert kept_id == kept_client.id
+    assert {:ok, %{status: "revoked"}} = DeviceCertificates.get(athanor, removed_certificate.id)
+    assert {:ok, %{status: "active"}} = DeviceCertificates.get(athanor, kept_certificate.id)
+
+    assert {:ok, %{status: "active"}} =
+             DeviceCertificates.get(other_athanor, other_certificate.id)
+
+    assert {:ok, %{state: "voided"}} = PendingConfirmations.get(athanor, removed_confirmation.ref)
+    assert {:ok, %{state: "confirmed"}} = PendingConfirmations.get(athanor, kept_confirmation.ref)
+    assert {:ok, %{state: "pending"}} = PendingConfirmations.get(athanor, pending.ref)
+    assert {:ok, %{head_hash: ^new}} = PersonIdentities.get(server(), person.id)
+    assert {:ok, %{head_hash: ^old}} = PersonIdentities.get(server(), other.id)
+  end
+
+  test "a recovery retires every binding of the account, and keeps a session no key signed" do
+    old = digest("old")
+    new = digest("new")
+    %{person: person, identifier: id} = account!(old)
+    athanor = athanor()
+
+    client = client!(athanor, person.id, device_key(), old)
     certificate = certificate!(athanor, client, id, old)
-    door = door!(person.id)
+    signed = session!(person.id, Prima.Identity.Key.kid(device_key()), old)
+    unsigned = session!(person.id, nil, nil)
+    confirmation = confirmed!(athanor, client, old)
 
-    # What another identifier's person holds is not this head's to retire.
-    cached!(other_identifier(other), old)
-    kept = session!(other.id, old)
+    assert {:ok, %{retired: retired}} = advance(id, old, new, [:recover])
 
-    # An ordinary rotation: a new key_epoch, the same recovery_epoch.
-    assert {:ok, %{retired: retired}} =
-             DirectoryHeads.advance(server(), id, old, %{
-               genesis: "genesis-bytes",
-               directory_url: "https://dir.example",
-               head_hash: new,
-               key_epoch: new,
-               recovery_epoch: recovery,
-               state: "{}"
-             })
-
-    assert retired == %{
-             session_hashes: [session],
-             passkey_ids: [],
-             confirmation_ids: [confirmation.ref],
-             certificate_ids: [certificate.id],
-             door_ids: []
-           }
-
-    assert [] = Arca.Repo.all(from(s in Session, where: s.user_id == ^person.id))
-    assert [_] = Arca.Repo.all(from(s in Session, where: s.token_hash == ^kept))
-    assert {:ok, %{state: "active"}} = Passkeys.get(server(), passkey.id)
-    assert {:ok, %{state: "voided"}} = PendingConfirmations.get(athanor, confirmation.ref)
-    assert {:ok, %{status: "revoked"}} = DeviceCertificates.get(athanor, certificate.id)
-    assert door.key in door_keys(person.id)
-
-    # The retired epoch binds nothing new, on every write that binds one.
-    assert {:error, :stale_key_epoch} = try_session(person.id, old)
-
-    assert {:error, :stale_key_epoch} =
-             PendingConfirmations.open(athanor, %{
-               record: record(athanor, person.id),
-               opener: "session:directory-heads-test",
-               asker: %{"kind" => "session"},
-               identity_key_epoch: old
-             })
-
-    assert {:error, :stale_key_epoch} =
-             DeviceCertificates.record(athanor, certificate_attrs(client, id, old))
-
-    # A passkey binds the recovery epoch, which the rotation left: a key
-    # epoch is not one it binds.
-    assert {:error, :stale_key_epoch} = Passkeys.register(server(), passkey_attrs(person.id, new))
-    assert {:ok, _} = Passkeys.register(server(), passkey_attrs(person.id, recovery))
-
-    # The current key epoch binds the rest.
-    assert is_binary(session!(person.id, new))
-    assert {:ok, _} = DeviceCertificates.record(athanor, certificate_attrs(client, id, new))
+    assert retired.client_ids == [client.id]
+    assert retired.certificate_ids == [certificate.id]
+    assert retired.confirmation_ids == [confirmation.ref]
+    assert signed in retired.session_hashes
+    assert hashes(person.id) == [unsigned]
+    assert {:ok, []} = PairedClients.list(athanor, user_id: person.id)
   end
 
-  test "a recovery that replaces the live key retires the passkeys and the doors linked under the old recovery_epoch, and keeps the cyfr door" do
-    id = identifier()
+  test "a key removed and added again between two reads is retired, then admitted afresh at the new head" do
     old = digest("old")
-    recovered = digest("recovered")
-    cached!(id, old)
-    person = remote_person!(id)
-    athanor = Prima.Actor.in_athanor("ath_dh_#{System.unique_integer([:positive])}")
-    other = remote_person!(identifier())
+    new = digest("new")
+    %{person: person, identifier: id} = account!(old)
+    athanor = athanor()
+    key = device_key()
+    kid = Prima.Identity.Key.kid(key)
 
-    session = session!(person.id, old)
-    passkey = passkey!(person.id, old)
-    confirmation = confirmation!(athanor, person.id, old)
-    door = door!(person.id)
-    # Another identifier's person keeps the door they linked.
-    other_door = door!(other.id)
+    client = client!(athanor, person.id, key, old)
+    session = session!(person.id, kid, old)
 
-    assert {:ok, %{retired: retired}} =
-             DirectoryHeads.advance(server(), id, old, %{
-               genesis: "genesis-bytes",
-               directory_url: "https://dir.example",
-               head_hash: recovered,
-               key_epoch: recovered,
-               recovery_epoch: recovered,
-               state: "{}"
-             })
+    # The walk of remove_key then add_key: the add retires nothing and is no step.
+    assert {:ok, %{retired: %{client_ids: [client_id], session_hashes: [^session]}}} =
+             advance(id, old, new, [{:remove_key, kid}])
 
-    assert retired == %{
-             session_hashes: [session],
-             passkey_ids: [passkey.id],
-             confirmation_ids: [confirmation.ref],
-             certificate_ids: [],
-             door_ids: [door.id]
-           }
+    assert client_id == client.id
 
-    assert door_keys(person.id) == ["cyfr|https://dir.example|#{id}"]
-    assert other_door.key in door_keys(other.id)
-    assert {:ok, %{state: "revoked"}} = Passkeys.get(server(), passkey.id)
-    assert {:error, :stale_key_epoch} = Passkeys.register(server(), passkey_attrs(person.id, old))
-    assert {:ok, _} = Passkeys.register(server(), passkey_attrs(person.id, recovered))
+    # What was verified against the old head binds nothing now.
+    assert {:error, :stale_head} = try_session(person.id, kid, old)
+    assert {:error, :stale_head} = try_client(athanor, person.id, key, old)
+
+    # The key is listed again at the new head, and binds afresh there.
+    assert is_binary(session!(person.id, kid, new))
+    readmitted = client!(athanor, person.id, key, new)
+    assert readmitted.id != client.id
+    assert {:ok, _} = DeviceCertificates.record(athanor, certificate_attrs(readmitted, id, new))
   end
 
-  test "a recover that keeps the live key (one adding a holder) moves the key epoch alone, and keeps the passkeys and doors" do
-    id = identifier()
-    old = digest("old")
-    holder = digest("holder")
-    cached!(id, old)
-    person = remote_person!(id)
-    passkey = passkey!(person.id, old)
-    door = door!(person.id)
+  test "every write that binds a key names the cached head of the person's own account" do
+    head = digest("head")
+    %{person: person, identifier: id} = account!(head)
+    %{person: other, identifier: other_id} = account!(head)
+    athanor = athanor()
+    stale = digest("stale")
+    key = device_key()
+    kid = Prima.Identity.Key.kid(key)
 
-    assert {:ok, %{retired: %{passkey_ids: [], door_ids: []}}} =
-             DirectoryHeads.advance(server(), id, old, %{
-               genesis: "genesis-bytes",
-               directory_url: "https://dir.example",
-               head_hash: holder,
-               key_epoch: holder,
-               recovery_epoch: old,
-               state: "{}"
+    assert {:error, :stale_head} = try_session(person.id, kid, stale)
+    assert {:error, :stale_head} = try_client(athanor, person.id, key, stale)
+
+    client = client!(athanor, person.id, key, head)
+
+    assert {:error, :stale_head} =
+             DeviceCertificates.record(athanor, certificate_attrs(client, id, stale))
+
+    # A certificate names the person's own account.
+    assert {:error, :stale_head} =
+             DeviceCertificates.record(athanor, certificate_attrs(client, other_id, head))
+
+    _certificate = certificate!(athanor, client, id, head)
+    row = opened!(athanor, person.id)
+    assert {:error, :stale_head} = try_confirm(athanor, row.ref, client, stale)
+    assert {:ok, %{kid: ^kid, head: ^head}} = try_confirm(athanor, row.ref, client, head)
+
+    # A person with no account, or one this home never read, has no head to name.
+    unread = remote_person!(identifier(), head)
+    assert {:error, :stale_head} = try_session(unread.id, kid, head)
+    assert {:error, :stale_head} = try_session(other.id, kid, stale)
+
+    # A key and a head are named together, or not at all.
+    assert {:error, {:invalid, _}} = try_session(person.id, kid, nil)
+    assert {:error, {:invalid, _}} = try_client(athanor, person.id, key, nil)
+
+    assert {:error, {:invalid, %{kid: _}}} =
+             PairedClients.record(athanor, %{
+               user_id: person.id,
+               source_kind: "device_cert",
+               source_id: digest("source"),
+               device_public_key: key,
+               kid: Prima.Identity.Key.kid(device_key()),
+               head: head
              })
-
-    assert {:ok, %{state: "active"}} = Passkeys.get(server(), passkey.id)
-    assert door.key in door_keys(person.id)
   end
 
-  test "a passkey binds a remote person's current recovery epoch under their lock, and a local person's none" do
-    id = identifier()
-    epoch = digest("epoch")
-    cached!(id, epoch, digest("recovery"))
-    person = remote_person!(id)
+  test "an account marked gone retires every binding, binds nothing, never advances and keeps its first mark" do
+    head = digest("head")
+    %{person: person, identifier: id} = account!(head)
+    athanor = athanor()
+    key = device_key()
+    kid = Prima.Identity.Key.kid(key)
+    client = client!(athanor, person.id, key, head)
+    certificate = certificate!(athanor, client, id, head)
+    session = session!(person.id, kid, head)
 
-    assert {:error, :identity_key_epoch_required} =
-             Passkeys.register(server(), passkey_attrs(person.id, nil))
+    assert {:ok, %{head: %{gone_at: %DateTime{} = gone_at}, retired: retired}} =
+             DirectoryHeads.gone(server(), id)
 
-    assert {:error, :stale_key_epoch} =
-             Passkeys.register(server(), passkey_attrs(person.id, epoch))
+    assert retired.client_ids == [client.id]
+    assert retired.certificate_ids == [certificate.id]
+    assert session in retired.session_hashes
 
-    assert DirectoryHeads.current_recovery_epoch!(id) != epoch
+    assert {:ok, %{fresh: false, head: %{gone_at: ^gone_at}}} =
+             DirectoryHeads.fresh(server(), id, 300)
+
+    assert {:error, :stale_head} = try_session(person.id, kid, head)
+    assert {:error, :gone} = advance(id, head, digest("next"), [])
+    assert {:error, :stale} = DirectoryHeads.touch(server(), id, head)
+
+    assert {:ok, %{head: %{gone_at: ^gone_at}, retired: %{client_ids: []}}} =
+             DirectoryHeads.gone(server(), id)
+
+    assert {:error, :not_found} = DirectoryHeads.gone(server(), identifier())
   end
 
   test "only the platform's own actor reads or writes the cache" do
     member = Prima.Actor.in_athanor("ath_test")
     assert {:error, :cross_tenant} = DirectoryHeads.get(member, identifier())
     assert {:error, :cross_tenant} = DirectoryHeads.put(member, %{})
+    assert {:error, :cross_tenant} = DirectoryHeads.gone(member, identifier())
+
+    assert {:error, :cross_tenant} =
+             DirectoryHeads.advance(member, identifier(), digest("h"), %{}, [])
   end
 
-  # A carry's lifetime, the bound the carry sweep passes.
+  # The bound a sweep passes.
   @bound 300_000
 
   # The head's last verification moved `ms` before the database's clock.
@@ -590,12 +616,12 @@ end
 
 defmodule Arca.DirectoryHeadsRaceTest do
   @moduledoc """
-  A session binding a remote person's `key_epoch` racing the advance that
-  retires it, on two real connections outside the sandbox. The advance
-  locks the identifier's people first, and a session holds its person's
-  lock and reads the cached epoch under it, so the two serialize in either
-  order: an advance waiting behind a session retires it, and a session
-  waiting behind an advance reads the new epoch and is refused. On
+  A session binding an account's key racing the walk that removes it, on
+  two real connections outside the sandbox. The advance locks the
+  account's people first, and a session holds its person's lock and reads
+  the cached head under it, so the two serialize in either order: an
+  advance waiting behind a session retires it, and a session waiting
+  behind an advance reads the new head and is refused. On
   PostgreSQL the waiter blocks on the person's row; on SQLite at the lock
   its transaction takes at entry. A sweep waiting behind a refresh of a
   head it chose keeps the refreshed head.
@@ -607,7 +633,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
   import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, DirectoryHeads, PersonIdentities, SessionStorage}
-  alias Arca.Schemas.{CellLease, DirectoryHead, ExternalIdentity, PersonIdentity, Session, User}
+  alias Arca.Schemas.{CellLease, DirectoryHead, PersonIdentity, Session, User}
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -630,12 +656,12 @@ defmodule Arca.DirectoryHeadsRaceTest do
     user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
     identifier = "per_" <> Prima.Digest.sha256_hex("race-#{n}")
     old = digest("old")
+    kid = digest("kid")
 
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
         Arca.Repo.delete_all(where(PersonIdentity, user_id: ^user_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(DirectoryHead, identifier: ^identifier))
       end)
@@ -647,27 +673,20 @@ defmodule Arca.DirectoryHeadsRaceTest do
           server(),
           %{
             id: user_id,
-            provider: "cyfr",
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,
             updated_at: now
           },
-          %{
-            key: "cyfr|https://dir.example|#{identifier}",
-            provider: "cyfr",
-            issuer: "https://dir.example",
-            subject: identifier,
-            first_seen_at: now,
-            last_seen_at: now
-          },
+          nil,
           also: fn person ->
             {:ok, _} =
               PersonIdentities.create(server(), %{
                 user_id: person.id,
                 provenance: "remote",
                 identifier: identifier,
-                directory_url: "https://dir.example"
+                directory_url: "https://dir.example",
+                head_hash: old
               })
 
             :ok
@@ -680,13 +699,11 @@ defmodule Arca.DirectoryHeadsRaceTest do
           genesis: "genesis-bytes",
           directory_url: "https://dir.example",
           head_hash: old,
-          key_epoch: old,
-          recovery_epoch: old,
           state: "{}"
         })
     end)
 
-    {:ok, user_id: user_id, identifier: identifier, old: old}
+    {:ok, user_id: user_id, identifier: identifier, old: old, kid: kid}
   end
 
   # This member's slot, taken on a real connection so every connection
@@ -791,34 +808,40 @@ defmodule Arca.DirectoryHeadsRaceTest do
     end
   end
 
-  defp session(user_id, epoch, hash, opts) do
+  defp session(user_id, kid, head, hash, opts) do
     SessionStorage.create_session(
       hash,
       %{
         user_id: user_id,
         provider: "cyfr",
-        identity_key_epoch: epoch,
+        kid: kid,
+        head: head,
         expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
       },
       Arca.Test.Actor.issuance(user_id) ++ opts
     )
   end
 
-  defp advance(identifier, old, new) do
-    DirectoryHeads.advance(server(), identifier, old, %{
-      genesis: "genesis-bytes",
-      directory_url: "https://dir.example",
-      head_hash: new,
-      key_epoch: new,
-      recovery_epoch: new,
-      state: "{}"
-    })
+  defp advance(identifier, old, new, kid) do
+    DirectoryHeads.advance(
+      server(),
+      identifier,
+      old,
+      %{
+        genesis: "genesis-bytes",
+        directory_url: "https://dir.example",
+        head_hash: new,
+        state: "{}"
+      },
+      [{:remove_key, kid}]
+    )
   end
 
-  test "an advance waiting behind a session binding the old epoch retires it", %{
+  test "an advance waiting behind a session binding the removed key retires it", %{
     user_id: user_id,
     identifier: identifier,
-    old: old
+    old: old,
+    kid: kid
   } do
     test = self()
     hash = :crypto.strong_rand_bytes(32)
@@ -826,7 +849,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
     issuer =
       Task.async(fn ->
         unboxed(fn ->
-          session(user_id, old, hash,
+          session(user_id, kid, old, hash,
             also: fn _session ->
               send(test, :issuance_holds)
 
@@ -845,13 +868,13 @@ defmodule Arca.DirectoryHeadsRaceTest do
       Task.async(fn ->
         unboxed(fn ->
           send(test, {:advancer, backend()})
-          advance(identifier, old, new)
+          advance(identifier, old, new, kid)
         end)
       end)
 
     assert_receive {:advancer, pid}, 5_000
     if postgres?(), do: LockWait.await_lock_wait!(pid, [~s("users"), "FOR UPDATE"])
-    refute Task.yield(advancer, 300), "the advance retired while a session bound the old epoch"
+    refute Task.yield(advancer, 300), "the advance retired while a session bound the old head"
 
     send(issuer.pid, :go)
     assert :ok = Task.await(issuer, 25_000)
@@ -861,10 +884,11 @@ defmodule Arca.DirectoryHeadsRaceTest do
 
   # The advance has no pause point but a PostgreSQL trigger; SQLite's write lock orders it.
   @tag :postgres
-  test "a session waiting behind the advance reads the new epoch and is refused", %{
+  test "a session waiting behind the advance reads the new head and is refused", %{
     user_id: user_id,
     identifier: identifier,
-    old: old
+    old: old,
+    kid: kid
   } do
     test = self()
     new = digest("new")
@@ -875,7 +899,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       Task.async(fn ->
         unboxed(fn ->
           send(test, {:advancer, backend()})
-          gated(fn -> advance(identifier, old, new) end)
+          gated(fn -> advance(identifier, old, new, kid) end)
         end)
       end)
 
@@ -887,17 +911,17 @@ defmodule Arca.DirectoryHeadsRaceTest do
       Task.async(fn ->
         unboxed(fn ->
           send(test, {:issuer, backend()})
-          session(user_id, old, hash, [])
+          session(user_id, kid, old, hash, [])
         end)
       end)
 
     assert_receive {:issuer, issuing}, 5_000
     LockWait.await_lock_wait!(issuing, [~s("users"), "FOR UPDATE"])
-    refute Task.yield(issuer, 300), "the session bound an epoch the advance was retiring"
+    refute Task.yield(issuer, 300), "the session bound a head the advance was moving"
 
     open_gate!(gate)
     assert {:ok, %{retired: %{session_hashes: []}}} = Task.await(advancer, 25_000)
-    assert {:error, :stale_key_epoch} = Task.await(issuer, 25_000)
+    assert {:error, :stale_head} = Task.await(issuer, 25_000)
     refute unboxed(fn -> Arca.Repo.exists?(where(Session, token_hash: ^hash)) end)
   end
 
@@ -918,8 +942,6 @@ defmodule Arca.DirectoryHeadsRaceTest do
           genesis: "genesis-bytes",
           directory_url: "https://dir.example",
           head_hash: head,
-          key_epoch: head,
-          recovery_epoch: head,
           state: "{}"
         })
 

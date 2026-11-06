@@ -4,8 +4,10 @@
 defmodule Arca.Schemas.DirectoryHead do
   @moduledoc """
   Ecto schema for the `directory_heads` table (backs
-  `Arca.DirectoryHeads`): this home's verified cache of one identifier's
-  head, with the genesis and directory it was verified from.
+  `Arca.DirectoryHeads`): this home's verified cache of one account's
+  head, with the genesis and directory it was verified from, the verified
+  state the head leaves, and `gone_at` once the directory answered the
+  account gone.
   """
 
   use Ecto.Schema
@@ -18,10 +20,9 @@ defmodule Arca.Schemas.DirectoryHead do
     field :genesis, :binary
     field :directory_url, :string
     field :head_hash, :string
-    field :key_epoch, :string
-    field :recovery_epoch, :string
     field :state, :string
     field :verified_at, :utc_datetime_usec
+    field :gone_at, :utc_datetime_usec
     field :revision, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end

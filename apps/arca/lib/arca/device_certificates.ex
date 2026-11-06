@@ -17,15 +17,17 @@ defmodule Arca.DeviceCertificates do
   records only for a paired client that stands in the actor's athanor, for
   the same person, whose recorded `device_public_key` is the certificate's:
   a client paired without a device key (a `session` or `api_key` source)
-  is never certified. An identity-subject certificate binds the `key_epoch`
-  current when it is recorded (`Arca.DirectoryHeads.certifiable!/3`, under
-  the person's lock), so a head that retires the epoch either revokes it
-  or refuses it. A revocation only narrows and is never
-  refused for ownership; revoking a revoked certificate answers it as it
-  is. A standing transition revokes the certificates it retires in its
-  own transaction (`Arca.SecurityTransitions`), and a head that retires an
-  identity's `key_epoch` revokes the identity-subject certificates issued
-  under it (`revoke_key_epoch!/2`).
+  is never certified. A certificate names the person's account, the
+  device key's `kid` (its device key's, `Prima.Identity.Key.kid/1`) and
+  the account head it was issued under, which must be the cached head of
+  the person's account when it is recorded (`Arca.DirectoryHeads.fence!/2`,
+  under the person's lock), so a walk that removes the key either revokes
+  it or refuses it. A revocation only narrows and is never refused for
+  ownership; revoking a revoked certificate answers it as it is. A
+  standing transition revokes the certificates it retires in its own
+  transaction (`Arca.SecurityTransitions`), and the cached head's walk
+  those bound to a key it removes, or every one of the account on a
+  recovery (`revoke_bound!/2`).
 
   Every function takes the actor first, and the athanor comes from it.
   Rows are plain maps (`Arca.Data`).
@@ -55,14 +57,16 @@ defmodule Arca.DeviceCertificates do
 
   @doc """
   Record a certificate issued to a paired client of the actor's athanor.
-  `attrs`: `:paired_client_id`, `:user_id`, `:subject_kind` (`"local"`, or
-  `"identity"` with the `:identifier` and `:key_epoch` it was issued
-  under), `:device_public_key`, `:issuing_home`, `:audience_home`,
+  `attrs`: `:paired_client_id`, `:user_id`, the `:identifier` of the
+  person's account, the device key's `:kid` and the `:head` it was issued
+  under, `:device_public_key`, `:issuing_home`, `:audience_home`,
   `:not_before`, `:expires_at`, the signed `:certificate` bytes and their
   `:digest`. Refusals: `:client_not_active` (no standing client of that
   person), `:no_device_key` (the client was paired without one),
   `:device_key_mismatch` (the client's device key is another),
-  `:stale_key_epoch`, `:conflict` (the digest is already recorded),
+  `:stale_head` (the head is not the cached head of the person's
+  account, or the identifier is not their account's),
+  `:conflict` (the digest is already recorded),
   `:not_owner`, `:no_athanor`, `{:invalid, errors}`, `:database_error`.
   """
   @spec record(Prima.Actor.t(), map()) :: {:ok, row()} | {:error, term()}
@@ -177,8 +181,8 @@ defmodule Arca.DeviceCertificates do
   # and the token hashes of the sessions it deleted, which the caller hands
   # its transition's `revoked_session_hashes` so every memo of them drops.
   # The one revocation statement: the standing transitions run it inside
-  # theirs (`Arca.SecurityTransitions`), and a head that retires an epoch
-  # through `revoke_key_epoch!/2`. A protected device's sessions stand on
+  # theirs (`Arca.SecurityTransitions`), and the cached head's walk through
+  # `revoke_bound!/2`. A protected device's sessions stand on
   # its certificate: the revocation of one still unexpired deletes every
   # session of its client in the same statements
   # (`Arca.SessionStorage.delete_clients!/1`), so a renewal, which revokes
@@ -188,7 +192,7 @@ defmodule Arca.DeviceCertificates do
           certificate_ids: [String.t()],
           session_hashes: [binary()]
         }
-  # arca:unscoped-ok the caller's query carries its own scope: an athanor, a person or an epoch.
+  # arca:unscoped-ok the caller's query carries its own scope: an athanor, a person or an account's key.
   # arca:db-raise-ok a transaction step: its callers rescue around it.
   def revoke_all(query) do
     now = Arca.ServerMetaStorage.now!()
@@ -220,41 +224,33 @@ defmodule Arca.DeviceCertificates do
   end
 
   @doc false
-  # The identity-subject certificates issued under `key_epoch` for
-  # `identifier`, revoked when a fresh head retires it
-  # (`Arca.DirectoryHeads.advance/4`).
-  @spec revoke_key_epoch!(String.t(), String.t()) :: %{
+  # The certificates of `identifier`'s account bound to the key `kid`, or
+  # with `:all` every one of them, revoked when the cached head's walk
+  # removes the key or reads a recovery (`Arca.DirectoryHeads.advance/5`).
+  @spec revoke_bound!(String.t(), String.t() | :all) :: %{
           certificate_ids: [String.t()],
           session_hashes: [binary()]
         }
   # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def revoke_key_epoch!(identifier, key_epoch)
-      when is_binary(identifier) and is_binary(key_epoch) do
-    revoke_all(
-      from(c in DeviceCertificate,
-        where:
-          c.subject_kind == "identity" and c.identifier == ^identifier and
-            c.key_epoch == ^key_epoch
-      )
-    )
+  def revoke_bound!(identifier, :all) when is_binary(identifier),
+    do: revoke_all(from(c in DeviceCertificate, where: c.identifier == ^identifier))
+
+  def revoke_bound!(identifier, kid) when is_binary(identifier) and is_binary(kid) do
+    revoke_all(from(c in DeviceCertificate, where: c.identifier == ^identifier and c.kid == ^kid))
   end
 
   # ---- internals -------------------------------------------------------------
 
   # The person first, then the cached head, then the client: the standing
-  # order, and the order `Arca.DirectoryHeads.advance/4` takes.
+  # order, and the order `Arca.DirectoryHeads.advance/5` takes.
   defp record_in(athanor_id, row) do
-    with :ok <- epoch_current(row) do
-      record_for_client(athanor_id, row)
+    case Arca.DirectoryHeads.fence!(row.user_id, row.head) do
+      {:ok, identifier} when identifier == row.identifier ->
+        record_for_client(athanor_id, row)
+
+      _stale ->
+        {:error, :stale_head}
     end
-  end
-
-  defp epoch_current(%{subject_kind: "identity"} = row),
-    do: Arca.DirectoryHeads.certifiable!(row.user_id, row.identifier, row.key_epoch)
-
-  defp epoch_current(row) do
-    Arca.DirectoryHeads.lock_person!(row.user_id)
-    :ok
   end
 
   defp record_for_client(athanor_id, row) do
@@ -314,23 +310,17 @@ defmodule Arca.DeviceCertificates do
     do: where(query, [c], c.state == "active" and c.expires_at <= ^now)
 
   defp build(attrs) do
-    subject = attrs[:subject_kind]
+    device_key = attrs[:device_public_key]
 
     checks = [
       {:paired_client_id, is_binary(attrs[:paired_client_id]) and attrs[:paired_client_id] != ""},
       {:user_id, is_binary(attrs[:user_id]) and attrs[:user_id] != ""},
-      {:subject_kind, subject in DeviceCertificate.subject_kinds()},
-      {:identifier,
-       if(subject == "identity",
-         do: Prima.Identity.Encoding.identifier?(attrs[:identifier]),
-         else: is_nil(attrs[:identifier])
-       )},
-      {:key_epoch,
-       if(subject == "identity",
-         do: Prima.Identity.Encoding.digest?(attrs[:key_epoch]),
-         else: is_nil(attrs[:key_epoch])
-       )},
-      {:device_public_key, Prima.Identity.Encoding.key?(attrs[:device_public_key])},
+      {:identifier, Prima.Identity.Encoding.identifier?(attrs[:identifier])},
+      {:kid,
+       Prima.Identity.Encoding.key?(device_key) and
+         attrs[:kid] == Prima.Identity.Key.kid(device_key)},
+      {:head, Prima.Identity.Encoding.digest?(attrs[:head])},
+      {:device_public_key, Prima.Identity.Encoding.key?(device_key)},
       {:issuing_home, Prima.Identity.Encoding.home?(attrs[:issuing_home])},
       {:audience_home, Prima.Identity.Encoding.home?(attrs[:audience_home])},
       {:not_before, match?(%DateTime{}, attrs[:not_before])},
@@ -358,9 +348,9 @@ defmodule Arca.DeviceCertificates do
          :athanor_id,
          :paired_client_id,
          :user_id,
-         :subject_kind,
          :identifier,
-         :key_epoch,
+         :kid,
+         :head,
          :device_public_key,
          :issuing_home,
          :audience_home,
@@ -373,8 +363,6 @@ defmodule Arca.DeviceCertificates do
          not_before: usec(attrs.not_before),
          expires_at: usec(attrs.expires_at),
          id: Prima.UUID7.generate_id("dct"),
-         identifier: attrs[:identifier],
-         key_epoch: attrs[:key_epoch],
          state: "active",
          revoked_at: nil,
          inserted_at: now,

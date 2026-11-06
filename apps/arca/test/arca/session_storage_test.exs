@@ -292,7 +292,7 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
-  describe "identity_key_epoch" do
+  describe "a key's binding" do
     # Writing a person's identity row is fenced by the member's slot: a
     # claimant runs and this member holds its slot, restored after the case.
     setup do
@@ -323,103 +323,79 @@ defmodule Arca.SessionStorageTest do
       :ok
     end
 
-    # A remote person, and this home's cached head of their identity at
-    # `epoch`: the epoch a session of theirs may bind.
-    defp remote_person!(epoch) do
-      n = System.unique_integer([:positive])
+    # A person with an account, and this home's cached head of it: the
+    # head a session a key of theirs signed for may name.
+    defp account_person! do
       now = DateTime.utc_now()
-      identifier = "per_" <> Prima.Digest.sha256_hex("remote-#{n}")
-
-      {:ok, _head} =
-        Arca.DirectoryHeads.put(Prima.Actor.system(), %{
-          identifier: identifier,
-          genesis: "genesis-#{n}",
-          directory_url: "https://dir.example",
-          head_hash: epoch,
-          key_epoch: epoch,
-          recovery_epoch: epoch,
-          state: "{}"
-        })
 
       {:ok, person} =
         Arca.Test.People.mint(
           Prima.Actor.system(),
           %{
             id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-            provider: "cyfr",
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,
             updated_at: now
           },
-          %{
-            key: "cyfr|https://dir.example|#{identifier}",
-            provider: "cyfr",
-            issuer: "https://dir.example",
-            subject: identifier,
-            first_seen_at: now,
-            last_seen_at: now
-          },
-          also: fn person ->
-            {:ok, _} =
-              Arca.PersonIdentities.create(Prima.Actor.system(), %{
-                user_id: person.id,
-                provenance: "remote",
-                identifier: identifier,
-                directory_url: "https://dir.example"
-              })
-
-            :ok
-          end
+          nil
         )
 
-      person
+      Map.merge(person, Arca.Test.People.account!(person.id))
     end
 
-    test "a remote person's session records the key_epoch it was minted under" do
-      epoch = Prima.Digest.sha256("epoch-#{System.unique_integer()}")
-      person = remote_person!(epoch)
-      hash = make_token_hash("remote")
+    test "a session a key signed for records the key and the cached head it was verified under" do
+      person = account_person!()
+      kid = Prima.Digest.sha256("kid-#{System.unique_integer()}")
+      hash = make_token_hash("bound")
       issuance = Arca.Test.Actor.issuance(person.id)
 
-      assert {:error, :identity_key_epoch_required} =
-               SessionStorage.create_session(hash, session_attrs(%{user_id: person.id}), issuance)
-
-      # An epoch other than the cached head's current one is stale.
-      assert {:error, :stale_key_epoch} =
+      # A head other than the cached head of the person's account is stale.
+      assert {:error, :stale_head} =
                SessionStorage.create_session(
                  hash,
                  session_attrs(%{
                    user_id: person.id,
-                   identity_key_epoch: Prima.Digest.sha256("gone")
+                   kid: kid,
+                   head: Prima.Digest.sha256("gone")
                  }),
+                 issuance
+               )
+
+      # A key and a head are named together.
+      assert {:error, {:invalid, %{kid: _}}} =
+               SessionStorage.create_session(
+                 hash,
+                 session_attrs(%{user_id: person.id, kid: kid}),
                  issuance
                )
 
       assert :ok =
                SessionStorage.create_session(
                  hash,
-                 session_attrs(%{user_id: person.id, identity_key_epoch: epoch}),
+                 session_attrs(%{user_id: person.id, kid: kid, head: person.head}),
                  issuance
                )
 
-      assert {:ok, %{identity_key_epoch: ^epoch}} = SessionStorage.get_session(hash)
+      head = person.head
+      assert {:ok, %{kid: ^kid, head: ^head}} = SessionStorage.get_session(hash)
     end
 
-    test "a local person's session records none" do
-      hash = make_token_hash("local")
+    test "a session no key signed names neither, and a person with no account has no head to name" do
+      hash = make_token_hash("unbound")
+      kid = Prima.Digest.sha256("kid")
 
-      assert {:error, :unexpected_key_epoch} =
+      assert {:error, :stale_head} =
                SessionStorage.create_session(
                  hash,
-                 session_attrs(%{identity_key_epoch: Prima.Digest.sha256("epoch")}),
+                 session_attrs(%{kid: kid, head: Prima.Digest.sha256("head")}),
                  Arca.Test.Actor.issuance()
                )
 
       assert :ok =
                SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
 
-      assert {:ok, %{identity_key_epoch: nil}} = SessionStorage.get_session(hash)
+      assert {:ok, %{kid: nil, head: nil}} = SessionStorage.get_session(hash)
     end
 
     test "the also: closure commits with the session, or the session is not written" do

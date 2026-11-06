@@ -992,7 +992,11 @@ defmodule Arca.CredentialIssuanceTest.Device do
   defp certificate!(user_id, athanor_id, client_id, device_key, expires_at, opts) do
     now = DateTime.utc_now()
     bytes = :crypto.strong_rand_bytes(64)
-    {kind, identifier} = Keyword.get(opts, :subject, {"local", nil})
+
+    identifier =
+      Keyword.get_lazy(opts, :identifier, fn ->
+        "per_" <> Prima.Digest.sha256_hex("account-#{System.unique_integer()}")
+      end)
 
     {1, _} =
       Arca.Repo.insert_all(DeviceCertificate, [
@@ -1001,9 +1005,9 @@ defmodule Arca.CredentialIssuanceTest.Device do
           athanor_id: athanor_id,
           paired_client_id: client_id,
           user_id: user_id,
-          subject_kind: kind,
           identifier: identifier,
-          key_epoch: if(identifier, do: Prima.Digest.sha256("epoch-#{identifier}")),
+          kid: Prima.Identity.Key.kid(device_key),
+          head: Prima.Digest.sha256("head-#{identifier}"),
           device_public_key: device_key,
           issuing_home: "https://home.example",
           audience_home: "https://home.example",
@@ -1175,7 +1179,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
 
       device =
         Device.record!(user_id, athanor_id,
-          subject: {"identity", identifier},
+          identifier: identifier,
           also_expiring: [renewed]
         )
 
@@ -1224,14 +1228,14 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       assert [certificate] = source.certificates
 
       assert Map.keys(certificate) |> Enum.sort() ==
-               ~w(expires_at id identifier key_epoch paired_client_id state subject_kind user_id)a
+               ~w(expires_at head id identifier kid paired_client_id state user_id)a
 
       assert DateTime.compare(certificate.expires_at, device.expires_at) == :eq
 
-      assert {certificate.paired_client_id, certificate.subject_kind, certificate.identifier} ==
-               {device.client_id, "identity", identifier}
+      assert {certificate.paired_client_id, certificate.identifier} ==
+               {device.client_id, identifier}
 
-      assert source.identity == %{user_id: user_id, provenance: "remote", identifier: identifier}
+      assert source.identity == %{user_id: user_id, identifier: identifier}
     end
 
     test "names nothing that is not there: no client, no certificate, no identity row" do
@@ -1253,13 +1257,13 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       assert source == %{kind: :device, row: nil, certificates: [], identity: nil, head: nil}
     end
 
-    test "reads a remote person's cached head after their identity row, unlocked, and hands its key_epoch" do
+    test "reads the account's cached head after the person's identity row, unlocked, and hands its head" do
       %{user_id: user_id, athanor_id: athanor_id} = standing!()
       identifier = "per_" <> Prima.Digest.sha256_hex("remote-#{System.unique_integer()}")
-      key_epoch = Prima.Digest.sha256("epoch-#{identifier}")
-      device = Device.record!(user_id, athanor_id, subject: {"identity", identifier})
+      head_hash = Prima.Digest.sha256("head-#{identifier}")
+      device = Device.record!(user_id, athanor_id, identifier: identifier)
       remote_identity!(user_id, identifier)
-      cached_head!(identifier, key_epoch)
+      cached_head!(identifier, head_hash)
       test = self()
 
       sources =
@@ -1308,7 +1312,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       end
 
       assert_received {:rows, %{source: %{head: head}}}
-      assert head == %{identifier: identifier, key_epoch: key_epoch}
+      assert head == %{identifier: identifier, head_hash: head_hash, gone_at: nil}
     end
   end
 
@@ -1331,7 +1335,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       ])
   end
 
-  defp cached_head!(identifier, key_epoch) do
+  defp cached_head!(identifier, head_hash) do
     now = DateTime.utc_now()
 
     {1, _} =
@@ -1340,9 +1344,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
           identifier: identifier,
           genesis: "genesis-bytes",
           directory_url: "https://directory.example",
-          head_hash: key_epoch,
-          key_epoch: key_epoch,
-          recovery_epoch: key_epoch,
+          head_hash: head_hash,
           state: "{}",
           verified_at: now,
           revision: 1,
