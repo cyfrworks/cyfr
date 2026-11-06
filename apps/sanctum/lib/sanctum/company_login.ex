@@ -370,7 +370,7 @@ defmodule Sanctum.CompanyLogin do
     end
   end
 
-  defp redirect_uri, do: Sanctum.Person.home() <> @redirect_path
+  defp redirect_uri, do: Sanctum.origin() <> @redirect_path
 
   @doc false
   # The stored form of a configuration (the module doc).

@@ -752,8 +752,12 @@ defmodule Sanctum.SharedThreads do
 
   defp title(_title), do: {:error, {:invalid_argument, "A thread needs a title"}}
 
+  # A person named by their account's identifier (`per_…`) or by their id
+  # here (`usr_…`): the two are distinct types and never compared.
   defp find_person(id) do
-    if Sanctum.Auth.Identity.key?(id), do: Users.get_by_identity(id), else: Users.get(id)
+    if Prima.Identity.Encoding.identifier?(id),
+      do: Users.get_by_identifier(id),
+      else: Users.get(id)
   end
 
   defp changed({:ok, thread}, user_id, thread_id) do
