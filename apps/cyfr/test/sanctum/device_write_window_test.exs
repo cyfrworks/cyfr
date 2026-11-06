@@ -13,8 +13,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
   certificate in that transaction (`Sanctum.Issuance.device_hold/1`); the
   revocation commits between the confirmation and the write. A change
   whose confirmation is consumed in its write's own transaction (a
-  certification for another home, another recovery code, a live-key
-  rotation, a remote sign-in assertion, a passkey) is held there
+  certification for another home, another recovery code, a remote sign-in
+  assertion, a passkey) is held there
   by the consumption (`Sanctum.Consent.Authz.consume/2`); the revocation lands
   inside that transaction, right after the device's standing was read
   there. A device never reaches a door's link or unlink, which are a
@@ -22,8 +22,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
   These need what only this suite has: the component domain a webhook's
   target is checked in. A grant's token endpoint is a scripted
-  provider's (`:sanctum, :scripted_oauth_provider`). The rotation and the
-  vault's own writes are the sanctum suite's (`Sanctum.IssuanceTest`),
+  provider's (`:sanctum, :scripted_oauth_provider`). The vault's own
+  writes are the sanctum suite's (`Sanctum.IssuanceTest`),
   and two connections racing a consumption and a revocation are
   `Sanctum.Consent.AuthzRaceTest`'s.
   """
@@ -43,7 +43,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
   alias Sanctum.{
     Context,
     DeviceCerts,
-    IdentityFreshness,
     Pairing,
     Passkeys,
     Person,
@@ -810,40 +809,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
       assert {:ok, %{phase: "accepted", key_epoch: epoch}} =
                Sanctum.TestContext.confirming(ctx, &Recovery.recovery_code_add(&1, args, opts))
-
-      assert identity(user.id).head_hash == epoch
-    end
-
-    test "rotating the live key is refused by a revocation at its write: no attempt, the key stays",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      before = identity(user.id)
-      id = request_id()
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &IdentityFreshness.rotate_live(&1, id, opts)
-               )
-
-      assert attempt(id) == nil
-      after_it = identity(user.id)
-
-      assert {after_it.live_public_key, after_it.head_hash} ==
-               {before.live_public_key, before.head_hash}
-    end
-
-    test "the live key is rotated while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      id = request_id()
-
-      assert {:ok, %{request_id: ^id, phase: "completed", key_epoch: epoch}} =
-               Sanctum.TestContext.confirming(ctx, &IdentityFreshness.rotate_live(&1, id, opts))
 
       assert identity(user.id).head_hash == epoch
     end

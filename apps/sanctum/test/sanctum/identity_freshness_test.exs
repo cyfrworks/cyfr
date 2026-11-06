@@ -57,11 +57,7 @@ defmodule Sanctum.IdentityFreshnessTest do
   # ---- fixtures ----------------------------------------------------------------
 
   # How this home is reached, restored after the case.
-  defp mode!(mode) do
-    prior = Application.fetch_env!(:sanctum, :access_mode)
-    on_exit(fn -> Application.put_env(:sanctum, :access_mode, prior) end)
-    Application.put_env(:sanctum, :access_mode, mode)
-  end
+  defp mode!(mode), do: Prima.Test.Env.put_app_env(:sanctum, :access_mode, mode)
 
   defp system, do: Prima.Actor.system()
 
