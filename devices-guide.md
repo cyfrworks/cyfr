@@ -136,7 +136,7 @@ A passkey is registered at one CYFR, under that CYFR's host as its relying party
 
 ## When CYFR's Address Changes
 
-CYFR's address is its tailnet name, its domain, or `localhost` when only its own computer reaches it, and it changes when `cyfr access` moves CYFR to another mode or name. Before it makes such a change, `cyfr access` lists what stops working:
+CYFR's address is its tailnet name, its domain, or `localhost` when only its own computer reaches it, and it changes when `cyfr access` moves CYFR to another mode or name. Before it makes such a change, `cyfr access` lists what stops working, unless CYFR has never started in its directory and so has no one set up to lose anything:
 
 1. **Passkeys.** Passkeys made at the old address no longer sign anyone in, since their relying party is the old host (above). The setup link at the new address registers the administrator's passkey there; everyone else registers one, which an administrator authorizes.
 2. **Paired devices.** Pair every device again, at the new address.

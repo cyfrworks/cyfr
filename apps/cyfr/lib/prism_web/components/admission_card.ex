@@ -213,7 +213,7 @@ defmodule PrismWeb.AdmissionCard do
 
   @doc "The sentence a ceremony that did not finish reads as on screen 1."
   @spec ceremony_failed() :: String.t()
-  def ceremony_failed, do: "The passkey was not created, so nothing was saved. Try again."
+  def ceremony_failed, do: "The passkey was not created. Try again."
 
   @doc """
   The person an admission made, held for screen 2, whose drive begins:
