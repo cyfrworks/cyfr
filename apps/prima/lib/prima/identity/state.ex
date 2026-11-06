@@ -38,6 +38,46 @@ defmodule Prima.Identity.State do
     }
   end
 
+  @doc """
+  Read a state from its JSON map, as `encode/1` writes it: the state a
+  directory stored beside its head, or a CYFR beside the head it cached.
+  Every field is held to its spelling and every key to `Prima.Identity.Key`'s.
+  """
+  @spec decode(term()) :: {:ok, t()} | :error
+  def decode(
+        %{
+          "identifier" => identifier,
+          "directory" => directory,
+          "head" => head,
+          "seq" => seq,
+          "keys" => keys,
+          "recovery" => recovery
+        } = map
+      )
+      when map_size(map) == 6 and is_list(keys) and is_list(recovery) do
+    with true <- Encoding.identifier?(identifier),
+         true <- Encoding.directory_url?(directory),
+         true <- Encoding.digest?(head),
+         true <- Encoding.ms?(seq),
+         decoded = Enum.map(keys, &Key.decode/1),
+         false <- Enum.member?(decoded, :error),
+         {:ok, recovery} <- Encoding.keys(map, "recovery") do
+      {:ok,
+       %__MODULE__{
+         identifier: identifier,
+         directory: directory,
+         head: head,
+         seq: seq,
+         keys: Enum.map(decoded, fn {:ok, key} -> key end),
+         recovery: recovery
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  def decode(_value), do: :error
+
   @doc "The listed key `kid` names, or nil."
   @spec key(t(), String.t()) :: Key.t() | nil
   def key(%__MODULE__{keys: keys}, kid), do: Enum.find(keys, &(&1.kid == kid))

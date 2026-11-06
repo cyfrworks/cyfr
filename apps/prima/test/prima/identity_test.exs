@@ -166,11 +166,24 @@ defmodule Prima.IdentityTest do
         %{"state" => state} ->
           assert {:ok, %State{} = verified} = result, name
           assert State.encode(verified) == state, name
+          assert State.decode(state) == {:ok, verified}, name
 
         %{"error" => error} ->
           assert result == refusal(error), name
       end
     end
+  end
+
+  test "a state reads back only in its own spelling" do
+    %{"state" => state} =
+      Enum.find(vectors()["chains"], &(&1["name"] == "a passkey removed by the recovery key"))
+
+    assert State.decode(Map.put(state, "extra", 1)) == :error
+    assert State.decode(Map.delete(state, "seq")) == :error
+    assert State.decode(%{state | "head" => "head-1"}) == :error
+    assert State.decode(%{state | "recovery" => []}) == :error
+    assert State.decode(%{state | "keys" => [%{"kid" => "x"}]}) == :error
+    assert State.decode(nil) == :error
   end
 
   test "extend/2 is verify_chain's step, one entry at a time" do

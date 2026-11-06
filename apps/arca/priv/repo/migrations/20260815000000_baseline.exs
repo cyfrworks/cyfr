@@ -678,28 +678,30 @@ defmodule Arca.Repo.Migrations.Baseline do
            )
 
     log_checks = [
-      known("identity_log_entries_kind_known", "kind", ~w(genesis rotate recover)),
-      known("identity_log_entries_outcome_known", "outcome", ~w(accepted stale_policy))
+      known(
+        "identity_log_entries_kind_known",
+        "kind",
+        ~w(genesis add_key remove_key recover add_recovery)
+      )
     ]
 
     # The directory's store: one log per identifier, an entry per accepted
-    # write at its position (`seq`, 0 for the genesis), and a recovery
-    # request's recorded outcome under its request id, so a retry answers
-    # the same outcome. A refused request has no position. `bytes` is what
-    # the row counts against the directory's log-byte quota.
+    # write at its position (`seq`, 0 for the genesis) beside the verified
+    # state it leaves (`state`, `Prima.Identity.State`'s JSON), so the next
+    # entry is checked against its head alone. `bytes` is what the row
+    # counts against the directory's log-byte quota. The genesis row
+    # carries the operator's tombstone (`gone_at`).
     create table(:identity_log_entries, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :identifier, :string, null: false
-      add :seq, :integer
+      add :seq, :integer, null: false
       add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(log_checks, 0))
-      add :entry_hash, :string
+      add :entry_hash, :string, null: false
       add :prev_hash, :string
-      add :entry, :binary
-      add :request_id, :string
-      add :request_digest, :string
-      add :outcome, :string, null: false, check: if(sqlite?, do: Enum.at(log_checks, 1))
-      add :outcome_body, :text
+      add :entry, :binary, null: false
+      add :state, :text, null: false
       add :bytes, :integer, null: false
+      add :gone_at, :utc_datetime_usec
       add :inserted_at, :utc_datetime_usec, null: false
     end
 
@@ -707,7 +709,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:identity_log_entries, [:identifier])
 
     create unique_index(:identity_log_entries, [:identifier, :seq],
-             where: "seq IS NOT NULL",
              name: :identity_log_entries_position_index
            )
 
@@ -716,9 +717,8 @@ defmodule Arca.Repo.Migrations.Baseline do
              name: :identity_log_entries_prev_index
            )
 
-    create unique_index(:identity_log_entries, [:identifier, :request_id],
-             where: "request_id IS NOT NULL",
-             name: :identity_log_entries_request_index
+    create unique_index(:identity_log_entries, [:identifier, :entry_hash],
+             name: :identity_log_entries_hash_index
            )
 
     # A home's verified cache of another person's head: the genesis it was
