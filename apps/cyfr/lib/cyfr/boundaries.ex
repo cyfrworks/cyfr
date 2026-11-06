@@ -2224,7 +2224,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
-    "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, token_hash: 1],
+    "Sanctum.Session" => [cleanup: 0, destroy: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [
       attachment: 4,
@@ -3160,13 +3160,11 @@ defmodule Cyfr.Boundaries do
       plane: :external,
       origin: :none
     },
-    # The browser's sign-in, re-authentication and policy acceptance, which
-    # establish a person's sign-in, prove it fresh or complete it rather
-    # than act under a context the gate admitted: a sign-in's start,
-    # its tickets, callbacks and door link, a company sign-in's start and
-    # callback, a fresh sign-in's proof of a
-    # confirmation and the answer to it, and the registry policy a sign-in
-    # accepts. The browser's sign-out decides nothing and is no entry.
+    # The browser's sign-in, which establishes a person's sign-in or
+    # completes it rather than act under a context the gate admitted: a
+    # company sign-in's start and callback, the ticket that sets a sign-in's
+    # session cookie and a device's unlock ticket. The browser's sign-out
+    # decides nothing and is no entry.
     # Cyfr's boundary does not depend on PrismWeb, so these rows name their
     # controllers by string, as this module's other rosters name PrismWeb's.
     %{

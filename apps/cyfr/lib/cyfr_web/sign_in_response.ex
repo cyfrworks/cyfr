@@ -3,32 +3,18 @@
 
 defmodule CyfrWeb.SignInResponse do
   @moduledoc """
-  One transcription of the sign-in outcome to a browser response.
+  One transcription of an admitted sign-in to a browser response: the
+  session an already-minted token names becomes the browser's cookie on a
+  clean Plug session, and the browser lands on the console. Two tickets
+  hand it a token: a sign-in's (`PrismWeb.PasskeyController`) and a
+  protected device's unlock (`PrismWeb.DeviceUnlockController`).
 
-  An admitted sign-in proceeds (`:proceed`); the sign-in's ticket renders
-  it (`PrismWeb.PasskeyController`), and the protected device's unlock
-  ticket, and one more answer, an account read that failed while minting
-  the session, is a page. This module owns the one mapping, and the
-  differences that are real travel as options:
-
-    * `:session` — `{:mint, ctx}` (create the session and cookie it) or
-      `{:token, token}` (cookie an already-minted token — the tickets).
-    * `:retry_path` — where the 503 page's "Try again" points.
-    * `:to` — where a proceeding sign-in goes instead of the post-login
-      landing, answered `303`: an absolute URL its caller has already
-      verified.
-
-  Every outcome is a redirect or a page; the session token travels in
-  the cookie and nowhere else.
+  The session token travels in the cookie and nowhere else.
   """
 
   import Plug.Conn
 
-  require Logger
-
   @session_key CyfrWeb.ContextGuard.session_key()
-
-  @type outcome :: :proceed | {:unavailable, atom()}
 
   @doc """
   The Plug session key holding the Sanctum session token. This module is
@@ -39,52 +25,13 @@ defmodule CyfrWeb.SignInResponse do
   """
   def session_key, do: @session_key
 
-  @spec respond(Plug.Conn.t(), outcome(), keyword()) :: Plug.Conn.t()
-  def respond(conn, outcome, opts)
-
-  def respond(conn, :proceed, opts) do
-    established(conn, opts, &landing(&1, Keyword.get(opts, :to)))
-  end
-
-  def respond(conn, {:unavailable, reason}, opts) do
-    # A mint-path failure leaves no session behind.
-    conn =
-      case Keyword.fetch!(opts, :session) do
-        {:mint, _ctx} -> safe_drop_session(conn)
-        _ -> conn
-      end
-
-    {title, inner} = unavailable_page(reason, Keyword.get(opts, :retry_path, "/login"))
-    refusal_page(conn, 503, title, inner)
-  end
-
-  # A sign-in that does not finish is the request's refused decision,
-  # recorded once under its title (`CyfrWeb.Plugs.CallIdentity.refused/3`)
-  # where the route minted a call identity, and answered as a page.
-  defp refusal_page(conn, status, title, inner) do
+  @doc "Cookie the session `token` names on a clean Plug session and land (the module doc)."
+  @spec respond(Plug.Conn.t(), :proceed, session: {:token, String.t()}) :: Plug.Conn.t()
+  def respond(conn, :proceed, session: {:token, token}) when is_binary(token) do
     conn
-    |> CyfrWeb.Plugs.CallIdentity.refused(status, title)
-    |> CyfrWeb.MinimalPage.send_page(status, title, inner)
-  end
-
-  # The post-login landing, or the verified `:to` its caller named.
-  defp landing(conn, nil), do: CyfrWeb.SafeRedirect.post_login(conn)
-
-  defp landing(conn, to) when is_binary(to) do
-    conn
-    |> put_status(303)
-    |> Phoenix.Controller.redirect(external: to)
-  end
-
-  # The outage copy, per reason: `{title, message}`.
-  defp unavailable_copy(:account_read) do
-    {"Temporarily unavailable",
-     "The server could not read your account just now — a transient fault, " <>
-       "not a refusal. Try again in a moment."}
-  end
-
-  defp unavailable_copy(_) do
-    {"Temporarily unavailable", "Signing in did not finish. Try again in a moment."}
+    |> renew_session()
+    |> put_session(@session_key, token)
+    |> CyfrWeb.SafeRedirect.post_login()
   end
 
   @doc """
@@ -99,13 +46,6 @@ defmodule CyfrWeb.SignInResponse do
     ArgumentError -> conn
   end
 
-  @doc "Drop the Plug session; a no-op when none was fetched (API routes)."
-  def safe_drop_session(conn) do
-    configure_session(conn, drop: true)
-  rescue
-    ArgumentError -> conn
-  end
-
   # Start the authenticated session on a clean one. Whatever the browser
   # carried while anonymous — most of all Phoenix's `_csrf_token`, which is
   # the value `PasskeyController.same_browser?/2` binds a sign-in ticket to
@@ -114,70 +54,4 @@ defmodule CyfrWeb.SignInResponse do
   # the data (the cookie store keeps no id to rotate) and `renew: true` moves
   # the id for a server-side store.
   defp renew_session(conn), do: conn |> configure_session(renew: true) |> clear_session()
-
-  # The session, then the cookie, then whatever the outcome renders. A
-  # session that cannot be written is a 500 — the only non-redirect answer
-  # a browser sees on an admitted sign-in.
-  defp established(conn, opts, fun) do
-    case Keyword.fetch!(opts, :session) do
-      {:mint, ctx} ->
-        case Sanctum.Session.create(ctx) do
-          {:ok, session} ->
-            fun.(conn |> renew_session() |> put_session(@session_key, session.token))
-
-          # A remote person whose identity could not be confirmed fresh, or
-          # a store that could not answer: the sign-in pauses, retryable,
-          # never a failure of this server.
-          {:error, reason} when reason in [:identity_stale, :unavailable] ->
-            refusal_page(
-              conn,
-              503,
-              "Temporarily unavailable",
-              "<p>#{CyfrWeb.MinimalPage.h(Prima.Refusal.message(reason))}</p>" <>
-                "<p><a href=\"/login\">Back to sign-in</a></p>"
-            )
-
-          # What the sign-in stood on went while it ran: the door it came
-          # through was retired, by a recovery of the person's keys that the
-          # session's fresh read found or by an unlink, or the person's
-          # standing changed (`Sanctum.Session.create/2`). A refusal, never
-          # a fault of this server: the person signs in again.
-          {:error, :unauthenticated} ->
-            CyfrWeb.MinimalPage.send_page(
-              conn,
-              401,
-              "Sign-in failed",
-              "<p>What this sign-in came through no longer admits you here. " <>
-                "Sign in again.</p>" <>
-                "<p><a href=\"/login\">Sign in again</a></p>"
-            )
-
-          {:error, reason} ->
-            Logger.error("[CyfrWeb.SignInResponse] session create failed: #{inspect(reason)}")
-
-            # Render browser sign-in failures as a page.
-            refusal_page(
-              conn,
-              500,
-              "Couldn't finish signing in",
-              "<p>The session could not be created. Please try again.</p>" <>
-                "<p><a href=\"/login\">Back to sign-in</a></p>"
-            )
-        end
-
-      {:token, token} ->
-        fun.(conn |> renew_session() |> put_session(@session_key, token))
-    end
-  end
-
-  # A sign-in that could not be finished: the shared no-session shell and
-  # a way to try again.
-  defp unavailable_page(reason, retry_path) do
-    {title, message} = unavailable_copy(reason)
-    href = CyfrWeb.MinimalPage.h(retry_path)
-
-    {title,
-     "<p>#{CyfrWeb.MinimalPage.h(message)}</p>" <>
-       "<p><a href=\"#{href}\">Try again</a></p>"}
-  end
 end
