@@ -254,8 +254,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   def paired_standing(id), do: Arca.Repo.get(Arca.Schemas.PairedClient, id).standing
 
-  # A device certificate, a pending pairing invitation, a passkey and a
-  # pending confirmation, each inserted directly for the reason a frame
+  # A device certificate, a passkey and a pending confirmation, each inserted directly for the reason a frame
   # is: writing them is fenced by the member's slot.
   def certificate!(athanor_id, user_id, paired_client_id) do
     now = DateTime.utc_now()
@@ -288,31 +287,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
   end
 
   def certificate_state(id), do: Arca.Repo.get(Arca.Schemas.DeviceCertificate, id).state
-
-  def invitation!(athanor_id, user_id) do
-    now = DateTime.utc_now()
-    id = Prima.UUID7.generate_id("pin")
-
-    {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.PairingInvitation, [
-        %{
-          id: id,
-          athanor_id: athanor_id,
-          secret_hash: Prima.Digest.sha256("secret-#{uniq()}"),
-          user_id: user_id,
-          prospective_client_id: Prima.UUID7.generate_id("pcl"),
-          audience_home: "https://home.example",
-          expires_at: DateTime.add(now, 300, :second),
-          state: "pending",
-          inserted_at: now,
-          updated_at: now
-        }
-      ])
-
-    id
-  end
-
-  def invitation_state(id), do: Arca.Repo.get(Arca.Schemas.PairingInvitation, id).state
 
   def passkey!(user_id) do
     now = DateTime.utc_now()
@@ -444,7 +418,7 @@ defmodule Arca.SecurityTransitionsTest do
   # transition's transaction: a client's confirmations are voided with it
   # (`Arca.PairedClients.retire_dependents!/1`).
   @retirement_tables ~w(frame_credentials paired_clients device_certificates
-                        pairing_invitations pending_confirmations)
+                        pending_confirmations)
 
   defp observe_offer_ends!(athanor_id, offers) do
     # The fixture's offer IDs include its tenant; file telemetry carries no
@@ -518,9 +492,9 @@ defmodule Arca.SecurityTransitionsTest do
     end
   end
 
-  # A frame, a paired client with its certificate and a confirmation it
-  # confirmed, and a pairing invitation of the person in the athanor,
-  # issued after a denial: what the allow that follows retires.
+  # A frame, and a paired client with its certificate and a confirmation
+  # it confirmed, issued after a denial: what the allow that follows
+  # retires.
   defp stragglers!(athanor_id, user_id) do
     client = paired!(athanor_id, user_id)
 
@@ -528,7 +502,6 @@ defmodule Arca.SecurityTransitionsTest do
       {Arca.Schemas.FrameCredential, frame!(athanor_id, user_id)},
       {Arca.Schemas.PairedClient, client},
       {Arca.Schemas.DeviceCertificate, certificate!(athanor_id, user_id, client)},
-      {Arca.Schemas.PairingInvitation, invitation!(athanor_id, user_id)},
       {Arca.Schemas.PendingConfirmation, confirmation!(athanor_id, user_id, client: client)}
     ]
   end
@@ -536,12 +509,11 @@ defmodule Arca.SecurityTransitionsTest do
   # Each straggler's whole row, as stored.
   defp rows(stragglers), do: for({schema, id} <- stragglers, do: Arca.Repo.get(schema, id))
 
-  defp straggler_states([frame, client, cert, invitation, confirmation]) do
+  defp straggler_states([frame, client, cert, confirmation]) do
     [
       frame_state(elem(frame, 1)),
       paired_standing(elem(client, 1)),
       certificate_state(elem(cert, 1)),
-      invitation_state(elem(invitation, 1)),
       confirmation_state(elem(confirmation, 1))
     ]
   end
@@ -552,7 +524,6 @@ defmodule Arca.SecurityTransitionsTest do
       change.revoked_frame_credential_ids,
       change.revoked_paired_client_ids,
       change.revoked_device_certificate_ids,
-      change.revoked_pairing_invitation_ids,
       change.voided_confirmation_ids
     ]
   end
@@ -953,7 +924,7 @@ defmodule Arca.SecurityTransitionsTest do
         assert athanor(own.id).status == "active"
 
         assert straggler_states(stragglers) ==
-                 ["revoked", "revoked", "revoked", "revoked", "voided"]
+                 ["revoked", "revoked", "revoked", "voided"]
       end
     end
   end
@@ -1072,7 +1043,7 @@ defmodule Arca.SecurityTransitionsTest do
     end
   end
 
-  describe "device certificates, pairing invitations, passkeys and confirmations" do
+  describe "device certificates, passkeys and confirmations" do
     test "a denial retires them everywhere the person stood, and in what it archives" do
       {user, own} = owner!()
       {peer, theirs} = owner!()
@@ -1083,8 +1054,6 @@ defmodule Arca.SecurityTransitionsTest do
       guest_cert = certificate!(own.id, peer.id, guest_client)
       peer_client = paired!(theirs.id, peer.id)
       peer_cert = certificate!(theirs.id, peer.id, peer_client)
-      invitation = invitation!(theirs.id, user.id)
-      peer_invitation = invitation!(theirs.id, peer.id)
       passkey = passkey!(user.id)
       own_confirmation = confirmation!(theirs.id, user.id)
       by_guest = confirmation!(own.id, peer.id, client: guest_client)
@@ -1093,23 +1062,19 @@ defmodule Arca.SecurityTransitionsTest do
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
       assert change.revoked_device_certificate_ids == Enum.sort([cert, guest_cert])
-      assert change.revoked_pairing_invitation_ids == [invitation]
       assert change.revoked_passkey_ids == [passkey]
       assert change.voided_confirmation_ids == Enum.sort([own_confirmation, by_guest])
 
       for id <- [cert, guest_cert], do: assert(certificate_state(id) == "revoked")
-      assert invitation_state(invitation) == "revoked"
       assert passkey_state(passkey) == "revoked"
       assert confirmation_state(own_confirmation) == "voided"
       assert confirmation_state(by_guest) == "voided"
 
       assert certificate_state(peer_cert) == "active"
-      assert invitation_state(peer_invitation) == "pending"
       assert confirmation_state(peer_confirmation) == "confirmed"
 
       # An allow resurrects none of them.
       assert {:ok, _} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
-      assert invitation_state(invitation) == "revoked"
       assert passkey_state(passkey) == "revoked"
       assert certificate_state(cert) == "revoked"
     end

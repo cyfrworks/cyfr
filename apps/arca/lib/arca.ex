@@ -181,7 +181,6 @@ defmodule Arca do
       Outbox,
       Overlay,
       PairedClients,
-      PairingInvitations,
       Passkeys,
       PendingConfirmations,
       PersonIdentities,

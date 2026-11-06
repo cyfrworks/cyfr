@@ -55,10 +55,6 @@ defmodule Arca.OneFenceTest do
       "a removal under the writer's slot inside the publication step, with its declared refusals (`:stale`, `:budget`)",
     {"arca/file_offers.ex", "commit_acceptance/5"} =>
       "an acceptance's second step, under the slot its first step read, beside the offer's own turn",
-    {"arca/pairing_invitations.ex", "consume/5"} =>
-      "a consumption inside `Arca.SecurityTransitions.Issuance.run/3`, after the standing order's locks",
-    {"arca/pairing_invitations.ex", "open/3"} =>
-      "an invitation issued inside `Arca.SecurityTransitions.Issuance.run/3`, after the standing order's locks",
     {"arca/provisioning_claims.ex", "claim/5"} =>
       "a claim's take, which answers `{:busy, row}` as well as `{:ok, row}` and commits either, under the caller's slot",
     {"arca/provisioning_claims.ex", "under_slot/2"} =>

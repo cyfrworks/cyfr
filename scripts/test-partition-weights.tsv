@@ -67,7 +67,6 @@
 30.9	apps/arca/test/arca/one_fence_test.exs
 0.1	apps/arca/test/arca/outbox_test.exs
 1.2	apps/arca/test/arca/paired_clients_test.exs
-4.3	apps/arca/test/arca/pairing_invitations_test.exs
 2.5	apps/arca/test/arca/passkeys_test.exs
 0.9	apps/arca/test/arca/pending_confirmations_test.exs
 0.4	apps/arca/test/arca/person_identities_test.exs

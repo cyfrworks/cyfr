@@ -62,7 +62,6 @@ defmodule Arca.TenantTables do
     "frame_credentials",
     "device_certificates",
     "pending_confirmations",
-    "pairing_invitations",
     "paired_clients",
     "storage_projection_changes",
     "storage_projection_roots",

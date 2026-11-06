@@ -102,7 +102,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "`Cyfr.Boundaries`' security row"},
       {~w(CompanyAuthorizations CompanyLoginAttempts
           DeviceCertificates DirectoryHeads IdentityLog
-          Invitations PairingInvitations Passkeys PendingConfirmations PersonIdentities
+          Invitations Passkeys PendingConfirmations PersonIdentities
           RequestRateWindows),
        "the identity, device, passkey, confirmation, " <>
          "admission invitation, company sign-in and pre-authentication rate rows Sanctum " <>

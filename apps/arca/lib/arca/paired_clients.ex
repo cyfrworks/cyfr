@@ -114,9 +114,9 @@ defmodule Arca.PairedClients do
   the credential it stands on (`source_kind`, `"session"`, `"api_key"` or
   `"device_cert"`, and `source_id`), each required, and for a
   `device_cert` client the device's 32-byte `device_public_key`
-  (required) and, optionally, the `id` a pairing invitation or an
-  enrollment reserved for it, the `holder_kind` a protected device reports
-  and the `display_name` it shows, and for a client that is an account
+  (required) and, optionally, the `id` its hello reserved for it, the
+  `holder_kind` a protected device reports and the `display_name` it
+  shows, and for a client that is an account
   key its `kid` and the `head` it was admitted under (the module doc).
   The row starts `active`.
 

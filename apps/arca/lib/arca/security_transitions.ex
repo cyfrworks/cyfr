@@ -15,10 +15,9 @@ defmodule Arca.SecurityTransitions do
   they sit in and every shared thread they leave empty, deletes their sessions and revokes the
   keys they created and the keys of their athanor, the frame
   credentials (`Arca.FrameCredentials`), paired clients
-  (`Arca.PairedClients`), device certificates (`Arca.DeviceCertificates`)
-  and pending pairing invitations (`Arca.PairingInvitations`) of the
-  person and of their athanor, and the person's passkeys
-  (`Arca.Passkeys`); it withdraws every file offer they sent or that their
+  (`Arca.PairedClients`) and device certificates
+  (`Arca.DeviceCertificates`) of the person and of their athanor, and the
+  person's passkeys (`Arca.Passkeys`); it withdraws every file offer they sent or that their
   athanor holds, and declines every other offer addressed to
   them (`Arca.FileOffers`), whose snapshots are released once it commits,
   and revokes every share of their athanor (`Arca.Shares`).
@@ -31,9 +30,8 @@ defmodule Arca.SecurityTransitions do
   never report success with a credential of the person still standing. An allow restores the person's standing and
   their own athanor and nothing else. It never un-revokes, re-creates or re-seats
   anything the retirement took, and it revokes again every frame
-  credential, paired client, device certificate and pending pairing
-  invitation the person still holds: a frame opened, a
-  client paired or an invitation issued under the old standing never
+  credential, paired client and device certificate the person still
+  holds: a frame opened or a client paired under the old standing never
   outlives a change of it.
 
   A declared restore (`restore/1`) consumes the marker `cyfr restore`
@@ -60,7 +58,7 @@ defmodule Arca.SecurityTransitions do
   threads sorted by id
   (`Arca.SharedThreads`) and their people, then cached identity heads, then
   sessions, then API keys, then frame credentials, then paired clients,
-  then device certificates, pairing invitations, admission invitations
+  then device certificates, admission invitations
   (`Arca.Invitations`), passkeys and pending confirmations, then file
   offers by offer and file name (`Arca.FileOffers`), then shares by id
   and the profiles that depend on them, by athanor and id (`Arca.Shares`,
@@ -72,8 +70,7 @@ defmodule Arca.SecurityTransitions do
   takes the server-wide census lock (`Arca.AthanorCensus`)
   after its row locks and right before the caller's policy, as a mint
   takes it after the people it holds. After it it writes only the rows
-  it holds and the credentials, clients and invitations that hang off
-  them, which no holder of the census lock locks before taking it. A
+  it holds and the credentials and clients that hang off them, which no holder of the census lock locks before taking it. A
   transition taking only a suffix of that order never goes back for an
   earlier lock. A declared restore takes its marker's row first, which
   nothing else locks, then every person and every athanor in id order.
@@ -114,8 +111,8 @@ defmodule Arca.SecurityTransitions do
 
   `{:ok, change}` only after commit. `change` is the committed data the
   caller announces from: the session hashes each DELETE returned, the
-  key, frame credential, paired client, device certificate, pairing
-  invitation and passkey ids each UPDATE returned, the confirmations it
+  key, frame credential, paired client, device certificate and passkey
+  ids each UPDATE returned, the confirmations it
   voided, the athanors archived or reopened with their new generations,
   the person of each archived athanor, the person's generation, and the shares
   it revoked (`revoked_share_ids`). Refusals:
@@ -133,7 +130,6 @@ defmodule Arca.SecurityTransitions do
     FrameCredentials,
     Invitations,
     PairedClients,
-    PairingInvitations,
     Passkeys,
     PendingConfirmations
   }
@@ -150,7 +146,6 @@ defmodule Arca.SecurityTransitions do
     FrameCredential,
     Invitation,
     PairedClient,
-    PairingInvitation,
     Passkey,
     PendingConfirmation,
     PersonIdentity,
@@ -196,7 +191,6 @@ defmodule Arca.SecurityTransitions do
           required(:revoked_frame_credential_ids) => [String.t()],
           required(:revoked_paired_client_ids) => [String.t()],
           required(:revoked_device_certificate_ids) => [String.t()],
-          required(:revoked_pairing_invitation_ids) => [String.t()],
           required(:revoked_passkey_ids) => [String.t()],
           required(:voided_confirmation_ids) => [String.t()],
           required(:member_user_ids) => %{String.t() => [String.t()]},
@@ -293,7 +287,6 @@ defmodule Arca.SecurityTransitions do
           %{certificate_ids: cert_ids, session_hashes: cert_hashes} =
             revoke_certificates(user_id, retire)
 
-          invitation_ids = revoke_pairing_invitations(user_id, retire)
           passkey_ids = Passkeys.revoke_all(from(p in Passkey, where: p.user_id == ^user_id))
           # The confirmations are voided only after the passkeys are revoked:
           # a confirm locks its client, then its passkey, then its record, and
@@ -326,7 +319,6 @@ defmodule Arca.SecurityTransitions do
                 revoked_frame_credential_ids: frame_ids,
                 revoked_paired_client_ids: paired_ids,
                 revoked_device_certificate_ids: merged_ids(dependents.certificate_ids, cert_ids),
-                revoked_pairing_invitation_ids: invitation_ids,
                 revoked_passkey_ids: passkey_ids,
                 voided_confirmation_ids:
                   merged_ids(dependents.confirmation_ids, merged_ids(by_passkeys, own)),
@@ -506,15 +498,6 @@ defmodule Arca.SecurityTransitions do
     )
   end
 
-  # A person's pending pairing invitations in every athanor, and every
-  # pending invitation of an athanor it archives
-  # (`Arca.PairingInvitations.revoke_all/1`).
-  defp revoke_pairing_invitations(user_id, athanor_ids) do
-    PairingInvitations.revoke_all(
-      from(i in PairingInvitation, where: i.user_id == ^user_id or i.athanor_id in ^athanor_ids)
-    )
-  end
-
   defp void_confirmations(query), do: PendingConfirmations.void_all(query)
 
   # arca:unscoped-ok the postconditions of one person's denial, read across every athanor.
@@ -536,9 +519,6 @@ defmodule Arca.SecurityTransitions do
       ),
       from(c in DeviceCertificate,
         where: c.state != "revoked" and (c.user_id == ^user_id or c.athanor_id in ^athanor_ids)
-      ),
-      from(i in PairingInvitation,
-        where: i.state == "pending" and (i.user_id == ^user_id or i.athanor_id in ^athanor_ids)
       ),
       from(p in Passkey, where: p.user_id == ^user_id and p.state != "revoked"),
       from(c in PendingConfirmation,
@@ -584,8 +564,6 @@ defmodule Arca.SecurityTransitions do
           %{certificate_ids: cert_ids, session_hashes: cert_hashes} =
             revoke_certificates(user_id, [])
 
-          invitation_ids = revoke_pairing_invitations(user_id, [])
-
           %{
             empty_change()
             | transitioned: moved?,
@@ -603,7 +581,6 @@ defmodule Arca.SecurityTransitions do
               revoked_frame_credential_ids: frame_ids,
               revoked_paired_client_ids: paired_ids,
               revoked_device_certificate_ids: merged_ids(dependents.certificate_ids, cert_ids),
-              revoked_pairing_invitation_ids: invitation_ids,
               voided_confirmation_ids: dependents.confirmation_ids
           }
         end
@@ -706,12 +683,11 @@ defmodule Arca.SecurityTransitions do
   (`Arca.Invitations`). It deletes every session; suspends every
   unrevoked API key, every webhook, every active paired client and every
   active passkey; revokes every frame credential, every device
-  certificate (`Arca.DeviceCertificates`), every pending pairing
-  invitation and every open admission invitation
-  (`Arca.Invitations.revoke_all!/0`); deletes every pending confirmation
-  (`Arca.PendingConfirmations.delete_all!/0`); moves every active profile
-  to `needs_consent`, every active vault entry to `needs_reauth` and
-  every active share to `revoked` (`Arca.StatusTransitions.restored/1`),
+  certificate (`Arca.DeviceCertificates`) and every open admission
+  invitation (`Arca.Invitations.revoke_all!/0`); deletes every pending
+  confirmation (`Arca.PendingConfirmations.delete_all!/0`); moves every
+  active profile to `needs_consent`, every active vault entry to
+  `needs_reauth` and every active share to `revoked` (`Arca.StatusTransitions.restored/1`),
   answering the shares in `revoked_share_ids`; deletes every standing
   allow (`tool_grants` rows of effect `allow`; denies stay);
   drops every unconsumed once binding by consuming it under the restore
@@ -834,7 +810,6 @@ defmodule Arca.SecurityTransitions do
     # fresh hello, which pairs it anew and issues its own.
     %{certificate_ids: certificate_ids} = DeviceCertificates.revoke_all(DeviceCertificate)
 
-    invitation_ids = PairingInvitations.revoke_all(PairingInvitation)
     admission_invitation_ids = Invitations.revoke_all!()
 
     passkey_ids =
@@ -899,7 +874,6 @@ defmodule Arca.SecurityTransitions do
       revoked_frame_credential_ids: frame_ids,
       suspended_paired_client_ids: client_ids,
       revoked_device_certificate_ids: certificate_ids,
-      revoked_pairing_invitation_ids: invitation_ids,
       revoked_admission_invitation_ids: admission_invitation_ids,
       suspended_passkey_ids: passkey_ids,
       deleted_confirmation_refs: confirmation_refs,
@@ -1002,7 +976,6 @@ defmodule Arca.SecurityTransitions do
       from(f in FrameCredential, where: f.state != "revoked"),
       from(p in PairedClient, where: p.standing == "active"),
       from(c in DeviceCertificate, where: c.state != "revoked"),
-      from(i in PairingInvitation, where: i.state == "pending"),
       from(i in Invitation, where: is_nil(i.redeemed_at) and is_nil(i.revoked_at)),
       from(p in Passkey, where: p.state == "active"),
       PendingConfirmation,
@@ -1131,7 +1104,6 @@ defmodule Arca.SecurityTransitions do
       revoked_frame_credential_ids: [],
       revoked_paired_client_ids: [],
       revoked_device_certificate_ids: [],
-      revoked_pairing_invitation_ids: [],
       revoked_passkey_ids: [],
       voided_confirmation_ids: [],
       member_user_ids: %{},

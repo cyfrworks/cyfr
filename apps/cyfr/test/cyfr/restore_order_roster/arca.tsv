@@ -31,7 +31,6 @@ apps/arca/test/arca/object_revisions_lock_test.exs	1	pending
 apps/arca/test/arca/object_revisions_s3_test.exs	5	pending
 apps/arca/test/arca/object_revisions_test.exs	5	pending
 apps/arca/test/arca/paired_clients_test.exs	1	pending
-apps/arca/test/arca/pairing_invitations_test.exs	2	pending
 apps/arca/test/arca/passkeys_test.exs	2	pending
 apps/arca/test/arca/pending_confirmations_test.exs	2	pending
 apps/arca/test/arca/person_identities_test.exs	1	pending

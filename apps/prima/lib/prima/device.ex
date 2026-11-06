@@ -73,8 +73,6 @@ defmodule Prima.Device do
   alias Prima.SignIn.DeviceAnswer
 
   @protocol "cyfr-device/v1"
-  @digest_bytes 32
-  @code_group 4
   @max_args_bytes 65_536
   @max_names 64
   @name ~r/\A[a-z][a-z0-9_]{0,31}\z/
@@ -155,44 +153,6 @@ defmodule Prima.Device do
   def types(sender) when sender in [:glass, :home] do
     Enum.sort(for {type, {^sender, _required, _optional}} <- @types, do: type)
   end
-
-  @doc """
-  The digest of the device public key `device_key` (32 raw bytes):
-  SHA-256 over those bytes, as unpadded base64url.
-  """
-  @spec key_digest(binary()) :: String.t()
-  def key_digest(device_key) when is_binary(device_key) and byte_size(device_key) == 32,
-    do: Encoding.b64(:crypto.hash(:sha256, device_key))
-
-  @doc "Whether `value` is spelled as a key digest is: unpadded base64url of 32 bytes."
-  @spec key_digest?(term()) :: boolean()
-  def key_digest?(value), do: match?({:ok, _digest}, get(:digest, value))
-
-  @doc """
-  The key digest `key_digest` as a person reads and types it: its
-  characters in groups of four, separated by single spaces.
-  `from_key_code/1` reads it back.
-  """
-  @spec key_code(String.t()) :: String.t()
-  def key_code(key_digest) when is_binary(key_digest) do
-    key_digest
-    |> String.graphemes()
-    |> Enum.chunk_every(@code_group)
-    |> Enum.map_join(" ", &Enum.join/1)
-  end
-
-  @doc """
-  The key digest a person typed or pasted as `text`, its code spelled with
-  or without the spaces between its groups: `{:ok, key_digest}`, or
-  `:error` for anything else.
-  """
-  @spec from_key_code(term()) :: {:ok, String.t()} | :error
-  def from_key_code(text) when is_binary(text) do
-    digest = String.replace(text, ~r/\s+/u, "")
-    if key_digest?(digest), do: {:ok, digest}, else: :error
-  end
-
-  def from_key_code(_text), do: :error
 
   @doc "The fields that mark an intent as carrying continuous data."
   @spec continuous_fields() :: [String.t()]
@@ -291,10 +251,6 @@ defmodule Prima.Device do
 
   defp get(:id, value), do: ok_if(Encoding.id?(value), value)
   defp get(:ms, value), do: ok_if(Encoding.ms?(value), value)
-
-  defp get(:digest, value) do
-    with {:ok, _bytes} <- Encoding.unb64(value, @digest_bytes), do: {:ok, value}
-  end
 
   defp get(:kid, value), do: ok_if(Encoding.digest?(value), value)
   defp get(:identifier, value), do: ok_if(Encoding.identifier?(value), value)

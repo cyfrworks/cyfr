@@ -798,7 +798,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
-  # Device certificates, pending confirmations and pairing invitations
+  # Device certificates and pending confirmations
   # ==========================================================================
 
   defp devices_and_confirmations do
@@ -914,57 +914,6 @@ defmodule Arca.Repo.Migrations.Baseline do
            )
 
     create index(:pending_confirmations, [:kid], where: "kid IS NOT NULL")
-
-    invitation_checks = [
-      known("pairing_invitations_state_known", "state", ~w(pending consumed revoked)),
-      known(
-        "pairing_invitations_confirmer_kind_known",
-        "confirmer_kind",
-        ~w(passkey device home)
-      ),
-      %{
-        name: "pairing_invitations_confirmer_whole",
-        expr: "(confirmer_kind IS NULL) = (confirmer_id IS NULL)"
-      }
-    ]
-
-    # A pairing invitation: the hash of its bearer secret (never the
-    # secret), the person and athanor it was opened under, the client id
-    # it reserves for the device that redeems it, its audience and expiry.
-    # Consumed once with issuance; a closed invitation never reopens. It
-    # names the digest of the key the new device showed before it opened,
-    # the only key that may complete it, and the passkey or paired client
-    # whose confirmation opened it, which must still stand at completion;
-    # an invitation opened before the person held either names none.
-    create table(:pairing_invitations, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
-      add :secret_hash, :string, null: false
-      add :user_id, :string, null: false
-      add :prospective_client_id, :string, null: false
-      add :audience_home, :text, null: false
-      add :expires_at, :utc_datetime_usec, null: false
-
-      add :state, :string,
-        null: false,
-        default: "pending",
-        check: if(sqlite?, do: Enum.at(invitation_checks, 0))
-
-      add :consumed_at, :utc_datetime_usec
-      add :revoked_at, :utc_datetime_usec
-      add :key_digest, :string
-
-      add :confirmer_kind, :string, check: if(sqlite?, do: Enum.at(invitation_checks, 1))
-
-      add :confirmer_id, :string, check: if(sqlite?, do: Enum.at(invitation_checks, 2))
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :pairing_invitations, invitation_checks)
-    create unique_index(:pairing_invitations, [:secret_hash])
-    create unique_index(:pairing_invitations, [:prospective_client_id])
-    create index(:pairing_invitations, [:athanor_id, :user_id, :state])
   end
 
   # A closed vocabulary as a check. SQLite takes a check only inside CREATE
