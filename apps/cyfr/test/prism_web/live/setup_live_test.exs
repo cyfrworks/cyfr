@@ -130,6 +130,17 @@ defmodule PrismWeb.SetupLiveTest do
       assert people() == 0
     end
 
+    test "the passkey is labelled with CYFR and the name typed, before cyfr.run holds it", %{
+      conn: conn
+    } do
+      directory!()
+      registry!()
+      {_browser, view} = opened(conn)
+      name!(view, "mira")
+      labelled!(view, "setup", "mira")
+      assert people() == 0
+    end
+
     test "a wrong token, a missing one and a CYFR with no setup token go to the root and start no ceremony",
          %{conn: conn} do
       for token <- [String.duplicate("0f", 32), "", "not-hex"], do: closed!(conn, token)
@@ -245,6 +256,9 @@ defmodule PrismWeb.SetupLiveTest do
       refute has_element?(view, ~s([data-test="admission-name-input"]))
       assert has_element?(view, ~s([data-test="admission-create"][data-webauthn-start]))
       refute_vocabulary(render(view))
+
+      # The passkey is labelled with the name the person holds.
+      labelled!(view, "setup", "mira")
 
       # Their code was saved at the first address, so nothing is left to
       # save and the page signs them in.

@@ -87,7 +87,7 @@ defmodule Sanctum.Newcomer do
 
     * `{:passkey, registration, identity}`, for setup, an invitation and
       an open admission — the browser's answer to
-      `Sanctum.Passkeys.newcomer_options/0`, verified with no transaction
+      `Sanctum.Passkeys.newcomer_options/1`, verified with no transaction
       open (`Sanctum.Passkeys.verify_newcomer/1`) and written, active,
       inside the admission's transaction (`Sanctum.Passkeys.write_newcomer/2`),
       so a failed admission leaves neither a person nor a passkey. The

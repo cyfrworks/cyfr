@@ -24,7 +24,7 @@ defmodule PrismWeb.LoginLive do
        (`PrismWeb.AdmissionCard`). The name is checked against cyfr.run
        under a per-address bound, since the page holds no token or code
        to check it under. The passkey registration
-       (`Sanctum.Passkeys.newcomer_options/0`, the `SystemLayer` hook in
+       (`Sanctum.Passkeys.newcomer_options/1`, the `SystemLayer` hook in
        its `create` mode), with the name and the recovery secret and
        request id the browser drew, is presented to
        `Sanctum.Newcomer.admit/2` as an open admission, which makes the
@@ -343,7 +343,7 @@ defmodule PrismWeb.LoginLive do
       true ->
         with {:ok, true} <- Sanctum.Door.Store.wildcard(),
              {:ok, %{public_key: public_key, registration: registration}} <-
-               Sanctum.Passkeys.newcomer_options() do
+               Sanctum.Passkeys.newcomer_options(socket.assigns.admission_name) do
           {:reply, %{public_key: public_key, registration: registration},
            assign(socket, :admission_error, nil)}
         else

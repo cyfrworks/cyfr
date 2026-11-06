@@ -18,7 +18,7 @@ defmodule PrismWeb.SetupLive do
 
   Otherwise the person meets the two screens (`PrismWeb.AdmissionCard`):
   their name, checked against cyfr.run under the token the page holds,
-  and a passkey (`Sanctum.Passkeys.newcomer_options/0`) whose
+  and a passkey (`Sanctum.Passkeys.newcomer_options/1`) whose
   registration, with the name and the recovery secret and request id
   the browser drew, is the setup admission's credential
   (`Sanctum.Newcomer.admit/2` with `{:setup, token}`), which makes the
@@ -129,7 +129,7 @@ defmodule PrismWeb.SetupLive do
       true ->
         with {:ok, _whom} <- Sanctum.Newcomer.setup_open(token),
              {:ok, %{public_key: public_key, registration: registration}} <-
-               Sanctum.Passkeys.newcomer_options() do
+               Sanctum.Passkeys.newcomer_options(socket.assigns.admission_name) do
           {:reply, %{public_key: public_key, registration: registration},
            assign(socket, :admission_error, nil)}
         else

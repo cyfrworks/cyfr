@@ -289,6 +289,7 @@ defmodule PrismWeb.LoginLiveTest do
       browser = get(conn, ~p"/login")
       {:ok, view, _html} = live(browser, ~p"/login")
       name!(view, "mira")
+      labelled!(view, "create", "mira")
       identity = admit!(view, "create")
 
       assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people + 1

@@ -95,7 +95,7 @@ defmodule Sanctum.NewcomerTest do
   defp registration, do: registration(authenticator())
 
   defp registration(auth) do
-    {:ok, options} = Sanctum.Passkeys.newcomer_options()
+    {:ok, options} = Sanctum.Passkeys.newcomer_options("newcomer")
     Authenticator.registration(auth, options)
   end
 
@@ -724,6 +724,22 @@ defmodule Sanctum.NewcomerTest do
       assert {:ok, %{user_id: _}} = Sanctum.Session.get(token)
     end
 
+    test "the passkeys the person registers are labelled with the name they typed, before cyfr.run holds it" do
+      %{person: _first} = setup!()
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+
+      {:ok, %{person: person}} =
+        Newcomer.admit(:open, {:passkey, registration(), identity("opened")})
+
+      assert %{namespace: nil} = Arca.Repo.get!(User, person.id)
+
+      assert {:ok, %{public_key: %{"rp" => rp, "user" => user}}} =
+               Sanctum.Passkeys.register(Sanctum.TestContext.session!(person.id), %{})
+
+      assert rp["name"] == "CYFR"
+      assert {user["name"], user["displayName"]} == {"@opened", "CYFR @opened"}
+    end
+
     test "at a cap is refused before the person's row: none is inserted, no athanor, no passkey" do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
@@ -763,7 +779,7 @@ defmodule Sanctum.NewcomerTest do
       seed = "same-credential-#{System.unique_integer([:positive])}"
 
       registered = fn ->
-        {:ok, options} = Sanctum.Passkeys.newcomer_options()
+        {:ok, options} = Sanctum.Passkeys.newcomer_options("newcomer")
         Authenticator.registration(Authenticator.new(seed), options)
       end
 
@@ -1597,7 +1613,9 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
   # A newcomer's registration and the person id it was drawn for, which
   # the case's cleanup names.
   defp registered do
-    {:ok, %{registration: token} = options} = unboxed(&Sanctum.Passkeys.newcomer_options/0)
+    {:ok, %{registration: token} = options} =
+      unboxed(fn -> Sanctum.Passkeys.newcomer_options("newcomer") end)
+
     {:ok, json} = Base.url_decode64(token, padding: false)
     %{"user" => person_id} = Jason.decode!(json)
 
