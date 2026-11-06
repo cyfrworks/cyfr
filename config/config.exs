@@ -210,6 +210,21 @@ config :esbuild,
           "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/js/sdk by `mix esbuild sdk`."
         ],
     cd: Path.expand("../apps/cyfr/assets", __DIR__)
+  ],
+  # The account pages: one script, its service worker, five pages and a
+  # stylesheet, served at /account/* by a directory and vendored built by
+  # cyfr.run. `mix esbuild account` rebuilds them; the built files are
+  # tracked, so a checkout carries what a directory serves.
+  account: [
+    args:
+      ~w(account=account/main.js sw=account/sw.js account/new.html account/sign.html account/add.html
+         account/recover.html account/devices.html account/account.css
+         --bundle --format=iife --target=es2020 --entry-names=[name]
+         --loader:.html=copy --loader:.css=copy --outdir=../priv/static/account) ++
+        [
+          "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/account by `mix esbuild account`."
+        ],
+    cd: Path.expand("../apps/cyfr/assets", __DIR__)
   ]
 
 # Prism tailwind configuration. A version bump adds the CLI's sha256 pins
