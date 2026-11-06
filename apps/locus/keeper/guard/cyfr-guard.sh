@@ -23,6 +23,17 @@
 # resolver and the private hosts passing for it there too, since the
 # kernel tracks a connection by its addresses and ports alone and state
 # one uid left would otherwise serve another that reuses them.
+# CYFR_GUARD_KNOWN comes before the metadata, control-plane, local and
+# private rules below without opening what they refuse: the kernel keeps a
+# connection's tracking only once its first packet has passed every hook,
+# and a first packet these rules refuse (OUTPUT is the only filter here)
+# discards its unconfirmed entry, so a tracked connection is one whose first
+# packet these rules admitted for its sender (the resolver, the private
+# hosts, the island service's own loopback, a public host) or one that came
+# into the namespace from outside, as a connection cyfr opens to the
+# island does. Reusing a tracked tuple reaches only a destination one of
+# those first packets reached, and a uid's own list still judges each of
+# its packets.
 #
 # What the rules refuse, for a new connection, in this order. The metadata and
 # private rows are Prima.Cidr's address table (`Prima.Cidr.address_table/0`),
