@@ -48,20 +48,26 @@ defmodule Sanctum.Passkeys do
 
   @doc """
   End every session here the context person's passkey `kid` signed for
-  (the module doc). Answers `%{kid, sessions}`, how many ended;
-  `{:not_found, "passkey", kid}` for a key that signed none of theirs.
+  (the module doc), in one statement (`Arca.SessionStorage.delete_signed_by/2`);
+  once it has committed, each ended session's memo is dropped and the
+  revocation announced. Answers `%{kid, sessions}`, how many ended;
+  `{:not_found, "passkey", kid}` for a key that signed none of theirs;
+  `:unavailable` when the store could not delete them, with nothing ended
+  and nothing announced.
   """
   @spec revoke(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def revoke(%Context{} = ctx, kid) when is_binary(kid) do
     with {:ok, user_id} <- person(ctx) do
-      case for(%{kid: ^kid, hash: hash} <- signed_in(user_id), do: hash) do
-        [] ->
+      case Arca.SessionStorage.delete_signed_by(Context.actor(ctx), kid) do
+        {:ok, []} ->
           {:error, {:not_found, "passkey", kid}}
 
-        hashes ->
-          Enum.each(hashes, &Sanctum.Session.destroy_by_hash/1)
-          Sanctum.Session.announce_revoked(user_id, [])
+        {:ok, hashes} ->
+          :ok = Sanctum.Session.announce_revoked(user_id, hashes)
           {:ok, %{kid: kid, sessions: length(hashes)}}
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
       end
     end
   end

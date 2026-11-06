@@ -463,6 +463,35 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
+  Delete every session of the actor's person that the passkey `kid`
+  signed for (provider `passkey`), in one statement, and answer the token
+  hashes it deleted, for the caller to drop from every memo and announce
+  once this returns: `{:ok, hashes}`, empty when there were none;
+  `{:error, :no_person}` for an actor naming no person;
+  `{:error, :database_error}` when the store cannot answer, with nothing
+  deleted.
+  """
+  @spec delete_signed_by(Prima.Actor.t(), String.t()) ::
+          {:ok, [binary()]} | {:error, :no_person | :database_error}
+  # arca:unscoped-ok a passkey's sign-ins are its person's sessions in whatever athanor; the actor's person is the scope.
+  def delete_signed_by(%Prima.Actor{user_id: user_id}, kid)
+      when is_binary(user_id) and user_id != "" and is_binary(kid) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_signed_by", fn ->
+      {_count, hashes} =
+        Arca.Repo.delete_all(
+          from(s in Session,
+            where: s.user_id == ^user_id and s.provider == "passkey" and s.kid == ^kid,
+            select: s.token_hash
+          )
+        )
+
+      {:ok, hashes || []}
+    end)
+  end
+
+  def delete_signed_by(%Prima.Actor{}, _kid), do: {:error, :no_person}
+
+  @doc """
   Delete every session of one user. Returns `{:ok, count}`.
   """
   @spec delete_by_user(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}

@@ -66,6 +66,32 @@ defmodule Sanctum.PasskeysTest do
         permissions: Context.person_permissions()
       )
 
+  # A delete from the sessions table refused by the store, per adapter.
+  defp fail_deletes! do
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!(
+        "CREATE TRIGGER pk_fail_delete BEFORE DELETE ON sessions " <>
+          "BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END"
+      )
+    else
+      Arca.Repo.query!(
+        "CREATE FUNCTION pk_fail_delete() RETURNS trigger LANGUAGE plpgsql AS " <>
+          "$$ BEGIN RAISE EXCEPTION 'injected delete failure'; END $$"
+      )
+
+      Arca.Repo.query!(
+        "CREATE TRIGGER pk_fail_delete BEFORE DELETE ON sessions " <>
+          "FOR EACH ROW EXECUTE FUNCTION pk_fail_delete()"
+      )
+    end
+  end
+
+  defp allow_deletes! do
+    if Arca.Test.Adapter.sqlite?(),
+      do: Arca.Repo.query!("DROP TRIGGER pk_fail_delete"),
+      else: Arca.Repo.query!("DROP TRIGGER pk_fail_delete ON sessions")
+  end
+
   defp kid(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
   defp hashes(person),
@@ -102,6 +128,32 @@ defmodule Sanctum.PasskeysTest do
     refute Enum.any?(ended, &(&1 in hashes(person)))
 
     assert {:error, {:not_found, "passkey", ^phone}} = Passkeys.revoke(ctx(person), phone)
+  end
+
+  test "a deletion that fails refuses the revocation, with nothing ended or announced" do
+    person = person!()
+    phone = kid("phone")
+    held = [session!(person, "passkey", phone), session!(person, "passkey", phone)]
+    test = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        [[:cyfr, :sanctum, :sessions, :revoked], [:cyfr, :sanctum, :caller, :invalidated]],
+        fn event, _measurements, _metadata, _config -> send(test, {:announced, event}) end,
+        nil
+      )
+
+    # The store reads the sessions and cannot delete them, inside the
+    # case's own transaction.
+    fail_deletes!()
+    assert {:error, :unavailable} = Passkeys.revoke(ctx(person), phone)
+    allow_deletes!()
+
+    refute_received {:announced, _event}
+    assert Enum.sort(hashes(person)) == Enum.sort(held)
   end
 
   test "only a person signed in reads or revokes" do
