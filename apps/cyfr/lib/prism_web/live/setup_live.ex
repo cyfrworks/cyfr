@@ -5,47 +5,39 @@ defmodule PrismWeb.SetupLive do
   @moduledoc """
   `/setup`: the page the setup link opens (`<CYFR address>/setup#<token>`,
   which `cyfr init` prints and `cyfr setup`'s done screen opens). It sets
-  the CYFR up by creating its first person, who administers it.
+  the CYFR up by admitting its first person, who administers it.
 
   It is sessionless. The token travels in the address's fragment, which
   no server log records; the page's script hands it over
-  (`system_layer/index.js`, the `SystemLayer` hook in its `setup` mode),
-  and the page asks whether it opens setup (`Sanctum.Newcomer.setup_open/1`)
-  before any ceremony starts. A token that is not this CYFR's, or a CYFR
-  set up already, is one answer: the page goes to `/`, so the setup link
-  can always be opened, whoever opens it. A browser that already holds a
-  session that stands goes into CYFR.
+  (`system_layer/index.js`, the `SystemLayer` hook with
+  `data-account="setup"`), and the page asks whether it opens setup
+  (`Sanctum.Newcomer.setup_open/1`) before it offers anything. A token
+  that is not this CYFR's, or a CYFR set up already, is one answer: the
+  page goes to `/`, so the setup link can always be opened, whoever opens
+  it. A browser that already holds a session that stands goes into CYFR.
 
-  Otherwise the person meets the two screens (`PrismWeb.AdmissionCard`):
-  their name, checked against cyfr.run under the token the page holds,
-  and a passkey (`Sanctum.Passkeys.newcomer_options/1`) whose
-  registration, with the name and the recovery secret and request id
-  the browser drew, is the setup admission's credential
-  (`Sanctum.Newcomer.admit/2` with `{:setup, token}`), which makes the
-  person, their keys, their athanor, the passkey, the platform administrator's mark and
-  their enrollment in one transaction. A cancelled ceremony sends
-  nothing. Then screen 2 registers them at cyfr.run, shows their
-  recovery code, and "I saved it" signs them in.
+  Otherwise the person signs in with their account, or creates it: this
+  CYFR mints a sign-in request bound to this browser and holding the
+  setup token (`Sanctum.SignIn.request/3`), and the page sends the
+  browser to the account pages with it, the sign page or the new page.
+  The answer comes back to the sign-in page (`PrismWeb.LoginLive`), which
+  admits the account under the token (`Sanctum.Newcomer`) and signs them
+  in.
 
-  When the link lets the person setup made in again, as after an address
-  change left their passkeys at the old one, the page asks no name: it
-  offers a passkey for the name their enrollment holds, and screen 2
-  follows as before.
-
-  The screens carry their own `data-test` names.
+  Its controls carry `data-test` names: `setup-sign-in`, `setup-create`
+  and `setup-error`.
   """
 
   use PrismWeb, :live_view
 
-  alias PrismWeb.AdmissionCard
-
-  # Passkey ceremonies begun per address, as the sign-in page bounds its
-  # own: the page is reached over the LiveView socket, which passes no
-  # rate-limit plug.
+  # Requests minted per address, as the sign-in page bounds its own: the
+  # page is reached over the LiveView socket, which passes no rate-limit
+  # plug.
   @starts 30
   @window_ms 60_000
 
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
+  @rate_limited "Too many sign-ins from here. Try again in a minute."
 
   @impl true
   def mount(params, session, socket) do
@@ -56,9 +48,7 @@ defmodule PrismWeb.SetupLive do
       |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
       |> assign(:step, :reading)
       |> assign(:token, nil)
-      |> assign(:readmit, nil)
       |> assign(:error, nil)
-      |> AdmissionCard.mount()
 
     {:ok, signed_in(socket, params, session), layout: false}
   end
@@ -81,105 +71,42 @@ defmodule PrismWeb.SetupLive do
   end
 
   @impl true
-  def handle_event("setup_token", %{"token" => token}, %{assigns: %{step: :reading}} = socket)
+  def handle_event("account_token", %{"token" => token}, %{assigns: %{step: :reading}} = socket)
       when is_binary(token) do
     case Sanctum.Newcomer.setup_open(token) do
-      {:ok, :first} ->
-        {:noreply, assign(socket, step: :passkey, token: token, error: nil)}
-
-      {:ok, {:readmit, name}} ->
-        {:noreply,
-         assign(socket,
-           step: :passkey,
-           token: token,
-           readmit: name,
-           admission_name: name,
-           error: nil
-         )}
-
-      {:error, :setup_closed} ->
-        {:noreply, redirect(socket, to: ~p"/")}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, :error, PrismWeb.Ops.error_message(reason))}
+      :ok -> {:noreply, assign(socket, step: :open, token: token, error: nil)}
+      {:error, :setup_closed} -> {:noreply, redirect(socket, to: ~p"/")}
+      {:error, reason} -> {:noreply, assign(socket, :error, PrismWeb.Ops.error_message(reason))}
     end
   end
 
-  def handle_event("setup_token", _params, socket), do: {:noreply, socket}
+  def handle_event("account_token", _params, socket), do: {:noreply, socket}
 
-  # The name is checked under the token the page holds.
-  def handle_event("admission_check", params, %{assigns: %{step: :passkey}} = socket),
-    do: {:noreply, AdmissionCard.check(socket, params)}
+  def handle_event("sign_in", _params, socket), do: {:noreply, hop(socket, :sign)}
+  def handle_event("create", _params, socket), do: {:noreply, hop(socket, {:new, nil})}
 
-  def handle_event("admission_check", _params, socket), do: {:noreply, socket}
-
-  def handle_event("setup_start", _params, %{assigns: %{step: :passkey, token: token}} = socket) do
+  # The sign-in request under the setup token, and the browser sent to the
+  # account pages with it.
+  defp hop(%{assigns: %{step: :open, token: token}} = socket, page) do
     cond do
-      is_nil(socket.assigns.readmit) and not AdmissionCard.startable?(socket) ->
-        {:reply, %{error: true}, socket}
-
       not Arca.ControlPlane.held?() ->
-        {:reply, %{error: @not_owner}, assign(socket, :admission_error, @not_owner)}
+        assign(socket, :error, @not_owner)
 
-      Prima.RateLimiter.check({:setup_passkey, socket.assigns.client_ip}, @starts, @window_ms) !=
-          :ok ->
-        message = "Too many passkey ceremonies from here. Try again in a minute."
-        {:reply, %{error: message}, assign(socket, :admission_error, message)}
+      Prima.RateLimiter.check({:sign_in, socket.assigns.client_ip}, @starts, @window_ms) != :ok ->
+        assign(socket, :error, @rate_limited)
 
       true ->
-        with {:ok, _whom} <- Sanctum.Newcomer.setup_open(token),
-             {:ok, %{public_key: public_key, registration: registration}} <-
-               Sanctum.Passkeys.newcomer_options(socket.assigns.admission_name) do
-          {:reply, %{public_key: public_key, registration: registration},
-           assign(socket, :admission_error, nil)}
-        else
-          {:error, reason} -> {:reply, %{error: true}, refused(socket, reason)}
+        case Sanctum.SignIn.request(:sign_in, {:browser, socket.assigns.browser_binding},
+               admission: {:setup, token},
+               page: page
+             ) do
+          {:ok, %{url: url}} -> push_event(socket, "account:hop", %{url: url})
+          {:error, reason} -> assign(socket, :error, PrismWeb.Ops.error_message(reason))
         end
     end
   end
 
-  def handle_event("setup_start", _params, socket), do: {:reply, %{error: true}, socket}
-
-  def handle_event(
-        "setup_passkey",
-        %{"credential" => credential} = params,
-        %{assigns: %{step: :passkey, token: token}} = socket
-      )
-      when is_map(credential) do
-    with {:ok, identity} <- AdmissionCard.identity(socket, params),
-         {:ok, admitted} <-
-           Sanctum.Newcomer.admit({:setup, token}, {:passkey, credential, identity}) do
-      {:noreply, socket |> assign(:step, :admitted) |> AdmissionCard.admitted(admitted)}
-    else
-      {:error, reason} -> {:noreply, refused(socket, reason)}
-    end
-  end
-
-  def handle_event("setup_passkey", _params, socket), do: {:noreply, socket}
-
-  def handle_event("setup_error", _params, %{assigns: %{step: :passkey}} = socket),
-    do: {:noreply, assign(socket, :admission_error, AdmissionCard.ceremony_failed())}
-
-  def handle_event("setup_error", _params, socket), do: {:noreply, socket}
-
-  # Screen 2's events, once the person is admitted.
-  def handle_event("admission_" <> _ = event, params, %{assigns: %{step: :admitted}} = socket),
-    do: {:noreply, AdmissionCard.event(event, params, socket)}
-
-  def handle_event("admission_" <> _, _params, socket), do: {:noreply, socket}
-
-  @impl true
-  def handle_info(message, socket) do
-    case AdmissionCard.handle_info(message, socket) do
-      :pass -> {:noreply, socket}
-      handled -> handled
-    end
-  end
-
-  defp refused(socket, :setup_closed), do: redirect(socket, to: ~p"/")
-
-  defp refused(socket, reason),
-    do: assign(socket, :admission_error, AdmissionCard.refusal(reason, true))
+  defp hop(socket, _page), do: socket
 
   @impl true
   def render(assigns) do
@@ -196,58 +123,36 @@ defmodule PrismWeb.SetupLive do
           <h1 class="text-2xl font-bold tracking-tight text-indigo-200">Set up CYFR</h1>
         </div>
 
-        <div class="bg-gray-900 rounded-lg shadow-xl p-6 space-y-4">
-          <div
-            :if={@step in [:reading, :passkey, :admitted]}
-            id="setup-passkey"
-            phx-hook="SystemLayer"
-            data-webauthn="setup"
-            class="space-y-4"
-          >
-            <div :if={@step == :reading} class="space-y-2">
-              <p class="text-sm text-gray-400">Reading the setup link.</p>
-              <p :if={@error} role="alert" data-test="admission-error" class="text-sm text-red-300">
-                {@error}
-              </p>
-            </div>
-            <div :if={@step == :passkey and @readmit != nil} class="space-y-4">
-              <p class="text-sm text-gray-300 leading-relaxed" data-test="setup-readmit">
-                Register a passkey for {@readmit} at this address.
-              </p>
-              <p
-                :if={@admission_error}
-                role="alert"
-                data-test="admission-error"
-                class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300"
-              >
-                {@admission_error}
-              </p>
-              <button
-                type="button"
-                data-webauthn-start
-                data-test="admission-create"
-                class="w-full px-4 py-3 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg transition-colors cursor-pointer"
-              >
-                Create a passkey
-              </button>
-            </div>
-            <AdmissionCard.name_screen
-              :if={@step == :passkey and @readmit == nil}
-              name={@admission_name}
-              check={@admission_check}
-              error={@admission_error}
+        <div
+          id="setup-account"
+          phx-hook="SystemLayer"
+          data-account="setup"
+          class="bg-gray-900 rounded-lg shadow-xl p-6 space-y-4"
+        >
+          <p :if={@step == :reading} class="text-sm text-gray-400">Reading the setup link.</p>
+          <p :if={@error} role="alert" data-test="setup-error" class="text-sm text-red-300">
+            {@error}
+          </p>
+          <div :if={@step == :open} class="space-y-4">
+            <p class="text-sm text-gray-300 leading-relaxed">
+              You are the first person on this CYFR, and you run it.
+            </p>
+            <button
+              type="button"
+              phx-click="sign_in"
+              data-test="setup-sign-in"
+              class="w-full px-4 py-3 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg transition-colors cursor-pointer"
             >
-              <p class="text-sm text-gray-300 leading-relaxed">
-                You are the first person on this CYFR, and you run it.
-              </p>
-            </AdmissionCard.name_screen>
-            <AdmissionCard.code_screen
-              :if={@step == :admitted}
-              state={@admission_state}
-              name={@admission_name}
-              error={@admission_error}
-              runs_cyfr
-            />
+              Sign in with your account
+            </button>
+            <button
+              type="button"
+              phx-click="create"
+              data-test="setup-create"
+              class="w-full px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition-colors cursor-pointer"
+            >
+              Create your account
+            </button>
           </div>
         </div>
       </div>

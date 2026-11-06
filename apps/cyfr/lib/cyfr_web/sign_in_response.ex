@@ -5,21 +5,18 @@ defmodule CyfrWeb.SignInResponse do
   @moduledoc """
   One transcription of the sign-in outcome to a browser response.
 
-  An admitted sign-in proceeds (`:proceed`); four surfaces render it —
-  the Ueberauth callback, the device-flow ticket, the passkey ticket and
-  the `cyfr` door's callback — and one more answer, an account read
-  that failed while minting the session, is a page. This module owns the
-  one mapping, and the differences that are real travel as options:
+  An admitted sign-in proceeds (`:proceed`); the sign-in's ticket renders
+  it (`PrismWeb.PasskeyController`), and the protected device's unlock
+  ticket, and one more answer, an account read that failed while minting
+  the session, is a page. This module owns the one mapping, and the
+  differences that are real travel as options:
 
     * `:session` — `{:mint, ctx}` (create the session and cookie it) or
-      `{:token, token}` (cookie an already-minted token — the device and
-      passkey tickets and the `cyfr` door).
+      `{:token, token}` (cookie an already-minted token — the tickets).
     * `:retry_path` — where the 503 page's "Try again" points.
     * `:to` — where a proceeding sign-in goes instead of the post-login
       landing, answered `303`: an absolute URL its caller has already
-      verified. Only the `cyfr` door's callback passes one, the fixed
-      return URL of the signing home's `/carry` that the carry's envelope
-      signed, so the person's browser reports the outcome there.
+      verified.
 
   Every outcome is a redirect or a page; the session token travels in
   the cookie and nowhere else.
@@ -111,7 +108,7 @@ defmodule CyfrWeb.SignInResponse do
 
   # Start the authenticated session on a clean one. Whatever the browser
   # carried while anonymous — most of all Phoenix's `_csrf_token`, which is
-  # the value `AuthController.same_browser?/2` binds a device-flow ticket to
+  # the value `PasskeyController.same_browser?/2` binds a sign-in ticket to
   # — must not survive the exchange, or a session an attacker could plant on
   # this origin beforehand keeps its hold afterwards. `clear_session/1` drops
   # the data (the cookie store keeps no id to rotate) and `renew: true` moves

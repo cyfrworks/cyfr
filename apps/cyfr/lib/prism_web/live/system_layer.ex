@@ -126,11 +126,6 @@ defmodule PrismWeb.SystemLayer do
       `webhook.reenable`, `pairing.reenable` or `passkey.reenable` of the
       item the person chose (below).
 
-  A page registers a passkey through the layer's `webauthn:create`
-  ceremony (`create_passkey/4`): the browser answers the layer, which
-  hands the credential to the page (`{:system_layer_passkey, {:ok,
-  credential} | :error}`) to register through `passkey.register`.
-
   ## After a declared restore
 
   A layer that listens, on the page of a person who can confirm, reads
@@ -162,12 +157,13 @@ defmodule PrismWeb.SystemLayer do
   (`PrismWeb.Ops.call_tool/4`'s `confirmation_id:`). The prompt names the
   record by its public ref (`Prima.Confirmation.ref/1`), reads the
   record's preview and the client that asked through `confirmation.pending`,
-  and shows them before any proof. It offers a passkey (the `webauthn:get`
-  ceremony over the record's digest), a fresh sign-in at the person's
-  identity provider (`confirmation.reauth`, opened in a new tab so this
-  page stays), a code sent to their verified email where one can reach
-  them, and cancel (`confirmation.cancel`), each only where the record's
-  `methods` offer it.
+  and shows them before any proof. It offers a passkey of the person's
+  account where the record's `methods` offer one: this CYFR mints the
+  record's `confirm` request (`confirmation.request`), and the browser
+  opens the account pages with it in a new tab (`system_layer:hop`), so
+  this page stays with its waiting change; the answer returns to the
+  sign-in page in that tab, which confirms the record. It offers cancel
+  too (`confirmation.cancel`).
 
   The layer listens on `confirmation.changes` while it is mounted on a
   connected page with a person behind it, unless it was mounted with
@@ -266,26 +262,6 @@ defmodule PrismWeb.SystemLayer do
   def show(id \\ @layer_id, prompt) do
     send_update(__MODULE__, id: id, prompt: prompt)
     :ok
-  end
-
-  @doc """
-  Ask the browser of the page `socket` is to create a passkey with the
-  creation options `public_key` and the home's `registration` token, both
-  as `passkey.register` answered them, through the layer `layer`'s hook
-  (`webauthn:create`). The layer hands the page the answer as
-  `{:system_layer_passkey, {:ok, credential}}`, or `{:system_layer_passkey,
-  :error}` when the ceremony did not finish.
-  """
-  @spec create_passkey(Phoenix.LiveView.Socket.t(), map(), String.t(), String.t()) ::
-          Phoenix.LiveView.Socket.t()
-  def create_passkey(socket, public_key, registration, layer \\ @layer_id)
-      when is_map(public_key) and is_binary(registration) do
-    push_event(socket, "webauthn:create", %{
-      layer: layer,
-      purpose: "passkey",
-      public_key: public_key,
-      registration: registration
-    })
   end
 
   # ---------------------------------------------------------------------------
@@ -1161,9 +1137,6 @@ defmodule PrismWeb.SystemLayer do
         %{
           status: :pending,
           form: nil,
-          reauth_url: nil,
-          home_url: nil,
-          code_sent: false,
           entry: nil
         },
         panel
@@ -1229,13 +1202,6 @@ defmodule PrismWeb.SystemLayer do
     case Map.get(socket.assigns.panels, ref) do
       nil -> socket
       panel -> put_panel(socket, ref, %{panel | status: status})
-    end
-  end
-
-  defp update_panel(socket, ref, changes) do
-    case Map.get(socket.assigns.panels, ref) do
-      nil -> socket
-      panel -> put_panel(socket, ref, Map.merge(panel, changes))
     end
   end
 
@@ -1544,86 +1510,14 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # A page's passkey ceremony (`create_passkey/4`): the answer is the
-  # page's to register.
-  def handle_event(
-        "webauthn_result",
-        %{"purpose" => "passkey", "credential" => credential},
-        socket
-      )
-      when is_map(credential) do
-    send(self(), {:system_layer_passkey, {:ok, credential}})
-    {:noreply, socket}
-  end
-
-  def handle_event("webauthn_error", %{"purpose" => "passkey"}, socket) do
-    send(self(), {:system_layer_passkey, :error})
-    {:noreply, socket}
-  end
-
+  # A passkey of the person's account confirms at the account pages, in a
+  # new tab, with the record's request this CYFR mints.
   def handle_event("prove_passkey", %{"ref" => ref}, socket) do
-    case open_panel(socket, ref) do
-      {:ok, %{entry: %{webauthn: %{} = options}}} ->
-        {:noreply,
-         socket
-         |> assign(:error, nil)
-         |> push_layer("webauthn:get", %{purpose: "confirmation", id: ref, public_key: options})}
-
-      _none ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event(
-        "webauthn_result",
-        %{"purpose" => "confirmation", "id" => ref, "credential" => credential},
-        socket
-      )
-      when is_map(credential) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      prove(socket, ref, %{"ref" => ref, "assertion" => credential})
-    end)
-  end
-
-  def handle_event("webauthn_error", %{"purpose" => "confirmation", "id" => ref}, socket) do
-    case open_panel(socket, ref) do
-      {:ok, _panel} ->
-        {:noreply, assign(socket, :error, "The passkey did not answer. Nothing was confirmed.")}
-
-      :none ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("reauth", %{"ref" => ref, "method" => method}, socket)
-      when method in ["oidc", "email"] do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open_panel(socket, ref) do
-        {:ok, _panel} -> {:noreply, reauth(socket, ref, method)}
+        {:ok, _panel} -> {:noreply, hop(socket, ref)}
         :none -> {:noreply, socket}
       end
-    end)
-  end
-
-  # A remote person confirms at their own home: the address they type, an
-  # origin and never this home, is where the record's `at_home` is carried,
-  # in the fragment of its `/carry` page, which no server sees.
-  def handle_event("confirm_at_home", %{"ref" => ref, "home" => home}, socket)
-      when is_binary(home) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open_panel(socket, ref) do
-        {:ok, %{entry: %{at_home: %{} = at_home}}} ->
-          {:noreply, at_home_url(socket, ref, String.trim(home), at_home)}
-
-        _none ->
-          {:noreply, socket}
-      end
-    end)
-  end
-
-  def handle_event("prove_code", %{"ref" => ref, "code" => code}, socket) when is_binary(code) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      prove(socket, ref, %{"ref" => ref, "code" => String.trim(code)})
     end)
   end
 
@@ -2272,54 +2166,18 @@ defmodule PrismWeb.SystemLayer do
   # Proofs
   # ---------------------------------------------------------------------------
 
-  defp prove(socket, ref, args) do
-    case open_panel(socket, ref) do
-      {:ok, panel} ->
-        case Ops.call_tool(socket, "confirmation/confirm", args) do
-          {:ok, _confirmed} ->
-            status = if panel.own, do: panel.status, else: :confirmed
-            {:noreply, socket |> set_status(ref, status) |> assign(:error, nil)}
+  # The record's `confirm` request, and the account pages opened with it
+  # in a new tab.
+  defp hop(socket, ref) do
+    case Ops.call_tool(socket, "confirmation/request", %{"ref" => ref}) do
+      {:ok, %{url: url}} when is_binary(url) ->
+        socket |> assign(:error, nil) |> push_layer("system_layer:hop", %{url: url})
 
-          {:error, reason} ->
-            {:noreply, assign(socket, :error, Ops.error_message(reason))}
-        end
-
-      :none ->
-        {:noreply, socket}
-    end
-  end
-
-  defp reauth(socket, ref, method) do
-    case Ops.call_tool(socket, "confirmation/reauth", %{"ref" => ref, "method" => method}) do
-      {:ok, %{url: url}} when method == "oidc" and is_binary(url) ->
-        socket |> update_panel(ref, %{reauth_url: url}) |> assign(:error, nil)
-
-      {:ok, _sent} ->
-        socket |> update_panel(ref, %{code_sent: true}) |> assign(:error, nil)
+      {:ok, _no_page} ->
+        socket
 
       {:error, reason} ->
         assign(socket, :error, Ops.error_message(reason))
-    end
-  end
-
-  defp at_home_url(socket, ref, home, at_home) do
-    home = String.trim_trailing(home, "/")
-
-    cond do
-      not Prima.Identity.Encoding.home?(home) ->
-        assign(socket, :error, "Type your CYFR's address, like https://cyfr.example.")
-
-      home == at_home[:audience] ->
-        assign(socket, :error, "Your keys are held at another CYFR: type its address.")
-
-      true ->
-        fragment = at_home |> Jason.encode!() |> Jason.decode!() |> Prima.Identity.Encoding.jcs!()
-
-        socket
-        |> update_panel(ref, %{
-          home_url: home <> "/carry#confirm=" <> Prima.Identity.Encoding.b64(fragment)
-        })
-        |> assign(:error, nil)
     end
   end
 
@@ -3044,18 +2902,6 @@ defmodule PrismWeb.SystemLayer do
 
   defp body(assigns), do: ~H""
 
-  # An addition once a passkey or paired device exists takes a proof one
-  # of them gives (`Sanctum.Pairing`): the record offers only those, and
-  # says where to give one when this client offers none.
-  defp restricted([]),
-    do:
-      "Adding a device, a passkey or a sign-in is confirmed with your passkey, on a device " <>
-        "of yours, or at your own CYFR: confirm it there."
-
-  defp restricted(_methods),
-    do:
-      "Adding a device, a passkey or a sign-in is confirmed with your passkey, on a device of yours, or at your own CYFR."
-
   attr :panel, :map, required: true
   attr :may, :boolean, required: true
   attr :shell, :boolean, default: false
@@ -3126,23 +2972,6 @@ defmodule PrismWeb.SystemLayer do
         {status(@panel)}
       </p>
 
-      <p
-        :if={@open and @entry != nil and @entry[:enroll] == true}
-        class="text-sm text-gray-300"
-        data-test="confirmation-enroll"
-      >
-        Add a passkey or a device first: until you hold one, your sign-in confirms only that.
-        Then confirm this with it. <a href="/settings" class="underline">Settings</a>
-      </p>
-
-      <p
-        :if={@open and @entry != nil and @entry[:restricted] == true}
-        class="text-sm text-gray-300"
-        data-test="confirmation-restricted"
-      >
-        {restricted(@methods)}
-      </p>
-
       <div :if={@may and @open and @entry != nil} class="flex flex-wrap gap-2">
         <a
           :if={@shell}
@@ -3165,99 +2994,7 @@ defmodule PrismWeb.SystemLayer do
         >
           Confirm with a passkey
         </button>
-        <button
-          :if={"oidc" in @methods and is_nil(@panel.reauth_url)}
-          type="button"
-          phx-click="reauth"
-          phx-target={@myself}
-          phx-value-ref={@panel.ref}
-          phx-value-method="oidc"
-          data-test="confirm-reauth"
-          class={button_class(false)}
-        >
-          Sign in again
-        </button>
-        <a
-          :if={@panel.reauth_url}
-          href={@panel.reauth_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-test="confirm-reauth-open"
-          class={button_class(false)}
-        >
-          Open the sign-in in a new tab
-        </a>
-        <a
-          :if={@panel.home_url}
-          href={@panel.home_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-test="confirm-at-home-open"
-          class={button_class(true)}
-        >
-          Open your CYFR to confirm
-        </a>
-        <button
-          :if={"email" in @methods and not @panel.code_sent}
-          type="button"
-          phx-click="reauth"
-          phx-target={@myself}
-          phx-value-ref={@panel.ref}
-          phx-value-method="email"
-          data-test="confirm-email"
-          class={button_class(false)}
-        >
-          Email me a code
-        </button>
       </div>
-
-      <form
-        :if={@may and @open and "home" in @methods and is_nil(@panel.home_url)}
-        id={"#{@id}-home"}
-        phx-submit="confirm_at_home"
-        phx-target={@myself}
-        class="flex gap-2"
-        data-test="confirm-at-home"
-      >
-        <input type="hidden" name="ref" value={@panel.ref} />
-        <label for={"#{@id}-home-input"} class="sr-only">Your CYFR's address</label>
-        <input
-          id={"#{@id}-home-input"}
-          name="home"
-          type="text"
-          inputmode="url"
-          autocomplete="url"
-          placeholder="Your CYFR, like https://cyfr.example"
-          data-test="confirm-at-home-address"
-          class="flex-1 rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm"
-        />
-        <button type="submit" data-test="confirm-at-home-submit" class={button_class(true)}>
-          Confirm at your CYFR
-        </button>
-      </form>
-
-      <form
-        :if={@may and @open and @panel.code_sent}
-        id={"#{@id}-code"}
-        phx-submit="prove_code"
-        phx-target={@myself}
-        class="flex gap-2"
-      >
-        <input type="hidden" name="ref" value={@panel.ref} />
-        <label for={"#{@id}-code-input"} class="sr-only">The code sent to your email</label>
-        <input
-          id={"#{@id}-code-input"}
-          name="code"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          placeholder="Code from your email"
-          data-test="confirm-code"
-          class="flex-1 rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
-        />
-        <button type="submit" data-test="confirm-code-submit" class={button_class(true)}>
-          Confirm
-        </button>
-      </form>
 
       <button
         :if={@panel.status in [:pending, :waiting]}

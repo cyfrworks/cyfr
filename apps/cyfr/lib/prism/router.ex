@@ -5,13 +5,10 @@ defmodule Prism.Router do
   @moduledoc """
   The console's routes: the browser pipeline under the console's root
   layout, the browser sign-in pipelines and their throttles, the claim,
-  legal-acceptance and attachment pipelines, browser sign-in and
-  sign-out with their callbacks, linking an OpenID Connect door, passkey
-  sign-in's completion, the `cyfr` door's start from a handle, its
-  challenge hop and callback, the company sign-in's page, start and
-  callback, the
-  OpenID Connect re-authentication's callback, the claim and legal pages, the
-  attachment and file downloads and the `:athanor` LiveView session.
+  legal-acceptance and attachment pipelines, browser sign-out, a sign-in's
+  ticket completion, the company sign-in's page, start and callback, the
+  claim and legal pages, the attachment and file downloads and the
+  `:athanor` LiveView session.
 
   The composition router invokes `routes/0` where these routes stand, so
   its `__routes__/0` stays the total table. The quoted calls resolve where
@@ -34,8 +31,8 @@ defmodule Prism.Router do
       # browser pipeline sets no root layout.
       CyfrWeb.Pipelines.browser(:auth_browser)
 
-      # The browser's sign-in, re-authentication and policy acceptance
-      # establish a person's sign-in, prove it fresh or complete it rather
+      # The browser's sign-in and policy acceptance establish a person's
+      # sign-in or complete it rather
       # than act under a context the gate admitted, so they decide for
       # themselves and record their own refusals: an admission entry each
       # (`Cyfr.Boundaries.admission_entries/0`), under the identity minted
@@ -57,15 +54,6 @@ defmodule Prism.Router do
       # callback shares: one definition in the host's shared pipelines.
       CyfrWeb.Pipelines.oauth_callback_throttle()
 
-      # Meter ticket adoption before authentication. Looking up a ticket
-      # consumes it, so attempts need their own request budget.
-      pipeline :device_complete_throttle do
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :device_complete,
-          max_requests: 30,
-          window_ms: 60_000
-      end
-
       # A protected device's unlock ticket: redeeming one consumes it, so
       # attempts need their own request budget.
       pipeline :device_unlock_throttle do
@@ -75,8 +63,8 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
-      # A passkey sign-in's ticket, like a device flow's: looking one up
-      # consumes it, so attempts need their own request budget.
+      # A sign-in's ticket: looking one up consumes it, so attempts need
+      # their own request budget.
       pipeline :passkey_complete_throttle do
         plug CyfrWeb.Plugs.AuthRateLimit,
           bucket: :passkey_complete,
@@ -110,24 +98,16 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
-      # Sign-in routes. GitHub/Google sign in by device flow on `/login`;
-      # `/auth/:provider` is the OIDC kickoff. Static paths
-      # sit above `/:provider` so they cannot be captured as a provider name;
-      # the OAuth grant callback is expanded before this scope by the
-      # composition router.
+      # Sign-out, a sign-in's ticket, a protected device's unlock ticket and
+      # the company sign-in. A person signs in with their account at
+      # `/login`; the OAuth grant callback is expanded before this scope by
+      # the composition router.
       scope "/auth", PrismWeb do
         pipe_through [:sign_in_identity, :auth_browser]
 
         # POST, never GET: signing someone out must not be one <img src> away
         # — the browser pipeline's CSRF token guards the state change.
         post "/logout", AuthController, :browser_logout, metadata: %{auth: :browser_public_auth}
-
-        scope "/" do
-          pipe_through :device_complete_throttle
-
-          get "/device/complete/:ticket", AuthController, :device_complete,
-            metadata: %{auth: :browser_oauth_flow}
-        end
 
         # A protected device's unlock: the page takes the one-time ticket
         # from its fragment and posts it, with the browser pipeline's CSRF
@@ -142,8 +122,8 @@ defmodule Prism.Router do
             metadata: %{auth: :device_unlock_ticket}
         end
 
-        # A passkey sign-in the sign-in page verified hands its one-time
-        # ticket here, which sets the cookie session.
+        # A sign-in the sign-in page verified hands its one-time ticket
+        # here, which sets the cookie session.
         scope "/" do
           pipe_through :passkey_complete_throttle
 
@@ -151,58 +131,12 @@ defmodule Prism.Router do
             metadata: %{auth: :browser_oauth_flow}
         end
 
-        # The issuer's answer to a re-authentication for one pending
-        # confirmation: its own redirect URI, beside the sign-in callback,
-        # which verifies the login and shows what it would confirm. The
-        # person's answer is a POST the browser pipeline's CSRF token
-        # guards, spending the verified proof's single-use ticket the
-        # cookie session holds.
-        scope "/" do
-          pipe_through :oauth_callback_throttle
-
-          get "/oidcc/reauth", ReauthController, :callback,
-            metadata: %{auth: :browser_oauth_callback}
-
-          post "/oidcc/reauth", ReauthController, :decide, metadata: %{auth: :browser_oauth_flow}
-        end
-
-        # The `cyfr` door's callback: the sign-in page posts the assertion
-        # the person's own home signed over the challenge this browser's
-        # session holds, with the browser pipeline's CSRF token.
-        scope "/" do
-          pipe_through :oauth_callback_throttle
-
-          post "/cyfr/callback", AuthController, :cyfr_callback,
-            metadata: %{auth: :browser_cyfr_callback}
-        end
-
-        # Linking an OpenID Connect door to the person signed in: a POST the
-        # browser pipeline's CSRF token guards, under the browser's own
-        # session, which holds the link intent and starts the issuer's
-        # sign-in. Above `/:provider` so it is never read as a provider.
-        scope "/" do
-          pipe_through :oauth_start_throttle
-
-          post "/link/oidcc", AuthController, :link_start, metadata: %{auth: :browser_session}
-        end
-
-        # The start of a `cyfr` sign-in: the sign-in page's one-time
-        # ticket, bound to this browser, which keeps the attempt (its home,
-        # and the identifier a handle named) in the browser's session and
-        # sends it to that home's `/carry`. Above `/:provider`, under the
-        # starts' throttle.
-        scope "/" do
-          pipe_through :oauth_start_throttle
-
-          get "/cyfr/start", AuthController, :cyfr_start, metadata: %{auth: :browser_oauth_flow}
-        end
-
         # A company sign-in, the standing condition a CYFR may require of
         # every person (`Sanctum.CompanyLogin`): its start, a POST the
         # browser pipeline's CSRF token guards from the company page,
         # under the browser's own session refused for that condition
         # alone, and the issuer's callback, which both company issuers
-        # share. Above `/:provider` so neither is read as a provider.
+        # share.
         scope "/" do
           pipe_through :oauth_start_throttle
 
@@ -216,39 +150,26 @@ defmodule Prism.Router do
           get "/company/callback", AuthController, :company_callback,
             metadata: %{auth: :browser_oauth_callback}
         end
-
-        scope "/" do
-          pipe_through :oauth_start_throttle
-
-          get "/:provider", AuthController, :request, metadata: %{auth: :browser_oauth_start}
-        end
-
-        scope "/" do
-          pipe_through :oauth_callback_throttle
-
-          get "/:provider/callback", AuthController, :callback,
-            metadata: %{auth: :browser_oauth_callback}
-        end
       end
 
       # ==========================================================================
       # Prism — the LiveView face, on this origin
       # ==========================================================================
 
-      # Sign in from the browser. `/login` starts GitHub/Google device flow
-      # (or links to `/auth/oidcc`); signing out is `POST /auth/logout`
-      # above. `/pair` is the page a pairing code opens on a new glass:
+      # Sign in from the browser. `/login` sends the browser to the account
+      # pages with this CYFR's request and takes the signed answer at its
+      # return; signing out is `POST /auth/logout` above. `/pair` is the
+      # page a pairing code opens on a new device:
       # sessionless like `/login`, it reads no session, and the invitation
       # in its fragment names the person. `/restore` is the page a fresh
       # installation serves its returning person: sessionless too, its form
       # posts the kit and the installation token to the restore ingress
       # (`POST /restore`) from the browser, never through this view.
-      # `/setup` is the page the setup link opens: its first step, the
-      # first person's passkey under the setup token in its fragment, is
-      # sessionless, and once that person is signed in it guards their
-      # session as every console page does (`PrismWeb.SetupLive`).
+      # `/setup` is the page the setup link opens: sessionless, the setup
+      # token in its fragment held with the sign-in request it sends the
+      # browser to the account pages with (`PrismWeb.SetupLive`).
       # `/invite` is the page an invitation link opens: sessionless, the
-      # code in its fragment, the newcomer's passkey made under it
+      # code in its fragment, whose hash the sign-in request holds
       # (`PrismWeb.InviteLive`). `/company-login` is the one page a
       # session refused for the company sign-in alone opens
       # (`PrismWeb.CompanyLoginLive`).
@@ -302,19 +223,10 @@ defmodule Prism.Router do
           # The chat names its athanor in the query, not the path, and mounts under the
           # session's default (`PrismWeb.Focus` passes a bare mount through).
           live "/chat", ChatLive, :index, metadata: %{auth: :browser_authenticated}
-          # The sign-in carry at the person's own home: a person signed in
-          # here begins a sign-in at another home, confirms its assertion
-          # and reads how it ended. Session-only, so a person not signed in
-          # is sent through `/login`, which keeps the carry's fragment.
-          live "/carry", CarryLive, :index, metadata: %{auth: :browser_authenticated}
           # Adding a device: the page a new device's QR code opens, the key's
           # digest in its fragment. Session-only, so a person not signed in is
           # sent through `/login`, whose script clears the fragment.
           live "/devices/add", DeviceAddLive, :index, metadata: %{auth: :browser_authenticated}
-          # Coming back from confirming a change at the person's own home: its
-          # certified assertion in the fragment. Session-only, as the record
-          # it confirms is this session's person's.
-          live "/confirm", HomeConfirmLive, :index, metadata: %{auth: :browser_authenticated}
 
           scope "/a/:athanor" do
             # Forward to /chat with the athanor selected.

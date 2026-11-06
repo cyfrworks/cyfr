@@ -15,15 +15,7 @@ import {AquaPanel, AquaPanelKeys} from "./aqua_panel"
 import MarkdownContent from "./hooks/markdown_content"
 import Canvas from "./canvas/index"
 import SystemLayer from "./system_layer/index"
-import Carry, {resume as resumeCarry} from "./hooks/carry"
-import DeviceAdd from "./hooks/device_add"
-import HomeConfirm from "./hooks/home_confirm"
 import {completeUnlock} from "./device_unlock"
-
-// A sign-in carry meant for this home's `/carry` that arrived while its
-// person was signed out here was kept through their sign-in: back to
-// `/carry` to finish it, before anything else on this page starts.
-resumeCarry(window)
 
 // A protected device's unlock page posts the ticket its fragment carries,
 // and nothing else on it starts.
@@ -49,9 +41,6 @@ Hooks.AquaPanelKeys = AquaPanelKeys
 Hooks.MarkdownContent = MarkdownContent
 Hooks.Canvas = Canvas
 Hooks.SystemLayer = SystemLayer
-Hooks.Carry = Carry
-Hooks.DeviceAdd = DeviceAdd
-Hooks.HomeConfirm = HomeConfirm
 
 Hooks.FlashAutoHide = {
   mounted() {

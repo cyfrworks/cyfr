@@ -2,20 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {nextStop, tabOrder} from "./focus.js"
-import {
-  clearCode,
-  clearFields,
-  codeNodes,
-  copyCode,
-  drawCode,
-  drawRequestId,
-  drawSeed,
-  fieldValue,
-  Material,
-  RestorePage
-} from "./recovery.js"
 import {initial, transition} from "./state.js"
-import {assert as assertPasskey, register as registerPasskey} from "./webauthn.js"
 
 /**
  * SystemLayer hook — the browser half of the layer Prism alone draws above
@@ -54,51 +41,26 @@ import {assert as assertPasskey, register as registerPasskey} from "./webauthn.j
  * The show and hide decisions are `state.js`'s and the tab order is
  * `focus.js`'s; this hook only performs their effects.
  *
- * The same hook holds the passkey ceremony (`webauthn.js`), the one piece
- * of the browser a proof comes from:
+ * A key's ceremony is never this page's: a passkey of the person's account
+ * lives at the account pages of its directory. The same hook holds the hop
+ * there and the return:
  *
- *   * On the system layer, the server asks for a ceremony with the pushed
- *     events `webauthn:get` (`{layer, purpose, id, public_key}`, request
- *     options) and `webauthn:create` (`{layer, purpose, public_key,
- *     registration}`, creation options and the home's registration
- *     token); the hook answers `webauthn_result` (`{purpose, id,
- *     credential}`) or `webauthn_error` (`{purpose, id}`) to the layer.
- *     Every event the layer pushes names it (`layer`, its element's id),
- *     and a layer's hook acts only on its own: a page may hold two layers
- *     (the page's and the person's own panel's), each its own element in
- *     the top layer, and every hook on a page hears every push.
- *   * On the sign-in page, an element with `data-webauthn="sign-in"` is
- *     a passkey sign-in: a click on its `[data-webauthn-start]` asks the
- *     page for a challenge (`passkey_start`, whose reply carries
- *     `public_key`), and answers it (`passkey_assertion`, `{credential}`)
- *     or says the ceremony did not finish (`passkey_error`). Such an
- *     element draws no prompt.
- *   * On the setup page, an element with `data-webauthn="setup"` is the
- *     first person's passkey, and on the invitation page one with
- *     `data-webauthn="invite"` is the invited newcomer's; each names its
- *     events by that mode (`setup_…`, `invite_…`). On mount it hands the
- *     page the setup token or the invitation code the address carries in
- *     its fragment (`<mode>_token`, `{token}`), which no server log
- *     records, and a click on its `[data-webauthn-start]` draws the new
- *     person's recovery secret (32 bytes, `drawSeed`) and its request id
- *     (`drawRequestId`), asks the page for creation options
- *     (`<mode>_start`, whose reply carries `public_key` and
- *     `registration`), creates the passkey and answers it with the two
- *     (`<mode>_passkey`, `{credential, recovery_secret, request_id}`;
- *     the page adds the name it holds), or says the ceremony did not
- *     finish (`<mode>_error`). The secret is held for that one ceremony
- *     alone. Such an element draws no prompt.
- *   * On the sign-in page, an element with `data-webauthn="create"` is a
- *     newcomer's passkey under an open admission: as the setup page's,
- *     with no fragment read, through `create_start`, `create_passkey` and
- *     `create_error`. Such an element draws no prompt.
- *   * On those three, once the person is admitted, the page pushes their
- *     recovery code once (`admission_code`, `{code}`): it is drawn as the
- *     text of the screen's `[data-test="recovery-code"]`, which the page's
- *     markup leaves empty and keeps the browser's, and is held nowhere
- *     else, so it goes when that element goes. A click on
- *     `[data-test="admission-copy"]` writes it to the clipboard and says
- *     "Copied.".
+ *   * The hop. A page asks the browser to go to the account pages with this
+ *     CYFR's request in the fragment (`account:hop`, `{url}`), which an
+ *     element with `data-account` takes: the browser goes there. The
+ *     layer's own confirmation opens them in a new tab instead
+ *     (`system_layer:hop`, `{layer, url}`), so the page that asked keeps
+ *     its waiting change and repeats it once the record is confirmed.
+ *   * The return. The account pages send the browser back to the sign-in
+ *     page with the answer in the fragment, which no server receives. An
+ *     element with `data-account="return"` reads it on mount, removes it
+ *     from the address (`history.replaceState`) and hands it to its page
+ *     (`account_answer`, `{answer}`), once.
+ *   * The setup and invitation pages, an element with `data-account`
+ *     `"setup"` or `"invite"`, hand their page the setup token or the
+ *     invitation code the address carries in its fragment
+ *     (`account_token`, `{token}`), on mount and on every reconnect, since a
+ *     new page process holds none.
  *
  * A change that waits on a fresh confirmation repeats once its record is
  * confirmed. A typed value is never held by the server meanwhile: the
@@ -112,23 +74,6 @@ import {assert as assertPasskey, register as registerPasskey} from "./webauthn.j
  * page reconnects,
  * since its waiting requests ended with the old page process. Keys typed
  * into a prompt stay in it: none drives the page behind it.
- *
- * A recovery prompt's form (`data-recovery`, `PrismWeb.SystemLayer.Recovery`)
- * is the browser's: a submit draws the new recovery code's secret and its
- * request id here (`recovery.js`'s `Material`), with the typed recovery
- * code that signs an added one, held in memory for that one request, and
- * sends them to the layer (`recovery_submit`); the same is sent again on
- * `recovery:resubmit` (`{layer, prompt}`), once its record is confirmed,
- * and on a retry. A recovery code arrives on `recovery:code`
- * (`{layer, prompt, code}`) and is drawn as text into the prompt's own
- * place (`data-recovery-code`) with a Copy button, whose click writes the
- * code to the clipboard; `recovery:clear` (`{layer, prompt}`), the
- * prompt's close and a reconnect forget the material and empty it.
- *
- * On the restore page (`/restore`), an element with `data-restore="page"`
- * holds the restore form (`recovery.js`'s `RestorePage`), which posts the
- * installation token and the recovery code to the restore ingress from the
- * browser.
  */
 
 const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]"
@@ -237,22 +182,11 @@ function watchFrames(doc) {
   frameWatch.observe(doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["inert"]})
 }
 
-// The pages whose link carries a token in its fragment, by their
-// `data-webauthn` mode; with `create`, the pages whose passkey makes a
-// newcomer.
-const NEWCOMER_MODES = new Set(["setup", "invite"])
-
 export default {
   mounted() {
-    if (this.el.dataset.webauthn === "sign-in") return this.mountSignIn()
-    if (NEWCOMER_MODES.has(this.el.dataset.webauthn)) return this.mountNewcomer()
-    if (this.el.dataset.webauthn === "create") return this.mountRegistration("create")
-    if (this.el.dataset.restore === "page") {
-      this.restorePage = new RestorePage(this.el)
-      return
-    }
+    if (this.el.dataset.account) return this.mountAccount(this.el.dataset.account)
 
-    this.handleCeremonies()
+    this.handleLayerEvents()
     this.gone = false
     this.layer = initial
     this.returnFocus = null
@@ -283,33 +217,17 @@ export default {
   },
 
   updated() {
-    if (this.el.dataset.webauthn) return
-    if (this.el.dataset.restore === "page") return
+    if (this.el.dataset.account) return
     this.dialog = this.el.querySelector("dialog")
     this.sync()
   },
 
   destroyed() {
-    if (this.onSignIn) {
-      this.el.removeEventListener("click", this.onSignIn)
-      clearAdmissionCode(this.el)
-      return
-    }
-
-    if (this.restorePage) {
-      this.restorePage.destroy()
-      return
-    }
+    if (this.el.dataset.account) return
 
     // A layer that goes covers nothing and does nothing more: its state
     // machine ends, and a fullscreen exit still settling finds it gone.
-    // The recovery material it held goes with it.
     this.gone = true
-    this.forgetAllRecovery()
-    if (this.onRecoverySubmit && typeof this.el.removeEventListener === "function") {
-      this.el.removeEventListener("submit", this.onRecoverySubmit)
-      this.el.removeEventListener("click", this.onRecoveryClick)
-    }
     this.layer = {...initial, attempt: this.layer ? this.layer.attempt + 1 : 0}
     this.cover(false)
     this.dialog.removeEventListener("cancel", this.onCancel)
@@ -319,69 +237,34 @@ export default {
     globalThis.document.removeEventListener("pointerlockchange", this.onEscalated)
   },
 
-  // A passkey sign-in: ask the page for its challenge, answer it once.
-  mountSignIn() {
-    this.onSignIn = (event) => {
-      const start = event.target && event.target.closest ? event.target.closest("[data-webauthn-start]") : null
-      if (!start) return
-      event.preventDefault()
-      this.pushEvent("passkey_start", {}, (reply) => {
-        if (!reply || !reply.public_key) return
-        assertPasskey(reply.public_key, globalThis.navigator.credentials)
-          .then((credential) => this.pushEvent("passkey_assertion", {credential}))
-          .catch(() => this.pushEvent("passkey_error", {}))
-      })
-    }
-    this.el.addEventListener("click", this.onSignIn)
-  },
-
-  // A newcomer's passkey: the fragment's token to the page, then a
-  // registration under the options the page answers, once per click.
-  pushFragment() {
-    const hash = globalThis.location ? globalThis.location.hash : ""
-    this.pushEvent(`${this.el.dataset.webauthn}_token`, {token: hash.startsWith("#") ? hash.slice(1) : hash})
-  },
-
-  mountNewcomer() {
-    this.pushFragment()
-    this.mountRegistration(this.el.dataset.webauthn)
-  },
-
-  // A newcomer's passkey, once per click: the recovery secret and request
-  // id drawn at the tap, `<mode>_start` for the creation options, then
-  // `<mode>_passkey` with the two, or `<mode>_error`. Once admitted, the
-  // page's recovery code is drawn into the screen, and Copy writes it.
-  mountRegistration(mode) {
-    this.onSignIn = (event) => {
-      const target = event.target && event.target.closest ? event.target : null
-      const copy = target ? target.closest('[data-test="admission-copy"]') : null
-      if (copy) {
-        event.preventDefault()
-        return copyCode(copy, globalThis.navigator?.clipboard)
-      }
-      const start = target ? target.closest("[data-webauthn-start]") : null
-      if (!start) return
-      event.preventDefault()
-      const material = {recovery_secret: drawSeed(), request_id: drawRequestId()}
-      this.pushEvent(`${mode}_start`, {}, (reply) => {
-        if (!reply || !reply.public_key) return
-        registerPasskey(reply.public_key, reply.registration, globalThis.navigator.credentials)
-          .then((credential) => this.pushEvent(`${mode}_passkey`, {credential, ...material}))
-          .catch(() => this.pushEvent(`${mode}_error`, {}))
-      })
-    }
-    this.el.addEventListener("click", this.onSignIn)
+  // An element of the account pages' hop and return: the browser sent there
+  // when its page asks, and the fragment the address carries handed over.
+  mountAccount(mode) {
     if (typeof this.handleEvent === "function")
-      this.handleEvent("admission_code", ({code}) => drawAdmissionCode(this.el, code))
+      this.handleEvent("account:hop", ({url}) => hop(globalThis.location, url))
+    if (mode === "return") return this.pushAnswer()
+    this.pushToken()
   },
 
-  // The ceremonies the system layer asks for; the layer decides nothing
-  // from their answers, the home does. Every hook on a page hears every
-  // push, and a page may hold two layers (the page's and the panel's), so
-  // each event names the layer it is for (`layer`, the layer's id) and
-  // only that layer's hook acts on it: a ceremony runs once, and a form is
-  // submitted again once.
-  handleCeremonies() {
+  // The answer the account pages returned, taken from the address once and
+  // handed to the page.
+  pushAnswer() {
+    const answer = takeFragment(globalThis.location, globalThis.history, globalThis.document)
+    if (answer) this.pushEvent("account_answer", {answer})
+  },
+
+  // The setup token or the invitation code the address carries.
+  pushToken() {
+    const hash = globalThis.location ? globalThis.location.hash : ""
+    this.pushEvent("account_token", {token: hash.startsWith("#") ? hash.slice(1) : hash})
+  },
+
+  // What the system layer asks of the browser; the layer decides nothing
+  // from it, the CYFR does. Every hook on a page hears every push, and a
+  // page may hold two layers (the page's and the panel's), so each event
+  // names the layer it is for (`layer`, the layer's id) and only that
+  // layer's hook acts on it: a form is submitted again once.
+  handleLayerEvents() {
     if (typeof this.handleEvent !== "function") return
     this.marks = new Map()
 
@@ -389,17 +272,8 @@ export default {
       if (payload && payload.layer === this.el.id) act(payload)
     })
 
-    on("webauthn:get", ({purpose, id, public_key: publicKey}) => {
-      assertPasskey(publicKey, globalThis.navigator.credentials)
-        .then((credential) => this.pushEventTo(this.el, "webauthn_result", {purpose, id, credential}))
-        .catch(() => this.pushEventTo(this.el, "webauthn_error", {purpose, id}))
-    })
-
-    on("webauthn:create", ({purpose, public_key: publicKey, registration}) => {
-      registerPasskey(publicKey, registration, globalThis.navigator.credentials)
-        .then((credential) => this.pushEventTo(this.el, "webauthn_result", {purpose, credential}))
-        .catch(() => this.pushEventTo(this.el, "webauthn_error", {purpose}))
-    })
+    // A confirmation's key ceremony, at the account pages in a new tab.
+    on("system_layer:hop", ({url}) => openTab(globalThis, url))
 
     // A change confirmed: the form that typed it, which still holds what
     // was typed, is submitted again.
@@ -409,90 +283,18 @@ export default {
     // that prompt ends.
     on("system_layer:mark", ({form, prompt}) => markForm(this.marks, form, prompt))
     on("system_layer:clear", ({prompt, form}) => clearMarked(globalThis.document, this.marks, prompt, form))
-
-    this.handleRecovery(on)
-  },
-
-  // ---------------------------------------------------------------------------
-  // Recovery material
-  // ---------------------------------------------------------------------------
-
-  // A recovery prompt's form is submitted here, never by the browser: the
-  // material is drawn or typed, held, and sent to the layer. The recovery
-  // code is drawn into the prompt's own place, and forgotten with it.
-  handleRecovery(on) {
-    this.material = new Material()
-
-    on("recovery:resubmit", ({prompt}) => this.recoverySubmit(prompt))
-    on("recovery:code", ({prompt, code}) => {
-      // The request answered: the secret now lives in the drawn code alone.
-      this.material.forget(prompt)
-      const form = this.recoveryForm(prompt)
-      if (form) form.hidden = true
-      drawCode(globalThis.document, this.codeSlot(prompt), code)
-    })
-    on("recovery:clear", ({prompt}) => this.forgetRecovery(prompt))
-
-    if (typeof this.el.addEventListener !== "function") return
-
-    this.onRecoverySubmit = (event) => {
-      const form = event.target
-      if (!form || !form.dataset || !form.dataset.recovery) return
-      event.preventDefault()
-      this.recoverySubmit(form.dataset.prompt)
-    }
-    this.onRecoveryClick = (event) => {
-      const target = event.target && event.target.closest ? event.target.closest("[data-recovery-copy]") : null
-      if (!target) return
-      event.preventDefault()
-      return copyCode(target, globalThis.navigator?.clipboard)
-    }
-    this.el.addEventListener("submit", this.onRecoverySubmit)
-    this.el.addEventListener("click", this.onRecoveryClick)
-  },
-
-  // What the prompt's form submits: the material held for it, or drawn now.
-  recoverySubmit(promptId) {
-    const form = this.recoveryForm(promptId)
-    if (!form || !this.material) return
-    const payload = this.material.submission(promptId, form.dataset.recovery, fieldValue(form, "recovery_code"))
-    this.pushEventTo(this.el, "recovery_submit", payload || {prompt_id: promptId})
-  },
-
-  recoveryForm(promptId) {
-    if (typeof promptId !== "string" || typeof this.el.querySelector !== "function") return null
-    return this.el.querySelector(`form[data-recovery][data-prompt="${promptId}"]`)
-  },
-
-  codeSlot(promptId) {
-    if (typeof promptId !== "string" || typeof this.el.querySelector !== "function") return null
-    return this.el.querySelector(`[data-recovery-code="${promptId}"]`)
-  },
-
-  // The prompt's material forgotten, its drawn code and typed code
-  // emptied, its form ready again.
-  forgetRecovery(promptId) {
-    if (this.material) this.material.forget(promptId)
-    clearCode(this.codeSlot(promptId))
-    const form = this.recoveryForm(promptId)
-    if (form) {
-      clearFields(form)
-      form.hidden = false
-    }
-  },
-
-  forgetAllRecovery() {
-    forgetAllRecovery(this)
   },
 
   // A reconnect is a new page process: every request this page was waiting
-  // on ended with the old one, so every form it typed for is emptied, and
-  // the recovery material it held is forgotten.
+  // on ended with the old one, so every form it typed for is emptied.
   reconnected() {
-    // A newcomer page's new process holds no token: hand it over again.
-    if (this.el && NEWCOMER_MODES.has(this.el.dataset.webauthn)) return this.pushFragment()
+    // A setup or invitation page's new process holds no token: hand it
+    // over again. A return's answer was taken once and is not.
+    if (this.el && this.el.dataset.account) {
+      if (this.el.dataset.account !== "return") this.pushToken()
+      return
+    }
     clearAllMarked(globalThis.document, this.marks)
-    forgetAllRecovery(this)
   },
 
   sync() {
@@ -567,7 +369,6 @@ export default {
 
       case "close":
         clearForms(this.dialog)
-        this.forgetAllRecovery()
         if (this.dialog.open) this.dialog.close()
         break
 
@@ -602,34 +403,35 @@ export default {
   }
 }
 
-// The recovery code an admission pushed, drawn as the text of the screen's
-// own place under `root`; nothing else holds it.
-export function drawAdmissionCode(root, code) {
-  const slot = root && typeof root.querySelector === "function" ? root.querySelector('[data-test="recovery-code"]') : null
-  if (!slot || typeof code !== "string" || !code) return
-  const doc = slot.ownerDocument
-  if (!doc || typeof slot.replaceChildren !== "function") {
-    slot.textContent = code
-    return
+// The browser sent to the account pages: only an https address, or an
+// http one, as a directory on this machine's loopback is.
+export function hop(location, url) {
+  if (!location || !accountUrl(url)) return
+  location.assign(url)
+}
+
+// The account pages opened in a new tab, which the page that asked keeps
+// waiting beside: no reference to this page goes with it.
+export function openTab(win, url) {
+  if (!win || typeof win.open !== "function" || !accountUrl(url)) return
+  win.open(url, "_blank", "noopener")
+}
+
+function accountUrl(url) {
+  return typeof url === "string" && /^https?:\/\/[^/#?]+\/account\/(sign|new)#/.test(url)
+}
+
+// The address's fragment, taken once: removed from the address and the
+// history entry so a reload or a shared link carries no answer.
+export function takeFragment(location, history, doc) {
+  const hash = location ? location.hash : ""
+  const fragment = hash.startsWith("#") ? hash.slice(1) : hash
+  if (!fragment) return ""
+  if (history && typeof history.replaceState === "function") {
+    const path = (location.pathname || "/") + (location.search || "")
+    history.replaceState(history.state, (doc && doc.title) || "", path)
   }
-  slot.replaceChildren(...codeNodes(doc, code))
-}
-
-// The screen's drawn recovery code under `root`, emptied.
-export function clearAdmissionCode(root) {
-  const slot = root && typeof root.querySelector === "function" ? root.querySelector('[data-test="recovery-code"]') : null
-  if (slot) slot.textContent = ""
-}
-
-// Every recovery prompt of the layer `hook` forgotten: the material it
-// holds, each drawn code and each typed code.
-export function forgetAllRecovery(hook) {
-  if (!hook) return
-  if (hook.material) hook.material.forgetAll()
-  const el = hook.el
-  const all = (selector) => (el && typeof el.querySelectorAll === "function" ? el.querySelectorAll(selector) : [])
-  for (const slot of all("[data-recovery-code]")) clearCode(slot)
-  for (const form of all("form[data-recovery]")) clearFields(form)
+  return fragment
 }
 
 // Submit the form `id` names again, as its own submit would.

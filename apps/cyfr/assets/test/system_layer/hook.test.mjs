@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import SystemLayer, {clearAllMarked, clearForms, clearMarked, drawAdmissionCode, markForm, resubmit} from "../../js/system_layer/index.js"
+import SystemLayer, {clearAllMarked, clearForms, clearMarked, hop, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
 
 // A document with a frame in fullscreen and pointer lock. Every call the
 // hook makes on it, and on the dialog, is recorded in `calls`, in order.
@@ -224,18 +224,15 @@ describe("two layers on one page", () => {
   // Every hook on a page hears every pushed event, as LiveView delivers
   // them (`window` events): the page's layer and the person's own panel's
   // each act only on the events that name them.
-  let listeners, layers, original
+  let listeners, layers
 
   beforeEach(() => {
     listeners = []
     layers = []
-    original = Object.getOwnPropertyDescriptor(globalThis.navigator, "credentials")
   })
 
   afterEach(() => {
     for (const layer of layers) layer.destroyed()
-    if (original) Object.defineProperty(globalThis.navigator, "credentials", original)
-    else delete globalThis.navigator.credentials
   })
 
   const push = (event, payload) => {
@@ -297,34 +294,22 @@ describe("two layers on one page", () => {
     assert.deepEqual(submitted, ["system-layer-credential"])
   })
 
-  test("a passkey ceremony runs once, and its answer goes to the layer that asked", async () => {
-    let ceremonies = 0
-    const bytes = (...values) => new Uint8Array(values).buffer
-    Object.defineProperty(globalThis.navigator, "credentials", {
-      configurable: true,
-      value: {
-        get: async () => {
-          ceremonies += 1
-          return {
-            id: "AQID_w",
-            rawId: bytes(1, 2, 3, 255),
-            type: "public-key",
-            response: {clientDataJSON: bytes(123, 125), authenticatorData: bytes(9), signature: bytes(251), userHandle: null}
-          }
-        }
-      }
-    })
-    layer("system-layer")
-    layer("system-layer-panel")
+  test("a confirmation's hop opens the account pages in a new tab, for the layer the event names", () => {
+    const opened = []
+    const open = globalThis.open
+    globalThis.open = (url, target, features) => opened.push([url, target, features])
+    try {
+      layer("system-layer")
+      layer("system-layer-panel")
+      const url = "https://cyfr.run/account/sign#eyJh"
 
-    push("webauthn:get", {layer: "system-layer-panel", purpose: "confirmation", id: "cnr_a", public_key: {challenge: "AQID"}})
-    await flush()
+      push("system_layer:hop", {layer: "system-layer-panel", url})
+      push("system_layer:hop", {layer: "elsewhere", url})
 
-    assert.equal(ceremonies, 1)
-    const answers = pushed.filter((entry) => entry.event.startsWith("webauthn_"))
-    assert.deepEqual(answers.map((entry) => [entry.target, entry.event, entry.payload.id]), [
-      ["system-layer-panel", "webauthn_result", "cnr_a"]
-    ])
+      assert.deepEqual(opened, [[url, "_blank", "noopener"]])
+    } finally {
+      globalThis.open = open
+    }
   })
 
   test("a form is marked and emptied by its own layer alone", () => {
@@ -696,157 +681,104 @@ describe("the page's frames while a modal prompt is open", () => {
 // Copy
 // ---------------------------------------------------------------------------
 
-describe("a newcomer page's recovery code", () => {
-  const code = "CYFR-0123ABCD-4567EFGH"
-  let location, navigator
+describe("the account pages' hop and return", () => {
+  let location, history
 
   beforeEach(() => {
     location = Object.getOwnPropertyDescriptor(globalThis, "location")
-    navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator")
-    Object.defineProperty(globalThis, "location", {configurable: true, value: {hash: "#ab12"}})
+    history = Object.getOwnPropertyDescriptor(globalThis, "history")
   })
 
   afterEach(() => {
     if (location) Object.defineProperty(globalThis, "location", location)
     else delete globalThis.location
-    if (navigator) Object.defineProperty(globalThis, "navigator", navigator)
-    else delete globalThis.navigator
+    if (history) Object.defineProperty(globalThis, "history", history)
+    else delete globalThis.history
   })
 
-  // The page's hooked element, holding screen 2's place for the code (the
-  // markup leaves it empty) and its Copy button.
-  function screen(mode, {withSlot = true} = {}) {
-    const shown = {textContent: ""}
-    const slot = {querySelector: (selector) => (selector === '[data-test="recovery-code"]' ? shown : null)}
-    const copy = {
-      textContent: "Copy",
-      closest: (selector) => {
-        if (selector === '[data-test="admission-copy"]') return copy
-        if (selector === "[data-recovery-code]") return slot
-        return null
-      }
-    }
-    const el = new EventTarget()
-    el.dataset = {webauthn: mode}
-    el.querySelector = (selector) => (withSlot && selector === '[data-test="recovery-code"]' ? shown : null)
-    const listeners = {}
+  // The address, with its fragment, and the history entry it rewrites.
+  function address(hash) {
+    const replaced = []
+    const assigned = []
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: {hash, pathname: "/login", search: "", assign: (url) => assigned.push(url)}
+    })
+    Object.defineProperty(globalThis, "history", {
+      configurable: true,
+      value: {state: null, replaceState: (_state, _title, url) => replaced.push(url)}
+    })
+    return {replaced, assigned}
+  }
+
+  // An element of the hop and return, in `mode`, with the events it hands
+  // its page and the events its page pushes to it.
+  function account(mode) {
     const events = []
-    const newcomer = Object.assign(Object.create(SystemLayer), {
+    const listeners = {}
+    const el = {dataset: {account: mode}}
+    const page = Object.assign(Object.create(SystemLayer), {
       el,
       pushEvent: (event, payload) => events.push({event, payload}),
       handleEvent: (event, callback) => (listeners[event] = callback)
     })
-    newcomer.mounted()
-    return {newcomer, el, shown, copy, listeners, events}
+    page.mounted()
+    return {page, events, listeners}
   }
 
-  const click = (el, target) => {
-    let prevented = false
-    const event = new Event("click")
-    Object.defineProperty(event, "target", {value: target})
-    Object.defineProperty(event, "preventDefault", {value: () => (prevented = true)})
-    el.dispatchEvent(event)
-    return prevented
+  test("the return hands its page the answer once, and takes it from the address", () => {
+    const {replaced} = address("#eyJhbnN3ZXIiOjF9")
+    const {page, events} = account("return")
+
+    assert.deepEqual(events, [{event: "account_answer", payload: {answer: "eyJhbnN3ZXIiOjF9"}}])
+    assert.deepEqual(replaced, ["/login"])
+
+    // A reconnect hands nothing again.
+    page.reconnected()
+    assert.equal(events.length, 1)
+  })
+
+  test("a return with no fragment hands nothing", () => {
+    address("")
+    const {events} = account("return")
+    assert.deepEqual(events, [])
+  })
+
+  for (const mode of ["setup", "invite"]) {
+    test(`the ${mode} page hands its page the fragment's token, again on a reconnect`, () => {
+      address("#ab12")
+      const {page, events} = account(mode)
+      page.reconnected()
+      assert.deepEqual(events, [
+        {event: "account_token", payload: {token: "ab12"}},
+        {event: "account_token", payload: {token: "ab12"}}
+      ])
+    })
   }
 
-  for (const mode of ["setup", "invite", "create"]) {
-    test(`on the ${mode} page, is drawn as the text of the screen's own place and held nowhere else`, () => {
-      const {newcomer, shown, listeners} = screen(mode)
-      assert.equal(typeof listeners.admission_code, "function")
+  test("the hop sends the browser to the account pages alone", () => {
+    const {assigned} = address("")
+    const {listeners} = account("return")
 
-      listeners.admission_code({code})
-      assert.equal(shown.textContent, code)
+    listeners["account:hop"]({url: "https://cyfr.run/account/sign#eyJh"})
+    listeners["account:hop"]({url: "http://localhost:4000/account/new#name=mira&request=eyJh"})
+    listeners["account:hop"]({url: "javascript:alert(1)"})
+    listeners["account:hop"]({url: "https://cyfr.run/elsewhere#eyJh"})
+    listeners["account:hop"]({url: null})
 
-      for (const [key, value] of Object.entries(newcomer)) {
-        if (key === "el" || typeof value === "function") continue
-        assert.ok(!JSON.stringify(value ?? null).includes(code), `the hook keeps it under ${key}`)
-      }
-
-      // The element going takes the code with it.
-      newcomer.destroyed()
-      assert.equal(shown.textContent, "")
-    })
-  }
-
-  test("an empty code draws nothing, and a code with no place to go is dropped", () => {
-    const {shown, listeners} = screen("setup")
-    listeners.admission_code({code: ""})
-    listeners.admission_code({code: null})
-    assert.equal(shown.textContent, "")
-
-    const bare = screen("create", {withSlot: false})
-    assert.doesNotThrow(() => bare.listeners.admission_code({code}))
+    assert.deepEqual(assigned, [
+      "https://cyfr.run/account/sign#eyJh",
+      "http://localhost:4000/account/new#name=mira&request=eyJh"
+    ])
   })
 
-  test("is drawn so a line breaks only after a hyphen: a <wbr> follows each, and the text is the code", () => {
-    const doc = {
-      createTextNode: (text) => ({nodeName: "#text", textContent: text}),
-      createElement: (tag) => ({nodeName: tag.toUpperCase(), textContent: ""})
-    }
-    const shown = {
-      ownerDocument: doc,
-      children: [],
-      replaceChildren(...nodes) {
-        this.children = nodes
-      },
-      get textContent() {
-        return this.children.map((node) => node.textContent).join("")
-      }
-    }
-    drawAdmissionCode({querySelector: (selector) => (selector === '[data-test="recovery-code"]' ? shown : null)}, code)
-
-    assert.equal(shown.textContent, code)
-    const groups = code.split("-")
-    assert.equal(shown.children.filter((node) => node.nodeName === "WBR").length, groups.length - 1)
-    shown.children.forEach((node, i) => {
-      if (node.nodeName === "WBR") assert.ok(shown.children[i - 1].textContent.endsWith("-"), "a <wbr> only after a hyphen")
-      else assert.ok(!node.textContent.slice(0, -1).includes("-"), "no group is cut")
-    })
-    assert.deepEqual(
-      shown.children.filter((node) => node.nodeName === "#text").map((node) => node.textContent.replace(/-$/, "")),
-      groups
-    )
-  })
-
-  test("Copy writes the drawn code to the clipboard and says Copied., starting no ceremony", async () => {
-    const written = []
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: {clipboard: {writeText: async (text) => written.push(text)}}
-    })
-
-    const {el, copy, listeners, events} = screen("invite")
-    listeners.admission_code({code})
-    assert.equal(click(el, copy), true)
-    await new Promise((resolve) => setImmediate(resolve))
-
-    assert.deepEqual(written, [code])
-    assert.equal(copy.textContent, "Copied.")
-    assert.deepEqual(
-      events.map((entry) => entry.event),
-      ["invite_token"],
-      "Copy sends the page nothing"
-    )
-  })
-
-  test("Copy with no code drawn writes nothing", async () => {
-    const written = []
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: {clipboard: {writeText: async (text) => written.push(text)}}
-    })
-
-    const {el, copy} = screen("create")
-    click(el, copy)
-    await new Promise((resolve) => setImmediate(resolve))
-    assert.deepEqual(written, [])
-    assert.equal(copy.textContent, "Copy")
+  test("hop, openTab and takeFragment ask nothing of what is not there", () => {
+    assert.doesNotThrow(() => hop(null, "https://cyfr.run/account/sign#x"))
+    assert.doesNotThrow(() => openTab({}, "https://cyfr.run/account/sign#x"))
+    assert.equal(takeFragment(null, null, null), "")
+    assert.equal(takeFragment({hash: "#x", pathname: "/login", search: ""}, null, null), "x")
   })
 })
-
-// ---------------------------------------------------------------------------
-// The system layer hook's part in a repeat
-// ---------------------------------------------------------------------------
 
 describe("a confirmed change's repeat in the browser", () => {
   test("the form that typed it is submitted again, as typed", () => {
