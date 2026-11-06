@@ -179,7 +179,7 @@ defmodule PrismWeb.SetupLive do
   defp refused(socket, :setup_closed), do: redirect(socket, to: ~p"/")
 
   defp refused(socket, reason),
-    do: assign(socket, :admission_error, AdmissionCard.refusal(reason))
+    do: assign(socket, :admission_error, AdmissionCard.refusal(reason, true))
 
   @impl true
   def render(assigns) do
@@ -246,6 +246,7 @@ defmodule PrismWeb.SetupLive do
               state={@admission_state}
               name={@admission_name}
               error={@admission_error}
+              runs_cyfr
             />
           </div>
         </div>

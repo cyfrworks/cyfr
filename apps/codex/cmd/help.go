@@ -9,6 +9,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// The CLI's words. Every sentence a person reads, in an ending, a preview,
+// a question or a refusal, says what to do now and what happens next. It
+// names a state only when the person must act on it. A question answered
+// no is not an error: it says what stands and exits 0. A consequence is
+// listed only when it can happen to someone. The facts stay and the
+// mechanism goes, in plain words: CYFR and Aqua, never home, hub, cell,
+// node, door or glass. A refusal over a security condition keeps its fix.
+
 // groupCommandOrder defines the display order within each help group.
 // Every registered command must appear in its group.
 var groupCommandOrder = map[string][]string{

@@ -110,9 +110,10 @@ func requirementCommands(account string) []string {
 
 // prepareMachine is cyfr init's first step, on Ubuntu 26.04 at a terminal
 // when this account cannot reach Docker: it shows what is missing, asks,
-// and installs it through one sudo. It answers true when the rest of init
-// ran in a process carrying the docker group, false when this process goes
-// on to prepare the project. Running init again is the retry.
+// and installs it through one sudo. It answers true when init ends here,
+// the rest of it run in a process carrying the docker group or the
+// installation declined, false when this process goes on to prepare the
+// project. Running init again is the retry.
 func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (bool, error) {
 	if !askTerminal() || !machine.supported() || machine.reachable() {
 		return false, nil
@@ -132,7 +133,8 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			return false, interruption{errQuestionInterrupted}
 		}
 		if !strings.EqualFold(answer, "yes") && !strings.EqualFold(answer, "y") {
-			return false, errors.New("Nothing was installed. Run `cyfr init` again when you want to continue")
+			fmt.Fprintln(out, "Nothing was installed. Run cyfr init again when you want to continue.")
+			return true, nil
 		}
 		err = machine.apply(commands)
 		machine.forget()

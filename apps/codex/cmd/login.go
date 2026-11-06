@@ -356,7 +356,7 @@ func (d *loginDriver) newSecret(ctx context.Context, v shell.View) ([]byte, []by
 		fmt.Fprintln(out, "Choose a six-digit PIN for this command line. This machine's chip keeps it: eight wrong tries, then one every ten minutes.")
 		return d.twice(ctx, "PIN: ", "The same PIN again: ")
 	}
-	fmt.Fprintf(out, "This machine has no chip to keep a short PIN safe, so this command line's key is kept under this passphrase. Write it down:\n\n  %s\n\n", v.Passphrase)
+	fmt.Fprintf(out, "This machine has no chip to keep a short PIN safe, so this command line uses this passphrase. Write it down:\n\n  %s\n\n", v.Passphrase)
 	return d.twice(ctx, "The passphrase: ", "The passphrase again: ")
 }
 
@@ -387,11 +387,11 @@ func (d *loginDriver) askSecret(ctx context.Context, v shell.View, why string) (
 func (d *loginDriver) finish(ctx context.Context, v shell.View) error {
 	if v.Admission != "pair" {
 		if d.mode == "pair" {
-			return fmt.Errorf("This command line made its key to %s, and CYFR's answer did not arrive. Run cyfr login --%s again to finish with it.",
+			return fmt.Errorf("This command line began to %s, and CYFR's answer did not arrive. Run cyfr login --%s again to finish.",
 				map[string]string{"setup": "set up CYFR", "invitation": "join CYFR", "open": "join CYFR"}[v.Admission],
 				map[string]string{"setup": "setup", "invitation": "join", "open": "join"}[v.Admission])
 		}
-		fmt.Fprintln(d.c.out, "This command line made its key, but CYFR's answer did not arrive: it finishes with the same key.")
+		fmt.Fprintln(d.c.out, "CYFR's answer did not arrive last time. This finishes setting up.")
 		name, err := d.askName(ctx)
 		if err != nil {
 			return err

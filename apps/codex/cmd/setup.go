@@ -36,7 +36,9 @@ var setupCmd = &cobra.Command{
 
 cyfr setup serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url. A Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display, and there cyfr setup without --no-open refuses before it serves anything. Nothing off this machine reaches the pages: the address carries a token of this run, and every request must come from the pages themselves.
 
-A step that fails shows why, in the command line's own sentence; a start that fails offers to try it again. Once CYFR is up, the pages show its setup link, <CYFR address>/setup#<token>, the token being CYFR_SETUP_TOKEN from .env, with a Copy button, and move the browser there: the link sets up CYFR's first person, who administers it, with a passkey. The program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing CYFR is reached, serving nothing. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
+A step that fails shows why, in the command line's own sentence; a start that fails offers to try it again. Once CYFR is up, the pages show its setup link, <CYFR address>/setup#<token>, the token being CYFR_SETUP_TOKEN from .env, with a Copy button, and move the browser there: the link sets up CYFR's first person, who administers it, with a passkey. The program stops serving the pages once they have read that, or a minute after. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
+
+Run in a project whose .env exists, cyfr setup serves no pages and says the next step instead: with no one set up, the setup link, as 'cyfr up' says it; once its first person is set up, 'cyfr open'; when it cannot tell, the setup link alone. The link opens in the default browser on a machine with a display unless --no-open is given or CYFR has tailnet access. While CYFR is stopped, 'cyfr up' comes first.
 
 Exit status 1: CYFR was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
@@ -82,11 +84,11 @@ const setupStepStart = "start"
 // runSetup is `cyfr setup` in the working directory: the pages served
 // until the run they drive ends, or ctx does.
 func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
-	if !o.noOpen && !hasDisplay() {
-		return errors.New("cyfr setup serves pages for a device whose launcher opens them, and this machine has no browser to open them. Run cyfr init here.")
+	if fileExists(".env") {
+		return setupNextHere(ctx, o.noOpen, out)
 	}
-	if err := refuseExistingHome(".env"); err != nil {
-		return err
+	if !o.noOpen && !hasDisplay() {
+		return errors.New("This machine has no browser for cyfr setup's pages. Run cyfr init here instead.")
 	}
 	// One setup serves a project's pages: a second would race the first
 	// for .env and for the address file. The lock is the setup's own, as
@@ -162,19 +164,65 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 	}
 }
 
-// refuseExistingHome refuses a project whose .env exists, as cyfr setup
-// sets up a new home alone: with existingAccess's refusals, or the
-// sentence init refuses changing an existing home with.
-func refuseExistingHome(path string) error {
-	if !fileExists(path) {
-		return nil
-	}
-	current, err := existingAccess(path)
-	if err != nil {
+// setupNextHere is cyfr setup in a project whose .env exists: the next
+// step of the CYFR set up here, read from cyfr's log under the stack's
+// lock (readSetUp). With no one set up, setupNext's step; its first
+// person set up, cyfr open; a log that cannot be read, the setup link
+// alone. The link opens in the default browser on a machine with a
+// display unless noOpen, as cyfr open opens Prism; a tailnet address
+// opens on the person's devices with Tailscale on, not here. While cyfr
+// is stopped, cyfr up first, then the setup link when cyfr never booted.
+func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
+	if _, err := existingAccess(".env"); err != nil {
 		return err
 	}
-	return existingHomeRefusal("cyfr setup", current)
+	e, err := openEngine(".")
+	if err != nil {
+		return engineFailure(err)
+	}
+	unlock, err := e.Lock("setup")
+	if err != nil {
+		return engineFailure(err)
+	}
+	head, err := e.Head()
+	read := setUpUnknown
+	if err == nil {
+		read = readSetUp(ctx, e, head)
+	}
+	unlock()
+	if err != nil {
+		return engineFailure(err)
+	}
+	values, _ := access.ReadEnvValues(".env")
+	link := setupLink(access.Describe(head).Address, values)
+	opened := func() {
+		if head.Mode != access.ModeTailnet && !headless(values) && openOnDisplay(link, noOpen, out) {
+			fmt.Fprintln(out, "Opened it in your browser.")
+		}
+	}
+	switch {
+	case read == setUpNone:
+		setupNext(out, head)
+		opened()
+	case read == setUpDone:
+		fmt.Fprintln(out, "CYFR is set up and has its first person. cyfr open opens it.")
+	case read == setUpUnknown && headless(values):
+		// A headless CYFR serves no setup page to point at.
+		fmt.Fprintln(out, "Run cyfr login --setup here if no one is set up yet. cyfr open opens CYFR.")
+	case read == setUpUnknown:
+		fmt.Fprintf(out, "Open %s.\n", hyperlink(out, link))
+		opened()
+	case neverBooted():
+		fmt.Fprintln(out, "CYFR is already set up here. "+upThenSetup(values, hyperlink(out, link)))
+	default:
+		fmt.Fprintln(out, "CYFR is already set up here. Next: cyfr up.")
+	}
+	return nil
 }
+
+// errSetUpMeanwhile refuses the pages' run once .env exists: another
+// command set CYFR up here since cyfr setup began serving them.
+var errSetUpMeanwhile = errors.New("Another command set CYFR up here meanwhile, so these pages changed nothing. Run cyfr setup again for the next step")
 
 // setupSession is the run the pages drive (setup.Session): cyfr init's
 // sequence, then cyfr up's start.
@@ -226,8 +274,8 @@ func (s *setupSession) Start() error {
 	if s.started || s.ctx.Err() != nil {
 		return fmt.Errorf("%w: setup has begun already, or is stopping", setup.ErrNotNow)
 	}
-	if err := refuseExistingHome(".env"); err != nil {
-		return err
+	if fileExists(".env") {
+		return errSetUpMeanwhile
 	}
 	s.started = true
 	s.st = setup.State{Phase: setup.PhaseRunning, Steps: setupSteps(s.o.noPull), Step: initStepFiles}
@@ -293,7 +341,8 @@ func (s *setupSession) run() {
 	case err == nil && !wroteEnv:
 		// init wrote no .env: another command wrote one since the
 		// start's check, or there is no template.
-		if err = refuseExistingHome(".env"); err == nil {
+		err = errSetUpMeanwhile
+		if !fileExists(".env") {
 			err = errors.New("There is no .env.example to write .env from, so nothing was set up: a released cyfr downloads it, and a cyfr built from source needs it copied from a checkout")
 		}
 		s.fail(err)
@@ -303,7 +352,7 @@ func (s *setupSession) run() {
 		return
 	}
 	if s.ctx.Err() != nil {
-		s.fail(errors.New(".env is written, and CYFR was not started: `cyfr up` starts it"))
+		s.fail(errors.New("CYFR is set up here and was not started. Next: cyfr up"))
 		return
 	}
 	s.start()

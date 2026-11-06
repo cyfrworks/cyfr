@@ -2586,8 +2586,8 @@ func (s *updateScenario) nothingRan() {
 // The home step shows what the update changes before it takes the lock:
 // the release the home is on, each managed image line that changes, the
 // lines left as written and where the release notes are; then it asks.
-// No, or no answer, changes nothing; with no terminal and no --yes the
-// change is shown and not made; yes makes it.
+// No, or no answer, changes nothing and says so, as no failure; with no
+// terminal and no --yes the change is shown and not made; yes makes it.
 func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 	compose := strings.Replace(string(shippedCompose(t)), "image: ghcr.io/cyfrworks/cyfr:latest", "image: ghcr.io/cyfrworks/cyfr:0.8.0@"+digestOld, 1)
 	for name, c := range map[string]struct {
@@ -2595,16 +2595,19 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 		answer   string
 		says     string
 	}{
-		"no":          {true, "no\n", "CYFR was not updated: the update was not confirmed. Nothing was changed"},
-		"no answer":   {true, "", "CYFR was not updated: the update was not confirmed. Nothing was changed"},
-		"no terminal": {false, "yes\n", "The update above was shown, not made: cyfr update changes CYFR only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it"},
+		"no":          {true, "no\n", ""},
+		"no answer":   {true, "", ""},
+		"no terminal": {false, "yes\n", "Nothing changed: there is no terminal to confirm the update on. Run it again with --yes to make it, or at a terminal"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newUpdateScenario(t, []byte(compose), nil)
 			askWith(t, c.terminal, strings.NewReader(c.answer))
 			var out bytes.Buffer
 			err := runHomeUpdate(context.Background(), &out, &out, false)
-			if err == nil || err.Error() != c.says {
+			switch {
+			case c.says == "" && (err != nil || !strings.HasSuffix(out.String(), "Update this CYFR? (yes/no) [no]: Nothing changed. Run cyfr update again when you want this release.\n")):
+				t.Fatalf("a declined update answered %v:\n%s", err, out.String())
+			case c.says != "" && (err == nil || err.Error() != c.says):
 				t.Fatalf("the update answered %v, want %q:\n%s", err, c.says, out.String())
 			}
 			for _, line := range []string{

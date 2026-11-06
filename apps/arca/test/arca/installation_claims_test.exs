@@ -288,6 +288,28 @@ defmodule Arca.InstallationClaimsTest do
       assert administrators() == 1
     end
 
+    test "once its mint commits, the log says so, after the boot's not-set-up line's marker" do
+      marker = InstallationClaims.set_up_marker()
+      assert marker == "[Cyfr] Set up:"
+
+      # A refused mint and a closure's refusal make no first person, and
+      # say nothing.
+      refused =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :not_set_up} = admitted("open")
+          assert {:error, :keys_unavailable} = mint(also: fn _ -> {:error, :keys_unavailable} end)
+        end)
+
+      refute refused =~ marker
+
+      made = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, _first} = mint() end)
+      assert [_one] = String.split(made, marker) |> tl()
+
+      # A later person is not the first.
+      later = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, _} = admitted("open") end)
+      refute later =~ marker
+    end
+
     test "a refusal of the mint's closure takes the mark back with the person" do
       assert {:error, :keys_unavailable} =
                mint(also: fn _person -> {:error, :keys_unavailable} end)
@@ -545,8 +567,17 @@ defmodule Arca.InstallationClaimsTest do
       assert {:error, :not_claimed} =
                Users.mint(server(), user, nil, admission: "restore", restore: other)
 
-      assert {:ok, %{id: id, admission: "restore"}} =
-               Users.mint(server(), user, nil, admission: "restore", restore: ref(attrs))
+      restored =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{id: id, admission: "restore"}} =
+                   Users.mint(server(), user, nil, admission: "restore", restore: ref(attrs))
+
+          send(self(), {:restored, id})
+        end)
+
+      assert_received {:restored, id}
+      # A restore that makes the first person says so as setup does.
+      assert restored =~ InstallationClaims.set_up_marker()
 
       assert {:ok, []} = Users.identities(server(), id)
       assert administrator?(id)

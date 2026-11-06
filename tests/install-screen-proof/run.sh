@@ -257,7 +257,7 @@ box_install() {
   check "it never asks how CYFR is reached" sh -c '! grep -q "How will you reach CYFR" "$1"' sh "$GUEST_DIR/transcript-init.txt"
   check "it shows the screen's commands" transcript_has init '^  systemctl enable cyfr-screen$'
   check "it says what it downloads" transcript_has init '^Downloading Chrome from Google \(about 110 MB\)$'
-  check "it ends on the CYFR reached from this machine" transcript_has init '^CYFR is reached from this machine, at http://localhost:4000\.$'
+  check "it ends on the CYFR reached from this computer" transcript_has init '^CYFR is set up in this directory, reached from this computer at http://localhost:4000\.$'
   check "it gives the next step" transcript_has init '^Next: cyfr up, then sudo reboot\.$'
   check "nothing took the terminal: tty1's getty runs and the screen does not" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-active --quiet cyfr-screen'
   check "Chrome's package left no .deb behind" guest_ssh '! ls /tmp/*.deb'

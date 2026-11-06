@@ -56,10 +56,13 @@ func TestStatusTakesNoLockAndChangesNothing(t *testing.T) {
 	if !slices.ContainsFunc(s.Containers, func(c Container) bool { return c.Service == "tailscale" && c.State == "running" }) {
 		t.Errorf("status shows %v", s.Containers)
 	}
-	for _, want := range []string{"Tailscale: connected as cyfr.tail1234.ts.net (node ID n0001CNTRL), the machine .env names", "HTTPS certificates: on", "Serve: open", "Certificate: "} {
+	for _, want := range []string{"Tailscale: connected as cyfr.tail1234.ts.net, the machine .env names", "HTTPS certificates: on", "Serve: open", "Certificate: "} {
 		if !slices.ContainsFunc(s.Health, func(l string) bool { return strings.HasPrefix(l, want) }) {
 			t.Errorf("health lacks %q: %v", want, s.Health)
 		}
+	}
+	if slices.ContainsFunc(s.Health, func(l string) bool { return strings.Contains(l, "n0001CNTRL") }) {
+		t.Errorf("health names the node id of the machine .env names: %v", s.Health)
 	}
 	if after := h.snapshot(); !mapsEqual(before, after) {
 		t.Error("status changed a file")
@@ -205,6 +208,35 @@ func TestDockerDiagnosticsCarryNoEnvValue(t *testing.T) {
 	for _, text := range texts {
 		if strings.Contains(text, secret) || strings.Contains(text, short) {
 			t.Errorf("a diagnosis carries the .env value: %s", text)
+		}
+	}
+}
+
+// The health line names the node ids only where the names alone do not
+// tell the running machine from the one .env names.
+func TestStatusNamesNodeIDsOnlyForTheSameName(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	for _, c := range []struct {
+		host, node, want string
+	}{
+		{"cyfr.tail1234.ts.net", "nOTHERNODE", "Tailscale: connected as cyfr.tail1234.ts.net (node ID n0001CNTRL), but .env names cyfr.tail1234.ts.net (node ID nOTHERNODE)"},
+		{"other.tail1234.ts.net", "nOTHERNODE", "Tailscale: connected as cyfr.tail1234.ts.net, but .env names other.tail1234.ts.net"},
+	} {
+		if err := EditEnvFile(filepath.Join(h.dir, ".env"), map[string]string{"CYFR_HOST": c.host, "CYFR_PUBLIC_URL": "https://" + c.host, "CYFR_TAILNET_NODE_ID": c.node}, nil); err != nil {
+			t.Fatal(err)
+		}
+		reader, err := Open(h.dir, h.fake)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := reader.Status(bg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(s.Health, c.want) {
+			t.Errorf("with .env naming %s (%s), health is %v, want %q", c.host, c.node, s.Health, c.want)
 		}
 	}
 }

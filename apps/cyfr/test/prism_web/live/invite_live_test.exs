@@ -275,7 +275,7 @@ defmodule PrismWeb.InviteLiveTest do
     assert has_element?(
              view,
              ~s([data-test="admission-error"]),
-             "The passkey was not created, so nothing was saved. Try again."
+             "The passkey was not created. Try again."
            )
 
     assert has_element?(view, ~s([data-test="admission-create"]))
