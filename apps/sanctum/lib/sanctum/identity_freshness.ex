@@ -27,7 +27,8 @@ defmodule Sanctum.IdentityFreshness do
   length the directory named. Then, in the cache's transaction, it walks
   them in order: each `remove_key` retires the sessions, certificates,
   pending confirmations and clients bound to that key, a `recover` every
-  binding of the account, and `add_key` and `add_recovery` nothing; then
+  binding of the account and every session of its people, bound to a key
+  or not, and `add_key` and `add_recovery` nothing; then
   the head advances (`Arca.DirectoryHeads.advance/5`). A key removed and
   added again between two refreshes is therefore retired and admitted
   afresh, never kept. The retired sessions' memos are dropped on every

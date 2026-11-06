@@ -17,7 +17,8 @@ defmodule Arca.SessionStorage do
   account (`Arca.DirectoryHeads.fence!/2`, read under the person's lock,
   so an advance that retires the key either retires this session or
   refuses it). The cached head's walk ends every session bound to a key
-  it removes, and a recovery every bound session (`delete_bound!/2`).
+  it removes, and a recovery every session of the person, bound to a key
+  or not (`delete_bound!/2`).
 
   A protected device's unlock reserves a session row that records its
   paired `client_id` and that no token loads (`reserve_client_session/2`),
@@ -493,11 +494,12 @@ defmodule Arca.SessionStorage do
 
   @doc false
   # End every session of the people `user_ids` bound to the key `kid`, or
-  # with `:all` every session bound to any key: a refresh read the key's
-  # removal, or a recovery, and a session that key signed for must not
-  # outlive it. Answers the token hashes it ended, for the caller to
-  # invalidate after commit. Run in the caller's transaction
-  # (`Arca.DirectoryHeads.advance/5`).
+  # with `:all` every session of theirs, bound to a key or not (a company
+  # login's included): a refresh read the key's removal, and a session
+  # that key signed for must not outlive it; or a recovery or a gone
+  # account, which replaces every way the person stood. Answers the token
+  # hashes it ended, for the caller to invalidate after commit. Run in the
+  # caller's transaction (`Arca.DirectoryHeads.advance/5`, `gone/2`).
   @spec delete_bound!([String.t()], String.t() | :all) :: [binary()]
   def delete_bound!([], _kid), do: []
 
@@ -507,7 +509,7 @@ defmodule Arca.SessionStorage do
     query =
       case kid do
         :all ->
-          from(s in Session, where: s.user_id in ^user_ids and not is_nil(s.kid))
+          from(s in Session, where: s.user_id in ^user_ids)
 
         kid when is_binary(kid) ->
           from(s in Session, where: s.user_id in ^user_ids and s.kid == ^kid)

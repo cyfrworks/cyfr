@@ -21,7 +21,9 @@ defmodule Arca.DirectoryHeads do
   An advance is handed the walk of the entries after the cached head, in
   log order, as their retiring steps (`t:step/0`): `{:remove_key, kid}`
   retires the bindings to that key, and `:recover` every binding of the
-  account; an `add_key` or `add_recovery` retires nothing and is not a
+  account and every session of its people, bound to a key or not (a
+  company login's included; API keys and webhooks are no sessions and
+  stand); an `add_key` or `add_recovery` retires nothing and is not a
   step. A binding is a row an account's key signed for, naming that key's
   `kid` and the head it was verified under: a session
   (`Arca.SessionStorage`), a device certificate
@@ -38,7 +40,8 @@ defmodule Arca.DirectoryHeads do
   ## Gone
 
   `gone/2` marks an account the directory answered gone: every binding of
-  it retires, as a recovery's would, and `gone_at` is set for good. A gone
+  it and every session of its people retire, as a recovery's would, and
+  `gone_at` is set for good. A gone
   head never advances, is never touched and binds nothing; freshness reads
   the mark (`Sanctum.IdentityFreshness`).
 
@@ -396,8 +399,9 @@ defmodule Arca.DirectoryHeads do
   end
 
   # One step of the walk, over the account's people: a removed key's
-  # bindings, or every binding a recovery replaced. The paired clients go
-  # first, with what stands on them, then the bindings named directly.
+  # bindings, or every binding a recovery replaced and every session of
+  # the people, bound to a key or not. The paired clients go first, with
+  # what stands on them, then the bindings named directly.
   defp walked(step, identifier, user_ids, acc) do
     clients = PairedClients.revoke_bound!(user_ids, kid_of(step))
     certificates = DeviceCertificates.revoke_bound!(identifier, kid_of(step))

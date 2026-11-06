@@ -8,10 +8,12 @@ defmodule Arca.DirectoryHeadsTest do
   the database's clock. An advance walks the entries after the cached
   head in its own transaction: a removed key's sessions, certificates,
   confirmations and clients retire, a recovery retires every binding of
-  the account, and a key removed and added again between two reads is
+  the account and every session of its people, bound to a key or not,
+  and a key removed and added again between two reads is
   retired and then admitted afresh. Every binding names the cached head
   under the person's lock, `:stale_head` otherwise. An account the
-  directory answered gone retires everything and binds nothing. A head no
+  directory answered gone retires everything, every session of its people
+  included, and binds nothing. A head no
   person and no pending invitation here names is swept once it was last
   verified past the caller's bound; every other stays.
   """
@@ -373,6 +375,8 @@ defmodule Arca.DirectoryHeadsTest do
     assert retired.confirmation_ids == [removed_confirmation.ref]
     assert removed_session in retired.session_hashes
     refute kept_session in retired.session_hashes
+    # A session no key signed is no removed key's binding: it stands.
+    refute unsigned in retired.session_hashes
 
     assert Enum.sort(hashes(person.id)) == Enum.sort([kept_session, unsigned])
     assert {:ok, [%{id: kept_id}]} = PairedClients.list(athanor, user_id: person.id)
@@ -390,16 +394,18 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:ok, %{head_hash: ^old}} = PersonIdentities.get(server(), other.id)
   end
 
-  test "a recovery retires every binding of the account, and keeps a session no key signed" do
+  test "a recovery retires every binding of the account and every session of its people, a session no key signed included" do
     old = digest("old")
     new = digest("new")
     %{person: person, identifier: id} = account!(old)
+    %{person: other} = account!(old)
     athanor = athanor()
 
     client = client!(athanor, person.id, device_key(), old)
     certificate = certificate!(athanor, client, id, old)
     signed = session!(person.id, Prima.Identity.Key.kid(device_key()), old)
     unsigned = session!(person.id, nil, nil)
+    others = session!(other.id, nil, nil)
     confirmation = confirmed!(athanor, client, old)
 
     assert {:ok, %{retired: retired}} = advance(id, old, new, [:recover])
@@ -407,9 +413,12 @@ defmodule Arca.DirectoryHeadsTest do
     assert retired.client_ids == [client.id]
     assert retired.certificate_ids == [certificate.id]
     assert retired.confirmation_ids == [confirmation.ref]
-    assert signed in retired.session_hashes
-    assert hashes(person.id) == [unsigned]
+    assert Enum.sort(retired.session_hashes) == Enum.sort([signed, unsigned])
+    assert hashes(person.id) == []
     assert {:ok, []} = PairedClients.list(athanor, user_id: person.id)
+
+    # Another account's session is not this recovery's.
+    assert hashes(other.id) == [others]
   end
 
   test "a key removed and added again between two reads is retired, then admitted afresh at the new head" do
@@ -495,13 +504,15 @@ defmodule Arca.DirectoryHeadsTest do
     client = client!(athanor, person.id, key, head)
     certificate = certificate!(athanor, client, id, head)
     session = session!(person.id, kid, head)
+    unsigned = session!(person.id, nil, nil)
 
     assert {:ok, %{head: %{gone_at: %DateTime{} = gone_at}, retired: retired}} =
              DirectoryHeads.gone(server(), id)
 
     assert retired.client_ids == [client.id]
     assert retired.certificate_ids == [certificate.id]
-    assert session in retired.session_hashes
+    assert Enum.sort(retired.session_hashes) == Enum.sort([session, unsigned])
+    assert hashes(person.id) == []
 
     assert {:ok, %{fresh: false, head: %{gone_at: ^gone_at}}} =
              DirectoryHeads.fresh(server(), id, 300)
