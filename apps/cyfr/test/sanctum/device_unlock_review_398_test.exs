@@ -97,27 +97,10 @@ defmodule Sanctum.DeviceUnlockReview398Test do
     first = unlocked!(ctx, device.key)
     {:ok, %{token: first_token}} = DeviceUnlock.redeem(first.ticket)
     actor = Sanctum.Context.actor(ctx)
-    pair = key()
-
-    {:ok, client} =
-      Arca.PairedClients.enroll(
-        actor,
-        %{
-          user_id: ctx.user_id,
-          source_kind: "device_cert",
-          source_id: "req_second",
-          device_public_key: elem(pair, 0),
-          holder_kind: "chip",
-          display_name: "Second"
-        },
-        first_method: :mark,
-        also: &Sanctum.Pairing.certify_first(actor, &1)
-      )
-
-    {:ok, cert} = Arca.DeviceCertificates.current(actor, client.id)
-    {:ok, certificate} = cert.certificate |> Jason.decode!() |> Prima.DeviceCert.decode()
-    other = connected!(%{key: pair, certificate: certificate})
-    second = unlocked!(other, pair)
+    account = Sanctum.Test.DirectoryServer.add_device!(device.dir.dir, device.account)
+    paired = Sanctum.Test.Devices.admitted!(account, List.last(account.devices))
+    other = connected!(paired)
+    second = unlocked!(other, paired.key)
     {:ok, %{token: second_token}} = DeviceUnlock.redeem(second.ticket)
     {:ok, mine} = Arca.DeviceCertificates.current(actor, ctx.client_id)
 

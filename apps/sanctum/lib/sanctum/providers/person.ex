@@ -4,21 +4,15 @@
 defmodule Sanctum.Providers.Person do
   @moduledoc """
   The `person` tool: a person's identity at their own home — the recovery
-  code their admission enrolled them with, another recovery code added by
-  one the person holds, and a device certificate for another home.
+  code their admission enrolled them with, and another recovery code added
+  by one the person holds.
 
-  Every action but one is on the external plane, through an interactive
-  session (`consent: :interactive`): a person's own, or, for
+  Every action is on the external plane, through an interactive session
+  (`consent: :interactive`): a person's own, or, for
   `person.close_recovery`, the platform administrator's (`scope:
-  :platform`). The exception is
-  `person.renew_certificate`, `auth: :anonymous` as `pairing.complete` is:
-  a device at another home renews here holding no session of this home's,
-  and the proof of its device key over this home's challenge is its only
-  credential (`Sanctum.RemoteCertification`). Showing the recovery code
-  and adding one touch recovery material; certifying a device pairs it:
-  each is a sensitive change Sanctum decides where it is made
-  (`Sanctum.Pairing`). `person.assert_confirmation` is declared with the
-  tool by `Sanctum.Providers.Assertion`, which handles it.
+  :platform`). Showing the recovery code and adding one touch recovery
+  material: each is a sensitive change Sanctum decides where it is made
+  (`Sanctum.Pairing`).
 
   A recovery secret the trusted form draws is the field `recovery_secret`
   wherever it appears, the added code's `holder` included; a recovery code
@@ -43,34 +37,24 @@ defmodule Sanctum.Providers.Person do
       the added code's attempt (`attempt_id`, `request_id`, `phase`,
       `identifier`), its `code` until it is saved, and the new
       `key_epoch`. A recovery code the person holds signs it.
-    * `person.certify` (`Sanctum.RemoteCertification.certify/2`) —
-      `%{certificate: _}`, a device certificate with an identity subject
-      for another home, after the `device_pairing` confirmation, recorded
-      as a certification here; this home pairs its own devices through
-      `pairing`.
     * `person.close_recovery` (`Sanctum.Recovery.close_recovery/2`) — the
       platform administrator's end of a person's recovery from a declared
       restore (`scope: :platform`, under the administrator's fresh
       confirmation): `%{user_id, closed_restore_ids}`. What the restore
       suspended stays suspended.
-    * `person.renew_certificate` (`Sanctum.RemoteCertification.renew/2`) —
-      `%{challenge: _}` for a certificate this home issued, then
-      `%{certificate: _}`, its replacement, for the device key's proof
-      over that challenge, while the certification stands.
   """
 
   alias Prima.{Arg, Operation}
-  alias Sanctum.{Context, Recovery, RemoteCertification}
-  alias Sanctum.Providers.Assertion
+  alias Sanctum.{Context, Recovery}
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.Provider assembles its roster from these.
   def definition do
     Operation.tool(
-      operations() ++ Assertion.operations(),
+      operations(),
       description:
-        "A person's identity at their own CYFR: read its status, show the recovery code and say it is saved, add another recovery code, and certify a device for another CYFR and renew that certificate.",
+        "A person's identity at their own CYFR: read its status, show the recovery code and say it is saved, and add another recovery code.",
       title: "Person"
     )
   end
@@ -119,34 +103,6 @@ defmodule Sanctum.Providers.Person do
       ),
       Operation.new(
         "person",
-        "certify",
-        "Certify a device for another CYFR",
-        [
-          Arg.new("device_key", :string,
-            required: true,
-            description: "certify: the device's public key, unpadded base64url"
-          ),
-          Arg.new("audience", :string,
-            required: true,
-            description:
-              "The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to"
-          ),
-          Arg.new("athanor", :string,
-            required: true,
-            description:
-              "The athanor at the other CYFR: the one a certified device joins, or the one a confirmed change is in"
-          ),
-          Arg.new("client_id", :string,
-            required: true,
-            description: "certify: the paired-client id that CYFR reserved for the device (pcl_…)"
-          )
-        ],
-        kind: :write,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
         "close_recovery",
         "End a person's recovery from a declared restore",
         [
@@ -160,25 +116,6 @@ defmodule Sanctum.Providers.Person do
         kind: :write,
         planes: [:external],
         consent: :interactive
-      ),
-      Operation.new(
-        "person",
-        "renew_certificate",
-        "Renew a device certificate this CYFR issued for another CYFR",
-        [
-          Arg.new("certificate", :json,
-            required: true,
-            description:
-              "renew_certificate: a certificate this CYFR issued for the device, which only locates its certification"
-          ),
-          Arg.new("proof", :json,
-            description:
-              "renew_certificate: the device key's signature over the renew challenge; absent, the answer is the challenge to sign"
-          )
-        ],
-        auth: :anonymous,
-        kind: :write,
-        planes: [:external]
       )
     ]
   end
@@ -206,9 +143,6 @@ defmodule Sanctum.Providers.Person do
           "The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)"
       )
 
-  def handle(%Context{} = ctx, %{"action" => "assert_confirmation"} = args),
-    do: Assertion.handle(ctx, args)
-
   def handle(%Context{} = ctx, %{"action" => "status"}), do: answer(Recovery.status(ctx))
 
   def handle(%Context{} = ctx, %{"action" => "recovery_code", "attempt_id" => id})
@@ -228,12 +162,6 @@ defmodule Sanctum.Providers.Person do
 
   def handle(%Context{} = ctx, %{"action" => "close_recovery"} = args),
     do: answer(Recovery.close_recovery(ctx, Map.get(args, "user_id")))
-
-  def handle(%Context{} = ctx, %{"action" => "certify"} = args),
-    do: answer(RemoteCertification.certify(ctx, args))
-
-  def handle(%Context{} = ctx, %{"action" => "renew_certificate"} = args),
-    do: renewal(RemoteCertification.renew(ctx, Map.take(args, ["certificate", "proof"])))
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "person.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
@@ -309,15 +237,6 @@ defmodule Sanctum.Providers.Person do
 
   defp refusal(:directory_unavailable), do: {:unavailable, "Your identity's directory"}
 
-  defp refusal(:wrong_audience),
-    do: {:invalid_argument, "A certificate for this CYFR is a pairing's"}
-
-  defp refusal(:stale_key_epoch),
-    do:
-      {:conflict,
-       "Your identity's keys changed while this was confirmed, so nothing was certified; " <>
-         "certify again."}
-
   defp refusal(:unauthenticated),
     do: refused(:unauthenticated, :unauthenticated, "Sign in to change your identity.")
 
@@ -335,52 +254,6 @@ defmodule Sanctum.Providers.Person do
     do: {:invalid_argument, "The #{field} is not valid"}
 
   defp refusal(reason), do: reason
-
-  # A renewal's own refusals: the glass reads the class, and is certified
-  # again at its person's home for the ones that end a certification.
-  defp renewal({:ok, value}), do: {:ok, value}
-  defp renewal({:error, reason}), do: {:error, renewal_refusal(reason)}
-
-  defp renewal_refusal(:not_found),
-    do:
-      refused(
-        :not_found,
-        :not_found,
-        "This CYFR holds no certification of that device; certify it again at your CYFR."
-      )
-
-  defp renewal_refusal(:certification_ended),
-    do:
-      refused(
-        :conflict,
-        :certification_ended,
-        "Your keys changed since this device was certified; certify it again at your CYFR."
-      )
-
-  defp renewal_refusal(:binding_changed),
-    do:
-      refused(
-        :conflict,
-        :binding_changed,
-        "This device was certified again since, for another key or athanor; certify it again."
-      )
-
-  defp renewal_refusal(:revoked),
-    do: refused(:conflict, :revoked, "This device's certification was withdrawn.")
-
-  defp renewal_refusal(:not_standing),
-    do: refused(:forbidden, :not_standing, "The person behind this device cannot sign here now.")
-
-  defp renewal_refusal(reason) when reason in [:proof_refused, :replayed],
-    do: refused(:unauthenticated, reason, "The device's proof of its key was refused.")
-
-  # The verification bounds answer their retry in milliseconds; the
-  # refusal reads whole seconds, rounded up, as the pairing provider's
-  # does.
-  defp renewal_refusal({:rate_limited, retry_after_ms}) when is_integer(retry_after_ms),
-    do: {:rate_limited, div(retry_after_ms + 999, 1_000)}
-
-  defp renewal_refusal(reason), do: refusal(reason)
 
   defp refused(class, reason, message),
     do: %Prima.Refusal{class: class, reason: reason, message: message}

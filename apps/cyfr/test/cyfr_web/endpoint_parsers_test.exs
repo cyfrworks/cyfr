@@ -919,7 +919,6 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
             "/mcp",
             "/hooks/:slug",
             "/directory/v1/register",
-            "/certify/v1/renew",
             "/restore"
           ] do
         assert path in paths, "#{path} takes no body"

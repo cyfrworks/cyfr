@@ -180,9 +180,6 @@ defmodule Prism.Router do
         live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
         live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
         live "/invite", InviteLive, :invite, metadata: %{auth: :browser_public_login}
-        # Where a pairing link opens in a browser: it says the link is for a
-        # command line or a box's screen, and holds no key.
-        live "/pair", PairLive, :pair, metadata: %{auth: :browser_public_login}
 
         live "/company-login", CompanyLoginLive, :index, metadata: %{auth: :browser_company_login}
       end
@@ -223,10 +220,6 @@ defmodule Prism.Router do
           # The chat names its athanor in the query, not the path, and mounts under the
           # session's default (`PrismWeb.Focus` passes a bare mount through).
           live "/chat", ChatLive, :index, metadata: %{auth: :browser_authenticated}
-          # Adding a device: the page a new device's QR code opens, the key's
-          # digest in its fragment. Session-only, so a person not signed in is
-          # sent through `/login`, whose script clears the fragment.
-          live "/devices/add", DeviceAddLive, :index, metadata: %{auth: :browser_authenticated}
 
           scope "/a/:athanor" do
             # Forward to /chat with the athanor selected.

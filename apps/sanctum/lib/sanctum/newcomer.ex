@@ -105,13 +105,18 @@ defmodule Sanctum.Newcomer do
 
   @doc """
   Make a person for `account` under `admission` (the module doc). A
-  restore names no account (`:none`).
+  restore names no account (`:none`). `opts[:also]`, a function of the
+  person's row, runs last in the admission's transaction and answers `:ok`
+  or `{:error, reason}`, which rolls the whole admission back: a device's
+  hello admits its person, pairs the device and issues its first
+  certificate together (`Sanctum.DeviceUnlock`).
   """
-  @spec admit(admission(), account() | :none) :: {:ok, admitted()} | {:error, term()}
-  def admit(admission, account) do
+  @spec admit(admission(), account() | :none, keyword()) ::
+          {:ok, admitted()} | {:error, term()}
+  def admit(admission, account, opts \\ []) when is_list(opts) do
     with :ok <- taken(admission, account),
          :ok <- admissible(admission, account),
-         {:ok, person} <- mint(admission, account) do
+         {:ok, person} <- mint(admission, account, Keyword.get(opts, :also)) do
       committed(admission, person)
     end
   end
@@ -214,7 +219,7 @@ defmodule Sanctum.Newcomer do
 
   # ---- the transaction ------------------------------------------------------
 
-  defp mint(admission, account) do
+  defp mint(admission, account, also) do
     now = DateTime.utc_now()
 
     user_attrs = %{
@@ -230,7 +235,7 @@ defmodule Sanctum.Newcomer do
       Prima.Actor.system(),
       user_attrs,
       nil,
-      [admission: kind(admission), also: &also(admission, account, &1)] ++
+      [admission: kind(admission), also: &also(admission, account, also, &1)] ++
         verify(admission) ++ restore_claim(admission)
     )
     |> case do
@@ -266,11 +271,11 @@ defmodule Sanctum.Newcomer do
   # Inside the mint's transaction, after the person's row and the first
   # person's grant: the account's identity row and the athanor, then what
   # the admission writes.
-  defp also({:restore, %{also: restored}}, :none, person) do
+  defp also({:restore, %{also: restored}}, :none, _also, person) do
     with :ok <- restored.(person), do: athanor(person)
   end
 
-  defp also(admission, account, %{id: user_id} = person) do
+  defp also(admission, account, also, %{id: user_id} = person) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
            user_id: user_id,
            provenance: "remote",
@@ -278,10 +283,18 @@ defmodule Sanctum.Newcomer do
            directory_url: account.directory_url,
            head_hash: account.head_hash
          }) do
-      {:ok, _row} -> with :ok <- athanor(person), do: admitted(admission, account, user_id)
-      {:error, reason} -> {:error, reason}
+      {:ok, _row} ->
+        with :ok <- athanor(person),
+             :ok <- admitted(admission, account, user_id),
+             do: last(also, person)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  defp last(nil, _person), do: :ok
+  defp last(also, person) when is_function(also, 1), do: also.(person)
 
   # Setup's account and an invitation's are allowed by identifier from
   # here on, where no deny stands; the open door admits by the entry that

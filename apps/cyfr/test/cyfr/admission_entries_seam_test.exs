@@ -95,9 +95,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.DirectoryController, :append} => :directory_append_unserved,
     {Emissary.Web.HandleController, :resolve} => :handle_resolve_unserved,
     {Emissary.Web.HandleController, :claim} => :handle_claim_unserved,
-    {Emissary.Web.DeviceEnrollmentController, :challenge} => :device_enrollment_no_token,
-    {Emissary.Web.DeviceEnrollmentController, :complete} => :device_enrollment_no_proof,
-    {Emissary.Web.DeviceEnrollmentController, :resume} => :device_enrollment_resume_no_token,
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
     {Emissary.Web.DeviceSessionController, :create} => :device_session_ticket_unknown,
     {Emissary.Web.RestoreController, :restore} => :restore_disabled,
@@ -551,31 +548,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     conn = restore_post(path, %{})
     assert json_response(conn, 404) == %{"error" => "restore_disabled"}
     {request_id_of(conn), refused("not_found", :none)}
-  end
-
-  # A protected device's enrollment: no setup token, a completion whose
-  # proof answers no held challenge, a resume without its capability.
-  def device_enrollment_no_token(_conn, _ctx) do
-    conn = restore_post("/device/enrollment/challenge", %{"admission" => "setup"})
-    assert json_response(conn, 401) == %{"error" => "invalid_token"}
-    {request_id_of(conn), refused("unauthenticated", :none)}
-  end
-
-  def device_enrollment_no_proof(_conn, _ctx) do
-    conn =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> put_req_header("x-cyfr-setup-token", String.duplicate("ab", 32))
-      |> post("/device/enrollment/complete", Jason.encode!(%{"proof" => %{}}))
-
-    assert json_response(conn, 422) == %{"error" => "proof_refused"}
-    {request_id_of(conn), refused("invalid_argument", :none)}
-  end
-
-  def device_enrollment_resume_no_token(_conn, _ctx) do
-    conn = restore_post("/device/enrollment/resume", %{"admission" => "restore"})
-    assert json_response(conn, 401) == %{"error" => "invalid_token"}
-    {request_id_of(conn), refused("unauthenticated", :none)}
   end
 
   def device_session_ticket_unknown(_conn, _ctx) do

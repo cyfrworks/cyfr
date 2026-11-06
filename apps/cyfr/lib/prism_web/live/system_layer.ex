@@ -51,8 +51,8 @@ defmodule PrismWeb.SystemLayer do
   client is told to confirm it from a signed-in browser. That is a
   display rule and decides nothing: a confirmation that arrives anyway is
   dispatched like any other, and the operation answers it. No client
-  holds a rank. Where the rule hides the control of a credential entry or
-  of pairing a device, the prompt offers "Request confirmation" instead,
+  holds a rank. Where the rule hides the control of a credential entry,
+  the prompt offers "Request confirmation" instead,
   which submits the same request: it answers the `confirmation_required`
   signal, and the change waits for a proof given on another client.
 
@@ -104,8 +104,7 @@ defmodule PrismWeb.SystemLayer do
       (`credential_sharing`); the prompt reports `:confirmed` once the
       share is made, and shows a refusal's sentence and stays open
       otherwise;
-    * pairing — `pairing.list` when it opens, `pairing.begin`, whose
-      answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
+    * pairing — `pairing.list` when it opens, and `pairing.revoke`;
     * the fallback notice's kept version — `canvas.restore` of the canvas,
       under today's grant: a grant that waits for the person raises the
       grant prompt, and once that is confirmed the restore is asked again;
@@ -1331,7 +1330,7 @@ defmodule PrismWeb.SystemLayer do
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
     do:
       assign(socket,
-        pairing: %{prompt_id: id, clients: :unread, invitation: nil},
+        pairing: %{prompt_id: id, clients: :unread},
         recovery: nil
       )
 
@@ -1435,32 +1434,6 @@ defmodule PrismWeb.SystemLayer do
   end
 
   def handle_event("notice_choose", _params, socket), do: {:noreply, socket}
-
-  # The code the new device shows, typed or pasted with or without the
-  # spaces between its groups: the digest of the key it generated, the one
-  # key the invitation is opened for.
-  def handle_event("pairing_begin", %{"prompt_id" => id} = params, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, [:pairing]) do
-        {:ok, prompt} ->
-          case Prima.Device.from_key_code(params["key_code"]) do
-            {:ok, key_digest} ->
-              {:noreply, pairing_begin(socket, prompt, key_digest)}
-
-            :error ->
-              {:noreply,
-               assign(
-                 socket,
-                 :error,
-                 "Type the code the new device shows: open this CYFR's /pair page on it first"
-               )}
-          end
-
-        :none ->
-          {:noreply, socket}
-      end
-    end)
-  end
 
   # The sheet's audience and caps, held to `share.create`'s arguments
   # before anything is dispatched; the operation decides the rest.
@@ -2074,10 +2047,8 @@ defmodule PrismWeb.SystemLayer do
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
-            case repeat do
-              {:pairing_begin, key_digest} -> pairing_begin(socket, prompt, key_digest)
-              {:pairing_revoke, client_id} -> pairing_revoke(socket, prompt, client_id)
-            end
+            {:pairing_revoke, client_id} = repeat
+            pairing_revoke(socket, prompt, client_id)
 
           %{id: ^prompt_id, kind: :share} = prompt ->
             {:share_create, args} = repeat
@@ -2211,41 +2182,6 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp pairing_begin(socket, prompt, key_digest) do
-    case layer_call(
-           socket,
-           prompt,
-           {:pairing_begin, key_digest},
-           "pairing/begin",
-           %{"key_digest" => key_digest}
-         ) do
-      {:asked, socket} ->
-        socket
-
-      {:done, {:ok, %{invitation_url: url, expires_at: expires_at}}, socket} ->
-        # An address too long for a QR code still gives the link.
-        svg =
-          case PrismWeb.QR.svg(url, label: "Pairing code", class: "h-56 w-56") do
-            {:ok, svg} -> svg
-            {:error, :too_long} -> nil
-          end
-
-        invitation = %{
-          url: url,
-          svg: svg,
-          expires_at: expires_at,
-          code: Prima.Device.key_code(key_digest)
-        }
-
-        socket
-        |> assign(:pairing, %{pairing_of(socket, prompt) | invitation: invitation})
-        |> assign(:error, nil)
-
-      {:done, {:error, reason}, socket} ->
-        refuse(socket, prompt, reason, Ops.error_message(reason))
-    end
-  end
-
   defp pairing_revoke(socket, prompt, client_id) do
     case layer_call(socket, prompt, {:pairing_revoke, client_id}, "pairing/revoke", %{
            "client_id" => client_id
@@ -2269,7 +2205,7 @@ defmodule PrismWeb.SystemLayer do
         pairing
 
       _other ->
-        %{prompt_id: prompt.id, clients: {:ok, []}, invitation: nil}
+        %{prompt_id: prompt.id, clients: {:ok, []}}
     end
   end
 
@@ -2877,12 +2813,9 @@ defmodule PrismWeb.SystemLayer do
     ~H"""
     <Pairing.devices
       prompt_id={@prompt.id}
-      key_code={@prompt.subject[:key_code]}
       pairing={@pairing}
-      may={@may}
       myself={@myself}
       button_class={button_class(false)}
-      primary_class={button_class(true)}
     />
     """
   end
@@ -3122,10 +3055,7 @@ defmodule PrismWeb.SystemLayer do
         "their own apps, and confirming it here is a fresh confirmation."
 
   defp description(%{kind: :pairing}),
-    do:
-      "Pair a phone or another browser with this CYFR, or revoke a device you paired. " <>
-        "Pairing and revoking each need a fresh confirmation. Command lines you signed in " <>
-        "are listed too, and revoking one needs none."
+    do: "Revoke a device you paired. Revoking needs a fresh confirmation."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:

@@ -58,257 +58,252 @@ const (
 
 // Actions, as tool then action.
 const (
-	ApprovalList             = "list"
-	ApprovalResolve          = "resolve"
-	AquaCreate               = "create"
-	AquaDelete               = "delete"
-	AquaGet                  = "get"
-	AquaList                 = "list"
-	AquaReset                = "reset"
-	AquaSkillCreate          = "skill_create"
-	AquaSkillDelete          = "skill_delete"
-	AquaSkillGet             = "skill_get"
-	AquaSkillList            = "skill_list"
-	AquaSkillReset           = "skill_reset"
-	AquaSkillUpdate          = "skill_update"
-	AquaStatus               = "status"
-	AquaUpdate               = "update"
-	AthanorGet               = "get"
-	AthanorProvision         = "provision"
-	AthanorSettings          = "settings"
-	BuildCompile             = "compile"
-	BuildStatus              = "status"
-	BuildToolchains          = "toolchains"
-	BuildValidate            = "validate"
-	CanvasActivate           = "activate"
-	CanvasCatalog            = "catalog"
-	CanvasRestore            = "restore"
-	CanvasVersions           = "versions"
-	CanvasWrite              = "write"
-	ComponentCategories      = "categories"
-	ComponentCreate          = "create"
-	ComponentDelete          = "delete"
-	ComponentDeprecate       = "deprecate"
-	ComponentDiscover        = "discover"
-	ComponentFork            = "fork"
-	ComponentGetBlob         = "get_blob"
-	ComponentInspect         = "inspect"
-	ComponentList            = "list"
-	ComponentPull            = "pull"
-	ComponentPush            = "push"
-	ComponentReadResource    = "read_resource"
-	ComponentRegister        = "register"
-	ComponentReset           = "reset"
-	ComponentSearch          = "search"
-	ComponentSetupPlan       = "setup_plan"
-	ComponentStatus          = "status"
-	ComponentYank            = "yank"
-	ConfirmationCancel       = "cancel"
-	ConfirmationConfirm      = "confirm"
-	ConfirmationPending      = "pending"
-	ConfirmationRequest      = "request"
-	DecisionCorrelate        = "correlate"
-	DecisionGet              = "get"
-	DecisionGetGlobal        = "get_global"
-	DecisionList             = "list"
-	DecisionListGlobal       = "list_global"
-	DirectoryTombstone       = "tombstone"
-	DoorAllow                = "allow"
-	DoorDeny                 = "deny"
-	DoorList                 = "list"
-	DoorRemove               = "remove"
-	DoorRequests             = "requests"
-	DoorResolve              = "resolve"
-	ExecutionCancel          = "cancel"
-	ExecutionForceRelease    = "force_release"
-	ExecutionList            = "list"
-	ExecutionLogs            = "logs"
-	ExecutionReadResource    = "read_resource"
-	ExecutionRun             = "run"
-	ExecutionRunStream       = "run_stream"
-	ExecutionStatus          = "status"
-	ExecutionUsage           = "usage"
-	FeedBind                 = "bind"
-	FeedList                 = "list"
-	FeedPress                = "press"
-	FeedRemove               = "remove"
-	FileAccept               = "accept"
-	FileDecline              = "decline"
-	FileDelete               = "delete"
-	FileList                 = "list"
-	FileOffer                = "offer"
-	FileOffers               = "offers"
-	FileRead                 = "read"
-	FileWithdraw             = "withdraw"
-	FileWrite                = "write"
-	InvitationCreate         = "create"
-	InvitationList           = "list"
-	InvitationRevoke         = "revoke"
-	KeyCreate                = "create"
-	KeyGet                   = "get"
-	KeyList                  = "list"
-	KeyReenable              = "reenable"
-	KeyRevoke                = "revoke"
-	KeyRotate                = "rotate"
-	LayoutEdit               = "edit"
-	LayoutGet                = "get"
-	McpLogCorrelate          = "correlate"
-	McpLogGet                = "get"
-	McpLogList               = "list"
-	McpLogStats              = "stats"
-	McpServersCreate         = "create"
-	McpServersDelete         = "delete"
-	McpServersDisable        = "disable"
-	McpServersEnable         = "enable"
-	McpServersGet            = "get"
-	McpServersList           = "list"
-	McpServersRefresh        = "refresh"
-	McpServersResetHome      = "reset_home"
-	McpServersRestart        = "restart"
-	McpServersSignIn         = "sign_in"
-	McpServersTest           = "test"
-	McpServersUpdate         = "update"
-	NotesEndorse             = "endorse"
-	NotesForget              = "forget"
-	NotesKeep                = "keep"
-	NotesList                = "list"
-	NotesPin                 = "pin"
-	NotesRead                = "read"
-	NotesSearch              = "search"
-	OauthDeleteClient        = "delete_client"
-	OauthList                = "list"
-	OauthSetClient           = "set_client"
-	PairingBegin             = "begin"
-	PairingComplete          = "complete"
-	PairingList              = "list"
-	PairingReenable          = "reenable"
-	PairingRenew             = "renew"
-	PairingRevoke            = "revoke"
-	PasskeyList              = "list"
-	PasskeyRevoke            = "revoke"
-	PersonAssertConfirmation = "assert_confirmation"
-	PersonCertify            = "certify"
-	PersonCloseRecovery      = "close_recovery"
-	PersonRecoveryCode       = "recovery_code"
-	PersonRecoveryCodeAdd    = "recovery_code_add"
-	PersonRecoveryCodeSaved  = "recovery_code_saved"
-	PersonRenewCertificate   = "renew_certificate"
-	PersonStatus             = "status"
-	PolicyLogCorrelate       = "correlate"
-	PolicyLogGet             = "get"
-	PolicyLogList            = "list"
-	ProfileCommit            = "commit"
-	ProfileGrant             = "grant"
-	ProfileGrants            = "grants"
-	ProfileList              = "list"
-	ProfilePlan              = "plan"
-	ProfilePreview           = "preview"
-	ProfilePublish           = "publish"
-	ProfileRevoke            = "revoke"
-	RecordGet                = "get"
-	RecordList               = "list"
-	RecordPayload            = "payload"
-	RegistryAppeal           = "appeal"
-	RegistryClaimPublisher   = "claim_publisher"
-	RegistryGetNamespace     = "get_namespace"
-	RegistryLegalAccept      = "legal_accept"
-	RegistryLegalPage        = "legal_page"
-	RegistryLegalVersion     = "legal_version"
-	RegistryListMyReports    = "list_my_reports"
-	RegistryMembersAdd       = "members_add"
-	RegistryMembersList      = "members_list"
-	RegistryMembersRemove    = "members_remove"
-	RegistryMembersUpdate    = "members_update"
-	RegistryRegister         = "register"
-	RegistryReport           = "report"
-	RegistrySync             = "sync"
-	RegistryTokensIssue      = "tokens_issue"
-	RegistryTokensList       = "tokens_list"
-	RegistryTokensRevoke     = "tokens_revoke"
-	RegistryVerifyPublisher  = "verify_publisher"
-	RegistryWhoami           = "whoami"
-	ResourceRead             = "read"
-	RetentionCleanup         = "cleanup"
-	RetentionGet             = "get"
-	RetentionSet             = "set"
-	ScheduleCreate           = "create"
-	ScheduleDelete           = "delete"
-	ScheduleGet              = "get"
-	ScheduleList             = "list"
-	SchedulePause            = "pause"
-	ScheduleReResolve        = "re_resolve"
-	ScheduleResume           = "resume"
-	ScheduleUpdate           = "update"
-	SessionLock              = "lock"
-	SessionLogout            = "logout"
-	SessionReadResource      = "read_resource"
-	SessionUnlock            = "unlock"
-	SessionWhoami            = "whoami"
-	SettingsList             = "list"
-	SettingsReset            = "reset"
-	SettingsSet              = "set"
-	ShareCreate              = "create"
-	ShareList                = "list"
-	ShareOffered             = "offered"
-	ShareRevoke              = "revoke"
-	ShareSetAudience         = "set_audience"
-	ShareSetCaps             = "set_caps"
-	ShareUsage               = "usage"
-	SharedThreadAdd          = "add"
-	SharedThreadArchive      = "archive"
-	SharedThreadAttach       = "attach"
-	SharedThreadCreate       = "create"
-	SharedThreadGet          = "get"
-	SharedThreadLeave        = "leave"
-	SharedThreadList         = "list"
-	SharedThreadMessages     = "messages"
-	SharedThreadPair         = "pair"
-	SharedThreadPeople       = "people"
-	SharedThreadPost         = "post"
-	SharedThreadRemove       = "remove"
-	SharedThreadRename       = "rename"
-	SharedThreadUnarchive    = "unarchive"
-	SharedThreadWithdraw     = "withdraw"
-	SystemNotify             = "notify"
-	SystemStatus             = "status"
-	ThreadAloud              = "aloud"
-	ThreadApprove            = "approve"
-	ThreadArchive            = "archive"
-	ThreadAttach             = "attach"
-	ThreadCreate             = "create"
-	ThreadDecline            = "decline"
-	ThreadDelete             = "delete"
-	ThreadDiscard            = "discard"
-	ThreadEvents             = "events"
-	ThreadGet                = "get"
-	ThreadList               = "list"
-	ThreadRestartForConsent  = "restart_for_consent"
-	ThreadRevokeGrant        = "revoke_grant"
-	ThreadSend               = "send"
-	ThreadStop               = "stop"
-	TinctureInvokeProtected  = "invoke_protected"
-	TinctureInvokePublic     = "invoke_public"
-	TinctureVisibilityGet    = "get"
-	ToolsList                = "list"
-	TurnRecover              = "recover"
-	TurnSuspend              = "suspend"
-	VaultAuthorize           = "authorize"
-	VaultCreate              = "create"
-	VaultDelete              = "delete"
-	VaultList                = "list"
-	VaultRebind              = "rebind"
-	VaultRename              = "rename"
-	VaultRevoke              = "revoke"
-	VaultRotate              = "rotate"
-	VaultSetDefault          = "set_default"
-	VaultStatus              = "status"
-	WebhookCreate            = "create"
-	WebhookGet               = "get"
-	WebhookList              = "list"
-	WebhookReenable          = "reenable"
-	WebhookRevoke            = "revoke"
-	WebhookRotate            = "rotate"
-	WebhookUpdate            = "update"
+	ApprovalList            = "list"
+	ApprovalResolve         = "resolve"
+	AquaCreate              = "create"
+	AquaDelete              = "delete"
+	AquaGet                 = "get"
+	AquaList                = "list"
+	AquaReset               = "reset"
+	AquaSkillCreate         = "skill_create"
+	AquaSkillDelete         = "skill_delete"
+	AquaSkillGet            = "skill_get"
+	AquaSkillList           = "skill_list"
+	AquaSkillReset          = "skill_reset"
+	AquaSkillUpdate         = "skill_update"
+	AquaStatus              = "status"
+	AquaUpdate              = "update"
+	AthanorGet              = "get"
+	AthanorProvision        = "provision"
+	AthanorSettings         = "settings"
+	BuildCompile            = "compile"
+	BuildStatus             = "status"
+	BuildToolchains         = "toolchains"
+	BuildValidate           = "validate"
+	CanvasActivate          = "activate"
+	CanvasCatalog           = "catalog"
+	CanvasRestore           = "restore"
+	CanvasVersions          = "versions"
+	CanvasWrite             = "write"
+	ComponentCategories     = "categories"
+	ComponentCreate         = "create"
+	ComponentDelete         = "delete"
+	ComponentDeprecate      = "deprecate"
+	ComponentDiscover       = "discover"
+	ComponentFork           = "fork"
+	ComponentGetBlob        = "get_blob"
+	ComponentInspect        = "inspect"
+	ComponentList           = "list"
+	ComponentPull           = "pull"
+	ComponentPush           = "push"
+	ComponentReadResource   = "read_resource"
+	ComponentRegister       = "register"
+	ComponentReset          = "reset"
+	ComponentSearch         = "search"
+	ComponentSetupPlan      = "setup_plan"
+	ComponentStatus         = "status"
+	ComponentYank           = "yank"
+	ConfirmationCancel      = "cancel"
+	ConfirmationConfirm     = "confirm"
+	ConfirmationPending     = "pending"
+	ConfirmationRequest     = "request"
+	DecisionCorrelate       = "correlate"
+	DecisionGet             = "get"
+	DecisionGetGlobal       = "get_global"
+	DecisionList            = "list"
+	DecisionListGlobal      = "list_global"
+	DirectoryTombstone      = "tombstone"
+	DoorAllow               = "allow"
+	DoorDeny                = "deny"
+	DoorList                = "list"
+	DoorRemove              = "remove"
+	DoorRequests            = "requests"
+	DoorResolve             = "resolve"
+	ExecutionCancel         = "cancel"
+	ExecutionForceRelease   = "force_release"
+	ExecutionList           = "list"
+	ExecutionLogs           = "logs"
+	ExecutionReadResource   = "read_resource"
+	ExecutionRun            = "run"
+	ExecutionRunStream      = "run_stream"
+	ExecutionStatus         = "status"
+	ExecutionUsage          = "usage"
+	FeedBind                = "bind"
+	FeedList                = "list"
+	FeedPress               = "press"
+	FeedRemove              = "remove"
+	FileAccept              = "accept"
+	FileDecline             = "decline"
+	FileDelete              = "delete"
+	FileList                = "list"
+	FileOffer               = "offer"
+	FileOffers              = "offers"
+	FileRead                = "read"
+	FileWithdraw            = "withdraw"
+	FileWrite               = "write"
+	InvitationCreate        = "create"
+	InvitationList          = "list"
+	InvitationRevoke        = "revoke"
+	KeyCreate               = "create"
+	KeyGet                  = "get"
+	KeyList                 = "list"
+	KeyReenable             = "reenable"
+	KeyRevoke               = "revoke"
+	KeyRotate               = "rotate"
+	LayoutEdit              = "edit"
+	LayoutGet               = "get"
+	McpLogCorrelate         = "correlate"
+	McpLogGet               = "get"
+	McpLogList              = "list"
+	McpLogStats             = "stats"
+	McpServersCreate        = "create"
+	McpServersDelete        = "delete"
+	McpServersDisable       = "disable"
+	McpServersEnable        = "enable"
+	McpServersGet           = "get"
+	McpServersList          = "list"
+	McpServersRefresh       = "refresh"
+	McpServersResetHome     = "reset_home"
+	McpServersRestart       = "restart"
+	McpServersSignIn        = "sign_in"
+	McpServersTest          = "test"
+	McpServersUpdate        = "update"
+	NotesEndorse            = "endorse"
+	NotesForget             = "forget"
+	NotesKeep               = "keep"
+	NotesList               = "list"
+	NotesPin                = "pin"
+	NotesRead               = "read"
+	NotesSearch             = "search"
+	OauthDeleteClient       = "delete_client"
+	OauthList               = "list"
+	OauthSetClient          = "set_client"
+	PairingList             = "list"
+	PairingReenable         = "reenable"
+	PairingRenew            = "renew"
+	PairingRevoke           = "revoke"
+	PasskeyList             = "list"
+	PasskeyRevoke           = "revoke"
+	PersonCloseRecovery     = "close_recovery"
+	PersonRecoveryCode      = "recovery_code"
+	PersonRecoveryCodeAdd   = "recovery_code_add"
+	PersonRecoveryCodeSaved = "recovery_code_saved"
+	PersonStatus            = "status"
+	PolicyLogCorrelate      = "correlate"
+	PolicyLogGet            = "get"
+	PolicyLogList           = "list"
+	ProfileCommit           = "commit"
+	ProfileGrant            = "grant"
+	ProfileGrants           = "grants"
+	ProfileList             = "list"
+	ProfilePlan             = "plan"
+	ProfilePreview          = "preview"
+	ProfilePublish          = "publish"
+	ProfileRevoke           = "revoke"
+	RecordGet               = "get"
+	RecordList              = "list"
+	RecordPayload           = "payload"
+	RegistryAppeal          = "appeal"
+	RegistryClaimPublisher  = "claim_publisher"
+	RegistryGetNamespace    = "get_namespace"
+	RegistryLegalAccept     = "legal_accept"
+	RegistryLegalPage       = "legal_page"
+	RegistryLegalVersion    = "legal_version"
+	RegistryListMyReports   = "list_my_reports"
+	RegistryMembersAdd      = "members_add"
+	RegistryMembersList     = "members_list"
+	RegistryMembersRemove   = "members_remove"
+	RegistryMembersUpdate   = "members_update"
+	RegistryRegister        = "register"
+	RegistryReport          = "report"
+	RegistrySync            = "sync"
+	RegistryTokensIssue     = "tokens_issue"
+	RegistryTokensList      = "tokens_list"
+	RegistryTokensRevoke    = "tokens_revoke"
+	RegistryVerifyPublisher = "verify_publisher"
+	RegistryWhoami          = "whoami"
+	ResourceRead            = "read"
+	RetentionCleanup        = "cleanup"
+	RetentionGet            = "get"
+	RetentionSet            = "set"
+	ScheduleCreate          = "create"
+	ScheduleDelete          = "delete"
+	ScheduleGet             = "get"
+	ScheduleList            = "list"
+	SchedulePause           = "pause"
+	ScheduleReResolve       = "re_resolve"
+	ScheduleResume          = "resume"
+	ScheduleUpdate          = "update"
+	SessionLock             = "lock"
+	SessionLogout           = "logout"
+	SessionReadResource     = "read_resource"
+	SessionUnlock           = "unlock"
+	SessionWhoami           = "whoami"
+	SettingsList            = "list"
+	SettingsReset           = "reset"
+	SettingsSet             = "set"
+	ShareCreate             = "create"
+	ShareList               = "list"
+	ShareOffered            = "offered"
+	ShareRevoke             = "revoke"
+	ShareSetAudience        = "set_audience"
+	ShareSetCaps            = "set_caps"
+	ShareUsage              = "usage"
+	SharedThreadAdd         = "add"
+	SharedThreadArchive     = "archive"
+	SharedThreadAttach      = "attach"
+	SharedThreadCreate      = "create"
+	SharedThreadGet         = "get"
+	SharedThreadLeave       = "leave"
+	SharedThreadList        = "list"
+	SharedThreadMessages    = "messages"
+	SharedThreadPair        = "pair"
+	SharedThreadPeople      = "people"
+	SharedThreadPost        = "post"
+	SharedThreadRemove      = "remove"
+	SharedThreadRename      = "rename"
+	SharedThreadUnarchive   = "unarchive"
+	SharedThreadWithdraw    = "withdraw"
+	SystemNotify            = "notify"
+	SystemStatus            = "status"
+	ThreadAloud             = "aloud"
+	ThreadApprove           = "approve"
+	ThreadArchive           = "archive"
+	ThreadAttach            = "attach"
+	ThreadCreate            = "create"
+	ThreadDecline           = "decline"
+	ThreadDelete            = "delete"
+	ThreadDiscard           = "discard"
+	ThreadEvents            = "events"
+	ThreadGet               = "get"
+	ThreadList              = "list"
+	ThreadRestartForConsent = "restart_for_consent"
+	ThreadRevokeGrant       = "revoke_grant"
+	ThreadSend              = "send"
+	ThreadStop              = "stop"
+	TinctureInvokeProtected = "invoke_protected"
+	TinctureInvokePublic    = "invoke_public"
+	TinctureVisibilityGet   = "get"
+	ToolsList               = "list"
+	TurnRecover             = "recover"
+	TurnSuspend             = "suspend"
+	VaultAuthorize          = "authorize"
+	VaultCreate             = "create"
+	VaultDelete             = "delete"
+	VaultList               = "list"
+	VaultRebind             = "rebind"
+	VaultRename             = "rename"
+	VaultRevoke             = "revoke"
+	VaultRotate             = "rotate"
+	VaultSetDefault         = "set_default"
+	VaultStatus             = "status"
+	WebhookCreate           = "create"
+	WebhookGet              = "get"
+	WebhookList             = "list"
+	WebhookReenable         = "reenable"
+	WebhookRevoke           = "revoke"
+	WebhookRotate           = "rotate"
+	WebhookUpdate           = "update"
 )
 
 // Actions lists every action the catalog serves, per tool.
@@ -333,9 +328,9 @@ var Actions = map[string][]string{
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
+	"pairing":             {"list", "reenable", "renew", "revoke"},
 	"passkey":             {"list", "revoke"},
-	"person":              {"assert_confirmation", "certify", "close_recovery", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "status"},
+	"person":              {"close_recovery", "recovery_code", "recovery_code_add", "recovery_code_saved", "status"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -2578,71 +2573,6 @@ func (args OauthSetClientArgs) MarshalJSON() ([]byte, error) {
 	}{Action: OauthSetClient, fields: fields(args)})
 }
 
-// PairingBeginArgs carries arguments for pairing.begin.
-type PairingBeginArgs struct {
-	// begin: the code the new device shows, the digest of the key it generated; only that key completes the pairing
-	KeyDigest string `json:"key_digest"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PairingBeginArgs) MarshalJSON() ([]byte, error) {
-	type fields PairingBeginArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PairingBegin, fields: fields(args)})
-}
-
-// PairingCompleteArgs carries arguments for pairing.complete.
-type PairingCompleteArgs struct {
-	// complete: the invitation's secret, from the pairing code's fragment
-	InvitationSecret string `json:"invitation_secret"`
-	// The device's public key, unpadded base64url (complete, renew)
-	DeviceKey string `json:"device_key"`
-	// complete: the digest of the device key, the code the device showed
-	KeyDigest string `json:"key_digest"`
-	// complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign
-	Proof Field[PairingCompleteArgsProof] `json:"proof,omitzero"`
-	// complete: for a person whose identity is at another CYFR, the device certificate their own CYFR issued for this client, device key, CYFR and athanor; absent for a person whose keys are here
-	Certificate Field[any] `json:"certificate,omitzero"`
-	// complete: what holds the device's key under its local unlock, chip or software, given with display_name
-	HolderKind Field[string] `json:"holder_kind,omitzero"`
-	// complete: the name the device shows, at most 64 bytes, given with holder_kind
-	DisplayName Field[string] `json:"display_name,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PairingCompleteArgs) MarshalJSON() ([]byte, error) {
-	type fields PairingCompleteArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PairingComplete, fields: fields(args)})
-}
-
-type PairingCompleteArgsProof struct {
-	Protocol  string `json:"protocol"`
-	Purpose   string `json:"purpose"`
-	Home      string `json:"home"`
-	Athanor   string `json:"athanor"`
-	ClientId  string `json:"client_id"`
-	DeviceKey string `json:"device_key"`
-	Nonce     string `json:"nonce"`
-	ExpiresAt int    `json:"expires_at"`
-	Sig       string `json:"sig"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *PairingCompleteArgsProof) UnmarshalJSON(data []byte) error {
-	type fields PairingCompleteArgsProof
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = PairingCompleteArgsProof(value)
-	return nil
-}
-
 // PairingListArgs carries arguments for pairing.list.
 type PairingListArgs struct {
 }
@@ -2675,7 +2605,7 @@ func (args PairingReenableArgs) MarshalJSON() ([]byte, error) {
 type PairingRenewArgs struct {
 	// The paired client (pcl_…) (renew, revoke, reenable)
 	ClientId string `json:"client_id"`
-	// The device's public key, unpadded base64url (complete, renew)
+	// renew: the device's public key, unpadded base64url
 	DeviceKey string `json:"device_key"`
 	// renew: the device key's signature over the renew challenge
 	Proof PairingRenewArgsProof `json:"proof"`
@@ -2756,54 +2686,6 @@ func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PasskeyRevoke, fields: fields(args)})
 }
 
-// PersonAssertConfirmationArgs carries arguments for person.assert_confirmation.
-type PersonAssertConfirmationArgs struct {
-	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
-	Audience string `json:"audience"`
-	// The athanor at the other CYFR: the one a certified device joins, or the one a confirmed change is in
-	Athanor string `json:"athanor"`
-	// assert_confirmation: the other CYFR's pending confirmation, by its ref
-	Ref string `json:"ref"`
-	// assert_confirmation: that confirmation's stored digest (sha256:<hex>)
-	Digest string `json:"digest"`
-	// assert_confirmation: when that confirmation expires, in Unix ms
-	ExpiresAt int `json:"expires_at"`
-	// assert_confirmation: the change as the other CYFR stored it
-	Preview any `json:"preview"`
-	// assert_confirmation: the digest of that preview the other CYFR names (sha256:<hex>)
-	PreviewDigest string `json:"preview_digest"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonAssertConfirmationArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonAssertConfirmationArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonAssertConfirmation, fields: fields(args)})
-}
-
-// PersonCertifyArgs carries arguments for person.certify.
-type PersonCertifyArgs struct {
-	// certify: the device's public key, unpadded base64url
-	DeviceKey string `json:"device_key"`
-	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
-	Audience string `json:"audience"`
-	// The athanor at the other CYFR: the one a certified device joins, or the one a confirmed change is in
-	Athanor string `json:"athanor"`
-	// certify: the paired-client id that CYFR reserved for the device (pcl_…)
-	ClientId string `json:"client_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCertifyArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCertifyArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCertify, fields: fields(args)})
-}
-
 // PersonCloseRecoveryArgs carries arguments for person.close_recovery.
 type PersonCloseRecoveryArgs struct {
 	// close_recovery: the person whose recovery from the restore ends; what it suspended stays suspended
@@ -2882,23 +2764,6 @@ func (args PersonRecoveryCodeSavedArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonRecoveryCodeSaved, fields: fields(args)})
-}
-
-// PersonRenewCertificateArgs carries arguments for person.renew_certificate.
-type PersonRenewCertificateArgs struct {
-	// renew_certificate: a certificate this CYFR issued for the device, which only locates its certification
-	Certificate any `json:"certificate"`
-	// renew_certificate: the device key's signature over the renew challenge; absent, the answer is the challenge to sign
-	Proof Field[any] `json:"proof,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRenewCertificateArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRenewCertificateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRenewCertificate, fields: fields(args)})
 }
 
 // PersonStatusArgs carries arguments for person.status.

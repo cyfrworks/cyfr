@@ -137,15 +137,13 @@ defmodule Sanctum.Caller do
   @typedoc """
   A paired device as `Sanctum.DeviceCerts` verified it: the certificate
   it stands under (nil for a renewal), its paired-client row, the
-  identity row an identity subject's person was resolved by (`identity`,
-  absent or nil for a local subject), and its person's `users` row and
-  their athanor's row, read for this verification, and whether they hold
-  the platform administrator's mark.
+  identifier of the account its person's identity row names, and its
+  person's `users` row and their athanor's row, read for this
+  verification, and whether they hold the platform administrator's mark.
   """
   @type device :: %{
           required(:certificate) => Prima.DeviceCert.t() | nil,
-          optional(:identity) =>
-            %{user_id: String.t(), provenance: String.t(), identifier: String.t()} | nil,
+          required(:identifier) => String.t(),
           required(:client) => map(),
           required(:user) => map(),
           required(:athanor) => map(),
@@ -358,19 +356,18 @@ defmodule Sanctum.Caller do
   the person's company sign-in, last, when this CYFR requires one
   (`Sanctum.CompanyLogin.standing/1`), and checks that the rows it is
   handed agree with each other: one active device client of that person
-  in that athanor, the person and the
-  athanor active and theirs, and the certificate, when there is
-  one, naming that client, athanor, person and device key: a local
-  subject by the person's id, an identity subject by the identifier of
-  the remote identity row the person was resolved by, which must be that
-  person's. Rows that do not agree are `{:error, :unauthenticated}`.
+  in that athanor, the client a key of the account, the person and the
+  athanor active and theirs, and the certificate, when there is one,
+  naming that client, athanor, key and account. Rows that do not agree
+  are `{:error, :unauthenticated}`.
 
   The context is the person's own interactive client there
   (`auth_method: :device`, its `client_id`, `origin: :interactive`),
   whose credential deadline is the certificate's expiry and whose
   credential binding is the device's (`source_kind: :device`, naming the
-  client, and the remote identity row for an identity subject), so a
-  credential issued from it holds that client (`Sanctum.Issuance`). A renewal's
+  client, its key's `kid` and the head the certificate was issued
+  under), so a credential issued from it holds that client
+  (`Sanctum.Issuance`). A renewal's
   context carries no certificate and so no deadline: it is the fixed
   renewal exchange's, and the one operation it is used for,
   `Sanctum.Pairing.renew/2`, takes no other. Nothing is memoized: the
@@ -415,12 +412,9 @@ defmodule Sanctum.Caller do
 
   # The rows a device's verification read agree with each other, as they
   # were read (nothing is read here): one active device client of the
-  # person in the athanor, the person and the athanor active, the athanor
-  # theirs, and the certificate,
-  # when there is one, naming that client, athanor, person and device key:
-  # a local subject by the person's id, an identity subject by the
-  # identifier of the identity row the verifier resolved them by
-  # (`device.identity`).
+  # person in the athanor that is a key of their account, the person and
+  # the athanor active, the athanor theirs, and the certificate, when there
+  # is one, naming that client, athanor, key and account.
   defp device_stands?(
          %{
            certificate: certificate,
@@ -430,7 +424,8 @@ defmodule Sanctum.Caller do
                user_id: user_id,
                athanor_id: athanor_id,
                standing: "active",
-               source_kind: "device_cert"
+               source_kind: "device_cert",
+               kid: kid
              } = client,
            user: %{id: user_id, status: "active", security_generation: user_generation},
            athanor: %{
@@ -443,74 +438,41 @@ defmodule Sanctum.Caller do
          } = device
        )
        when is_binary(client_id) and is_binary(user_id) and is_binary(athanor_id) and
-              is_integer(user_generation) and is_integer(athanor_generation) and
-              is_boolean(platform_admin) do
-    certifies?(certificate, client, Map.get(device, :identity))
+              is_binary(kid) and is_integer(user_generation) and
+              is_integer(athanor_generation) and is_boolean(platform_admin) do
+    certifies?(certificate, client, Map.get(device, :identifier))
   end
 
   defp device_stands?(_device), do: false
 
-  defp certifies?(nil, _client, _identity), do: true
+  defp certifies?(_certificate, _client, identifier) when not is_binary(identifier), do: false
+  defp certifies?(nil, _client, _identifier), do: true
 
-  defp certifies?(%Prima.DeviceCert{} = certificate, client, identity) do
+  defp certifies?(%Prima.DeviceCert{} = certificate, client, identifier) do
     certificate.client_id == client.id and certificate.athanor == client.athanor_id and
-      subject_names?(certificate.subject, client.user_id, identity) and
-      certificate.device_key == client.device_public_key
+      certificate.kid == client.kid and certificate.identifier == identifier
   end
 
-  defp certifies?(_certificate, _client, _identity), do: false
-
-  # A local subject names the client's person by their id, with no identity
-  # row handed. An identity subject names them by an identifier, which must
-  # be the one the identity row handed holds, and that row must be the
-  # client's person's and remote: the subject, the row and the client agree.
-  defp subject_names?(%{kind: :local, user_id: user_id}, user_id, nil), do: true
-
-  defp subject_names?(
-         %{kind: :identity, identifier: identifier},
-         user_id,
-         %{provenance: "remote", user_id: user_id, identifier: identifier}
-       )
-       when is_binary(identifier),
-       do: true
-
-  defp subject_names?(_subject, _user_id, _identity), do: false
+  defp certifies?(_certificate, _client, _identifier), do: false
 
   # What the device's context was read against
   # (`t:Sanctum.Context.credential_binding/0`): the person's and the
-  # athanor's generations, and the
-  # paired client the context stands on, with the remote identity row an
-  # identity subject's person was resolved by and the `key_epoch` its
-  # certificate was verified under (both nil for a local subject). An
-  # issuance from it locks and rereads them all, the client after the
-  # person and athanor, so a revocation that commits after this
-  # verification and before the issuance refuses it (`Sanctum.Issuance`).
+  # athanor's generations, the paired client the context stands on, its
+  # key's `kid`, and the head its certificate was issued under (nil for a
+  # renewal's context, which stands under no certificate). An issuance from
+  # it locks and rereads them all, the client after the person and
+  # athanor, so a revocation that commits after this verification and
+  # before the issuance refuses it (`Sanctum.Issuance`).
   defp device_binding(device) do
-    {identity, key_epoch} = binding_subject(device.certificate, Map.get(device, :identity))
-
     %{
       source_kind: :device,
       source_id: device.client.id,
       user_generation: device.user.security_generation,
       athanor_generation: device.athanor.security_generation,
-      identity: identity,
-      key_epoch: key_epoch
+      kid: device.client.kid,
+      head: device.certificate && device.certificate.head
     }
   end
-
-  # `device_stands?/1` has already held a handed row to the certificate's
-  # subject and the client's person; the binding keeps the columns that
-  # bind it and nothing else, with the `key_epoch` the verifier checked the
-  # certificate's subject against the person's head under
-  # (`Sanctum.DeviceCerts.remote_subject/3`). A renewal's context stands
-  # under no certificate, so no row was held to one, and it carries none.
-  defp binding_subject(
-         %Prima.DeviceCert{subject: %{kind: :identity, key_epoch: key_epoch}},
-         %{} = identity
-       ),
-       do: {Map.take(identity, [:user_id, :provenance, :identifier]), key_epoch}
-
-  defp binding_subject(_certificate, _identity), do: {nil, nil}
 
   defp device_deadline(nil), do: nil
 

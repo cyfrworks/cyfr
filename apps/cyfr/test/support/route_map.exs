@@ -21,12 +21,6 @@
           "CyfrWeb.Plugs.MCPRateLimit",
           "CyfrWeb.Plugs.Authenticate"
         ],
-        "certificate_renewal" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
         "directory" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -64,14 +58,6 @@
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.FrameRequest",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
-        "device_enrollment" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.FrameRequest",
-          ":fetch_session",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
         "tincture" => [
@@ -247,42 +233,6 @@
           auth: "public_oauth_state",
           live_view: nil,
           pipe_through: ["oauth_callback", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/certify/v1/renew",
-          plug: "Emissary.Web.CertificateRenewalController",
-          plug_opts: ":renew_certificate",
-          auth: "device_key_proof",
-          live_view: nil,
-          pipe_through: ["certificate_renewal"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/enrollment/challenge",
-          plug: "Emissary.Web.DeviceEnrollmentController",
-          plug_opts: ":challenge",
-          auth: "device_enrollment",
-          live_view: nil,
-          pipe_through: ["device_enrollment"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/enrollment/complete",
-          plug: "Emissary.Web.DeviceEnrollmentController",
-          plug_opts: ":complete",
-          auth: "device_enrollment",
-          live_view: nil,
-          pipe_through: ["device_enrollment"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/enrollment/resume",
-          plug: "Emissary.Web.DeviceEnrollmentController",
-          plug_opts: ":resume",
-          auth: "device_enrollment",
-          live_view: nil,
-          pipe_through: ["device_enrollment"]
         },
         %{
           verb: "POST",
@@ -778,15 +728,6 @@
         },
         %{
           verb: "GET",
-          path: "/devices/add",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.DeviceAddLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
           path: "/invite",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":invite",
@@ -801,15 +742,6 @@
           plug_opts: ":login",
           auth: "browser_public_login",
           live_view: "PrismWeb.LoginLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/pair",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":pair",
-          auth: "browser_public_login",
-          live_view: "PrismWeb.PairLive",
           pipe_through: ["browser"]
         },
         %{

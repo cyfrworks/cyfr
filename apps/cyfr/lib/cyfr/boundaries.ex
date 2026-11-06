@@ -2126,16 +2126,8 @@ defmodule Cyfr.Boundaries do
       purge_global: 2,
       refused: 3
     ],
-    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
-    "Sanctum.DeviceUnlock" => [
-      closed: 3,
-      enroll: 2,
-      enrollment_challenge: 2,
-      redeem: 1,
-      report_storage: 2,
-      resume: 2,
-      slide: 2
-    ],
+    "Sanctum.DeviceCerts" => [challenge_key: 2, verify_connect: 3, verify_request: 2],
+    "Sanctum.DeviceUnlock" => [closed: 3, redeem: 1, report_storage: 2, slide: 2],
     "Sanctum.Directory" => [
       append: 2,
       from: 1,
@@ -2453,15 +2445,6 @@ defmodule Cyfr.Boundaries do
         "a directory entry, or a handle claim, signed by a key the identifier's verified " <>
           "chain lists and verified against that chain before anything is written; no session"
     },
-    device_key_proof: %{
-      admits: :credential,
-      why:
-        "a certified device's renewal at the CYFR that holds its person's identity: the device key's proof over a " <>
-          "renewal challenge this CYFR issued for a certification it recorded, under the " <>
-          "person's current `key_epoch` (`Sanctum.RemoteCertification`); no session or cookie " <>
-          "is read, and CORS answers any origin with no credentials, since the proof is the " <>
-          "only credential"
-    },
     installation_capability: %{
       admits: :credential,
       why:
@@ -2482,19 +2465,6 @@ defmodule Cyfr.Boundaries do
           "`POST /device/session` spends the same ticket the same way and answers the " <>
           "session's token in its body, reading and setting no cookie, so no CSRF token " <>
           "is asked"
-    },
-    device_enrollment: %{
-      admits: :credential,
-      why:
-        "a protected device's enrollment (`Sanctum.DeviceUnlock`): the setup token in the " <>
-          "`x-cyfr-setup-token` header, checked in constant time, an invitation's code in " <>
-          "the `x-cyfr-invitation` header, the door's open admission counted against the " <>
-          "caller's address, or a restore's own session within its first-method window, " <>
-          "or for a resume the restore token as the authorization header; then the device " <>
-          "key's proof over an `enroll` challenge this CYFR holds and consumes once. No CSRF " <>
-          "token, since no cross-site form sets these headers and no CORS answer admits " <>
-          "one, and a restore's cookie or an open admission alone enrolls nothing without " <>
-          "the proof over a challenge only its answer carries"
     },
     restore_kit_proof: %{
       admits: :credential,
@@ -2537,7 +2507,6 @@ defmodule Cyfr.Boundaries do
     {:post, "/directory/v1/register"},
     {:get, "/invite"},
     {:get, "/login"},
-    {:get, "/pair"},
     {:get, "/restore"},
     {:get, "/setup"},
     {:get, "/v1/handles/:handle"}
@@ -3068,26 +3037,6 @@ defmodule Cyfr.Boundaries do
     # credential's context is `Sanctum.Caller.establish_kit/2`'s and names
     # no origin.
     %{module: Emissary.Web.RestoreController, site: :restore, plane: :external, origin: :none},
-    # A protected device's enrollment, an entry path too: the setup token
-    # or a restore's session, then the device key's proof.
-    %{
-      module: Emissary.Web.DeviceEnrollmentController,
-      site: :challenge,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Emissary.Web.DeviceEnrollmentController,
-      site: :complete,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Emissary.Web.DeviceEnrollmentController,
-      site: :resume,
-      plane: :external,
-      origin: :none
-    },
     # A protected command line's session: the unlock's one-time ticket.
     %{
       module: Emissary.Web.DeviceSessionController,

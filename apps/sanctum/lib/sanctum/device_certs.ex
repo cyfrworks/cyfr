@@ -3,35 +3,48 @@
 
 defmodule Sanctum.DeviceCerts do
   @moduledoc """
-  Device certificates as a backend checks them: the proof of possession
-  on a connection, and on every paired request a strict expiry on this
-  home's clock, clock tolerance at not-before alone, and the chain to the
-  person's current live key, read from the certificate's own subject. No
-  cached validation outlives a certificate.
+  Device certificates (`Prima.DeviceCert`, `cyfr-device-cert/v2`): this
+  CYFR's own word that a device of a person's account is admitted here,
+  issued and verified under its installation key
+  (`Sanctum.Cipher.installation_key/0`) and read by nothing else.
+
+  ## Issuing
+
+  `issue/2` signs a certificate for a paired client that is a key of its
+  person's account, naming the client's `kid`, the account's identifier
+  and the account head it is issued under, for this CYFR as audience
+  (`Sanctum.SignIn.audience/0`), valid `device_cert_seconds` from now, and
+  records it on the client's row under the issuance fence
+  (`Arca.DeviceCertificates.record/2`, `Arca.DirectoryHeads.fence!/2`): a
+  head that is no longer the cached head of the person's account is
+  refused `:stale_head`, so a certificate issued against a head a refresh
+  has moved past either commits before the refresh and is retired by its
+  walk, or is refused. A device's first certificate is issued at its hello
+  (`Sanctum.DeviceUnlock`), a renewal's through its channel
+  (`Sanctum.Pairing.renew/2`).
 
   ## On a connection
 
-  `verify_connect/3` decides the proof a glass sends on the device
-  channel, against the challenge the channel holds for that connection
+  `verify_connect/3` decides the proof a device sends on its channel,
+  against the challenge the channel holds for that connection
   (`Prima.DeviceCert.Challenge`), by the challenge's purpose:
 
-    * `connect` — the proof of possession of the certificate's device
-      key, then the certificate itself, as every request checks it
-      (below). Answers the client's context, whose credential deadline is
-      the certificate's expiry.
+    * `connect` — the proof of possession of the key the certificate's
+      paired client stores (the challenge's device key, whose kid the
+      certificate names), then the certificate itself, as every request
+      checks it (below). Answers the client's context, whose credential
+      deadline is the certificate's expiry.
     * `renew` — the proof of possession of the device key the active
-      paired-client row stores, for a glass whose certificate expired or
-      was chained to a live key since rotated. The certificate the glass
-      brought only located the client; it authorizes nothing and is not
-      checked. Answers the renewal exchange's context, which carries no
-      certificate and so no deadline: the channel uses it for the one
-      renewal operation (`pairing/renew`) and nothing else, and
-      `Sanctum.Pairing.renew/2` takes no other context.
+      paired-client row stores, for a device whose certificate expired or
+      was signed under an installation key this CYFR no longer holds. The
+      certificate it brought only located the client; it authorizes
+      nothing and is not checked. Answers the renewal exchange's context,
+      which carries no certificate and so no deadline: the channel uses it
+      for the one renewal operation (`pairing/renew`) and nothing else.
 
-  A challenge is bound to this home (`Sanctum.Person.home/0`), the
-  athanor, the client and the device key, so a connect proof is never
-  taken as a renewal proof, or a proof for one client or home as
-  another's.
+  A challenge is bound to this CYFR, the athanor, the client and the
+  device key, so a connect proof is never taken as a renewal proof, or a
+  proof for one client as another's.
 
   ## On every request
 
@@ -40,145 +53,76 @@ defmodule Sanctum.DeviceCerts do
   established under (its credential deadline is the certificate's
   expiry), or, for the renewal exchange's context, the replacement the
   renewal issued. A certificate is not secret, so it verifies nothing
-  without the proof of possession that context stands for. It checks the
-  certificate's signature under the person's live key as this home stores
-  it now (read from the certificate's own subject, never from what the
-  connection claims), its audience, its not-before with the clock
-  tolerance (`clock_skew_seconds`) and its expiry, strictly on this
-  home's clock; then that the certificate's client, athanor and person
-  are the context's, and the paired-client row active and holding the
-  certificate's device key; then the person's standing: not denied, the
-  athanor open and theirs. Nothing is cached:
-  the next request reads it all again, so no validation outlives the
-  certificate or the standing behind it.
+  without the proof of possession that context stands for. In order: the
+  paired client the certificate names stands and holds the certificate's
+  kid; the account it names is the client's person's, and its head is
+  read within freshness's policy (`Sanctum.IdentityFreshness.fresh?/2`),
+  whose walk retires what a removed key or a recovery ends before
+  anything else is read; the certificate is one this CYFR recorded for
+  the client and still holds, and verifies under the installation key
+  with the head its row names, its audience, its not-before with the
+  clock tolerance (`clock_skew_seconds`) and its expiry strictly on this
+  CYFR's clock (`Prima.DeviceCert.verify/3`); the client is read again,
+  and then the person's standing: not denied, the athanor open and
+  theirs. Nothing is cached: the next request reads it all again.
 
   This module verifies and builds no context: once a proof or a request
   verifies, the client's context is established by
-  `Sanctum.Caller.establish_device/2`, whose one caller this is, from the
-  verified certificate, the paired client and its person and athanor as
-  read here.
-
-  ## A remote person's certificate
-
-  A certificate of an `identity` subject names a person whose keys another
-  home holds, and that home issued it (`remote_subject/3`). It is checked
-  against the person this home admitted under that identifier (their
-  identity row, `remote`) and the head their directory names: signed by
-  its current live key, under its current `key_epoch`, for this home as
-  audience, within its window. On every request the head is answered
-  within `identity_freshness_seconds` (`Sanctum.IdentityFreshness.fresh?/2`)
-  and read again past it; a directory that cannot be read pauses the
-  request (`:identity_stale`), and a head that moved retires the
-  certificate (`:bad_signature`, as a local certificate chained to a
-  rotated key is). This home never calls the person's home. Pairing reads
-  the head live instead (`Sanctum.Pairing.complete/3`). A remote
-  certificate is not renewed here: a `renew` for a remote person's client
-  is refused `:remote_identity_unavailable`. The glass renews it at the
-  person's home by a proof of its device key
-  (`Sanctum.RemoteCertification`), and connects here again under the
-  replacement, which this home checks as it checks any certificate and,
-  once it verifies, records on the client's row, so what stands on the
-  client's recorded certificate (a confirmation it gives and its
-  consumption) stands on the one it holds.
+  `Sanctum.Caller.establish_device/2` from what was read here.
 
   ## Verification bounds
 
   Two families of bounds, each in two layers: this node's count
   (`Prima.RateLimiter`), which answers a flood without a database read,
   then the cell's, shared by every member (`Arca.RequestRateWindows`).
-  Pairing completions and renewals count in one family
-  (`:device_verification_*`), connects in another (`:device_connect_*`),
-  so bad connects cannot starve renewals.
+  Renewals count in one family (`:device_verification_*`), connects in
+  another (`:device_connect_*`), so bad connects cannot starve renewals.
 
-  An attempt is charged to a name only once it has proven what only that
-  name's holder can, against the stored row; what it merely names counts
-  for nothing, since a certificate, a client id and an identifier are not
-  secret, and a flood naming a real client must not spend that client's
-  budget. So, on every path:
+  An attempt is charged to a client only once it has proven what only
+  that client's device can, against the stored row; what it merely names
+  counts for nothing, since a certificate and a client id are not secret,
+  and a flood naming a real client must not spend that client's budget.
+  So, on every path:
 
     1. The source address's window is read without counting, this
        node's and then the cell's, before any row or signature: a spent
        one refuses with nothing verified and nothing counted.
-    2. The attempt is attributed, or not:
-        * a connect, when its proof verifies over the challenge under the
-          certificate's device key and that key is the one the named
-          paired-client row stores (the row read at any standing);
-        * a renewal on the channel, when its proof verifies under the
-          device key the named paired-client row stores;
-        * a completion, when the secret's hash names a pending invitation
-          (`Sanctum.Pairing`);
-        * a renewal at a person's home, when the certification the
-          certificate locates holds the key a verified proof was made by
-          (`Sanctum.RemoteCertification`).
-    3. An attributed attempt is charged to its name: its client
-       (`:device_connect_client`, `:device_verification_client`) or its
-       person (`:device_verification_person`), 20 a minute each, this
-       node's count and then the cell's. A spent budget refuses with its
-       own retry bound. It never spends the source's or the
-       installation's.
+    2. The attempt is attributed when its proof verifies over the
+       challenge under the device key the named paired-client row stores
+       (the row read at any standing).
+    3. An attributed attempt is charged to its client, 20 a minute, this
+       node's count and then the cell's; a connect only when it fails,
+       before its certificate is checked its budget read without counting
+       (`Prima.RateLimiter.peek/3`, `Arca.RequestRateWindows.check/5`), a
+       renewal every time. A spent budget refuses `{:device_rate_limited,
+       retry_after_ms}`.
     4. An attempt nothing attributes is charged to the source (20 a
        minute) and the installation (200 a minute), this node's two
        counts and then the cell's, and is refused with the word the
-       checks always gave it. A connect whose proof verified but whose
-       key no client's row stores is counted first and only then checked
-       as every connect always was, so its word is unchanged: a
-       certificate this home cannot verify says so, and a verified one
-       whose client is gone is `:not_standing`. A spent bound refuses
-       `{:rate_limited, retry_after_ms}` instead, and once this node's
-       count of either is spent, nothing more is written.
-
-  So the installation's 200 a minute is the ceiling on everything no name
-  proved, and a flood of that, from any number of addresses, leaves every
-  client and person that proves itself admitted within its own budget. An
-  attempt refused there has still cost its source's read and the one to
-  four keyed reads that attribute it, bounded only per address. Only a
-  name that stands is charged: a person's budget is charged only for a
-  pending invitation or an active certification under their current
-  `key_epoch`, so a dead device key cannot spend what the person's other
-  devices need. A client's own budget is charged by its own key even once
-  the client is revoked, which harms only that client.
-
-  A connect's own budget counts only its failures, so a paired device
-  reconnecting spends nothing, and a burst of devices reconnecting after
-  a restart spends nothing either: before its certificate is checked, an
-  attributed connect reads its client's budget without counting
-  (`Prima.RateLimiter.peek/3`, `Arca.RequestRateWindows.check/5`), and
-  counts only when it fails. Completions and renewals count every
-  attributed attempt, before the work it asks for. A spent client budget
-  refuses a connect or a renewal on the channel
-  `{:device_rate_limited, retry_after_ms}`, so the channel can say which
-  bound it was. A read and a later count can race between concurrent
-  attempts; the overshoot is bounded by that concurrency.
+       checks always gave it, or `{:rate_limited, retry_after_ms}` once
+       either bound is spent.
 
   ## Refusals
 
     * `:proof_refused` — the proof does not answer the held challenge
-      under its device key, the challenge is not this home's, or its
-      device key is not the one the certificate or row names.
-    * `:expired`, `:not_yet_valid`, `:bad_signature`, `:wrong_audience` —
-      the certificate, as `Prima.DeviceCert.verify/3` refuses it.
-      `:bad_signature` is also a certificate chained to a live key the
-      person's row no longer names.
-    * `:unknown_subject` — the certificate names no person with a local
-      key set here.
+      under its device key, the challenge is not this CYFR's, or its
+      device key is not the one the client's row stores.
+    * `:expired`, `:not_yet_valid`, `:bad_signature`, `:wrong_audience`,
+      `:stale_head` — the certificate, as `Prima.DeviceCert.verify/3`
+      refuses it; `:bad_signature` also for one this CYFR never recorded.
     * `:client_mismatch` — the certificate names another client, athanor,
-      person or device key than the paired-client row or the context, or
-      the context is not a device context `verify_connect/3` produced.
-    * `:revoked` — the paired client was revoked.
-    * `:not_standing` — no such paired client here, a client a declared
-      restore suspended (until its person re-enables it), or the person is
-      denied, or the athanor archived or not theirs.
-    * `:identity_stale` — a remote person's directory could not confirm
-      their head fresh: the request pauses.
+      key or account than the paired-client row or the context, or the
+      context is not a device context `verify_connect/3` produced.
+    * `:revoked` — the paired client or the certificate was revoked.
+    * `:not_standing` — no such paired client here, a suspended one, the
+      person denied, the athanor archived or not theirs, or the account
+      gone.
+    * `:identity_stale` — the account's head could not be read fresh: the
+      request pauses.
     * `:company_login_required` — the person stands but for the company
-      sign-in this CYFR requires (`Sanctum.CompanyLogin`): the device
-      reaches nothing until they give it in a browser.
-    * `:remote_identity_unavailable` — a renewal for a remote person's
-      client, which their own home renews.
-    * `{:rate_limited, retry_after_ms}` — the source address's or the
-      installation's verification bound is spent.
-    * `{:device_rate_limited, retry_after_ms}` — the client's own budget
-      is spent.
+      sign-in this CYFR requires (`Sanctum.CompanyLogin`).
+    * `{:rate_limited, retry_after_ms}`, `{:device_rate_limited,
+      retry_after_ms}` — a verification bound is spent.
     * `:unavailable` — the store or a setting could not answer; never a
       verdict either way.
   """
@@ -187,8 +131,8 @@ defmodule Sanctum.DeviceCerts do
 
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
-  alias Prima.Identity.Encoding
-  alias Sanctum.{Context, Person}
+  alias Prima.Identity.{Encoding, Key}
+  alias Sanctum.Context
 
   @window_ms 60_000
   @source_cap 20
@@ -214,29 +158,15 @@ defmodule Sanctum.DeviceCerts do
           | :not_yet_valid
           | :bad_signature
           | :wrong_audience
-          | :unknown_subject
+          | :stale_head
           | :client_mismatch
           | :revoked
           | :not_standing
           | :identity_stale
           | :company_login_required
-          | :remote_identity_unavailable
           | {:rate_limited, non_neg_integer()}
           | {:device_rate_limited, non_neg_integer()}
           | :unavailable
-
-  @typedoc """
-  A name an attempt proved itself to be (the module doc): a paired client
-  by its id, or a person by theirs.
-  """
-  @type name :: {:client, String.t()} | {:person, String.t()}
-
-  @typedoc """
-  What counting answers: `:ok`, the bound's retry in milliseconds once it
-  is spent, or `:unavailable` when the store cannot count, which refuses
-  as a spent bound would.
-  """
-  @type counted :: :ok | {:error, {:rate_limited, non_neg_integer()} | :unavailable}
 
   @typedoc """
   A person's standing in their athanor, as read now: the users row, the
@@ -250,11 +180,141 @@ defmodule Sanctum.DeviceCerts do
         }
 
   # ---------------------------------------------------------------------------
+  # Issuing
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Issue and record a certificate for the paired client `client` (its
+  row, a key of its person's account: `kid` set) under the account head
+  `head` (the module doc). Refusals: `:stale_head`, `:not_standing` (the
+  client no longer stands), `:unavailable`, and the store's own.
+  """
+  @spec issue(map(), String.t()) :: {:ok, DeviceCert.t()} | {:error, term()}
+  def issue(%{id: client_id, kid: kid, athanor_id: athanor_id, user_id: user_id} = client, head)
+      when is_binary(kid) and is_binary(head) do
+    with {:ok, identifier} <- identifier(user_id),
+         {:ok, seconds} <- cert_seconds(),
+         {:ok, home} <- Sanctum.SignIn.audience(),
+         now = System.os_time(:millisecond),
+         {:ok, unsigned} <-
+           DeviceCert.new(
+             kid: kid,
+             client_id: client_id,
+             identifier: identifier,
+             head: head,
+             athanor: athanor_id,
+             audience: home,
+             not_before: now,
+             expires_at: now + seconds * 1_000
+           ) do
+      {_public, private} = Sanctum.Cipher.installation_key()
+      certificate = DeviceCert.sign(unsigned, private)
+
+      with {:ok, _row} <- record(client, certificate), do: {:ok, certificate}
+    else
+      {:error, {reason, _field}} when reason in [:invalid_field, :missing_field] ->
+        {:error, :unavailable}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def issue(_client, _head), do: {:error, :not_standing}
+
+  # The certificate on the client's row, as signed: its JCS bytes and
+  # their digest, under the member's live ownership, the person's lock and
+  # the fence, and the client's lock.
+  defp record(client, %DeviceCert{} = certificate) do
+    bytes = Encoding.jcs!(DeviceCert.encode(certificate))
+
+    case Arca.DeviceCertificates.record(Prima.Actor.in_athanor(client.athanor_id), %{
+           paired_client_id: client.id,
+           user_id: client.user_id,
+           identifier: certificate.identifier,
+           kid: certificate.kid,
+           head: certificate.head,
+           device_public_key: client.device_public_key,
+           issuing_home: certificate.audience,
+           audience_home: certificate.audience,
+           not_before: DateTime.from_unix!(certificate.not_before, :millisecond),
+           expires_at: DateTime.from_unix!(certificate.expires_at, :millisecond),
+           certificate: bytes,
+           digest: Prima.Digest.sha256(bytes)
+         }) do
+      {:ok, row} -> {:ok, row}
+      {:error, :stale_head} -> {:error, :stale_head}
+      {:error, :client_not_active} -> {:error, :not_standing}
+      {:error, :database_error} -> {:error, :unavailable}
+      {:error, :not_owner} -> {:error, :unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # A certificate's validity refuses a stale value: a store that cannot
+  # answer it issues nothing, as a session is not issued on a window this
+  # member cannot read.
+  defp cert_seconds do
+    case Arca.PlatformSettings.effective("device_cert_seconds") do
+      {:ok, seconds} when is_integer(seconds) and seconds > 0 ->
+        {:ok, seconds}
+
+      {:ok, other} ->
+        Logger.error(
+          "[Sanctum.DeviceCerts] the stored device_cert_seconds #{inspect(other)} is not a " <>
+            "positive whole number of seconds; refusing until it is"
+        )
+
+        {:error, :unavailable}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[Sanctum.DeviceCerts] device_cert_seconds cannot be read: the setting is #{reason}"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # On a connection
   # ---------------------------------------------------------------------------
 
   @doc """
-  Decide the proof `proof` a glass sent on its connection, against the
+  The device key a connection's `connect` or `renew` challenge is bound
+  to: the key the paired client the connection names stores, at any
+  standing, when its `kid` is the one the certificate names. The source
+  address's bound of the purpose's family is read first, counting
+  nothing, as `verify_connect/3` reads it. A client this CYFR does not
+  hold, or one of another key, is `:unchallengeable`.
+  """
+  @spec challenge_key(:connect | :renew, connection()) ::
+          {:ok, binary()}
+          | {:error, :unchallengeable | {:rate_limited, non_neg_integer()} | :unavailable}
+  def challenge_key(purpose, %{client_id: client_id, certificate: %DeviceCert{} = cert} = conn)
+      when purpose in [:connect, :renew] and is_binary(client_id) do
+    family = if purpose == :connect, do: :device_connect, else: :device_verification
+
+    with :ok <- source_room(family, Map.get(conn, :source)) do
+      case Arca.PairedClients.list(Prima.Actor.in_athanor(cert.athanor), standing: :all) do
+        {:ok, rows} ->
+          case Enum.find(rows, &(&1.id == client_id)) do
+            %{kid: kid, device_public_key: key} when kid == cert.kid and is_binary(key) ->
+              {:ok, key}
+
+            _absent_or_another ->
+              {:error, :unchallengeable}
+          end
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  def challenge_key(_purpose, _connection), do: {:error, :unchallengeable}
+
+  @doc """
+  Decide the proof `proof` a device sent on its connection, against the
   challenge `challenge` the channel holds for it, by the challenge's
   purpose (the module doc). Answers the client's context, which
   `Sanctum.Caller.establish_device/2` builds from what was verified here:
@@ -301,16 +361,16 @@ defmodule Sanctum.DeviceCerts do
 
   def verify_connect(_connection, _proof, _challenge), do: {:error, :proof_refused}
 
-  # A connect is the named client's once its proof, made by the
-  # certificate's device key over the challenge held for it, shows that
-  # key is the one the client's row stores. A proof or a challenge that
-  # fails first is no one's, refused with its own word; one the client's
-  # row does not stand behind is no one's either (`:not_the_clients`).
+  # A connect is the named client's once its proof, made by the device key
+  # the challenge names over the challenge held for it, shows that key is
+  # the one the client's row stores. A proof or a challenge that fails
+  # first is no one's, refused with its own word; one the client's row
+  # does not stand behind is no one's either (`:not_the_clients`).
   defp connect_attribution(certificate, client_id, proof, challenge, now) do
     with :ok <- held(challenge, client_id, certificate),
          :ok <- possession(proof, challenge, now),
          :ok <- names_client(certificate, %{client_id: client_id}) do
-      case attribution(certificate.athanor, client_id, certificate.device_key) do
+      case attribution(certificate.athanor, client_id, challenge.device_key) do
         {:ok, row} -> {:ok, row}
         {:unattributed, _row_says} -> :not_the_clients
         {:error, :unavailable} -> {:error, :unavailable}
@@ -323,12 +383,7 @@ defmodule Sanctum.DeviceCerts do
   # A connect no client's row stands behind is counted against the address
   # and the installation first, so past either bound it is refused having
   # cost nothing more. Under them it is answered the word its certificate's
-  # own check gives, in the order every connect was always checked: a
-  # certificate this home cannot verify says so, and a verified one whose
-  # client is gone is told its standing ended (`:not_standing`), so a
-  # glass whose pairing is gone, after a restore for instance, pairs
-  # again. That check reads the person's key, or for a remote person
-  # their head, as it always did, within the installation's bound.
+  # own check gives, as every connect is checked.
   defp unattributed_connect(certificate, client_id, source, now) do
     case claim_unattributed(:device_connect, source) do
       {:error, {:rate_limited, _retry_after_ms}} = spent -> spent
@@ -338,19 +393,17 @@ defmodule Sanctum.DeviceCerts do
 
   # The client's own connect budget is read before its certificate is
   # checked, and counts only a failure: a paired device reconnecting is
-  # no guess. A failure that finds the budget spent says so. The row read
-  # to attribute the connect only attributes it: its standing is read
-  # again once the certificate is checked, so a revocation committed
-  # meanwhile is seen.
+  # no guess. The row read to attribute the connect only attributes it:
+  # its standing is read again once the certificate is checked.
   defp attributed_connect(row, certificate, client_id, source, now) do
     name = {:client, row.id}
 
     with :ok <- device_bound(named_room(:device_connect, name)) do
       case checked_request(certificate, %{client_id: client_id}, now, client_ip: source) do
         {:ok, ctx} ->
-          with :ok <- remembered(row, certificate), do: {:ok, ctx}
+          {:ok, ctx}
 
-        # A store or a directory that could not answer is no failed proof.
+        # A store or an account that could not be read is no failed proof.
         {:error, reason} = unanswered when reason in [:unavailable, :identity_stale] ->
           unanswered
 
@@ -364,7 +417,7 @@ defmodule Sanctum.DeviceCerts do
   end
 
   # A renewal is the named client's once its proof shows the device key
-  # the client's row stores; the certificate the glass brought only
+  # the client's row stores; the certificate the device brought only
   # located the client.
   defp renewal_attribution(%Challenge{} = challenge, client_id, proof, now) do
     with :ok <- renewal_held(challenge, client_id),
@@ -375,21 +428,23 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  # Counted against the client's own budget before anything more is read.
+  # Counted against the client's own budget before anything more is read;
+  # the account's head is read before the client again, so a walk that
+  # retired the client is seen.
   defp attributed_renewal(row, source) do
     with :ok <- device_bound(claim_named(:device_verification, {:client, row.id})),
-         {:ok, row} <- row_standing(row),
-         :ok <- local_identity(row.user_id),
+         {:ok, identifier} <- identifier(row.user_id),
+         :ok <- fresh(identifier),
+         {:ok, row} <- paired_client(row.athanor_id, row.user_id, row.id),
          {:ok, standing} <- standing(row.user_id, row.athanor_id) do
-      established(row, standing, nil, client_ip: source)
+      established(row, standing, nil, identifier, client_ip: source)
     end
   end
 
   # The client `client_id` names in `athanor_id`, read at any standing,
   # and whether `device_key`, which a verified proof was just made by, is
   # the key its row stores: only then is the attempt that client's.
-  # Otherwise answers the refusal the row itself gives, as reading it as
-  # standing (`paired_client/3`) and then its key would.
+  # Otherwise answers the refusal the row itself gives.
   defp attribution(athanor_id, client_id, device_key)
        when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) and
               is_binary(device_key) do
@@ -416,21 +471,24 @@ defmodule Sanctum.DeviceCerts do
 
   defp attribution(_athanor_id, _client_id, _device_key), do: {:unattributed, :not_standing}
 
-  # The challenge the channel holds for this connect: this home's, for
-  # this client, bound to the certificate's athanor and device key.
+  # The challenge the channel holds for this connect: this CYFR's, for
+  # this client, bound to the certificate's athanor and to the device key
+  # whose kid the certificate names.
   defp held(%Challenge{} = challenge, client_id, %DeviceCert{} = certificate) do
-    if challenge.home == Person.home() and challenge.client_id == client_id and
+    if this_home?(challenge.home) and challenge.client_id == client_id and
          challenge.athanor == certificate.athanor and
-         challenge.device_key == certificate.device_key,
+         Key.kid(challenge.device_key) == certificate.kid,
        do: :ok,
        else: {:error, :proof_refused}
   end
 
   defp renewal_held(%Challenge{} = challenge, client_id) do
-    if challenge.home == Person.home() and challenge.client_id == client_id,
+    if this_home?(challenge.home) and challenge.client_id == client_id,
       do: :ok,
       else: {:error, :proof_refused}
   end
+
+  defp this_home?(home), do: Sanctum.SignIn.audience() == {:ok, home}
 
   defp possession(proof, %Challenge{} = challenge, now) do
     case Proof.verify(proof, challenge, now) do
@@ -467,8 +525,6 @@ defmodule Sanctum.DeviceCerts do
              request_id: ctx.request_id,
              client_ip: ctx.client_ip
            ) do
-      # The certificate's subject, resolved to a person here, is the
-      # context's own person.
       if user_id == ctx.user_id, do: {:ok, checked}, else: {:error, :client_mismatch}
     end
   end
@@ -479,36 +535,37 @@ defmodule Sanctum.DeviceCerts do
   # inside `verify_connect/3` once the proof verified, the client the
   # connection names. Private: a certificate alone proves nothing.
   #
-  # The client's standing is read before the certificate is: a revoked or
-  # suspended client paired with the certificate's key is told its
-  # standing ended whatever its certificate's age, and only a standing
-  # client hears that its certificate is to be renewed.
+  # The client's standing is read before the certificate is, so a revoked
+  # or suspended client is told its standing ended whatever its
+  # certificate's age; the account's head is read before the certificate's
+  # row and the client again, so whatever its walk retires is seen.
   defp checked_request(certificate, client, now, carried) do
     with :ok <- names_client(certificate, client),
-         :ok <- standing_first(certificate),
-         {:ok, subject} <- subject(certificate, now),
-         certificate = subject.certificate,
-         {:ok, row} <- paired_client(certificate.athanor, subject.user_id, certificate.client_id),
-         :ok <- stored_key(row, certificate.device_key),
-         {:ok, standing} <- standing(subject.user_id, certificate.athanor) do
-      established(row, standing, certificate, carried, subject.identity)
+         {:ok, row} <- certified_client(certificate),
+         {:ok, identifier} <- identifier(row.user_id),
+         :ok <- same(identifier, certificate.identifier),
+         :ok <- fresh(identifier),
+         {:ok, head} <- recorded(row, certificate),
+         {:ok, certificate} <- checked(certificate, head, now),
+         {:ok, row} <- paired_client(row.athanor_id, row.user_id, row.id),
+         {:ok, standing} <- standing(row.user_id, certificate.athanor) do
+      established(row, standing, certificate, identifier, carried)
     end
   end
 
-  # The client the certificate names, when its row holds the certificate's
-  # key: a client no longer standing refuses here, before anything of the
-  # certificate is checked. A client this home does not hold, or holds
-  # under another key, is decided after the certificate, as before.
-  defp standing_first(%DeviceCert{athanor: athanor_id, client_id: client_id, device_key: key})
-       when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) do
+  # The client the certificate names, at any standing, standing and
+  # holding the certificate's kid.
+  defp certified_client(%DeviceCert{athanor: athanor_id, client_id: client_id, kid: kid}) do
     case Arca.PairedClients.list(Prima.Actor.in_athanor(athanor_id), standing: :all) do
       {:ok, rows} ->
         case Enum.find(rows, &(&1.id == client_id)) do
-          %{device_public_key: ^key} = row ->
-            with {:ok, _row} <- row_standing(row), do: :ok
+          nil ->
+            {:error, :not_standing}
 
-          _absent_or_another_key ->
-            :ok
+          row ->
+            with {:ok, row} <- row_standing(row) do
+              if row.kid == kid, do: {:ok, row}, else: {:error, :client_mismatch}
+            end
         end
 
       {:error, _unanswered} ->
@@ -516,214 +573,99 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  defp standing_first(%DeviceCert{}), do: :ok
+  defp same(value, value), do: :ok
+  defp same(_value, _other), do: {:error, :client_mismatch}
 
-  # The context names the certificate's client, athanor and, for a local
-  # subject, person (an identity subject's person is resolved from the
-  # identifier and held to the context's after), and was established under
-  # this certificate (its deadline is the certificate's expiry) or is the
-  # renewal exchange's, established under none.
+  # The context names the certificate's client and athanor and was
+  # established under this certificate (its deadline is the certificate's
+  # expiry), or is the renewal exchange's, established under none.
   defp names_context(%DeviceCert{} = certificate, %Context{} = ctx) do
     deadline = ctx.credential_deadline
 
     if ctx.client_id == certificate.client_id and ctx.athanor_id == certificate.athanor and
-         names_person?(certificate, ctx.user_id) and
+         is_binary(ctx.user_id) and
          (is_nil(deadline) or DateTime.to_unix(deadline, :millisecond) == certificate.expires_at),
        do: :ok,
        else: {:error, :client_mismatch}
   end
 
-  defp names_person?(%DeviceCert{subject: %{kind: :local, user_id: user_id}}, user_id), do: true
-  defp names_person?(%DeviceCert{subject: %{kind: :identity}}, user_id), do: is_binary(user_id)
-  defp names_person?(%DeviceCert{}, _user_id), do: false
-
   defp names_client(%DeviceCert{client_id: id}, %{client_id: id}), do: :ok
   defp names_client(%DeviceCert{}, _client), do: {:error, :client_mismatch}
 
-  # The person a certificate names and the certificate as verified: a local
-  # subject under the live key this home stores for them; an identity
-  # subject under the head their directory names (`remote_subject/3`).
-  defp subject(%DeviceCert{subject: %{kind: :local, user_id: user_id}} = certificate, now) do
-    with {:ok, live_key} <- live_key(user_id),
-         {:ok, skew_ms} <- skew_ms(),
-         {:ok, certificate} <- checked(certificate, live_key, now, skew_ms, nil) do
-      {:ok, %{user_id: user_id, identity: nil, certificate: certificate}}
+  # The account the person's identity row names.
+  defp identifier(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{identifier: identifier}} when is_binary(identifier) -> {:ok, identifier}
+      {:ok, _none} -> {:error, :not_standing}
+      {:error, :not_found} -> {:error, :not_standing}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  defp subject(%DeviceCert{subject: %{kind: :identity}} = certificate, now),
-    do: remote_subject(certificate, now, :bounded)
-
-  defp subject(%DeviceCert{}, _now), do: {:error, :unknown_subject}
-
-  @doc """
-  Check `certificate`, an `identity` subject's, as another home issued it
-  for one of its people (the module doc), at `now` (Unix milliseconds):
-  the person this home admitted under that identifier, whose identity row
-  is `remote`, and the head their directory names, read within its
-  freshness bound (`:bounded`, every request) or live (`:live`, a
-  pairing). The certificate must be signed by that head's live key, under
-  its `key_epoch`, for this home as audience, within its window.
-
-  Answers `{:ok, %{user_id, identity, certificate}}`, `identity` the
-  person's identity row as read here (its `user_id`, `provenance` and
-  `identifier`), or a refusal: `:unknown_subject` (no remote person here
-  holds that identifier), `:bad_signature` (another key, or a `key_epoch`
-  the head has moved past), `:expired`, `:not_yet_valid`,
-  `:wrong_audience`, `:identity_stale`, `:unavailable`.
-  """
-  @spec remote_subject(DeviceCert.t(), non_neg_integer(), :bounded | :live) ::
-          {:ok,
-           %{
-             user_id: String.t(),
-             identity: %{user_id: String.t(), provenance: String.t(), identifier: String.t()},
-             certificate: DeviceCert.t()
-           }}
-          | {:error, refusal()}
-  def remote_subject(
-        %DeviceCert{subject: %{kind: :identity, identifier: identifier}} = certificate,
-        now,
-        freshness
-      )
-      when freshness in [:bounded, :live] do
-    with {:ok, identity} <- remote_person(identifier),
-         {:ok, state} <- head_state(identifier, freshness),
-         {:ok, skew_ms} <- skew_ms(),
-         {:ok, certificate} <- checked(certificate, state.live_key, now, skew_ms, state.key_epoch) do
-      {:ok, %{user_id: identity.user_id, identity: identity, certificate: certificate}}
+  # The account's head within freshness's policy: a refresh walks the
+  # entries after the cached head before it answers, so a key it removes
+  # or a recovery has retired its bindings by now.
+  defp fresh(identifier) do
+    case Sanctum.IdentityFreshness.fresh?(identifier) do
+      {:ok, _head} -> :ok
+      {:refused, :identity_stale} -> {:error, :identity_stale}
+      {:refused, _gone} -> {:error, :not_standing}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  def remote_subject(%DeviceCert{}, _now, _freshness), do: {:error, :unknown_subject}
+  # The head the certificate's own row names: the row this CYFR recorded
+  # when it issued these bytes, read now, so one revoked since stands for
+  # nothing and one never recorded here is no certificate of this CYFR's.
+  defp recorded(row, %DeviceCert{} = certificate) do
+    digest = Prima.Digest.sha256(Encoding.jcs!(DeviceCert.encode(certificate)))
 
-  # The person this home admitted under `identifier`: a remote person's
-  # identity row, of which the context's establishment is handed the
-  # columns that bind it (`Sanctum.Caller.establish_device/2`). A local
-  # person's own identifier names no certificate another home issued to
-  # them here.
-  defp remote_person(identifier) do
-    case Arca.PersonIdentities.lookup_identifier(Prima.Actor.system(), identifier) do
-      {:ok, %{provenance: "remote"} = row} ->
-        {:ok, Map.take(row, [:user_id, :provenance, :identifier])}
-
-      {:ok, _local} ->
-        {:error, :unknown_subject}
-
-      {:error, :not_found} ->
-        {:error, :unknown_subject}
+    case Arca.DeviceCertificates.list(Prima.Actor.in_athanor(row.athanor_id),
+           paired_client_id: row.id,
+           status: :all
+         ) do
+      {:ok, rows} ->
+        case Enum.find(rows, &(&1.digest == digest)) do
+          %{status: "active", head: head} -> {:ok, head}
+          %{status: "expired"} -> {:error, :expired}
+          %{status: "revoked"} -> {:error, :revoked}
+          nil -> {:error, :bad_signature}
+        end
 
       {:error, _unanswered} ->
         {:error, :unavailable}
     end
   end
 
-  @doc """
-  Whether the paired client `client` (an `Arca.PairedClients` row) can
-  still prove itself here: the row active, and the newest certificate this
-  home recorded for it current and verified now as a request's is
-  (`subject/2`): a local subject's under the live key this home stores for
-  them, an identity subject's under the head their directory names within
-  its freshness bound, so one a rotation or a recovery of the person's
-  keys retired proves nothing. A store or directory that cannot answer
-  proves nothing either.
-  """
-  @spec proves_itself?(map()) :: boolean()
-  def proves_itself?(%{standing: "active", athanor_id: athanor_id, id: client_id})
-      when is_binary(athanor_id) and is_binary(client_id) do
-    with {:ok, %{certificate: bytes}} <-
-           Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor_id), client_id),
-         {:ok, map} <- Jason.decode(bytes),
-         {:ok, %DeviceCert{client_id: ^client_id} = certificate} <- DeviceCert.decode(map),
-         {:ok, _subject} <- subject(certificate, System.system_time(:millisecond)) do
-      true
-    else
-      _ended_or_unanswered -> false
-    end
-  end
+  # The certificate under the installation key, for this CYFR, at the head
+  # its row names, within its window.
+  defp checked(certificate, head, now) do
+    {public, _private} = Sanctum.Cipher.installation_key()
 
-  def proves_itself?(_client), do: false
+    with {:ok, home} <- Sanctum.SignIn.audience(),
+         {:ok, skew_ms} <- skew_ms() do
+      case DeviceCert.verify(certificate, public,
+             home: home,
+             head: head,
+             now: now,
+             skew: skew_ms
+           ) do
+        {:ok, certificate} ->
+          {:ok, certificate}
 
-  @doc """
-  The head `identifier`'s directory names now, read live whatever the
-  cache says (`Sanctum.IdentityFreshness.fresh!/2`), as its verified
-  state: for a remote person's proof that must stand on their keys as they
-  are, a confirmation's. Refusals: `:identity_stale` (the directory cannot
-  answer) and `:unavailable`.
-  """
-  @spec live_head(String.t()) ::
-          {:ok, Prima.Identity.State.t()} | {:error, :identity_stale | :unavailable}
-  def live_head(identifier) when is_binary(identifier), do: head_state(identifier, :live)
-
-  defp head_state(identifier, freshness) do
-    answer =
-      case freshness do
-        :bounded -> Sanctum.IdentityFreshness.fresh?(identifier)
-        :live -> Sanctum.IdentityFreshness.fresh!(identifier)
-      end
-
-    case answer do
-      {:ok, head} ->
-        case Sanctum.Directory.Client.state(head) do
-          {:ok, state} -> {:ok, state}
-          {:error, :corrupt} -> {:error, :unavailable}
-        end
-
-      {:refused, :identity_stale} ->
-        {:error, :identity_stale}
-
-      {:error, :unavailable} ->
-        {:error, :unavailable}
-    end
-  end
-
-  # The live key this home stores for the certificate's own subject, read
-  # as the server, as every read of a person's key row is
-  # (`Sanctum.Person`): the subject names the person, and a person is not
-  # a row inside an athanor.
-  defp live_key(user_id) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "local", live_public_key: key}} when is_binary(key) -> {:ok, key}
-      {:ok, _no_local_keys} -> {:error, :unknown_subject}
-      {:error, :not_found} -> {:error, :unknown_subject}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  @doc """
-  Whether the person `user_id` holds a local key set at this home, the
-  only kind this home signs a certificate for: `:ok`, or
-  `:remote_identity_unavailable` for a person whose keys are at another
-  home (or who holds none here), and `:unavailable` when the store
-  cannot answer.
-  """
-  @spec local_identity(String.t()) :: :ok | {:error, :remote_identity_unavailable | :unavailable}
-  def local_identity(user_id) when is_binary(user_id) do
-    case live_key(user_id) do
-      {:ok, _key} -> :ok
-      {:error, :unavailable} -> {:error, :unavailable}
-      {:error, _not_local} -> {:error, :remote_identity_unavailable}
-    end
-  end
-
-  # A certificate under `live_key`; an identity subject's under the
-  # `key_epoch` its head names too, a moved epoch reading as a key the
-  # person's head no longer names.
-  defp checked(certificate, live_key, now, skew_ms, key_epoch) do
-    case DeviceCert.verify(certificate, live_key,
-           home: Person.home(),
-           now: now,
-           skew: skew_ms,
-           key_epoch: key_epoch
-         ) do
-      {:ok, certificate} ->
-        {:ok, certificate}
-
-      {:error, reason}
-      when reason in [:expired, :not_yet_valid, :bad_signature, :wrong_audience] ->
         {:error, reason}
+        when reason in [
+               :expired,
+               :not_yet_valid,
+               :bad_signature,
+               :wrong_audience,
+               :stale_head
+             ] ->
+          {:error, reason}
 
-      {:error, _malformed_or_moved} ->
-        {:error, :bad_signature}
+        {:error, _malformed} ->
+          {:error, :bad_signature}
+      end
     end
   end
 
@@ -757,12 +699,10 @@ defmodule Sanctum.DeviceCerts do
 
   @doc """
   The paired-client row `client_id` in the athanor `athanor_id`, of the
-  person `user_id`: `{:ok, row}` for an active
-  client paired with a device key, `:revoked` for a revoked one,
-  `:not_standing` for a suspended one (a declared restore's, which stands
-  for nothing until it is re-enabled, `Sanctum.Pairing.reenable/3`) and
-  for one this home does not hold, and `:unavailable` when the store
-  cannot answer.
+  person `user_id`: `{:ok, row}` for an active device client,
+  `:revoked` for a revoked one, `:not_standing` for a suspended one (a
+  declared restore's) and for one this CYFR does not hold, and
+  `:unavailable` when the store cannot answer.
   """
   @spec paired_client(String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, :revoked | :not_standing | :unavailable}
@@ -785,17 +725,15 @@ defmodule Sanctum.DeviceCerts do
 
   def paired_client(_athanor_id, _user_id, _client_id), do: {:error, :not_standing}
 
-  # Only an active device client stands. A suspended one is refused as a
-  # client whose standing ended, never as revoked: it stands again once
-  # re-enabled, and its glass reconnects or renews then.
-  defp row_standing(%{standing: "active", source_kind: "device_cert"} = row), do: {:ok, row}
-  defp row_standing(%{standing: "revoked"}), do: {:error, :revoked}
-  defp row_standing(%{standing: "suspended"}), do: {:error, :not_standing}
-  defp row_standing(_no_device), do: {:error, :not_standing}
+  # Only an active device client that is a key of the account stands. A
+  # suspended one is refused as a client whose standing ended, never as
+  # revoked: it stands again once re-enabled.
+  defp row_standing(%{standing: "active", source_kind: "device_cert", kid: kid} = row)
+       when is_binary(kid),
+       do: {:ok, row}
 
-  defp stored_key(row, device_key) do
-    if row.device_public_key == device_key, do: :ok, else: {:error, :client_mismatch}
-  end
+  defp row_standing(%{standing: "revoked"}), do: {:error, :revoked}
+  defp row_standing(_suspended_or_no_device), do: {:error, :not_standing}
 
   @doc """
   The standing of the person `user_id` in the athanor `athanor_id`, read
@@ -832,10 +770,10 @@ defmodule Sanctum.DeviceCerts do
   Whether the paired client a device context names still stands: its
   certificate's deadline not passed, the paired-client row active (a
   suspended one is `:not_standing`) and the person's standing in the
-  athanor (`standing/2`). For a grant decided
-  under a paired device (`Sanctum.Consent.Authz.authorize/3`) and for who
-  can confirm (`Sanctum.Pairing.can_confirm?/1`). Any other context
-  stands for no paired client.
+  athanor (`standing/2`). For a grant decided under a paired device
+  (`Sanctum.Consent.Authz.authorize/3`) and for who can confirm
+  (`Sanctum.Pairing.can_confirm?/1`). Any other context stands for no
+  paired client.
   """
   @spec client_standing(Context.t()) :: :ok | {:error, :revoked | :not_standing | :unavailable}
   def client_standing(
@@ -863,15 +801,13 @@ defmodule Sanctum.DeviceCerts do
   # The client's context, established by `Sanctum.Caller.establish_device/2`
   # from what was verified here: the certificate (nil for a renewal, whose
   # certificate only located the client), the paired-client row, the
-  # identity row an identity subject's person was resolved by (nil for a
-  # local subject), and its person and athanor as just read, with the
-  # connection's request correlation and address. Nothing here builds a
-  # context.
-  defp established(row, standing, certificate, carried, identity \\ nil) do
+  # account it is a key of, and its person and athanor as just read, with
+  # the connection's request correlation and address.
+  defp established(row, standing, certificate, identifier, carried) do
     device = %{
       certificate: certificate,
       client: row,
-      identity: identity,
+      identifier: identifier,
       user: standing.user,
       athanor: standing.athanor,
       platform_admin: standing.platform_admin
@@ -887,103 +823,9 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  # A remote person's device renews its certificate at their own home,
-  # which this home never sees: the replacement it connects under, verified
-  # just now against their head, is recorded here once, so what stands on
-  # this client's recorded certificates (a confirmation it gives, its
-  # consumption, an issuance) stands on the certificate it holds. A
-  # certificate this home issued was recorded when it was issued.
-  defp remembered(row, %DeviceCert{subject: %{kind: :identity}} = certificate) do
-    case record(Prima.Actor.in_athanor(row.athanor_id), row, certificate) do
-      {:ok, _recorded} -> :ok
-      {:error, :conflict} -> :ok
-      {:error, :certificate_refused} -> {:error, :bad_signature}
-      {:error, :not_standing} -> {:error, :not_standing}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  defp remembered(_row, %DeviceCert{}), do: :ok
-
-  @doc """
-  Record `certificate` on the paired client `client`'s row, as signed: its
-  JCS bytes and their digest, under the member's live ownership and the
-  client's lock (`Arca.DeviceCertificates.record/2`). An identity
-  subject's names its identifier and `key_epoch`, which the store binds to
-  the cached head's under the person's lock. Refusals: `:not_standing`,
-  `:certificate_refused` (a remote person's head moved between the
-  certificate's check and its record), `:conflict` (already recorded),
-  `:unavailable`, and the store's own.
-  """
-  @spec record(Prima.Actor.t(), map(), DeviceCert.t()) :: {:ok, map()} | {:error, term()}
-  def record(actor, client, %DeviceCert{} = certificate) do
-    bytes = Encoding.jcs!(DeviceCert.encode(certificate))
-
-    case Arca.DeviceCertificates.record(actor, %{
-           paired_client_id: client.id,
-           user_id: client.user_id,
-           subject_kind: Atom.to_string(certificate.subject.kind),
-           identifier: Map.get(certificate.subject, :identifier),
-           key_epoch: Map.get(certificate.subject, :key_epoch),
-           device_public_key: certificate.device_key,
-           issuing_home: certificate.issuer,
-           audience_home: certificate.audience,
-           not_before: DateTime.from_unix!(certificate.not_before, :millisecond),
-           expires_at: DateTime.from_unix!(certificate.expires_at, :millisecond),
-           certificate: bytes,
-           digest: Prima.Digest.sha256(bytes)
-         }) do
-      {:ok, row} -> {:ok, row}
-      {:error, :client_not_active} -> {:error, :not_standing}
-      {:error, :database_error} -> {:error, :unavailable}
-      {:error, :stale_key_epoch} -> {:error, :certificate_refused}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # Verification bounds
   # ---------------------------------------------------------------------------
-
-  @doc """
-  Whether the address `source` (a client address, or `nil` where the
-  ingress knew none) may attempt a pairing completion or a renewal now,
-  counting nothing: this node's window, then, for `:cell`, the cell's
-  (the module doc's first step). `:node` reads this node's alone, for an
-  attempt that does no database work of its own. `:ok`, `{:rate_limited,
-  retry_after_ms}` once a window is spent, or `:unavailable` when the
-  store cannot answer, which refuses as a spent bound would.
-  """
-  @spec verification_room(String.t() | nil, :cell | :node) ::
-          :ok | {:error, {:rate_limited, non_neg_integer()} | :unavailable}
-  def verification_room(source, layers \\ :cell)
-
-  def verification_room(source, :cell), do: source_room(:device_verification, source)
-
-  def verification_room(source, :node),
-    do: node_room({:device_verification, :source, source_key(source)}, @source_cap)
-
-  @doc """
-  Count one pairing completion or renewal against the name it proved
-  itself to be (`t:name/0`, the module doc's third step): 20 a minute,
-  this node's count and then the cell's. Never against the source's or
-  the installation's bounds. Answers `t:counted/0`, the retry the name's
-  own window gives.
-  """
-  @spec claim_attributed(name()) :: counted()
-  def claim_attributed(name), do: claim_named(:device_verification, name)
-
-  @doc """
-  Count one pairing completion or renewal that proved itself to be no
-  one, from `source`, against the source's and the installation's bounds
-  (the module doc's fourth step), and refuse it: `{:error, refusal}`, or
-  `{:error, {:rate_limited, retry_after_ms}}` once either bound is spent.
-  A store that cannot count leaves the refusal as it was.
-  """
-  @spec refuse_unattributed(String.t() | nil, term()) ::
-          {:error, term() | {:rate_limited, non_neg_integer()}}
-  def refuse_unattributed(source, refusal),
-    do: unattributed(:device_verification, source, refusal)
 
   defp source_room(family, source) do
     key = source_key(source)
@@ -1014,11 +856,11 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  # A proven name's own budget. Only a name an attempt proved reaches this
-  # node's table, so no caller chooses how many keys it holds.
-  defp claim_named(family, {kind, id}) when kind in [:client, :person] and is_binary(id) do
-    with :ok <- on_node({family, kind, id}, @name_cap) do
-      in_cell(bucket(family, kind), id, @name_cap)
+  # A proven client's own budget. Only a client an attempt proved reaches
+  # this node's table, so no caller chooses how many keys it holds.
+  defp claim_named(family, {:client, id}) when is_binary(id) do
+    with :ok <- on_node({family, :client, id}, @name_cap) do
+      in_cell(bucket(family, :client), id, @name_cap)
     end
   end
 
@@ -1051,12 +893,11 @@ defmodule Sanctum.DeviceCerts do
 
   defp device_bound(answer), do: answer
 
-  # The durable buckets, spelled in code: the completion and renewal
-  # bounds, and the connect bounds beside them.
+  # The durable buckets, spelled in code: the renewal bounds, and the
+  # connect bounds beside them.
   defp bucket(:device_verification, :source), do: :device_verification_source
   defp bucket(:device_verification, :installation), do: :device_verification_installation
   defp bucket(:device_verification, :client), do: :device_verification_client
-  defp bucket(:device_verification, :person), do: :device_verification_person
   defp bucket(:device_connect, :source), do: :device_connect_source
   defp bucket(:device_connect, :installation), do: :device_connect_installation
   defp bucket(:device_connect, :client), do: :device_connect_client

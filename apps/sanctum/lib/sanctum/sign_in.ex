@@ -31,7 +31,9 @@ defmodule Sanctum.SignIn do
       surface that asked carries one: the setup token (`{:setup, token}`)
       or an invitation's code hash (`{:invitation, hash}`,
       `Sanctum.Invitations.code_hash/1`). Without one a new person is
-      admitted only as the door admits their identifier.
+      admitted only as the door admits their identifier. A channel's
+      sign-in is a device's hello (`Sanctum.DeviceUnlock.hello/2`): it
+      holds the `kid` the hello named, the one key that may answer it.
     * `:confirm` — the pending confirmation `ref` of the asking context's
       own person in its athanor, still pending; the request's `subject` is
       the record's digest, which the system layer previewed before the
@@ -72,10 +74,14 @@ defmodule Sanctum.SignIn do
          no longer be used grants nothing: a person the door admits anyway
          is signed in, anyone else is refused `:invitation_invalid`. A new
          person is admitted under the request's admission or the door
-         (`Sanctum.Newcomer.admit/2`). A session is then minted bound to
-         the key that signed and the head it was verified under, under the
-         issuance fence (`Sanctum.Session.create/2`, `:stale_head` when the
-         head moved meanwhile).
+         (`Sanctum.Newcomer.admit/3`). A browser's answer then mints a
+         session bound to the key that signed and the head it was verified
+         under, under the issuance fence (`Sanctum.Session.create/2`,
+         `:stale_head` when the head moved meanwhile). A device's answer
+         to its hello, by the key the hello named, pairs the device
+         instead (`Sanctum.DeviceUnlock.pair/4`): in the new person's
+         admission, or right after the door admitted a person this CYFR
+         holds, and answers the key that signed.
        * `:confirm` requires the answer's identifier to be the
          confirmation's person's (`Sanctum.Tenancy.Users.identifier/1`, a
          `usr_` id never compared with a `per_` one), then confirms the
@@ -138,6 +144,7 @@ defmodule Sanctum.SignIn do
   @typedoc "What an accepted answer did, by its purpose."
   @type outcome ::
           %{purpose: :sign_in, user: Users.user(), session_token: String.t()}
+          | %{purpose: :sign_in, user: Users.user(), kid: String.t()}
           | %{purpose: :confirm, ref: String.t(), back: String.t() | nil}
           | %{purpose: :registry, user_id: String.t(), signed: binary(), back: String.t() | nil}
 
@@ -157,7 +164,9 @@ defmodule Sanctum.SignIn do
     * `:back` — where a browser returns after a `:confirm` or `:registry`
       answer: a path on this CYFR;
     * `:identifier` — the account a channel speaks for, for a
-      `{:channel, id}` binding.
+      `{:channel, id}` binding;
+    * `:kid` — the device key a channel's `:sign_in` (a hello) is
+      answered by.
 
   Refusals: `:no_directory` (a browser's request with no directory to
   send it to), `{:not_found, "confirmation", ref}`, `:not_pending`,
@@ -189,8 +198,16 @@ defmodule Sanctum.SignIn do
   defp binding(_binding, _opts),
     do: {:error, {:invalid_argument, "A request is bound to a browser or a device's channel"}}
 
-  # This CYFR's origin in its one spelling: a request's audience. An origin
-  # served under a path names no audience a request can carry.
+  @doc """
+  This CYFR's origin in its one spelling (`Sanctum.origin/0`, its scheme
+  and host lowercased, a default port and any path dropped): the audience
+  of every request it mints and of every device certificate it issues.
+  `:unavailable`, logged, for an origin that names no scheme and host.
+  """
+  @spec audience() :: {:ok, String.t()} | {:error, :unavailable}
+  def audience, do: home()
+
+  # An origin served under a path names no audience a request can carry.
   defp home do
     case Encoding.canonical_home(Sanctum.origin()) do
       {:ok, home} ->
@@ -210,13 +227,13 @@ defmodule Sanctum.SignIn do
   defp held(:sign_in, opts) do
     case Keyword.get(opts, :admission) do
       nil ->
-        {:ok, %{admission: nil, identifier: opts[:identifier]}}
+        {:ok, %{admission: nil, identifier: opts[:identifier], kid: opts[:kid]}}
 
       {:setup, token} = admission when is_binary(token) ->
-        {:ok, %{admission: admission, identifier: opts[:identifier]}}
+        {:ok, %{admission: admission, identifier: opts[:identifier], kid: opts[:kid]}}
 
       {:invitation, hash} = admission when is_binary(hash) ->
-        {:ok, %{admission: admission, identifier: opts[:identifier]}}
+        {:ok, %{admission: admission, identifier: opts[:identifier], kid: opts[:kid]}}
 
       _other ->
         {:error, {:invalid_argument, "A sign-in comes in under the setup token or an invitation"}}
@@ -547,8 +564,30 @@ defmodule Sanctum.SignIn do
 
   # ---- what each purpose does --------------------------------------------------
 
+  # A device's hello: answered by the key it named, which is paired here
+  # with the person's admission.
+  defp done(
+         %{request: %{purpose: :sign_in}, binding: {:channel, client_id}} = held,
+         _answer,
+         identifier,
+         %Prima.Identity.Key{kind: :device, kid: kid} = key,
+         head
+       ) do
+    if held[:kid] == kid do
+      pair = &Sanctum.DeviceUnlock.pair(&1, client_id, key, head.head_hash)
+
+      with {:ok, user} <- signed_in(identifier, held.admission, head, pair),
+           do: {:ok, %{purpose: :sign_in, user: user, kid: kid}}
+    else
+      refused(:wrong_key)
+    end
+  end
+
+  defp done(%{request: %{purpose: :sign_in}, binding: {:channel, _id}}, _answer, _id2, _k, _h),
+    do: refused(:wrong_key)
+
   defp done(%{request: %{purpose: :sign_in}} = held, _answer, identifier, key, head) do
-    with {:ok, user} <- signed_in(identifier, held.admission, head),
+    with {:ok, user} <- signed_in(identifier, held.admission, head, nil),
          {:ok, token} <- session(user, key, head) do
       {:ok, %{purpose: :sign_in, user: user, session_token: token}}
     end
@@ -616,13 +655,21 @@ defmodule Sanctum.SignIn do
 
   defp confirming_client(_binding, _key), do: %{}
 
-  # The person the identifier names here, or a new one.
-  defp signed_in(identifier, admission, head) do
+  # The person the identifier names here, or a new one, and what `also`
+  # writes for them: in a new person's admission, or once the door
+  # admitted a person this CYFR holds.
+  defp signed_in(identifier, admission, head, also) do
     case Users.get_by_identifier(identifier) do
-      {:ok, user} -> admitted(user, admission)
-      {:error, :not_found} -> newcomer(identifier, admission, head)
+      {:ok, user} -> with {:ok, user} <- admitted(user, admission), do: also(also, user)
+      {:error, :not_found} -> newcomer(identifier, admission, head, also)
       {:error, _unanswered} -> {:error, :unavailable}
     end
+  end
+
+  defp also(nil, user), do: {:ok, user}
+
+  defp also(also, user) do
+    with :ok <- also.(user), do: {:ok, user}
   end
 
   # A person this CYFR holds, with the invitation they came with redeemed
@@ -657,20 +704,20 @@ defmodule Sanctum.SignIn do
   # A new person: admitted under the request's admission, or as the door
   # admits their identifier. One another answer made meanwhile is the
   # person this answer signs in.
-  defp newcomer(identifier, admission, head) do
+  defp newcomer(identifier, admission, head, also) do
     account = %{
       identifier: identifier,
       directory_url: head.directory_url,
       head_hash: head.head_hash
     }
 
-    case Sanctum.Newcomer.admit(admission || :open, account) do
+    case Sanctum.Newcomer.admit(admission || :open, account, also: also) do
       {:ok, %{person: user}} ->
         {:ok, user}
 
       {:error, :conflict} ->
         case Users.get_by_identifier(identifier) do
-          {:ok, user} -> admitted(user, nil)
+          {:ok, user} -> with {:ok, user} <- admitted(user, nil), do: also(also, user)
           {:error, _unread} -> {:error, :unavailable}
         end
 

@@ -601,7 +601,7 @@ defmodule PrismWeb.ShellLive do
       {:noreply, socket}
     else
       {prompt_id, socket} = next_prompt_id(socket, "pairing")
-      show_prompt(%{id: prompt_id, kind: :pairing, action: :device_pairing, subject: %{}})
+      show_prompt(%{id: prompt_id, kind: :pairing, action: :pairing_revocation, subject: %{}})
       {:noreply, assign(socket, :pairing_prompt, prompt_id)}
     end
   end

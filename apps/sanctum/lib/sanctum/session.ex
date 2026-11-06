@@ -184,7 +184,10 @@ defmodule Sanctum.Session do
   context's credential deadline, its certificate's expiry. The row takes
   a new token, the provider `unlock`, and an expiry 60 seconds after the
   database's clock, never past the certificate: `session_ttl_hours` plays
-  no part, so zero never lifts the bound. It is activated in the issuance
+  no part, so zero never lifts the bound. It is bound to the device's key
+  (the expectation's `kid`) and the account head this CYFR holds now, under
+  the issuance fence, so a walk that removes the key ends it. It is
+  activated in the issuance
   transaction the expectation names, which locks and rereads the person,
   athanor, client and certificate, then the reserved row
   (`Arca.SessionStorage.activate_client_session/3`): a row a lock retired
@@ -200,7 +203,8 @@ defmodule Sanctum.Session do
       when is_binary(client_id) do
     token = generate_token()
 
-    with {:ok, now} <- db_now() do
+    with {:ok, now} <- db_now(),
+         {:ok, head} <- account_head(held.user_id) do
       expires_at =
         Enum.min(
           [DateTime.add(now, Sanctum.DeviceUnlock.lifetime_ms(), :millisecond), held.deadline],
@@ -212,7 +216,8 @@ defmodule Sanctum.Session do
         client_id: client_id,
         user_id: held.user_id,
         token_prefix: String.slice(token, 0, 8),
-        identity_key_epoch: Map.get(expectation, :key_epoch),
+        kid: Map.get(expectation, :kid),
+        head: head,
         expires_at: expires_at
       }
 
@@ -227,6 +232,17 @@ defmodule Sanctum.Session do
         {:error, _reason} = refusal ->
           refusal
       end
+    end
+  end
+
+  # The account head this CYFR holds for the person now: the head an
+  # unlocked session names, which the fence holds to the cached head.
+  defp account_head(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{head_hash: head}} when is_binary(head) -> {:ok, head}
+      {:ok, _none} -> {:error, :unauthenticated}
+      {:error, :not_found} -> {:error, :unauthenticated}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 

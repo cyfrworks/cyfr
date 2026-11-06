@@ -82,7 +82,7 @@ defmodule PrismWeb.DeviceUnlockControllerTest do
         home: certificate.audience,
         athanor: certificate.athanor,
         client_id: certificate.client_id,
-        device_key: certificate.device_key,
+        device_key: elem(device.key, 0),
         session_id: answer.session_id
       )
 

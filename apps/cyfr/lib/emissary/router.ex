@@ -6,8 +6,8 @@ defmodule Emissary.Router do
   Emissary's routes, with the pipelines they pass through: MCP, the
   vault's OAuth grant callback, tincture serving, a canvas's page and
   the tincture data routes (a canvas's among them), health, the
-  execution-events stream, inbound webhooks, the identity directory, a
-  certified device's renewal and the restore ingress.
+  execution-events stream, inbound webhooks, the identity directory and
+  the restore ingress.
 
   The composition router invokes `routes/0` where the adapter's routes
   stand, so its `__routes__/0` stays the total table. The quoted calls
@@ -186,26 +186,6 @@ defmodule Emissary.Router do
           window_ms: 60_000
       end
 
-      # A protected device's enrollment (`Emissary.Web.DeviceEnrollmentController`):
-      # JSON, no CSRF token, since the setup token, an invitation's code and
-      # the restore token travel in headers no cross-site form can set and no CORS answer
-      # admits; the cookie session is fetched only to read a restore's own
-      # session, whose first-method window enrolls the restored person's
-      # first device. An entry path, so the routes record their own
-      # refusals, metered per address before Sanctum reads anything.
-      pipeline :device_enrollment do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "device"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-        plug CyfrWeb.Plugs.FrameRequest
-        plug :fetch_session
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :device_enrollment,
-          max_requests: 30,
-          window_ms: 60_000
-      end
-
       # A protected command line's session (`Emissary.Web.DeviceSessionController`):
       # JSON, no session fetched and no CSRF token, since no cookie is read
       # or set; the one-time ticket the device's channel was answered is the
@@ -230,24 +210,6 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.CallIdentity, tool: "directory"
         plug :accepts, ["json"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
-      end
-
-      # A certified device's renewal at its person's home
-      # (`Sanctum.RemoteCertification`), asked by the device itself, a
-      # command line, never a browser: JSON, no session fetched and no CSRF
-      # token, since the device key's proof over this home's challenge is
-      # the only credential, and no CORS answer, so no page of another
-      # origin reads it. Metered per address here, before the operation
-      # counts it against the verification bounds.
-      pipeline :certificate_renewal do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "person"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :certificate_renewal,
-          max_requests: 60,
-          window_ms: 60_000
       end
 
       # MCP endpoint. POST is the only verb this revision defines: a request's own
@@ -407,36 +369,12 @@ defmodule Emissary.Router do
         get "/:name", AccountController, :show, metadata: %{auth: :public_directory}
       end
 
-      # A certified device's renewal (`person.renew_certificate`), from the
-      # device itself.
-      scope "/certify/v1", Emissary.Web do
-        pipe_through :certificate_renewal
-
-        post "/renew", CertificateRenewalController, :renew_certificate,
-          metadata: %{auth: :device_key_proof}
-      end
-
       # Restore (`Sanctum.Recovery`): an identity brought back onto this
       # empty node from its recovery code, under the installation capability
       # (`CYFR_RESTORE_TOKEN`) in the authorization header; and, on a home
       # restored from a backup, the proof a recovering person's recovery code
       # signs (the `/kit` routes keep their path) and the re-enables it admits. Its body is
       # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
-      # A protected device's enrollment at setup, under an invitation, by the
-      # open admission or after a restore, and the resume of one whose answer
-      # was lost.
-      scope "/device/enrollment", Emissary.Web do
-        pipe_through :device_enrollment
-
-        post "/challenge", DeviceEnrollmentController, :challenge,
-          metadata: %{auth: :device_enrollment}
-
-        post "/complete", DeviceEnrollmentController, :complete,
-          metadata: %{auth: :device_enrollment}
-
-        post "/resume", DeviceEnrollmentController, :resume, metadata: %{auth: :device_enrollment}
-      end
-
       # A protected command line spends its unlock's ticket for its session.
       scope "/device", Emissary.Web do
         pipe_through :device_session

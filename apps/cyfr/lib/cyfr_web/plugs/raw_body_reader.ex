@@ -40,9 +40,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   body is a signed request of the same size
   (`Prima.RegistryRequest.max_bytes/0`). Their raw
   bytes are not cached. The restore ingress (`/restore…`), which takes a
-  recovery code before any person exists, is bounded the same way, and so
-  is a certified device's renewal (`/certify…`), which a device sends
-  holding no session.
+  recovery code before any person exists, is bounded the same way.
 
   ## A caller no pipeline has authenticated
 
@@ -130,7 +128,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   authenticated, the attachment allowance (28 MB) for one its pipeline
   has; never more than the webhook cap under `/hooks/*`, nor the
   directory's 16 KiB write-body limit under `/directory/*`, `/v1/*`,
-  `/restore*` and `/certify/*`. `{:error, message}` when the webhook cap's
+  and `/restore*`. `{:error, message}` when the webhook cap's
   configuration is out of its range.
   """
   @spec cap(Plug.Conn.t()) :: {:ok, pos_integer()} | {:error, String.t()}
@@ -204,7 +202,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   defp hooks_path?(_), do: false
 
   defp directory_path?(%Plug.Conn{path_info: [family | _]})
-       when family in ["directory", "v1", "restore", "certify"],
+       when family in ["directory", "v1", "restore"],
        do: true
 
   defp directory_path?(_), do: false

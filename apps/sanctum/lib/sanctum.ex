@@ -83,7 +83,6 @@ defmodule Sanctum do
       Person,
       Policy.Enforcement,
       PolicyLog,
-      Providers.Assertion,
       Providers.Confirmation,
       Providers.Pairing,
       Providers.Passkey,

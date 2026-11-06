@@ -79,11 +79,9 @@ defmodule Sanctum.Context do
   none; the issuance stands on that door still being the person's.
 
   A paired device's context carries `source_kind: :device`, its paired
-  client's id as `source_id`, and `identity`: the identity row a person
-  whose keys are at another home was resolved by when the certificate was
-  verified (`t:device_identity/0`), or nil for a certificate this home's
-  own key set signed. For such a person it also carries `key_epoch`, the
-  head's `key_epoch` the certificate was verified under; nil otherwise.
+  client's id as `source_id`, the `kid` of the account key the client is,
+  and `head`, the account head its certificate was issued under (nil for
+  the renewal exchange's context, which stands under no certificate).
   Only `Sanctum.Caller.establish_device/2` sets it, and `build/1` refuses
   it on any context but that device's own (`auth_method: :device`, its
   `client_id` the binding's `source_id`).
@@ -93,28 +91,15 @@ defmodule Sanctum.Context do
   (`Arca.SecurityTransitions.Issuance`), so a context read before a
   retirement cannot issue after the restore. A device's issuance also
   locks its paired client after them and refuses unless the client and
-  what its certificate stands on still stand: for a certificate this home
-  signed, its row; for a remote person, the identity row and their cached
-  head at that `key_epoch` (`Sanctum.Issuance`).
+  its certificate's row still stand (`Sanctum.Issuance`).
   """
   @type credential_binding :: %{
           required(:source_kind) => :identity | :session | :api_key | :device,
           required(:source_id) => String.t() | nil,
           required(:user_generation) => pos_integer(),
           required(:athanor_generation) => pos_integer() | nil,
-          optional(:identity) => device_identity() | nil,
-          optional(:key_epoch) => String.t() | nil
-        }
-
-  @typedoc """
-  The remote identity row a paired device's person was resolved by, as
-  `Sanctum.DeviceCerts.remote_subject/3` read it: whose row it is, its
-  `provenance` (`remote`) and the identifier the certificate names.
-  """
-  @type device_identity :: %{
-          user_id: String.t(),
-          provenance: String.t(),
-          identifier: String.t()
+          optional(:kid) => String.t(),
+          optional(:head) => String.t() | nil
         }
 
   @typedoc """
@@ -519,31 +504,19 @@ defmodule Sanctum.Context do
   # A device's binding is only that device context's own: it names the
   # paired client the context was established through, and the issuance
   # locks that client. On any other context it would name a client the
-  # context never proved. A remote person's identity row comes with the
-  # `key_epoch` their certificate was verified under, and neither without
-  # the other; no other kind carries either.
+  # context never proved. It names the client's key and the head its
+  # certificate was issued under, if any; no other kind carries either.
   defp held_by?(%{source_kind: :device, source_id: client_id} = binding, attrs)
        when is_binary(client_id) and client_id != "" do
     Map.get(attrs, :auth_method) == :device and Map.get(attrs, :client_id) == client_id and
-      device_identity?(Map.get(binding, :identity), Map.get(binding, :key_epoch))
+      Prima.Identity.Encoding.digest?(Map.get(binding, :kid)) and
+      (is_nil(Map.get(binding, :head)) or Prima.Identity.Encoding.digest?(binding.head))
   end
 
   defp held_by?(%{source_kind: :device}, _attrs), do: false
 
   defp held_by?(binding, _attrs),
-    do: is_nil(Map.get(binding, :identity)) and is_nil(Map.get(binding, :key_epoch))
-
-  defp device_identity?(nil, nil), do: true
-
-  defp device_identity?(
-         %{user_id: user_id, provenance: "remote", identifier: identifier} = identity,
-         key_epoch
-       )
-       when is_binary(user_id) and is_binary(identifier) and map_size(identity) == 3 and
-              is_binary(key_epoch) and key_epoch != "",
-       do: true
-
-  defp device_identity?(_identity, _key_epoch), do: false
+    do: is_nil(Map.get(binding, :kid)) and is_nil(Map.get(binding, :head))
 
   @spec malformed_binding!(term()) :: no_return()
   defp malformed_binding!(other),

@@ -448,8 +448,6 @@
 0.3	apps/cyfr/test/emissary/security_test.exs
 0.1	apps/cyfr/test/emissary/telemetry_test.exs
 4.0	apps/cyfr/test/emissary/web/controllers/canvas_controller_test.exs
-0.8	apps/cyfr/test/emissary/web/controllers/certificate_renewal_controller_test.exs
-0.7	apps/cyfr/test/emissary/web/controllers/device_enrollment_controller_test.exs
 0.2	apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs
 2.7	apps/cyfr/test/emissary/web/controllers/directory_controller_test.exs
 1.2	apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs
@@ -595,14 +593,12 @@
 1.8	apps/cyfr/test/prism_web/live/company_login_live_test.exs
 7.2	apps/cyfr/test/prism_web/live/components_live_test.exs
 4.9	apps/cyfr/test/prism_web/live/consent_sheet_component_test.exs
-1.1	apps/cyfr/test/prism_web/live/device_add_live_test.exs
 2.5	apps/cyfr/test/prism_web/live/enforcements_live_test.exs
 7.6	apps/cyfr/test/prism_web/live/files_live_test.exs
 2.0	apps/cyfr/test/prism_web/live/invite_live_test.exs
 8.4	apps/cyfr/test/prism_web/live/login_live_test.exs
 3.3	apps/cyfr/test/prism_web/live/mcp_servers_live_test.exs
 5.1	apps/cyfr/test/prism_web/live/modes_test.exs
-0.2	apps/cyfr/test/prism_web/live/pair_live_test.exs
 0.6	apps/cyfr/test/prism_web/live/redirect_live_test.exs
 1.9	apps/cyfr/test/prism_web/live/registry_live_test.exs
 0.4	apps/cyfr/test/prism_web/live/restore_live_test.exs
@@ -833,7 +829,6 @@
 0.0	apps/prima/test/prima/component_path_test.exs
 0.1	apps/prima/test/prima/component_ref_test.exs
 0.0	apps/prima/test/prima/component_row_test.exs
-0.2	apps/prima/test/prima/confirmation_assertion_test.exs
 0.1	apps/prima/test/prima/confirmation_test.exs
 0.1	apps/prima/test/prima/consent_preview_test.exs
 0.2	apps/prima/test/prima/consent_signal_test.exs

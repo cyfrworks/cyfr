@@ -26,8 +26,6 @@ defmodule Emissary.Web do
     deps: [Emissary, Sanctum, Arca, Cyfr, Compendium, Opus, CyfrWeb],
     exports: [
       CanvasController,
-      CertificateRenewalController,
-      DeviceEnrollmentController,
       DeviceSessionController,
       DeviceChannel,
       DirectoryController,

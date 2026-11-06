@@ -95,7 +95,6 @@ defmodule Cyfr.Admission do
     "Emissary.Web.DirectoryController",
     "Emissary.Web.HandleController",
     "Emissary.Web.RestoreController",
-    "Emissary.Web.DeviceEnrollmentController",
     "Emissary.Web.DeviceSessionController",
     "Emissary.Web.OAuthCallbackController",
     "PrismWeb.AuthController",
@@ -123,8 +122,7 @@ defmodule Cyfr.Admission do
                      "and what no person of this CYFR admits: the identity directory, " <>
                      "whose writes the identifier's own chain authorizes, restore, an " <>
                      "entry path that runs before its person exists, the recovery " <>
-                     "kit, its own ingress (§9.1, §6.9), and a protected device's " <>
-                     "enrollment under the setup token or a restore's session, the OAuth callback, which " <>
+                     "kit, its own ingress (§9.1, §6.9), the OAuth callback, which " <>
                      "completes the vault.authorize the gate admitted under the state it " <>
                      "left, and the browser's sign-in, the answer to a request this CYFR " <>
                      "minted, policy acceptance and a protected device's unlock ticket, " <>

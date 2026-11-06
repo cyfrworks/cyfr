@@ -18,12 +18,14 @@ defmodule Emissary.Web.DeviceChannel do
   The upgrade admits nothing. The glass sends `connect`, naming its client
   id and the certificate it connects under, and the home answers a
   `challenge` for purpose `connect` (`Prima.DeviceCert.Challenge`) bound
-  to the certificate's home, athanor and device key and the client id.
-  The glass answers with a `proof`, which `Sanctum.DeviceCerts.verify_connect/3`
-  decides with the connect and the challenge held for this connection:
-  the proof of possession of the certificate's device key, then the
-  certificate, under the person's current live key at this home, and the
-  paired client's standing. Until a proof verifies, the channel takes
+  to the certificate's home and athanor, the client id and the device key
+  that client's row stores for the kid the certificate names
+  (`Sanctum.DeviceCerts.challenge_key/2`; a client this home does not hold
+  is `unchallengeable`). The glass answers with a `proof`, which
+  `Sanctum.DeviceCerts.verify_connect/3` decides with the connect and the
+  challenge held for this connection: the proof of possession of that
+  device key, then the certificate, under this home's installation key,
+  and the paired client's standing. Until a proof verifies, the channel takes
   `connect`, `renew` and `proof` and nothing else; the challenge's
   lifetime bounds how long it waits, from the upgrade and again from the
   challenge. A verified proof sets the client's context
@@ -32,9 +34,9 @@ defmodule Emissary.Web.DeviceChannel do
 
   Each discrete `intent` after that is checked first
   (`Sanctum.DeviceCerts.verify_request/2`: the certificate strictly
-  unexpired on this home's clock, still chained to the person's current
-  live key, and the paired client and its person still standing, read
-  anew), then dispatched through the gate under the client's context,
+  unexpired on this home's clock, still one this home holds for the
+  client, the account's head read within its bound, and the paired client
+  and its person still standing, read anew), then dispatched through the gate under the client's context,
   one call id each, and answered with its `id` and exactly one of
   `result` or `error`. Nothing is dispatched on a validation the channel
   remembers.
@@ -89,8 +91,8 @@ defmodule Emissary.Web.DeviceChannel do
   A glass renews with `renew`, naming its client and the certificate that
   locates it, and the home answers a `challenge` for purpose `renew`,
   bound like a connect's. On a connection that has proven nothing yet —
-  a glass whose certificate expired, or was chained to a live key since
-  rotated — that certificate only locates the client: the proof must be
+  a glass whose certificate expired, or was signed under an installation
+  key this home no longer holds — that certificate only locates the client: the proof must be
   made by the device key the paired-client row stores, and the client and
   its person must stand (`Sanctum.DeviceCerts.verify_connect/3`). The
   channel then invokes `pairing/renew` through the gate, under the
@@ -167,12 +169,11 @@ defmodule Emissary.Web.DeviceChannel do
     * `4403` (`forbidden`) — the client's standing ended: its pairing
       revoked, its person denied, or the athanor archived or not theirs.
     * `4408` (`unauthenticated`) — the certificate expired unrenewed, or
-      is no longer chained to the person's current live key: the glass
-      renews.
+      is not one this home holds now: the glass renews.
     * `1013` — this home could not check the connection now: its store
-      did not answer, or a remote person's identity could not be
-      confirmed fresh with their directory (reason `unavailable` for
-      both: the work pauses, the pairing stands), or a verification bound
+      did not answer, or the person's account could not be read fresh
+      (reason `unavailable` for both: the work pauses, the pairing
+      stands), or a verification bound
       is spent (reason `rate_limited; retry_after_s=N`, the seconds until
       the bound opens again; the recorded sentence says whether it was
       the address's and the installation's or this device's own). The
@@ -499,26 +500,31 @@ defmodule Emissary.Web.DeviceChannel do
   defp receive_message({_type, _body}, state), do: refuse(state, :not_accepted)
 
   # The challenge for this connection's `connect` or `renew`: the home the
-  # certificate names, which the verifier holds to this one, its athanor
-  # and device key, the client id the glass named, and a nonce drawn here.
-  # A renewal's certificate only locates the client: the verifier holds
-  # the proof to the device key the client's row stores.
+  # certificate names, which the verifier holds to this one, its athanor,
+  # the device key the client the glass named stores for the kid the
+  # certificate names (`Sanctum.DeviceCerts.challenge_key/2`), that client
+  # id, and a nonce drawn here. A renewal's certificate only locates the
+  # client: the verifier holds the proof to the device key the client's
+  # row stores.
   defp challenge(purpose, %{client_id: client_id, certificate: certificate} = body, state) do
-    case Challenge.new(
-           purpose: purpose,
-           home: certificate.audience,
-           athanor: certificate.athanor,
-           client_id: client_id,
-           device_key: certificate.device_key,
-           nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
-           now: now()
-         ) do
-      {:ok, challenge} ->
-        state = arm(%{state | connect: body, challenge: challenge}, challenge.expires_at - now())
-        {:reply, :ok, {:text, wire({:challenge, %{challenge: challenge}})}, state}
+    connection = Map.put(body, :source, state.ctx.client_ip)
 
-      {:error, _unchallengeable} ->
-        refuse(state, :unchallengeable)
+    with {:ok, device_key} <- Sanctum.DeviceCerts.challenge_key(purpose, connection),
+         {:ok, challenge} <-
+           Challenge.new(
+             purpose: purpose,
+             home: certificate.audience,
+             athanor: certificate.athanor,
+             client_id: client_id,
+             device_key: device_key,
+             nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
+             now: now()
+           ) do
+      state = arm(%{state | connect: body, challenge: challenge}, challenge.expires_at - now())
+      {:reply, :ok, {:text, wire({:challenge, %{challenge: challenge}})}, state}
+    else
+      {:error, reason} when reason == :unavailable or is_tuple(reason) -> refuse(state, reason)
+      {:error, _unchallengeable} -> refuse(state, :unchallengeable)
     end
   end
 
@@ -988,7 +994,7 @@ defmodule Emissary.Web.DeviceChannel do
        do: @malformed
 
   defp close_code(%Prima.Refusal{reason: reason})
-       when reason in [:expired, :certificate_expired, :bad_signature],
+       when reason in [:expired, :certificate_expired, :bad_signature, :stale_head],
        do: @renew
 
   # A person who stands but for the company sign-in keeps their pairing:
@@ -1027,8 +1033,8 @@ defmodule Emissary.Web.DeviceChannel do
   defp class(reason) when reason in [:revoked, :not_standing, :company_login_required],
     do: :forbidden
 
-  # A remote person's identity that could not be confirmed fresh is a
-  # pause, as a store that could not answer is: never a sign-out.
+  # An account that could not be read fresh is a pause, as a store that
+  # could not answer is: never a sign-out.
   defp class(reason) when reason in [:unavailable, :identity_stale], do: :unavailable
 
   defp class({spent, _retry_after_ms}) when spent in [:rate_limited, :device_rate_limited],
@@ -1050,22 +1056,18 @@ defmodule Emissary.Web.DeviceChannel do
     do: "The device's certificate has expired; renew it"
 
   defp sentence(:bad_signature),
-    do: "The device's certificate is not signed by its person's current key; renew it"
+    do: "The device's certificate is not one this CYFR holds; renew it"
+
+  defp sentence(:stale_head),
+    do: "The device's certificate names another account head than its record; renew it"
 
   defp sentence(:not_yet_valid), do: "The device's certificate is not valid yet"
   defp sentence(:wrong_audience), do: "The device's certificate is for another CYFR"
-  defp sentence(:unknown_subject), do: "The device's certificate names no person of this CYFR"
 
   defp sentence(:client_mismatch),
     do: "The device's certificate names another client than this connection's"
 
-  defp sentence(:remote_identity_unavailable),
-    do:
-      "This device's certificate is issued by its person's own CYFR; renew it there, " <>
-        "not here"
-
-  defp sentence(:identity_stale),
-    do: "This device's person's identity could not be confirmed fresh just now; retry shortly"
+  defp sentence(:identity_stale), do: Prima.Refusal.message(:identity_stale)
 
   defp sentence(:revoked), do: "This device's pairing was revoked"
 

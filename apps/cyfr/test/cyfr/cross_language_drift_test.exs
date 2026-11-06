@@ -391,13 +391,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/assets/test/sdk/wire.test.mjs", ~w(tincture_urls)},
       {"apps/prima/test/prima/tincture_wire_test.exs", ~w(tincture_urls)}
     ],
-    "confirmation_assertion.json" => [
-      {"apps/codex/cmd/pair_test.go", ~w(exchange)},
-      {"apps/codex/internal/shell/certify_test.go", ~w(exchange)},
-      {"apps/cyfr/assets/test/home_confirm/home_confirm.test.mjs",
-       ~w(exchange.deciding exchange.home)},
-      {"apps/sanctum/test/sanctum/pairing_test.exs", ~w(exchange)}
-    ],
     "confirmation.json" => [
       {"apps/codex/cmd/consent_error_test.go", ~w(ref signal)},
       {"apps/codex/internal/confirmation/confirmation_test.go", ~w(protocol ref)},
