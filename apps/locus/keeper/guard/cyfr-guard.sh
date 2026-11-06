@@ -79,13 +79,16 @@
 #   cyfr-guard admit <uid> [address…]
 #                      the control's: give the spawn uid exactly these
 #                      addresses under rule 5, replacing what it held (no
-#                      address refuses it every public one), and record the
-#                      admission (ADMITTED/<uid>, its addresses one a line);
-#                      a change that fails leaves the uid refused every
-#                      public address, recorded so, and exits 1
+#                      address refuses it every public one), recording the
+#                      admission (ADMITTED/<uid>, its addresses one a line)
+#                      before any rule that admits; a change that fails at
+#                      any step leaves the uid refused every public address
+#                      (recorded so where the record can be written) and
+#                      exits 1
 #   cyfr-guard clear <uid>
 #                      the control's: return the uid to the island's rule
-#                      and drop its record
+#                      and drop its record; a clear that fails leaves the
+#                      uid refused every public address and exits 1
 #   cyfr-guard check   the health probe: the ready file is present, both
 #                      rule tables can be read, their static rules are the
 #                      ones the file recorded when they were installed (no
@@ -591,25 +594,36 @@ uid_unchain() {
   } | "${tool}-restore" -w 5 --noflush || { log "error: $tool: clearing uid $uid failed"; return 1; }
 }
 
+# A failed admission leaves the uid refused every public address, whatever
+# step failed: the record is written before any rule that admits, and every
+# failure from there on takes refuse_all before the guard answers. A uid
+# whose other session still runs is then refused too, which is what its
+# keeper counts on when it leaves a failed change in place (it clears only
+# a uid no session holds).
 admit() {
   uid="$1"
   shift
   spawn_uid "$uid" || exit 1
+  exec 9>"$LOCK"
+  flock 9
   v4list="" v6list=""
   for address in "$@"; do
     case "$address" in
-      "" | *[!0-9a-f.:]*) log "error: '$address' is not an address"; exit 1 ;;
-      *:*) v6list="$v6list $address" ;;
-      *[!0-9.]*) log "error: '$address' is not an address"; exit 1 ;;
-      *.*.*.*) v4list="$v4list $address" ;;
-      *) log "error: '$address' is not an address"; exit 1 ;;
+      *:*[!0-9a-f:.]* | *[!0-9a-f:.]*:*) valid="" ;;
+      *:*) valid=6 ;;
+      *[!0-9.]*) valid="" ;;
+      *.*.*.*) valid=4 ;;
+      *) valid="" ;;
+    esac
+    case "$valid" in
+      4) v4list="$v4list $address" ;;
+      6) v6list="$v6list $address" ;;
+      *) log "error: '$address' is not an address"; refuse_all "$uid"; exit 1 ;;
     esac
   done
-  exec 9>"$LOCK"
-  flock 9
+  remember "$uid" "$@" || { refuse_all "$uid"; exit 1; }
   # shellcheck disable=SC2086 # one argument per address
   if uid_chain 4 "$uid" $v4list && uid_chain 6 "$uid" $v6list; then
-    remember "$uid" "$@" || exit 1
     log "uid $uid admitted to$v4list$v6list"
     return 0
   fi
@@ -646,7 +660,7 @@ clear_uid() {
     refuse_all "$uid"
     exit 1
   fi
-  rm -f "$ADMITTED/$uid" || { log "error: uid $uid's record could not be dropped"; exit 1; }
+  rm -f "$ADMITTED/$uid" || { log "error: uid $uid's record could not be dropped"; refuse_all "$uid"; exit 1; }
   log "uid $uid cleared"
 }
 

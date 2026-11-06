@@ -30,6 +30,10 @@ signed as CYFR signs them (harness.py):
   it and restored passes it again, and a uid's chain removed behind its
   back still fails it after a legitimate change to another uid (an admit
   and a clear), until the guard admits the uid again.
+- An admission the guard cannot record (its record's path made a folder)
+  while another session of the kept uid runs refuses the new session
+  `guard_unavailable` and leaves the running one refused every public
+  address, the one its row names included.
 - Retiring a listed program's process clears its uid at the guard; losing
   the keeper leaves every uid it admitted refused every public address.
 
@@ -277,6 +281,26 @@ def main():
                "a uid's rule changed behind the guard's back fails its health check", removed.stdout + removed.stderr)
         restored = stack.guard_exec(f"iptables -I CYFR_GUARD_U{listed_uid} 1 -d {address} -j RETURN && cyfr-guard check")
         expect(restored.returncode == 0, "the rule restored where it stood, the check passes again",
+               restored.stdout + restored.stderr)
+
+        # ————— a failed admission leaves a running session refused —————
+        blocked = stack.guard_exec(f"mkdir /run/cyfr-guard/admitted/{kept_uid}.tmp")
+        expect(blocked.returncode == 0, f"uid {kept_uid}'s record cannot be written: its temporary path is a folder",
+               blocked.stderr)
+        status, answer = c.open(KEPT, "probe", key="second", home_id=KEPT_ENTRY)
+        expect((status, answer) == (STATUSES["guard_unavailable"], {"version": VERSION, "error": "guard_unavailable"}),
+               "a second session of the kept entry, whose admission the guard cannot record, is refused guard_unavailable",
+               [status, answer])
+        listed = next((f"{a}:443" for a in kept_addresses if ":" not in a), None) or f"[{kept_addresses[0]}]:443"
+        before = stack.guard_counters()
+        codes = connect(c, KEPT, [listed], home_id=KEPT_ENTRY)
+        after = stack.guard_counters()
+        expect(codes.get(listed) in REFUSED and chain_rose(before, after, kept_uid, "-j REJECT") >= 1,
+               f"the session still running under uid {kept_uid} is refused even the address its row names, on its chain",
+               {"codes": codes, "chain": uid_chain(stack, kept_uid)})
+        restored = stack.guard_exec(f"rmdir /run/cyfr-guard/admitted/{kept_uid}.tmp && "
+                                    f"cyfr-guard admit {kept_uid} {' '.join(kept_addresses)} && cyfr-guard check")
+        expect(restored.returncode == 0, f"uid {kept_uid}'s record writable again and the uid admitted, the guard is healthy",
                restored.stdout + restored.stderr)
 
         # ————— retirement clears; the keeper's loss refuses —————
