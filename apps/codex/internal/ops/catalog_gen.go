@@ -107,7 +107,7 @@ const (
 	ConfirmationCancel       = "cancel"
 	ConfirmationConfirm      = "confirm"
 	ConfirmationPending      = "pending"
-	ConfirmationReauth       = "reauth"
+	ConfirmationRequest      = "request"
 	DecisionCorrelate        = "correlate"
 	DecisionGet              = "get"
 	DecisionGetGlobal        = "get_global"
@@ -186,25 +186,15 @@ const (
 	PairingRenew             = "renew"
 	PairingRevoke            = "revoke"
 	PasskeyList              = "list"
-	PasskeyRecoverAdmin      = "recover_admin"
-	PasskeyReenable          = "reenable"
-	PasskeyRegister          = "register"
 	PasskeyRevoke            = "revoke"
-	PersonAssert             = "assert"
 	PersonAssertConfirmation = "assert_confirmation"
-	PersonCarryBegin         = "carry_begin"
-	PersonCarryCancel        = "carry_cancel"
-	PersonCarryComplete      = "carry_complete"
-	PersonCarryList          = "carry_list"
 	PersonCertify            = "certify"
 	PersonCloseRecovery      = "close_recovery"
-	PersonLinkDoor           = "link_door"
 	PersonRecoveryCode       = "recovery_code"
 	PersonRecoveryCodeAdd    = "recovery_code_add"
 	PersonRecoveryCodeSaved  = "recovery_code_saved"
 	PersonRenewCertificate   = "renew_certificate"
 	PersonStatus             = "status"
-	PersonUnlinkDoor         = "unlink_door"
 	PinEnroll                = "enroll"
 	PolicyLogCorrelate       = "correlate"
 	PolicyLogGet             = "get"
@@ -331,7 +321,7 @@ var Actions = map[string][]string{
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"canvas":              {"activate", "catalog", "restore", "versions", "write"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
-	"confirmation":        {"cancel", "confirm", "pending", "reauth"},
+	"confirmation":        {"cancel", "confirm", "pending", "request"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"directory":           {"tombstone"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
@@ -346,8 +336,8 @@ var Actions = map[string][]string{
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
-	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
-	"person":              {"assert", "assert_confirmation", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "status", "unlink_door"},
+	"passkey":             {"list", "revoke"},
+	"person":              {"assert_confirmation", "certify", "close_recovery", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "status"},
 	"pin":                 {"enroll"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
@@ -372,12 +362,6 @@ var Actions = map[string][]string{
 
 // CredentialKinds lists every credential kind a manifest need may name.
 var CredentialKinds = []string{"api_key", "oauth", "bundle", "login"}
-
-// SignInProviders lists every sign-in provider.
-var SignInProviders = []string{"github", "google", "oidcc"}
-
-// DeviceFlowProviders lists the sign-in providers a device flow starts with.
-var DeviceFlowProviders = []string{"github", "google"}
 
 // ApprovalListArgs carries arguments for approval.list.
 type ApprovalListArgs struct {
@@ -1219,14 +1203,8 @@ func (args ConfirmationCancelArgs) MarshalJSON() ([]byte, error) {
 type ConfirmationConfirmArgs struct {
 	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
 	Ref string `json:"ref"`
-	// confirm: a WebAuthn assertion over the confirmation's digest, from a passkey registered here
-	Assertion Field[any] `json:"assertion,omitzero"`
-	// confirm: the one-time code sent to your verified email for it
-	Code Field[string] `json:"code,omitzero"`
-	// confirm: a protected device's proof over the confirm challenge pending answered it
-	DeviceProof Field[any] `json:"device_proof,omitzero"`
-	// confirm: your own CYFR's certified assertion that you confirmed this change there
-	HomeAssertion Field[any] `json:"home_assertion,omitzero"`
+	// confirm: the answer to the confirmation's request, from a passkey at the account pages or from your device
+	Answer any `json:"answer"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -1253,21 +1231,19 @@ func (args ConfirmationPendingArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ConfirmationPending, fields: fields(args)})
 }
 
-// ConfirmationReauthArgs carries arguments for confirmation.reauth.
-type ConfirmationReauthArgs struct {
+// ConfirmationRequestArgs carries arguments for confirmation.request.
+type ConfirmationRequestArgs struct {
 	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
 	Ref string `json:"ref"`
-	// reauth: a fresh OpenID Connect sign-in, or a one-time code to your verified email
-	Method string `json:"method"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
-func (args ConfirmationReauthArgs) MarshalJSON() ([]byte, error) {
-	type fields ConfirmationReauthArgs
+func (args ConfirmationRequestArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationRequestArgs
 	return json.Marshal(struct {
 		Action string `json:"action"`
 		fields
-	}{Action: ConfirmationReauth, fields: fields(args)})
+	}{Action: ConfirmationRequest, fields: fields(args)})
 }
 
 // DecisionCorrelateArgs carries arguments for decision.correlate.
@@ -2768,59 +2744,10 @@ func (args PasskeyListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PasskeyList, fields: fields(args)})
 }
 
-// PasskeyRecoverAdminArgs carries arguments for passkey.recover_admin.
-type PasskeyRecoverAdminArgs struct {
-	// recover_admin: the person whose pending registration is authorized
-	UserId string `json:"user_id"`
-	// The passkey, or the pending registration (revoke, reenable, recover_admin)
-	PasskeyId string `json:"passkey_id"`
-	// recover_admin: the digest (sha256:<hex>) of the exact pending registration authorized
-	RegistrationDigest string `json:"registration_digest"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyRecoverAdminArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyRecoverAdminArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyRecoverAdmin, fields: fields(args)})
-}
-
-// PasskeyReenableArgs carries arguments for passkey.reenable.
-type PasskeyReenableArgs struct {
-	// The passkey, or the pending registration (revoke, reenable, recover_admin)
-	PasskeyId string `json:"passkey_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyReenableArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyReenableArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyReenable, fields: fields(args)})
-}
-
-// PasskeyRegisterArgs carries arguments for passkey.register.
-type PasskeyRegisterArgs struct {
-	// register: the WebAuthn registration the browser's ceremony answered; absent, the answer is the options to begin one with
-	Credential Field[any] `json:"credential,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyRegisterArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyRegisterArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyRegister, fields: fields(args)})
-}
-
 // PasskeyRevokeArgs carries arguments for passkey.revoke.
 type PasskeyRevokeArgs struct {
-	// The passkey, or the pending registration (revoke, reenable, recover_admin)
-	PasskeyId string `json:"passkey_id"`
+	// revoke: the passkey, by the kid of its key in your account
+	Kid string `json:"kid"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2830,27 +2757,6 @@ func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PasskeyRevoke, fields: fields(args)})
-}
-
-// PersonAssertArgs carries arguments for person.assert.
-type PersonAssertArgs struct {
-	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
-	Audience string `json:"audience"`
-	// assert: the challenge that CYFR issued for this sign-in
-	Challenge string `json:"challenge"`
-	// The pending sign-in carry, by its action id
-	ActionId string `json:"action_id"`
-	// assert: the key_epoch (sha256:<hex>) of the identity head the assertion is signed under
-	KeyEpoch string `json:"key_epoch"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonAssertArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonAssertArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonAssert, fields: fields(args)})
 }
 
 // PersonAssertConfirmationArgs carries arguments for person.assert_confirmation.
@@ -2878,66 +2784,6 @@ func (args PersonAssertConfirmationArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonAssertConfirmation, fields: fields(args)})
-}
-
-// PersonCarryBeginArgs carries arguments for person.carry_begin.
-type PersonCarryBeginArgs struct {
-	// carry_begin: the CYFR to sign in at, as its origin
-	Destination string `json:"destination"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryBeginArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryBeginArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryBegin, fields: fields(args)})
-}
-
-// PersonCarryCancelArgs carries arguments for person.carry_cancel.
-type PersonCarryCancelArgs struct {
-	// The pending sign-in carry, by its action id
-	ActionId string `json:"action_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryCancelArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryCancelArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryCancel, fields: fields(args)})
-}
-
-// PersonCarryCompleteArgs carries arguments for person.carry_complete.
-type PersonCarryCompleteArgs struct {
-	// The pending sign-in carry, by its action id
-	ActionId string `json:"action_id"`
-	// carry_complete: the navigation outcome the destination returned
-	Outcome string `json:"outcome"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryCompleteArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryCompleteArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryComplete, fields: fields(args)})
-}
-
-// PersonCarryListArgs carries arguments for person.carry_list.
-type PersonCarryListArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryListArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryList, fields: fields(args)})
 }
 
 // PersonCertifyArgs carries arguments for person.certify.
@@ -2974,23 +2820,6 @@ func (args PersonCloseRecoveryArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonCloseRecovery, fields: fields(args)})
-}
-
-// PersonLinkDoorArgs carries arguments for person.link_door.
-type PersonLinkDoorArgs struct {
-	// link_door: the sign-in method to link, as its provider name
-	Provider string `json:"provider"`
-	// link_door: the single-use ticket a completed sign-in with that sign-in method answered, proving control of its subject
-	Ticket string `json:"ticket"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonLinkDoorArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonLinkDoorArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonLinkDoor, fields: fields(args)})
 }
 
 // PersonRecoveryCodeArgs carries arguments for person.recovery_code.
@@ -3086,21 +2915,6 @@ func (args PersonStatusArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonStatus, fields: fields(args)})
-}
-
-// PersonUnlinkDoorArgs carries arguments for person.unlink_door.
-type PersonUnlinkDoorArgs struct {
-	// unlink_door: the linked sign-in method's identity key (provider|issuer|subject)
-	Door string `json:"door"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonUnlinkDoorArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonUnlinkDoorArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonUnlinkDoor, fields: fields(args)})
 }
 
 // PinEnrollArgs carries arguments for pin.enroll.

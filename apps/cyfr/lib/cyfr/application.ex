@@ -1148,10 +1148,8 @@ defmodule Cyfr.Application do
     end
   end
 
-  # OIDC issuer reserved-host check. A generic-OIDC issuer pointed at a
-  # reserved direct-provider host (github.com, accounts.google.com) would
-  # produce cross-deployment colliding user ids and silently break login.
-  # Surface it at boot so a deploy fails loudly instead of every login.
+  # The company sign-in's issuer, when one is configured, is named: a
+  # blank one refuses the boot rather than every company sign-in.
   defp validate_oidc_issuer_config! do
     case Sanctum.Auth.OIDC.issuer() do
       nil ->
@@ -1165,19 +1163,7 @@ defmodule Cyfr.Application do
     end
   end
 
-  # The boot's half of the assertion `Sanctum.Auth.OIDC`'s issuer
-  # resolution makes at sign-in.
-  defp check_oidc_issuer(issuer) when is_binary(issuer) and issuer != "" do
-    if Sanctum.Auth.Identity.reserved_issuer?(issuer) do
-      {:error,
-       "CYFR_OIDC_ISSUER (#{issuer}) is a reserved direct-provider host. " <>
-         "ueberauth_oidcc against github.com/accounts.google.com produces " <>
-         "cross-deployment colliding user ids; use GitHub/Google OAuth directly " <>
-         "(CYFR_GITHUB_CLIENT_ID / CYFR_GOOGLE_CLIENT_ID)."}
-    else
-      :ok
-    end
-  end
+  defp check_oidc_issuer(issuer) when is_binary(issuer) and issuer != "", do: :ok
 
   defp check_oidc_issuer(_),
     do:

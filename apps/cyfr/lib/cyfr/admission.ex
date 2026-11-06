@@ -102,7 +102,6 @@ defmodule Cyfr.Admission do
     "PrismWeb.AuthController",
     "PrismWeb.PasskeyController",
     "PrismWeb.DeviceUnlockController",
-    "PrismWeb.ReauthController",
     "CyfrWeb.Plugs.AuthRateLimit",
     "CyfrWeb.Plugs.Authenticate",
     "CyfrWeb.Plugs.ControlPlaneOwnership",
@@ -129,10 +128,10 @@ defmodule Cyfr.Admission do
                      "enrollment under the setup token or a restore's session, a locked device's PIN " <>
                      "evaluation by its evaluator identifier and the reset its key proves, the OAuth callback, which " <>
                      "completes the vault.authorize the gate admitted under the state it " <>
-                     "left, and the browser's sign-in, re-authentication and policy " <>
-                     "acceptance and a protected device's unlock ticket, which establish a " <>
-                     "person's sign-in, prove it fresh or complete it rather than act under " <>
-                     "a context the gate admitted"
+                     "left, and the browser's sign-in, the answer to a request this CYFR " <>
+                     "minted, policy acceptance and a protected device's unlock ticket, " <>
+                     "which establish a person's sign-in or complete it rather than act " <>
+                     "under a context the gate admitted"
 
   @roster [
     %{

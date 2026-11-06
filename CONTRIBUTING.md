@@ -48,9 +48,8 @@ plugin, `python3`, and a host that allows unprivileged user namespaces
 (`docker-compose.yml`'s `locus-runtime` service says why).
 
 On its first run it makes `.env` mode 0600 and writes into it what a `mix`
-boot needs and nothing sets: `CYFR_GITHUB_CLIENT_ID` from `.env.example`,
-and `CYFR_SETUP_TOKEN`, the runtime root and the backends key, minted as
-`cyfr init` mints them. Later runs keep every value. The builds key, which
+boot needs and nothing sets: `CYFR_SETUP_TOKEN`, the runtime root and the
+backends key, minted as `cyfr init` mints them. Later runs keep every value. The builds key, which
 a `mix` boot refuses without the builds URL only the stack sets, is minted
 for each run unless `.env` sets one. It then builds the tree's Locus image
 with `scripts/image.sh` when the host does not hold it already (every
