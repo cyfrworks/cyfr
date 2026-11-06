@@ -224,7 +224,7 @@ defmodule Sanctum.Consent.AuthzTest do
     test "the refusals render through the vocabulary's owner" do
       assert Authz.message(:not_standing) =~ "no longer stands"
       assert Authz.message(:unavailable) =~ "try again"
-      assert Authz.message(:identity_stale) =~ "directory"
+      assert Authz.message(:identity_stale) == Prima.Refusal.message(:identity_stale)
     end
   end
 

@@ -1026,13 +1026,11 @@ defmodule Prima.Refusal do
        "That company account is bound to someone else here, or you are bound to another " <>
          "one. Sign in with the company account that is yours here."}
 
-  # A remote person's identity whose head this home could not confirm
-  # fresh within its bound: their work here pauses and their session
-  # stands, so it is no sign-out and no denial.
+  # An account whose head this CYFR could not read fresh within its
+  # bound: the person's work here pauses and their session stands, so it
+  # is no sign-out and no denial.
   defp row(:identity_stale),
-    do:
-      {:unavailable,
-       "Your identity could not be confirmed fresh with its directory just now; try again shortly."}
+    do: {:unavailable, "Your account could not be checked just now; try again shortly."}
 
   # An account its directory answered gone: every binding of it here is
   # retired and nothing binds again, so it is a denial, never a pause.

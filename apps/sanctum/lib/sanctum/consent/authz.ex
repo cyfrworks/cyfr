@@ -421,8 +421,7 @@ defmodule Sanctum.Consent.Authz do
 
   def message(:unavailable), do: "Your standing could not be checked; try again"
 
-  def message(:identity_stale),
-    do: "Your identity's current state could not be read from its directory; try again shortly"
+  def message(:identity_stale), do: Prima.Refusal.message(:identity_stale)
 
   def message(:missing_tenant),
     do: "A change that needs a fresh confirmation is made in an athanor; open one first"

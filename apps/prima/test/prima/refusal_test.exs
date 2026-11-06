@@ -845,12 +845,12 @@ defmodule Prima.RefusalTest do
           do: assert(Refusal.reason?(reason))
     end
 
-    test "an identity that could not be confirmed fresh pauses: retryable, no sign-out" do
+    test "an account that could not be checked fresh pauses: retryable, no sign-out" do
       assert %Refusal{class: :unavailable, message: message} =
                Refusal.classify(:identity_stale)
 
-      assert message =~ "could not be confirmed fresh"
-      assert message =~ "try again shortly"
+      assert message == "Your account could not be checked just now; try again shortly."
+      refute message =~ "directory"
       refute message =~ "sign in"
       assert Refusal.reason?(:identity_stale)
     end
