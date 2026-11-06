@@ -121,7 +121,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the cache's one epoch rule, which Sanctum's shape derivation and Compendium read " <>
          "beside Cache and Cache.Keys"},
       {~w(InstallationClaims),
-       "the installation mode Sanctum installs and the first-person mint reads"},
+       "whether this CYFR is set up, which Sanctum's setup check reads"},
       {~w(StorageReserve),
        "the storage reserve's latch, which the host's monitor sets and Sanctum's gate reads"},
       {~w(ObjectRevisions),

@@ -411,9 +411,9 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
+        Sanctum Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
         Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning
-        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
+        Sanctum.Refusals Sanctum.RegistryCredentials
         Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
@@ -423,9 +423,7 @@ defmodule Cyfr.Boundaries do
           "the component work and calls down into it. OCI and registry transports " <>
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
           "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`, " <>
-          "which also decides the fresh confirmation issuing another one needs; what a " <>
-          "registry answer writes is written only while the caller still stands " <>
-          "(`Sanctum.Caller.revalidate_session/1`). " <>
+          "which also decides the fresh confirmation issuing another one needs. " <>
           "Removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
@@ -1139,14 +1137,13 @@ defmodule Cyfr.Boundaries do
         CyfrWeb.Plugs.ParserErrors CyfrWeb.Plugs.RawBodyReader
         CyfrWeb.Plugs.ScrubTinctureCredentials CyfrWeb.Plugs.TinctureRateLimit
         CyfrWeb.Plugs.VerifyWebhookSignature CyfrWeb.Plugs.WebhookIdempotency
-        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE CyfrWeb.SignInResponse
+        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE
       ),
       reason:
         "Emissary's adapters read the host's shared web tier and never its root router, " <>
           "its endpoint or another adapter: the HTTP API renders its refusals " <>
           "(`CyfrWeb.ApiError`) and the OAuth grant callback its no-session page " <>
-          "(`CyfrWeb.MinimalPage`), the API's sign-out drops the cookie session through " <>
-          "the sign-in response (`CyfrWeb.SignInResponse`), and `Emissary.Router` " <>
+          "(`CyfrWeb.MinimalPage`), and `Emissary.Router` " <>
           "declares the OAuth callback throttle from the shared pipelines " <>
           "(`CyfrWeb.Pipelines`). The MCP pipeline parses its body behind the transport's " <>
           "rate limit and authentication with the host's one parser definition " <>
@@ -2204,8 +2201,6 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.SignIn" => [
       answer: 2,
-      record_claim: 2,
-      record_namespace: 2,
       request: 2,
       request: 3
     ],
@@ -2468,7 +2463,6 @@ defmodule Cyfr.Boundaries do
     {:post, "/directory/v1/register"},
     {:get, "/invite"},
     {:get, "/login"},
-    {:get, "/restore"},
     {:get, "/setup"},
     {:get, "/v1/handles/:handle"}
   ]
