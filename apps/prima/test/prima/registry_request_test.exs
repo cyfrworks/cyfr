@@ -162,6 +162,25 @@ defmodule Prima.RegistryRequestTest do
     assert Enum.sort(operations) == RegistryRequest.operations()
   end
 
+  test "every signed request reads back from its map, and nothing else is read as one" do
+    v = vectors()
+    signed = for {name, %{"request" => %{"sig" => _} = map}} <- v["requests"], do: {name, map}
+    assert length(signed) > 10
+
+    for {name, map} <- signed do
+      assert {:ok, %RegistryRequest{} = request} = RegistryRequest.decode(map), name
+      assert RegistryRequest.encode(request) == map, name
+    end
+
+    {_name, map} = hd(signed)
+    assert {:error, :request_malformed} = RegistryRequest.decode(Map.delete(map, "sig"))
+    assert {:error, :request_malformed} = RegistryRequest.decode(Map.delete(map, "signer"))
+    assert {:error, :request_malformed} = RegistryRequest.decode(Map.put(map, "extra", 1))
+    assert {:error, :wrong_protocol} = RegistryRequest.decode(%{map | "protocol" => "v1"})
+    assert {:error, :unknown_operation} = RegistryRequest.decode(%{map | "operation" => "x.y"})
+    assert {:error, :request_malformed} = RegistryRequest.decode(Jason.encode!(map))
+  end
+
   test "every request is checked under its head, registry and clock to its result" do
     v = vectors()
 
