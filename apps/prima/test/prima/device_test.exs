@@ -6,7 +6,9 @@ defmodule Prima.DeviceTest do
   The device protocol as data (`tests/fixtures/device.json`): every
   message reads as its sender sent it and writes back to itself; a type
   the other side sends, another version, a field a type does not carry
-  and an intent carrying continuous data are each refused by shape.
+  and an intent carrying continuous data are each refused by shape; and a
+  first connection's answer is device_1's signature over the request it
+  answers, re-signed from its seed.
   """
 
   use ExUnit.Case, async: true
@@ -14,6 +16,8 @@ defmodule Prima.DeviceTest do
   alias Prima.Device
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
+  alias Prima.SignIn
+  alias Prima.SignIn.DeviceAnswer
 
   @vectors Path.expand("../../../../tests/fixtures/device.json", __DIR__)
 
@@ -72,6 +76,76 @@ defmodule Prima.DeviceTest do
              Device.decode(by_type["challenge"], :home)
 
     assert {:ok, {:proof, %{proof: %Proof{}}}} = Device.decode(by_type["proof"], :glass)
+  end
+
+  test "a hello reads to its key, account, holder, name and admission" do
+    hellos = for %{"message" => %{"type" => "hello"} = m} <- vectors()["messages"], do: m
+
+    for message <- hellos do
+      admission =
+        case message["admission"] do
+          %{"setup" => token} -> %{admission: {:setup, token}}
+          %{"invitation" => code} -> %{admission: {:invitation, code}}
+          nil -> %{}
+        end
+
+      assert Device.decode(message, :glass) ==
+               {:ok,
+                {:hello,
+                 Map.merge(
+                   %{
+                     kid: message["kid"],
+                     identifier: message["identifier"],
+                     holder_kind: message["holder_kind"],
+                     display_name: message["display_name"]
+                   },
+                   admission
+                 )}}
+    end
+
+    assert Enum.map(hellos, &Map.keys(&1["admission"] || %{})) == [["setup"], ["invitation"], []]
+  end
+
+  test "a first connection: device_1's hello, its signed answer, and its certificate" do
+    v = vectors()
+    by_type = Map.new(v["messages"], &{&1["message"]["type"], &1["message"]})
+    %{"seed" => seed, "public" => public} = v["keys"]["device_1"]
+    {:ok, seed} = Prima.Identity.Encoding.unb64(seed, 32)
+    {:ok, public} = Prima.Identity.Encoding.unb64(public, 32)
+    {derived, _private} = :crypto.generate_key(:eddsa, :ed25519, seed)
+    kid = Prima.Identity.kid(public)
+
+    assert derived == public
+    assert by_type["hello"]["kid"] == kid
+
+    {:ok, {:sign_in_request, %{request: %SignIn{purpose: :sign_in} = request}}} =
+      Device.decode(by_type["sign_in_request"], :home)
+
+    assert SignIn.encode(request) == by_type["sign_in_request"]["request"]
+
+    {:ok, {:sign_in_answer, %{answer: answer}}} = Device.decode(by_type["sign_in_answer"], :glass)
+    assert answer == DeviceAnswer.sign(request, kid, seed)
+    assert DeviceAnswer.encode(answer) == by_type["sign_in_answer"]["answer"]
+    assert :crypto.verify(:eddsa, :none, SignIn.digest(request), answer.sig, [public, :ed25519])
+
+    {:ok, {:admitted, admitted}} = Device.decode(by_type["admitted"], :home)
+    {:ok, {:standing, standing}} = Device.decode(by_type["standing"], :home)
+    {:ok, certificate} = DeviceCert.decode(by_type["connect"]["certificate"])
+
+    assert admitted == %{
+             client_id: certificate.client_id,
+             certificate: certificate,
+             standing: standing
+           }
+
+    assert {certificate.kid, certificate.identifier} ==
+             {kid, by_type["hello"]["identifier"]}
+
+    assert standing == %{
+             client_id: certificate.client_id,
+             athanor: certificate.athanor,
+             expires_at: certificate.expires_at
+           }
   end
 
   test "a key's digest and its code are the fixture's, and the code reads back to the digest" do
