@@ -232,6 +232,7 @@ defmodule Sanctum.CompanyLoginTest do
     %{
       certificate: certificate,
       client: client,
+      identifier: certificate.identifier,
       user: standing.user,
       athanor: standing.athanor,
       platform_admin: standing.platform_admin

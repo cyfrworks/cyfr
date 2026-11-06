@@ -197,7 +197,7 @@ defmodule Sanctum.IssuanceTest do
         home: certificate.audience,
         athanor: certificate.athanor,
         client_id: device.client_id,
-        device_key: certificate.device_key,
+        device_key: device.device_key,
         nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
         now: System.system_time(:millisecond)
       )
