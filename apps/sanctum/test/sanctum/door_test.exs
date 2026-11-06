@@ -71,7 +71,8 @@ defmodule Sanctum.DoorTest do
         user_id: user.id,
         provenance: "remote",
         identifier: identifier(n),
-        directory_url: "https://dir.example"
+        directory_url: "https://dir.example",
+        head_hash: Prima.Digest.sha256("head-" <> identifier(n))
       })
 
     user

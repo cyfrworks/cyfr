@@ -43,7 +43,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
     AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent SignInTerminalComponent
-    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive IdentityCard
+    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive
   )
 
   # The tasks started from the console, by file, and the files that take
@@ -61,9 +61,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
       {2, ["live/aqua_live.ex", "live/aqua_live/agents_component.ex"]},
     # The system layer's listener on `confirmation.changes`, whose facts
     # the layer takes in the focus it was opened for.
-    "live/system_layer.ex" => {1, ["live/system_layer.ex"]},
-    # The identity card's one registry read: a handle's live check.
-    "components/identity_card.ex" => {1, ["components/identity_card.ex"]}
+    "live/system_layer.ex" => {1, ["live/system_layer.ex"]}
   }
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/

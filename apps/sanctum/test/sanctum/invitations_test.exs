@@ -97,7 +97,7 @@ defmodule Sanctum.InvitationsTest do
         %{
           identifier: identifier,
           directory_url: "https://dir.example",
-          head_hash: Prima.Digest.sha256_hex("head-" <> identifier)
+          head_hash: Prima.Digest.sha256("head-" <> identifier)
         }
       )
 
@@ -691,7 +691,7 @@ defmodule Sanctum.InvitationsRaceTest do
         Sanctum.Test.People.remote(%{id: remote_key, provider: "cyfr"}, %{
           identifier: identifier,
           directory_url: "https://dir.example",
-          head_hash: Prima.Digest.sha256_hex("head-" <> identifier)
+          head_hash: Prima.Digest.sha256("head-" <> identifier)
         })
 
       {:ok,

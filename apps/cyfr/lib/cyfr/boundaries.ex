@@ -607,10 +607,10 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
+        Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
-        Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations
+        Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Invitations
         Sanctum.Newcomer Sanctum.Pairing Sanctum.PolicyLog
         Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SharedThreads Sanctum.SignIn
@@ -648,8 +648,6 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Invitations` is the invitation page's read of who invited and to which " <>
           "athanor, or that the code admits no one (`lookup/1`), which grants nothing, " <>
           "and the hash it keeps (`code_hash/1`). " <>
-          "`Sanctum.Handle` is a live check of a handle against the registry's answer " <>
-          "(`resolve/1`), navigation that grants nothing. " <>
           "`Sanctum.CompanyLogin` is the company page's: whether the browser's session is " <>
           "refused for the company sign-in alone (`held/1`), the sign-in it begins for that " <>
           "session (`start/1`) and the issuer's callback it finishes (`complete/2`), which " <>
@@ -1025,7 +1023,7 @@ defmodule Cyfr.Boundaries do
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.FrameRequest
-        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
+        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
@@ -2150,7 +2148,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Directory.Handles" => [claim: 1, resolve: 1],
     "Sanctum.Door" => [refusal_message: 0],
-    "Sanctum.Door.Store" => [requests: 0, wildcard: 0],
+    "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Gate" => [
@@ -2160,7 +2158,6 @@ defmodule Cyfr.Boundaries do
       open_stream: 2,
       open_stream: 3
     ],
-    "Sanctum.Handle" => [resolve: 1],
     "Sanctum.IdentityFreshness" => [sweep: 1],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
@@ -2241,12 +2238,7 @@ defmodule Cyfr.Boundaries do
       request: 2,
       request: 3
     ],
-    "Sanctum.Tenancy" => [
-      channel_active?: 2,
-      continuation: 3,
-      resolve_status: 2,
-      revalidate: 1
-    ],
+    "Sanctum.Tenancy" => [channel_active?: 2, continuation: 3, revalidate: 1],
     "Sanctum.Tenancy.Athanors" => [
       active?: 1,
       by_route_slug: 1,
@@ -2449,10 +2441,6 @@ defmodule Cyfr.Boundaries do
         "the sign-out post drops whatever session the browser has and needs none to " <>
           "be told to; POST and not GET, so the browser pipeline's CSRF token guards it"
     },
-    browser_oauth_start: %{
-      admits: :nothing,
-      why: "starts an IdP round trip and carries nothing of the caller into it"
-    },
     public_directory: %{
       admits: :nothing,
       why:
@@ -2556,7 +2544,6 @@ defmodule Cyfr.Boundaries do
     {:get, "/account/:name"},
     {:get, "/api/health"},
     {:get, "/api/health/ready"},
-    {:get, "/auth/:provider"},
     {:post, "/auth/logout"},
     {:get, "/directory/v1/:identifier"},
     {:get, "/directory/v1/:identifier/from/:hash"},
@@ -2680,6 +2667,10 @@ defmodule Cyfr.Boundaries do
     # The issuer's side of a company sign-in (`Sanctum.Auth.OIDC`): a test
     # stands in its own for the token exchange.
     oidc_reauth_client: :seam,
+    # Where the account pages' bundle is read from
+    # (`Emissary.Web.AccountController`): a suite points it at a bundle of
+    # its own; a release never sets it, so the built bundle is served.
+    account_pages_root: :seam,
     # WorkOS's API base URL (`Sanctum.Auth.WorkOS`), which a suite points at
     # its scripted WorkOS on loopback; a release never sets it, so the
     # company sign-in reaches https://api.workos.com.

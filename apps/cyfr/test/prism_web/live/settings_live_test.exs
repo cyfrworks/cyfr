@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.SettingsLiveTest do
   @moduledoc """
   Settings: the door and the platform settings are the operator's
@@ -10,6 +13,8 @@ defmodule PrismWeb.SettingsLiveTest do
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
+
+  alias Sanctum.Test.RegistryStub
 
   test "the door section is shown to a platform admin and to nobody else", %{conn: conn} do
     person = test_user()
@@ -321,5 +326,49 @@ defmodule PrismWeb.SettingsLiveTest do
       view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render_click()
       refute has_element?(view, passkey)
     end
+  end
+
+  # The registry: `handles` answers a handle's resolution by name (`:free`
+  # for none, `:taken` for one held), the policy version is current, and
+  # every signed request is verified under `state` and handed to
+  # `answer`.
+  defp registry(state, handles, answer \\ fn _request -> flunk("no signed request expected") end) do
+    RegistryStub.start!(fn
+      %{method: "GET", path: "/v1/legal/version"} ->
+        {200, RegistryStub.answer(%{"policy_version" => "2026-09", "policies" => []})}
+
+      %{method: "GET", path: "/v1/handles/" <> handle} ->
+        case Map.get(handles, handle, :free) do
+          :free -> RegistryStub.refusal(:handle_not_found)
+          :taken -> {200, handle_answer(handle, "per_" <> String.duplicate("a", 64))}
+          {:held, identifier} -> {200, handle_answer(handle, identifier)}
+          :close -> :close
+        end
+
+      %{body: body} = request ->
+        case RegistryStub.verify(body, state) do
+          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
+          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
+        end
+    end)
+  end
+
+  # An allowlist entry typed into the panel's form, then its button clicked.
+  defp door_entry(view, button, value) do
+    view
+    |> element(~s(form[phx-change="door_form_changed"]))
+    |> render_change(%{"value" => value})
+
+    view |> element("button[phx-click=#{button}]") |> render_click()
+  end
+
+  defp handle_answer(handle, identifier) do
+    RegistryStub.answer(%{
+      "protocol" => Prima.HandleAnswer.protocol(),
+      "registry" => RegistryStub.host(),
+      "handle" => handle,
+      "identifier" => identifier,
+      "directory" => RegistryStub.directory()
+    })
   end
 end

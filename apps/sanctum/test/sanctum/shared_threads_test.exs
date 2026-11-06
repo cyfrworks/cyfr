@@ -49,7 +49,7 @@ defmodule Sanctum.SharedThreadsTest do
         %{
           identifier: identifier,
           directory_url: "https://dir.example",
-          head_hash: Prima.Digest.sha256_hex("head-" <> identifier)
+          head_hash: Prima.Digest.sha256("head-" <> identifier)
         }
       )
 
