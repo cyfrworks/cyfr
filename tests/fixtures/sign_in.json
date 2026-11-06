@@ -11,6 +11,7 @@
         "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
       },
       "error": "unknown_field",
+      "field": "protocol",
       "kind": "passkey",
       "name": "a passkey answer with an unknown field"
     },
@@ -23,6 +24,7 @@
         "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
       },
       "error": "missing_field",
+      "field": "identifier",
       "kind": "passkey",
       "name": "a passkey answer without its identifier"
     },
@@ -36,6 +38,7 @@
         "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
       },
       "error": "invalid_field",
+      "field": "identifier",
       "kind": "passkey",
       "name": "a passkey answer naming a local person id"
     },
@@ -49,6 +52,7 @@
         "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
       },
       "error": "invalid_field",
+      "field": "credential_id",
       "kind": "passkey",
       "name": "an empty credential id"
     },
@@ -62,6 +66,7 @@
         "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
       },
       "error": "invalid_field",
+      "field": "credential_id",
       "kind": "passkey",
       "name": "a credential id of 1024 bytes"
     },
@@ -75,6 +80,7 @@
         "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
       },
       "error": "invalid_field",
+      "field": "client_data",
       "kind": "passkey",
       "name": "padded client data"
     },
@@ -85,6 +91,7 @@
         "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
       },
       "error": "invalid_field",
+      "field": "sig",
       "kind": "device",
       "name": "a device answer with a signature of 63 bytes"
     },
@@ -95,6 +102,7 @@
         "sig": "kEGBtjPVQQxrYoT2qFwSkBqTsYQUrt6-c4lnejZRP8VdvnbKXCM5QFTesLNoSjat_wVFdyw29WCORfx9iGcLCw"
       },
       "error": "invalid_field",
+      "field": "kid",
       "kind": "device",
       "name": "a device answer whose kid is not a digest"
     },
@@ -106,6 +114,7 @@
         "sig": "kEGBtjPVQQxrYoT2qFwSkBqTsYQUrt6-c4lnejZRP8VdvnbKXCM5QFTesLNoSjat_wVFdyw29WCORfx9iGcLCw"
       },
       "error": "unknown_field",
+      "field": "identifier",
       "kind": "device",
       "name": "a device answer carrying an identifier"
     },
@@ -120,6 +129,7 @@
         "signer": "passkey-1"
       },
       "error": "invalid_field",
+      "field": "signer",
       "kind": "passkey",
       "name": "a passkey answer whose signer is not a kid"
     },
@@ -134,6 +144,7 @@
         "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
       },
       "error": "invalid_field",
+      "field": "signer",
       "kind": "passkey",
       "name": "a passkey answer naming a recovery signer"
     }
@@ -456,7 +467,7 @@
     }
   },
   "challenge_bytes": 32,
-  "comment": "The vectors pinning Prima.SignIn (cyfr-sign-in/v1), read by CYFR and by the account pages. Every side derives each key as identity.json does and walks the identity entries to the account's state; reads every request and writes it back to the same map; reproduces each sign_in and confirm request's digest (SHA-256 of the request's JCS bytes) and each passkey registry answer's (SHA-256 of the registry request's JCS bytes with signer set to the answer's signer: a registry request reaches the page without signer and sig, and the passkey chosen sets its kid) and each fragment (unpadded base64url of the JCS bytes of a request or of a passkey's answer), and parses each fragment back, refusing one past max_fragment_bytes before decoding it and one whose bytes are not the JCS form of the object they decode to; re-signs every device answer with Ed25519 over the 32 digest bytes; checks each verify case's answer against the named request, held for its challenge, at home and now_ms, under the account's state, reaching the result or the refusal of the first check that fails, in the order: the answer's challenge is the request's, the request is unexpired, its audience is home; for a passkey, the state is the answer's identifier's, a passkey it lists has the answer's credential id, the assertion verifies over the digest at the directory (type, challenge, origin, crossOrigin, rpIdHash, user presence, user verification, signature), a registry answer's identifier is its registry request's, and a registry answer's signer is the kid of the passkey that made the assertion while any other answer names none (wrong_signer, also for a registry answer naming no signer, checked before the assertion); for a device, the purpose is sign_in or confirm, a device key the state lists has the answer's kid, and its signature verifies. registry_output is a passkey's answer to a registry request made into the registry request's bytes with the answer's signer and the assertion as its sig: the registry verifies it under the account's state as registry_wire.json's verifier does. Each malformed request and answer is refused.",
+  "comment": "The vectors pinning Prima.SignIn (cyfr-sign-in/v1), read by CYFR and by the account pages. Every side derives each key as identity.json does and walks the identity entries to the account's state; reads every request and writes it back to the same map; reproduces each sign_in and confirm request's digest (SHA-256 of the request's JCS bytes) and each passkey registry answer's (SHA-256 of the registry request's JCS bytes with signer set to the answer's signer: a registry request reaches the page without signer and sig, and the passkey chosen sets its kid) and each fragment (unpadded base64url of the JCS bytes of a request or of a passkey's answer), and parses each fragment back, refusing one past max_fragment_bytes before decoding it and one whose bytes are not the JCS form of the object they decode to; re-signs every device answer with Ed25519 over the 32 digest bytes; checks each verify case's answer against the named request, held for its challenge, at home and now_ms, under the account's state, reaching the result or the refusal of the first check that fails, in the order: the answer's challenge is the request's, the request is unexpired, its audience is home; for a passkey, the state is the answer's identifier's, a passkey it lists has the answer's credential id, the assertion verifies over the digest at the directory (type, challenge, origin, crossOrigin, rpIdHash, user presence, user verification, signature), a registry answer's identifier is its registry request's, and a registry answer's signer is the kid of the passkey that made the assertion while any other answer names none (wrong_signer, also for a registry answer naming no signer, checked before the assertion); for a device, the purpose is sign_in or confirm, a device key the state lists has the answer's kid, and its signature verifies. A malformed request's or answer's refusal that names a field carries it as field, as each side's typed result does. registry_output is a passkey's answer to a registry request made into the registry request's bytes with the answer's signer and the assertion as its sig: the registry verifies it under the account's state as registry_wire.json's verifier does. Each malformed request and answer is refused.",
   "directory": "https://cyfr.run",
   "fragments": {
     "answers": {
@@ -679,6 +690,7 @@
   "request_refusals": [
     {
       "error": "unknown_field",
+      "field": "session",
       "name": "an unknown field",
       "request": {
         "audience": "https://alice.example",
@@ -692,6 +704,7 @@
     },
     {
       "error": "missing_field",
+      "field": "return",
       "name": "no return",
       "request": {
         "audience": "https://alice.example",
@@ -715,6 +728,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "purpose",
       "name": "an unknown purpose",
       "request": {
         "audience": "https://alice.example",
@@ -727,6 +741,7 @@
     },
     {
       "error": "missing_field",
+      "field": "subject",
       "name": "a confirmation without its subject",
       "request": {
         "audience": "https://alice.example",
@@ -739,6 +754,7 @@
     },
     {
       "error": "unknown_field",
+      "field": "subject",
       "name": "a sign-in carrying a subject",
       "request": {
         "audience": "https://alice.example",
@@ -752,6 +768,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "subject",
       "name": "a subject that is not a digest",
       "request": {
         "audience": "https://alice.example",
@@ -765,6 +782,7 @@
     },
     {
       "error": "missing_field",
+      "field": "registry_request",
       "name": "a registry signature without its request",
       "request": {
         "audience": "https://alice.example",
@@ -777,6 +795,7 @@
     },
     {
       "error": "unknown_field",
+      "field": "registry_request",
       "name": "a sign-in carrying a registry request",
       "request": {
         "audience": "https://alice.example",
@@ -800,6 +819,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "registry_request",
       "name": "a registry request that is signed",
       "request": {
         "audience": "https://alice.example",
@@ -829,6 +849,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "registry_request",
       "name": "a registry request carrying its signer",
       "request": {
         "audience": "https://alice.example",
@@ -853,6 +874,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "registry_request",
       "name": "a registry request of another protocol",
       "request": {
         "audience": "https://alice.example",
@@ -876,6 +898,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "challenge",
       "name": "a challenge of 31 bytes",
       "request": {
         "audience": "https://alice.example",
@@ -888,6 +911,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "audience",
       "name": "an audience with a trailing slash",
       "request": {
         "audience": "https://alice.example/",
@@ -900,6 +924,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "return",
       "name": "a return on another origin",
       "request": {
         "audience": "https://alice.example",
@@ -912,6 +937,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "return",
       "name": "a return with a query",
       "request": {
         "audience": "https://alice.example",
@@ -924,6 +950,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "return",
       "name": "a return with a fragment",
       "request": {
         "audience": "https://alice.example",
@@ -936,6 +963,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "expires_at",
       "name": "a negative expiry",
       "request": {
         "audience": "https://alice.example",

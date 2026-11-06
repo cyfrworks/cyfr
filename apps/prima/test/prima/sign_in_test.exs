@@ -29,7 +29,12 @@ defmodule Prima.SignInTest do
 
   defp tag({:ok, _value}), do: "ok"
   defp tag({:error, reason}) when is_atom(reason), do: Atom.to_string(reason)
-  defp tag({:error, {reason, _field}}) when is_atom(reason), do: Atom.to_string(reason)
+
+  # A refusal as Prima answers it, its field included.
+  defp refusal(%{"error" => error, "field" => field}),
+    do: {:error, {String.to_existing_atom(error), field}}
+
+  defp refusal(%{"error" => error}), do: {:error, String.to_existing_atom(error)}
 
   defp state(v) do
     {:ok, state} = Identity.verify_chain(v["identity"]["entries"])
@@ -178,15 +183,15 @@ defmodule Prima.SignInTest do
   end
 
   test "every malformed request is refused" do
-    for %{"name" => name, "request" => map, "error" => error} <- vectors()["request_refusals"] do
-      assert tag(SignIn.decode(map)) == error, name
+    for %{"name" => name, "request" => map} = vector <- vectors()["request_refusals"] do
+      assert SignIn.decode(map) == refusal(vector), name
     end
   end
 
   test "every malformed answer is refused" do
-    for %{"name" => name, "kind" => kind, "answer" => map, "error" => error} <-
+    for %{"name" => name, "kind" => kind, "answer" => map} = vector <-
           vectors()["answer_refusals"] do
-      assert tag(decoder(kind).(map)) == error, name
+      assert decoder(kind).(map) == refusal(vector), name
     end
   end
 

@@ -38,9 +38,13 @@ defmodule Prima.DeviceCertTest do
     )
   end
 
-  defp tag({:error, reason}), do: tag(reason)
-  defp tag({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
-  defp tag(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp tag({:error, reason}) when is_atom(reason), do: Atom.to_string(reason)
+
+  # A refusal as Prima answers it, its field included.
+  defp refusal(%{"error" => error, "field" => field}),
+    do: {:error, {String.to_existing_atom(error), field}}
+
+  defp refusal(%{"error" => error}), do: {:error, String.to_existing_atom(error)}
 
   test "the protocols, lifetime and purposes are the fixture's" do
     v = vectors()
@@ -130,8 +134,8 @@ defmodule Prima.DeviceCertTest do
   end
 
   test "every malformed certificate is refused" do
-    for %{"name" => name, "certificate" => cert, "error" => error} <- vectors()["refusals"] do
-      assert tag(DeviceCert.decode(cert)) == error, name
+    for %{"name" => name, "certificate" => cert} = vector <- vectors()["refusals"] do
+      assert DeviceCert.decode(cert) == refusal(vector), name
     end
   end
 
@@ -263,8 +267,8 @@ defmodule Prima.DeviceCertTest do
     test "every malformed challenge is refused, and a proof needs its signature" do
       v = vectors()
 
-      for %{"name" => name, "challenge" => map, "error" => error} <- v["challenge_refusals"] do
-        assert tag(Challenge.decode(map)) == error, name
+      for %{"name" => name, "challenge" => map} = vector <- v["challenge_refusals"] do
+        assert Challenge.decode(map) == refusal(vector), name
       end
 
       assert Proof.decode(Map.delete(v["proofs"]["connect"], "sig")) ==

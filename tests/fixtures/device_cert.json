@@ -75,6 +75,7 @@
         "purpose": "connect"
       },
       "error": "invalid_field",
+      "field": "nonce",
       "name": "a nonce of 16 bytes"
     },
     {
@@ -89,6 +90,7 @@
         "purpose": "sign"
       },
       "error": "invalid_field",
+      "field": "purpose",
       "name": "a purpose outside connect, renew and pair"
     },
     {
@@ -198,7 +200,7 @@
       "purpose": "renew"
     }
   },
-  "comment": "The vectors pinning Prima.DeviceCert (cyfr-device-cert/v2) and its challenge and proof (cyfr-device-proof/v1): every side re-signs each certificate whose signer is named with that installation key and reproduces its sig, checks each certificate under the named key's public key with the given home (the CYFR's origin), head (the one its paired-client row names), clock (Unix milliseconds) and clock tolerance, and reaches the named result or refusal in the order signature, audience, head, not-before, expiry; refuses each malformed certificate and challenge; and holds each proof to the challenge held for the connection at the given time, a mismatch naming the first field that differs in the order purpose, home, athanor, client_id, device_key, nonce, expires_at. A certificate's kid is sha256:<hex> over the device key the account's log lists. Expiry is strict: at or after expires_at a certificate is refused whatever the tolerance, which applies to not_before only. A challenge lives lifetime_ms from issue. A pair challenge binds the prospective client id the pairing invitation reserved; a proof of one purpose is refused for every other.",
+  "comment": "The vectors pinning Prima.DeviceCert (cyfr-device-cert/v2) and its challenge and proof (cyfr-device-proof/v1): every side re-signs each certificate whose signer is named with that installation key and reproduces its sig, checks each certificate under the named key's public key with the given home (the CYFR's origin), head (the one its paired-client row names), clock (Unix milliseconds) and clock tolerance, and reaches the named result or refusal in the order signature, audience, head, not-before, expiry; refuses each malformed certificate and challenge; and holds each proof to the challenge held for the connection at the given time, a mismatch naming the first field that differs in the order purpose, home, athanor, client_id, device_key, nonce, expires_at. A refusal that names a field carries it as field, as each side's typed result does. A certificate's kid is sha256:<hex> over the device key the account's log lists. Expiry is strict: at or after expires_at a certificate is refused whatever the tolerance, which applies to not_before only. A challenge lives lifetime_ms from issue. A pair challenge binds the prospective client id the pairing invitation reserved; a proof of one purpose is refused for every other.",
   "issued_at": 1790000000000,
   "keys": {
     "device_1": {
@@ -431,6 +433,7 @@
         "sig": "xZivUUaWBhr0oiqi27t6RoEutsRrKTaUsK89zFeqccF7Oe9UpdSzELigNZ-h2DOyfwpddWQgLHoRgxbikx5hBw"
       },
       "error": "unknown_field",
+      "field": "scope",
       "name": "an unknown field"
     },
     {
@@ -452,6 +455,7 @@
         }
       },
       "error": "unknown_field",
+      "field": "subject",
       "name": "the first version's subject"
     },
     {
@@ -467,6 +471,7 @@
         "protocol": "cyfr-device-cert/v2"
       },
       "error": "missing_field",
+      "field": "sig",
       "name": "no signature"
     },
     {
@@ -482,6 +487,7 @@
         "sig": "kOMQ4R4C4181FwP0gYABazDs4R3aSDMqA_sVisdev7nigzEzHnPtphRvxiQBAHjdvKn8iXg3V8LGVPzNR4mUAA"
       },
       "error": "missing_field",
+      "field": "head",
       "name": "no head"
     },
     {
@@ -514,6 +520,7 @@
         "sig": "_hmGUSCs0MedJ1Tx9FDnoY6ua5rfHuZUKCWValCrkoOsZeEJLD2cYCtWdSGVL59cKhsNVDmR5VDN9AjrB6kDAw"
       },
       "error": "invalid_field",
+      "field": "kid",
       "name": "a kid that is not a digest"
     },
     {
@@ -530,6 +537,7 @@
         "sig": "iAIuiTleL4zmLsBPtBAhmMbFcBdFPT4S5qfLgy5RlvZfuqK6THmMFJfLOdbSFW1bsfRlIVu__GsxpDFI0tYdAQ"
       },
       "error": "invalid_field",
+      "field": "identifier",
       "name": "a local person id for the identifier"
     },
     {
@@ -546,6 +554,7 @@
         "sig": "ryNNvc72XHeo799hilEHEhqman2jwebmmPID-tax3XwiuT4WHXS8Gff5-tjvsAVZRAL0bKwzMizaSAAIiNSYCw"
       },
       "error": "invalid_field",
+      "field": "head",
       "name": "a head that is not a digest"
     },
     {
@@ -562,6 +571,7 @@
         "sig": "tnGqWWHX2T19n4i1f1nn7gJVYXPP7aeIahyOvuLv2TJVpM7R8n71Jj0_tLOWx5Lg407FV67PyxwUSfkr-ygRCg"
       },
       "error": "invalid_field",
+      "field": "expires_at",
       "name": "an expiry not after not-before"
     },
     {
@@ -578,6 +588,7 @@
         "sig": "p5paXai5yvd6B0jUtExA557rkWpQM593XXqGVaoAohFcUGvR2s10ae9zGWQIhs1NOU5pgqPuexbOAVXChbJkAQ"
       },
       "error": "invalid_field",
+      "field": "audience",
       "name": "an audience spelled in capitals"
     },
     {
@@ -594,6 +605,7 @@
         "sig": "dS6PtFaYCG9rT--fvDu07GtBH2tm9Os07OO5NgzFwZFiW3GEavNz5kyP6FhYo4V8BNNXrB2ca7PVlAYwIaBzDg"
       },
       "error": "invalid_field",
+      "field": "audience",
       "name": "an audience with a trailing slash"
     },
     {
@@ -610,6 +622,7 @@
         "sig": "sOSGmdmFc4Yo6Np5sWNuyF__7RAV3LjoG5ZIV1QLqM8Z5auJHejnWoeAkdHY_EhOv5IKK3b5tPUIBgPSFrCgBg"
       },
       "error": "invalid_field",
+      "field": "audience",
       "name": "an audience naming its default port"
     },
     {
@@ -626,6 +639,7 @@
         "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
       },
       "error": "invalid_field",
+      "field": "sig",
       "name": "a signature of 63 bytes"
     }
   ],
