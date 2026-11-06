@@ -920,3 +920,46 @@ func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
 		})
 	}
 }
+
+// With no terminal to confirm on and no --yes, the preview takes no lock,
+// so it cannot read cyfr's log: the consequence list stays, as whenever
+// the read cannot tell, unless CYFR never booted in this directory.
+func TestAccessPreviewWithoutATerminalKeepsTheListUnlessNeverBooted(t *testing.T) {
+	const startedAt = "2026-10-28T00:01:02.123456789Z"
+	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
+	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
+	list := "The address changes, so:\n  1. Pair every device again.\nYour CYFR identity does not change.\n"
+	for _, c := range []struct {
+		name, log string
+		booted    bool
+		want      string
+	}{
+		{"no one set up, which cannot be told without the lock", "booting\n" + notSetUp, true, lead + list},
+		{"set up at the boot", "booting\n", true, lead + list},
+		{"never booted", "", false, lead},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.edit(".env", scenarioEnv)
+			if !c.booted {
+				if err := os.Remove(filepath.Join("data", "cyfr.db")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.engine.addressChanges = []string{"Pair every device again."}
+			s.answer("ps.out", "c0ffee\n")
+			s.answer("inspect.out", startedAt+"\n")
+			s.answer("logs.out", c.log)
+			s.answer("logs.exit", "0")
+			askTerminal = func() bool { return false }
+			var out bytes.Buffer
+			err := runAccess(context.Background(), access.ModeLocal, accessOptions{}, false, "", &out)
+			if err == nil || !strings.Contains(err.Error(), "Nothing changed: there is no terminal to confirm the change on.") {
+				t.Fatalf("cyfr access local with no terminal answered %v\n%s", err, out.String())
+			}
+			if out.String() != c.want {
+				t.Errorf("cyfr access printed\n%s\nwant\n%s", out.String(), c.want)
+			}
+		})
+	}
+}

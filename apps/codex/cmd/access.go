@@ -643,7 +643,7 @@ var accessCmd = &cobra.Command{
   tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
   public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
 
-It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes for passkeys, paired devices and clients, unless no one is set up on CYFR yet: it has never started in this directory, or cyfr's log since its start holds the boot's not-set-up line and no set-up line after it. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
+It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes for passkeys, paired devices and clients, unless no one is set up on CYFR yet. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
 When CYFR has tailnet access and its Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), 'cyfr access tailnet' serves it on the tailnet again: it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
 
@@ -856,6 +856,10 @@ func showUnconfirmed(ctx context.Context, target access.Target, o accessOptions,
 	if target.Mode == access.ModeTailnet && (o.hostname != "" || o.keyFile != "") {
 		return alreadyJoined(p.New.Host, o)
 	}
+	// This path takes no lock, and cyfr's log is read only under it
+	// (readSetUp), so whether anyone is set up cannot be told here: the
+	// consequence list stays, as it does whenever the read cannot tell,
+	// unless CYFR never booted in this directory.
 	printPreview(out, p, !neverBooted())
 	return errors.New("Nothing changed: there is no terminal to confirm the change on. " + again)
 }
