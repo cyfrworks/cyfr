@@ -1526,6 +1526,17 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     row
   end
 
+  # A notice written decided, as its card's decision writes it: scoped to
+  # the notice's athanor, actor first, as every row write is.
+  defp decide!(here, notice) do
+    {1, _} =
+      from(m in Arca.Schemas.Message, where: m.id == ^notice.id)
+      |> Arca.QueryHelpers.where_tenant(Sanctum.Context.actor(here))
+      |> Arca.Repo.update_all(set: [status: "approved"])
+
+    %{notice | status: "approved"}
+  end
+
   defp chat!(conn, athanor, thread) do
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(athanor), thread.id))
     settled_render(view)
@@ -1613,14 +1624,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(pane, shown, "explorer needs you")
 
       # The card's decision writes the notice decided and announces it.
-      decided = %{notice | status: "approved"}
-
-      Arca.Repo.update_all(
-        from(m in Arca.Schemas.Message, where: m.id == ^notice.id),
-        set: [status: "approved"]
-      )
-
+      decided = decide!(here, notice)
       Aqua.Tape.announce(here, room.id, :notice, decided)
+      refute has_element?(pane, shown, "explorer needs you")
+
+      # The notice's opening announcement, arriving after its decision's,
+      # is an older snapshot: the decided notice stands.
+      Aqua.Tape.announce(here, room.id, :notice, notice)
       refute has_element?(pane, shown, "explorer needs you")
 
       {_view, pane} = chat!(conn, athanor, room)

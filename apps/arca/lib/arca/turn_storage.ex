@@ -1961,12 +1961,12 @@ defmodule Arca.TurnStorage do
   out is `{:error, :illegal_transition}`.
   An approved step returns to `proposed`, its kind unchanged; any other
   decision closes it `denied`. The card's pending notices on the threads
-  that asked for the turn are decided with it. Answers `{:ok, %{approval,
-  step, card, notices}}`;
+  that asked for the turn are decided with it (`notices/2` reads them).
+  Answers `{:ok, %{approval, step, card}}`;
   a decision already made answers `{:error, {:already_resolved, approval}}`.
   """
   @spec resolve_approval(Prima.Actor.t(), String.t(), String.t(), map()) ::
-          {:ok, %{approval: map(), step: map(), card: map(), notices: [map()]}}
+          {:ok, %{approval: map(), step: map(), card: map()}}
           | {:error, term()}
   def resolve_approval(%Prima.Actor{athanor_id: athanor_id} = actor, approval_id, decision, attrs)
       when is_binary(athanor_id) and athanor_id != "" and decision in @decisions and is_map(attrs) do
@@ -2022,15 +2022,13 @@ defmodule Arca.TurnStorage do
 
           # The notices of the card on the threads that asked for the turn
           # are decided with it: none waits on the person any more.
-          {_, notices} =
-            from(m in Message,
-              where: m.athanor_id == ^athanor_id and m.approval_id == ^approval_id,
-              where: m.outcome == "needs_you" and m.status == "pending",
-              select: m.id
-            )
-            |> Arca.Repo.update_all(
-              set: [status: decision, resolved_by: Map.get(attrs, :decided_by), resolved_at: now]
-            )
+          from(m in Message,
+            where: m.athanor_id == ^athanor_id and m.approval_id == ^approval_id,
+            where: m.outcome == "needs_you" and m.status == "pending"
+          )
+          |> Arca.Repo.update_all(
+            set: [status: decision, resolved_by: Map.get(attrs, :decided_by), resolved_at: now]
+          )
 
           if decision == "approved" do
             {1, _} =
@@ -2059,11 +2057,7 @@ defmodule Arca.TurnStorage do
           %{
             approval: approval!(athanor_id, approval_id),
             step: step!(athanor_id, step.id),
-            card: Arca.Repo.get_by!(Message, id: approval.message_id, athanor_id: athanor_id),
-            notices:
-              Arca.Repo.all(
-                from(m in Message, where: m.athanor_id == ^athanor_id and m.id in ^notices)
-              )
+            card: Arca.Repo.get_by!(Message, id: approval.message_id, athanor_id: athanor_id)
           }
         end)
       end)
@@ -2072,6 +2066,33 @@ defmodule Arca.TurnStorage do
   end
 
   def resolve_approval(%Prima.Actor{}, _approval_id, _decision, _attrs), do: {:error, :no_athanor}
+
+  @doc """
+  The notices of the cards of the turns `turn_ids`: each `needs_you` row
+  naming one of their approvals, on the thread that asked for the turn,
+  as it stands. Every write that settles a card settles its notices in the
+  same transaction: its decision (`resolve_approval/4`), and the skip that
+  invalidates it when its turn is cancelled, paused or archived.
+  """
+  @spec notices(Prima.Actor.t(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
+  def notices(%Prima.Actor{athanor_id: athanor_id}, turn_ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(turn_ids) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.notices", fn ->
+      {:ok,
+       Arca.Repo.all(
+         from(m in Message,
+           join: a in Approval,
+           on: a.athanor_id == m.athanor_id and a.id == m.approval_id,
+           where: m.athanor_id == ^athanor_id and a.turn_id in ^turn_ids,
+           where: m.outcome == "needs_you",
+           order_by: [asc: m.thread_id, asc: m.seq]
+         )
+       )}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def notices(%Prima.Actor{}, _turn_ids), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
   # Sources

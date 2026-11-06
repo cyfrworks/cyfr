@@ -587,6 +587,52 @@ defmodule Aqua.CrewTest do
     assert %{status: "answered"} = row(ctx, more)
   end
 
+  # The room's viewers hear a card's notice settled whichever way its card
+  # goes: decided, its turn cancelled, its thread archived.
+  for {how, settle} <- [
+        cancelled: quote(do: fn ctx, child -> Runner.stop_turn(ctx, child.id) end),
+        archived: quote(do: fn ctx, child -> Tape.archive(ctx, child.id) end)
+      ] do
+    test "a card's notice is announced invalidated on the room when its turn is #{how}",
+         %{ctx: ctx, room: room} do
+      {child, notice} = carded!(ctx, room)
+      room_id = room.id
+      notice_id = notice.id
+
+      unquote(settle).(ctx, child)
+
+      assert_receive %Cyfr.Bus.ThreadEvent{
+                       thread_id: ^room_id,
+                       kind: :notice,
+                       data: %{id: ^notice_id, status: "invalidated"}
+                     },
+                     5_000
+
+      assert %{status: "invalidated"} = row(ctx, notice_id)
+    end
+  end
+
+  # A request to the planner whose child turn waits on a card, and the
+  # notice of that card on the room.
+  defp carded!(ctx, room) do
+    script!([
+      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
+      reply("kept")
+    ])
+
+    {:ok, %{message_id: request}} = Runner.send_message(ctx, room.id, "@planner keep the plan")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    await_status(ctx, delivered_turn(ctx, child, request), "paused")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+    notice =
+      Enum.find(rows(ctx, room.id), &(&1.reply_to == request and &1.outcome == "needs_you"))
+
+    assert %{status: "pending"} = notice
+    {child, notice}
+  end
+
   test "a busy child thread leaves the request pending, and the next tick delivers it",
        %{ctx: ctx, room: room} do
     # The soul's request holds the member's thread on a card; the

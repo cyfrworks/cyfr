@@ -442,19 +442,24 @@ defmodule Aqua.Tape do
              Map.put_new(attrs, :fence, turn.fence)
            ) do
       broadcast(ctx, turn.thread_id, :message, aborted)
+      announce_notices(ctx, [turn.id])
       {:ok, paused}
     end
   end
 
   @doc "Set down a running turn a dead runner left with an unacknowledged uncertainty (`TurnStorage.pause_recovered/3`)."
   @spec pause_recovered(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
-  def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content),
-    do:
-      TurnStorage.pause_recovered(
-        Sanctum.Context.actor(ctx),
-        turn.id,
-        standing(%{content: content, fence: turn.fence}, :current)
-      )
+  def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content) do
+    with {:ok, _paused} = paused <-
+           TurnStorage.pause_recovered(
+             Sanctum.Context.actor(ctx),
+             turn.id,
+             standing(%{content: content, fence: turn.fence}, :current)
+           ) do
+      announce_notices(ctx, [turn.id])
+      paused
+    end
+  end
 
   @doc "Whether the turn holds an uncertainty its sender has not acknowledged."
   @spec unacknowledged_episode?(Context.t(), turn()) :: boolean()
@@ -478,6 +483,7 @@ defmodule Aqua.Tape do
              do: broadcast(ctx, turn.thread_id, :message, row)
       end)
 
+      announce_notices(ctx, [turn.id])
       {:ok, steps}
     end
   end
@@ -533,11 +539,10 @@ defmodule Aqua.Tape do
   @doc """
   Consume a pending approval with the decision and its consequences, in one
   transaction; the card's notices decided with it are announced on their
-  threads.
+  threads (`announce_notices/2`).
   """
   @spec resolve_approval(Context.t(), turn(), String.t(), String.t(), map()) ::
-          {:ok, %{approval: approval(), step: step(), card: row(), notices: [row()]}}
-          | {:error, term()}
+          {:ok, %{approval: approval(), step: step(), card: row()}} | {:error, term()}
   def resolve_approval(%Context{} = ctx, turn, approval_id, decision, attrs) when is_map(attrs) do
     with {:ok, %{card: card, step: step} = resolved} <-
            TurnStorage.resolve_approval(
@@ -560,10 +565,7 @@ defmodule Aqua.Tape do
         decision: decision
       })
 
-      # A notice of the card, on the thread that asked for the turn, is
-      # decided with it.
-      for notice <- Map.get(resolved, :notices, []),
-          do: broadcast(ctx, notice.thread_id, :notice, notice)
+      announce_notices(ctx, [turn.id])
 
       # The runner holding the turn learns the decision from the topic,
       # after the commit like every row.
@@ -608,6 +610,7 @@ defmodule Aqua.Tape do
            Threads.archive(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring)) do
       if cancelled != [] do
         broadcast(ctx, thread_id, :turn_finished, nil)
+        announce_notices(ctx, Enum.map(cancelled, & &1.turn_id))
         wake_crew(ctx)
       end
 
@@ -724,6 +727,18 @@ defmodule Aqua.Tape do
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
+
+  # The notices of the turns' cards, each announced on the thread that
+  # asked for its turn as it now stands: the one announcement after every
+  # write that settles a card (its decision, the skip a cancellation, a
+  # pause or an archive makes), so an open pane of that thread drops it.
+  # A read that fails announces nothing; the next load shows the store.
+  defp announce_notices(ctx, turn_ids) do
+    case TurnStorage.notices(Sanctum.Context.actor(ctx), turn_ids) do
+      {:ok, notices} -> Enum.each(notices, &broadcast(ctx, &1.thread_id, :notice, &1))
+      {:error, _unread} -> :ok
+    end
+  end
 
   # What a row is to a viewer: a request to a crew member, a reply or a
   # notice answering one, or any other row.
