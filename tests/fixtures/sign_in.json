@@ -1,0 +1,1090 @@
+{
+  "answer_refusals": [
+    {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "protocol": "cyfr-sign-in/v1",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "error": "unknown_field",
+      "kind": "passkey",
+      "name": "a passkey answer with an unknown field"
+    },
+    {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "error": "missing_field",
+      "kind": "passkey",
+      "name": "a passkey answer without its identifier"
+    },
+    {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "usr_01a09fee-0000-7000-8000-000000000001",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "error": "invalid_field",
+      "kind": "passkey",
+      "name": "a passkey answer naming a local person id"
+    },
+    {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "error": "invalid_field",
+      "kind": "passkey",
+      "name": "an empty credential id"
+    },
+    {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "error": "invalid_field",
+      "kind": "passkey",
+      "name": "a credential id of 1024 bytes"
+    },
+    {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9=",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "error": "invalid_field",
+      "kind": "passkey",
+      "name": "padded client data"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "error": "invalid_field",
+      "kind": "device",
+      "name": "a device answer with a signature of 63 bytes"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "kid": "device-1",
+        "sig": "kEGBtjPVQQxrYoT2qFwSkBqTsYQUrt6-c4lnejZRP8VdvnbKXCM5QFTesLNoSjat_wVFdyw29WCORfx9iGcLCw"
+      },
+      "error": "invalid_field",
+      "kind": "device",
+      "name": "a device answer whose kid is not a digest"
+    },
+    {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "sig": "kEGBtjPVQQxrYoT2qFwSkBqTsYQUrt6-c4lnejZRP8VdvnbKXCM5QFTesLNoSjat_wVFdyw29WCORfx9iGcLCw"
+      },
+      "error": "unknown_field",
+      "kind": "device",
+      "name": "a device answer carrying an identifier"
+    }
+  ],
+  "answers": {
+    "device_confirm": {
+      "answer": {
+        "challenge": "syfqipkZcMUKFVYSbg1h99BQe3EwQBLEYw2RPDD0zlo",
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "sig": "HLr4vP7lgdUxl3TusKBjxgYhow3trgc0_Sqw8OclfKcwSdpDUqjp_kFg1JT-znvFtzkTLID3dwJTZAsUGcNCAg"
+      },
+      "kind": "device",
+      "request": "confirm",
+      "signer": "device_1"
+    },
+    "device_forged": {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "sig": "KFaUOMVSWM5llBEedefS6zD2ytPoKB7REw-UBcPWGjXn24s5D-p90SanXjM-efwvtxFWKnamwBGLjUmb_EG_Cg"
+      },
+      "kind": "device",
+      "request": "sign_in",
+      "signer": "stranger"
+    },
+    "device_naming_a_passkey": {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+        "sig": "kEGBtjPVQQxrYoT2qFwSkBqTsYQUrt6-c4lnejZRP8VdvnbKXCM5QFTesLNoSjat_wVFdyw29WCORfx9iGcLCw"
+      },
+      "kind": "device",
+      "request": "sign_in",
+      "signer": "device_1"
+    },
+    "device_registry": {
+      "answer": {
+        "challenge": "PUF9es3srsPfS9rlq_tVgXbUtGj_ciIeSJBFUKZ1j88",
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "sig": "t4b3Ith_eEeSCRG9aj401Yc2Hjn6sf8arqpZaWp53yUFqe-BWw3BiQd08cU_UgdludnyKwvUipRhRDON6NfuCA"
+      },
+      "kind": "device",
+      "request": "registry",
+      "signer": "device_1"
+    },
+    "device_sign_in": {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "sig": "kEGBtjPVQQxrYoT2qFwSkBqTsYQUrt6-c4lnejZRP8VdvnbKXCM5QFTesLNoSjat_wVFdyw29WCORfx9iGcLCw"
+      },
+      "kind": "device",
+      "request": "sign_in",
+      "signer": "device_1"
+    },
+    "device_the_log_does_not_list": {
+      "answer": {
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "kid": "sha256:a496f9a75035947fb57a6ccd71d87c2d0b9d83b40f6e7c580faa74c522b02388",
+        "sig": "KFaUOMVSWM5llBEedefS6zD2ytPoKB7REw-UBcPWGjXn24s5D-p90SanXjM-efwvtxFWKnamwBGLjUmb_EG_Cg"
+      },
+      "kind": "device",
+      "request": "sign_in",
+      "signer": "stranger"
+    },
+    "passkey_altered": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABg",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_at_another_origin": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vZXZpbC5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIH35SSPTE8wABVj0bP7PywFNOBMNYtw-vu35jMEE-7sRAiEAyWdMgAIB0zXBg_Arj6ruFOVKr8ih4RSVtr-9y5hSa68"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_confirm": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "syfqipkZcMUKFVYSbg1h99BQe3EwQBLEYw2RPDD0zlo",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoid1VjN3FGWnNFWHJWWmZTNEN1aEZVbGpONHVGUFRxcGQtSlljLXJNWWt3WSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEYCIQDizIlWB7JQNplpf95vT-hKp4NieP4_H4EhVkdz-m3fmwIhALDHMUuAOC_CEQv3vqDr6zcVVhFBxsfOtbNkLrMA25PP"
+      },
+      "kind": "passkey",
+      "request": "confirm",
+      "signer": null
+    },
+    "passkey_cross_origin": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6dHJ1ZX0",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDAHGNP2tO-wbq-vhpoUbu-jL32vxRDyHvH8Z-J1M-kGQIgDnxPO7AHmqbYL8YZBkmSbVCnObexoey-21OZEc6lP0k"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_for_another_relying_party": {
+      "answer": {
+        "authenticator_data": "nBgN4M1pnueIl8R8_bPn7h11kG4xt3RqR0fepTaQmDcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIHFp4iRGEsIzwSoiDrkYXZPpbaIDnxUARkSU2nWSs7KuAiEAqso15Yf1lvO9Uycu0BRp_LRYiHgNlKsWlnmp0vo0mlU"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_naming_another_account": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_c94c269354a3c08012185ad334b02ed26d15b650d7a802210a8f55671a6ae37c",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_over_another_request": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiY0JkTjVBSGZLcUhiWWJCZFlTRXNyYW85N1l4TU9SSHRQbHZ0SmJ0b011OCIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEQCIDZzP2LcRBxqmbEZqEvmX_mm9K0TWny97neYjF7Yc5reAiA7tSYMjfFeZThSAZwrLrZSY39umkal4AoKd1IF9j4bpg"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_registration": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEQCIA_UvH41wzNyXxMKlHsaOYq0pLMp5xgTCrOq93GwKNWdAiB9OmuarA5AQXXyv7ObhUjY3IrmC3DVjdPdMb4S0mzIKg"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_registry": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "PUF9es3srsPfS9rlq_tVgXbUtGj_ciIeSJBFUKZ1j88",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiQW9raDhMUHEwWHBBcWRHZlhjZ1MzMEk3X2E5TW1ENGpwdUxGQjZEQnNOMCIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEYCIQCr2FTLZ1xclnF6cfDPBYt-dvbDkE3ldXzqH0mGbyCBcgIhAKCRBlBObnFvRHFzjw5AaNk552VoFUnyCCipPxqTJQgU"
+      },
+      "kind": "passkey",
+      "request": "registry",
+      "signer": null
+    },
+    "passkey_registry_for_another_account": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "s6oVjekCZWvRAMJv2V_vwDYB3suSNkvrjwAkX1qTB-Y",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicThvMUNqeXktSmtoSlVYTnJtbWVQREdsTUwzUzJaT3prdU13blB2MEJ2cyIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEYCIQCT8r4qIptJaViunud2_NxBE-jY7EzaSQ0hn0kccEtF4wIhAM0n1VImgC41baU8iWvTQ7DUaXapBqdwBNk5jOEIJLQV"
+      },
+      "kind": "passkey",
+      "request": "registry_for_another_account",
+      "signer": null
+    },
+    "passkey_sign_in": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDFXC34Wp9vvsZmK0owNuBiACMtLlKoIkvX8GixOrflVgIgAtR5a--z1WsevAFpgy8u5rCMoigfoLasZ7Jw8UHlsCQ"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_the_log_does_not_list": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDc-KA1Z_Kva2YjXn3LUeXDqb3nibKsd4Jlwa5xbJxpigIgMoLQoqmdOjV0H3SWV6P-kNg-O4-ergW9_jeUSgKAcDc"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_under_a_listed_credential_id": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIQDc-KA1Z_Kva2YjXn3LUeXDqb3nibKsd4Jlwa5xbJxpigIgMoLQoqmdOjV0H3SWV6P-kNg-O4-ergW9_jeUSgKAcDc"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_without_user_presence": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcEAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEUCIHJYmwE50NYLBAD66ocvLMeZuqYcCHBXPGN-n92TXEgPAiEA_JMzAKO9w6lhslQ8420FITiNRGcYDIWc72BEzPfjmKc"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    },
+    "passkey_without_user_verification": {
+      "answer": {
+        "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcBAAAABw",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidURuV3VUQzk0d1RseGU3T01JWG1ienZkN1BzbDJoTEdReGVTdGFaZTAzSSIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+        "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "signature": "MEYCIQCc-kYvZD9QqdBXUNP3YBnlqf_g-XlVIeH3Cs8hIerl3AIhAPnbpFi9YURb02gLacCdX1m2dv7mUrzspAlYlyzh1hSe"
+      },
+      "kind": "passkey",
+      "request": "sign_in",
+      "signer": null
+    }
+  },
+  "challenge_bytes": 32,
+  "comment": "The vectors pinning Prima.SignIn (cyfr-sign-in/v1), read by CYFR and by the account pages. Every side derives each key as identity.json does and walks the identity entries to the account's state; reads every request and writes it back to the same map; reproduces each request's digest (SHA-256 of the request's JCS bytes, or of its registry request's for purpose registry) and each fragment (unpadded base64url of the JCS bytes of a request or of a passkey's answer), and parses each fragment back, refusing one past max_fragment_bytes before decoding it; re-signs every device answer with Ed25519 over the 32 digest bytes; checks each verify case's answer against the named request, held for its challenge, at home and now_ms, under the account's state, reaching the result or the refusal of the first check that fails, in the order: the answer's challenge is the request's, the request is unexpired, its audience is home; for a passkey, the state is the answer's identifier's, a passkey it lists has the answer's credential id, the assertion verifies over the digest at the directory (type, challenge, origin, crossOrigin, rpIdHash, user presence, user verification, signature), and a registry answer's identifier is its registry request's; for a device, the purpose is sign_in or confirm, a device key the state lists has the answer's kid, and its signature verifies. registry_output is a passkey's answer to a registry request made into the registry request's bytes with the assertion as its sig: the registry verifies it under the account's state as registry_wire.json's verifier does. Each malformed request and answer is refused.",
+  "directory": "https://cyfr.run",
+  "fragments": {
+    "answers": {
+      "passkey_altered": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCZyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJUURGWEMzNFdwOXZ2c1ptSzBvd051QmlBQ010TGxLb0lrdlg4R2l4T3JmbFZnSWdBdFI1YS0tejFXc2V2QUZwZ3k4dTVyQ01vaWdmb0xhc1o3Snc4VUhsc0NRIn0",
+      "passkey_at_another_origin": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlpYWnBiQzVsZUdGdGNHeGxJaXdpWTNKdmMzTlBjbWxuYVc0aU9tWmhiSE5sZlEiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJSDM1U1NQVEU4d0FCVmowYlA3UHl3Rk5PQk1OWXR3LXZ1MzVqTUVFLTdzUkFpRUF5V2RNZ0FJQjB6WEJnX0FyajZydUZPVktyOGloNFJTVnRyLTl5NWhTYTY4In0",
+      "passkey_confirm": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6InN5ZnFpcGtaY01VS0ZWWVNiZzFoOTlCUWUzRXdRQkxFWXcyUlBERDB6bG8iLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWQxVmpOM0ZHV25ORldISldXbVpUTkVOMWFFWlZiR3BPTkhWR1VGUnhjR1F0U2xsakxYSk5XV3QzV1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FWUNJUURpeklsV0I3SlFOcGxwZjk1dlQtaEtwNE5pZVA0X0g0RWhWa2R6LW0zZm13SWhBTERITVV1QU9DX0NFUXYzdnFEcjZ6Y1ZWaEZCeHNmT3RiTmtMck1BMjVQUCJ9",
+      "passkey_cross_origin": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2ZEhKMVpYMCIsImNyZWRlbnRpYWxfaWQiOiJqODlJMTZSTHBjX2VHLTRZcVRJNEx3IiwiaWRlbnRpZmllciI6InBlcl82MDZkYWVjNjY4ZWU0YzI5ZGVhMTQ4OGYwMDg4MDc1N2I0NzI0NzUzZTdiOTBmYTE1MDVlNWQ5YTcwNTQ4NjkwIiwic2lnbmF0dXJlIjoiTUVVQ0lRREFIR05QMnRPLXdicS12aHBvVWJ1LWpMMzJ2eFJEeUh2SDhaLUoxTS1rR1FJZ0RueFBPN0FIbXFiWUw4WVpCa21TYlZDbk9iZXhvZXktMjFPWkVjNmxQMGsifQ",
+      "passkey_for_another_relying_party": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJuQmdONE0xcG51ZUlsOFI4X2JQbjdoMTFrRzR4dDNScVIwZmVwVGFRbURjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJSEZwNGlSR0VzSXp3U29pRHJrWVhaUHBiYUlEbnhVQVJrU1UybldTczdLdUFpRUFxc28xNVlmMWx2TzlVeWN1MEJScF9MUllpSGdObEtzV2xubXAwdm8wbWxVIn0",
+      "passkey_naming_another_account": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfYzk0YzI2OTM1NGEzYzA4MDEyMTg1YWQzMzRiMDJlZDI2ZDE1YjY1MGQ3YTgwMjIxMGE4ZjU1NjcxYTZhZTM3YyIsInNpZ25hdHVyZSI6Ik1FVUNJUURGWEMzNFdwOXZ2c1ptSzBvd051QmlBQ010TGxLb0lrdlg4R2l4T3JmbFZnSWdBdFI1YS0tejFXc2V2QUZwZ3k4dTVyQ01vaWdmb0xhc1o3Snc4VUhsc0NRIn0",
+      "passkey_over_another_request": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaVkwSmtUalZCU0daTGNVaGlXV0pDWkZsVFJYTnlZVzg1TjFsNFRVOVNTSFJRYkhaMFNtSjBiMDExT0NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FUUNJRFp6UDJMY1JCeHFtYkVacUV2bVhfbW05SzBUV255OTduZVlqRjdZYzVyZUFpQTd0U1lNamZGZVpUaFNBWndyTHJaU1kzOXVta2FsNEFvS2QxSUY5ajRicGcifQ",
+      "passkey_registration": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVkzSmxZWFJsSWl3aVkyaGhiR3hsYm1kbElqb2lkVVJ1VjNWVVF6azBkMVJzZUdVM1QwMUpXRzFpZW5aa04xQnpiREpvVEVkUmVHVlRkR0ZhWlRBelNTSXNJbTl5YVdkcGJpSTZJbWgwZEhCek9pOHZZM2xtY2k1eWRXNGlMQ0pqY205emMwOXlhV2RwYmlJNlptRnNjMlY5IiwiY3JlZGVudGlhbF9pZCI6Imo4OUkxNlJMcGNfZUctNFlxVEk0THciLCJpZGVudGlmaWVyIjoicGVyXzYwNmRhZWM2NjhlZTRjMjlkZWExNDg4ZjAwODgwNzU3YjQ3MjQ3NTNlN2I5MGZhMTUwNWU1ZDlhNzA1NDg2OTAiLCJzaWduYXR1cmUiOiJNRVFDSUFfVXZINDF3ek55WHhNS2xIc2FPWXEwcExNcDV4Z1RDck9xOTNHd0tOV2RBaUI5T211YXJBNUFRWFh5djdPYmhValkzSXJtQzNEVmpkUGRNYjRTMG16SUtnIn0",
+      "passkey_registry": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IlBVRjllczNzcnNQZlM5cmxxX3RWZ1hiVXRHal9jaUllU0pCRlVLWjFqODgiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaVFXOXJhRGhNVUhFd1dIQkJjV1JIWmxoaloxTXpNRWszWDJFNVRXMUVOR3B3ZFV4R1FqWkVRbk5PTUNJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FWUNJUUNyMkZUTFoxeGNsbkY2Y2ZEUEJZdC1kdmJEa0UzbGRYenFIMG1HYnlDQmNnSWhBS0NSQmxCT2JuRnZSSEZ6anc1QWFOazU1MlZvRlVueUNDaXBQeHFUSlFnVSJ9",
+      "passkey_registry_for_another_account": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6InM2b1ZqZWtDWld2UkFNSnYyVl92d0RZQjNzdVNOa3ZyandBa1gxcVRCLVkiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWNUaHZNVU5xZVhrdFNtdG9TbFZZVG5KdGJXVlFSRWRzVFV3elV6SmFUM3ByZFUxM2JsQjJNRUoyY3lJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FWUNJUUNUOHI0cUlwdEphVml1bnVkMl9OeEJFLWpZN0V6YVNRMGhuMGtjY0V0RjR3SWhBTTBuMVZJbWdDNDFiYVU4aVd2VFE3RFVhWGFwQnFkd0JOazVqT0VJSkxRViJ9",
+      "passkey_sign_in": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJUURGWEMzNFdwOXZ2c1ptSzBvd051QmlBQ010TGxLb0lrdlg4R2l4T3JmbFZnSWdBdFI1YS0tejFXc2V2QUZwZ3k4dTVyQ01vaWdmb0xhc1o3Snc4VUhsc0NRIn0",
+      "passkey_the_log_does_not_list": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiLUR3WnV5S0R1aG9VYW5RWHVVTmlIdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJUURjLUtBMVpfS3ZhMllqWG4zTFVlWERxYjNuaWJLc2Q0Smx3YTV4Ykp4cGlnSWdNb0xRb3FtZE9qVjBIM1NXVjZQLWtOZy1PNC1lcmdXOV9qZVVTZ0tBY0RjIn0",
+      "passkey_under_a_listed_credential_id": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJUURjLUtBMVpfS3ZhMllqWG4zTFVlWERxYjNuaWJLc2Q0Smx3YTV4Ykp4cGlnSWdNb0xRb3FtZE9qVjBIM1NXVjZQLWtOZy1PNC1lcmdXOV9qZVVTZ0tBY0RjIn0",
+      "passkey_without_user_presence": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjRUFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FVUNJSEpZbXdFNTBOWUxCQUQ2Nm9jdkxNZVp1cVljQ0hCWFBHTi1uOTJUWEVnUEFpRUFfSk16QUtPOXc2bGhzbFE4NDIwRklUaU5SR2NZRElXYzcyQkV6UGZqbUtjIn0",
+      "passkey_without_user_verification": "eyJhdXRoZW50aWNhdG9yX2RhdGEiOiJjcjBCUkx5Y3FoUEx2NkpHUlA4UFJ2SjBqLVYtWUc0eVA3M25vWExNLWtjQkFBQUFCdyIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJjbGllbnRfZGF0YSI6ImV5SjBlWEJsSWpvaWQyVmlZWFYwYUc0dVoyVjBJaXdpWTJoaGJHeGxibWRsSWpvaWRVUnVWM1ZVUXprMGQxUnNlR1UzVDAxSldHMWllblprTjFCemJESm9URWRSZUdWVGRHRmFaVEF6U1NJc0ltOXlhV2RwYmlJNkltaDBkSEJ6T2k4dlkzbG1jaTV5ZFc0aUxDSmpjbTl6YzA5eWFXZHBiaUk2Wm1Gc2MyVjkiLCJjcmVkZW50aWFsX2lkIjoiajg5STE2UkxwY19lRy00WXFUSTRMdyIsImlkZW50aWZpZXIiOiJwZXJfNjA2ZGFlYzY2OGVlNGMyOWRlYTE0ODhmMDA4ODA3NTdiNDcyNDc1M2U3YjkwZmExNTA1ZTVkOWE3MDU0ODY5MCIsInNpZ25hdHVyZSI6Ik1FWUNJUUNjLWtZdlpEOVFxZEJYVU5QM1lCbmxxZl9nLVhsVkllSDNDczhoSWVybDNBSWhBUG5icEZpOVlVUmIwMmdMYWNDZFgxbTJkdjdtVXJ6c3BBbFlseXpoMWhTZSJ9"
+    },
+    "parse": [
+      {
+        "error": "too_large",
+        "name": "a fragment one byte past the bound, refused before it is decoded",
+        "repeat": {
+          "char": "A",
+          "length": 32769
+        }
+      },
+      {
+        "error": "invalid_fragment",
+        "name": "the bound's worth of what is no fragment",
+        "repeat": {
+          "char": "A",
+          "length": 32768
+        }
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "not*a*fragment",
+        "name": "characters outside base64url"
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "eyJhdWRpZW5jZSI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZSIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJleHBpcmVzX2F0IjoxNzkwMDAwMzAwMDAwLCJwcm90b2NvbCI6ImN5ZnItc2lnbi1pbi92MSIsInB1cnBvc2UiOiJzaWduX2luIiwicmV0dXJuIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlL3NpZ24taW4vcmV0dXJuIn0==",
+        "name": "a padded fragment"
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "eyJhIjoi+/8ifQ",
+        "name": "standard base64"
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "W10",
+        "name": "a JSON array"
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "c2lnbiBpbg",
+        "name": "bytes that are no JSON"
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "e31",
+        "name": "stray bits past the last byte"
+      }
+    ],
+    "requests": {
+      "another_sign_in": "eyJhdWRpZW5jZSI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZSIsImNoYWxsZW5nZSI6IlJQQU1vbEFnb040dnZBVVRMS2toWjdmMTV0eUtmS3hiRHphUlZNRnJwb2ciLCJleHBpcmVzX2F0IjoxNzkwMDAwMzAwMDAwLCJwcm90b2NvbCI6ImN5ZnItc2lnbi1pbi92MSIsInB1cnBvc2UiOiJzaWduX2luIiwicmV0dXJuIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlL3NpZ24taW4vcmV0dXJuIn0",
+      "confirm": "eyJhdWRpZW5jZSI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZSIsImNoYWxsZW5nZSI6InN5ZnFpcGtaY01VS0ZWWVNiZzFoOTlCUWUzRXdRQkxFWXcyUlBERDB6bG8iLCJleHBpcmVzX2F0IjoxNzkwMDAwMzAwMDAwLCJwcm90b2NvbCI6ImN5ZnItc2lnbi1pbi92MSIsInB1cnBvc2UiOiJjb25maXJtIiwicmV0dXJuIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlL2NvbmZpcm0vcmV0dXJuIiwic3ViamVjdCI6InNoYTI1Njo4OGJlYWJhNjk1NWIxYTMzYThmMThjMjA4YmViNGQ3YmQzZTc2YTZmYzZlYWE0YmI5OTQ5OWIxNDQwMWJmZTUwIn0",
+      "registry": "eyJhdWRpZW5jZSI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZSIsImNoYWxsZW5nZSI6IlBVRjllczNzcnNQZlM5cmxxX3RWZ1hiVXRHal9jaUllU0pCRlVLWjFqODgiLCJleHBpcmVzX2F0IjoxNzkwMDAwMzAwMDAwLCJwcm90b2NvbCI6ImN5ZnItc2lnbi1pbi92MSIsInB1cnBvc2UiOiJyZWdpc3RyeSIsInJlZ2lzdHJ5X3JlcXVlc3QiOnsiYm9keSI6eyJoYW5kbGUiOiJhbGljZSJ9LCJleHBpcmVzX2F0IjoxNzkwMDAwMTIwMDAwLCJpZGVudGlmaWVyIjoicGVyXzYwNmRhZWM2NjhlZTRjMjlkZWExNDg4ZjAwODgwNzU3YjQ3MjQ3NTNlN2I5MGZhMTUwNWU1ZDlhNzA1NDg2OTAiLCJub25jZSI6InpTci0waVhFeldKckxvazFUcnNGcmciLCJvcGVyYXRpb24iOiJoYW5kbGUuY2xhaW0iLCJwcm90b2NvbCI6ImN5ZnItcmVnaXN0cnktcmVxdWVzdC92MiIsInJlZ2lzdHJ5IjoiY3lmci5ydW4iLCJzaWduZXIiOiJzaGEyNTY6NjI1NGViNDdlOWY5Y2ZmYWM0YmI5NjE5MjNkMGE4OGE0Y2I4NWQ2NGNkNTI2MmY1MjdiYTUwYzEwODI5NTJlOCJ9LCJyZXR1cm4iOiJodHRwczovL2FsaWNlLmV4YW1wbGUvcmVnaXN0cnkvcmV0dXJuIn0",
+      "registry_for_another_account": "eyJhdWRpZW5jZSI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZSIsImNoYWxsZW5nZSI6InM2b1ZqZWtDWld2UkFNSnYyVl92d0RZQjNzdVNOa3ZyandBa1gxcVRCLVkiLCJleHBpcmVzX2F0IjoxNzkwMDAwMzAwMDAwLCJwcm90b2NvbCI6ImN5ZnItc2lnbi1pbi92MSIsInB1cnBvc2UiOiJyZWdpc3RyeSIsInJlZ2lzdHJ5X3JlcXVlc3QiOnsiYm9keSI6eyJoYW5kbGUiOiJib2IifSwiZXhwaXJlc19hdCI6MTc5MDAwMDEyMDAwMCwiaWRlbnRpZmllciI6InBlcl9jOTRjMjY5MzU0YTNjMDgwMTIxODVhZDMzNGIwMmVkMjZkMTViNjUwZDdhODAyMjEwYThmNTU2NzFhNmFlMzdjIiwibm9uY2UiOiJfdHRsZGNPV19iUWVUX0pBLVdkNVhBIiwib3BlcmF0aW9uIjoiaGFuZGxlLmNsYWltIiwicHJvdG9jb2wiOiJjeWZyLXJlZ2lzdHJ5LXJlcXVlc3QvdjIiLCJyZWdpc3RyeSI6ImN5ZnIucnVuIiwic2lnbmVyIjoic2hhMjU2OjYyNTRlYjQ3ZTlmOWNmZmFjNGJiOTYxOTIzZDBhODhhNGNiODVkNjRjZDUyNjJmNTI3YmE1MGMxMDgyOTUyZTgifSwicmV0dXJuIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlL3JlZ2lzdHJ5L3JldHVybiJ9",
+      "sign_in": "eyJhdWRpZW5jZSI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZSIsImNoYWxsZW5nZSI6IjQwVG56ZHdWeFJGWk8wb2g3WUZtUnhxcU01VVZpOExUU3NTUk9JVlRKMmsiLCJleHBpcmVzX2F0IjoxNzkwMDAwMzAwMDAwLCJwcm90b2NvbCI6ImN5ZnItc2lnbi1pbi92MSIsInB1cnBvc2UiOiJzaWduX2luIiwicmV0dXJuIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlL3NpZ24taW4vcmV0dXJuIn0"
+    }
+  },
+  "home": "https://alice.example",
+  "identity": {
+    "entries": [
+      {
+        "at": 1790000000000,
+        "directory": "https://cyfr.run",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "-xyB2thgMZIBKBoxjXpfcmrDnCRfKRoc9qrvvreZRM7z7W11e6EK9Wurp2CGcw_ugRWoYy96GkDUw-slG1lBDQ",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      {
+        "at": 1790000001000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+          "kind": "device",
+          "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+        },
+        "kind": "add_key",
+        "prev": "sha256:606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+        "protocol": "cyfr-identity/v2",
+        "seq": 1,
+        "sig": "vcLKn0gtFlagfk4RZUh0G6P8ZTfB6FDwfVb6eleaMUkE6mInRdouXOZ0O_MHlKHNH1DxqqZd4seUMbKjwHpnBQ",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      {
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+          "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+          "kind": "passkey",
+          "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+        },
+        "kind": "add_key",
+        "prev": "sha256:fac041e061bf52bda7941cc94fbb8b7bec676464900e3026159857a8fcf57353",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "yO7KyI8jhhsyScJLXUzGhXChNcBMtngMWho-BjW34ByPRDB00r9ekItVWHV21mwbCUDhsqeRW8XqyUJpm0bZBA",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      }
+    ],
+    "identifiers": {
+      "alice": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+      "bob": "per_c94c269354a3c08012185ad334b02ed26d15b650d7a802210a8f55671a6ae37c"
+    }
+  },
+  "keys": {
+    "bob_kit": {
+      "alg": "ed25519",
+      "kid": "sha256:a99b122048614d735ee2d5f3ddfc61ff78ae3c2c174f9509333ca3a8c2188348",
+      "public": "NX6ReiqEOZ5JGQ1_tQahgadRBiDCW4vxG5_3rMCGqZU",
+      "seed": "3dKpZw7XjPelJQ5fBGccUMDRflCSBibz4opbu2QfCDM"
+    },
+    "device_1": {
+      "alg": "ed25519",
+      "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+      "public": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U",
+      "seed": "jXx9yTsmkEpHJ20dstSmCSShIu1RADHjUGzlBEElMUs"
+    },
+    "kit_a": {
+      "alg": "ed25519",
+      "kid": "sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557",
+      "public": "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI",
+      "seed": "zRsg9S7s15ZZ4Fulxt_RArIdXRqLKyjJGE7oLorzMJk"
+    },
+    "passkey_1": {
+      "alg": "es256",
+      "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+      "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+      "private": "h0iSkk4fcu97zUhJ-80D8JiMs71fdmY2Z8jPLHhHSKk",
+      "public": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+    },
+    "passkey_2": {
+      "alg": "es256",
+      "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+      "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+      "private": "c5PnyHrFSLi_65nA2oQuUQkcEUuN4ir5oK0nh67pXwE",
+      "public": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+    },
+    "stranger": {
+      "alg": "ed25519",
+      "kid": "sha256:a496f9a75035947fb57a6ccd71d87c2d0b9d83b40f6e7c580faa74c522b02388",
+      "public": "o8OOZTNaPxxzM-21WDDLcgTezPO5KIjS5Nkm7Zf_BQ8",
+      "seed": "WOZtr7KcMnT6MKU9rjLhnkb5maPc5glSFUk4q5Mwu-E"
+    }
+  },
+  "lifetime_ms": 300000,
+  "max_fragment_bytes": 32768,
+  "protocol": "cyfr-sign-in/v1",
+  "purposes": [
+    "sign_in",
+    "confirm",
+    "registry"
+  ],
+  "registry_output": {
+    "answer": "passkey_registry",
+    "bytes": "{\"body\":{\"handle\":\"alice\"},\"expires_at\":1790000120000,\"identifier\":\"per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690\",\"nonce\":\"zSr-0iXEzWJrLok1TrsFrg\",\"operation\":\"handle.claim\",\"protocol\":\"cyfr-registry-request/v2\",\"registry\":\"cyfr.run\",\"sig\":{\"authenticator_data\":\"cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw\",\"client_data\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiQW9raDhMUHEwWHBBcWRHZlhjZ1MzMEk3X2E5TW1ENGpwdUxGQjZEQnNOMCIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9\",\"signature\":\"MEYCIQCr2FTLZ1xclnF6cfDPBYt-dvbDkE3ldXzqH0mGbyCBcgIhAKCRBlBObnFvRHFzjw5AaNk552VoFUnyCCipPxqTJQgU\"},\"signer\":\"sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8\"}",
+    "now_ms": 1790000001000,
+    "registry": {
+      "directory": "https://cyfr.run",
+      "host": "cyfr.run"
+    },
+    "request": "registry"
+  },
+  "request_refusals": [
+    {
+      "error": "unknown_field",
+      "name": "an unknown field",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return",
+        "session": "abc"
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "no return",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in"
+      }
+    },
+    {
+      "error": "wrong_protocol",
+      "name": "another protocol",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v2",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "an unknown purpose",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "join",
+        "return": "https://alice.example/sign-in/return"
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a confirmation without its subject",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "syfqipkZcMUKFVYSbg1h99BQe3EwQBLEYw2RPDD0zlo",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "confirm",
+        "return": "https://alice.example/confirm/return"
+      }
+    },
+    {
+      "error": "unknown_field",
+      "name": "a sign-in carrying a subject",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return",
+        "subject": "sha256:88beaba6955b1a33a8f18c208beb4d7bd3e76a6fc6eaa4bb99499b14401bfe50"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a subject that is not a digest",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "syfqipkZcMUKFVYSbg1h99BQe3EwQBLEYw2RPDD0zlo",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "confirm",
+        "return": "https://alice.example/confirm/return",
+        "subject": "confirmation-1"
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a registry signature without its request",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "PUF9es3srsPfS9rlq_tVgXbUtGj_ciIeSJBFUKZ1j88",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "registry",
+        "return": "https://alice.example/registry/return"
+      }
+    },
+    {
+      "error": "unknown_field",
+      "name": "a sign-in carrying a registry request",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "registry_request": {
+          "body": {
+            "handle": "alice"
+          },
+          "expires_at": 1790000120000,
+          "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+          "nonce": "zSr-0iXEzWJrLok1TrsFrg",
+          "operation": "handle.claim",
+          "protocol": "cyfr-registry-request/v2",
+          "registry": "cyfr.run",
+          "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+        },
+        "return": "https://alice.example/sign-in/return"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a registry request that is signed",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "PUF9es3srsPfS9rlq_tVgXbUtGj_ciIeSJBFUKZ1j88",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "registry",
+        "registry_request": {
+          "body": {
+            "handle": "alice"
+          },
+          "expires_at": 1790000120000,
+          "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+          "nonce": "zSr-0iXEzWJrLok1TrsFrg",
+          "operation": "handle.claim",
+          "protocol": "cyfr-registry-request/v2",
+          "registry": "cyfr.run",
+          "sig": {
+            "authenticator_data": "cr0BRLycqhPLv6JGRP8PRvJ0j-V-YG4yP73noXLM-kcFAAAABw",
+            "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiQW9raDhMUHEwWHBBcWRHZlhjZ1MzMEk3X2E5TW1ENGpwdUxGQjZEQnNOMCIsIm9yaWdpbiI6Imh0dHBzOi8vY3lmci5ydW4iLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+            "signature": "MEYCIQCr2FTLZ1xclnF6cfDPBYt-dvbDkE3ldXzqH0mGbyCBcgIhAKCRBlBObnFvRHFzjw5AaNk552VoFUnyCCipPxqTJQgU"
+          },
+          "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+        },
+        "return": "https://alice.example/registry/return"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a registry request of another protocol",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "PUF9es3srsPfS9rlq_tVgXbUtGj_ciIeSJBFUKZ1j88",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "registry",
+        "registry_request": {
+          "body": {
+            "handle": "alice"
+          },
+          "expires_at": 1790000120000,
+          "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+          "nonce": "zSr-0iXEzWJrLok1TrsFrg",
+          "operation": "handle.claim",
+          "protocol": "cyfr-registry-request/v1",
+          "registry": "cyfr.run",
+          "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+        },
+        "return": "https://alice.example/registry/return"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a challenge of 31 bytes",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "an audience with a trailing slash",
+      "request": {
+        "audience": "https://alice.example/",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a return on another origin",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://evil.example/sign-in/return"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a return with a query",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return?next=/"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a return with a fragment",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return#x"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a negative expiry",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": -1,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return"
+      }
+    }
+  ],
+  "requests": {
+    "another_sign_in": {
+      "digest": "cBdN5AHfKqHbYbBdYSEsrao97YxMORHtPlvtJbtoMu8",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "RPAMolAgoN4vvAUTLKkhZ7f15tyKfKxbDzaRVMFrpog",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return"
+      }
+    },
+    "confirm": {
+      "digest": "wUc7qFZsEXrVZfS4CuhFUljN4uFPTqpd-JYc-rMYkwY",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "syfqipkZcMUKFVYSbg1h99BQe3EwQBLEYw2RPDD0zlo",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "confirm",
+        "return": "https://alice.example/confirm/return",
+        "subject": "sha256:88beaba6955b1a33a8f18c208beb4d7bd3e76a6fc6eaa4bb99499b14401bfe50"
+      }
+    },
+    "registry": {
+      "digest": "Aokh8LPq0XpAqdGfXcgS30I7_a9MmD4jpuLFB6DBsN0",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "PUF9es3srsPfS9rlq_tVgXbUtGj_ciIeSJBFUKZ1j88",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "registry",
+        "registry_request": {
+          "body": {
+            "handle": "alice"
+          },
+          "expires_at": 1790000120000,
+          "identifier": "per_606daec668ee4c29dea1488f00880757b4724753e7b90fa1505e5d9a70548690",
+          "nonce": "zSr-0iXEzWJrLok1TrsFrg",
+          "operation": "handle.claim",
+          "protocol": "cyfr-registry-request/v2",
+          "registry": "cyfr.run",
+          "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+        },
+        "return": "https://alice.example/registry/return"
+      }
+    },
+    "registry_for_another_account": {
+      "digest": "q8o1Cjyy-JkhJUXNrmmePDGlML3S2ZOzkuMwnPv0Bvs",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "s6oVjekCZWvRAMJv2V_vwDYB3suSNkvrjwAkX1qTB-Y",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "registry",
+        "registry_request": {
+          "body": {
+            "handle": "bob"
+          },
+          "expires_at": 1790000120000,
+          "identifier": "per_c94c269354a3c08012185ad334b02ed26d15b650d7a802210a8f55671a6ae37c",
+          "nonce": "_ttldcOW_bQeT_JA-Wd5XA",
+          "operation": "handle.claim",
+          "protocol": "cyfr-registry-request/v2",
+          "registry": "cyfr.run",
+          "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+        },
+        "return": "https://alice.example/registry/return"
+      }
+    },
+    "sign_in": {
+      "digest": "uDnWuTC94wTlxe7OMIXmbzvd7Psl2hLGQxeStaZe03I",
+      "request": {
+        "audience": "https://alice.example",
+        "challenge": "40TnzdwVxRFZO0oh7YFmRxqqM5UVi8LTSsSROIVTJ2k",
+        "expires_at": 1790000300000,
+        "protocol": "cyfr-sign-in/v1",
+        "purpose": "sign_in",
+        "return": "https://alice.example/sign-in/return"
+      }
+    }
+  },
+  "verify": [
+    {
+      "answer": "passkey_sign_in",
+      "home": "https://alice.example",
+      "name": "a passkey signs in",
+      "now_ms": 1790000001000,
+      "request": "sign_in",
+      "result": "ok"
+    },
+    {
+      "answer": "device_sign_in",
+      "home": "https://alice.example",
+      "name": "a device signs in",
+      "now_ms": 1790000001000,
+      "request": "sign_in",
+      "result": "ok"
+    },
+    {
+      "answer": "passkey_confirm",
+      "home": "https://alice.example",
+      "name": "a passkey confirms",
+      "now_ms": 1790000001000,
+      "request": "confirm",
+      "result": "ok"
+    },
+    {
+      "answer": "device_confirm",
+      "home": "https://alice.example",
+      "name": "a device confirms",
+      "now_ms": 1790000001000,
+      "request": "confirm",
+      "result": "ok"
+    },
+    {
+      "answer": "passkey_registry",
+      "home": "https://alice.example",
+      "name": "a passkey signs a registry request",
+      "now_ms": 1790000001000,
+      "request": "registry",
+      "result": "ok"
+    },
+    {
+      "answer": "passkey_sign_in",
+      "home": "https://alice.example",
+      "name": "the last millisecond before the request expires",
+      "now_ms": 1790000299999,
+      "request": "sign_in",
+      "result": "ok"
+    },
+    {
+      "answer": "passkey_sign_in",
+      "error": "unknown_challenge",
+      "home": "https://alice.example",
+      "name": "an answer to another request",
+      "now_ms": 1790000001000,
+      "request": "another_sign_in"
+    },
+    {
+      "answer": "passkey_sign_in",
+      "error": "expired",
+      "home": "https://alice.example",
+      "name": "an answer once the request expired",
+      "now_ms": 1790000300000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_sign_in",
+      "error": "wrong_audience",
+      "home": "https://hub.example",
+      "name": "an answer at a CYFR the request was not minted for",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_naming_another_account",
+      "error": "wrong_identifier",
+      "home": "https://alice.example",
+      "name": "a passkey answer naming another account",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_the_log_does_not_list",
+      "error": "unknown_key",
+      "home": "https://alice.example",
+      "name": "a passkey the log does not list",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_under_a_listed_credential_id",
+      "error": "bad_signature",
+      "home": "https://alice.example",
+      "name": "another passkey under a listed credential id",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_registration",
+      "error": "wrong_type",
+      "home": "https://alice.example",
+      "name": "a registration's client data",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_over_another_request",
+      "error": "wrong_challenge",
+      "home": "https://alice.example",
+      "name": "an assertion over another request",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_at_another_origin",
+      "error": "wrong_origin",
+      "home": "https://alice.example",
+      "name": "an assertion made at another origin",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_cross_origin",
+      "error": "cross_origin",
+      "home": "https://alice.example",
+      "name": "an assertion made cross-origin",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_for_another_relying_party",
+      "error": "wrong_rp",
+      "home": "https://alice.example",
+      "name": "an assertion for another relying party",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_without_user_presence",
+      "error": "user_not_present",
+      "home": "https://alice.example",
+      "name": "an assertion without user presence",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_without_user_verification",
+      "error": "user_not_verified",
+      "home": "https://alice.example",
+      "name": "an assertion without user verification",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_altered",
+      "error": "bad_signature",
+      "home": "https://alice.example",
+      "name": "an assertion whose authenticator data was altered",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "passkey_registry_for_another_account",
+      "error": "wrong_identifier",
+      "home": "https://alice.example",
+      "name": "a registry answer for another account's request",
+      "now_ms": 1790000001000,
+      "request": "registry_for_another_account"
+    },
+    {
+      "answer": "device_registry",
+      "error": "wrong_purpose",
+      "home": "https://alice.example",
+      "name": "a device answering a registry request",
+      "now_ms": 1790000001000,
+      "request": "registry"
+    },
+    {
+      "answer": "device_forged",
+      "error": "bad_signature",
+      "home": "https://alice.example",
+      "name": "a device answer naming a listed device, signed by another key",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "device_the_log_does_not_list",
+      "error": "unknown_key",
+      "home": "https://alice.example",
+      "name": "a device the log does not list",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    },
+    {
+      "answer": "device_naming_a_passkey",
+      "error": "unknown_key",
+      "home": "https://alice.example",
+      "name": "a device answer naming a passkey's kid",
+      "now_ms": 1790000001000,
+      "request": "sign_in"
+    }
+  ]
+}

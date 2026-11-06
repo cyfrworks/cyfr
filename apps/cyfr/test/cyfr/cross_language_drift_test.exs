@@ -602,6 +602,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/runner_relay_test.exs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
+    "sign_in.json" => [
+      {"apps/prima/test/prima/sign_in_test.exs",
+       ~w(answer_refusals answers challenge_bytes directory fragments home identity keys lifetime_ms max_fragment_bytes protocol purposes registry_output request_refusals requests verify)}
+    ],
     "tincture_wire.json" => [
       {"apps/cyfr/assets/test/canvas/hook.test.mjs", ~w(shell shell_invalid canvas.handshake)},
       {"apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs", ~w(stream_rejections)},
