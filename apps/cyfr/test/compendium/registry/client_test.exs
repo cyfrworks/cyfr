@@ -62,16 +62,8 @@ defmodule Compendium.Registry.ClientTest do
   # Registry endpoint error paths against an unreachable host.
 
   describe "signed/3 - error handling" do
-    test "a person with no identifier is refused before anything is sent" do
+    test "every operation is refused, this CYFR holding no key, and nothing is written" do
       user = Sanctum.Test.RegistryStub.person!()
-
-      assert {:error, :not_enrolled} =
-               Client.signed(user.id, "handle.claim", %{"handle" => "alice"})
-    end
-
-    test "an unreachable registry is unavailable for every operation, and nothing is written" do
-      user = Sanctum.Test.RegistryStub.person!()
-      Sanctum.Test.RegistryStub.enroll!(user.id)
 
       for {operation, body} <- [
             {"handle.claim", %{"handle" => "alice"}},
@@ -82,8 +74,7 @@ defmodule Compendium.Registry.ClientTest do
             {"publisher.claim", %{"slug" => "acme.com"}},
             {"publisher.verify", %{"slug" => "acme.com", "label" => "laptop"}}
           ] do
-        assert {:error, :registry_unavailable} = Client.signed(user.id, operation, body),
-               operation
+        assert {:error, :remote} = Client.signed(user.id, operation, body), operation
       end
 
       assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user.id)

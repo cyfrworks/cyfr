@@ -754,27 +754,6 @@ defmodule Compendium.Registry.ClientSyncTest do
       end
     end
 
-    test "a signed mint's tokens are redacted" do
-      user = Sanctum.Test.RegistryStub.person!()
-      Sanctum.Test.RegistryStub.enroll!(user.id)
-
-      Sanctum.Test.RegistryStub.start!(fn _ ->
-        {200,
-         Jason.encode!(%{
-           "personal_namespace" => %{"slug" => "alice", "token" => @raw_token},
-           "memberships" => []
-         })}
-      end)
-
-      log =
-        with_info_log(fn ->
-          {:ok, _} = Client.signed(user.id, "tokens.mint", %{"label" => "l"})
-        end)
-
-      assert log =~ "[REDACTED]"
-      refute log =~ @raw_token
-    end
-
     test "issue_additional_token — token is redacted", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/namespaces/alice/tokens", fn conn ->
         json_resp(conn, 200, %{

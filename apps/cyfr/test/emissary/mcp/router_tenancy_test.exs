@@ -114,8 +114,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
                 {"aqua", "list"},
                 {"aqua", "get"},
                 {"aqua", "create"},
-                {"registry", "sync"},
-                {"registry", "register"}
+                {"registry", "sync"}
               ] do
             assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
                    "#{tool}.#{action} answered an anonymous caller"
@@ -141,15 +140,6 @@ defmodule Emissary.MCP.RouterTenancyTest do
             refute auth_refused?(Router.dispatch(ctx, tool_call_msg("registry", action))),
                    "registry.#{action} refused a signed-in person ahead of the claim"
           end
-
-          # The tier admits `register` too; its handler then answers for the
-          # person's own enrollment, which a context with no authentication
-          # (a denied person's session) does not reach.
-          assert {:error, :auth_required, message} =
-                   Router.dispatch(ctx, tool_call_msg("registry", "register"))
-
-          refute message =~ "requires authentication",
-                 "registry.register refused at the tier a signed-in person ahead of the claim"
 
           for {tool, action} <- [{"aqua", "list"}, {"component", "list"}, {"registry", "whoami"}] do
             assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
