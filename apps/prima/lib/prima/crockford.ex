@@ -5,8 +5,7 @@ defmodule Prima.Crockford do
   @moduledoc """
   Crockford base32, the alphabet a person reads back to a screen:
   `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, five bits a symbol, most significant
-  bits first. It is spelled here once, for `Prima.RecoveryCode` and for
-  `Prima.PersonAssertion.comparison_code/1`.
+  bits first. It is spelled here once, for `Prima.RecoveryCode`.
 
   `encode/1` takes a bitstring whose size is a multiple of five.
   `decode/1` reads the uppercase alphabet and, as Crockford base32 does,

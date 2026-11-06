@@ -384,9 +384,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "carry.json" => [
       {"apps/cyfr/assets/test/carrier/carry.test.mjs",
-       ~w(fragments.parse fragments.valid max_fragment_bytes payload returns)},
-      {"apps/prima/test/prima/carry_test.exs",
-       ~w(envelopes fragments identity keys max_fragment_bytes max_payload_bytes operations outcomes payload payload_digest protocol returns verify)}
+       ~w(fragments.parse fragments.valid max_fragment_bytes payload returns)}
     ],
     "component_refs.json" => [
       {"apps/codex/internal/ref/ref_fixture_test.go", ~w(cases version_ordering)},
@@ -398,8 +396,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/codex/internal/shell/certify_test.go", ~w(exchange)},
       {"apps/cyfr/assets/test/home_confirm/home_confirm.test.mjs",
        ~w(exchange.deciding exchange.home)},
-      {"apps/prima/test/prima/confirmation_assertion_test.exs",
-       ~w(assertions identity keys lifetime_ms protocol record refusals verify)},
       {"apps/sanctum/test/sanctum/pairing_test.exs", ~w(exchange)}
     ],
     "confirmation.json" => [
@@ -489,7 +485,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # SHA-256), outside this roster's reach.
     "identity.json" => [
       {"apps/prima/test/prima/identity_test.exs",
-       ~w(chains directory entries identifiers keys kinds kits locate max_entry_bytes prefix protocol requests)}
+       ~w(chains directory entries identifiers keys kinds kits max_entry_bytes max_keys max_recovery prefix protocol user_ids webauthn)}
     ],
     "keeper_protocol.json" => [
       {"apps/cyfr/test/opus/programs/definition_test.exs", ~w(reserved_env_prefixes)},
@@ -554,10 +550,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"seed/components/catalysts/local/claude-code/0.1.0/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)}
     ],
-    "person_assertion.json" => [
-      {"apps/prima/test/prima/person_assertion_test.exs",
-       ~w(assertions identity keys protocol refusals transport verify)}
-    ],
     "access_modes.json" => [
       {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
       {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
@@ -596,9 +588,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "restore_kit.json" => [
       {"apps/cyfr/assets/test/system_layer/recovery.test.mjs",
        ~w(challenge_bytes kit other_kit protocol refused valid)},
-      {"apps/cyfr/test/sanctum/restore_kit_proof_test.exs", ~w(kit refused valid)},
-      {"apps/prima/test/prima/identity_restore_kit_test.exs",
-       ~w(challenge_bytes kit other_kit protocol refused valid)}
+      {"apps/cyfr/test/sanctum/restore_kit_proof_test.exs", ~w(kit refused valid)}
     ],
     "runner_control.json" => [
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
@@ -714,17 +704,17 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # Planted: a reader of another file, a section it does not read, and a
     # file that is gone are each reported.
     planted = %{
-      "carry.json" => [
-        {"apps/prima/test/prima/layout_test.exs", ~w(fragments)},
-        {"apps/prima/test/prima/carry_test.exs", ~w(no_such_section)},
-        {"apps/prima/test/prima/planted_test.exs", ~w(fragments)}
+      "recovery_code.json" => [
+        {"apps/prima/test/prima/layout_test.exs", ~w(spellings)},
+        {"apps/prima/test/prima/recovery_code_test.exs", ~w(no_such_section)},
+        {"apps/prima/test/prima/planted_test.exs", ~w(spellings)}
       ]
     }
 
     assert unread(planted) == [
-             "apps/prima/test/prima/layout_test.exs does not read carry.json",
-             "apps/prima/test/prima/layout_test.exs does not read carry.json's fragments",
-             "apps/prima/test/prima/carry_test.exs does not read carry.json's no_such_section",
+             "apps/prima/test/prima/layout_test.exs does not read recovery_code.json",
+             "apps/prima/test/prima/layout_test.exs does not read recovery_code.json's spellings",
+             "apps/prima/test/prima/recovery_code_test.exs does not read recovery_code.json's no_such_section",
              "apps/prima/test/prima/planted_test.exs is gone"
            ]
   end

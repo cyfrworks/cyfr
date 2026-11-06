@@ -4,20 +4,20 @@
 defmodule Prima.RegistryRequestTest do
   @moduledoc """
   The registry request as data (`tests/fixtures/registry_wire.json`, which
-  the registry at cyfr.run reads too): every key derives from its seed,
-  the identity walks to each head with its `key_epoch` and
-  `recovery_epoch`, every request re-signs to its bytes from its fields
-  and seed, one for each operation; every request is checked as the
-  registry checks it, under a head and a clock, to its result or refusal,
-  in the order the protocol fixes; every refusal that needs no database is
-  reached by its input, and the signer refuses the same malformed fields
-  before it signs anything.
+  the registry at cyfr.run reads too): every key derives from its seed or
+  scalar, the identity walks to each head, every request an Ed25519 key
+  signed re-signs to its bytes from its fields and seed and every passkey's
+  attaches to its bytes, one for each operation; every request is checked
+  as the registry checks it, under a head and a clock, to its result or
+  refusal, in the order the protocol fixes; every refusal that needs no
+  database is reached by its input, and the signer refuses the same
+  malformed fields before it signs anything.
   """
 
   use ExUnit.Case, async: true
 
   alias Prima.{ComponentRef, Identity, RegistryRequest}
-  alias Prima.Identity.{Encoding, RecoverRequest}
+  alias Prima.Identity.{Encoding, State, WebAuthn}
 
   @vectors Path.expand("../../../../tests/fixtures/registry_wire.json", __DIR__)
 
@@ -29,6 +29,7 @@ defmodule Prima.RegistryRequestTest do
   end
 
   defp private(v, name), do: unb64(v["keys"][name]["seed"])
+  defp ed25519?(v, signer), do: is_binary(signer) and v["keys"][signer]["alg"] == "ed25519"
 
   # The signature convention, spelled independently of Prima.Identity.Encoding.
   defp raw_signature(map, private_key) do
@@ -78,7 +79,7 @@ defmodule Prima.RegistryRequestTest do
       registry: map["registry"],
       operation: map["operation"],
       identifier: map["identifier"],
-      key_epoch: map["key_epoch"],
+      signer: map["signer"],
       nonce: unb64(map["nonce"]),
       expires_at: map["expires_at"],
       body: map["body"]
@@ -86,7 +87,7 @@ defmodule Prima.RegistryRequestTest do
   end
 
   test "the protocol's constants" do
-    assert RegistryRequest.protocol() == "cyfr-registry-request/v1"
+    assert RegistryRequest.protocol() == "cyfr-registry-request/v2"
     assert RegistryRequest.max_bytes() == 16_384
     assert RegistryRequest.nonce_bytes() == 16
     assert RegistryRequest.lifetime_ms() == 120_000
@@ -96,64 +97,63 @@ defmodule Prima.RegistryRequestTest do
              ~w(appeal.file handle.claim policy.accept publisher.claim publisher.verify tokens.mint)
   end
 
-  test "every public key derives from its seed" do
-    for {name, %{"seed" => seed, "public" => public}} <- vectors()["keys"] do
-      {derived, _private} = :crypto.generate_key(:eddsa, :ed25519, unb64(seed))
+  test "every public key derives from its seed or scalar" do
+    for {name, %{"alg" => alg, "public" => public} = key} <- vectors()["keys"] do
+      derived =
+        case alg do
+          "ed25519" -> elem(:crypto.generate_key(:eddsa, :ed25519, unb64(key["seed"])), 0)
+          "es256" -> elem(:crypto.generate_key(:ecdh, :secp256r1, unb64(key["private"])), 0)
+        end
+
       assert Encoding.b64(derived) == public, name
+      assert Identity.kid(derived) == key["kid"], name
     end
   end
 
-  test "every entry re-signs to its bytes, and each head is its walk's" do
+  test "every entry an Ed25519 key signed re-signs to its bytes, and each head is its walk's" do
     v = vectors()
 
     for {name, %{"entry" => entry, "hash" => hash, "signer" => signer}} <-
           v["identity"]["entries"] do
-      signed = if entry["kind"] == "recover", do: entry["request"], else: entry
-      assert signed["sig"] == raw_signature(signed, private(v, signer)), name
+      if ed25519?(v, signer),
+        do: assert(entry["sig"] == raw_signature(entry, private(v, signer)), name)
+
       assert {:ok, decoded} = Identity.Entry.decode(entry)
       assert Identity.hash(decoded) == hash, name
     end
 
-    {:ok, recover} =
-      RecoverRequest.decode(v["identity"]["entries"]["recover"]["entry"]["request"])
-
-    assert recover.live_key != head(v, "rotated").live_key
-
     for {name, expected} <- v["identity"]["heads"] do
-      state = head(v, name)
-      assert state.identifier == expected["identifier"], name
-      assert state.directory == expected["directory"], name
-      assert state.key_epoch == expected["key_epoch"], name
-      assert state.recovery_epoch == expected["recovery_epoch"], name
-      assert Encoding.b64(state.live_key) == expected["live_key"], name
+      assert State.encode(head(v, name)) == Map.delete(expected, "entries"), name
     end
-
-    heads = v["identity"]["heads"]
-    # A rotation moves key_epoch and keeps recovery_epoch; a recovery that
-    # replaces the live key moves both.
-    assert heads["rotated"]["key_epoch"] != heads["genesis"]["key_epoch"]
-    assert heads["rotated"]["recovery_epoch"] == heads["genesis"]["recovery_epoch"]
-    assert heads["recovered"]["recovery_epoch"] != heads["rotated"]["recovery_epoch"]
   end
 
-  test "every request re-signs to its bytes from its fields and seed, one for each operation" do
+  test "every request re-signs or attaches to its bytes from its fields, one for each operation" do
     v = vectors()
 
     for {name, %{"request" => map, "signer" => signer}} <- v["requests"] do
-      assert map["sig"] == raw_signature(map, private(v, signer)), name
       assert {:ok, request} = new(map)
       bytes = Encoding.jcs!(map)
 
       # A request whose escaped bytes pass the size bound the signer refuses,
       # as the registry does.
-      if byte_size(bytes) > RegistryRequest.max_bytes() do
-        assert RegistryRequest.sign(request, private(v, signer)) == {:error, :request_malformed},
-               name
-      else
-        assert RegistryRequest.sign(request, private(v, signer)) == {:ok, bytes}, name
-      end
+      expected = if byte_size(bytes) > RegistryRequest.max_bytes(), do: :error, else: :ok
 
-      assert RegistryRequest.encode(%{request | sig: unb64(map["sig"])}) == map, name
+      cond do
+        ed25519?(v, signer) ->
+          assert map["sig"] == raw_signature(map, private(v, signer)), name
+          sent = RegistryRequest.sign(request, private(v, signer))
+          assert sent == if(expected == :ok, do: {:ok, bytes}, else: {:error, :request_malformed})
+          assert RegistryRequest.encode(%{request | sig: unb64(map["sig"])}) == map, name
+
+        is_binary(signer) ->
+          {:ok, assertion} = WebAuthn.decode(map["sig"])
+          client = Jason.decode!(assertion.client_data)
+          assert client["challenge"] == Encoding.b64(RegistryRequest.challenge(request)), name
+          assert RegistryRequest.attach(request, assertion) == {:ok, bytes}, name
+
+        true ->
+          :ok
+      end
     end
 
     operations =
@@ -188,7 +188,7 @@ defmodule Prima.RegistryRequestTest do
     reached = v["refusals"] |> Enum.map(& &1["error"]) |> Enum.uniq() |> Enum.sort()
 
     assert reached ==
-             ~w(bad_signature expired expiry_too_far request_malformed stale_key_epoch unknown_identity unknown_operation wrong_directory wrong_protocol wrong_registry)
+             ~w(bad_signature expired expiry_too_far request_malformed unknown_identity unknown_operation wrong_directory wrong_protocol wrong_registry)
   end
 
   test "every refusal has one name, the registry's code and its status, as the vectors spell them" do
@@ -252,7 +252,8 @@ defmodule Prima.RegistryRequestTest do
     # A body of the wrong shape, and fields the wrong shape.
     assert {:error, :request_malformed} = new(Map.put(valid, "body", ["alice"]))
     assert {:error, :request_malformed} = new(Map.put(valid, "registry", "CYFR.RUN"))
-    assert {:error, :request_malformed} = new(Map.put(valid, "key_epoch", "epoch-1"))
+    assert {:error, :request_malformed} = new(Map.put(valid, "signer", "epoch-1"))
+    assert {:error, :request_malformed} = new(Map.put(valid, "signer", "recovery:epoch-1"))
     assert {:error, :request_malformed} = new(Map.put(valid, "expires_at", -1))
 
     assert {:error, :request_malformed} =
@@ -260,7 +261,7 @@ defmodule Prima.RegistryRequestTest do
                registry: "cyfr.run",
                operation: "handle.claim",
                identifier: valid["identifier"],
-               key_epoch: valid["key_epoch"],
+               signer: valid["signer"],
                nonce: :binary.copy(<<1>>, 15),
                expires_at: valid["expires_at"],
                body: %{"handle" => "alice"}
@@ -283,15 +284,15 @@ defmodule Prima.RegistryRequestTest do
           }
       })
 
-    assert RegistryRequest.sign(appeal, private(v, "alice_live_1")) ==
+    assert RegistryRequest.sign(appeal, private(v, "device_1")) ==
              {:error, :request_malformed}
   end
 
   test "each handle and publisher spelling is held to the slug grammar on both sides" do
     v = vectors()
     valid = v["requests"]["handle_claim"]["request"]
-    genesis = head(v, "genesis")
-    registry = %{host: "cyfr.run", directory: genesis.directory}
+    keyed = head(v, "keyed")
+    registry = %{host: "cyfr.run", directory: keyed.directory}
     now = valid["expires_at"] - 1
 
     for {kind, operation, key, grammar} <- [
@@ -311,35 +312,35 @@ defmodule Prima.RegistryRequestTest do
         {:error, reason} -> assert Atom.to_string(reason) == expected, spelling
       end
 
-      signed = fields |> Map.delete("sig") |> Encoding.sign(private(v, "alice_live_1"))
-      result = RegistryRequest.verify(Jason.encode!(signed), genesis, registry, now)
+      signed = fields |> Map.delete("sig") |> Encoding.sign(private(v, "device_1"))
+      result = RegistryRequest.verify(Jason.encode!(signed), keyed, registry, now)
       assert tag(result) == expected, spelling
     end
   end
 
   test "a request the signer makes now stands at the registry until its expiry" do
     v = vectors()
-    genesis = head(v, "genesis")
+    keyed = head(v, "keyed")
     now = 1_800_000_000_000
 
     {:ok, request} =
       RegistryRequest.new(
         registry: "cyfr.run",
         operation: "tokens.mint",
-        identifier: genesis.identifier,
-        key_epoch: genesis.key_epoch,
+        identifier: keyed.identifier,
+        signer: v["keys"]["device_1"]["kid"],
         nonce: :crypto.strong_rand_bytes(RegistryRequest.nonce_bytes()),
         expires_at: now + RegistryRequest.lifetime_ms(),
         body: %{"label" => "laptop"}
       )
 
-    {:ok, bytes} = RegistryRequest.sign(request, private(v, "alice_live_1"))
-    registry = %{host: "cyfr.run", directory: genesis.directory}
+    {:ok, bytes} = RegistryRequest.sign(request, private(v, "device_1"))
+    registry = %{host: "cyfr.run", directory: keyed.directory}
 
-    assert {:ok, verified} = RegistryRequest.verify(bytes, genesis, registry, now)
+    assert {:ok, verified} = RegistryRequest.verify(bytes, keyed, registry, now)
     assert %{verified | sig: nil} == request
 
     assert {:error, :expired} =
-             RegistryRequest.verify(bytes, genesis, registry, request.expires_at)
+             RegistryRequest.verify(bytes, keyed, registry, request.expires_at)
   end
 end

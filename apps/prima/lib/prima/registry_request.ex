@@ -4,15 +4,20 @@
 defmodule Prima.RegistryRequest do
   @moduledoc """
   The one signed request that carries every registry operation a person
-  makes, `cyfr-registry-request/v1`. `tests/fixtures/registry_wire.json`
+  makes, `cyfr-registry-request/v2`. `tests/fixtures/registry_wire.json`
   holds its vectors, which the registry's verifier reads too.
 
   A request is a JSON object of at most 16 KiB with exactly the keys
   `protocol`, `registry` (the registry's lowercase host), `operation`,
-  `identifier`, `key_epoch` (of the head the signing live key belongs
-  to), `nonce` (16 bytes), `expires_at` (Unix milliseconds), `body` and
-  `sig`, the live key's signature over the JCS bytes of every key but
-  `sig`, in the encodings of `Prima.Identity.Encoding`.
+  `identifier`, `signer` (a key the identifier's log lists, by its `kid`,
+  or `recovery:<kid>` for one of its recovery keys), `nonce` (16 bytes),
+  `expires_at` (Unix milliseconds), `body` and `sig`, in the encodings of
+  `Prima.Identity.Encoding`. `sig` is the signer's, over the JCS bytes of
+  every key but `sig`: an Ed25519 signature over those bytes for a device
+  or recovery key (`sign/2`), or a passkey's `Prima.Identity.WebAuthn`
+  assertion whose challenge is their SHA-256 (`challenge/1`, `attach/2`).
+  `policy.accept` precedes a person's first `handle.claim`; at an
+  account's birth both are signed by its recovery key.
 
   Each operation's body holds exactly its keys:
 
@@ -41,11 +46,15 @@ defmodule Prima.RegistryRequest do
        keys and valid values (`:request_malformed`);
     5. `expires_at`: `:expired` at or before the clock, `:expiry_too_far`
        more than `max_ahead_ms/0` after it;
-    6. the head the registry read for the request's identifier: a head of
-       another identifier is no log of this one, `:unknown_identity`;
+    6. the head the registry read for the request's identifier at the
+       directory it is configured with: a head of another identifier is no
+       log of this one, `:unknown_identity`;
     7. the head's directory against the registry's: `:wrong_directory`;
-    8. `key_epoch` against the head's: `:stale_key_epoch`;
-    9. the signature under the head's live key: `:bad_signature`.
+    8. the signature by the signer, a key or recovery key the head lists,
+       checked as `Prima.Identity` checks an entry's (a passkey's at the
+       registry's directory): `:bad_signature` for a signer the head does
+       not list, a `sig` of the other algorithm's shape, or a signature
+       that does not verify.
 
   The refusals after these (a replayed nonce, a ban and the operations'
   own rules) need the registry's database and are the registry's alone.
@@ -62,14 +71,15 @@ defmodule Prima.RegistryRequest do
   """
 
   alias Prima.ComponentRef
-  alias Prima.Identity.{Encoding, State}
+  alias Prima.Identity.{Encoding, Key, State, WebAuthn}
 
-  @protocol "cyfr-registry-request/v1"
+  @protocol "cyfr-registry-request/v2"
   @max_bytes 16_384
   @nonce_bytes 16
   @lifetime_ms 120_000
   @max_ahead_ms 360_000
-  @envelope ~w(protocol registry operation identifier key_epoch nonce expires_at body)
+  @envelope ~w(protocol registry operation identifier signer nonce expires_at body)
+  @signer ~r/\A(?:recovery:)?sha256:[0-9a-f]{64}\z/
 
   # Each operation's body: its required keys and its optional keys. `valid?/2`
   # checks each value by its key.
@@ -93,7 +103,6 @@ defmodule Prima.RegistryRequest do
     unknown_identity: {"UNKNOWN_IDENTITY", 404},
     directory_unavailable: {"DIRECTORY_UNAVAILABLE", 503},
     wrong_directory: {"WRONG_DIRECTORY", 403},
-    stale_key_epoch: {"STALE_KEY_EPOCH", 409},
     bad_signature: {"BAD_SIGNATURE", 401},
     replayed: {"REPLAYED", 409},
     banned: {"IDENTITY_BANNED", 403},
@@ -154,22 +163,21 @@ defmodule Prima.RegistryRequest do
           | :expiry_too_far
           | :unknown_identity
           | :wrong_directory
-          | :stale_key_epoch
           | :bad_signature
 
   @type t :: %__MODULE__{
           registry: String.t(),
           operation: operation(),
           identifier: String.t(),
-          key_epoch: String.t(),
+          signer: String.t(),
           nonce: binary(),
           expires_at: non_neg_integer(),
           body: %{String.t() => term()},
-          sig: binary() | nil
+          sig: binary() | WebAuthn.t() | nil
         }
 
-  @enforce_keys [:registry, :operation, :identifier, :key_epoch, :nonce, :expires_at, :body]
-  defstruct [:registry, :operation, :identifier, :key_epoch, :nonce, :expires_at, :body, sig: nil]
+  @enforce_keys [:registry, :operation, :identifier, :signer, :nonce, :expires_at, :body]
+  defstruct [:registry, :operation, :identifier, :signer, :nonce, :expires_at, :body, sig: nil]
 
   @doc "The protocol string a request carries."
   @spec protocol() :: String.t()
@@ -236,28 +244,40 @@ defmodule Prima.RegistryRequest do
   not take is refused even when its value is nil). A field of the wrong
   shape answers `:request_malformed` and an operation this protocol does
   not know `:unknown_operation`, as the registry would. Sign it with
-  `sign/2`.
+  `sign/2`, or attach a passkey's assertion over `challenge/1` with
+  `attach/2`.
   """
   @spec new(map() | keyword()) :: {:ok, t()} | {:error, :request_malformed | :unknown_operation}
   def new(attrs) do
     attrs = Map.new(attrs)
 
-    map =
+    unsigned(
       Encoding.compact(%{
         "protocol" => @protocol,
         "registry" => attrs[:registry],
         "operation" => attrs[:operation],
         "identifier" => attrs[:identifier],
-        "key_epoch" => attrs[:key_epoch],
+        "signer" => attrs[:signer],
         "nonce" => is_binary(attrs[:nonce]) && Encoding.b64(attrs[:nonce]),
         "expires_at" => attrs[:expires_at],
         "body" => attrs[:body]
       })
+    )
+  end
 
+  @doc """
+  Read an unsigned request from its JSON map, held as `new/1` holds its
+  fields: the request a passkey or a terminal is asked to sign.
+  """
+  @spec unsigned(term()) ::
+          {:ok, t()} | {:error, :request_malformed | :wrong_protocol | :unknown_operation}
+  def unsigned(map) when is_map(map) and not is_struct(map) do
     with {:ok, request} <- read(map, false),
          :ok <- body(request),
          do: {:ok, request}
   end
+
+  def unsigned(_value), do: {:error, :request_malformed}
 
   @doc "The JSON map of a request; `sig` is absent while unsigned."
   @spec encode(t()) :: map()
@@ -267,38 +287,59 @@ defmodule Prima.RegistryRequest do
       "registry" => request.registry,
       "operation" => request.operation,
       "identifier" => request.identifier,
-      "key_epoch" => request.key_epoch,
+      "signer" => request.signer,
       "nonce" => Encoding.b64(request.nonce),
       "expires_at" => request.expires_at,
       "body" => request.body,
-      "sig" => request.sig && Encoding.b64(request.sig)
+      "sig" => encode_sig(request.sig)
     })
   end
 
+  defp encode_sig(nil), do: nil
+  defp encode_sig(sig) when is_binary(sig), do: Encoding.b64(sig)
+  defp encode_sig(sig), do: WebAuthn.encode(sig)
+
+  @doc "The bytes a request's signer signs: its JCS form without `sig`."
+  @spec signing_bytes(t()) :: binary()
+  def signing_bytes(%__MODULE__{} = request),
+    do: %{request | sig: nil} |> encode() |> Encoding.jcs!()
+
+  @doc "A passkey's WebAuthn challenge for a request: SHA-256 of its `signing_bytes/1`."
+  @spec challenge(t()) :: binary()
+  def challenge(%__MODULE__{} = request), do: :crypto.hash(:sha256, signing_bytes(request))
+
   @doc """
-  Sign a request with the person's live private key: the bytes the signer
-  sends, the JCS form of the request with its `sig`. A request whose bytes
-  would exceed `max_bytes/0` (JSON escaping can make a body that fits its
-  own bounds larger) is `:request_malformed`, as the registry would answer
-  it.
+  Sign a request with an Ed25519 private key, a device's or a recovery
+  key's: the bytes the signer sends, the JCS form of the request with its
+  `sig`. A request whose bytes would exceed `max_bytes/0` (JSON escaping
+  can make a body that fits its own bounds larger) is `:request_malformed`,
+  as the registry would answer it.
   """
   @spec sign(t(), binary()) :: {:ok, binary()} | {:error, :request_malformed}
-  def sign(%__MODULE__{} = request, live_private_key) do
-    bytes =
-      %{request | sig: nil}
-      |> encode()
-      |> Encoding.sign(live_private_key)
-      |> Encoding.jcs!()
+  def sign(%__MODULE__{} = request, private_key) do
+    sig = :crypto.sign(:eddsa, :none, signing_bytes(request), [private_key, :ed25519])
+    sent(%{request | sig: sig})
+  end
 
+  @doc """
+  Attach a passkey's assertion over `challenge/1` as a request's `sig`:
+  the bytes the signer sends, bounded as `sign/2`'s are.
+  """
+  @spec attach(t(), WebAuthn.t()) :: {:ok, binary()} | {:error, :request_malformed}
+  def attach(%__MODULE__{} = request, %{authenticator_data: _, client_data: _} = assertion),
+    do: sent(%{request | sig: assertion})
+
+  defp sent(request) do
+    bytes = request |> encode() |> Encoding.jcs!()
     if byte_size(bytes) > @max_bytes, do: {:error, :request_malformed}, else: {:ok, bytes}
   end
 
   @doc """
   Check the bytes of a request as the registry `registry` (its host and
-  the directory every identity it accepts names) does at `now` (Unix
-  milliseconds), under `head`, the state it verified from the log it read
-  at its directory for the request's identifier. Refusals in the
-  moduledoc's order.
+  the directory it is configured with, which every identity it accepts
+  names) does at `now` (Unix milliseconds), under `head`, the state it
+  verified from the log it read at that directory for the request's
+  identifier. Refusals in the moduledoc's order.
   """
   @spec verify(binary(), State.t(), registry(), integer()) :: {:ok, t()} | {:error, reason()}
   def verify(bytes, %State{} = head, %{host: host, directory: directory}, now)
@@ -310,8 +351,7 @@ defmodule Prima.RegistryRequest do
          :ok <- expiry(request.expires_at, now),
          :ok <- same(request.identifier, head.identifier, :unknown_identity),
          :ok <- same(head.directory, directory, :wrong_directory),
-         :ok <- same(request.key_epoch, head.key_epoch, :stale_key_epoch),
-         :ok <- signed(map, head.live_key) do
+         :ok <- signed(request, head) do
       {:ok, request}
     end
   end
@@ -336,7 +376,7 @@ defmodule Prima.RegistryRequest do
          {:ok, registry} <- Encoding.check(map, "registry", &Encoding.host?/1),
          {:ok, operation} <- Encoding.check(map, "operation", &is_binary/1),
          {:ok, identifier} <- Encoding.check(map, "identifier", &Encoding.identifier?/1),
-         {:ok, key_epoch} <- Encoding.check(map, "key_epoch", &Encoding.digest?/1),
+         {:ok, signer} <- Encoding.check(map, "signer", &signer?/1),
          {:ok, nonce} <- Encoding.binary(map, "nonce", @nonce_bytes),
          {:ok, expires_at} <- Encoding.check(map, "expires_at", &Encoding.ms?/1),
          {:ok, body} <- Encoding.check(map, "body", &is_map/1),
@@ -347,7 +387,7 @@ defmodule Prima.RegistryRequest do
            registry: registry,
            operation: operation,
            identifier: identifier,
-           key_epoch: key_epoch,
+           signer: signer,
            nonce: nonce,
            expires_at: expires_at,
            body: body,
@@ -361,8 +401,22 @@ defmodule Prima.RegistryRequest do
     end
   end
 
+  defp signer?(value), do: is_binary(value) and Regex.match?(@signer, value)
+
   defp signature(_map, false), do: {:ok, nil}
-  defp signature(map, true), do: Encoding.binary(map, "sig", 64)
+
+  defp signature(map, true) do
+    case map["sig"] do
+      sig when is_binary(sig) ->
+        Encoding.binary(map, "sig", 64)
+
+      sig ->
+        case WebAuthn.decode(sig) do
+          {:ok, assertion} -> {:ok, assertion}
+          :error -> {:error, {:invalid_field, "sig"}}
+        end
+    end
+  end
 
   defp body(%__MODULE__{operation: operation, body: body}) do
     case Map.fetch(@bodies, operation) do
@@ -404,7 +458,36 @@ defmodule Prima.RegistryRequest do
   defp same(value, value, _reason), do: :ok
   defp same(_value, _expected, reason), do: {:error, reason}
 
-  defp signed(map, live_key) do
-    if Encoding.verify(map, live_key), do: :ok, else: {:error, :bad_signature}
+  # The signer must be one the head lists, and its `sig` the shape of its
+  # algorithm: Ed25519 over the signing bytes, or a passkey's assertion
+  # over their SHA-256 at the head's directory.
+  defp signed(%__MODULE__{signer: "recovery:" <> _ = signer, sig: sig} = request, head)
+       when is_binary(sig),
+       do: ed25519(request, sig, State.recovery_key(head, signer))
+
+  defp signed(%__MODULE__{signer: kid, sig: sig} = request, head) do
+    case {State.key(head, kid), sig} do
+      {%Key{alg: :ed25519, pub: pub}, sig} when is_binary(sig) ->
+        ed25519(request, sig, pub)
+
+      {%Key{alg: :es256, pub: pub}, %{} = assertion} ->
+        {origin, host} = Encoding.directory_origin(head.directory)
+
+        case WebAuthn.verify(assertion, pub, challenge(request), origin, host) do
+          :ok -> :ok
+          {:error, _reason} -> {:error, :bad_signature}
+        end
+
+      _other ->
+        {:error, :bad_signature}
+    end
+  end
+
+  defp ed25519(_request, _sig, nil), do: {:error, :bad_signature}
+
+  defp ed25519(request, sig, pub) do
+    if :crypto.verify(:eddsa, :none, signing_bytes(request), sig, [pub, :ed25519]),
+      do: :ok,
+      else: {:error, :bad_signature}
   end
 end
