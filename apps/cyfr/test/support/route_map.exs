@@ -319,7 +319,7 @@
         },
         %{
           verb: "POST",
-          path: "/directory/v1/:identifier/entries",
+          path: "/directory/v1/:identifier/append",
           plug: "Emissary.Web.DirectoryController",
           plug_opts: ":append",
           auth: "directory_signed",
@@ -327,17 +327,17 @@
           pipe_through: ["directory"]
         },
         %{
-          verb: "POST",
-          path: "/directory/v1/:identifier/recover",
+          verb: "GET",
+          path: "/directory/v1/:identifier/from/:hash",
           plug: "Emissary.Web.DirectoryController",
-          plug_opts: ":recover",
-          auth: "directory_signed",
+          plug_opts: ":from",
+          auth: "public_directory",
           live_view: nil,
           pipe_through: ["directory"]
         },
         %{
           verb: "POST",
-          path: "/directory/v1/genesis",
+          path: "/directory/v1/register",
           plug: "Emissary.Web.DirectoryController",
           plug_opts: ":register",
           auth: "public_directory",

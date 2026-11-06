@@ -386,18 +386,18 @@ defmodule Emissary.Router do
       # identifier's chain. A write's body is bounded to 16 KiB before it is
       # decoded (`CyfrWeb.Plugs.RawBodyReader`), and every request to the
       # directory's per-source and per-installation windows before any
-      # signature is checked. The literal `genesis` is declared above the
+      # signature is checked. The literal `register` is declared above the
       # `:identifier` routes.
       scope "/directory/v1", Emissary.Web do
         pipe_through :directory
 
-        post "/genesis", DirectoryController, :register, metadata: %{auth: :public_directory}
+        post "/register", DirectoryController, :register, metadata: %{auth: :public_directory}
         get "/:identifier", DirectoryController, :resolve, metadata: %{auth: :public_directory}
 
-        post "/:identifier/entries", DirectoryController, :append,
-          metadata: %{auth: :directory_signed}
+        get "/:identifier/from/:hash", DirectoryController, :from,
+          metadata: %{auth: :public_directory}
 
-        post "/:identifier/recover", DirectoryController, :recover,
+        post "/:identifier/append", DirectoryController, :append,
           metadata: %{auth: :directory_signed}
       end
 

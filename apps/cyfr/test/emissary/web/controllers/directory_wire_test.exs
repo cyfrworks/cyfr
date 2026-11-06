@@ -36,10 +36,17 @@ defmodule Emissary.Web.DirectoryWireTest do
     :ok
   end
 
-  test "the signing seeds and canonical entries are portable" do
+  test "the signing keys and canonical entries are portable" do
     for {_name, key} <- @vectors["keys"] do
-      seed = Base.url_decode64!(key["seed"], padding: false)
-      {public, _private} = :crypto.generate_key(:eddsa, :ed25519, seed)
+      {public, _private} =
+        case key do
+          %{"alg" => "es256", "private" => private} ->
+            :crypto.generate_key(:ecdh, :secp256r1, Base.url_decode64!(private, padding: false))
+
+          %{"seed" => seed} ->
+            :crypto.generate_key(:eddsa, :ed25519, Base.url_decode64!(seed, padding: false))
+        end
+
       assert Base.url_encode64(public, padding: false) == key["public"]
     end
 
@@ -57,34 +64,43 @@ defmodule Emissary.Web.DirectoryWireTest do
       end
 
       for {step, index} <- Enum.with_index(@scenario["steps"], 1) do
-        request = step["request"]
-        expected = step["expect"]
-        context = "#{@scenario["name"]}, step #{index}: #{request["method"]} #{request["path"]}"
-        response = send_request(request, expected["status"])
-        assert response.status == expected["status"], context
-
-        body = if response.status == 413, do: %{}, else: Jason.decode!(response.resp_body)
-
-        for {field, value} <- expected["body"] do
-          assert Map.has_key?(body, field), "#{context}: missing #{field}"
-          assert_field(body[field], value, field, context)
-        end
-
-        for {name, value} <- expected["headers"] do
-          value =
-            case value do
-              %{"body_field" => field} -> Integer.to_string(Map.fetch!(body, field))
-              literal -> literal
-            end
-
-          assert get_resp_header(response, String.downcase(name)) == [value], context
-        end
-
-        for entry <- Map.get(body, "entries", []) ++ List.wrap(body["entry"]) do
-          assert String.contains?(response.resp_body, Prima.Identity.Encoding.jcs!(entry)),
-                 "#{context}: entry bytes are not canonical"
-        end
+        run_step(@scenario["name"], step, index)
       end
+    end
+  end
+
+  # A tombstone is the operator's, made through `Sanctum.Directory`, never
+  # over the wire.
+  defp run_step(_scenario, %{"tombstone" => identifier}, _index),
+    do: assert(:ok = Sanctum.Directory.tombstone(identifier))
+
+  defp run_step(scenario, step, index) do
+    request = step["request"]
+    expected = step["expect"]
+    context = "#{scenario}, step #{index}: #{request["method"]} #{request["path"]}"
+    response = send_request(request, expected["status"])
+    assert response.status == expected["status"], context
+
+    body = if response.status == 413, do: %{}, else: Jason.decode!(response.resp_body)
+
+    for {field, value} <- expected["body"] do
+      assert Map.has_key?(body, field), "#{context}: missing #{field}"
+      assert_field(body[field], value, field, context)
+    end
+
+    for {name, value} <- expected["headers"] do
+      value =
+        case value do
+          %{"body_field" => field} -> Integer.to_string(Map.fetch!(body, field))
+          literal -> literal
+        end
+
+      assert get_resp_header(response, String.downcase(name)) == [value], context
+    end
+
+    for entry <- Map.get(body, "entries", []) do
+      assert String.contains?(response.resp_body, Prima.Identity.Encoding.jcs!(entry)),
+             "#{context}: entry bytes are not canonical"
     end
   end
 
