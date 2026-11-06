@@ -4,8 +4,6 @@
 defmodule Sanctum.Tenancy.UsersTest do
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
-
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
 
@@ -245,29 +243,6 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert focused == personal.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
-
-  test "a post-restore period is the person's: a denial leaves it, the users row takes it" do
-    u = person(42)
-
-    # Written straight to the table: its store comes with the declared
-    # restore.
-    {1, _} =
-      Arca.Repo.insert_all("restore_people", [
-        %{restore_id: "rst_#{System.unique_integer([:positive])}", user_id: u.id}
-      ])
-
-    assert restore_periods(u.id) == 1
-
-    assert {:ok, _} = Users.deny(u)
-    assert restore_periods(u.id) == 1
-
-    # Its owner is the person's row: deleting it takes the period.
-    assert {1, _} = Arca.Repo.delete_all(from(p in "users", where: p.id == ^u.id))
-    assert restore_periods(u.id) == 0
-  end
-
-  defp restore_periods(user_id),
-    do: Arca.Repo.aggregate(from(r in "restore_people", where: r.user_id == ^user_id), :count)
 
   # A denial revokes every share of the person's own athanor in its
   # transaction, and each is announced once it committed, so recipients in

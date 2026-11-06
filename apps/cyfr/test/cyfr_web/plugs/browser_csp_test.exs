@@ -26,7 +26,7 @@ defmodule CyfrWeb.Plugs.BrowserCSPTest do
   end
 
   test "every page is served it" do
-    for path <- ["/login", "/restore"] do
+    for path <- ["/login", "/setup"] do
       policy = directives(get(build_conn(), path))
       assert "connect-src 'self'" in policy, path
       refute Enum.any?(policy, &(&1 =~ "https:")), path
