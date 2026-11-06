@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. key_digest is a device key's digest (SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. key_digest is a device key's digest (SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
   "continuous_fields": [
     "stream",
     "frames",
@@ -328,6 +328,7 @@
     },
     {
       "error": "missing_field",
+      "field": "protocol",
       "message": {
         "args": {
           "fields": {
@@ -344,6 +345,7 @@
     },
     {
       "error": "missing_field",
+      "field": "type",
       "message": {
         "args": {
           "fields": {
@@ -441,6 +443,7 @@
     },
     {
       "error": "unknown_field",
+      "field": "priority",
       "message": {
         "args": {
           "fields": {
@@ -459,6 +462,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "args",
       "message": {
         "args": [
           "github"
@@ -473,6 +477,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "operation",
       "message": {
         "args": {
           "fields": {
@@ -526,6 +531,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "result",
       "message": {
         "error": {},
         "id": "int_1",
@@ -538,6 +544,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "result",
       "message": {
         "id": "int_1",
         "protocol": "cyfr-device/v1",
@@ -548,6 +555,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "certificate",
       "message": {
         "certificate": {
           "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
@@ -569,6 +577,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "capabilities",
       "message": {
         "capabilities": [
           "display",
@@ -582,6 +591,7 @@
     },
     {
       "error": "invalid_field",
+      "field": "subject",
       "message": {
         "expires_at": 1790000000000,
         "grant_id": "sgr_1",

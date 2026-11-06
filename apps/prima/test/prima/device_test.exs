@@ -19,9 +19,18 @@ defmodule Prima.DeviceTest do
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
-  defp tag({:error, reason}), do: tag(reason)
-  defp tag({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
-  defp tag(reason) when is_atom(reason), do: Atom.to_string(reason)
+  # A refusal as Prima answers it: its field included, and for an unknown
+  # type or one the other side sends, the message's type.
+  defp refusal(%{"error" => "unknown_type", "message" => message}),
+    do: {:error, {:unknown_type, message["type"]}}
+
+  defp refusal(%{"error" => "wrong_sender", "message" => message}),
+    do: {:error, {:wrong_sender, String.to_existing_atom(message["type"])}}
+
+  defp refusal(%{"error" => error, "field" => field}),
+    do: {:error, {String.to_existing_atom(error), field}}
+
+  defp refusal(%{"error" => error}), do: {:error, String.to_existing_atom(error)}
 
   defp sender("glass"), do: :glass
   defp sender("home"), do: :home
@@ -82,7 +91,7 @@ defmodule Prima.DeviceTest do
     end
   end
 
-  test "every refusal is refused with its reason" do
+  test "every refusal is refused with its reason, and its field when it names one" do
     intent = Enum.find(vectors()["messages"], &(&1["message"]["type"] == "intent"))["message"]
 
     for %{"name" => name} = vector <- vectors()["refusals"] do
@@ -95,7 +104,7 @@ defmodule Prima.DeviceTest do
             message
         end
 
-      assert tag(Device.decode(message, sender(vector["sender"] || "glass"))) == vector["error"],
+      assert Device.decode(message, sender(vector["sender"] || "glass")) == refusal(vector),
              name
     end
 
