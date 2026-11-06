@@ -65,10 +65,6 @@ defmodule Sanctum.SharesRaceTest do
       Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
 
       if user do
-        Arca.Repo.delete_all(
-          from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id)
-        )
-
         Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user.id))
       end
     end

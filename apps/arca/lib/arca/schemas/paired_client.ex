@@ -28,20 +28,20 @@ defmodule Arca.Schemas.PairedClient do
   @doc """
   The credentials a paired client may stand on: a session, an API key, a
   device certificate, whose client carries the device's public key, or a
-  passkey, whose client is that credential's platform holder and carries
-  no key (`Arca.PairedClients.project_passkey!/1`).
+  passkey of the person's account that signed in here, whose client is
+  known by its key and carries none (`Arca.PairedClients.record_passkey/2`).
   """
   @spec source_kinds() :: [String.t()]
   def source_kinds, do: @source_kinds
 
   @doc """
-  What holds a client's key: a device's holder as its hello names it
-  (`Prima.Device.holder_kinds/0`), or the `platform` that keeps a
-  passkey, which this CYFR records for the credential it projects.
-  Information a person reads, never an input to a decision.
+  What holds a protected device's key, as its hello names it
+  (`Prima.Device.holder_kinds/0`): a TPM `chip` or a passphrase-wrapped
+  `software` file. Information a person reads, never an input to a
+  decision.
   """
   @spec holder_kinds() :: [String.t()]
-  def holder_kinds, do: Prima.Device.holder_kinds() ++ ["platform"]
+  def holder_kinds, do: Prima.Device.holder_kinds()
 
   schema "paired_clients" do
     field :athanor_id, :string
@@ -52,7 +52,6 @@ defmodule Arca.Schemas.PairedClient do
     field :standing, :string, default: "active"
     field :holder_kind, :string
     field :display_name, :string
-    field :passkey_id, :string
     field :kid, :string
     field :head, :string
     timestamps(type: :utc_datetime_usec)

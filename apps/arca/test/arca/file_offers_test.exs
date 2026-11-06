@@ -2362,14 +2362,6 @@ defmodule Arca.FileOffersLockOrderTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|lock#{tag}#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "lock#{tag}#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 

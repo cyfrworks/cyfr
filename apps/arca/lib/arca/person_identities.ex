@@ -35,12 +35,12 @@ defmodule Arca.PersonIdentities do
 
   @doc """
   Write a person's identity row: `attrs` names the `:user_id`, the
-  `:provenance` `"remote"`, the account's `:identifier`, the
-  `:directory_url` of its genesis and the `:head_hash` this home read.
+  account's `:identifier`, the `:directory_url` of its genesis and the
+  `:head_hash` this home read.
 
   Written once per person: a second row is `{:error, :conflict}`. Runs in
   its own locking transaction, nested in a caller's (the `also:` closure
-  an admission passes `Arca.Users.mint/4`), and proves this member still
+  an admission passes `Arca.Users.mint/3`), and proves this member still
   owns its slot first.
   """
   @spec create(Prima.Actor.t(), map()) ::
@@ -71,38 +71,6 @@ defmodule Arca.PersonIdentities do
   def get(%Prima.Actor{}, _user_id), do: {:error, :not_found}
 
   @doc """
-  Whether the first-method latch of the person `user_id` is still open: no
-  fresh confirmation method, a passkey or a paired device, has ever
-  existed for them, and the mark `first_method!/1` writes once and for
-  good is unset. The person's row is locked first, as every write that
-  sets the mark holds it, so inside a caller's transaction the answer
-  stands until that transaction ends. A person with no identity row holds
-  no method and reads open. The actor reads as `get/2` does.
-  """
-  @spec first_method_open?(Prima.Actor.t(), String.t()) ::
-          {:ok, boolean()} | {:error, :cross_tenant | :database_error}
-  def first_method_open?(%Prima.Actor{} = actor, user_id)
-      when is_binary(user_id) and user_id != "" do
-    if reads?(actor, user_id) do
-      Arca.Repo.Errors.with_db_rescue("Arca.PersonIdentities.first_method_open?", fn ->
-        Arca.Repo.locking_transaction(fn ->
-          _locked = Arca.DirectoryHeads.lock_person!(user_id)
-
-          not Arca.Repo.exists?(
-            from(p in PersonIdentity,
-              where: p.user_id == ^user_id and not is_nil(p.first_method_at)
-            )
-          )
-        end)
-      end)
-    else
-      {:error, :cross_tenant}
-    end
-  end
-
-  def first_method_open?(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
-
-  @doc """
   The identity row an identifier names, for the door before any person or
   session exists: only the platform's own actor asks.
   """
@@ -120,27 +88,6 @@ defmodule Arca.PersonIdentities do
 
   def lookup_identifier(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
 
-  # ---- steps inside another store's transaction --------------------------------
-
-  @doc false
-  @spec first_method!(String.t()) :: :marked | :already | :no_identity
-  # Record, once and for good, that a fresh confirmation method exists for
-  # the person: nothing clears the mark, so revoking every method never
-  # reopens a first-method exception. Answers `:marked` when this call set
-  # it, `:already` when a method existed before, and `:no_identity` for a
-  # person with no row.
-  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
-  def first_method!(user_id) do
-    now = Arca.ServerMetaStorage.now!()
-    unset = from(p in PersonIdentity, where: p.user_id == ^user_id and is_nil(p.first_method_at))
-
-    cond do
-      step(unset, first_method_at: now) == 1 -> :marked
-      Arca.Repo.exists?(from(p in PersonIdentity, where: p.user_id == ^user_id)) -> :already
-      true -> :no_identity
-    end
-  end
-
   # ---- internals -------------------------------------------------------------
 
   defp reads?(%Prima.Actor{scope: :platform}, _user_id), do: true
@@ -154,18 +101,7 @@ defmodule Arca.PersonIdentities do
     end
   end
 
-  # One conditional statement over the row it names, raising the row's
-  # revision; the count is its evidence.
-  defp step(query, set) do
-    now = Arca.ServerMetaStorage.now!()
-
-    {count, _} =
-      Arca.Repo.update_all(query, set: Keyword.put(set, :updated_at, now), inc: [revision: 1])
-
-    count
-  end
-
-  defp build(%{provenance: "remote"} = attrs) do
+  defp build(attrs) do
     errors =
       []
       |> required(attrs, :user_id, &(is_binary(&1) and &1 != ""))
@@ -174,15 +110,11 @@ defmodule Arca.PersonIdentities do
       |> required(attrs, :head_hash, &Prima.Identity.Encoding.digest?/1)
 
     row(errors, attrs, %{
-      provenance: "remote",
-      enrollment: "enrolled",
       identifier: attrs[:identifier],
       directory_url: attrs[:directory_url],
       head_hash: attrs[:head_hash]
     })
   end
-
-  defp build(_attrs), do: {:error, {:invalid, %{provenance: ["is remote"]}}}
 
   defp row([], attrs, fields) do
     now = DateTime.utc_now()
@@ -192,9 +124,6 @@ defmodule Arca.PersonIdentities do
        %{
          id: Prima.UUID7.generate_id("pid"),
          user_id: attrs.user_id,
-         identifier: nil,
-         head_hash: nil,
-         first_method_at: nil,
          revision: 1,
          inserted_at: now,
          updated_at: now

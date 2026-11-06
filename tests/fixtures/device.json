@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's, and sign-in requests and device answers tests/fixtures/sign_in.json's. A device's first connection is hello, sign_in_request, sign_in_answer and admitted: the hello names device_1's kid and the certificate's account, the request is sign_in.json's sign_in request, the answer is device_1's Ed25519 signature over that request's digest, which every side re-signs from keys.device_1's seed, and admitted carries the certificate issued for that kid and the standing message's fields. A hello's admission is {\"setup\": the setup token, 64 lowercase hexadecimal characters} or {\"invitation\": an invitation's code, unpadded base64url of 32 bytes}, or absent; its holder_kind is chip or software, and its display_name non-empty UTF-8 of at most 64 bytes with no control character. key_digest is a device key's digest (SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's, and sign-in requests and device answers tests/fixtures/sign_in.json's. A device's first connection is hello, sign_in_request, sign_in_answer and admitted: the hello names device_1's kid and the certificate's account, the request is sign_in.json's sign_in request, the answer is device_1's Ed25519 signature over that request's digest, which every side re-signs from keys.device_1's seed, and admitted carries the certificate issued for that kid and the standing message's fields. A hello's admission is {\"setup\": the setup token, 64 lowercase hexadecimal characters} or {\"invitation\": an invitation's code, unpadded base64url of 32 bytes}, or absent; its holder_kind is chip or software, and its display_name non-empty UTF-8 of at most 64 bytes with no control character. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
   "continuous_fields": [
     "stream",
     "frames",
@@ -7,11 +7,6 @@
     "samples",
     "continuous"
   ],
-  "key_digest": {
-    "code": "sv5Q Hby2 ooLr BWLs _JOr jk8g oRiw YWrr CDbE 2Rui E0o",
-    "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-    "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
-  },
   "keys": {
     "device_1": {
       "public": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",

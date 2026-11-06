@@ -8,11 +8,13 @@ defmodule Sanctum.Providers.Passkey do
   passkey is added to the account, and removed from it, at the account
   pages.
 
-    * `list` answers the person's passkeys signed in here, each its
-      `kid`, its standing sessions here and its newest sign-in.
-    * `revoke` ends every session here that one passkey signed for, by
-      its `kid`, and answers how many ended. It takes authority away
-      and asks no confirmation.
+    * `list` answers the person's passkeys that signed in here and stand,
+      each its `kid`, its paired client (`client_id`) and when it first
+      signed in here (`signed_in_at`).
+    * `revoke` signs one passkey out of this CYFR, by its `kid`: its
+      client is revoked with every session it signed for, and it answers
+      how many sessions ended. It takes authority away and asks no
+      confirmation.
 
   Every action is the person's own, on the external plane, through an
   interactive surface (`consent: :interactive`).

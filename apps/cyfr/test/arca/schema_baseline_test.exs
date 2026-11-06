@@ -96,11 +96,7 @@ defmodule Arca.SchemaBaselineTest do
         for({table, _fk, _parent} <- Arca.TenantTables.by_parent(), do: table)
 
     # The server's people and its door exist before any athanor does.
-    assert Enum.sort(unscoped -- documented) == [
-             "external_identities",
-             "server_allowlist",
-             "users"
-           ]
+    assert Enum.sort(unscoped -- documented) == ["server_allowlist", "users"]
 
     assert documented -- unscoped == []
   end
@@ -121,9 +117,6 @@ defmodule Arca.SchemaBaselineTest do
     admin = Enum.find(columns("users"), &(&1.name == "platform_admin_at"))
     assert admin, "users.platform_admin_at is missing"
     refute admin.not_null?, "users.platform_admin_at is nullable"
-
-    # A pairing is the person's, named by no seat.
-    refute "membership_id" in Enum.map(columns("pairing_invitations"), & &1.name)
   end
 
   test "a person and an athanor carry a positive standing generation, 1 at birth" do

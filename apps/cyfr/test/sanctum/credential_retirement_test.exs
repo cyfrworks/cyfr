@@ -462,15 +462,10 @@ defmodule Sanctum.CredentialRetirementLockTest do
   end
 
   defp cleanup!(n) do
-    identity = "github|https://github.com|race-#{n}"
-
     user_ids =
       Arca.Repo.all(
-        from(i in Arca.Schemas.ExternalIdentity, where: i.key == ^identity, select: i.user_id)
-      ) ++
-        Arca.Repo.all(
-          from(u in Arca.Schemas.User, where: u.email == ^"race#{n}@example.com", select: u.id)
-        )
+        from(u in Arca.Schemas.User, where: u.email == ^"race#{n}@example.com", select: u.id)
+      )
 
     athanor_ids =
       Arca.Repo.all(
@@ -479,7 +474,6 @@ defmodule Sanctum.CredentialRetirementLockTest do
 
     Arca.Repo.delete_all(where(Arca.Schemas.Session, [s], s.user_id in ^user_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.ApiKey, [k], k.created_by in ^user_ids))
-    Arca.Repo.delete_all(where(Arca.Schemas.ExternalIdentity, [i], i.user_id in ^user_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.PersonIdentity, [p], p.user_id in ^user_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.User, [u], u.id in ^user_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.Athanor, [a], a.id in ^athanor_ids))

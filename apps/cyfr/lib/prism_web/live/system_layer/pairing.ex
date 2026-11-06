@@ -5,12 +5,12 @@ defmodule PrismWeb.SystemLayer.Pairing do
   @moduledoc """
   The pairing prompt's body, which only the system layer draws: the
   person's Devices, one list, in the athanor in focus, each with its
-  revoke control and what holds its key (`Sanctum.Pairing.list/1`): a
-  protected device with what it last reported of its disks, a report a
-  person reads and never a decision, and each passkey as **Passkey**, one
-  entry per credential, saying whether it may sync to their other
-  machines and that revoking it ends it on each of them. A command line
-  is a protected device like any other.
+  revoke control (`Sanctum.Pairing.list/1`): a protected device with what
+  holds its key and what it last reported of its disks, a report a person
+  reads and never a decision, and each passkey of their account that
+  signed in here as **Passkey**, saying that revoking it signs it out of
+  this CYFR and leaves it in their account. A command line is a protected
+  device like any other.
 
   A device comes here by its first connection (`Sanctum.DeviceUnlock`),
   once it is a key of the person's account; nothing is paired from this
@@ -93,28 +93,24 @@ defmodule PrismWeb.SystemLayer.Pairing do
 
   defp expiry(_client), do: ""
 
-  defp name(%{holder_kind: "platform"}), do: "Passkey"
+  defp name(%{source: "passkey"}), do: "Passkey"
   defp name(client), do: client[:display_name] || "Paired device"
 
-  defp added(%{holder_kind: "platform"}), do: "Registered"
+  defp added(%{source: "passkey"}), do: "Signed in"
   defp added(_client), do: "Paired"
 
-  # What revoking an entry ends: a passkey wherever it synced, a device on
-  # that device alone.
-  defp scope(%{holder_kind: "platform", synced: true}),
+  # What revoking a passkey ends: its sessions here, never the key.
+  defp scope(%{source: "passkey"}),
     do:
-      "May sync to your other phones and computers. Revoking it ends it on every one of them, " <>
-        "and the sessions it signed in."
-
-  defp scope(%{holder_kind: "platform"}),
-    do: "Kept on the one phone, computer or security key that made it. Revoking it ends it there."
+      "Revoking it signs it out of this CYFR. It stays a passkey of your account, " <>
+        "and signing in with it again brings it back."
 
   defp scope(_device), do: nil
 
-  # What holds a protected device's key, as the device reports it; a
-  # passkey's platform keeps it under the person's own screen lock.
-  defp holder(%{holder_kind: "platform"}),
-    do: "Signs in and confirms with your face, fingerprint or screen lock, at this CYFR alone."
+  # What holds a key: a passkey's own platform, under the person's screen
+  # lock, or what a protected device reports.
+  defp holder(%{source: "passkey"}),
+    do: "Signs in and confirms with your face, fingerprint or screen lock."
 
   defp holder(%{holder_kind: "chip"}),
     do: "Unlocks with a PIN; its key is sealed in this device's security chip."

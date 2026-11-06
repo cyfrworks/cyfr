@@ -67,35 +67,25 @@ defmodule Arca.InstallationClaimsTest do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
 
-    {%{
-       id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-       email: "first#{n}@example.com",
-       email_verified: true,
-       first_seen_at: now,
-       last_seen_at: now,
-       created_at: now,
-       updated_at: now
-     },
-     %{
-       key: "github|https://github.com|first#{n}",
-       provider: "github",
-       issuer: "https://github.com",
-       subject: "first#{n}",
-       first_seen_at: now,
-       last_seen_at: now
-     }}
+    %{
+      id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+      email: "first#{n}@example.com",
+      email_verified: true,
+      first_seen_at: now,
+      last_seen_at: now,
+      created_at: now,
+      updated_at: now
+    }
   end
 
-  # A setup mint, naming no sign-in method.
+  # A setup mint.
   defp mint(opts \\ []) do
-    {user, _identity} = person_attrs()
-    Users.mint(server(), user, nil, Keyword.merge([admission: "setup"], opts))
+    Users.mint(server(), person_attrs(), Keyword.merge([admission: "setup"], opts))
   end
 
-  # A mint under `admission`, linking a sign-in method.
+  # A mint under `admission`.
   defp admitted(admission, opts \\ []) do
-    {user, identity} = person_attrs()
-    Users.mint(server(), user, identity, [admission: admission] ++ opts)
+    Users.mint(server(), person_attrs(), [admission: admission] ++ opts)
   end
 
   defp administrator?(user_id),
@@ -264,7 +254,7 @@ defmodule Arca.InstallationClaimsRaceTest do
   import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, Users}
-  alias Arca.Schemas.{CellLease, ExternalIdentity, User}
+  alias Arca.Schemas.{CellLease, User}
 
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
@@ -286,7 +276,6 @@ defmodule Arca.InstallationClaimsRaceTest do
     on_exit(fn ->
       unboxed(fn ->
         for id <- [door_id, second_id] do
-          Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^id))
           Arca.Repo.delete_all(where(User, id: ^id))
         end
       end)
@@ -363,7 +352,6 @@ defmodule Arca.InstallationClaimsRaceTest do
         created_at: now,
         updated_at: now
       },
-      nil,
       [admission: "setup"] ++ opts
     )
   end

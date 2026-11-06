@@ -83,7 +83,6 @@ defmodule Arca.PairedClientsTest do
 
   # A person this home holds, whom a restore row can name.
   defp person! do
-    n = System.unique_integer([:positive])
     now = DateTime.utc_now()
 
     {:ok, person} =
@@ -96,14 +95,6 @@ defmodule Arca.PairedClientsTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|pcl#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "pcl#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
@@ -209,14 +200,6 @@ defmodule Arca.PairedClientsTest do
 
     defp identity!(user_id), do: Arca.Test.People.account!(user_id)
 
-    defp marked?(user_id),
-      do:
-        Arca.Repo.exists?(
-          from(p in Arca.Schemas.PersonIdentity,
-            where: p.user_id == ^user_id and not is_nil(p.first_method_at)
-          )
-        )
-
     test "records what holds its key and the name it shows, and nothing a browser key reports",
          %{actor: actor} do
       row =
@@ -253,40 +236,29 @@ defmodule Arca.PairedClientsTest do
       assert {:error, {:invalid, _}} = PairedClients.record(actor, attrs(%{holder_kind: "chip"}))
     end
 
-    test "a first-method enrollment claims the latch once; a marking one enrolls either way", %{
-      actor: actor
-    } do
+    test "an enrollment writes its row and runs its also: step with it", %{actor: actor} do
       user_id = person!()
       identity!(user_id)
-      ok = fn _row -> {:ok, :certified} end
+      test = self()
 
-      assert {:ok, first} =
-               PairedClients.enroll(actor, device_attrs(user_id), first_method: :claim, also: ok)
+      assert {:ok, enrolled} =
+               PairedClients.enroll(actor, device_attrs(user_id),
+                 also: fn row -> {:ok, send(test, {:also, row.id})} end
+               )
 
-      assert first.holder_kind == "chip"
-      assert marked?(user_id)
-
-      assert {:error, :first_method_used} =
-               PairedClients.enroll(actor, device_attrs(user_id), first_method: :claim, also: ok)
-
-      assert {:ok, _second} =
-               PairedClients.enroll(actor, device_attrs(user_id), first_method: :mark, also: ok)
-
-      assert Arca.Repo.aggregate(from(p in PairedClient, where: p.user_id == ^user_id), :count) ==
-               2
+      assert enrolled.holder_kind == "chip"
+      assert_received {:also, id}
+      assert id == enrolled.id
     end
 
-    test "a refusal of its also: step rolls the enrollment and the latch back", %{actor: actor} do
+    test "a refusal of its also: step rolls the enrollment back", %{actor: actor} do
       user_id = person!()
       identity!(user_id)
 
       assert {:error, :not_certified} =
                PairedClients.enroll(actor, device_attrs(user_id),
-                 first_method: :claim,
                  also: fn _row -> {:error, :not_certified} end
                )
-
-      refute marked?(user_id)
 
       assert Arca.Repo.aggregate(from(p in PairedClient, where: p.user_id == ^user_id), :count) ==
                0
@@ -299,7 +271,7 @@ defmodule Arca.PairedClientsTest do
       attrs = device_attrs(user_id, %{source_id: "req_found"})
 
       {:ok, row} =
-        PairedClients.enroll(actor, attrs, first_method: :mark, also: fn _ -> {:ok, nil} end)
+        PairedClients.enroll(actor, attrs, also: fn _ -> {:ok, nil} end)
 
       assert {:ok, %{id: id}} = PairedClients.enrolled(Prima.Actor.system(), "req_found")
       assert id == row.id
@@ -343,6 +315,90 @@ defmodule Arca.PairedClientsTest do
                PairedClients.revoke(actor, row.id)
 
       assert {:error, :not_found} = Arca.SessionStorage.get_session(hash)
+    end
+  end
+
+  describe "a passkey" do
+    # The person's account with its head cached here, and what a sign-in
+    # by one of its passkeys names.
+    defp passkey_sign_in! do
+      user_id = person!()
+      %{head: head} = Arca.Test.People.account!(user_id)
+      %{user_id: user_id, kid: Prima.Digest.sha256("passkey-#{user_id}"), head: head}
+    end
+
+    test "is recorded by its key at the cached head, holding no device key, and found again",
+         %{actor: actor} do
+      signed = passkey_sign_in!()
+
+      assert {:ok, row} = PairedClients.record_passkey(actor, signed)
+
+      assert %{
+               source_kind: "passkey",
+               standing: "active",
+               device_public_key: nil,
+               holder_kind: nil,
+               display_name: nil
+             } = row
+
+      assert {row.athanor_id, row.source_id, row.kid, row.head} ==
+               {actor.athanor_id, row.id, signed.kid, signed.head}
+
+      # A second sign-in by the same passkey finds the row that stands.
+      assert {:ok, ^row} = PairedClients.record_passkey(actor, signed)
+
+      # One revoked stands for nothing: the next sign-in records a new row.
+      {:ok, _revoked} = PairedClients.revoke(actor, row.id)
+      assert {:ok, again} = PairedClients.record_passkey(actor, signed)
+      refute again.id == row.id
+      assert again.standing == "active"
+    end
+
+    test "a head the cached head moved past records nothing", %{actor: actor} do
+      signed = passkey_sign_in!()
+      moved = %{signed | head: Prima.Digest.sha256("an older head")}
+
+      assert {:error, :stale_head} = PairedClients.record_passkey(actor, moved)
+      assert Arca.Repo.aggregate(PairedClient, :count) == 0
+    end
+
+    test "names its key and head, and the store refuses one without its key or with a device key",
+         %{actor: actor} do
+      signed = passkey_sign_in!()
+
+      assert {:error, {:invalid, %{kid: _}}} =
+               PairedClients.record(
+                 actor,
+                 attrs(%{user_id: signed.user_id, source_kind: "passkey"})
+               )
+
+      base = %{
+        id: Prima.UUID7.generate_id("pcl"),
+        athanor_id: actor.athanor_id,
+        user_id: signed.user_id,
+        source_kind: "passkey",
+        source_id: "src_passkey",
+        kid: signed.kid,
+        head: signed.head,
+        standing: "active",
+        inserted_at: DateTime.utc_now(),
+        updated_at: DateTime.utc_now()
+      }
+
+      # Each attempt in its own savepoint, so a refused one leaves the
+      # test's transaction usable on either adapter.
+      refused? = fn row ->
+        try do
+          Arca.Repo.transaction(fn -> Arca.Repo.insert_all(PairedClient, [row]) end)
+          false
+        rescue
+          _violation -> true
+        end
+      end
+
+      assert refused?.(%{base | kid: nil, head: nil})
+      assert refused?.(Map.put(base, :device_public_key, :crypto.strong_rand_bytes(32)))
+      refute refused?.(base)
     end
   end
 

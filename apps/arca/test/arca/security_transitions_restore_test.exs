@@ -58,14 +58,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
           last_seen_at: now(),
           created_at: now(),
           updated_at: now()
-        },
-        %{
-          key: "github|https://github.com|rs#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "rs#{n}",
-          first_seen_at: now(),
-          last_seen_at: now()
         }
       )
 
@@ -227,20 +219,20 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     id
   end
 
-  defp passkey!(user_id, state) do
-    id = Prima.UUID7.generate_id("psk")
+  # The client of a passkey of the person's account that signed in here,
+  # in `standing`: known by its key, holding no device key.
+  defp passkey!(athanor_id, user_id, standing) do
+    id = Prima.UUID7.generate_id("pcl")
 
-    insert!(Schemas.Passkey, %{
+    insert!(Schemas.PairedClient, %{
       id: id,
+      athanor_id: athanor_id,
       user_id: user_id,
-      credential_id: "cred-#{uniq()}",
-      rp_id: "home.example",
-      relying_home: "https://home.example",
-      public_key: "cose",
-      sign_count: 0,
-      state: state,
-      registration_digest: Prima.Digest.sha256("reg-#{uniq()}"),
-      possession_verified: true,
+      source_kind: "passkey",
+      source_id: id,
+      kid: Prima.Digest.sha256("passkey-#{uniq()}"),
+      head: Prima.Digest.sha256("head-#{uniq()}"),
+      standing: standing,
       inserted_at: now(),
       updated_at: now()
     })
@@ -555,7 +547,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       alice: alice,
       bob: bob,
       carol: carol,
-      bob_passkey: passkey!(bob.id, "active"),
+      bob_passkey: passkey!(bob_own.id, bob.id, "active"),
       own: own,
       bob_own: bob_own,
       shared_thread: shared_thread,
@@ -569,9 +561,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       revoked_paired: paired!(own.id, alice.id, "revoked"),
       certificate: certificate!(own.id, alice.id, paired, "active"),
       revoked_certificate: certificate!(own.id, alice.id, paired, "revoked"),
-      passkey: passkey!(alice.id, "active"),
-      pending_passkey: passkey!(alice.id, "pending"),
-      revoked_passkey: passkey!(alice.id, "revoked"),
+      passkey: passkey!(own.id, alice.id, "active"),
+      revoked_passkey: passkey!(own.id, alice.id, "revoked"),
       confirmation: confirmation!(own.id, alice.id),
       invitation: admission_invitation!(alice),
       expired_invitation:
@@ -701,19 +692,19 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       for hash <- fixture.sessions,
           do: refute(Arca.Repo.exists?(where(Schemas.Session, token_hash: ^hash)))
 
-      # Keys, webhooks, devices and passkeys are suspended; revoked and
-      # pending rows keep their state.
+      # Keys, webhooks, devices and passkeys are suspended; revoked rows
+      # keep their state.
       assert %{suspended: true, revoked: false} = get(Schemas.ApiKey, fixture.key)
       assert %{suspended: false, revoked: true} = get(Schemas.ApiKey, fixture.revoked_key)
       assert get(Schemas.Webhook, fixture.webhook).suspended == true
       assert get(Schemas.PairedClient, fixture.paired).standing == "suspended"
       assert get(Schemas.PairedClient, fixture.revoked_paired).standing == "revoked"
-      assert get(Schemas.Passkey, fixture.passkey).state == "suspended"
-      assert get(Schemas.Passkey, fixture.pending_passkey).state == "pending"
-      assert get(Schemas.Passkey, fixture.revoked_passkey).state == "revoked"
+      assert get(Schemas.PairedClient, fixture.passkey).standing == "suspended"
+      assert get(Schemas.PairedClient, fixture.revoked_passkey).standing == "revoked"
       assert change.suspended_api_key_ids == [fixture.key]
-      assert change.suspended_passkey_ids == Enum.sort([fixture.passkey, fixture.bob_passkey])
-      assert change.suspended_paired_client_ids == [fixture.paired]
+
+      assert change.suspended_paired_client_ids ==
+               Enum.sort([fixture.paired, fixture.passkey, fixture.bob_passkey])
 
       # Every certificate this home issued is revoked: a device comes back
       # by a fresh hello, never by its old certificate.
@@ -869,7 +860,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     test "a statement that fails rolls everything back, and the next boot applies it once" do
       fixture = home!()
       restore_id = marked!()
-      trigger = fail_on!("passkeys", "UPDATE")
+      trigger = fail_on!("paired_clients", "UPDATE")
 
       assert {:error, :database_error} = SecurityTransitions.restore(slot: :none)
 
@@ -885,7 +876,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       clear_failure!(trigger)
       assert {:ok, %{restore_id: ^restore_id}} = SecurityTransitions.restore(slot: :none)
       assert {:ok, :none} = SecurityTransitions.restore(slot: :none)
-      assert get(Schemas.Passkey, fixture.passkey).state == "suspended"
+      assert get(Schemas.PairedClient, fixture.passkey).standing == "suspended"
       assert get(Schemas.DeviceCertificate, fixture.certificate).state == "revoked"
     end
 
@@ -896,7 +887,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
 
       try do
         assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
-        assert get(Schemas.Passkey, fixture.passkey).state == "active"
+        assert get(Schemas.PairedClient, fixture.passkey).standing == "active"
         assert marker()
       after
         clear_failure!(trigger)
@@ -926,7 +917,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       try do
         assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
         assert get(Schemas.Invitation, fixture.invitation).revoked_at == nil
-        assert get(Schemas.Passkey, fixture.passkey).state == "active"
+        assert get(Schemas.PairedClient, fixture.passkey).standing == "active"
         assert marker()
       after
         clear_failure!(trigger)

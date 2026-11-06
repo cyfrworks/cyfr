@@ -534,14 +534,6 @@ defmodule Sanctum.TestContext do
               created_at: now,
               updated_at: now
             },
-            %{
-              key: "local|local|" <> user_id,
-              provider: "local",
-              issuer: "local",
-              subject: user_id,
-              first_seen_at: now,
-              last_seen_at: now
-            },
             also: fn person ->
               _account = account!(person.id)
               :ok
@@ -735,7 +727,6 @@ defmodule Sanctum.TestContext do
         {:ok, _row} =
           Arca.PersonIdentities.create(system, %{
             user_id: user_id,
-            provenance: "remote",
             identifier: state.identifier,
             directory_url: @test_directory,
             head_hash: state.head

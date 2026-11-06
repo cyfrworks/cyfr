@@ -894,26 +894,20 @@ defmodule Sanctum.Caller do
     {:error, refusal}
   end
 
-  # A remote person's session stands only on their account's fresh head
+  # A person's session stands only on their account's fresh head
   # (`Sanctum.IdentityFreshness.fresh?/2`): past the bound with the
   # directory unable to refresh it, the work pauses as `:identity_stale`,
   # and the session stays; an account gone is refused `:identity_gone`.
   # The refresh's walk retires a session its removed key signed for, and
   # every session of the person on a recovery, so the session is read
   # again once the head is fresh: a session the refresh just retired
-  # stands for nothing, whatever was loaded before it. A local person's
-  # session reads no directory. A person's identity row is minted with
-  # their person row, so a person without one stands on nothing.
+  # stands for nothing, whatever was loaded before it. A person's identity
+  # row is minted with their person row, so a person without one stands on
+  # nothing.
   defp identity_current(user_id, hash) when is_binary(user_id) and is_binary(hash) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+      {:ok, %{identifier: identifier}} ->
         with :ok <- account_current(identifier), do: session_survives(hash)
-
-      {:ok, %{provenance: "remote"}} ->
-        {:error, :unauthenticated}
-
-      {:ok, _local} ->
-        :ok
 
       {:error, :not_found} ->
         if Prima.PersonId.person?(user_id),
@@ -1015,20 +1009,14 @@ defmodule Sanctum.Caller do
     end
   end
 
-  # A remote person's device stands on their identity's fresh head as their
-  # session does: past the bound with the directory unable to refresh it,
-  # the work pauses and the pairing stands. A local person's device reads
-  # no directory; a person without an identity row stands on nothing.
+  # A person's device stands on their account's fresh head as their session
+  # does: past the bound with the directory unable to refresh it, the work
+  # pauses and the pairing stands. A person without an identity row stands
+  # on nothing.
   defp device_identity(user_id) when is_binary(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+      {:ok, %{identifier: identifier}} ->
         account_current(identifier)
-
-      {:ok, %{provenance: "remote"}} ->
-        {:error, :not_standing}
-
-      {:ok, _local} ->
-        :ok
 
       {:error, :not_found} ->
         if Prima.PersonId.person?(user_id),

@@ -617,7 +617,6 @@ defmodule Sanctum.Test.DirectoryServer do
     {:ok, _row} =
       Arca.PersonIdentities.create(Prima.Actor.system(), %{
         user_id: user_id,
-        provenance: "remote",
         identifier: account.identifier,
         directory_url: account.url,
         head_hash: head(account)

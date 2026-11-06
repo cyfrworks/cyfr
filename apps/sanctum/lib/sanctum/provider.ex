@@ -21,10 +21,10 @@ defmodule Sanctum.Provider do
   - `profile` - Consent profiles and their grants
   - `oauth` - OAuth grant flow for vault entries
   - `webhook` - Inbound webhooks
-  - `person` - A person's identity at their own home: enrollment, the kit, the
-    live key, doors, device certificates, the sign-in carry and its assertion
-  - `pairing` - Paired devices
-  - `passkey` - Passkeys at this home
+  - `pairing` - The devices and passkeys of the person's account paired or
+    signed in at this CYFR: a device's certificate renewed, either revoked
+  - `passkey` - The passkeys of the person's account that signed in at this
+    CYFR, by their key, each signed out here
   - `confirmation` - Pending confirmations of sensitive changes
   - `share` - A person's own keys offered to a thread they sit in or to everyone
 

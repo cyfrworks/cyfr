@@ -32,10 +32,8 @@ defmodule Arca.CredentialIssuanceTest do
     Athanor,
     CellLease,
     DeviceCertificate,
-    ExternalIdentity,
     OauthProviderCredential,
     PairedClient,
-    PairingInvitation,
     PendingConfirmation,
     Session,
     User,
@@ -80,14 +78,6 @@ defmodule Arca.CredentialIssuanceTest do
             last_seen_at: now,
             created_at: now,
             updated_at: now
-          },
-          %{
-            key: "github|https://github.com|ci#{n}",
-            provider: "github",
-            issuer: "https://github.com",
-            subject: "ci#{n}",
-            first_seen_at: now,
-            last_seen_at: now
           }
         )
 
@@ -103,7 +93,6 @@ defmodule Arca.CredentialIssuanceTest do
 
     on_exit(fn ->
       unboxed(fn ->
-        Arca.Repo.delete_all(where(PairingInvitation, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PendingConfirmation, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(Webhook, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(VaultEntry, athanor_id: ^athanor_id))
@@ -111,7 +100,6 @@ defmodule Arca.CredentialIssuanceTest do
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
         Arca.Repo.delete_all(where(ApiKey, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
@@ -681,9 +669,9 @@ defmodule Arca.CredentialIssuanceTest do
   # ---------------------------------------------------------------------------
 
   # Each write a device makes that is not a key or a session, run under the
-  # device's issuance (`Arca.SecurityTransitions.Issuance.held/2`, or
-  # `open/3`'s source): its fixture laid first, the write as a function of
-  # the issuance options, and whether it wrote.
+  # device's issuance (`Arca.SecurityTransitions.Issuance.held/2`): its
+  # fixture laid first, the write as a function of the issuance options,
+  # and whether it wrote.
   defp other_write(:webhook_create, user_id, athanor_id) do
     attrs = webhook_attrs(user_id, athanor_id)
 
@@ -742,97 +730,6 @@ defmodule Arca.CredentialIssuanceTest do
      fn -> match?({:ok, %{sealed_payload: "v2"}}, Arca.VaultStorage.get(actor, entry.id)) end}
   end
 
-  # The invitation is opened on the person's proven `pairing.begin`
-  # confirmation, which its verifier consumes once the issuance's own
-  # verifier agrees, as `Sanctum.Pairing.begin/2` consumes it.
-  defp other_write(:invitation_open, user_id, athanor_id) do
-    actor = Prima.Actor.in_athanor(athanor_id)
-    secret_hash = Prima.Digest.sha256("glass-#{System.unique_integer([:positive])}")
-    {secret, expected} = pairing_confirmation!(actor, user_id)
-
-    open = fn opts ->
-      attrs = %{
-        user_id: user_id,
-        secret_hash: secret_hash,
-        key_digest: Prima.Device.key_digest(:crypto.strong_rand_bytes(32)),
-        confirmation_ref: Prima.Confirmation.ref(secret),
-        audience_home: "https://home.example",
-        lifetime_ms: 60_000,
-        source: get_in(opts, [:lock, :source])
-      }
-
-      verify = fn locked ->
-        with :ok <- Keyword.fetch!(opts, :verify).(locked),
-             {:ok, _consumed} <- Arca.PendingConfirmations.consume(actor, secret, expected) do
-          :ok
-        end
-      end
-
-      case Arca.PairingInvitations.open(actor, attrs, verify) do
-        {:ok, _invitation} -> :ok
-        {:error, _reason} = refusal -> refusal
-      end
-    end
-
-    {open, fn -> Arca.Repo.exists?(where(PairingInvitation, secret_hash: ^secret_hash)) end}
-  end
-
-  # A `pairing.begin` confirmation of the person, proven by a
-  # re-authentication no passkey or paired client gave (the person holds
-  # neither, so their first-method latch is open): its secret and what
-  # consuming it expects.
-  defp pairing_confirmation!(actor, user_id) do
-    secret = "cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    opener = "session:credential-issuance-test"
-
-    {:ok, record} =
-      Prima.Confirmation.new(
-        id: Prima.Confirmation.ref(secret),
-        home: "https://home.example",
-        rp_id: "home.example",
-        athanor: actor.athanor_id,
-        person: user_id,
-        operation: "pairing.begin",
-        args_digest: Prima.Digest.sha256("args-#{System.unique_integer()}"),
-        action: "device_pairing",
-        preview: %{home: "https://home.example", athanor: "CI", operation: "pairing.begin"},
-        challenge: :crypto.strong_rand_bytes(32),
-        expires_at: System.system_time(:millisecond) + 300_000
-      )
-
-    {:ok, _} =
-      Arca.PendingConfirmations.open(actor, %{
-        record: record,
-        opener: opener,
-        asker: %{"kind" => "session"}
-      })
-
-    {:ok, _} = Arca.PendingConfirmations.confirm(actor, record.id, %{proof: "oidc_reauth"})
-
-    {secret,
-     %{
-       user_id: user_id,
-       operation: "pairing.begin",
-       args_digest: record.args_digest,
-       preview: record.preview,
-       opener: opener
-     }}
-  end
-
-  # An invitation is opened only by a member that owns its slot
-  # (`Arca.ControlPlane.verify_held/1`): this member's slot, taken on a real
-  # connection so every connection reads the lease, as
-  # `Arca.PairingInvitationsTest` takes it; the lease row, the process-wide
-  # standing and the claim switch are given back after the case. The other
-  # writes run where no claimant runs, and their fence passes with nothing
-  # read.
-  defp slot_for(:invitation_open) do
-    _slot = hold_slot!()
-    :ok
-  end
-
-  defp slot_for(_kind), do: :ok
-
   defp hold_slot! do
     saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
     claim = Application.get_env(:arca, :control_plane_claim_enabled)
@@ -872,11 +769,10 @@ defmodule Arca.CredentialIssuanceTest do
   end
 
   describe "a paired device's other credential writes" do
-    for kind <- [:webhook_create, :webhook_rotate, :vault_put, :vault_commit, :invitation_open] do
+    for kind <- [:webhook_create, :webhook_rotate, :vault_put, :vault_commit] do
       test "#{kind}: a revocation of the client committing before the write reaches it writes nothing",
            %{user_id: user_id, athanor_id: athanor_id} do
         test = self()
-        slot_for(unquote(kind))
         hold_issuances!()
 
         device =
@@ -909,14 +805,13 @@ defmodule Arca.CredentialIssuanceTest do
       end
     end
 
-    test "an invitation holds its client: a revocation that starts once it holds the client waits",
+    test "a write holds its client: a revocation that starts once it holds the client waits",
          %{user_id: user_id, athanor_id: athanor_id} do
       test = self()
-      slot_for(:invitation_open)
       device = unboxed(fn -> Arca.CredentialIssuanceTest.Device.record!(user_id, athanor_id) end)
 
       {open, written?} =
-        unboxed(fn -> other_write(:invitation_open, user_id, athanor_id) end)
+        unboxed(fn -> other_write(:webhook_create, user_id, athanor_id) end)
 
       opts = [
         lock: device_targets(user_id, athanor_id, device),
@@ -938,7 +833,7 @@ defmodule Arca.CredentialIssuanceTest do
       if postgres?(), do: LockWait.await_lock_wait!(pid, [~s("paired_clients"), "FOR UPDATE"])
 
       refute Task.yield(revoker, 300),
-             "the revocation decided while the invitation held the client"
+             "the revocation decided while the write held the client"
 
       send(opener.pid, :go)
       assert :ok = Task.await(opener, 25_000)
@@ -1190,9 +1085,8 @@ defmodule Arca.CredentialIssuanceSandboxTest do
           %{
             id: Prima.UUID7.generate_id("pid"),
             user_id: user_id,
-            provenance: "remote",
-            enrollment: "enrolled",
             identifier: identifier,
+            head_hash: Prima.Digest.sha256("head-" <> identifier),
             directory_url: "https://directory.example",
             revision: 1,
             inserted_at: now,
@@ -1324,9 +1218,8 @@ defmodule Arca.CredentialIssuanceSandboxTest do
         %{
           id: Prima.UUID7.generate_id("pid"),
           user_id: user_id,
-          provenance: "remote",
-          enrollment: "enrolled",
           identifier: identifier,
+          head_hash: Prima.Digest.sha256("head-" <> identifier),
           directory_url: "https://directory.example",
           revision: 1,
           inserted_at: now,
@@ -1381,14 +1274,6 @@ defmodule Arca.CredentialIssuanceSandboxTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|order#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "order#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 

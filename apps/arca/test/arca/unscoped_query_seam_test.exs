@@ -441,8 +441,6 @@ defmodule Arca.UnscopedQuerySeamTest do
   @athanor_less %{
     "Arca.Schemas.Athanor" => "the tenant itself — it cannot carry a reference to itself",
     "Arca.Schemas.User" => "a person, addressed by their own id; people are not tenant-owned",
-    "Arca.Schemas.ExternalIdentity" =>
-      "how an IdP names a person — keyed by the identity key and the person's id, no tenant",
     "Arca.Schemas.RegistryToken" => "keyed by user_id — the identity plane, not a tenant's",
     "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
     "Arca.Schemas.CellLease" =>
@@ -473,16 +471,6 @@ defmodule Arca.UnscopedQuerySeamTest do
         "and the account's identifier; a directory holds no athanor",
     "Arca.Schemas.DirectoryNonce" =>
       "a nonce a signed registry request spent, keyed by the account's identifier",
-    "Arca.Schemas.CarryAction" =>
-      "a person's sign-in carry and a relying home's login receipt, keyed by the person " <>
-        "and the action; a carry moves a person between homes, never inside an athanor",
-    "Arca.Schemas.Passkey" =>
-      "a person's credential at this home, keyed by the person and its RP ID; revoked " <>
-        "with the person, never with an athanor",
-    "Arca.Schemas.DeviceCertification" =>
-      "a person's certification of a device at another home, keyed by the person, that " <>
-        "home and its client; the athanor it names is the other home's, not one of this " <>
-        "home's",
     "Arca.Schemas.RequestRateWindow" =>
       "a pre-authentication limit, keyed by bucket and hashed key; no session, and so no " <>
         "athanor, stands behind the requests it bounds",

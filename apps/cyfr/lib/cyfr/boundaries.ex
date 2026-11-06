@@ -338,8 +338,8 @@ defmodule Cyfr.Boundaries do
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
     Arca.PersonIdentities Arca.IdentityLog
-    Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
-    Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
+    Arca.DirectoryHeads Arca.DeviceCertificates
+    Arca.PendingConfirmations Arca.InstallationClaims
     Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
@@ -1201,14 +1201,14 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "profiles, consents and their proofs, standing tool grants, vault entries, " <>
-          "sessions, API keys, tincture frame credentials, paired clients, their " <>
-          "pairing invitations and device certificates, registry push tokens, " <>
+          "sessions, API keys, tincture frame credentials, paired clients and their " <>
+          "device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
           "the identities, athanors and sign-in permissions that decide standing, " <>
           "the invitations that admit a person and seat them, a person's company sign-in " <>
           "and the company sign-ins in flight, a " <>
-          "person's identity row, keys, attempts and carries, the directory's logs " <>
-          "and cached heads, passkeys, pending confirmations, the installation claim, " <>
+          "person's identity row, the directory's logs " <>
+          "and cached heads, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, shares and " <>
           "their use counts, the admission decisions and the request-log rows " <>
           "that project them, and the policy consultation log " <>

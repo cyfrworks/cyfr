@@ -19,7 +19,7 @@ defmodule Sanctum.Newcomer do
 
   The installation's first person is its platform administrator: the mint
   that writes them writes the mark on their row (`users.platform_admin_at`),
-  under the order row and the member slot (`Arca.Users.mint/4`), and no
+  under the order row and the member slot (`Arca.Users.mint/3`), and no
   other path writes it; the mark is audited once it commits (`[:cyfr,
   :sanctum, :tenancy, :platform_admin_bootstrap]`). Only setup makes the
   first person; any other admission onto an empty installation is refused
@@ -217,7 +217,6 @@ defmodule Sanctum.Newcomer do
     Arca.Users.mint(
       Prima.Actor.system(),
       user_attrs,
-      nil,
       [admission: kind(admission), also: &also(admission, account, also, &1)] ++
         verify(admission)
     )
@@ -253,7 +252,6 @@ defmodule Sanctum.Newcomer do
   defp also(admission, account, also, %{id: user_id} = person) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
            user_id: user_id,
-           provenance: "remote",
            identifier: account.identifier,
            directory_url: account.directory_url,
            head_hash: account.head_hash

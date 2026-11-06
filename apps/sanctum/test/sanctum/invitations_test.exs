@@ -627,7 +627,6 @@ defmodule Sanctum.InvitationsRaceTest do
 
   alias Arca.Schemas.{
     Athanor,
-    ExternalIdentity,
     Invitation,
     PersonIdentity,
     SharedThread,
@@ -645,12 +644,13 @@ defmodule Sanctum.InvitationsRaceTest do
   setup do
     n = System.unique_integer([:positive])
     key = "github|https://github.com|invitations-race-#{n}"
+    email = "invitations-race-#{n}@example.com"
     identifier = "per_" <> Prima.Digest.sha256_hex("invitations-race-#{n}")
     remote_key = "cyfr|https://dir.example|" <> identifier
-    on_exit(fn -> unboxed(fn -> cleanup!([key, remote_key], identifier) end) end)
+    on_exit(fn -> unboxed(fn -> cleanup!(email, identifier) end) end)
 
     unboxed(fn ->
-      {:ok, issuer} = Sanctum.Test.People.linked(%{id: key, provider: "github"})
+      {:ok, issuer} = Sanctum.Test.People.linked(%{id: key, provider: "github", email: email})
       {:ok, thread} = Sanctum.SharedThreads.create(issuer.id, "Race #{n}")
       ctx = Sanctum.Context.build(user_id: issuer.id)
       {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx, thread.id)
@@ -775,9 +775,14 @@ defmodule Sanctum.InvitationsRaceTest do
     assert state(context) == %{redeemed_by: nil, seats: 0, door: ["deny"]}
   end
 
-  defp cleanup!(keys, identifier) do
+  # The issuer, by the email the case gave them, and the newcomer, by
+  # their account's identifier.
+  defp cleanup!(email, identifier) do
     people =
-      Arca.Repo.all(from(i in ExternalIdentity, where: i.key in ^keys, select: i.user_id))
+      Arca.Repo.all(from(u in User, where: u.email == ^email, select: u.id)) ++
+        Arca.Repo.all(
+          from(p in PersonIdentity, where: p.identifier == ^identifier, select: p.user_id)
+        )
 
     athanors =
       Arca.Repo.all(
@@ -800,7 +805,6 @@ defmodule Sanctum.InvitationsRaceTest do
     Arca.Repo.delete_all(from(t in SharedThread, where: t.id in ^threads))
 
     Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id in ^people))
-    Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))
     Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^athanors))
     Arca.Repo.delete_all(from(u in User, where: u.id in ^people))
   end

@@ -1324,7 +1324,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
   alias Arca.Schemas.{
     Athanor,
     DeviceCertificate,
-    ExternalIdentity,
     OauthProviderCredential,
     PairedClient,
     PendingConfirmation,
@@ -1359,7 +1358,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
         Arca.Repo.delete_all(where(OauthProviderCredential, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
@@ -1408,14 +1406,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|consume-race#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "consume-race#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         },
         also: fn person ->
           %{identifier: identifier} = Sanctum.TestContext.account!(person.id)

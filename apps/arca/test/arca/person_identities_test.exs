@@ -60,30 +60,20 @@ defmodule Arca.PersonIdentitiesTest do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
 
-    {%{
-       id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-       provider: "github",
-       email: "pid#{n}@example.com",
-       email_verified: true,
-       first_seen_at: now,
-       last_seen_at: now,
-       created_at: now,
-       updated_at: now
-     },
-     %{
-       key: "github|https://github.com|pid#{n}",
-       provider: "github",
-       issuer: "https://github.com",
-       subject: "pid#{n}",
-       first_seen_at: now,
-       last_seen_at: now
-     }}
+    %{
+      id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+      email: "pid#{n}@example.com",
+      email_verified: true,
+      first_seen_at: now,
+      last_seen_at: now,
+      created_at: now,
+      updated_at: now
+    }
   end
 
   defp account_attrs(user_id) do
     %{
       user_id: user_id,
-      provenance: "remote",
       identifier: identifier(),
       directory_url: "https://dir.example",
       head_hash: Prima.Digest.sha256("head-#{System.unique_integer()}")
@@ -91,8 +81,7 @@ defmodule Arca.PersonIdentitiesTest do
   end
 
   defp person! do
-    {user, identity} = person_attrs()
-    {:ok, person} = Arca.Test.People.mint(server(), user, identity)
+    {:ok, person} = Arca.Test.People.mint(server(), person_attrs())
     person
   end
 
@@ -110,7 +99,6 @@ defmodule Arca.PersonIdentitiesTest do
 
       account = %{
         user_id: person.id,
-        provenance: "remote",
         identifier: id,
         directory_url: "https://dir.example",
         head_hash: head
@@ -121,9 +109,7 @@ defmodule Arca.PersonIdentitiesTest do
 
       assert {:ok, row} = PersonIdentities.create(server(), account)
 
-      assert row.provenance == "remote"
-      assert row.enrollment == "enrolled"
-      assert row.head_hash == head
+      assert Map.take(row, [:user_id, :identifier, :directory_url, :head_hash]) == account
       refute Map.has_key?(row, :live_key_sealed) or Map.has_key?(row, :genesis_hash)
       assert {:ok, %{user_id: user_id}} = PersonIdentities.lookup_identifier(server(), id)
       assert user_id == person.id
@@ -140,12 +126,9 @@ defmodule Arca.PersonIdentitiesTest do
       assert {:error, :cross_tenant} =
                PersonIdentities.create(%Prima.Actor{user_id: person.id}, account_attrs(person.id))
 
-      for provenance <- ~w(local door) do
-        assert {:error, {:invalid, %{provenance: _}}} =
-                 PersonIdentities.create(server(), %{
-                   account_attrs(person.id)
-                   | provenance: provenance
-                 })
+      for field <- [:identifier, :directory_url] do
+        assert {:error, {:invalid, %{^field => _}}} =
+                 PersonIdentities.create(server(), Map.delete(account_attrs(person.id), field))
       end
     end
   end
@@ -174,48 +157,6 @@ defmodule Arca.PersonIdentitiesTest do
                PersonIdentities.lookup_identifier(%Prima.Actor{user_id: "usr_x"}, identifier())
 
       assert {:error, :not_found} = PersonIdentities.lookup_identifier(server(), identifier())
-    end
-  end
-
-  describe "the first-method mark" do
-    test "is set once and never cleared" do
-      person = person!()
-      {:ok, _} = PersonIdentities.create(server(), account_attrs(person.id))
-
-      assert {:ok, :marked} =
-               Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
-
-      assert {:ok, :already} =
-               Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
-
-      assert {:ok, :no_identity} =
-               Arca.Repo.transaction(fn -> PersonIdentities.first_method!("usr_nobody") end)
-    end
-
-    test "reads open before it is set and closed after, open for a person with no row, and only to the person or the platform" do
-      person = person!()
-      {:ok, _} = PersonIdentities.create(server(), account_attrs(person.id))
-      own = %Prima.Actor{user_id: person.id}
-
-      assert {:ok, true} = PersonIdentities.first_method_open?(own, person.id)
-      assert {:ok, true} = PersonIdentities.first_method_open?(server(), person.id)
-
-      {:ok, :marked} = Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
-
-      assert {:ok, false} = PersonIdentities.first_method_open?(own, person.id)
-      assert {:ok, false} = PersonIdentities.first_method_open?(server(), person.id)
-
-      bare = person!()
-      assert {:error, :not_found} = PersonIdentities.get(server(), bare.id)
-
-      assert {:ok, true} =
-               PersonIdentities.first_method_open?(%Prima.Actor{user_id: bare.id}, bare.id)
-
-      assert {:error, :cross_tenant} =
-               PersonIdentities.first_method_open?(%Prima.Actor{user_id: bare.id}, person.id)
-
-      assert {:error, :cross_tenant} =
-               PersonIdentities.first_method_open?(Prima.Actor.in_athanor("ath_test"), person.id)
     end
   end
 end

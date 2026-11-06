@@ -84,10 +84,14 @@ defmodule Sanctum.SignIn do
          no longer be used grants nothing: a person the door admits anyway
          is signed in, anyone else is refused `:invitation_invalid`. A new
          person is admitted under the request's admission or the door
-         (`Sanctum.Newcomer.admit/3`). A browser's answer then mints a
-         session bound to the key that signed and the head it was verified
-         under, under the issuance fence (`Sanctum.Session.create/2`,
-         `:stale_head` when the head moved meanwhile). A device's answer
+         (`Sanctum.Newcomer.admit/3`). A browser's answer then records
+         the passkey that signed as a paired client of the person's, in
+         their own athanor, by its key and the head it was verified under
+         (`Arca.PairedClients.record_passkey/2`, the one that stands when
+         it signed in here before), and mints a session on that client,
+         bound to the same key and head, each under the issuance fence
+         (`Sanctum.Session.create/2`, `:stale_head` when the head moved
+         meanwhile). A device's answer
          to its hello, by the key the hello named, pairs the device
          instead (`Sanctum.DeviceUnlock.pair/4`): in the new person's
          admission, or right after the door admitted a person this CYFR
@@ -917,8 +921,11 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  # The session, bound to the key that signed and the head it was verified
-  # under: a head that moved since is refused by the fence.
+  # The session, on the passkey's client and bound to the key that signed
+  # and the head it was verified under: a head that moved since is refused
+  # by the fence, the client's and the session's. The client is recorded
+  # first, so a revocation of it that commits before the session leaves
+  # the session unminted (`Arca.SessionStorage.create_session/3`).
   defp session(user, key, head) do
     ctx =
       Context.build(
@@ -929,13 +936,15 @@ defmodule Sanctum.SignIn do
         permissions: Context.person_permissions()
       )
 
-    with {:ok, ctx} <-
+    with {:ok, client} <- passkey_client(user, key, head),
+         {:ok, ctx} <-
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
-         {:ok, session} <- Sanctum.Session.create(ctx, kid: key.kid, head: head.head_hash) do
+         {:ok, session} <-
+           Sanctum.Session.create(ctx, kid: key.kid, head: head.head_hash, client_id: client.id) do
       Sanctum.Telemetry.auth_event(key.kind, :success)
       {:ok, session.token}
     else
-      {:error, reason} when reason in [:stale_head, :unavailable, :not_owner] ->
+      {:error, reason} when reason in [:stale_head, :unavailable, :not_owner, :not_standing] ->
         {:error, if(reason == :not_owner, do: :unavailable, else: reason)}
 
       {:error, reason} ->
@@ -945,6 +954,28 @@ defmodule Sanctum.SignIn do
         )
 
         {:error, :unavailable}
+    end
+  end
+
+  # The passkey's client in the person's own athanor: the one that stands,
+  # or a new one at the head the answer was verified under.
+  defp passkey_client(user, %Prima.Identity.Key{kind: :passkey, kid: kid}, head) do
+    with {:ok, athanor_id} <- own_athanor(user.id) do
+      Prima.Actor.in_athanor(athanor_id)
+      |> Arca.PairedClients.record_passkey(%{user_id: user.id, kid: kid, head: head.head_hash})
+      |> case do
+        {:ok, client} -> {:ok, client}
+        {:error, reason} when reason in [:stale_head, :not_owner] -> {:error, reason}
+        {:error, _unrecorded} -> {:error, :unavailable}
+      end
+    end
+  end
+
+  defp own_athanor(user_id) do
+    case Arca.Athanors.get_by_owner(Prima.Actor.system(), user_id) do
+      {:ok, %{id: athanor_id}} -> {:ok, athanor_id}
+      {:error, :not_found} -> {:error, :not_standing}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 

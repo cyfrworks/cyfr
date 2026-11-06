@@ -43,14 +43,6 @@ defmodule Sanctum.DoorTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: uid(n),
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "door#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
@@ -73,21 +65,12 @@ defmodule Sanctum.DoorTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "cyfr|https://dir.example|" <> identifier(n),
-          provider: "cyfr",
-          issuer: "https://dir.example",
-          subject: identifier(n),
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
     {:ok, _} =
       Arca.PersonIdentities.create(Prima.Actor.system(), %{
         user_id: user.id,
-        provenance: "remote",
         identifier: identifier(n),
         directory_url: "https://dir.example",
         head_hash: Prima.Digest.sha256("head-" <> identifier(n))
@@ -96,7 +79,7 @@ defmodule Sanctum.DoorTest do
     user
   end
 
-  # The local person's row naming the identifier they enrolled under.
+  # The person's identity row naming their account's identifier.
   defp enrolled!(user, n) do
     now = DateTime.utc_now()
 
@@ -106,8 +89,7 @@ defmodule Sanctum.DoorTest do
           id: Prima.UUID7.generate_id("pid"),
           user_id: user.id,
           identifier: identifier(n),
-          provenance: "local",
-          enrollment: "enrolled",
+          head_hash: Prima.Digest.sha256("head-" <> identifier(n)),
           directory_url: "https://dir.example",
           revision: 1,
           inserted_at: now,
@@ -306,10 +288,12 @@ defmodule Sanctum.DoorTest do
       operator = local!(31)
       enrolled!(operator, 31)
       {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      # The allow setup writes for its account.
+      {:ok, _} = Store.allow("identifier", identifier(31), "setup")
 
       assert {:error, :platform_admin} = Store.deny("person", operator.id, "ops")
       assert {:error, :platform_admin} = Store.deny("identifier", identifier(31), "ops")
-      assert Store.list() == []
+      assert [%{effect: "allow"}] = Store.list()
       assert {:ok, :allowed} = Door.admit_person(operator)
     end
 

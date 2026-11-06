@@ -10,11 +10,10 @@ defmodule Sanctum.Door do
   a sign-in method only unlocks a person who exists (`Sanctum.SignIn`), so
   what the door asks at every sign-in is about the person:
 
-    * A local person — one whose keys this server holds — is admitted
-      unless a deny names them: their admission was the admitting act.
-    * A remote person — one whose keys another CYFR holds, admitted
-      through the CYFR sign-in — is admitted by `*` or by an allow naming
-      their identifier (`per_…`), unless a deny names them.
+    * A person this server holds is admitted by `*` or by an allow naming
+      their account's identifier (`per_…`), unless a deny names them.
+    * A person with no identity row, which no admission makes, is judged
+      by their own id alone: admitted unless a deny names them.
 
   The server allowlist (`Sanctum.Door.Store`) holds allows of an
   identifier or `*`, and denies of a person (their `usr_…` id) or an
@@ -52,7 +51,7 @@ defmodule Sanctum.Door do
   @spec admit_person(%{required(:id) => String.t(), optional(atom()) => term()}) :: verdict()
   def admit_person(%{id: user_id}) when is_binary(user_id) do
     case identity(user_id) do
-      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+      {:ok, %{identifier: identifier}} when is_binary(identifier) ->
         with :no <- deny_arm(user_id, identifier), :no <- remote_arms(identifier) do
           {:error, :not_allowed}
         end
@@ -92,8 +91,8 @@ defmodule Sanctum.Door do
       {:error, reason} ->
         identifier =
           case identity(user_id) do
-            {:ok, %{provenance: "remote", identifier: identifier}} -> identifier
-            _local -> nil
+            {:ok, %{identifier: identifier}} -> identifier
+            _unread -> nil
           end
 
         refused(reason, user_id, identifier)
@@ -202,12 +201,12 @@ defmodule Sanctum.Door do
   @spec refusal_message() :: String.t()
   def refusal_message, do: "not allowed on this server — ask the operator"
 
-  # The person's identity row: provenance and identifier. A person with no
-  # row is judged as a local person by their own id.
+  # The person's identity row, which names their account's identifier. A
+  # person with no row is judged by their own id alone.
   defp identity(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, identity} -> {:ok, identity}
-      {:error, :not_found} -> {:ok, %{provenance: "local", identifier: nil}}
+      {:error, :not_found} -> {:ok, %{identifier: nil}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end

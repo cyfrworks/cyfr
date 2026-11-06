@@ -242,7 +242,6 @@ defmodule Sanctum.DeviceUnlock do
               kid: kid,
               head: head
             },
-            first_method: :mark,
             also: &Sanctum.DeviceCerts.issue(&1, head)
           )
           |> issued()

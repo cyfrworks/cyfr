@@ -68,7 +68,7 @@ defmodule Sanctum.NewcomerTest do
       assert person.platform_admin_at
       identifier = account.identifier
 
-      assert %{provenance: "remote", identifier: ^identifier} =
+      assert %{identifier: ^identifier} =
                Arca.Repo.get_by!(PersonIdentity, user_id: person.id)
 
       assert {:ok, %{owner_user_id: owner}} = Sanctum.Tenancy.Athanors.get_by_owner(person.id)

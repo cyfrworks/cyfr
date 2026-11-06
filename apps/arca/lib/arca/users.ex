@@ -3,8 +3,7 @@
 
 defmodule Arca.Users do
   @moduledoc """
-  Person rows and the sign-in methods linked to them
-  (`Arca.Schemas.User`, `Arca.Schemas.ExternalIdentity`).
+  Person rows (`Arca.Schemas.User`).
 
   ## Why none of this is athanor-scoped
 
@@ -22,8 +21,8 @@ defmodule Arca.Users do
   resolution act as. Who may see a person, and which of these rows they
   may act on, is decided above this layer.
 
-  Nothing that belongs to Ecto crosses the boundary: a person or an
-  identity is answered as a plain map (`Arca.Data`). A refusal is
+  Nothing that belongs to Ecto crosses the boundary: a person is answered
+  as a plain map (`Arca.Data`). A refusal is
   `:conflict` (a unique index — a concurrent admission won it, so the
   loser re-reads), `{:invalid, %{field => [message]}}`, `:not_found`,
   `:cross_tenant` or `:database_error`.
@@ -31,7 +30,7 @@ defmodule Arca.Users do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{ExternalIdentity, User}
+  alias Arca.Schemas.User
 
   @type refusal :: {:error, :cross_tenant | :database_error}
   @type write_refusal ::
@@ -52,27 +51,6 @@ defmodule Arca.Users do
 
   def get(%Prima.Actor{scope: :platform}, _id), do: {:error, :not_found}
   def get(%Prima.Actor{}, _id), do: {:error, :cross_tenant}
-
-  @doc "The person an IdP identity key names, if any."
-  @spec get_by_identity(Prima.Actor.t(), String.t()) ::
-          {:ok, map()} | {:error, :not_found} | refusal()
-  def get_by_identity(%Prima.Actor{scope: :platform}, key) when is_binary(key) and key != "" do
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.get_by_identity", fn ->
-      found(
-        Arca.Repo.one(
-          from(u in User,
-            join: i in ExternalIdentity,
-            on: i.user_id == u.id,
-            where: i.key == ^key
-          )
-        )
-      )
-    end)
-    |> Arca.Data.project()
-  end
-
-  def get_by_identity(%Prima.Actor{scope: :platform}, _key), do: {:error, :not_found}
-  def get_by_identity(%Prima.Actor{}, _key), do: {:error, :cross_tenant}
 
   @doc "The person whose cyfr.run namespace this is, if any."
   @spec get_by_namespace(Prima.Actor.t(), String.t()) ::
@@ -132,38 +110,6 @@ defmodule Arca.Users do
       after_id when is_binary(after_id) -> from(u in query, where: u.id > ^after_id)
     end
   end
-
-  @doc "Every IdP identity that names this person, oldest first."
-  @spec identities(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
-  def identities(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.identities", fn ->
-      {:ok,
-       Arca.Repo.all(
-         from(i in ExternalIdentity,
-           where: i.user_id == ^user_id,
-           order_by: [asc: i.first_seen_at]
-         )
-       )}
-    end)
-    |> Arca.Data.project()
-  end
-
-  def identities(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
-
-  @doc "Stamp `now` on the identity row this key names, as its last sighting."
-  @spec touch_identity(Prima.Actor.t(), String.t(), DateTime.t()) :: :ok | refusal()
-  def touch_identity(%Prima.Actor{scope: :platform}, key, %DateTime{} = now)
-      when is_binary(key) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.touch_identity", fn ->
-      Arca.Repo.update_all(from(i in ExternalIdentity, where: i.key == ^key),
-        set: [last_seen_at: now]
-      )
-
-      :ok
-    end)
-  end
-
-  def touch_identity(%Prima.Actor{}, _key, _now), do: {:error, :cross_tenant}
 
   @doc """
   Record `namespace`, the registry's personal namespace for the person
@@ -243,13 +189,8 @@ defmodule Arca.Users do
   mark (`users.platform_admin_at`) in this transaction; no other mint
   writes it. Every other admission onto an empty node is `:not_set_up`,
   and a `setup` on a node that holds a person is `:setup_closed`.
-
-  `identity_attrs` is the sign-in method linked with the person, or nil
-  for none. A concurrent mint naming the same identity wins the unique
-  index; the loser rolls back and reads the person the winner minted, so
-  both answer the same row.
   """
-  @spec mint(Prima.Actor.t(), map(), map() | nil, keyword()) ::
+  @spec mint(Prima.Actor.t(), map(), keyword()) ::
           {:ok, map()}
           | {:error,
              :not_set_up
@@ -258,30 +199,25 @@ defmodule Arca.Users do
              | term()}
           | refusal()
           | write_refusal()
-  def mint(actor, user_attrs, identity_attrs, opts)
+  def mint(actor, user_attrs, opts)
 
-  def mint(%Prima.Actor{scope: :platform} = actor, user_attrs, identity_attrs, opts)
-      when is_map(user_attrs) and (is_map(identity_attrs) or is_nil(identity_attrs)) and
-             is_list(opts) do
+  def mint(%Prima.Actor{scope: :platform}, user_attrs, opts)
+      when is_map(user_attrs) and is_list(opts) do
     admission = Keyword.fetch!(opts, :admission)
 
     if admission in User.admissions() do
-      mint_guarded(actor, admission, user_attrs, identity_attrs, opts)
+      mint_guarded(admission, user_attrs, opts)
     else
       {:error, {:invalid, %{admission: ["is not an admission"]}}}
     end
   end
 
-  def mint(%Prima.Actor{}, _user_attrs, _identity_attrs, _opts), do: {:error, :cross_tenant}
+  def mint(%Prima.Actor{}, _user_attrs, _opts), do: {:error, :cross_tenant}
 
-  defp mint_guarded(actor, admission, user_attrs, identity_attrs, opts) do
+  defp mint_guarded(admission, user_attrs, opts) do
     verify = Keyword.get(opts, :verify, fn -> :ok end)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
     user_attrs = user_attrs |> Map.new() |> Map.put(:admission, admission)
-
-    identity_attrs =
-      identity_attrs &&
-        identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
 
     Arca.Repo.owned("Arca.Users.mint", fn ->
       case Arca.InstallationClaims.guard!(admission) do
@@ -296,7 +232,6 @@ defmodule Arca.Users do
                  |> User.changeset(user_attrs)
                  |> Arca.Repo.insert()
                  |> settled(),
-               {:ok, _identity} <- insert_identity(identity_attrs, user.id),
                :ok <- also_ran(also.(Arca.Data.project(user))) do
             {:ok, {admitted, user}}
           end
@@ -311,8 +246,8 @@ defmodule Arca.Users do
       {:ok, {:ok, user}} ->
         {:ok, user}
 
-      {:error, reason} ->
-        lost_the_race(actor, identity_attrs && identity_attrs[:key], reason)
+      {:error, _reason} = refusal ->
+        refusal
     end
   end
 
@@ -320,154 +255,6 @@ defmodule Arca.Users do
   # administrator's mark, on the row itself and past every changeset.
   defp born(:first), do: %User{platform_admin_at: DateTime.utc_now()}
   defp born(:ok), do: %User{}
-
-  @doc """
-  Link another IdP identity (`attrs`: its `:key`, `:provider`, `:issuer`
-  and `:subject`) to the person `user_id`, in one locking transaction that
-  locks the person's row first and reads them `active`
-  (`:not_active` otherwise, `:not_found` for no such person).
-
-  An identity already the person's is answered `{:ok, %{identity: row,
-  linked: false}}` and writes nothing. One another person holds is
-  `:conflict`. Otherwise the row is written and `opts[:also]` runs after
-  it, inside the transaction, handed `%{identity: row}`; it answers `:ok`
-  or `{:error, reason}`, which rolls the link back with that reason. A
-  link answers `{:ok, %{identity: row, linked: true}}`.
-  """
-  @spec link_identity(Prima.Actor.t(), String.t(), map(), keyword()) ::
-          {:ok, %{identity: map(), linked: boolean()}}
-          | {:error, :conflict | :not_active | :not_found | term()}
-          | refusal()
-  def link_identity(actor, user_id, attrs, opts \\ [])
-
-  def link_identity(%Prima.Actor{scope: :platform}, user_id, attrs, opts)
-      when is_binary(user_id) and user_id != "" and is_map(attrs) and is_list(opts) do
-    also = Keyword.get(opts, :also, fn _linked -> :ok end)
-
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.link_identity", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        with :ok <- active_locked(user_id),
-             {:ok, outcome} <- linked(user_id, attrs) do
-          case outcome do
-            %{linked: false} ->
-              outcome
-
-            %{linked: true, identity: identity} ->
-              case also_ran(also.(%{identity: Arca.Data.project(identity)})) do
-                :ok -> outcome
-                {:error, reason} -> Arca.Repo.rollback(reason)
-              end
-          end
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def link_identity(%Prima.Actor{}, _user_id, _attrs, _opts), do: {:error, :cross_tenant}
-
-  @doc """
-  Unlink the IdP identity `key` from the person `user_id`, in one locking
-  transaction that locks the person's row first and reads them `active`.
-  Only the person's own identity is removed (`:not_found` for one that is
-  not theirs). `opts[:also]` runs after the delete, inside the
-  transaction, handed `%{identity: row, remaining: count}`, the person's
-  identities left; it answers `:ok` or `{:error, reason}`, which restores
-  the identity and refuses with that reason.
-  """
-  @spec unlink_identity(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
-          {:ok, map()} | {:error, :not_active | :not_found | term()} | refusal()
-  def unlink_identity(actor, user_id, key, opts \\ [])
-
-  def unlink_identity(%Prima.Actor{scope: :platform}, user_id, key, opts)
-      when is_binary(user_id) and user_id != "" and is_binary(key) and is_list(opts) do
-    also = Keyword.get(opts, :also, fn _unlinked -> :ok end)
-
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.unlink_identity", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        with :ok <- active_locked(user_id),
-             %ExternalIdentity{} = identity <-
-               Arca.Repo.get_by(ExternalIdentity, key: key, user_id: user_id) ||
-                 {:error, :not_found} do
-          {1, _} = Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.id == ^identity.id))
-
-          remaining =
-            Arca.Repo.one(
-              from(i in ExternalIdentity, where: i.user_id == ^user_id, select: count(i.id))
-            )
-
-          unlinked = %{identity: Arca.Data.project(identity), remaining: remaining}
-
-          case also_ran(also.(unlinked)) do
-            :ok -> unlinked
-            {:error, reason} -> Arca.Repo.rollback(reason)
-          end
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def unlink_identity(%Prima.Actor{}, _user_id, _key, _opts), do: {:error, :cross_tenant}
-
-  # The person's row, locked first as every standing order locks it, and
-  # read active under the lock.
-  defp active_locked(user_id) do
-    from(u in User, where: u.id == ^user_id, select: u.status)
-    |> Arca.QueryHelpers.for_update()
-    |> Arca.Repo.one()
-    |> case do
-      nil -> {:error, :not_found}
-      "active" -> :ok
-      _not_active -> {:error, :not_active}
-    end
-  end
-
-  # The unique key decides: an insert that finds the key taken writes
-  # nothing (`on_conflict: :nothing`, which on PostgreSQL leaves the
-  # transaction usable) and reads whose it is.
-  defp linked(user_id, attrs) do
-    key = attrs[:key]
-
-    case Arca.Repo.get_by(ExternalIdentity, key: key) do
-      %ExternalIdentity{user_id: ^user_id} = identity ->
-        {:ok, %{identity: identity, linked: false}}
-
-      %ExternalIdentity{} ->
-        {:error, :conflict}
-
-      nil ->
-        now = DateTime.utc_now()
-
-        row = %{
-          id: Prima.UUID7.generate_id("ext"),
-          user_id: user_id,
-          key: key,
-          provider: attrs[:provider],
-          issuer: attrs[:issuer],
-          subject: attrs[:subject],
-          first_seen_at: now,
-          last_seen_at: now
-        }
-
-        changeset = ExternalIdentity.changeset(%ExternalIdentity{}, row)
-
-        cond do
-          not changeset.valid? ->
-            {:error, Arca.Data.invalid(changeset)}
-
-          match?({1, _}, Arca.Repo.insert_all(ExternalIdentity, [row], on_conflict: :nothing)) ->
-            {:ok, %{identity: Arca.Repo.get!(ExternalIdentity, row.id), linked: true}}
-
-          true ->
-            {:error, :conflict}
-        end
-    end
-  end
 
   defp also_ran(:ok), do: :ok
   defp also_ran({:error, _reason} = refusal), do: refusal
@@ -479,30 +266,6 @@ defmodule Arca.Users do
   end
 
   # ---- internal --------------------------------------------------------------
-
-  defp insert_identity(nil, _user_id), do: {:ok, nil}
-
-  defp insert_identity(attrs, user_id) do
-    %ExternalIdentity{}
-    |> ExternalIdentity.changeset(Map.put(attrs, :user_id, user_id))
-    |> Arca.Repo.insert()
-    |> case do
-      {:ok, identity} -> {:ok, identity}
-      {:error, %Ecto.Changeset{} = changeset} -> {:error, refusal(changeset)}
-    end
-  end
-
-  # The unique index on the identity key is the arbiter of a concurrent
-  # admission: the loser reads the row the winner wrote rather than
-  # reporting a conflict nobody can act on.
-  defp lost_the_race(actor, key, :conflict) when is_binary(key) do
-    case get_by_identity(actor, key) do
-      {:ok, user} -> {:ok, user}
-      _ -> {:error, :conflict}
-    end
-  end
-
-  defp lost_the_race(_actor, _key, reason), do: {:error, reason}
 
   defp found(nil), do: {:error, :not_found}
   defp found(%User{} = user), do: {:ok, user}

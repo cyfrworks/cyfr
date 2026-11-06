@@ -108,7 +108,7 @@ defmodule Arca.CredentialBindingsLockTest do
 
   import Ecto.Query
 
-  alias Arca.Schemas.{Athanor, ExternalIdentity, Session, User}
+  alias Arca.Schemas.{Athanor, Session, User}
   alias Ecto.Adapters.SQL.Sandbox
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
@@ -133,14 +133,6 @@ defmodule Arca.CredentialBindingsLockTest do
             last_seen_at: now,
             created_at: now,
             updated_at: now
-          },
-          %{
-            key: "github|https://github.com|cb#{n}",
-            provider: "github",
-            issuer: "https://github.com",
-            subject: "cb#{n}",
-            first_seen_at: now,
-            last_seen_at: now
           }
         )
 
@@ -157,7 +149,6 @@ defmodule Arca.CredentialBindingsLockTest do
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)

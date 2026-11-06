@@ -4,42 +4,37 @@
 defmodule Sanctum.Passkeys do
   @moduledoc """
   The passkeys of a person's account that signed in here, as this CYFR
-  knows them: by the key each signed with (`kid`), from the sessions its
-  sign-ins minted (`Sanctum.SignIn`, provider `passkey`). A passkey lives
-  in the account's log at the directory and in its person's platform;
-  this CYFR holds no registration of it, and a key removed from the
-  account ends its sessions here once a refresh reads the removal
-  (`Sanctum.IdentityFreshness`).
+  knows them: each a paired client of the person's, known by the key it
+  signs with (`kid`), which its first sign-in here recorded
+  (`Sanctum.SignIn`, `Arca.PairedClients.record_passkey/2`) and its
+  sessions stand on. A passkey lives in the account's log at the
+  directory and in its person's platform; this CYFR holds no registration
+  of it, and a key removed from the account ends its client and sessions
+  here once a refresh reads the removal (`Sanctum.IdentityFreshness`).
 
-  `list/1` answers the context person's passkeys signed in here, each its
-  `kid`, how many of its sessions stand (`sessions`) and when the newest
-  was minted (`signed_in_at`). `revoke/2` ends every session here that
-  one passkey signed for, which signs it out of this CYFR and leaves the
-  key in the account: removing it from the account is the account pages'
-  (`/account/devices`). The person's devices are their paired clients
-  (`Sanctum.Pairing`).
+  `list/1` answers the context person's passkeys that stand here, each its
+  `kid`, its client (`client_id`) and when it first signed in here
+  (`signed_in_at`). `revoke/2` revokes one passkey's client here, which
+  ends every session it signed for and signs it out of this CYFR, and
+  leaves the key in the account: its next sign-in here is recorded anew,
+  and removing it from the account is the account pages'
+  (`/account/devices`). The person's devices are their other paired
+  clients (`Sanctum.Pairing`).
   """
 
   alias Sanctum.Context
 
   @typedoc "A passkey of the person's account as this CYFR knows it."
-  @type listed :: %{kid: String.t(), sessions: pos_integer(), signed_in_at: DateTime.t()}
+  @type listed :: %{kid: String.t(), client_id: String.t(), signed_in_at: DateTime.t()}
 
-  @doc "The context person's passkeys signed in here, newest sign-in first (the module doc)."
-  @spec list(Context.t()) :: {:ok, [listed()]} | {:error, :unauthenticated}
+  @doc "The context person's passkeys that stand here, newest first (the module doc)."
+  @spec list(Context.t()) :: {:ok, [listed()]} | {:error, :unauthenticated | :unavailable}
   def list(%Context{} = ctx) do
-    with {:ok, user_id} <- person(ctx) do
+    with {:ok, user_id} <- person(ctx),
+         {:ok, clients} <- standing(user_id) do
       passkeys =
-        user_id
-        |> signed_in()
-        |> Enum.group_by(& &1.kid)
-        |> Enum.map(fn {kid, rows} ->
-          %{
-            kid: kid,
-            sessions: length(rows),
-            signed_in_at: rows |> Enum.map(& &1.inserted_at) |> Enum.max(DateTime)
-          }
-        end)
+        clients
+        |> Enum.map(&%{kid: &1.kid, client_id: &1.id, signed_in_at: &1.inserted_at})
         |> Enum.sort_by(& &1.signed_in_at, {:desc, DateTime})
 
       {:ok, passkeys}
@@ -47,39 +42,44 @@ defmodule Sanctum.Passkeys do
   end
 
   @doc """
-  End every session here the context person's passkey `kid` signed for
-  (the module doc), in one statement (`Arca.SessionStorage.delete_signed_by/2`);
-  once it has committed, each ended session's memo is dropped and the
-  revocation announced. Answers `%{kid, sessions}`, how many ended;
-  `{:not_found, "passkey", kid}` for a key that signed none of theirs;
-  `:unavailable` when the store could not delete them, with nothing ended
-  and nothing announced.
+  Revoke the context person's passkey `kid` here (the module doc): its
+  client, with every session it signed for
+  (`Arca.PairedClients.revoke/2`); once that has committed, each ended
+  session's memo is dropped and the revocation announced. Answers `%{kid,
+  sessions}`, how many sessions ended; `{:not_found, "passkey", kid}` for
+  a key with no client of theirs standing here; `:unavailable` when the
+  store could not revoke it, with nothing ended and nothing announced.
   """
   @spec revoke(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def revoke(%Context{} = ctx, kid) when is_binary(kid) do
-    with {:ok, user_id} <- person(ctx) do
-      case Arca.SessionStorage.delete_signed_by(Context.actor(ctx), kid) do
-        {:ok, []} ->
-          {:error, {:not_found, "passkey", kid}}
-
-        {:ok, hashes} ->
-          :ok = Sanctum.Session.announce_revoked(user_id, hashes)
-          {:ok, %{kid: kid, sessions: length(hashes)}}
-
-        {:error, _unanswered} ->
-          {:error, :unavailable}
+    with {:ok, user_id} <- person(ctx),
+         {:ok, clients} <- standing(user_id) do
+      # A passkey's client is recorded in its person's own athanor under
+      # their lock, so one at most stands.
+      case Enum.find(clients, &(&1.kid == kid)) do
+        nil -> {:error, {:not_found, "passkey", kid}}
+        client -> revoked(user_id, kid, client)
       end
     end
   end
 
-  # The person's standing sessions a passkey of their account signed for.
-  # A row that cannot be read is no passkey's: the list shows fewer, and
-  # grants nothing.
-  defp signed_in(user_id) do
-    for hash <- Arca.SessionStorage.hashes_by_user(user_id),
-        {:ok, %{provider: "passkey", kid: kid} = row} <- [Arca.SessionStorage.get_session(hash)],
-        is_binary(kid),
-        do: %{kid: kid, hash: hash, inserted_at: row.inserted_at}
+  defp revoked(user_id, kid, client) do
+    case Arca.PairedClients.revoke(Prima.Actor.in_athanor(client.athanor_id), client.id) do
+      {:ok, %{revoked_session_hashes: hashes}} ->
+        :ok = Sanctum.Session.announce_revoked(user_id, hashes)
+        {:ok, %{kid: kid, sessions: length(hashes)}}
+
+      {:error, _unrevoked} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # The person's passkey clients that stand, in every athanor.
+  defp standing(user_id) do
+    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
+      {:ok, clients} -> {:ok, Enum.filter(clients, &(&1.source_kind == "passkey"))}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
   end
 
   # A person signed in, off the guest plane.

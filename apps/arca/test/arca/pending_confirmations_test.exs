@@ -5,11 +5,11 @@ defmodule Arca.PendingConfirmationsTest do
   @moduledoc """
   Pending confirmations, athanor-scoped and keyed by their public ref: a
   new record for every open, never one that stands; confirmed once, by a
-  passkey or client that still stands, named by its ref; consumed once,
+  key of the person's account or a client that still stands, named by its
+  ref; consumed once,
   only confirmed, unexpired, unvoided, for exactly the change it recorded,
   by the credential that opened it and under the secret whose ref it is;
-  cancelled once; voided when the client or passkey that confirmed it is
-  revoked; the secret stored nowhere; and the stored row rebuilds the
+  cancelled once; voided when the client that confirmed it is revoked; the secret stored nowhere; and the stored row rebuilds the
   `Prima.Confirmation` whose digest the proof covered.
   """
 
@@ -348,7 +348,7 @@ defmodule Arca.PendingConfirmationsTest do
                PendingConfirmations.confirm(actor, rec.id, %{proof: "oidc_reauth"})
     end
 
-    test "refuses a proof the vocabulary lacks, and a passkey proof names its key or its passkey",
+    test "refuses a proof the vocabulary lacks, and a passkey proof names its key",
          %{actor: actor} do
       rec = record(actor)
       {:ok, _} = open(actor, rec)
@@ -359,11 +359,7 @@ defmodule Arca.PendingConfirmationsTest do
       assert {:error, {:invalid, %{kid: _}}} =
                PendingConfirmations.confirm(actor, rec.id, %{proof: "passkey"})
 
-      assert {:error, :revoked} =
-               PendingConfirmations.confirm(actor, rec.id, %{
-                 proof: "passkey",
-                 passkey_id: "psk_x"
-               })
+      assert {:ok, %{state: "pending"}} = PendingConfirmations.get(actor, rec.id)
     end
 
     test "a key's proof names its key and the cached head of the person's account, both or neither",
@@ -380,17 +376,12 @@ defmodule Arca.PendingConfirmationsTest do
                })
 
       assert {:error, {:invalid, %{kid: _}}} =
-               PendingConfirmations.confirm(actor, rec.id, %{
-                 proof: "passkey",
-                 passkey_id: "psk_x",
-                 kid: kid
-               })
+               PendingConfirmations.confirm(actor, rec.id, %{proof: "passkey", kid: kid})
 
       # The record's person has no account here: no head is theirs to name.
       assert {:error, :stale_head} =
                PendingConfirmations.confirm(actor, rec.id, %{
                  proof: "passkey",
-                 passkey_id: "psk_x",
                  kid: kid,
                  head: digest("head")
                })
@@ -398,7 +389,7 @@ defmodule Arca.PendingConfirmationsTest do
       assert {:ok, %{state: "pending"}} = PendingConfirmations.get(actor, rec.id)
     end
 
-    test "a passkey of the person's account confirms by its key at the cached head, with no passkey here",
+    test "a passkey of the person's account confirms by its key at the cached head",
          %{actor: actor} do
       now = DateTime.utc_now()
       user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
@@ -406,8 +397,7 @@ defmodule Arca.PendingConfirmationsTest do
       {:ok, _person} =
         Arca.Test.People.mint(
           Prima.Actor.system(),
-          %{id: user_id, first_seen_at: now, last_seen_at: now, created_at: now, updated_at: now},
-          nil
+          %{id: user_id, first_seen_at: now, last_seen_at: now, created_at: now, updated_at: now}
         )
 
       %{head: head} = Arca.Test.People.account!(user_id)
@@ -429,7 +419,7 @@ defmodule Arca.PendingConfirmationsTest do
                  head: head
                })
 
-      assert is_nil(row.confirmed_passkey_id)
+      assert is_nil(row.confirmed_client_id)
     end
 
     test "refuses after expiry, and a revoked client confirms nothing", %{actor: actor} do
@@ -759,7 +749,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
     Athanor,
     CellLease,
     DeviceCertificate,
-    ExternalIdentity,
     PairedClient,
     PendingConfirmation,
     User
@@ -792,7 +781,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
         Arca.Repo.delete_all(where(PendingConfirmation, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
@@ -812,14 +800,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
               last_seen_at: now,
               created_at: now,
               updated_at: now
-            },
-            %{
-              key: "github|https://github.com|cnf#{n}",
-              provider: "github",
-              issuer: "https://github.com",
-              subject: "cnf#{n}",
-              first_seen_at: now,
-              last_seen_at: now
             }
           )
 
@@ -1040,97 +1020,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
     assert {:error, :revoked} = Task.await(confirmer, 25_000)
 
     assert %{state: "voided", confirmed_client_id: nil} =
-             unboxed(fn -> Arca.Repo.get!(PendingConfirmation, record.id) end)
-  end
-
-  # The denial has no pause point here but a PostgreSQL trigger; SQLite's write lock orders it.
-  @tag :postgres
-  test "a denial and a confirm through a passkey take the passkey before the record", %{
-    actor: actor,
-    user_id: user_id,
-    client: client,
-    record: record
-  } do
-    test = self()
-
-    identifier = "per_" <> Prima.Digest.sha256_hex("race-#{System.unique_integer([:positive])}")
-
-    on_exit(fn ->
-      unboxed(fn ->
-        Arca.Repo.delete_all(where(Arca.Schemas.Passkey, user_id: ^user_id))
-        Arca.Repo.delete_all(where(Arca.Schemas.PersonIdentity, user_id: ^user_id))
-        Arca.Repo.delete_all(where(Arca.Schemas.DirectoryHead, identifier: ^identifier))
-      end)
-    end)
-
-    passkey =
-      unboxed(fn ->
-        _account = Arca.Test.People.account!(user_id, identifier: identifier)
-
-        {:ok, passkey} =
-          Arca.Passkeys.register(%Prima.Actor{user_id: user_id}, %{
-            user_id: user_id,
-            credential_id: "cred-race-#{System.unique_integer([:positive])}",
-            rp_id: "home.example",
-            relying_home: "https://home.example",
-            public_key: "cose-key",
-            registration_digest: Prima.Digest.sha256("registration"),
-            possession_verified: true,
-            state: "active"
-          })
-
-        # The record is already confirmed through the paired client, so the
-        # denial voids it as a dependent of that client.
-        {:ok, _} =
-          PendingConfirmations.confirm(actor, record.id, %{
-            proof: "oidc_reauth",
-            client_id: client.id
-          })
-
-        passkey
-      end)
-
-    # The denial is held after it revoked the client and before it revokes
-    # the passkeys: with the confirmations voided only after the passkeys,
-    # it holds no confirmation's lock yet, so the confirm, locking the
-    # passkey and then the record, finishes, and the denial then takes the
-    # passkey. Voiding first would hold the record here, and the two would
-    # deadlock.
-    install_gate!("pairing_invitations")
-    gate = close_gate!()
-
-    denier =
-      Task.async(fn ->
-        unboxed(fn ->
-          send(test, {:denier, backend()})
-
-          gated(fn ->
-            SecurityTransitions.deny_user(server(), user_id, verify: fn _ -> :ok end)
-          end)
-        end)
-      end)
-
-    assert_receive {:denier, pid}, 5_000
-    LockWait.await_lock_wait!(pid, [~s(UPDATE "pairing_invitations")], event: "advisory")
-
-    confirmer =
-      Task.async(fn ->
-        unboxed(fn ->
-          PendingConfirmations.confirm(actor, record.id, %{
-            proof: "passkey",
-            passkey_id: passkey.id
-          })
-        end)
-      end)
-
-    answer = Task.await(confirmer, 25_000)
-    refute answer == {:error, :database_error}, "the confirm deadlocked: #{inspect(answer)}"
-
-    open_gate!(gate)
-    assert {:ok, %{transitioned: true} = change} = Task.await(denier, 25_000)
-    assert passkey.id in change.revoked_passkey_ids
-
-    assert %{state: "voided"} =
              unboxed(fn -> Arca.Repo.get!(PendingConfirmation, record.id) end)
   end
 end

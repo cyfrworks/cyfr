@@ -190,7 +190,7 @@ defmodule Sanctum.Provisioning do
   @doc """
   Whether a person may be admitted with an athanor of their own, asked
   inside their admission's transaction before their row is written
-  (`Sanctum.Newcomer`, `Arca.Users.mint/4`'s `verify:`), so a refused
+  (`Sanctum.Newcomer`, `Arca.Users.mint/3`'s `verify:`), so a refused
   admission writes no row: the mint rate, then the server cap, counted
   under the census lock the transaction then holds to its end
   (`Sanctum.Tenancy.Athanors.personal_place/0`). `CYFR_MINT_PER_HOUR` bounds how fast

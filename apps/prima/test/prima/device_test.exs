@@ -193,23 +193,6 @@ defmodule Prima.DeviceTest do
            }
   end
 
-  test "a key's digest and its code are the fixture's, and the code reads back to the digest" do
-    %{"device_key" => key, "key_digest" => digest, "code" => code} = vectors()["key_digest"]
-    {:ok, raw} = Prima.Identity.Encoding.unb64(key, 32)
-
-    assert Device.key_digest(raw) == digest
-    assert Device.key_digest?(digest)
-    assert Device.key_code(digest) == code
-    assert Device.from_key_code(code) == {:ok, digest}
-    assert Device.from_key_code(" " <> String.replace(code, " ", "\n") <> " ") == {:ok, digest}
-    assert Device.from_key_code(digest) == {:ok, digest}
-
-    for not_a_digest <- [String.slice(digest, 0, 42), digest <> "A", "sha256:" <> digest, nil, 7] do
-      refute Device.key_digest?(not_a_digest)
-      assert Device.from_key_code(not_a_digest) == :error
-    end
-  end
-
   test "every refusal is refused with its reason, and its field when it names one" do
     intent = Enum.find(vectors()["messages"], &(&1["message"]["type"] == "intent"))["message"]
 
