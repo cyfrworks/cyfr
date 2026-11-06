@@ -288,7 +288,7 @@ defmodule Compendium.Providers.RegistryTest do
   # Each action as its handler reaches the registry
   # (`Compendium.Registry.Client`): a POST or PATCH changes something
   # there, a DELETE deletes it, a GET reads.
-  @remote_changes ~w(sync register claim_publisher verify_publisher tokens_issue
+  @remote_changes ~w(sync claim_publisher verify_publisher tokens_issue
                      members_add members_update report legal_accept appeal)
   @remote_deletes ~w(tokens_revoke members_remove)
   @reads ~w(tokens_list members_list whoami get_namespace list_my_reports legal_page
