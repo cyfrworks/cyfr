@@ -43,14 +43,6 @@ defmodule Sanctum.DoorTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: uid(n),
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "door#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
@@ -73,14 +65,6 @@ defmodule Sanctum.DoorTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "cyfr|https://dir.example|" <> identifier(n),
-          provider: "cyfr",
-          issuer: "https://dir.example",
-          subject: identifier(n),
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 

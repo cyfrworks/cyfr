@@ -60,24 +60,15 @@ defmodule Arca.PersonIdentitiesTest do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
 
-    {%{
-       id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-       provider: "github",
-       email: "pid#{n}@example.com",
-       email_verified: true,
-       first_seen_at: now,
-       last_seen_at: now,
-       created_at: now,
-       updated_at: now
-     },
-     %{
-       key: "github|https://github.com|pid#{n}",
-       provider: "github",
-       issuer: "https://github.com",
-       subject: "pid#{n}",
-       first_seen_at: now,
-       last_seen_at: now
-     }}
+    %{
+      id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+      email: "pid#{n}@example.com",
+      email_verified: true,
+      first_seen_at: now,
+      last_seen_at: now,
+      created_at: now,
+      updated_at: now
+    }
   end
 
   defp account_attrs(user_id) do
@@ -90,8 +81,7 @@ defmodule Arca.PersonIdentitiesTest do
   end
 
   defp person! do
-    {user, identity} = person_attrs()
-    {:ok, person} = Arca.Test.People.mint(server(), user, identity)
+    {:ok, person} = Arca.Test.People.mint(server(), person_attrs())
     person
   end
 

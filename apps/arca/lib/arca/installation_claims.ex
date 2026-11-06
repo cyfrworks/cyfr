@@ -8,7 +8,7 @@ defmodule Arca.InstallationClaims do
   ## The guard
 
   `guard!/1` is the check every person mint runs inside its own
-  transaction (`Arca.Users.mint/4`), naming the mint's admission. The
+  transaction (`Arca.Users.mint/3`), naming the mint's admission. The
   installation's first person is made only by `setup`, and is its
   platform administrator: every other admission needs an existing
   person's act, so on a node with no person it is refused `:not_set_up`.
@@ -45,7 +45,7 @@ defmodule Arca.InstallationClaims do
   @doc false
   @spec guard!(String.t()) :: admitted() | {:error, :not_set_up | :setup_closed}
   # The first-person guard, inside the caller's locking transaction
-  # (`Arca.Users.mint/4`): the mint's admission. Answers what it admits or
+  # (`Arca.Users.mint/3`): the mint's admission. Answers what it admits or
   # the refusal the caller rolls back with.
   # arca:db-raise-ok a transaction step: the mint that runs it rescues around its transaction.
   def guard!(admission) when is_binary(admission) do
@@ -94,7 +94,7 @@ defmodule Arca.InstallationClaims do
 
   @doc false
   @spec first_person_made() :: :ok
-  # Said by `Arca.Users.mint/4` once the mint of the first person, by
+  # Said by `Arca.Users.mint/3` once the mint of the first person, by
   # setup or `cyfr login --setup`, committed. Logged at the
   # boot's notice level, so a log that holds the one holds the other.
   def first_person_made do

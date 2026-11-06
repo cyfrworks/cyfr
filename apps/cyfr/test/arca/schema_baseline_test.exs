@@ -96,11 +96,7 @@ defmodule Arca.SchemaBaselineTest do
         for({table, _fk, _parent} <- Arca.TenantTables.by_parent(), do: table)
 
     # The server's people and its door exist before any athanor does.
-    assert Enum.sort(unscoped -- documented) == [
-             "external_identities",
-             "server_allowlist",
-             "users"
-           ]
+    assert Enum.sort(unscoped -- documented) == ["server_allowlist", "users"]
 
     assert documented -- unscoped == []
   end

@@ -58,14 +58,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
           last_seen_at: now(),
           created_at: now(),
           updated_at: now()
-        },
-        %{
-          key: "github|https://github.com|rs#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "rs#{n}",
-          first_seen_at: now(),
-          last_seen_at: now()
         }
       )
 

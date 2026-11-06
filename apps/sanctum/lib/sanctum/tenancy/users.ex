@@ -7,10 +7,9 @@ defmodule Sanctum.Tenancy.Users do
   `Arca.Users` answers for their row.
 
   A row is written only by an admission (`Sanctum.Newcomer`), together
-  with the person's identity row, and touched on every later sign-in
-  (`seen/2`); the door, invited shared-thread seats and per-person preferences key
-  off it. The person's identifier is on that identity row,
-  never on the `users` row (`identifier/1`).
+  with the person's identity row; the door, invited shared-thread seats
+  and per-person preferences key off it. The person's identifier is on
+  that identity row, never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
   person loses their sessions and API keys, their own athanor is archived
   (nothing deleted), their seats in shared threads are removed and the
@@ -20,10 +19,9 @@ defmodule Sanctum.Tenancy.Users do
 
   ## What is decided here, and what is stored below
 
-  The statements are `Arca.Users`'. What stays here is the deciding: which
-  claims a sign-in method's provider makes are recorded on the contact
-  fields, what an eject costs the person, and what an unanswerable read
-  should read as. A person is not a row inside an
+  The statements are `Arca.Users`'. What stays here is the deciding: what
+  an eject costs the person, and what an unanswerable read should read
+  as. A person is not a row inside an
   athanor — they exist before any athanor does and sit in several at once
   — so every call runs as the server (`Prima.Actor.system/0`), which is
   what `Arca.Users` requires and says why.
@@ -34,49 +32,9 @@ defmodule Sanctum.Tenancy.Users do
   @typedoc "A person's row, as the plain map `Arca.Users` answers."
   @type user :: %{required(:id) => String.t(), optional(atom()) => term()}
 
-  @typedoc """
-  What a linked sign-in method's provider said at an unlock: `id` is the
-  method's identity key (`provider|issuer|subject`), never a person's own
-  id.
-  """
-  @type provider_info :: %{
-          required(:id) => String.t(),
-          optional(:provider) => String.t() | atom(),
-          optional(:email) => String.t() | nil,
-          optional(:verified) => boolean() | :unknown,
-          optional(:name) => String.t() | nil
-        }
-
-  @doc """
-  Record a sign-in on the person's row: `last_seen_at`, and the contact
-  fields the method's provider asserted. An email is written, with
-  `email_verified: true`, only when the provider proved it (`verified:
-  true`); a screen name when one is given. An absent claim leaves the
-  stored value in place. The identity row the key names is touched as
-  last seen. `users.email` decides nothing: it is a contact field.
-  """
-  @spec seen(user(), provider_info()) :: {:ok, user()} | {:error, term()}
-  def seen(%{id: _} = user, %{id: key} = info) when is_binary(key) do
-    now = DateTime.utc_now()
-    Arca.Users.touch_identity(server(), key, now)
-
-    attrs =
-      %{last_seen_at: now}
-      |> Prima.MapUtil.put_present(:display_name, Map.get(info, :name))
-      |> proved_email(Map.get(info, :email), Map.get(info, :verified))
-
-    update(user, attrs)
-  end
-
-  defp proved_email(attrs, email, true) when is_binary(email) and email != "",
-    do: Map.merge(attrs, %{email: email, email_verified: true})
-
-  defp proved_email(attrs, _email, _unproved), do: attrs
-
   @doc """
   The person a person identifier names here, by their identity row
-  (`Arca.PersonIdentities.lookup_identifier/2`): a person admitted through
-  the CYFR sign-in, or a local person once enrolled.
+  (`Arca.PersonIdentities.lookup_identifier/2`).
   """
   @spec get_by_identifier(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get_by_identifier(identifier) when is_binary(identifier) do
@@ -90,27 +48,14 @@ defmodule Sanctum.Tenancy.Users do
   @doc """
   The person's identifier (`per_…`), read from their identity row beside
   the `users` row (`Arca.PersonIdentities`), which the `users` row does not
-  carry: `{:ok, identifier}` once they are enrolled, or admitted from
-  another home; `{:ok, nil}` for a local person not yet enrolled;
-  `{:error, :not_found}` for a person with no identity row.
+  carry: `{:ok, identifier}`, or `{:error, :not_found}` for a person with
+  no identity row.
   """
   @spec identifier(String.t()) ::
           {:ok, String.t() | nil} | {:error, :not_found | :cross_tenant | :database_error}
   def identifier(user_id) when is_binary(user_id) do
     with {:ok, row} <- Arca.PersonIdentities.get(server(), user_id),
          do: {:ok, row.identifier}
-  end
-
-  @doc "The person a linked sign-in method's identity key names, if any."
-  @spec get_by_identity(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
-  def get_by_identity(key), do: Arca.Users.get_by_identity(server(), key)
-
-  @doc "Every sign-in method linked to this person, oldest first."
-  @spec identities(String.t()) :: [map()]
-  def identities(user_id) when is_binary(user_id) do
-    # Deliberate default: a display read of how a person has signed in —
-    # an outage shows fewer providers, it grants nothing.
-    rows_or_empty(Arca.Users.identities(server(), user_id))
   end
 
   @spec get(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}

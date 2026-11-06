@@ -337,8 +337,7 @@ defmodule Arca.SessionStorageTest do
             last_seen_at: now,
             created_at: now,
             updated_at: now
-          },
-          nil
+          }
         )
 
       Map.merge(person, Arca.Test.People.account!(person.id))

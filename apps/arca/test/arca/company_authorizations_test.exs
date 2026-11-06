@@ -42,8 +42,7 @@ defmodule Arca.CompanyAuthorizationsTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        nil
+        }
       )
 
     person.id
@@ -226,8 +225,7 @@ defmodule Arca.CompanyAuthorizationsRaceTest do
         {:ok, _} =
           Arca.Test.People.mint(
             server(),
-            %{id: id, first_seen_at: now, last_seen_at: now, created_at: now, updated_at: now},
-            nil
+            %{id: id, first_seen_at: now, last_seen_at: now, created_at: now, updated_at: now}
           )
       end
     end)

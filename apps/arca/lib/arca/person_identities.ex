@@ -40,7 +40,7 @@ defmodule Arca.PersonIdentities do
 
   Written once per person: a second row is `{:error, :conflict}`. Runs in
   its own locking transaction, nested in a caller's (the `also:` closure
-  an admission passes `Arca.Users.mint/4`), and proves this member still
+  an admission passes `Arca.Users.mint/3`), and proves this member still
   owns its slot first.
   """
   @spec create(Prima.Actor.t(), map()) ::

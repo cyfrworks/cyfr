@@ -244,8 +244,7 @@ defmodule Arca.PairedClients do
   """
   @spec record_passkey(Prima.Actor.t(), map()) ::
           {:ok, row()}
-          | {:error,
-             :no_athanor | :stale_head | :not_owner | :database_error | {:invalid, map()}}
+          | {:error, :no_athanor | :stale_head | :not_owner | :database_error | {:invalid, map()}}
   # arca:db-raise-ok the read and the insert run inside `owned/2`, which rescues around its transaction.
   def record_passkey(
         %Prima.Actor{athanor_id: athanor_id} = actor,

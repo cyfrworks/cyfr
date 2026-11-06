@@ -1095,7 +1095,6 @@ defmodule Sanctum.IssuanceRaceTest do
     ApiKey,
     Athanor,
     DeviceCertificate,
-    ExternalIdentity,
     PairedClient,
     User
   }
@@ -1120,7 +1119,6 @@ defmodule Sanctum.IssuanceRaceTest do
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(ApiKey, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
@@ -1168,14 +1166,6 @@ defmodule Sanctum.IssuanceRaceTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|race#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "race#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 

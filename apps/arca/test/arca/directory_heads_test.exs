@@ -102,7 +102,6 @@ defmodule Arca.DirectoryHeadsTest do
           created_at: now,
           updated_at: now
         },
-        nil,
         also: fn person ->
           {:ok, _} =
             PersonIdentities.create(server(), %{
@@ -688,7 +687,6 @@ defmodule Arca.DirectoryHeadsRaceTest do
             created_at: now,
             updated_at: now
           },
-          nil,
           also: fn person ->
             {:ok, _} =
               PersonIdentities.create(server(), %{

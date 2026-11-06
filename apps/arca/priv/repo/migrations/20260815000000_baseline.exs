@@ -22,10 +22,10 @@ defmodule Arca.Repo.Migrations.Baseline do
   before any tenant was resolved is the host's record, not a tenant's).
   `invitations` is no athanor's: an invitation is to this CYFR, and the
   shared thread it may seat its newcomer in is no athanor's either.
-  `server_meta`, `registry_tokens`,
-  `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
-  and `settings_pins` are not athanor-scoped: the first three are the
-  server's own facts and the rest the cell's, and a cell has no athanor.
+  `server_meta`, `registry_tokens`, `cell_leases`, `job_claims`,
+  `platform_settings` and `settings_pins` are not athanor-scoped: the
+  first two are the server's own facts and the rest the cell's, and a
+  cell has no athanor.
   A person's identity, company sign-in and company sign-in attempts, the
   directory's log and the handles and spent nonces of the registry beside
   it, the cached heads of other people's logs and the pre-authentication
@@ -97,7 +97,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "security_generation > 0"
     }
 
-    # How a person was made here (`Arca.Users.mint/4`): the admission that
+    # How a person was made here (`Arca.Users.mint/3`): the admission that
     # wrote their row, and nothing else ever writes it.
     user_admission =
       known("users_admission_known", "admission", ~w(setup invitation open remote))
@@ -149,8 +149,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:athanors, [:status])
 
     # The people this server knows: one row per person, keyed by a minted
-    # `usr_…` id. How an identity provider names them is an
-    # `external_identities` row. Log tables keep writing user_id without a
+    # `usr_…` id; the account they were admitted by is their
+    # `person_identities` row. Log tables keep writing user_id without a
     # foreign key here — synthetic principals are not people. `email` is not
     # unique.
     create table(:users, primary_key: false) do
@@ -191,22 +191,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:users, [:email])
     create index(:users, [:status])
     create unique_index(:users, [:namespace], where: "namespace IS NOT NULL")
-
-    # How an identity provider names a person, keyed by the IdP composite
-    # `<provider>|<issuer>|<subject>`. One person may be named by several.
-    create table(:external_identities, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :key, :string, null: false
-      add :provider, :string, null: false
-      add :issuer, :string, null: false
-      add :subject, :string, null: false
-      add :first_seen_at, :utc_datetime_usec, null: false
-      add :last_seen_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:external_identities, [:key])
-    create index(:external_identities, [:user_id])
 
     # The door: who may sign in to this server. An allow names a person
     # identifier or the wildcard `*`; a deny names a person of this server

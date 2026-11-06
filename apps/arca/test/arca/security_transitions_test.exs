@@ -33,15 +33,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
             updated_at: now
           },
           overrides
-        ),
-        %{
-          key: "github|https://github.com|st#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "st#{n}",
-          first_seen_at: now,
-          last_seen_at: now
-        }
+        )
       )
 
     user
@@ -1167,7 +1159,6 @@ defmodule Arca.SecurityTransitionsLockTest do
   alias Arca.Schemas.{
     ApiKey,
     Athanor,
-    ExternalIdentity,
     Session,
     User
   }
@@ -1196,14 +1187,6 @@ defmodule Arca.SecurityTransitionsLockTest do
             last_seen_at: now,
             created_at: now,
             updated_at: now
-          },
-          %{
-            key: "github|https://github.com|stl#{n}",
-            provider: "github",
-            issuer: "https://github.com",
-            subject: "stl#{n}",
-            first_seen_at: now,
-            last_seen_at: now
           }
         )
 
@@ -1221,7 +1204,6 @@ defmodule Arca.SecurityTransitionsLockTest do
       unboxed(fn ->
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
         Arca.Repo.delete_all(where(ApiKey, created_by: ^user_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
       end)
 

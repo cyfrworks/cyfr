@@ -68,7 +68,7 @@ defmodule Arca.SchemaVocabularyTest do
        Arca.Schemas.SharedThread.statuses()},
       {"shared_thread_members", "shared_thread_members_status_known", "status",
        Arca.Schemas.SharedThreadMember.statuses()},
-      # How a person was made here (`Arca.Users.mint/4`), written once.
+      # How a person was made here (`Arca.Users.mint/3`), written once.
       {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()},
       {"mcp_servers", "mcp_servers_home_known", "home", Arca.Schemas.McpServer.homes()},
       {"threads", "threads_kind_known", "kind", Arca.Schemas.Thread.kinds()},

@@ -83,7 +83,6 @@ defmodule Arca.PairedClientsTest do
 
   # A person this home holds, whom a restore row can name.
   defp person! do
-    n = System.unique_integer([:positive])
     now = DateTime.utc_now()
 
     {:ok, person} =
@@ -96,14 +95,6 @@ defmodule Arca.PairedClientsTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|pcl#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "pcl#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 

@@ -32,7 +32,6 @@ defmodule Arca.CredentialIssuanceTest do
     Athanor,
     CellLease,
     DeviceCertificate,
-    ExternalIdentity,
     OauthProviderCredential,
     PairedClient,
     PendingConfirmation,
@@ -79,14 +78,6 @@ defmodule Arca.CredentialIssuanceTest do
             last_seen_at: now,
             created_at: now,
             updated_at: now
-          },
-          %{
-            key: "github|https://github.com|ci#{n}",
-            provider: "github",
-            issuer: "https://github.com",
-            subject: "ci#{n}",
-            first_seen_at: now,
-            last_seen_at: now
           }
         )
 
@@ -109,7 +100,6 @@ defmodule Arca.CredentialIssuanceTest do
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
         Arca.Repo.delete_all(where(ApiKey, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
@@ -1284,14 +1274,6 @@ defmodule Arca.CredentialIssuanceSandboxTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|order#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "order#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 

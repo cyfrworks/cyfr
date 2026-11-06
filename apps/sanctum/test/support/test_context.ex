@@ -534,14 +534,6 @@ defmodule Sanctum.TestContext do
               created_at: now,
               updated_at: now
             },
-            %{
-              key: "local|local|" <> user_id,
-              provider: "local",
-              issuer: "local",
-              subject: user_id,
-              first_seen_at: now,
-              last_seen_at: now
-            },
             also: fn person ->
               _account = account!(person.id)
               :ok

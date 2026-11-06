@@ -290,8 +290,7 @@ defmodule Arca.ExecutionStandingLockTest do
             last_seen_at: now,
             created_at: now,
             updated_at: now
-          },
-          nil
+          }
         )
     end)
 

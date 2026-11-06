@@ -133,9 +133,6 @@ defmodule Cyfr.ReleaseFixtureTest do
       fixture.(["person", "capped@example.com", "fixture-capped"])
     end
 
-    assert {:error, :not_found} =
-             Sanctum.Tenancy.Users.get_by_identity("github|https://github.com|fixture-capped")
-
     assert Arca.Repo.aggregate(User, :count) == 1
   end
 end

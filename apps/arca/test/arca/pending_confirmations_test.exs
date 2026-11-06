@@ -397,8 +397,7 @@ defmodule Arca.PendingConfirmationsTest do
       {:ok, _person} =
         Arca.Test.People.mint(
           Prima.Actor.system(),
-          %{id: user_id, first_seen_at: now, last_seen_at: now, created_at: now, updated_at: now},
-          nil
+          %{id: user_id, first_seen_at: now, last_seen_at: now, created_at: now, updated_at: now}
         )
 
       %{head: head} = Arca.Test.People.account!(user_id)
@@ -750,7 +749,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
     Athanor,
     CellLease,
     DeviceCertificate,
-    ExternalIdentity,
     PairedClient,
     PendingConfirmation,
     User
@@ -783,7 +781,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
         Arca.Repo.delete_all(where(PendingConfirmation, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
@@ -803,14 +800,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
               last_seen_at: now,
               created_at: now,
               updated_at: now
-            },
-            %{
-              key: "github|https://github.com|cnf#{n}",
-              provider: "github",
-              issuer: "https://github.com",
-              subject: "cnf#{n}",
-              first_seen_at: now,
-              last_seen_at: now
             }
           )
 

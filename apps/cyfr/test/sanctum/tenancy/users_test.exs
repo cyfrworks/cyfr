@@ -30,9 +30,8 @@ defmodule Sanctum.Tenancy.UsersTest do
     user
   end
 
-  # A person with no athanor of their own yet: the row and its linked
-  # sign-in method alone.
-  defp unhoused(n) do
+  # A person with no athanor of their own yet: the row alone.
+  defp unhoused do
     now = DateTime.utc_now()
 
     {:ok, %{id: user_id}} =
@@ -44,14 +43,6 @@ defmodule Sanctum.Tenancy.UsersTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|unhoused-#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "unhoused-#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
@@ -67,65 +58,9 @@ defmodule Sanctum.Tenancy.UsersTest do
     refute a.id == b.id
   end
 
-  # Missing provider fields must preserve previously recorded display data.
-  test "a sign-in that asserts no name or email keeps what is already stored" do
-    stored = person(41, %{email: "keep@example.com", name: "Keep Me"})
-    assert stored.display_name == "Keep Me"
-
-    {:ok, refreshed} = Users.seen(stored, info(41, %{email: nil, name: nil}))
-
-    assert refreshed.id == stored.id
-    assert refreshed.display_name == "Keep Me"
-    assert refreshed.email == "keep@example.com"
-  end
-
-  test "a sign-in that does assert them updates, and an email only when the provider proved it" do
-    stored = person(42, %{email: "old@example.com", name: "Old Name", verified: false})
-    refute stored.email_verified
-
-    {:ok, refreshed} =
-      Users.seen(stored, info(42, %{email: "new@example.com", name: "New Name"}))
-
-    assert refreshed.id == stored.id
-    assert refreshed.display_name == "New Name"
-    assert refreshed.email == "new@example.com"
-    assert refreshed.email_verified
-
-    for verified <- [false, :unknown] do
-      {:ok, unproved} =
-        Users.seen(refreshed, info(42, %{email: "unproved@example.com", verified: verified}))
-
-      assert unproved.email == "new@example.com"
-      assert unproved.email_verified
-    end
-  end
-
-  test "a person's id is this server's, and the method they linked unlocks them and no one else" do
-    n = System.unique_integer([:positive])
-    key = "github|https://github.com|minted-#{n}"
-    user = person(n, %{id: key})
-
-    assert Prima.PersonId.person?(user.id)
-    refute user.id == key
-    assert {:ok, %{id: same}} = Users.get_by_identity(key)
-    assert same == user.id
-    assert [%{key: ^key, provider: "github", subject: subject}] = Users.identities(user.id)
-    assert subject == "minted-#{n}"
-
-    # The same method again finds the same person, not a second one.
-    people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
-    {:ok, _again} = Sanctum.Test.People.linked(info(n, %{id: key}))
-    assert {:ok, %{id: ^same}} = Users.get_by_identity(key)
-    assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
-
-    # A method no person here linked names no one.
-    assert {:error, :not_found} = Users.get_by_identity("github|https://github.com|nobody-#{n}")
-  end
-
   test "a person is found by an account's identifier alone: synthetic principal ids and bare ids name no one" do
     for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes", "usr_x"] do
       assert {:error, :not_found} = Users.get_by_identifier(id)
-      assert {:error, :not_found} = Users.get_by_identity(id)
     end
 
     # A row's id is a person's, never a synthetic principal's.
@@ -152,7 +87,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   end
 
   test "own_athanor?/2 reads the owner" do
-    u = unhoused(7)
+    u = unhoused()
 
     # Known, but no furnace minted yet.
     refute Users.own_athanor?(u.id, "ath_anything")
@@ -172,7 +107,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   end
 
   test "an athanor whose owner is the person is theirs to every reader" do
-    u = unhoused(8)
+    u = unhoused()
 
     {:ok, own} =
       Athanors.create(%{
