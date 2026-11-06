@@ -15,7 +15,6 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
     DeviceCertificate,
     Session,
     PersonIdentity,
-    IdentityAttempt,
     Athanor,
     DirectoryHead,
     ServerAllowlistEntry
@@ -38,7 +37,7 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
 
     on_exit(fn ->
       unboxed(fn ->
-        for schema <- [Session, DeviceCertificate, PairedClient, IdentityAttempt, PersonIdentity] do
+        for schema <- [Session, DeviceCertificate, PairedClient, PersonIdentity] do
           Arca.Repo.delete_all(from(r in schema, where: r.user_id == ^user_id))
         end
 

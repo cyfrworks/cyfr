@@ -704,12 +704,12 @@ defmodule Cyfr.Application do
   defp restored(%{restore_id: restore_id} = change) do
     Logger.warning(
       "[Cyfr.Application] declared restore #{restore_id} applied: " <>
-        "#{length(change.user_ids)} people must recover; " <>
         "#{length(change.revoked_session_hashes)} sessions retired, " <>
         "#{length(change.suspended_api_key_ids)} keys, " <>
         "#{length(change.suspended_webhook_ids)} webhooks, " <>
         "#{length(change.suspended_paired_client_ids)} devices and " <>
         "#{length(change.suspended_passkey_ids)} passkeys suspended, " <>
+        "#{length(change.revoked_device_certificate_ids)} device certificates revoked, " <>
         "#{length(change.failed_execution_ids)} runs and " <>
         "#{length(change.uncertain_turn_ids)} turns ended uncertain"
     )

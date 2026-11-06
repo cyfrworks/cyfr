@@ -227,8 +227,6 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The component registry host (default `cyfr.run`; in development, unset means `none`, so a dev boot makes no person at cyfr.run, and `scripts/dev-stack.sh` names its own stand-in), which a person's registry requests are signed for and names resolve at; `none` is an appliance without a registry, whose pulls, publishes and registry requests refuse."},
     {"CYFR_REQUIRE_SIGNED_PULLS",
      "Refuse a component pull whose OCI signature cannot be verified (default off: the component is stored as unverified)."},
-    {"CYFR_RESTORE_TOKEN",
-     "The installation's restore capability, exactly 64 lowercase hexadecimal characters (`openssl rand -hex 32`), set in `.env` alone. Set, an empty installation's first person is reserved for a restore from a recovery code and setup is refused; unset, restore is disabled. A malformed value refuses the boot, which never prints it."},
     {"CYFR_S3_ACCESS_KEY_ID", "The object store's access key ID, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_BUCKET", "The object store's bucket, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_ENDPOINT",

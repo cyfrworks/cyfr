@@ -25,7 +25,6 @@ apps/arca/test/arca/execution_test.exs	1	pending
 apps/arca/test/arca/fenced_publication_test.exs	1	pending
 apps/arca/test/arca/file_offers_test.exs	14	pending
 apps/arca/test/arca/frame_credentials_test.exs	1	pending
-apps/arca/test/arca/identity_attempts_test.exs	2	pending
 apps/arca/test/arca/identity_log_test.exs	2	pending
 apps/arca/test/arca/installation_claims_test.exs	2	pending
 apps/arca/test/arca/layouts_test.exs	1	pending

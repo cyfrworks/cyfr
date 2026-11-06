@@ -101,7 +101,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions CompanyAuthorizations CompanyLoginAttempts
-          DeviceCertificates DeviceCertifications DirectoryHeads IdentityAttempts IdentityLog
+          DeviceCertificates DeviceCertifications DirectoryHeads IdentityLog
           Invitations PairingInvitations Passkeys PendingConfirmations PersonIdentities
           RequestRateWindows),
        "the identity, device, passkey, confirmation, carry, " <>

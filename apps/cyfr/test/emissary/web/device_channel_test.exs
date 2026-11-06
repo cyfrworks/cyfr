@@ -59,7 +59,6 @@ defmodule Emissary.Web.DeviceChannelTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.PersonIdentity
   alias Emissary.Web.DeviceChannel
   alias Prima.{Device, DeviceCert}
   alias Prima.DeviceCert.{Challenge, Proof}
@@ -176,7 +175,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       assert challenge.purpose == :connect
       # This home as certificates name it.
-      assert challenge.home == Sanctum.Person.home()
+      assert challenge.home == Sanctum.origin()
       assert challenge.athanor == glass.cert.athanor
       assert challenge.client_id == glass.client_id
       assert challenge.device_key == glass.cert.device_key
@@ -454,17 +453,6 @@ defmodule Emissary.Web.DeviceChannelTest do
       {state, challenge} = connected(device)
       assert_refused(send_frame(state, proof_message(challenge, device)), 4408)
     end
-
-    test "a certificate chained to a key the person's row no longer names is refused", %{
-      session_ctx: session_ctx,
-      user: user
-    } do
-      device = pair!(session_ctx)
-      rotate_live_key!(user.id)
-      {state, challenge} = connected(device)
-
-      assert_refused(send_frame(state, proof_message(challenge, device)), 4408)
-    end
   end
 
   # ==========================================================================
@@ -507,28 +495,6 @@ defmodule Emissary.Web.DeviceChannelTest do
       # Intents are admitted under the replacement.
       assert {:reply, :ok, {:text, _json}, _state} =
                send_frame(state, intent_message("int_1", "pairing.list", %{}))
-    end
-
-    test "after the live key rotated, reconnecting renews under the new key", %{
-      session_ctx: session_ctx,
-      user: user
-    } do
-      device = pair!(session_ctx)
-      new_key = rotate_live_key!(user.id)
-      {state, challenge} = renewing(device)
-
-      assert {:push, [{:text, certificate_json}, _standing], _state} =
-               send_frame(state, proof_message(challenge, device))
-
-      {:ok, {:certificate, %{certificate: renewed}}} =
-        Device.decode(Jason.decode!(certificate_json), :home)
-
-      assert {:ok, _} =
-               DeviceCert.verify(renewed, new_key,
-                 home: Sanctum.Person.home(),
-                 now: System.system_time(:millisecond),
-                 skew: 0
-               )
     end
 
     test "on a verified channel the glass renews under the certificate it stands under", %{
@@ -706,7 +672,7 @@ defmodule Emissary.Web.DeviceChannelTest do
             key_epoch: DirectoryServer.key_epoch(identity)
           },
           issuer: "https://a.example",
-          audience: Sanctum.Person.home(),
+          audience: Sanctum.origin(),
           athanor: athanor.id,
           not_before: now,
           expires_at: now + 3_600_000
@@ -2280,7 +2246,7 @@ defmodule Emissary.Web.DeviceChannelTest do
   defp glass do
     {device_key, device_private} = :crypto.generate_key(:eddsa, :ed25519)
     {_live_key, live_private} = :crypto.generate_key(:eddsa, :ed25519)
-    home = Sanctum.Person.home()
+    home = Sanctum.origin()
     now = System.system_time(:millisecond)
     client_id = Prima.UUID7.generate_id("pcl")
 
@@ -2400,18 +2366,6 @@ defmodule Emissary.Web.DeviceChannelTest do
         Process.sleep(10)
         past_expiry(certificate, tries - 1)
     end
-  end
-
-  defp rotate_live_key!(user_id) do
-    {public, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, sealed} = Sanctum.Cipher.encrypt(private, Sanctum.CipherAAD.person_key(user_id, :live))
-
-    {1, _} =
-      Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^user_id),
-        set: [live_public_key: public, live_key_sealed: sealed]
-      )
-
-    public
   end
 
   defp connect_message(glass),

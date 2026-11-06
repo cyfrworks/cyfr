@@ -3,14 +3,13 @@
 
 defmodule Sanctum.DoorPlacementTest do
   @moduledoc """
-  A session is minted at exactly two places, each behind the door or an
-  admission: the sign-in (`Sanctum.SignIn`) mints for a person this CYFR
-  holds only once the door admits them (`Sanctum.Door.sign_in/1`), and for
-  a new person only past their admission (`Sanctum.Newcomer.admit/2`),
-  which mints a newcomer only past the door's verdict on their identifier,
-  an invitation or the setup token; and the restore ingress mints behind
-  the installation capability, since no door admits a person who does not
-  exist yet. Reads the sources rather than the behaviour: a new
+  A session is minted at one place, behind the door or an admission: the
+  sign-in (`Sanctum.SignIn`) mints for a person this CYFR holds only once
+  the door admits them (`Sanctum.Door.sign_in/1`), and for a new person
+  only past their admission (`Sanctum.Newcomer.admit/2`), which mints a
+  newcomer only past the door's verdict on their identifier, an
+  invitation or the setup token. Reads the sources rather than the
+  behaviour: a new
   `Session.create/2` caller that forgot the door would pass every
   behavioural test on the paths that remembered it.
   """
@@ -18,10 +17,9 @@ defmodule Sanctum.DoorPlacementTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  @recovery "apps/sanctum/lib/sanctum/recovery.ex"
   @newcomer "apps/sanctum/lib/sanctum/newcomer.ex"
   @sign_in "apps/sanctum/lib/sanctum/sign_in.ex"
-  @minters [@recovery, @sign_in]
+  @minters [@sign_in]
 
   defp lib_files do
     for dir <- Prima.Test.SourceTree.app_libs(@root),
@@ -57,14 +55,5 @@ defmodule Sanctum.DoorPlacementTest do
     newcomer = source(@newcomer)
     assert newcomer =~ "Sanctum.Door.sign_in_identifier(identifier)"
     assert newcomer =~ "Plug.Crypto.secure_compare(configured, token)"
-
-    # The restore mints the first person of an empty node, whom no door can
-    # have admitted: it checks the installation capability instead, and
-    # mints only the reserved `restore` provider's session, which the
-    # session store holds to the restore attempt that minted the person.
-    recovery = source(@recovery)
-    assert recovery =~ "Application.get_env(:sanctum, :restore_token)"
-    assert recovery =~ "Plug.Crypto.secure_compare("
-    assert recovery =~ "Sanctum.Session.create(ctx, restore: attempt.id)"
   end
 end

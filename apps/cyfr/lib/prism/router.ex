@@ -158,13 +158,7 @@ defmodule Prism.Router do
 
       # Sign in from the browser. `/login` sends the browser to the account
       # pages with this CYFR's request and takes the signed answer at its
-      # return; signing out is `POST /auth/logout` above. `/pair` is the
-      # page a pairing code opens on a new device:
-      # sessionless like `/login`, it reads no session, and the invitation
-      # in its fragment names the person. `/restore` is the page a fresh
-      # installation serves its returning person: sessionless too, its form
-      # posts the kit and the installation token to the restore ingress
-      # (`POST /restore`) from the browser, never through this view.
+      # return; signing out is `POST /auth/logout` above.
       # `/setup` is the page the setup link opens: sessionless, the setup
       # token in its fragment held with the sign-in request it sends the
       # browser to the account pages with (`PrismWeb.SetupLive`).
@@ -177,7 +171,6 @@ defmodule Prism.Router do
         pipe_through :browser
 
         live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
-        live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
         live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
         live "/invite", InviteLive, :invite, metadata: %{auth: :browser_public_login}
 

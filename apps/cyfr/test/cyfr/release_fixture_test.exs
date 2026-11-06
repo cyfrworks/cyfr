@@ -17,7 +17,7 @@ defmodule Cyfr.ReleaseFixtureTest do
   # setup device's record in are process-wide.
   use ExUnit.Case, async: false
 
-  alias Arca.Schemas.{IdentityAttempt, PersonIdentity, User}
+  alias Arca.Schemas.{PersonIdentity, User}
 
   @fixture Path.expand("../../../../tests/release-boot/fixture.exs", __DIR__)
 
@@ -56,15 +56,9 @@ defmodule Cyfr.ReleaseFixtureTest do
     first = person!(fixture, "first@example.com", "fixture-first")
     assert Sanctum.Tenancy.platform_admin?(first["user_id"])
 
-    # Finished: registered as the directory's acceptance records it, the
-    # code saved and the name recorded, with nothing sent.
-    assert %IdentityAttempt{phase: "completed", kit_seed_sealed: nil, name: "release-proof"} =
-             attempt = Arca.Repo.get_by!(IdentityAttempt, user_id: first["user_id"])
-
-    assert %PersonIdentity{enrollment: "enrolled", identifier: identifier} =
+    assert %PersonIdentity{enrollment: "enrolled", identifier: "per_" <> _} =
              Arca.Repo.get_by!(PersonIdentity, user_id: first["user_id"])
 
-    assert identifier == attempt.identifier
     assert {:ok, %{namespace: "release-proof"}} = Sanctum.Tenancy.Users.get(first["user_id"])
 
     {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
@@ -94,7 +88,7 @@ defmodule Cyfr.ReleaseFixtureTest do
       "seed" => Base.url_encode64(seed, padding: false),
       "client_id" => Prima.UUID7.generate_id("pcl"),
       "athanor_id" => Prima.UUID7.generate_id("ath"),
-      "home" => Sanctum.Person.home(),
+      "home" => Sanctum.origin(),
       "certificate" => %{}
     }
 

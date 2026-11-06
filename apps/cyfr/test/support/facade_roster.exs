@@ -28,7 +28,6 @@
     "Sanctum.Gate",
     "Sanctum.Pairing",
     "Sanctum.Passkeys",
-    "Sanctum.Recovery",
     "Sanctum.RegistryCredentials",
     "Sanctum.RequestLog",
     "Sanctum.Resources",

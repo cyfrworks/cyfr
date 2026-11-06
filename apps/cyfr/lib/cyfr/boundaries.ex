@@ -337,7 +337,7 @@ defmodule Cyfr.Boundaries do
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
-    Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
+    Arca.PersonIdentities Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
@@ -412,8 +412,8 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
-        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Person Sanctum.Provisioning
-        Sanctum.Recovery Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
+        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning
+        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
         Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
@@ -423,16 +423,10 @@ defmodule Cyfr.Boundaries do
           "the component work and calls down into it. OCI and registry transports " <>
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
           "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`, " <>
-          "which also decides the fresh confirmation issuing another one needs; every " <>
-          "request a person makes at the registry is signed by their live key " <>
-          "(`Sanctum.Person.sign_registry_request/3`), and what its answer writes is " <>
-          "written only while the caller still stands " <>
+          "which also decides the fresh confirmation issuing another one needs; what a " <>
+          "registry answer writes is written only while the caller still stands " <>
           "(`Sanctum.Caller.revalidate_session/1`). " <>
-          "`Sanctum.Recovery` is `registry.register`'s drive of the enrollment a " <>
-          "person's admission opened: registering it at the directory (`advance/1`) " <>
-          "and replacing the name it wants before the registry's claim " <>
-          "(`rename/2`), each decided by Sanctum on the caller's own attempt; " <>
-          "removing a component's last version revokes its profiles " <>
+          "Removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
           "`Sanctum.TinctureAuth` is a canvas activation's spend of the validation " <>
@@ -530,7 +524,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts
         Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Directory.Handles Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
-        Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
+        Sanctum.Network Sanctum.Proxy Sanctum.Refusals Sanctum.Resources
         Sanctum.RunningTasks Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
@@ -559,7 +553,7 @@ defmodule Cyfr.Boundaries do
           "damaged head), for the flows the tincture's ingress declares to the origins " <>
           "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
           "decisions, the handle registry's beside it `Sanctum.Directory.Handles`'s, the " <>
-          "account pages' served only by the directory's writer, the restore ingress `Sanctum.Recovery`'s, a protected device's " <>
+          "account pages' served only by the directory's writer, a protected device's " <>
           "enrollment `Sanctum.DeviceUnlock`'s, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts` and slides, and at its end " <>
           "retires, the sessions its unlocks reserved and holds its device's storage report " <>
@@ -611,7 +605,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Context Sanctum.Decisions
         Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Invitations
         Sanctum.Newcomer Sanctum.Pairing Sanctum.PolicyLog
-        Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
+        Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SharedThreads Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
@@ -631,10 +625,10 @@ defmodule Cyfr.Boundaries do
           "change of a thread goes through the `shared_thread` tool. " <>
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
-          "control and never decides: the operation a confirmation dispatches decides. " <>
-          "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
-          "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
-          "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
+          "control and never decides: the operation a confirmation dispatches decides; " <>
+          "and its read of the person's checklist after a declared restore " <>
+          "(`restore_checklist/1`), what it lists for them to re-enable, re-consent and " <>
+          "rotate; each re-enable it offers is an operation, decided there. " <>
           "`Sanctum.DeviceUnlock` is a protected device's unlock page: the ticket its " <>
           "shell's channel was answered, spent once for the session (`redeem/1`), which " <>
           "decides in the issuance transaction. " <>
@@ -2047,7 +2041,6 @@ defmodule Cyfr.Boundaries do
       drop_memo: 1,
       establish: 2,
       establish_context: 1,
-      establish_kit: 2,
       fresh?: 1,
       revalidate_session: 1
     ],
@@ -2163,7 +2156,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
-    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
+    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1, restore_checklist: 1],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],
     "Sanctum.Provisioning" => [
@@ -2188,19 +2181,7 @@ defmodule Cyfr.Boundaries do
       under_claim: 3
     ],
     "Sanctum.Proxy" => [install!: 1],
-    "Sanctum.Recovery" => [
-      advance: 1,
-      checklist: 1,
-      kit_challenge: 1,
-      kit_proof: 1,
-      kit_reenable: 4,
-      rename: 2,
-      reproof: 2,
-      restore: 2,
-      restore_challenge: 1
-    ],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
-    "Sanctum.Person" => [sign_registry_request: 3],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,
       delete_push_token: 4,
@@ -2445,14 +2426,6 @@ defmodule Cyfr.Boundaries do
         "a directory entry, or a handle claim, signed by a key the identifier's verified " <>
           "chain lists and verified against that chain before anything is written; no session"
     },
-    installation_capability: %{
-      admits: :credential,
-      why:
-        "the restore ingress: the installation capability (`CYFR_RESTORE_TOKEN`) as the " <>
-          "authorization header, checked in constant time before any kit is read, any key " <>
-          "staged or any outbound call made (`Sanctum.Recovery`); no session and no CSRF " <>
-          "token, since no cross-site form sets the header and no CORS answer admits one"
-    },
     device_unlock_ticket: %{
       admits: :credential,
       why:
@@ -2465,18 +2438,6 @@ defmodule Cyfr.Boundaries do
           "`POST /device/session` spends the same ticket the same way and answers the " <>
           "session's token in its body, reading and setting no cookie, so no CSRF token " <>
           "is asked"
-    },
-    restore_kit_proof: %{
-      admits: :credential,
-      why:
-        "a person recovering from a declared restore, with no sign-in method left: a " <>
-          "challenge this CYFR holds for their identifier while their recovery is open, " <>
-          "bounded per address and per person; a kit proof over it, signed by a recovery " <>
-          "key of their identity read fresh from its directory and redeemed once; and the " <>
-          "kit credential it answers, admitted for the four re-enable operations and their " <>
-          "previews alone (`Sanctum.Recovery`, `Sanctum.Caller.establish_kit/2`); no session " <>
-          "and no CSRF token, since no cross-site form sets the header and no CORS answer " <>
-          "admits one"
     },
     browser_company_login: %{
       admits: :session,
@@ -3031,31 +2992,10 @@ defmodule Cyfr.Boundaries do
     # directory's windows. The account's own chain authorizes a claim.
     %{module: Emissary.Web.HandleController, site: :resolve, plane: :external, origin: :none},
     %{module: Emissary.Web.HandleController, site: :claim, plane: :external, origin: :none},
-    # Restore, an entry path because no person exists yet to admit an
-    # operation, and the recovery kit, its own ingress: the installation
-    # capability, the kit, its proof and the kit credential. The kit
-    # credential's context is `Sanctum.Caller.establish_kit/2`'s and names
-    # no origin.
-    %{module: Emissary.Web.RestoreController, site: :restore, plane: :external, origin: :none},
     # A protected command line's session: the unlock's one-time ticket.
     %{
       module: Emissary.Web.DeviceSessionController,
       site: :create,
-      plane: :external,
-      origin: :none
-    },
-    %{module: Emissary.Web.RestoreController, site: :challenge, plane: :external, origin: :none},
-    %{module: Emissary.Web.RestoreController, site: :reproof, plane: :external, origin: :none},
-    %{
-      module: Emissary.Web.RestoreController,
-      site: :kit_challenge,
-      plane: :external,
-      origin: :none
-    },
-    %{module: Emissary.Web.RestoreController, site: :kit, plane: :external, origin: :none},
-    %{
-      module: Emissary.Web.RestoreController,
-      site: :kit_reenable,
       plane: :external,
       origin: :none
     },

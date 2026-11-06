@@ -97,14 +97,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.HandleController, :claim} => :handle_claim_unserved,
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
     {Emissary.Web.DeviceSessionController, :create} => :device_session_ticket_unknown,
-    {Emissary.Web.RestoreController, :restore} => :restore_disabled,
-    {Emissary.Web.RestoreController, :challenge} => :restore_challenge_disabled,
-    {Emissary.Web.RestoreController, :reproof} => :restore_reproof_disabled,
-    {Emissary.Web.RestoreController, :kit_challenge} => :restore_kit_challenge_not_recovering,
-    {Emissary.Web.RestoreController, :kit} => :restore_kit_invalid_proof,
-    {Emissary.Web.RestoreController, :kit_reenable} => :restore_kit_reenable_unnamed,
     {Emissary.Web.OAuthCallbackController, :callback} => :oauth_callback_unknown_state,
-    {CyfrWeb.Plugs.AuthRateLimit, :call} => :restore_rate_limited,
+    {CyfrWeb.Plugs.AuthRateLimit, :call} => :device_session_rate_limited,
     {PrismWeb.AuthController, :company_start} => :company_start_no_session,
     {PrismWeb.AuthController, :company_callback} => :company_callback_no_session,
     {PrismWeb.PasskeyController, :complete} => :sign_in_passkey_ticket_unknown,
@@ -535,21 +529,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused("invalid_argument", :none)}
   end
 
-  # This node configures no restore token, so the capability's routes
-  # refuse as `restore_disabled`; the kit's routes need no token and refuse
-  # what they were given.
-  defp restore_post(path, body) do
-    build_conn()
-    |> put_req_header("content-type", "application/json")
-    |> post(path, Jason.encode!(body))
-  end
-
-  defp restore_disabled_at(path) do
-    conn = restore_post(path, %{})
-    assert json_response(conn, 404) == %{"error" => "restore_disabled"}
-    {request_id_of(conn), refused("not_found", :none)}
-  end
-
   def device_session_ticket_unknown(_conn, _ctx) do
     conn =
       build_conn()
@@ -567,34 +546,20 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused("forbidden", :none)}
   end
 
-  def restore_disabled(_conn, _ctx), do: restore_disabled_at("/restore")
-  def restore_challenge_disabled(_conn, _ctx), do: restore_disabled_at("/restore/challenge")
-  def restore_reproof_disabled(_conn, _ctx), do: restore_disabled_at("/restore/reproof")
-
-  def restore_kit_challenge_not_recovering(_conn, _ctx) do
-    conn = restore_post("/restore/kit/challenge", %{"identifier" => "per_seam"})
-    assert json_response(conn, 404) == %{"error" => "not_recovering"}
-    {request_id_of(conn), refused("not_found", :none)}
-  end
-
-  def restore_kit_invalid_proof(_conn, _ctx) do
-    conn = restore_post("/restore/kit", %{"proof" => "not a proof"})
-    assert json_response(conn, 422) == %{"error" => "invalid_proof"}
-    {request_id_of(conn), refused("invalid_argument", :none)}
-  end
-
-  def restore_kit_reenable_unnamed(_conn, _ctx) do
-    conn = restore_post("/restore/kit/reenable", %{})
-    assert json_response(conn, 403) == %{"error" => "operation_not_permitted"}
-    {request_id_of(conn), refused("forbidden", :none)}
-  end
-
-  # The restore routes' budget is ten requests a minute an address.
-  def restore_rate_limited(_conn, _ctx) do
+  # A command line's session spend is metered thirty requests a minute
+  # an address.
+  def device_session_rate_limited(_conn, _ctx) do
     Prima.Test.RateLimiter.reset!()
-    for _ <- 1..10, do: assert(restore_post("/restore/kit", %{}).status == 422)
 
-    conn = restore_post("/restore/kit", %{})
+    spend = fn ->
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> post("/device/session", Jason.encode!(%{"ticket" => "nope"}))
+    end
+
+    for _ <- 1..30, do: assert(spend.().status == 403)
+
+    conn = spend.()
     assert conn.status == 429
     {request_id_of(conn), refused("rate_limited", :none)}
   end

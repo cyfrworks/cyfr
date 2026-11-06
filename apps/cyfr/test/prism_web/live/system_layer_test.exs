@@ -5553,24 +5553,6 @@ defmodule PrismWeb.SystemLayerTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "Settings' prompt for another recovery code, dismissed, lets it go", %{conn: conn} do
-      {view, _html} = mount_athanor(conn, "/settings")
-
-      view |> element(~s([data-test="identity-add-code"])) |> render_click()
-      render(view)
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="holder"]))
-
-      view |> element(~s(#system-layer [data-test="prompt-dismiss"])) |> render_click()
-
-      wait_until(
-        fn -> not has_element?(view, ~s(#system-layer [data-test="recovery"])) end,
-        2_000,
-        "the prompt let go"
-      )
-
-      assert has_element?(view, ~s([data-test="identity-add-code"]))
-    end
-
     test "a webhook waits on its origin grant, granted with webhooks, before its own confirmation",
          %{conn: conn, local: local} do
       wasm = Cyfr.Test.Guests.wasm(:reagent)
@@ -5699,17 +5681,7 @@ defmodule PrismWeb.SystemLayerTest do
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :pairing_revocation, subject: %{}},
            "Revoke a device you paired"},
-        confirmation: {confirmation, "A client of yours asked for a change"},
-        kit:
-          {%{
-             id: "k-kit",
-             kind: :kit,
-             action: :recovery_material,
-             subject: %{attempt_id: "att_k"}
-           }, "Show your recovery code again"},
-        holder:
-          {%{id: "k-holder", kind: :holder, action: :recovery_material, subject: %{}},
-           "A recovery code you hold approves the new one"}
+        confirmation: {confirmation, "A client of yours asked for a change"}
       }
     end
 

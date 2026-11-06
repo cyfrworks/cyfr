@@ -12,15 +12,12 @@ apps/sanctum/test/sanctum/client_ip_proxy_trust_test.exs	2	pending
 apps/sanctum/test/sanctum/client_ip_test.exs	8	pending
 apps/sanctum/test/sanctum/company_login_test.exs	3	pending
 apps/sanctum/test/sanctum/consent/proof_db_test.exs	1	pending
-apps/sanctum/test/sanctum/device_certs_test.exs	1	pending
 apps/sanctum/test/sanctum/directory_test.exs	2	pending
 apps/sanctum/test/sanctum/door_test.exs	1	pending
 apps/sanctum/test/sanctum/handle_test.exs	1	pending
 apps/sanctum/test/sanctum/network_private_policy_test.exs	9	pending
 apps/sanctum/test/sanctum/pairing_test.exs	1	pending
-apps/sanctum/test/sanctum/person_test.exs	8	pending
 apps/sanctum/test/sanctum/policy/ceiling_test.exs	5	pending
-apps/sanctum/test/sanctum/recovery_test.exs	5	pending
 apps/sanctum/test/sanctum/tenancy/caps_test.exs	1	pending
 apps/sanctum/test/sanctum/tenancy_test.exs	5	pending
 apps/sanctum/test/sanctum/tool_grants_test.exs	2	pending

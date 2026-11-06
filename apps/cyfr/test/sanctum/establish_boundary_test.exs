@@ -22,12 +22,9 @@ defmodule Sanctum.EstablishBoundaryTest do
   # and what each site is.
   @sites %{
     # The recipes `establish/2` runs in place, a frame credential and a
-    # webhook row; `establish_device/2`: a paired device
-    # `Sanctum.DeviceCerts`, its one caller, verified; and
-    # `establish_kit/2`: the restore kit's checklist credential, minted by
-    # `Sanctum.Recovery` against a signed kit proof and admitting the four
-    # `*.reenable` operations and their previews alone.
-    "apps/sanctum/lib/sanctum/caller.ex" => 4,
+    # webhook row; and `establish_device/2`: a paired device
+    # `Sanctum.DeviceCerts`, its one caller, verified.
+    "apps/sanctum/lib/sanctum/caller.ex" => 3,
     # `Session.load/1`, the session recipe `establish/2` calls.
     "apps/sanctum/lib/sanctum/session.ex" => 1,
     # `ApiKey.context_from_metadata/1`, the key recipe `establish/2` calls.
@@ -66,10 +63,7 @@ defmodule Sanctum.EstablishBoundaryTest do
   @recipes [
     ~r/\bSession\.load\(/,
     ~r/\bApiKey\.(?:validate|context_from_metadata)\(/,
-    ~r/\bTinctureAuth\.verify_frame_credential\(/,
-    # The restore kit's credential recipe (`establish_kit/2`); `kit_proof/2`
-    # is not one — it mints the credential at the kit's own HTTP ingress.
-    ~r/\bRecovery\.kit_grant\(/
+    ~r/\bTinctureAuth\.verify_frame_credential\(/
   ]
   @caller "apps/sanctum/lib/sanctum/caller.ex"
 

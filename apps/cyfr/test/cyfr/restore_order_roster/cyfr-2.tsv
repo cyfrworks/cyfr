@@ -50,7 +50,6 @@ apps/cyfr/test/emissary/web/controllers/held_frame_stream_deadline_test.exs	1	pe
 apps/cyfr/test/emissary/web/controllers/mcp_confirmation_repeat_test.exs	4	pending
 apps/cyfr/test/emissary/web/controllers/mcp_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/oauth_callback_controller_test.exs	1	pending
-apps/cyfr/test/emissary/web/controllers/restore_controller_test.exs	4	pending
 apps/cyfr/test/emissary/web/controllers/tincture_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/tincture_data_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/webhook_controller_test.exs	7	pending

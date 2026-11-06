@@ -1370,15 +1370,7 @@ defmodule PrismWeb.VaultLiveTest do
 
       refute has_element?(view, share_button(market))
 
-      # The person recovers their passkey, as a recovery re-enables it, and
-      # rotates the key under its confirmation.
-      passkey = Arca.Repo.get_by!(Arca.Schemas.Passkey, user_id: terry.user.user_id)
-
-      {:ok, _} =
-        Arca.Passkeys.reenable(Prima.Actor.system(), terry.user.user_id, passkey.id,
-          verify: fn _passkey -> :ok end
-        )
-
+      # The person rotates the key under a confirmation of their account.
       {:ok, %{entries: [%{payload_rev: rev}]}} =
         Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "list"})
 

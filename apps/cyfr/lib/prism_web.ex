@@ -52,7 +52,6 @@ defmodule PrismWeb do
       MyReportsLive,
       PasskeyController,
       RegistryLive,
-      RestoreLive,
       RootRedirectLive,
       SchedulesLive,
       SettingsLive,

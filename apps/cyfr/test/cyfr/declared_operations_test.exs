@@ -31,7 +31,7 @@ defmodule Cyfr.DeclaredOperationsTest do
 
   describe "the declared operations" do
     test "are on the table as they are admitted: interactive, external, never replayed" do
-      for tool <- ~w(person pairing passkey confirmation) do
+      for tool <- ~w(pairing passkey confirmation) do
         {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
 
         for op <- meta.operations do
@@ -52,16 +52,12 @@ defmodule Cyfr.DeclaredOperationsTest do
       for {tool, action} <- [
             {"pairing", "list"},
             {"passkey", "list"},
-            {"confirmation", "pending"},
-            {"person", "recovery_code"},
-            {"person", "status"}
+            {"confirmation", "pending"}
           ] do
         assert operation(tool, action).kind == :read, "#{tool}.#{action}"
       end
 
-      for action <- ~w(recovery_code_saved recovery_code_add) do
-        assert operation("person", action).kind == :write, "person.#{action}"
-      end
+      refute Map.has_key?(Sanctum.Catalog.operations(), "person")
 
       assert operation("pairing", "revoke").kind == :destructive
       assert operation("passkey", "revoke").kind == :destructive
@@ -75,9 +71,8 @@ defmodule Cyfr.DeclaredOperationsTest do
       code =
         Prima.RecoveryCode.encode("per_" <> String.duplicate("c", 64), :binary.copy(<<7>>, 32))
 
-      # Every field `person.recovery_code_add` and a new person's enrollment
-      # take, and every answer's `code` (an enrollment's `recovery`,
-      # `person.recovery_code`).
+      # A recovery secret, a typed code and an answer's `code`, wherever
+      # they appear.
       sanitized =
         Prima.Sanitizer.sanitize(%{
           "recovery_secret" => @seed,

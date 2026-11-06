@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.SystemLayerRecoveryTest.Host do
+defmodule PrismWeb.SystemLayerRestoreTest.Host do
   @moduledoc false
   # A page mounted through the context guard, holding the layer as a
   # settings page does, and forwarding what the layer tells it.
@@ -37,31 +37,15 @@ defmodule PrismWeb.SystemLayerRecoveryTest.Host do
   end
 end
 
-defmodule PrismWeb.SystemLayerRecoveryTest do
+defmodule PrismWeb.SystemLayerRestoreTest do
   @moduledoc """
-  The system layer's recovery prompts: a recovery code shown again, and
-  another recovery code, each drawn only in the layer and each
-  change confirmed fresh where Sanctum decides it.
-
-  The material never rests on the server: the browser submits a secret it
-  drew and holds, or a recovery code the person typed, the layer
-  dispatches it and keeps none of it, the browser submits the same once
-  the record is confirmed, and a recovery code an answer carries goes to
-  the browser in a push to the layer alone, never an assign, a rendered
-  page or a log. "I saved it" erases the secret at the home, and the end
-  of a prompt, however it ends, has the browser forget what it held. A
-  prompt never names a secret or a code, and a frame never reaches any of
-  it.
-
-  After a declared restore the layer draws the person's restore
-  checklist: what the restore suspended, each with its re-enable control
-  where the page reaches it, the profiles to consent to again and the
-  entries to rotate. A re-enable is the layer's own sensitive change,
-  confirmed while the recovery is open by a door or an emailed code and
-  never by a passkey, and made again by the layer once confirmed.
-
-  The directory is a scripted one this home reaches through the client's
-  test seam (`Sanctum.Test.DirectoryServer`).
+  The system layer's restore checklist after a declared restore: the API
+  keys and webhooks the restore suspended, each with its re-enable
+  control where the page reaches it, the profiles to consent to again and
+  the entries to rotate. A re-enable is the layer's own sensitive change,
+  confirmed by a passkey of the person's account like any other, and
+  made again by the layer once confirmed. A device the restore suspended
+  is not listed: it comes back by a fresh hello.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -69,90 +53,13 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
-  alias Arca.Schemas.IdentityAttempt
-  alias Prima.Identity
-  alias Prima.Identity.Encoding
-  alias PrismWeb.SystemLayer.{Prompt, Recovery}
-  alias PrismWeb.SystemLayerRecoveryTest.Host
-  alias Sanctum.Context
-  alias Sanctum.Test.DirectoryServer, as: Directory
-  alias Sanctum.TestContext.{Authenticator, MailSink}
-
-  setup_all do
-    %{tls: Directory.tls()}
-  end
-
-  setup %{tls: tls} do
-    Directory.listen!()
-    Directory.seam!(tls)
-    directory = Directory.start!(tls)
-    prior = Application.fetch_env(:sanctum, :directory_url)
-
-    on_exit(fn ->
-      case prior do
-        {:ok, value} -> Application.put_env(:sanctum, :directory_url, value)
-        :error -> Application.delete_env(:sanctum, :directory_url)
-      end
-    end)
-
-    Application.put_env(:sanctum, :directory_url, directory.url)
-    %{directory: directory}
-  end
+  alias PrismWeb.SystemLayer.Prompt
+  alias PrismWeb.SystemLayerRestoreTest.Host
+  alias Sanctum.TestContext.Authenticator
 
   # ---- fixtures ------------------------------------------------------------------
 
-  defp signed_in(%{conn: conn}) do
-    user = test_user()
-    conn = log_in_user(conn, user)
-    athanor = seated_athanor()
-
-    {:ok, view, _html} =
-      live_isolated(conn, Host, session: %{"athanor_id" => athanor.id, "test" => self()})
-
-    # Another session of the same person, established as a request
-    # establishes one: what a change made outside the page is made under.
-    built =
-      Context.build(
-        user_id: user.user_id,
-        provider: "github",
-        athanor_id: athanor.id,
-        permissions: Context.person_permissions(),
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    {:ok, session} = Sanctum.TestContext.create_session(built)
-
-    {:ok, ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
-
-    %{view: view, ctx: ctx, user: user, authenticator: Sanctum.TestContext.passkey!(user.user_id)}
-  end
-
-  defp prompt(view, prompt) do
-    send(view.pid, {:prompt, prompt})
-    render(view)
-    render(view)
-  end
-
   defp layer(view), do: with_target(view, "#system-layer")
-
-  defp seed, do: Encoding.b64(:crypto.strong_rand_bytes(32))
-  defp request_id, do: "req_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-
-  # The recovery code of `identifier` whose secret is `seed`, the browser's
-  # unpadded base64url, as the server composes it.
-  defp code_of(identifier, seed),
-    do: Prima.RecoveryCode.encode(identifier, Base.url_decode64!(seed, padding: false))
-
-  defp any_code, do: code_of("per_" <> String.duplicate("0", 64), seed())
-
-  # `code` with its last symbol changed, so its check fails.
-  defp typo_of(code) do
-    {head, last} = String.split_at(code, -1)
-    head <> if(last == "0", do: "1", else: "0")
-  end
 
   defp state_of(view),
     do: inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
@@ -179,381 +86,12 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
              Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
   end
 
-  defp outcome(id) do
-    assert_receive {:host, {:system_layer, ^id, outcome}}, 2_000
-    outcome
-  end
-
   defp open_prompt(view) do
     case Regex.run(~r/data-prompt-id="([^"]+)"/, render(view)) do
       [_, id] -> id
       nil -> nil
     end
   end
-
-  defp logged do
-    inspect(
-      {Arca.Repo.all(from(l in Arca.Schemas.McpLog, select: {l.input, l.output, l.error})),
-       Arca.Repo.all(from(d in Arca.Schemas.DecisionLog, select: {d.reason, d.tool, d.action}))},
-      limit: :infinity,
-      printable_limit: :infinity
-    )
-  end
-
-  defp attempts(user_id, kind) do
-    Arca.Repo.all(from(a in IdentityAttempt, where: a.user_id == ^user_id and a.kind == ^kind))
-  end
-
-  # An enrollment the directory accepted, opened as an admission opens it
-  # and registered at the pinned directory as `registry.register` does.
-  defp enrolled!(ctx) do
-    identity = Sanctum.Test.Newcomers.identity()
-    :ok = Sanctum.Recovery.open_at_admission(ctx.user_id, identity, Sanctum.directory_url())
-
-    {:ok, %{phase: "accepted", attempt_id: attempt_id, identifier: identifier}} =
-      Sanctum.Recovery.advance(ctx)
-
-    %{
-      seed: Encoding.b64(identity.recovery_secret),
-      attempt_id: attempt_id,
-      identifier: identifier
-    }
-  end
-
-  # ---- the prompts' shape --------------------------------------------------------
-
-  describe "a recovery prompt" do
-    test "names no secret: a recovery code its attempt, another code nothing" do
-      assert {:ok, %{kind: :kit, subject: %{attempt_id: "att_1"}}} =
-               Recovery.recovery_code("r2", "att_1")
-
-      assert {:ok, %{kind: :holder, subject: %{}}} = Recovery.holder("r3")
-
-      for {kind, subject} <- [
-            {:kit, %{attempt_id: "att_1", code: any_code()}},
-            {:holder, %{recovery_code: any_code()}}
-          ] do
-        assert {:error, :invalid_prompt} =
-                 Prompt.validate(%{
-                   id: "r",
-                   kind: kind,
-                   action: :recovery_material,
-                   subject: subject
-                 })
-      end
-
-      # Under no other action.
-      assert {:error, :invalid_prompt} =
-               Prompt.validate(%{
-                 id: "r",
-                 kind: :kit,
-                 action: :grant,
-                 subject: %{attempt_id: "a"}
-               })
-
-      assert Prompt.recovery_kinds() == [:kit, :holder]
-    end
-
-    test "dispatches the code's operations: a code again by its attempt, another signed by a typed code" do
-      {:ok, again} = Recovery.recovery_code("k1", "att_1")
-
-      assert Recovery.request(again, %{}) ==
-               {:ok, "person/recovery_code", %{"attempt_id" => "att_1"},
-                {:recovery_code, "att_1"}}
-
-      {:ok, holder} = Recovery.holder("h1")
-      {typed, added, rid} = {any_code(), seed(), request_id()}
-
-      assert Recovery.request(holder, %{
-               "prompt_id" => "h1",
-               "recovery_code" => typed,
-               "holder" => %{"recovery_secret" => added},
-               "request_id" => rid
-             }) ==
-               {:ok, "person/recovery_code_add",
-                %{
-                  "recovery_code" => typed,
-                  "holder" => %{"recovery_secret" => added},
-                  "request_id" => rid
-                }, :recovery_resubmit}
-
-      # A typed secret is no signer: only a recovery code signs.
-      assert Recovery.request(holder, %{
-               "recovery_secret" => seed(),
-               "holder" => %{"recovery_secret" => added},
-               "request_id" => rid
-             }) == {:error, "Type a recovery code you hold now."}
-
-      assert Recovery.request(holder, %{"recovery_code" => typed, "request_id" => rid}) ==
-               {:error,
-                "This browser could not draw the recovery code's secret. Nothing was sent."}
-
-      # The browser is handed an answer's code alone, and nothing else is a code.
-      assert Recovery.code(%{attempt_id: "att_1", code: typed}) == %{code: typed}
-      assert Recovery.code(%{attempt_id: "att_1"}) == nil
-      assert Recovery.code(%{attempt_id: "att_1", kit: %{recovery_secret: added}}) == nil
-    end
-
-    test "the saved block says what the code is for and offers I saved it, and no Print" do
-      {:ok, again} = Recovery.recovery_code("k1", "att_1")
-
-      html =
-        render_component(&Recovery.body/1,
-          prompt: again,
-          recovery: %{prompt_id: "k1", phase: :kit, attempt_id: "att_1"},
-          may: true,
-          myself: nil,
-          id: "system-layer",
-          primary_class: "primary"
-        )
-
-      assert html =~ ~s(data-test="recovery-saved")
-
-      assert html =~
-               "If this CYFR is ever lost, this is the one thing that brings you back. Save it " <>
-                 "in your password manager, or print this page. Once you say you saved it, CYFR " <>
-                 "forgets it."
-
-      assert html =~
-               ~r/phx-click="recovery_ack"[^>]*data-test="recovery-ack"[^>]*>\s*I saved it\s*</
-
-      assert html =~ ~r/<div data-recovery-code="k1" hidden(="")?><\/div>/
-      refute html =~ ~r/>\s*Print\s*</
-      refute html =~ "recovery-print"
-      refute html =~ "data-recovery-kit"
-    end
-  end
-
-  describe "a recovery code again, and another code, as the person reads them" do
-    setup :signed_in
-
-    test "say code, never kit, in their titles, descriptions, statements, fields and buttons",
-         %{view: view} do
-      {:ok, again} = Recovery.recovery_code("k1", "att_1")
-      prompt(view, again)
-
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="kit"]))
-      assert has_element?(view, "#system-layer-title", "Your recovery code")
-
-      assert has_element?(
-               view,
-               "#system-layer-description",
-               "Show your recovery code again. Each time needs a fresh confirmation, and once " <>
-                 "you say you saved it, CYFR forgets it."
-             )
-
-      assert has_element?(
-               view,
-               ~s(#system-layer [data-test="recovery-statements"]),
-               "Anyone who sees your recovery code can replace your keys until you have it no more."
-             )
-
-      assert has_element?(view, ~s([data-test="recovery-submit"]), "Show my recovery code")
-      assert has_element?(view, ~s([data-recovery-code="k1"][hidden]))
-      refute has_element?(view, ~s([data-test="recovery-saved"]))
-      refute has_element?(view, "#system-layer", ~r/\bkits?\b|printed|Print/)
-      PrismWeb.Vocabulary.refute_vocabulary(view |> element("#system-layer") |> render())
-      view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
-
-      {:ok, holder} = Recovery.holder("h1")
-      prompt(view, holder)
-
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="holder"]))
-      assert has_element?(view, "#system-layer-title", "Add another recovery code")
-
-      assert has_element?(
-               view,
-               "#system-layer-description",
-               "A recovery code you hold approves the new one."
-             )
-
-      for statement <- [
-            "Each recovery code alone can replace your keys. A copied code is someone else's " <>
-              "way in, so keep every one apart from your devices.",
-            "Adding a recovery code changes your identity's head: every other CYFR ends the " <>
-              "sessions and device certificates it bound to your current keys once it sees " <>
-              "the change."
-          ] do
-        assert has_element?(view, ~s([data-test="recovery-statements"] li), statement)
-      end
-
-      assert has_element?(
-               view,
-               ~s(label[for="system-layer-recovery-signer"]),
-               "Your recovery code"
-             )
-
-      assert has_element?(
-               view,
-               ~s|input#system-layer-recovery-signer[data-field="recovery_code"][data-test="recovery-signer"]:not([name])|
-             )
-
-      refute has_element?(view, ~s(#system-layer input[data-field="recovery_secret"]))
-      assert has_element?(view, ~s([data-test="recovery-submit"]), "Continue")
-      assert has_element?(view, ~s([data-recovery-code="h1"][hidden]))
-      refute has_element?(view, "#system-layer", ~r/\bkits?\b|printed|Print/)
-      PrismWeb.Vocabulary.refute_vocabulary(view |> element("#system-layer") |> render())
-    end
-  end
-
-  describe "a recovery code not yet saved" do
-    setup :signed_in
-
-    test "is shown again under a fresh proof each time, which the layer asks for again itself",
-         %{view: view, ctx: ctx, user: user, authenticator: authenticator} do
-      enrolled = enrolled!(ctx)
-      {:ok, again} = Recovery.recovery_code("k1", enrolled.attempt_id)
-      prompt(view, again)
-
-      view |> layer() |> render_hook("recovery_submit", %{"prompt_id" => "k1"})
-      assert render(view) =~ ~s(data-status="waiting")
-      ref = Prima.Confirmation.ref(held_secret(view))
-
-      assert %{operation: "person.recovery_code", state: "pending"} =
-               Enum.find(pending_records(user.user_id), &(&1.ref == ref))
-
-      prove_here!(view, ref, authenticator)
-
-      # The layer holds nothing secret for a code shown again: it asks again
-      # itself.
-      code = code_of(enrolled.identifier, enrolled.seed)
-      assert_push_event(view, "recovery:code", %{prompt: "k1", code: ^code}, 2_000)
-      refute_push_event(view, "recovery:resubmit", _any, 100)
-      refute render(view) =~ code
-      refute state_of(view) =~ code
-      refute logged() =~ code
-
-      assert has_element?(view, ~s([data-test="recovery-ack"]), "I saved it")
-      refute has_element?(view, ~s([data-test="recovery-print"]))
-
-      # "I saved it" erases the secret at the home and ends the prompt.
-      view |> element(~s([data-test="recovery-ack"])) |> render_click()
-      assert outcome("k1") == :confirmed
-      assert_push_event(view, "recovery:clear", %{layer: "system-layer", prompt: "k1"})
-      assert open_prompt(view) == nil
-
-      assert [%{phase: "completed", kit_seed_sealed: nil}] =
-               attempts(user.user_id, "enrollment")
-    end
-  end
-
-  describe "another recovery code" do
-    setup :signed_in
-
-    test "is signed by a recovery code the person holds, typed, beside a secret the browser drew",
-         %{
-           view: view,
-           ctx: ctx,
-           user: user,
-           directory: directory,
-           authenticator: authenticator
-         } do
-      enrolled = enrolled!(ctx)
-      {:ok, holder} = Recovery.holder("h1")
-      prompt(view, holder)
-      assert has_element?(view, ~s|[data-test="recovery-signer"]:not([name])|)
-
-      signer = code_of(enrolled.identifier, enrolled.seed)
-      added = seed()
-
-      params = %{
-        "prompt_id" => "h1",
-        "recovery_code" => signer,
-        "holder" => %{"recovery_secret" => added},
-        "request_id" => request_id()
-      }
-
-      view |> layer() |> render_hook("recovery_submit", params)
-      ref = Prima.Confirmation.ref(held_secret(view))
-
-      assert %{operation: "person.recovery_code_add", state: "pending"} =
-               Enum.find(pending_records(user.user_id), &(&1.ref == ref))
-
-      for secret <- [signer, added, enrolled.seed] do
-        refute state_of(view) =~ secret
-      end
-
-      prove_here!(view, ref, authenticator)
-      assert_push_event(view, "recovery:resubmit", %{prompt: "h1"}, 2_000)
-      view |> layer() |> render_hook("recovery_submit", params)
-
-      # The new code is the identity's with the secret the browser drew.
-      code = code_of(enrolled.identifier, added)
-      assert_push_event(view, "recovery:code", %{prompt: "h1", code: ^code})
-
-      # The directory holds the added code's key as a holder of the identity.
-      {:ok, state} = Identity.verify_chain(Directory.log(directory.dir, enrolled.identifier))
-
-      {:ok, {added_key, _}} =
-        Identity.derive_recovery_key(Base.url_decode64!(added, padding: false))
-
-      assert added_key in state.recovery_keys
-
-      html = render(view)
-
-      for secret <- [signer, code, added] do
-        refute html =~ secret
-        refute state_of(view) =~ secret
-        refute logged() =~ secret
-      end
-
-      view |> element(~s([data-test="recovery-ack"])) |> render_click()
-      assert outcome("h1") == :confirmed
-      assert [%{phase: "completed", kit_seed_sealed: nil}] = attempts(user.user_id, "holder")
-    end
-
-    test "with no signing code typed, asks for one and sends nothing",
-         %{view: view, ctx: ctx, user: user} do
-      {:ok, holder} = Recovery.holder("h1")
-      prompt(view, holder)
-
-      html =
-        view
-        |> layer()
-        |> render_hook("recovery_submit", %{
-          "prompt_id" => "h1",
-          "recovery_secret" => seed(),
-          "holder" => %{"recovery_secret" => seed()},
-          "request_id" => request_id()
-        })
-
-      assert html =~ "Type a recovery code you hold now."
-      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), user.user_id)
-    end
-
-    test "signed by a code with a typo, is refused with its sentence before anything is asked",
-         %{view: view, ctx: ctx, user: user} do
-      enrolled = enrolled!(ctx)
-      {:ok, holder} = Recovery.holder("h1")
-      prompt(view, holder)
-
-      typed = typo_of(code_of(enrolled.identifier, enrolled.seed))
-
-      view
-      |> layer()
-      |> render_hook("recovery_submit", %{
-        "prompt_id" => "h1",
-        "recovery_code" => typed,
-        "holder" => %{"recovery_secret" => seed()},
-        "request_id" => request_id()
-      })
-
-      assert {:refused, _reason} = outcome("h1")
-
-      assert has_element?(
-               view,
-               "#system-layer",
-               "That recovery code has a typo. Check it against the one you saved."
-             )
-
-      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), user.user_id)
-      assert attempts(user.user_id, "holder") == []
-      refute render(view) =~ typed
-      refute logged() =~ typed
-    end
-  end
-
-  # ---- after a declared restore --------------------------------------------------
 
   defp now, do: DateTime.utc_now()
   defp uniq, do: System.unique_integer([:positive])
@@ -657,26 +195,18 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
     view
   end
 
-  # A person whose home was restored from a backup with the marker: their
-  # passkey, a paired device, an API key and a webhook of theirs and a
-  # profile and a vault entry of their own athanor, each standing before
-  # the restore; then signed in again with a door, since the restore ended
-  # every session.
+  # A person whose home was restored from a backup with the marker: a
+  # paired device, an API key and a webhook of theirs and a profile and a
+  # vault entry of their own athanor, each standing before the restore;
+  # then signed in again, since the restore ended every session.
   defp restored(%{conn: conn}) do
     user = test_user()
     _before = log_in_user(conn, user)
     athanor = seated_athanor()
     authenticator = Sanctum.TestContext.passkey!(user.user_id)
-
-    passkey_id =
-      Arca.Repo.one!(
-        from(p in Arca.Schemas.Passkey, where: p.user_id == ^user.user_id, select: p.id)
-      )
-
     profile_id = profile!(athanor.id)
 
     ids = %{
-      passkey: passkey_id,
       client: paired!(athanor.id, user.user_id),
       key: key!(athanor.id, user.user_id),
       webhook: webhook!(athanor.id, user.user_id, profile_id),
@@ -685,7 +215,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
     }
 
     {:ok, _marked} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
-    {:ok, %{restore_id: restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
+    {:ok, %{restore_id: _restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
 
     conn = log_in_user(conn, user)
 
@@ -695,7 +225,6 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       user: user,
       athanor: athanor,
       authenticator: authenticator,
-      restore_id: restore_id,
       ids: ids
     }
   end
@@ -711,22 +240,21 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
 
     test "lists what the restore suspended and asks for again, with nothing secret and no prompt",
          %{view: view, athanor: athanor, ids: ids} do
-      assert has_element?(view, ~s([data-test="restore-checklist"][data-recovering="true"]))
+      assert has_element?(view, ~s([data-test="restore-checklist"]))
       assert render(view) =~ "This CYFR was restored from a backup"
-      assert has_element?(view, ~s([data-test="restore-checklist-recovering"]))
 
-      for {operation, id} <- [
-            {"passkey.reenable", ids.passkey},
-            {"pairing.reenable", ids.client},
-            {"key.reenable", ids.key},
-            {"webhook.reenable", ids.webhook}
-          ] do
+      for {operation, id} <- [{"key.reenable", ids.key}, {"webhook.reenable", ids.webhook}] do
         assert has_element?(
                  view,
                  ~s([data-test="restore-reenable"][data-operation="#{operation}"][data-id="#{id}"])
                ),
                operation
       end
+
+      # The device the restore suspended comes back by a fresh hello, not
+      # from here.
+      assert row!(Arca.Schemas.PairedClient, ids.client).standing == "suspended"
+      refute has_element?(view, ~s([data-test="restore-checklist-item"][data-id="#{ids.client}"]))
 
       profile = row!(Arca.Schemas.Profile, ids.profile)
 
@@ -767,7 +295,8 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       for {operation, id} <- [
             {"key.reenable", "key_not_listed"},
             {"vault.delete", ids.vault},
-            {"passkey.reenable", ids.key}
+            {"pairing.reenable", ids.client},
+            {"webhook.reenable", ids.key}
           ] do
         view
         |> layer()
@@ -787,13 +316,11 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    # Needs the four re-enable operations and the confirmation provider's
-    # restore rule.
-    test "a re-enable raises its record's prompt, offering an emailed code and never a passkey",
-         %{view: view, user: user, ids: ids} do
-      reenable!(view, "passkey.reenable", ids.passkey)
+    test "a re-enable raises its record's prompt, which a passkey of the account confirms",
+         %{view: view, user: user, ids: ids, authenticator: authenticator} do
+      reenable!(view, "key.reenable", ids.key)
 
-      assert [%{ref: ref, operation: "passkey.reenable", action: "restore_reenable"}] =
+      assert [%{ref: ref, operation: "key.reenable", action: "restore_reenable"}] =
                pending_records(user.user_id)
 
       assert open_prompt(view) == Prompt.confirmation_id(ref)
@@ -803,63 +330,9 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
                ~s([data-test="confirmation"][data-ref="#{ref}"][data-own="true"])
              )
 
-      refute has_element?(view, ~s([data-test="confirm-passkey"]))
-      assert has_element?(view, ~s([data-test="confirm-email"]))
-
       # The secret is the layer's own, never drawn.
       refute render(view) =~ held_secret(view)
 
-      # Dismissed, the request is cancelled; the page asked for nothing,
-      # so it is told nothing.
-      view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
-      assert open_prompt(view) == nil
-      assert [%{state: "cancelled"}] = pending_records(user.user_id)
-      refute_received {:host, {:system_layer, _id, _outcome}}
-      Cyfr.Test.Sandbox.end_views()
-    end
-
-    # Needs the four re-enable operations and the confirmation provider's
-    # restore rule.
-    test "an emailed code re-enables a passkey, which ends the recovery; the passkey then confirms",
-         %{view: view, user: user, ids: ids, authenticator: authenticator} do
-      reenable!(view, "passkey.reenable", ids.passkey)
-      view |> element(~s([data-test="confirm-email"])) |> render_click()
-      assert_receive {:confirmation_code_mail, mail}, 2_000
-      view |> form("#system-layer-code", %{"code" => MailSink.code(mail)}) |> render_submit()
-
-      wait_until(
-        fn ->
-          has_element?(view, ~s([data-test="restore-checklist"][data-recovering="false"]))
-        end,
-        2_000,
-        "the recovery's end"
-      )
-
-      assert open_prompt(view) == nil
-
-      assert has_element?(
-               view,
-               ~s([data-test="restore-checklist-notice"]),
-               "passkey is re-enabled"
-             )
-
-      refute has_element?(
-               view,
-               ~s([data-test="restore-checklist-item"][data-id="#{ids.passkey}"])
-             )
-
-      assert row!(Arca.Schemas.Passkey, ids.passkey).state == "active"
-
-      assert {:ok, nil} =
-               Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user.user_id)
-
-      # The device stays suspended until it is re-enabled itself.
-      assert has_element?(view, ~s([data-test="restore-reenable"][data-id="#{ids.client}"]))
-      assert row!(Arca.Schemas.PairedClient, ids.client).standing == "suspended"
-
-      # The recovery over, the re-enabled passkey confirms the next one.
-      reenable!(view, "key.reenable", ids.key)
-      ref = Prima.Confirmation.ref(held_secret(view))
       prove_here!(view, ref, authenticator)
 
       wait_until(
@@ -870,66 +343,54 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
         "the key's re-enable"
       )
 
+      assert open_prompt(view) == nil
+
+      assert has_element?(
+               view,
+               ~s([data-test="restore-checklist-notice"]),
+               "API key is re-enabled"
+             )
+
       refute row!(Arca.Schemas.ApiKey, ids.key).suspended
+
+      # The webhook stays suspended until it is re-enabled itself.
+      assert has_element?(view, ~s([data-test="restore-reenable"][data-id="#{ids.webhook}"]))
+      assert row!(Arca.Schemas.Webhook, ids.webhook).suspended
+      refute_received {:host, {:system_layer, _id, _outcome}}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a dismissed re-enable cancels its record and changes nothing",
+         %{view: view, user: user, ids: ids} do
+      reenable!(view, "webhook.reenable", ids.webhook)
+      assert [%{operation: "webhook.reenable"}] = pending_records(user.user_id)
+      view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
+      assert open_prompt(view) == nil
+      assert [%{state: "cancelled"}] = pending_records(user.user_id)
+      assert row!(Arca.Schemas.Webhook, ids.webhook).suspended
       refute_received {:host, {:system_layer, _id, _outcome}}
       Cyfr.Test.Sandbox.end_views()
     end
   end
 
-  describe "a person with nothing to recover" do
-    setup :signed_in
+  describe "a person with nothing a restore suspended" do
+    test "sees no restore checklist, even with a profile that asks for consent again",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      profile_id = profile!(athanor.id)
 
-    test "sees no restore checklist", %{view: view, ctx: ctx} do
-      assert {:ok, nil} = Sanctum.Recovery.checklist(ctx)
-      refute has_element?(view, ~s([data-test="restore-checklist"]))
-    end
-  end
-
-  # ---- a frame -------------------------------------------------------------------
-
-  describe "a frame" do
-    # A tincture's frame acts through its per-open credential, on the
-    # tincture plane: every person action is interactive, so the gate
-    # refuses each before its handler, and no recovery material is ever
-    # answered into a frame.
-    test "reaches no recovery material: every person action is refused it" do
-      {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
-      own = Sanctum.Test.People.athanor!(user)
-      issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
-      {:ok, session} = Sanctum.TestContext.create_session(issuer)
-      {:ok, source} = Sanctum.Caller.establish(session.token)
-
-      reference = %{publisher: "local", name: "recovery-probe", version: "1.0.0"}
-
-      {:ok, %{credential: bearer}} =
-        Sanctum.TinctureAuth.mint_frame_credential(
-          source,
-          reference,
-          "sha256:" <> String.duplicate("0", 64),
-          0,
-          "frm_recovery_#{System.unique_integer([:positive])}"
+      {1, _} =
+        Arca.Repo.update_all(from(p in Arca.Schemas.Profile, where: p.id == ^profile_id),
+          set: [status: "needs_consent"]
         )
 
-      {:ok, frame} = Sanctum.Caller.establish({:frame_credential, bearer})
-
-      code = any_code()
-
-      for args <- [
-            %{"action" => "status"},
-            %{"action" => "recovery_code", "attempt_id" => "att_1"},
-            %{"action" => "recovery_code_saved", "attempt_id" => "att_1"},
-            %{
-              "action" => "recovery_code_add",
-              "recovery_code" => code,
-              "holder" => %{"recovery_secret" => seed()},
-              "request_id" => request_id()
-            }
-          ] do
-        assert {:error, reason} = Sanctum.Gate.call_external("person", frame, args)
-        refute match?({:ok, _}, reason)
-        refute inspect(reason) =~ "recovery_secret"
-        refute inspect(reason) =~ code
-      end
+      view = host!(conn, athanor)
+      ctx = :sys.get_state(view.pid).socket.assigns.context
+      assert {:ok, nil} = Sanctum.Pairing.restore_checklist(ctx)
+      refute has_element?(view, ~s([data-test="restore-checklist"]))
+      Cyfr.Test.Sandbox.end_views()
     end
   end
 end

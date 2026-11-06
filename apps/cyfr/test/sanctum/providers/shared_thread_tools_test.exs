@@ -262,19 +262,6 @@ defmodule Sanctum.Providers.SharedThreadToolsTest do
 
     assert Refusals.render(reason) =~ "A pair's two people were set when it opened"
 
-    # While a member recovers from a declared restore, no one is added.
-    restore = Prima.UUID7.generate_id("rst")
-
-    {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
-        %{restore_id: restore, user_id: bob, open: true}
-      ])
-
-    assert {:error, {:shared_thread, :recovering_from_restore} = reason} =
-             call(a, %{"action" => "add", "thread" => id, "user_id" => carol})
-
-    assert Refusals.render(reason) =~ "restored from a backup"
-
     # An archived thread takes no message.
     {:ok, _} = call(a, %{"action" => "archive", "thread" => id})
 

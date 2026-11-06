@@ -45,14 +45,6 @@
           "CyfrWeb.Plugs.ApiSecurityHeaders"
         ],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "restore" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.FrameRequest",
-          ":fetch_session",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
         "device_session" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -314,60 +306,6 @@
           auth: "authenticate_plug",
           live_view: nil,
           pipe_through: ["mcp"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":restore",
-          auth: "installation_capability",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/challenge",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":challenge",
-          auth: "installation_capability",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/kit",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":kit",
-          auth: "restore_kit_proof",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/kit/challenge",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":kit_challenge",
-          auth: "restore_kit_proof",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/kit/reenable",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":kit_reenable",
-          auth: "restore_kit_proof",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/reproof",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":reproof",
-          auth: "installation_capability",
-          live_view: nil,
-          pipe_through: ["restore"]
         },
         %{
           verb: "GET",
@@ -742,15 +680,6 @@
           plug_opts: ":login",
           auth: "browser_public_login",
           live_view: "PrismWeb.LoginLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/restore",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":restore",
-          auth: "browser_public_login",
-          live_view: "PrismWeb.RestoreLive",
           pipe_through: ["browser"]
         },
         %{

@@ -114,37 +114,26 @@ defmodule PrismWeb.SystemLayer do
       boundary, so confirming leaves for the sign-in page;
     * an unlock — no operation unlocks the vault, so an unlock prompt has
       no confirm control and can only be dismissed;
-    * recovery material (`PrismWeb.SystemLayer.Recovery`) — a recovery
-      code again through `person.recovery_code`, another code through
-      `person.recovery_code_add`, and "I saved it" through
-      `person.recovery_code_saved`. An added code's secret is the browser's, drawn there
-      and submitted (`recovery_submit`) and submitted again once confirmed,
-      never assigned; a recovery code goes to the browser in a push and is
-      erased there when the prompt ends;
-    * a re-enable from the restore checklist — `key.reenable`,
-      `webhook.reenable`, `pairing.reenable` or `passkey.reenable` of the
-      item the person chose (below).
+    * a re-enable from the restore checklist — `key.reenable` or
+      `webhook.reenable` of the item the person chose (below).
 
   ## After a declared restore
 
   A layer that listens, on the page of a person who can confirm, reads
-  the person's restore checklist (`Sanctum.Recovery.checklist/1`) once
-  per page and draws it while it lists anything
-  (`PrismWeb.SystemLayer.RestoreChecklist`): the passkeys, paired
-  devices, API keys and webhooks the restore suspended, the profiles to
-  consent to again and the entries to rotate. A layer that does not
-  listen draws none, since it hears no record's confirmation. A
-  re-enable (`restore_reenable`) names one of the four operations and an
-  item the checklist lists for the page's athanor, and is dispatched as
+  the person's restore checklist (`Sanctum.Pairing.restore_checklist/1`)
+  once per page and draws it while it lists anything
+  (`PrismWeb.SystemLayer.RestoreChecklist`): the API keys and webhooks
+  the restore suspended, the profiles to consent to again and the
+  entries to rotate. A layer that does not listen draws none, since it
+  hears no record's confirmation. A re-enable (`restore_reenable`) names
+  one of the two operations and an item the checklist lists for the
+  page's athanor, and is dispatched as
   the layer's own sensitive change: its `confirmation_required` opens
   that record's confirmation prompt, marked as this client's, which
   reports nothing to the page. Once the record reads confirmed the layer
   makes the change again with the secret it holds, closes the prompt and
   reads the checklist again. A refusal is shown as its sentence, in the
-  prompt or, for the first dispatch, in the checklist. While the
-  person's recovery is open the record offers a door's fresh sign-in or
-  an emailed code, never a passkey: which proofs it offers is the
-  record's, as Sanctum decides them.
+  prompt or, for the first dispatch, in the checklist.
 
   ## Fresh confirmation
 
@@ -221,7 +210,7 @@ defmodule PrismWeb.SystemLayer do
   alias Phoenix.LiveView.JS
   alias Prism.Fallback
   alias PrismWeb.Ops
-  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery, RestoreChecklist, Share}
+  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, RestoreChecklist, Share}
   alias Sanctum.Context
 
   @layer_id "system-layer"
@@ -728,7 +717,6 @@ defmodule PrismWeb.SystemLayer do
        panels: %{},
        held: %{},
        pairing: nil,
-       recovery: nil,
        restoring: %{},
        notice: nil,
        notice_error: nil,
@@ -1308,37 +1296,16 @@ defmodule PrismWeb.SystemLayer do
   defp step(%{assigns: %{queue: [next | rest]}} = socket),
     do:
       socket
-      |> forget_recovery()
       |> assign(current: next, queue: rest, error: nil)
       |> mark_shown()
 
-  defp step(socket) do
-    socket
-    |> forget_recovery()
-    |> assign(current: nil, queue: [], error: nil, pairing: nil, recovery: nil)
-  end
+  defp step(socket), do: assign(socket, current: nil, queue: [], error: nil, pairing: nil)
 
-  # A recovery prompt that ends, however it ends, has the browser forget
-  # its material and empty the prompt.
-  defp forget_recovery(%{assigns: %{recovery: %{prompt_id: prompt_id}}} = socket),
-    do: socket |> push_layer("recovery:clear", %{prompt: prompt_id}) |> assign(:recovery, nil)
-
-  defp forget_recovery(socket), do: socket
-
-  # The pairing prompt, as it is shown, has its list still to read; a
-  # recovery prompt starts at its form.
+  # The pairing prompt, as it is shown, has its list still to read.
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
-    do:
-      assign(socket,
-        pairing: %{prompt_id: id, clients: :unread},
-        recovery: nil
-      )
+    do: assign(socket, pairing: %{prompt_id: id, clients: :unread})
 
-  defp mark_shown(%{assigns: %{current: %{kind: kind, id: id}}} = socket)
-       when kind in [:kit, :holder],
-       do: assign(socket, pairing: nil, recovery: Recovery.start(id))
-
-  defp mark_shown(socket), do: assign(socket, pairing: nil, recovery: nil)
+  defp mark_shown(socket), do: assign(socket, pairing: nil)
 
   # What a shown prompt reads: for the pairing prompt, the person's paired
   # clients.
@@ -1462,27 +1429,6 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # The material is read out of the event and handed to the dispatch;
-  # nothing here assigns, renders or logs it (`recovery_secret` is on the
-  # redaction roster, `Prima.Sanitizer`).
-  def handle_event("recovery_submit", %{"prompt_id" => id} = params, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, Prompt.recovery_kinds()) do
-        {:ok, prompt} -> {:noreply, recovery_submit(socket, prompt, params)}
-        :none -> {:noreply, socket}
-      end
-    end)
-  end
-
-  def handle_event("recovery_ack", %{"id" => id}, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, Prompt.recovery_kinds()) do
-        {:ok, prompt} -> {:noreply, recovery_ack(socket, prompt)}
-        :none -> {:noreply, socket}
-      end
-    end)
-  end
-
   # A passkey of the person's account confirms at the account pages, in a
   # new tab, with the record's request this CYFR mints.
   def handle_event("prove_passkey", %{"ref" => ref}, socket) do
@@ -1504,7 +1450,7 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # A re-enable from the restore checklist: the operation is one of the
-  # four and the item one the checklist lists here (`RestoreChecklist`).
+  # two and the item one the checklist lists here (`RestoreChecklist`).
   def handle_event("restore_reenable", %{"operation" => operation, "id" => id}, socket)
       when is_binary(operation) and is_binary(id) do
     CyfrWeb.ContextGuard.guard(socket, &{:noreply, restore_reenable(&1, operation, id)})
@@ -2041,9 +1987,6 @@ defmodule PrismWeb.SystemLayer do
       %{repeat: :resubmit} ->
         push_resubmit(socket, "#{socket.assigns.id}-credential")
 
-      %{repeat: :recovery_resubmit, prompt_id: prompt_id} ->
-        push_layer(socket, "recovery:resubmit", %{prompt: prompt_id})
-
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
@@ -2053,9 +1996,6 @@ defmodule PrismWeb.SystemLayer do
           %{id: ^prompt_id, kind: :share} = prompt ->
             {:share_create, args} = repeat
             share_create(socket, prompt, args)
-
-          %{id: ^prompt_id, kind: :kit} = prompt ->
-            recovery_submit(socket, prompt, %{})
 
           %{id: ^prompt_id, kind: :confirmation} = prompt ->
             {:restore_reenable, operation, id} = repeat
@@ -2210,59 +2150,6 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # ---------------------------------------------------------------------------
-  # Recovery material
-  # ---------------------------------------------------------------------------
-
-  # The material the browser submitted, dispatched as the prompt's change;
-  # once confirmed, the browser submits it again (`:recovery_resubmit`) or,
-  # for a code shown again, the layer asks again (`{:recovery_code, attempt_id}`).
-  defp recovery_submit(socket, prompt, params) do
-    case Recovery.request(prompt, params) do
-      {:ok, tool, args, repeat} ->
-        case layer_call(socket, prompt, repeat, tool, args) do
-          {:asked, socket} -> socket
-          {:done, result, socket} -> recovered(socket, prompt, result)
-        end
-
-      {:error, sentence} ->
-        assign(socket, :error, sentence)
-    end
-  end
-
-  # A recovery code answered goes to the browser alone, which draws it;
-  # the layer keeps the attempt it belongs to, which "I saved it" names,
-  # and nothing of the code.
-  defp recovered(socket, prompt, {:ok, %{attempt_id: attempt_id} = answer}) do
-    case Recovery.code(answer) do
-      nil ->
-        settle(socket, prompt, :confirmed)
-
-      %{code: code} ->
-        socket
-        |> push_layer("recovery:code", %{prompt: prompt.id, code: code})
-        |> assign(:recovery, %{Recovery.start(prompt.id) | phase: :kit, attempt_id: attempt_id})
-        |> assign(:error, nil)
-    end
-  end
-
-  defp recovered(socket, prompt, {:ok, _answer}), do: settle(socket, prompt, :confirmed)
-
-  defp recovered(socket, prompt, {:error, reason}),
-    do: refuse(socket, prompt, reason, Ops.error_message(reason))
-
-  # The person saved the recovery code: its secret is erased at the home,
-  # and the browser forgets the code as the prompt ends.
-  defp recovery_ack(%{assigns: %{recovery: %{phase: :kit, attempt_id: id}}} = socket, prompt)
-       when is_binary(id) do
-    case Ops.call_tool(socket, "person/recovery_code_saved", %{"attempt_id" => id}) do
-      {:ok, _saved} -> settle(socket, prompt, :confirmed)
-      {:error, reason} -> assign(socket, :error, Ops.error_message(reason))
-    end
-  end
-
-  defp recovery_ack(socket, _prompt), do: socket
-
-  # ---------------------------------------------------------------------------
   # The restore checklist
   # ---------------------------------------------------------------------------
 
@@ -2282,7 +2169,7 @@ defmodule PrismWeb.SystemLayer do
   defp read_checklist(socket), do: socket
 
   defp load_checklist(%{assigns: %{context: %Context{} = context}} = socket) do
-    case Sanctum.Recovery.checklist(context) do
+    case Sanctum.Pairing.restore_checklist(context) do
       {:ok, nil} ->
         assign(socket, restore_checklist: nil, restore_places: %{})
 
@@ -2516,7 +2403,6 @@ defmodule PrismWeb.SystemLayer do
             myself={@myself}
             id={@id}
             pairing={@pairing}
-            recovery={@recovery}
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
@@ -2643,7 +2529,6 @@ defmodule PrismWeb.SystemLayer do
   attr :myself, :any, required: true
   attr :id, :string, required: true
   attr :pairing, :map, default: nil
-  attr :recovery, :map, default: nil
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
@@ -2816,19 +2701,6 @@ defmodule PrismWeb.SystemLayer do
       pairing={@pairing}
       myself={@myself}
       button_class={button_class(false)}
-    />
-    """
-  end
-
-  defp body(%{prompt: %{kind: kind}} = assigns) when kind in [:kit, :holder] do
-    ~H"""
-    <Recovery.body
-      prompt={@prompt}
-      recovery={@recovery}
-      may={@may}
-      myself={@myself}
-      id={@id}
-      primary_class={button_class(true)}
     />
     """
   end
@@ -3027,9 +2899,6 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :pairing}), do: "Your devices"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
-  defp title(%{kind: kind} = prompt) when kind in [:kit, :holder],
-    do: Recovery.title(prompt)
-
   defp description(%{kind: :grant}),
     do:
       "Approve what this app may use and reach, as listed below. Nothing is granted until you do."
@@ -3066,9 +2935,6 @@ defmodule PrismWeb.SystemLayer do
     do:
       "A client of yours asked for a change that needs a fresh confirmation. Check what it " <>
         "would change and who asked before you confirm."
-
-  defp description(%{kind: kind} = prompt) when kind in [:kit, :holder],
-    do: Recovery.description(prompt)
 
   defp confirm_label(%{kind: :grant}), do: "Grant"
   defp confirm_label(%{kind: :sign_in}), do: "Sign in"

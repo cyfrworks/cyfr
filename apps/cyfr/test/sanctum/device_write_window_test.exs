@@ -12,12 +12,11 @@ defmodule Sanctum.DeviceWriteWindowTest do
   provider's client credentials) holds the device's client and
   certificate in that transaction (`Sanctum.Issuance.device_hold/1`); the
   revocation commits between the confirmation and the write. A change
-  whose confirmation is consumed in its write's own transaction (a
-  certification for another home, another recovery code, a remote sign-in
-  assertion) is held there
-  by the consumption (`Sanctum.Consent.Authz.consume/2`); the revocation lands
-  inside that transaction, right after the device's standing was read
-  there. Each change still completes while the device stands.
+  whose confirmation is consumed in its write's own transaction is held
+  there by the consumption (`Sanctum.Consent.Authz.consume/2`); the
+  revocation lands inside that transaction, right after the device's
+  standing was read there. Each change still completes while the device
+  stands.
 
   These need what only this suite has: the component domain a webhook's
   target is checked in. A grant's token endpoint is a scripted
@@ -35,19 +34,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{DeviceCertification, IdentityAttempt, PersonIdentity}
   alias Prima.DeviceCert.{Challenge, Proof}
-  alias Prima.Identity.Encoding
-
-  alias Sanctum.{
-    Context,
-    DeviceCerts,
-    Pairing,
-    Person,
-    ProviderCredentials,
-    Recovery,
-    RemoteCertification
-  }
+  alias Sanctum.{Context, DeviceCerts, Pairing, ProviderCredentials}
 
   alias Sanctum.Consent.Authz
   alias Sanctum.Test.DirectoryServer, as: Directory
@@ -59,7 +47,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # Where the grants' entries may go, as `Prima.Destination`'s canonical
   # text; no case reads a token, so they stay attach-only.
   @destination ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"})
-  @hub "https://hub.example"
 
   setup_all do
     %{tls: Directory.tls()}
@@ -246,67 +233,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
     send(held, :release)
     Task.await(task, 25_000)
   end
-
-  # A handler on the repo's statements: the process that put
-  # `{test, actor, client_id}` under `:revoke_in_place` revokes that client
-  # right after its first read of a paired client inside a transaction (the
-  # device's standing read where its change is consumed, in the write's own
-  # transaction), and tells the test what the revocation answered.
-  @doc false
-  def revoke_in_place(_event, _measurements, %{source: "paired_clients"}, _config) do
-    with {test, actor, client_id} <- Process.get(:revoke_in_place),
-         true <- Arca.Repo.in_transaction?() do
-      Process.delete(:revoke_in_place)
-      send(test, {:revoked_in_place, Arca.PairedClients.revoke(actor, client_id)})
-    end
-
-    :ok
-  end
-
-  def revoke_in_place(_event, _measurements, _metadata, _config), do: :ok
-
-  # `write`, run here with the person's revocation of the device landing
-  # inside the write's own transaction, right after the device's standing
-  # was read there: on the one connection a sandboxed test has, the only
-  # point a revocation can land between that read and the write. A refused
-  # write rolls the revocation back with everything else, so a case
-  # asserts what the write answered and that nothing was written.
-  defp revoked_in_place(session_ctx, client_id, write) do
-    handler = "device-write-in-place-#{System.unique_integer([:positive])}"
-    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_in_place/4, nil)
-    on_exit(fn -> :telemetry.detach(handler) end)
-    Process.put(:revoke_in_place, {self(), Context.actor(session_ctx), client_id})
-
-    answer =
-      try do
-        write.()
-      after
-        Process.delete(:revoke_in_place)
-        :telemetry.detach(handler)
-      end
-
-    assert_received {:revoked_in_place, {:ok, %{standing: "revoked"}}}
-    answer
-  end
-
-  # `site` under the device's `ctx` as its person confirms it
-  # (`Sanctum.TestContext.confirming/2`): asked, proven, then repeated under
-  # the proven record with the device revoked at its write.
-  defp revoked_at_its_write(session_ctx, client_id, ctx, site) do
-    Sanctum.TestContext.confirming(ctx, fn
-      %Context{confirmation_id: nil} = asking -> site.(asking)
-      repeating -> revoked_in_place(session_ctx, client_id, fn -> site.(repeating) end)
-    end)
-  end
-
-  defp confirmations(user_id) do
-    Arca.Repo.aggregate(from(c in "pending_confirmations", where: c.user_id == ^user_id), :count)
-  end
-
-  defp identity(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
-  defp attempt(request_id), do: Arca.Repo.get_by(IdentityAttempt, request_id: request_id)
-  defp request_id, do: "req_#{System.unique_integer([:positive])}"
-  defp recovery_secret, do: :crypto.strong_rand_bytes(32)
 
   defp webhook?(ctx, name) do
     Arca.Repo.exists?(
@@ -585,184 +511,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
       assert {:ok, %{"client_id" => "glass-id", "client_secret" => "glass"}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, @provider)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # The person's identity
-  # ---------------------------------------------------------------------------
-
-  # The person enrolled at the scripted directory, as their admission
-  # enrolls them and `registry.register` registers them; answers their
-  # recovery code.
-  defp enrolled!(session_ctx, opts) do
-    identity = Sanctum.Test.Newcomers.identity()
-    :ok = Recovery.open_at_admission(session_ctx.user_id, identity, Sanctum.directory_url())
-    {:ok, %{phase: "accepted", identifier: identifier}} = Recovery.advance(session_ctx, opts)
-    Prima.RecoveryCode.encode(identifier, identity.recovery_secret)
-  end
-
-  defp certify_args do
-    {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
-
-    %{
-      "device_key" => Encoding.b64(device_key),
-      "audience" => @hub,
-      "athanor" => "ath_hub",
-      "client_id" => "pcl_hub"
-    }
-  end
-
-  defp certifications(user_id),
-    do: Arca.Repo.all(from(c in DeviceCertification, where: c.user_id == ^user_id))
-
-  defp holder_args(signer, added, id) do
-    %{
-      "recovery_code" => signer,
-      "holder" => %{"recovery_secret" => Encoding.b64(added)},
-      "request_id" => id
-    }
-  end
-
-  # The person's own pending carry to the hub, under the head their row
-  # holds, and the assertion request the hub's challenge makes of it.
-  defp carried!(user_id) do
-    payload = ~s({"genesis":{}})
-    head = identity(user_id).head_hash
-
-    {:ok, action} =
-      Arca.CarryActions.open(%Prima.Actor{user_id: user_id}, %{
-        user_id: user_id,
-        action_id: "car_#{System.unique_integer([:positive])}",
-        source_home: Person.home(),
-        destination_home: @hub,
-        return_url: Person.home() <> "/carry",
-        payload: payload,
-        payload_digest: Prima.Digest.sha256(payload),
-        key_epoch: head
-      })
-
-    request = %{
-      audience: @hub,
-      challenge: :crypto.strong_rand_bytes(32),
-      action_id: action.action_id,
-      key_epoch: head
-    }
-
-    {action, request}
-  end
-
-  describe "a person's identity, changed from a device" do
-    setup %{tls: tls} do
-      Directory.listen!()
-      pinned = Application.fetch_env(:sanctum, :directory_url)
-
-      on_exit(fn ->
-        case pinned do
-          {:ok, url} -> Application.put_env(:sanctum, :directory_url, url)
-          :error -> Application.delete_env(:sanctum, :directory_url)
-        end
-
-        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      end)
-
-      directory = Directory.start!(tls)
-      Application.put_env(:sanctum, :directory_url, directory.url)
-      {:ok, opts: Directory.opts(tls)}
-    end
-
-    test "certifying a device for another home is refused by a revocation at its write: none is recorded",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      args = certify_args()
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &RemoteCertification.certify(&1, args)
-               )
-
-      assert certifications(user.id) == []
-    end
-
-    test "a device for another home is certified while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      args = certify_args()
-
-      assert {:ok, %{certificate: %{}}} =
-               Sanctum.TestContext.confirming(ctx, &RemoteCertification.certify(&1, args))
-
-      assert [%{audience_home: @hub}] = certifications(user.id)
-    end
-
-    test "another recovery code is refused by a revocation at its write: no attempt is opened, the head stays",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      code = enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      head = identity(user.id).head_hash
-      id = request_id()
-      args = holder_args(code, recovery_secret(), id)
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &Recovery.recovery_code_add(&1, args, opts)
-               )
-
-      assert attempt(id) == nil
-      assert identity(user.id).head_hash == head
-    end
-
-    test "another recovery code is added while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      code = enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      args = holder_args(code, recovery_secret(), request_id())
-
-      assert {:ok, %{phase: "accepted", key_epoch: epoch}} =
-               Sanctum.TestContext.confirming(ctx, &Recovery.recovery_code_add(&1, args, opts))
-
-      assert identity(user.id).head_hash == epoch
-    end
-
-    test "a remote sign-in assertion is refused by a revocation at its write: none is recorded",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      {action, request} = carried!(user.id)
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &Person.sign_assertion(&1, request)
-               )
-
-      assert {:ok, %{assertion: nil}} =
-               Arca.CarryActions.get(%Prima.Actor{user_id: user.id}, action.id)
-    end
-
-    test "a remote sign-in assertion is signed while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      {action, request} = carried!(user.id)
-
-      assert {:ok, %{assertion: %Prima.PersonAssertion{}}} =
-               Sanctum.TestContext.confirming(ctx, &Person.sign_assertion(&1, request))
-
-      assert {:ok, %{assertion: recorded}} =
-               Arca.CarryActions.get(%Prima.Actor{user_id: user.id}, action.id)
-
-      assert is_binary(recorded)
     end
   end
 end

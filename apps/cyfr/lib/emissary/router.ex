@@ -166,26 +166,6 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.WebhookIdempotency
       end
 
-      # The restore ingress: JSON, no CSRF token, since the installation
-      # capability is an authorization header no cross-site form can set and
-      # no CORS answer admits; the cookie session is fetched only to hand the
-      # restored person their session. Metered per address, before Sanctum
-      # checks the capability. Restore is an entry path and the kit its own
-      # ingress, not gate operations, so the routes record their own
-      # refusals.
-      pipeline :restore do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "restore"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-        plug CyfrWeb.Plugs.FrameRequest
-        plug :fetch_session
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :restore,
-          max_requests: 10,
-          window_ms: 60_000
-      end
-
       # A protected command line's session (`Emissary.Web.DeviceSessionController`):
       # JSON, no session fetched and no CSRF token, since no cookie is read
       # or set; the one-time ticket the device's channel was answered is the
@@ -369,40 +349,12 @@ defmodule Emissary.Router do
         get "/:name", AccountController, :show, metadata: %{auth: :public_directory}
       end
 
-      # Restore (`Sanctum.Recovery`): an identity brought back onto this
-      # empty node from its recovery code, under the installation capability
-      # (`CYFR_RESTORE_TOKEN`) in the authorization header; and, on a home
-      # restored from a backup, the proof a recovering person's recovery code
-      # signs (the `/kit` routes keep their path) and the re-enables it admits. Its body is
-      # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
       # A protected command line spends its unlock's ticket for its session.
       scope "/device", Emissary.Web do
         pipe_through :device_session
 
         post "/session", DeviceSessionController, :create,
           metadata: %{auth: :device_unlock_ticket}
-      end
-
-      scope "/restore", Emissary.Web do
-        pipe_through :restore
-
-        post "/", RestoreController, :restore, metadata: %{auth: :installation_capability}
-
-        post "/challenge", RestoreController, :challenge,
-          metadata: %{auth: :installation_capability}
-
-        post "/reproof", RestoreController, :reproof, metadata: %{auth: :installation_capability}
-
-        # After a declared restore: a person with no door left proves their
-        # kit over a challenge this home holds, and re-enables their
-        # suspended methods and credentials under the credential it answers.
-        post "/kit/challenge", RestoreController, :kit_challenge,
-          metadata: %{auth: :restore_kit_proof}
-
-        post "/kit", RestoreController, :kit, metadata: %{auth: :restore_kit_proof}
-
-        post "/kit/reenable", RestoreController, :kit_reenable,
-          metadata: %{auth: :restore_kit_proof}
       end
     end
   end
