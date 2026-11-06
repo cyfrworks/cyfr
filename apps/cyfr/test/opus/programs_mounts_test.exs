@@ -139,8 +139,10 @@ defmodule Opus.ProgramsMountsTest do
   describe "a login entry's end" do
     test "a revoked entry stops the kept stdio row that mounts it, and the next call is refused",
          %{ctx: ctx} do
-      start_reconciler()
+      # Signed in before the reconciler starts: the sign-in's own change
+      # signal would raise the row's epoch under the start below.
       entry = login_entry(ctx, "gh-login", "gh")
+      start_reconciler()
       row = kept_stdio_row(ctx, entry)
       assert {:ok, [%{"name" => "github__search"}]} = Servers.ensure_started(row, ctx)
       pid = server_pid(ctx, row)
@@ -160,9 +162,10 @@ defmodule Opus.ProgramsMountsTest do
     end
 
     test "a revoked entry ends its running sign-in at once", %{ctx: ctx} do
+      # Signed in before the reconciler starts, as above.
+      entry = login_entry(ctx, "claude-login", "claude")
       start_reconciler()
       pipe_row(ctx)
-      entry = login_entry(ctx, "claude-login", "claude")
       admin = %{ctx | permissions: MapSet.new([:*])}
 
       assert {:ok, %{session: token}} =
