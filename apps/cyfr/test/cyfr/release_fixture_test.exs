@@ -18,7 +18,6 @@ defmodule Cyfr.ReleaseFixtureTest do
   use ExUnit.Case, async: false
 
   alias Arca.Schemas.{IdentityAttempt, PersonIdentity, User}
-  alias Sanctum.Auth.Identity
 
   @fixture Path.expand("../../../../tests/release-boot/fixture.exs", __DIR__)
 
@@ -141,9 +140,7 @@ defmodule Cyfr.ReleaseFixtureTest do
     end
 
     assert {:error, :not_found} =
-             Sanctum.Tenancy.Users.get_by_identity(
-               Identity.builtin_key(:github, "fixture-capped")
-             )
+             Sanctum.Tenancy.Users.get_by_identity("github|https://github.com|fixture-capped")
 
     assert Arca.Repo.aggregate(User, :count) == 1
   end

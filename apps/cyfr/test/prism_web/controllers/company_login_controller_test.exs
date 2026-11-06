@@ -206,7 +206,7 @@ defmodule PrismWeb.CompanyLoginControllerTest do
       assert %URI{scheme: "https", host: "idp.example.com", path: "/authorize"} = uri
       assert query["response_type"] == "code"
       assert query["client_id"] == "cid"
-      assert query["redirect_uri"] == Sanctum.Person.home() <> "/auth/company/callback"
+      assert query["redirect_uri"] == Sanctum.origin() <> "/auth/company/callback"
       assert query["redirect_uri"] == request.redirect_uri
       assert is_binary(query["state"]) and query["state"] == request.state
       assert is_binary(query["nonce"]) and query["nonce"] == request.nonce

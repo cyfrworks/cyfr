@@ -372,11 +372,8 @@ defmodule Cyfr.StorageReserveTest do
       assert entry.operation == "pairing.revoke"
 
       # The proof, then the revocation repeated naming it.
-      {:ok, digest} = Encoding.unb64(entry.webauthn["challenge"], 32)
-      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
-
       assert {:ok, %{state: "confirmed"}} =
-               call(ctx, "confirmation", "confirm", %{"ref" => ref, "assertion" => assertion})
+               call(ctx, "confirmation", "confirm", proof(ctx, ref, authenticator))
 
       assert {:ok, %{client_id: client_id, standing: standing}} =
                call(%{ctx | confirmation_id: id}, "pairing", "revoke", %{
@@ -400,11 +397,10 @@ defmodule Cyfr.StorageReserveTest do
 
       ordinary = Prima.Confirmation.ref(ordinary_id)
 
-      {:ok, %{confirmations: [listed]}} =
+      {:ok, %{confirmations: [_listed]}} =
         call(ctx, "confirmation", "pending", %{"request" => ordinary})
 
-      {:ok, digest} = Encoding.unb64(listed.webauthn["challenge"], 32)
-      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
+      answered = proof(ctx, ordinary, authenticator)
 
       Disk.set_free(@bytes - 1)
       assert Cyfr.StorageReserve.poll(pid) == :depleted
@@ -421,13 +417,9 @@ defmodule Cyfr.StorageReserveTest do
 
       assert reserve_refusal?(call(ctx, "confirmation", "pending", %{"request" => ordinary}))
 
-      assert reserve_refusal?(
-               call(ctx, "confirmation", "confirm", %{"ref" => ordinary, "assertion" => assertion})
-             )
+      assert reserve_refusal?(call(ctx, "confirmation", "confirm", answered))
 
-      assert reserve_refusal?(
-               call(ctx, "confirmation", "reauth", %{"ref" => ordinary, "method" => "email"})
-             )
+      assert reserve_refusal?(call(ctx, "confirmation", "request", %{"ref" => ordinary}))
 
       assert reserve_refusal?(call(ctx, "confirmation", "cancel", %{"ref" => ordinary}))
 
@@ -600,5 +592,21 @@ defmodule Cyfr.StorageReserveTest do
 
     {:ok, certificate} = DeviceCert.decode(certificate)
     %{client_id: client_id, certificate: certificate, key: key}
+  end
+
+  # The record `ref` names proven by the person's passkey: this CYFR's
+  # `confirm` request for it, under the session in `ctx`, and the answer
+  # the account pages return for it, as `confirmation.confirm` takes them.
+  defp proof(ctx, ref, authenticator) do
+    {:ok, %{request: encoded}} = call(ctx, "confirmation", "request", %{"ref" => ref})
+    {:ok, request} = Prima.SignIn.decode(encoded)
+    %{identifier: identifier} = Sanctum.TestContext.account!(ctx.user_id)
+
+    answer =
+      authenticator
+      |> Sanctum.TestContext.Authenticator.answer(request, identifier)
+      |> Prima.SignIn.fragment()
+
+    %{"ref" => ref, "answer" => answer}
   end
 end

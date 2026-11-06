@@ -75,7 +75,7 @@ defmodule PrismWeb.SettingsLiveTest do
       |> render_click()
 
       link = view |> element(~s([data-test="invitation-link"])) |> render() |> text()
-      assert String.starts_with?(link, Sanctum.Person.home() <> "/invite#")
+      assert String.starts_with?(link, Sanctum.origin() <> "/invite#")
       code = link |> String.split("#") |> List.last()
       assert has_element?(view, ~s([data-test="invitation-copy"]))
 

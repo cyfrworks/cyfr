@@ -114,23 +114,20 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert [%{key: ^key, provider: "github", subject: subject}] = Users.identities(user.id)
     assert subject == "minted-#{n}"
 
-    # The same method signs in again: the same person, not a second one.
+    # The same method again finds the same person, not a second one.
     people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
-    assert {:ok, %{id: ^same}} = Sanctum.SignIn.unlock(info(n, %{id: key}))
-
-    # A method no person here linked unlocks no one, and makes no one.
-    nobody = "github|https://github.com|nobody-#{n}"
-    assert {:error, :no_person} = Sanctum.SignIn.unlock(info(n, %{id: nobody}))
-    assert {:error, :not_found} = Users.get_by_identity(nobody)
+    {:ok, _again} = Sanctum.Test.People.linked(info(n, %{id: key}))
+    assert {:ok, %{id: ^same}} = Users.get_by_identity(key)
     assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
+
+    # A method no person here linked names no one.
+    assert {:error, :not_found} = Users.get_by_identity("github|https://github.com|nobody-#{n}")
   end
 
-  test "only an IdP identity is a sign-in method: synthetic principal ids and bare ids name no one" do
+  test "a person is found by an account's identifier alone: synthetic principal ids and bare ids name no one" do
     for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes", "usr_x"] do
-      refute Sanctum.Auth.Identity.key?(id)
-
-      assert {:error, :no_person} =
-               Sanctum.SignIn.unlock(%{id: id, provider: "github", email: "x@example.com"})
+      assert {:error, :not_found} = Users.get_by_identifier(id)
+      assert {:error, :not_found} = Users.get_by_identity(id)
     end
 
     # A row's id is a person's, never a synthetic principal's.

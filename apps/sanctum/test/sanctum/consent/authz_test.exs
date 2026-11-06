@@ -1095,7 +1095,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
       # A context no stored credential backs is named by this home.
       assert Jason.decode!(record(theirs, own).asker) ==
-               %{"kind" => "unbound", "name" => Sanctum.Person.home()}
+               %{"kind" => "unbound", "name" => Sanctum.origin()}
     end
 
     test "another session of the same person never takes a record this one opened, even proven",

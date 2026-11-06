@@ -163,15 +163,19 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     [{dave, dave_identifier}, {erin, erin_identifier}] =
       for _name <- ["dave", "erin"] do
-        identity = DirectoryServer.identity!(directory.dir, directory.url)
+        identity = DirectoryServer.account!(directory.dir, directory.url)
 
         {:ok, user} =
           Sanctum.Test.People.remote(
             %{
-              id: Sanctum.Auth.Identity.cyfr_key(identity.url, identity.identifier),
+              id: "cyfr|" <> identity.url <> "|" <> identity.identifier,
               provider: "cyfr"
             },
-            %{identifier: identity.identifier, directory_url: identity.url}
+            %{
+              identifier: identity.identifier,
+              directory_url: identity.url,
+              head_hash: DirectoryServer.head(identity)
+            }
           )
 
         _head = DirectoryServer.cached!(identity)
@@ -533,10 +537,14 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     {:ok, user} =
       Sanctum.Test.People.remote(
         %{
-          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          id: "cyfr|https://dir.example|" <> identifier,
           provider: "cyfr"
         },
-        %{identifier: identifier, directory_url: "https://dir.example"}
+        %{
+          identifier: identifier,
+          directory_url: "https://dir.example",
+          head_hash: Prima.Digest.sha256_hex("head-" <> identifier)
+        }
       )
 
     user

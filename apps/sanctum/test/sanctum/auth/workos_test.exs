@@ -239,7 +239,7 @@ defmodule Sanctum.Auth.WorkOSTest do
 
       %{url: base} = WorkOSStub.start!(fn _request -> WorkOSStub.token(profile) end)
       {user_id, token} = person_with_session!()
-      redirect_uri = Sanctum.Person.home() <> "/auth/company/callback"
+      redirect_uri = Sanctum.origin() <> "/auth/company/callback"
 
       assert Caller.establish({:session, token}) == {:error, :company_login_required}
 

@@ -130,11 +130,11 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
   defp oauth_shaped_context do
     Context.build(
-      user_id: Sanctum.Auth.Identity.builtin_key(:github, "12345"),
+      user_id: "github|https://github.com|12345",
       email: "tester@example.com",
       provider: "github",
       namespace: "testns",
-      # Athanor-less, as device flow and the OIDC provider build it — resolved from the person.
+      # Athanor-less, as a sign-in builds it — resolved from the person.
       athanor_id: nil,
       permissions: [:*]
     )

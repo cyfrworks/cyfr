@@ -46,7 +46,11 @@ defmodule Sanctum.SharedThreadsTest do
           id: "cyfr|https://dir.example|" <> identifier,
           provider: "cyfr"
         },
-        %{identifier: identifier, directory_url: "https://dir.example"}
+        %{
+          identifier: identifier,
+          directory_url: "https://dir.example",
+          head_hash: Prima.Digest.sha256_hex("head-" <> identifier)
+        }
       )
 
     user

@@ -94,7 +94,11 @@ defmodule Sanctum.InvitationsTest do
           id: "cyfr|https://dir.example|" <> identifier,
           provider: "cyfr"
         },
-        %{identifier: identifier, directory_url: "https://dir.example"}
+        %{
+          identifier: identifier,
+          directory_url: "https://dir.example",
+          head_hash: Prima.Digest.sha256_hex("head-" <> identifier)
+        }
       )
 
     if name, do: {:ok, _} = Arca.Users.update(Prima.Actor.system(), user.id, %{namespace: name})
@@ -686,7 +690,8 @@ defmodule Sanctum.InvitationsRaceTest do
       {:ok, carol} =
         Sanctum.Test.People.remote(%{id: remote_key, provider: "cyfr"}, %{
           identifier: identifier,
-          directory_url: "https://dir.example"
+          directory_url: "https://dir.example",
+          head_hash: Prima.Digest.sha256_hex("head-" <> identifier)
         })
 
       {:ok,
