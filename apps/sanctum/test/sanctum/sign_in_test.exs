@@ -360,35 +360,254 @@ defmodule Sanctum.SignInTest do
   end
 
   describe "a registry signature" do
-    test "is the registry request signed by the passkey, for the caller's own account", %{
-      account: account
-    } do
+    setup %{account: account} do
+      Prima.Test.Env.put_app_env(:sanctum, :registry_url, "registry.example")
       user = first!(account)
       {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
       [session] = sessions(user.id)
-      binding = {:session, session.token_hash}
 
-      ctx = person_context(user, athanor_id, session)
+      %{
+        user: user,
+        ctx: person_context(user, athanor_id, session),
+        binding: {:session, session.token_hash},
+        channel: {:channel, "pcl_terminal"}
+      }
+    end
 
-      {:ok, registry} =
-        Prima.RegistryRequest.to_sign(%{
-          "protocol" => "cyfr-registry-request/v2",
-          "registry" => "registry.example",
-          "operation" => "handle.claim",
-          "identifier" => account.identifier,
-          "nonce" => Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(16)),
-          "expires_at" => System.system_time(:millisecond) + 60_000,
-          "body" => %{"handle" => "mira"}
-        })
+    @accept %{"policy_version" => "2026-09"}
 
-      {request, _url} = minted(:registry, binding, ctx: ctx, registry_request: registry)
+    # A `:registry` request for the policy acceptance, minted for `ctx`.
+    defp registry(binding, ctx, opts \\ []) do
+      minted(:registry, binding, [ctx: ctx, operation: "policy.accept", body: @accept] ++ opts)
+    end
 
-      assert {:ok, %{purpose: :registry, user_id: user_id, signed: signed}} =
-               SignIn.answer(answer(request, account), binding)
+    # The registry request a terminal signs with the device key `device`,
+    # as its signed JSON, read back.
+    defp signed_by({pub, priv}, registry) do
+      {:ok, bytes} =
+        Prima.RegistryRequest.sign(%{registry | signer: Prima.Identity.Key.kid(pub)}, priv)
+
+      {:ok, signed} = bytes |> Jason.decode!() |> Prima.RegistryRequest.decode()
+      {signed, bytes}
+    end
+
+    # The registry's own check of `bytes`, under the account's log at its
+    # directory.
+    defp registry_verifies(bytes, account) do
+      {:ok, state} = Prima.Identity.verify_chain(account.log)
+
+      Prima.RegistryRequest.verify(
+        bytes,
+        state,
+        %{host: "registry.example", directory: account.url},
+        System.system_time(:millisecond)
+      )
+    end
+
+    test "is composed for the caller's account and expires with the request that carries it",
+         %{ctx: ctx, binding: binding, account: account, dir: dir} do
+      {request, url} = registry(binding, ctx, back: "/a/x/registry")
+
+      assert url == dir.url <> "/account/sign#" <> Prima.SignIn.fragment(request)
+
+      assert %Prima.RegistryRequest{
+               registry: "registry.example",
+               operation: "policy.accept",
+               identifier: identifier,
+               signer: nil,
+               sig: nil,
+               body: @accept,
+               nonce: nonce,
+               expires_at: expires_at
+             } = request.registry_request
+
+      assert identifier == account.identifier
+      assert byte_size(nonce) == 16
+      assert expires_at <= request.expires_at
+      assert request.expires_at - expires_at < 1_000
+    end
+
+    test "a passkey of the caller's account signs it, and the registry takes the bytes", %{
+      ctx: ctx,
+      user: user,
+      binding: binding,
+      account: account
+    } do
+      {request, _url} = registry(binding, ctx, back: "/a/x/registry")
+
+      assert {:ok,
+              %{
+                purpose: :registry,
+                user_id: user_id,
+                signed: signed,
+                back: "/a/x/registry",
+                registry_request: registry_request
+              }} = SignIn.answer(answer(request, account), binding)
 
       assert user_id == user.id
+      assert registry_request == request.registry_request
       assert {:ok, %{"signer" => signer, "sig" => %{}}} = Jason.decode(signed)
       assert signer == Prima.Identity.Key.kid(hd(account.passkeys).pub)
+      assert {:ok, %Prima.RegistryRequest{body: @accept}} = registry_verifies(signed, account)
+    end
+
+    test "a terminal answers with the request it signed, found by its nonce, taken once", %{
+      ctx: ctx,
+      channel: channel,
+      account: account
+    } do
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, bytes} = signed_by(hd(account.devices), request.registry_request)
+
+      assert {:ok, %{purpose: :registry, signed: ^bytes, registry_request: held}} =
+               SignIn.answer(signed, channel, operation: "policy.accept", body: @accept)
+
+      assert held == request.registry_request
+      assert {:ok, _request} = registry_verifies(bytes, account)
+
+      # Replayed, it meets a spent request.
+      assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+    end
+
+    test "a terminal's request that is not the one held, or under another channel, or late, is refused and spends it",
+         %{ctx: ctx, channel: channel, account: account, dir: dir} do
+      stranger = DirectoryServer.account!(dir.dir, dir.url)
+
+      for change <- [
+            &%{&1 | identifier: stranger.identifier},
+            &%{&1 | body: %{"policy_version" => "2026-10"}},
+            &%{&1 | operation: "tokens.mint", body: %{"label" => "laptop"}},
+            &%{&1 | expires_at: &1.expires_at + 1}
+          ] do
+        {request, nil} = registry(channel, ctx, identifier: account.identifier)
+        {signed, _bytes} = signed_by(hd(account.devices), change.(request.registry_request))
+        assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+
+        # The nonce found the request, which is spent.
+        {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+        assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+      end
+
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+      assert {:error, :answer_refused} = SignIn.answer(signed, {:channel, "pcl_another"})
+      assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(signed, channel, now: request.expires_at)
+    end
+
+    test "an answer for another operation or body than the caller names does nothing", %{
+      ctx: ctx,
+      binding: binding,
+      channel: channel,
+      account: account
+    } do
+      {request, _url} = registry(binding, ctx)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), binding,
+                 operation: "policy.accept",
+                 body: %{"policy_version" => "2026-10"}
+               )
+
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(signed, channel, operation: "tokens.mint", body: @accept)
+
+      # A sign-in's answer is no registry signature.
+      {request, _url} = minted(:sign_in, @browser)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), @browser,
+                 operation: "policy.accept",
+                 body: @accept
+               )
+    end
+
+    test "a passkey of another account, under another session, or past the expiry signs nothing",
+         %{ctx: ctx, binding: binding, account: account, dir: dir} do
+      stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+
+      {request, _url} = registry(binding, ctx)
+      assert {:error, :answer_refused} = SignIn.answer(answer(request, stranger), binding)
+
+      {request, _url} = registry(binding, ctx)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), {:session, :crypto.strong_rand_bytes(32)})
+
+      assert {:error, :answer_refused} = SignIn.answer(answer(request, account), binding)
+
+      {request, _url} = registry(binding, ctx)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), binding, now: request.expires_at)
+
+      # A device's answer to the request's digest is no registry signature.
+      {request, nil} = registry({:channel, "pcl_device"}, ctx, identifier: account.identifier)
+      {pub, priv} = hd(account.devices)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(
+                 %DeviceAnswer{
+                   challenge: request.challenge,
+                   kid: Prima.Identity.Key.kid(pub),
+                   sig: :crypto.sign(:eddsa, :none, <<0::256>>, [priv, :ed25519])
+                 },
+                 {:channel, "pcl_device"}
+               )
+    end
+
+    test "names a registry, an operation the protocol knows and a body it takes", %{
+      ctx: ctx,
+      binding: binding
+    } do
+      assert {:error, {:invalid_argument, _}} =
+               SignIn.request(:registry, binding,
+                 ctx: ctx,
+                 operation: "handle.rename",
+                 body: %{}
+               )
+
+      assert {:error, {:invalid_argument, _}} =
+               SignIn.request(:registry, binding,
+                 ctx: ctx,
+                 operation: "publisher.claim",
+                 body: %{"slug" => "no-dot"}
+               )
+
+      Prima.Test.Env.put_app_env(:sanctum, :registry_url, "none")
+
+      assert {:error, :no_registry} =
+               SignIn.request(:registry, binding,
+                 ctx: ctx,
+                 operation: "policy.accept",
+                 body: @accept
+               )
+    end
+
+    test "binds a device to its channel and a browser to its session; nothing else asks", %{
+      ctx: ctx,
+      account: account
+    } do
+      device = %{ctx | auth_method: :device, client_id: "pcl_1", session_token_hash: nil}
+      assert {:ok, {:channel, "pcl_1"}, [identifier: identifier]} = SignIn.binding(device)
+      assert identifier == account.identifier
+
+      assert {:ok, {:session, hash}, []} = SignIn.binding(ctx)
+      assert hash == ctx.session_token_hash
+
+      assert {:error, :unauthenticated} =
+               SignIn.binding(%{ctx | session_token_hash: nil, auth_method: :api_key})
+
+      assert {:error, :unauthenticated} =
+               SignIn.binding(%{device | user_id: "usr_" <> String.duplicate("0", 26)})
     end
   end
 
