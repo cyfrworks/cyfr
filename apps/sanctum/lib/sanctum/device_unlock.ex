@@ -167,9 +167,9 @@ defmodule Sanctum.DeviceUnlock do
   end
 
   defp admission({:invitation, code}) do
-    case Sanctum.Invitations.code_hash(code) do
-      {:ok, hash} -> {:ok, {:invitation, hash}}
-      {:error, _invalid} -> {:error, :invitation_invalid}
+    with {:ok, hash} <- Sanctum.Invitations.code_hash(code),
+         :ok <- Sanctum.Invitations.redeemable_hash(hash) do
+      {:ok, {:invitation, hash}}
     end
   end
 

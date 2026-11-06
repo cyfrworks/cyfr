@@ -3,7 +3,7 @@
 
 defmodule Emissary.Web.DeviceChannel do
   @moduledoc """
-  The device channel: a paired glass's own socket, carrying the device
+  The device channel: a device's own socket, carrying the device
   protocol (`Prima.Device`) and nothing else.
 
   It is a raw WebSocket under `Phoenix.Socket.Transport`, one
@@ -15,7 +15,28 @@ defmodule Emissary.Web.DeviceChannel do
 
   ## The sequence
 
-  The upgrade admits nothing. The glass sends `connect`, naming its client
+  The upgrade admits nothing. A device that is not yet a client here
+  opens with `hello`, naming its key's kid, its account's identifier,
+  what holds the key, the name it shows and, when it brings one, the
+  setup token or an invitation's code: only a connection that has sent
+  nothing may. The channel reserves a paired-client id for it and asks
+  `Sanctum.DeviceUnlock.hello/2`, which answers a `sign_in` request bound
+  to this channel by that id, held for the key the hello named; the
+  channel answers `sign_in_request`. While the request is out the channel
+  takes `sign_in_answer` and nothing else, and waits until the request
+  expires (a person may be typing a PIN), not the challenge's lifetime.
+  The answer goes to `Sanctum.DeviceUnlock.admit/2`, which verifies it
+  against the account's log, admits the person and pairs the device with
+  its first certificate, and the channel answers `admitted`: the client
+  id, the certificate and the client's standing. From then on the
+  connection is as a fresh one is, bounded by the challenge's lifetime
+  again: the device sends `connect` with its new certificate, and the
+  exchange below follows. A second `hello`, a `hello` after a `connect`
+  or `renew`, and a `sign_in_answer` with no hello held are refused as
+  anything else before a proof is. A hello or an answer this CYFR refuses
+  closes the channel (Refusals).
+
+  A device this CYFR holds as a client sends `connect`, naming its client
   id and the certificate it connects under, and the home answers a
   `challenge` for purpose `connect` (`Prima.DeviceCert.Challenge`) bound
   to the certificate's home and athanor, the client id and the device key
@@ -26,9 +47,9 @@ defmodule Emissary.Web.DeviceChannel do
   challenge held for this connection: the proof of possession of that
   device key, then the certificate, under this home's installation key,
   and the paired client's standing. Until a proof verifies, the channel takes
-  `connect`, `renew` and `proof` and nothing else; the challenge's
-  lifetime bounds how long it waits, from the upgrade and again from the
-  challenge. A verified proof sets the client's context
+  `connect`, `renew` and `proof` and nothing else, a hello's exchange
+  apart; the challenge's lifetime bounds how long it waits, from the
+  upgrade and again from the challenge. A verified proof sets the client's context
   (`auth_method: :device`, its `client_id`), and the home answers
   `standing`: the client, its athanor and its certificate's expiry.
 
@@ -152,8 +173,11 @@ defmodule Emissary.Web.DeviceChannel do
   Each refusal is one admission decision, recorded under the call id the
   channel assigned the message it refuses, on the external plane, under
   the client's identity once one is established and under none before,
-  with its refusal class. Then the socket closes with a WebSocket close
-  code whose reason is that class:
+  with its refusal class. A client's decision opens its request-log row
+  with what was refused: the message's type and its field names, and an
+  intent's argument names, never a value, so a hello's setup token or
+  invitation code and an answer's signature reach no row. Then the socket
+  closes with a WebSocket close code whose reason is that class:
 
     * `4400` (`unauthenticated`) — a frame that does not decode as a
       `Prima.Device` message a glass sends: over 131,072 bytes (refused
@@ -164,16 +188,22 @@ defmodule Emissary.Web.DeviceChannel do
     * `4401` (`unauthenticated`) — a refused or missing proof, a proof
       after its challenge expired, a second `connect`, a renewal refused,
       or anything but `connect`, `renew` and `proof` before a proof
-      verified. An intent, a repeated confirmation among them, is
-      answered first with its `id` and an `error` naming the class.
+      verified, a hello's exchange apart; a hello whose capability admits
+      nobody (a setup token that is not this CYFR's, an invitation code
+      that names none) or that names no key, account, holder or name in
+      the protocol's grammar; an answer refused, and a hello's request
+      expired unanswered. An intent, a repeated confirmation among them,
+      is answered first with its `id` and an `error` naming the class.
     * `4403` (`forbidden`) — the client's standing ended: its pairing
-      revoked, its person denied, or the athanor archived or not theirs.
+      revoked, its person denied, or the athanor archived or not theirs;
+      or a hello's person the door denies or whose account is closed.
     * `4408` (`unauthenticated`) — the certificate expired unrenewed, or
       is not one this home holds now: the glass renews.
     * `1013` — this home could not check the connection now: its store
-      did not answer, or the person's account could not be read fresh
-      (reason `unavailable` for both: the work pauses, the pairing
-      stands), or a verification bound
+      did not answer, or the person's account could not be read fresh, or
+      changed while a hello's device was admitted (reason `unavailable`
+      for each: the work pauses, the pairing stands, the device says
+      hello again), or a verification bound
       is spent (reason `rate_limited; retry_after_s=N`, the seconds until
       the bound opens again; the recorded sentence says whether it was
       the address's and the installation's or this device's own). The
@@ -257,12 +287,18 @@ defmodule Emissary.Web.DeviceChannel do
       answers: `client_id` and the `certificate` that locates it.
     * `challenge` — the challenge held for this connection, nil when none
       is.
+    * `hello` — a hello's exchange: nil before one, `{:asked, client_id,
+      request}` while its request is out, `:admitted` once it was
+      answered `admitted`.
     * `deadline` — the token and timer of the deadline the proof must
       arrive before, nil when none is held or the channel closed.
     * `expiry` — the token and timer of the bound certificate's expiry.
     * `keepalive` — the token and timer of the next ping.
     * `call_id` — the call id the channel assigned the message it decided
       last.
+    * `received` — what a refusal of that message records of it: its
+      type and field names, and an intent's argument names; empty for a
+      frame that did not decode and for a timer.
     * `grants` — each stream open on this connection, by grant id: the
       grant, the stream's name, its forwarder and its deadline's timer.
     * `standing` — whether the channel hears the person's standing
@@ -278,10 +314,12 @@ defmodule Emissary.Web.DeviceChannel do
           cert: DeviceCert.t() | nil,
           connect: %{client_id: String.t(), certificate: DeviceCert.t()} | nil,
           challenge: Challenge.t() | nil,
+          hello: {:asked, String.t(), Prima.SignIn.t()} | :admitted | nil,
           deadline: {reference(), reference()} | nil,
           expiry: {reference(), reference()} | nil,
           keepalive: {reference(), reference()} | nil,
           call_id: String.t() | nil,
+          received: map(),
           grants: %{
             optional(String.t()) => %{
               grant: StreamGrant.t(),
@@ -314,10 +352,12 @@ defmodule Emissary.Web.DeviceChannel do
        cert: nil,
        connect: nil,
        challenge: nil,
+       hello: nil,
        deadline: nil,
        expiry: nil,
        keepalive: nil,
        call_id: nil,
+       received: %{},
        grants: %{},
        standing: false,
        sessions: [],
@@ -335,13 +375,13 @@ defmodule Emissary.Web.DeviceChannel do
   def handle_in(_frame, %{closed: true} = state), do: {:stop, @closed, state}
 
   def handle_in({frame, opts}, state) do
-    state = %{state | call_id: Prima.UUID7.generate_id("call")}
+    state = %{state | call_id: Prima.UUID7.generate_id("call"), received: %{}}
 
     with :ok <- bounded(frame),
          :text <- Keyword.get(opts, :opcode),
          {:ok, map} <- Prima.Json.decode(frame),
          {:ok, message} <- Device.decode(map, :glass) do
-      receive_message(message, state)
+      receive_message(message, %{state | received: received(message)})
     else
       :oversize -> refuse(state, :oversize_frame)
       _malformed -> refuse(state, :malformed_frame)
@@ -427,23 +467,33 @@ defmodule Emissary.Web.DeviceChannel do
   def terminate(_reason, _state), do: :ok
 
   # ---------------------------------------------------------------------------
-  # Before a proof verified: `connect` or `renew`, then `proof`, and
-  # nothing else.
+  # Before a proof verified: a hello's exchange on a connection that sent
+  # nothing before it, `connect` or `renew`, then `proof`, and nothing
+  # else.
   # ---------------------------------------------------------------------------
 
-  defp receive_message({:connect, body}, %{client: nil, connect: nil} = state),
-    do: challenge(:connect, body, state)
+  defp receive_message({:hello, hello}, %{client: nil, connect: nil, hello: nil} = state),
+    do: hello(hello, state)
+
+  defp receive_message({:sign_in_answer, %{answer: answer}}, %{hello: {:asked, id, _}} = state),
+    do: admit_device(id, answer, state)
+
+  defp receive_message({:connect, body}, %{client: nil, connect: nil, hello: hello} = state)
+       when hello in [nil, :admitted],
+       do: challenge(:connect, body, state)
 
   defp receive_message(
          {:renew, %{certificate: %DeviceCert{}} = body},
-         %{client: nil, connect: nil} = state
-       ),
+         %{client: nil, connect: nil, hello: hello} = state
+       )
+       when hello in [nil, :admitted],
        do: challenge(:renew, body, state)
 
   # A renewal that names no certificate names no athanor or device key to
   # challenge.
-  defp receive_message({:renew, _body}, %{client: nil, connect: nil} = state),
-    do: refuse(state, :unchallengeable)
+  defp receive_message({:renew, _body}, %{client: nil, connect: nil, hello: hello} = state)
+       when hello in [nil, :admitted],
+       do: refuse(state, :unchallengeable)
 
   defp receive_message({:proof, %{proof: proof}}, %{client: nil} = state) do
     cond do
@@ -461,6 +511,10 @@ defmodule Emissary.Web.DeviceChannel do
       frames: [answer_refused(id, refusal(:proof_missing))]
     )
   end
+
+  # While a hello's request is out, its answer is the one message taken.
+  defp receive_message({_type, _body}, %{hello: {:asked, _id, _request}} = state),
+    do: refuse(state, :proof_missing)
 
   defp receive_message({:connect, _body}, state), do: refuse(state, :second_connect)
 
@@ -498,6 +552,36 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   defp receive_message({_type, _body}, state), do: refuse(state, :not_accepted)
+
+  # A hello: a paired-client id reserved for the device, made as every
+  # client id is, and the request `Sanctum.DeviceUnlock.hello/2` holds for
+  # it, which the channel waits on until it expires.
+  defp hello(hello, state) do
+    client_id = Prima.UUID7.generate_id("pcl")
+
+    case Sanctum.DeviceUnlock.hello(client_id, hello) do
+      {:ok, request} ->
+        state = arm(%{state | hello: {:asked, client_id, request}}, request.expires_at - now())
+        {:reply, :ok, {:text, wire({:sign_in_request, %{request: request}})}, state}
+
+      {:error, reason} ->
+        refuse(state, reason, refusal: admission_refusal(reason))
+    end
+  end
+
+  # The device's answer to its hello's request: the person admitted and
+  # the device paired, and the connection fresh again, bounded by the
+  # challenge's lifetime, for the `connect` under its new certificate.
+  defp admit_device(client_id, answer, state) do
+    case Sanctum.DeviceUnlock.admit(client_id, answer) do
+      {:ok, admitted} ->
+        state = arm(%{state | hello: :admitted}, Challenge.lifetime_ms())
+        {:reply, :ok, {:text, wire({:admitted, admitted})}, state}
+
+      {:error, reason} ->
+        refuse(state, reason, refusal: admission_refusal(reason))
+    end
+  end
 
   # The challenge for this connection's `connect` or `renew`: the home the
   # certificate names, which the verifier holds to this one, its athanor,
@@ -973,7 +1057,7 @@ defmodule Emissary.Web.DeviceChannel do
         action: action
       )
 
-    Sanctum.Decisions.open(state.client, decision, %{method: "device", input: %{}})
+    Sanctum.Decisions.open(state.client, decision, %{method: "device", input: state.received})
   end
 
   defp close(state, code, reason, []), do: {:stop, :normal, {code, reason}, state}
@@ -993,7 +1077,7 @@ defmodule Emissary.Web.DeviceChannel do
        when reason in [:oversize_frame, :malformed_frame],
        do: @malformed
 
-  defp close_code(%Prima.Refusal{reason: reason})
+  defp close_code(%Prima.Refusal{reason: reason, class: :unauthenticated})
        when reason in [:expired, :certificate_expired, :bad_signature, :stale_head],
        do: @renew
 
@@ -1008,6 +1092,15 @@ defmodule Emissary.Web.DeviceChannel do
        do: @try_again
 
   defp close_code(%Prima.Refusal{}), do: @unproven
+
+  # A hello's or its answer's refusal, in the channel's table. A head
+  # that moved while the device was admitted is a refresh that raced the
+  # hello, never a certificate to renew: a pause, after which the device
+  # says hello again.
+  defp admission_refusal(:stale_head),
+    do: %{refusal(:stale_head) | class: :unavailable, message: Prima.Refusal.message(:stale_head)}
+
+  defp admission_refusal(reason), do: refusal(reason)
 
   defp answer_refused(id, %Prima.Refusal{} = refusal) do
     error = %{"class" => Atom.to_string(refusal.class), "message" => refusal.message}
@@ -1030,8 +1123,11 @@ defmodule Emissary.Web.DeviceChannel do
     }
   end
 
-  defp class(reason) when reason in [:revoked, :not_standing, :company_login_required],
-    do: :forbidden
+  defp class(reason)
+       when reason in [:revoked, :not_standing, :company_login_required, :identity_gone],
+       do: :forbidden
+
+  defp class({:door, _reason}), do: :forbidden
 
   # An account that could not be read fresh is a pause, as a store that
   # could not answer is: never a sign-out.
@@ -1078,6 +1174,13 @@ defmodule Emissary.Web.DeviceChannel do
 
   defp sentence(:unavailable), do: "This CYFR could not check the device now; retry shortly"
 
+  defp sentence(:answer_refused), do: "The device's answer to its sign-in request was refused"
+  defp sentence({:door, _reason}), do: Sanctum.Door.refusal_message()
+  defp sentence({:invalid_argument, sentence}) when is_binary(sentence), do: sentence
+
+  defp sentence(reason) when reason in [:setup_closed, :invitation_invalid, :identity_gone],
+    do: Prima.Refusal.message(reason)
+
   defp sentence({:rate_limited, retry_after_ms}),
     do:
       "Too many device verifications from this address or across this CYFR; " <>
@@ -1108,8 +1211,25 @@ defmodule Emissary.Web.DeviceChannel do
     {tool, action}
   end
 
-  # A timer message decided on its own, not on a frame: its own call id.
-  defp assign_call(state), do: %{state | call_id: Prima.UUID7.generate_id("call")}
+  # A timer message decided on its own, not on a frame: its own call id,
+  # and nothing received.
+  defp assign_call(state),
+    do: %{state | call_id: Prima.UUID7.generate_id("call"), received: %{}}
+
+  # What a refusal of `message` records of it: its type and the names of
+  # its fields, and an intent's argument names. Never a value: a hello
+  # carries the setup token or an invitation's code, an answer its
+  # signature, a connect its certificate.
+  defp received({type, body}) do
+    received = %{"type" => Atom.to_string(type), "field_names" => field_names(body)}
+
+    case body do
+      %{args: args} when type == :intent -> Map.put(received, "arg_names", field_names(args))
+      _other -> received
+    end
+  end
+
+  defp field_names(map), do: map |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
 
   # The proof must arrive within `ms`: a timer whose token the state
   # holds, replacing the one before, so a stale timer decides nothing.
