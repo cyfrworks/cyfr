@@ -5,7 +5,7 @@ defmodule Sanctum.Providers.Person do
   @moduledoc """
   The `person` tool: a person's identity at their own home — the recovery
   code their admission enrolled them with, another recovery code added by
-  one the person holds, the live key's rotation, the doors they sign in through, a device
+  one the person holds, the doors they sign in through, a device
   certificate for another home, and the sign-in carry that begins and
   completes here. The carry stores no saved-home list.
 
@@ -17,8 +17,8 @@ defmodule Sanctum.Providers.Person do
   a device at another home renews here holding no session of this home's,
   and the proof of its device key over this home's challenge is its only
   credential (`Sanctum.RemoteCertification`). Showing the recovery code
-  and adding one touch recovery material; rotating changes
-  the live key; linking and unlinking change the sign-in methods;
+  and adding one touch recovery material; linking and unlinking change
+  the sign-in methods;
   certifying a device pairs it: each is a sensitive change Sanctum decides
   where it is made (`Sanctum.Pairing`). `person.assert` and
   `person.assert_confirmation` are declared with the tool by
@@ -47,8 +47,6 @@ defmodule Sanctum.Providers.Person do
       the added code's attempt (`attempt_id`, `request_id`, `phase`,
       `identifier`), its `code` until it is saved, and the new
       `key_epoch`. A recovery code the person holds signs it.
-    * `person.rotate` (`Sanctum.IdentityFreshness.rotate_live/3`) — the
-      attempt's `request_id`, its `phase` and the new `key_epoch`.
     * `person.link_door` and `person.unlink_door`
       (`Sanctum.SignIn.link_door/3`, `unlink_door/2`) — the door linked or
       unlinked, by its key, provider, issuer and subject.
@@ -79,7 +77,7 @@ defmodule Sanctum.Providers.Person do
   """
 
   alias Prima.{Arg, Operation}
-  alias Sanctum.{Carry, Context, IdentityFreshness, Recovery, RemoteCertification, SignIn}
+  alias Sanctum.{Carry, Context, Recovery, RemoteCertification, SignIn}
   alias Sanctum.Providers.Assertion
 
   @doc false
@@ -89,7 +87,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own CYFR: read its status, show the recovery code and say it is saved, add another recovery code, rotate the live key, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
+        "A person's identity at their own CYFR: read its status, show the recovery code and say it is saved, add another recovery code, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
       title: "Person"
     )
   end
@@ -98,11 +96,6 @@ defmodule Sanctum.Providers.Person do
     [
       Operation.new("person", "status", "Read the person's identity", [],
         kind: :read,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new("person", "rotate", "Rotate the live key", [request_id()],
-        kind: :write,
         planes: [:external],
         consent: :interactive
       ),
@@ -307,7 +300,7 @@ defmodule Sanctum.Providers.Person do
       Arg.new("request_id", :string,
         required: true,
         description:
-          "The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)"
+          "The attempt's request id: a retry under the same id resumes the same attempt (recovery_code_add)"
       )
 
   defp attempt_id,
@@ -394,24 +387,6 @@ defmodule Sanctum.Providers.Person do
 
   def handle(%Context{} = ctx, %{"action" => "renew_certificate"} = args),
     do: renewal(RemoteCertification.renew(ctx, Map.take(args, ["certificate", "proof"])))
-
-  # The live key's rotation (`Sanctum.IdentityFreshness.rotate_live/3`):
-  # the `key_rotation` confirmation, one durable attempt per request id,
-  # and a retry under the same id resuming it.
-  def handle(%Context{} = ctx, %{"action" => "rotate", "request_id" => request_id})
-      when is_binary(request_id) do
-    case IdentityFreshness.rotate_live(ctx, request_id) do
-      {:ok, rotation} ->
-        {:ok,
-         %{request_id: rotation.request_id, phase: rotation.phase, key_epoch: rotation.key_epoch}}
-
-      {:error, reason} ->
-        {:error, rotation_refusal(reason)}
-    end
-  end
-
-  def handle(%Context{}, %{"action" => "rotate"}),
-    do: {:error, {:invalid_argument, "rotate needs the attempt's request_id"}}
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "person.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
@@ -562,46 +537,4 @@ defmodule Sanctum.Providers.Person do
 
   defp refused(class, reason, message),
     do: %Prima.Refusal{class: class, reason: reason, message: message}
-
-  # A rotation's own refusals, in the refusal table's words. Nothing
-  # rotated in any of them; the retryable ones resume under the same
-  # request id.
-  defp rotation_refusal(:invalid_request),
-    do: {:invalid_argument, "The request_id is not a valid request id"}
-
-  defp rotation_refusal(:not_found),
-    do: {:conflict, "Your keys are held at another CYFR; rotate them there."}
-
-  defp rotation_refusal(:not_enrolled),
-    do: {:conflict, "Rotating the live key needs an enrolled identity; enroll first."}
-
-  defp rotation_refusal(:stale_head),
-    do:
-      {:conflict,
-       "Your identity's log has moved past this CYFR's head, so nothing was rotated. A " <>
-         "recovery or another rotation may have replaced your keys."}
-
-  defp rotation_refusal(:superseded),
-    do:
-      {:conflict,
-       "A recovery or another rotation replaced this rotation before it took effect, so " <>
-         "nothing was rotated here."}
-
-  defp rotation_refusal(:rotation_refused),
-    do: {:conflict, "Your identity's directory refused this rotation; nothing was rotated."}
-
-  defp rotation_refusal({:attempt_in_progress, request_id}) when is_binary(request_id),
-    do:
-      {:conflict,
-       "Another rotation of your live key is in progress; finish it under its request id " <>
-         request_id <> "."}
-
-  defp rotation_refusal({:attempt_in_progress, _unknown}),
-    do: {:conflict, "Another rotation of your live key is in progress; finish it first."}
-
-  defp rotation_refusal(:request_id_reused),
-    do: {:conflict, "This request id names another request; use a new one."}
-
-  defp rotation_refusal(:directory_unavailable), do: {:unavailable, "Your identity's directory"}
-  defp rotation_refusal(reason), do: reason
 end

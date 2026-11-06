@@ -295,7 +295,6 @@ defmodule Sanctum.PairingTest do
     :passkey_registration,
     :remote_sign_in,
     :remote_confirmation,
-    :key_rotation,
     :sign_in_methods,
     :restore_reenable,
     :restore_close

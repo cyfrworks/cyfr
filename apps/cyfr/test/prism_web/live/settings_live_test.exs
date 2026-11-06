@@ -551,7 +551,7 @@ defmodule PrismWeb.SettingsLiveTest do
   describe "your name" do
     import PrismWeb.AdmissionScreens
 
-    test "a named person sees their name, their identifier for the command line, another recovery code, what losing it costs and the rotation",
+    test "a named person sees their name, their identifier for the command line, another recovery code, and what losing it costs",
          %{conn: conn} do
       person = test_user()
       state = acknowledged!(person)
@@ -572,7 +572,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert view |> element(~s([data-test="identity-costs"] ol)) |> render() |> sentences() ==
                @costs
 
-      assert has_element?(view, ~s([data-test="identity-rotate"]), "Rotate the live key")
+      refute has_element?(view, ~s([data-test="identity-rotate"]))
       refute has_element?(view, ~s([data-test="identity-show-code"]))
       refute html =~ "sealed-kit-seed"
       refute_vocabulary(identity_card(view))
@@ -587,20 +587,6 @@ defmodule PrismWeb.SettingsLiveTest do
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="holder"]))
       assert has_element?(view, "#system-layer-title", "Add another recovery code")
       view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
-
-      # Rotating the live key asks for its fresh confirmation in the layer,
-      # as this page's own request, and rotates nothing before it.
-      view |> element(~s([data-test="identity-rotate"])) |> render_click()
-      render(view)
-      assert has_element?(view, ~s(#system-layer [data-test="confirmation"][data-own="true"]))
-
-      assert [%{action: "key_rotation", state: "pending"}] =
-               Arca.Repo.all(
-                 from(c in "pending_confirmations",
-                   where: c.user_id == ^person.user_id,
-                   select: %{action: c.action, state: c.state}
-                 )
-               )
     end
 
     test "an added code whose recovery code waits to be saved is shown again from here", %{

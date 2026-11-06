@@ -201,7 +201,6 @@ const (
 	PersonRecoveryCodeAdd    = "recovery_code_add"
 	PersonRecoveryCodeSaved  = "recovery_code_saved"
 	PersonRenewCertificate   = "renew_certificate"
-	PersonRotate             = "rotate"
 	PersonStatus             = "status"
 	PersonUnlinkDoor         = "unlink_door"
 	PinEnroll                = "enroll"
@@ -345,7 +344,7 @@ var Actions = map[string][]string{
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
-	"person":              {"assert", "assert_confirmation", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "rotate", "status", "unlink_door"},
+	"person":              {"assert", "assert_confirmation", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "status", "unlink_door"},
 	"pin":                 {"enroll"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
@@ -2997,7 +2996,7 @@ type PersonRecoveryCodeAddArgs struct {
 	RecoveryCode string `json:"recovery_code"`
 	// recovery_code_add: the new code's secret
 	Holder PersonRecoveryCodeAddArgsHolder `json:"holder"`
-	// The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)
+	// The attempt's request id: a retry under the same id resumes the same attempt (recovery_code_add)
 	RequestId string `json:"request_id"`
 }
 
@@ -3056,21 +3055,6 @@ func (args PersonRenewCertificateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonRenewCertificate, fields: fields(args)})
-}
-
-// PersonRotateArgs carries arguments for person.rotate.
-type PersonRotateArgs struct {
-	// The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)
-	RequestId string `json:"request_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRotateArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRotateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRotate, fields: fields(args)})
 }
 
 // PersonStatusArgs carries arguments for person.status.

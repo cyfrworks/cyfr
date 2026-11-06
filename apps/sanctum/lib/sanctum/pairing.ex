@@ -186,7 +186,6 @@ defmodule Sanctum.Pairing do
   | `:passkey_registration` | a fresh confirmation |
   | `:remote_sign_in` | a fresh confirmation |
   | `:remote_confirmation` | a fresh confirmation, a passkey's or a protected device's |
-  | `:key_rotation` | a fresh confirmation |
   | `:sign_in_methods` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation, from a door or the kit while the person recovers |
   | `:restore_close` | a fresh confirmation, the platform administrator's |
@@ -238,7 +237,6 @@ defmodule Sanctum.Pairing do
     passkey_registration: :fresh,
     remote_sign_in: :fresh,
     remote_confirmation: :fresh,
-    key_rotation: :fresh,
     sign_in_methods: :fresh,
     restore_reenable: :fresh,
     restore_close: :fresh
@@ -267,7 +265,6 @@ defmodule Sanctum.Pairing do
           | :passkey_registration
           | :remote_sign_in
           | :remote_confirmation
-          | :key_rotation
           | :sign_in_methods
           | :restore_reenable
           | :restore_close

@@ -15,8 +15,7 @@ defmodule PrismWeb.SettingsLive do
     * **Your name** — the identity card (`PrismWeb.IdentityCard`): the
       person's name and identifier, another recovery code, what losing it
       costs, and, for a person whose page ended before they saved their
-      recovery code, the finish of their name and code; beside it, for a
-      named person, the live key's rotation (`person.rotate`). Every
+      recovery code, the finish of their name and code. Every
       recovery code renders only in the system layer's recovery prompts
       (`PrismWeb.SystemLayer.Recovery`): this page never holds a secret or
       a recovery code.
@@ -41,7 +40,7 @@ defmodule PrismWeb.SettingsLive do
   among them, are shown as the refusal's own sentence.
 
   The identity card's controls carry its own `data-test` names, and this
-  page's beside it `identity-rotate` and `identity-rotation`; `doors`, `door` (with `data-key`), `door-unlink`,
+  page's `doors`, `door` (with `data-key`), `door-unlink`,
   `door-link-github`, `door-link-google`, `door-link-oidcc`,
   `door-link-flow`, `door-link-code`, `door-link-cancel`; `passkeys`,
   `passkey` (with `data-id` and `data-state`), `passkey-register` and
@@ -191,20 +190,6 @@ defmodule PrismWeb.SettingsLive do
     setting_call(socket, "settings/reset", args, "#{key} reset to its default.")
   end
 
-  # ---- identity --------------------------------------------------------------
-
-  # A rotation in progress is finished under its own request id; otherwise
-  # a new one begins.
-  def handle_event("rotate", _params, socket) do
-    request_id =
-      case socket.assigns.identity do
-        %{rotation: %{request_id: id}} when is_binary(id) -> id
-        _none -> new_request_id("rot")
-      end
-
-    rotate(socket, request_id)
-  end
-
   # ---- doors -----------------------------------------------------------------
 
   def handle_event("link_device", %{"provider" => provider}, socket)
@@ -269,8 +254,6 @@ defmodule PrismWeb.SettingsLive do
 
   # A change this page asked for was confirmed: made again, once.
   @impl PrismWeb.SystemLayer.Hook
-  def system_layer_repeat(:rotate, _tool, %{"request_id" => id}, socket), do: rotate(socket, id)
-
   def system_layer_repeat({:link, provider}, _tool, %{"ticket" => ticket}, socket),
     do: link(socket, provider, ticket, [])
 
@@ -516,39 +499,6 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # The identity card reads where the person stands again, after a change
-  # this page made beside it.
-  defp reload_card(socket) do
-    send_update(IdentityCard, id: IdentityCard.id(), reload: true)
-    socket
-  end
-
-  defp new_request_id(prefix),
-    do: prefix <> "_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-
-  defp rotate(socket, request_id) do
-    case SystemLayer.call(socket, :rotate, "person/rotate", %{"request_id" => request_id}) do
-      {:ok, %{phase: "completed"}, socket} ->
-        {:noreply,
-         socket
-         |> load_identity()
-         |> reload_card()
-         |> put_flash(:info, "Your live key was rotated.")}
-
-      {:ok, %{phase: phase}, socket} ->
-        {:noreply,
-         socket
-         |> load_identity()
-         |> put_flash(:info, "The rotation stands at #{phase}; rotate again to finish it.")}
-
-      {:asked, socket} ->
-        {:noreply, socket}
-
-      {:error, reason, socket} ->
-        {:noreply, socket |> load_identity() |> put_flash(:error, error_message(reason))}
-    end
-  end
-
   # ---- doors -----------------------------------------------------------------
 
   defp start_link_flow(socket, provider) do
@@ -778,11 +728,7 @@ defmodule PrismWeb.SettingsLive do
 
       <div :if={!@loading} class="space-y-6">
         <.card>
-          <.live_component module={IdentityCard} id={IdentityCard.id()} context={@context}>
-            <:named :let={status}>
-              <.rotation status={status} />
-            </:named>
-          </.live_component>
+          <.live_component module={IdentityCard} id={IdentityCard.id()} context={@context} />
         </.card>
 
         <.doors_card
@@ -1122,24 +1068,6 @@ defmodule PrismWeb.SettingsLive do
       </div>
 
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
-    </div>
-    """
-  end
-
-  attr :status, :map, required: true
-
-  # Beside the identity card, for a named person: the live key's rotation.
-  defp rotation(assigns) do
-    ~H"""
-    <div class="space-y-2">
-      <p :if={@status.rotation} class="text-sm" data-test="identity-rotation">
-        A rotation of your live key stands at {@status.rotation.phase}.
-      </p>
-      <div class="flex flex-wrap gap-2">
-        <.button variant="ghost" phx-click="rotate" data-test="identity-rotate">
-          {if @status.rotation, do: "Finish the rotation", else: "Rotate the live key"}
-        </.button>
-      </div>
     </div>
     """
   end
