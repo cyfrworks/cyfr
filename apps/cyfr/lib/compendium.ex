@@ -476,6 +476,14 @@ defmodule Compendium do
   @spec sync_seeds() :: :ok
   defdelegate sync_seeds(), to: Compendium.Provisioning
 
+  @doc """
+  Complete a registry request the person's passkey signed at the account
+  pages, as the sign-in page took its answer
+  (`Compendium.Providers.Registry.complete/2`).
+  """
+  @spec complete_registry(Context.t(), map()) :: {:ok, term()} | {:error, term()}
+  defdelegate complete_registry(ctx, outcome), to: Compendium.Providers.Registry, as: :complete
+
   # ---------------------------------------------------------------------------
   # The assistant's agents and skills
   # ---------------------------------------------------------------------------

@@ -3465,6 +3465,8 @@ type RegistryAppealArgs struct {
 	ActionRef string `json:"action_ref"`
 	// Appeal argument, ≤4000 bytes (for appeal action)
 	Argument string `json:"argument"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3480,6 +3482,8 @@ func (args RegistryAppealArgs) MarshalJSON() ([]byte, error) {
 type RegistryClaimPublisherArgs struct {
 	// Namespace slug (publisher or personal)
 	Slug string `json:"slug"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3510,6 +3514,8 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 type RegistryLegalAcceptArgs struct {
 	// Policy version string (for legal_accept; obtained via legal_version)
 	PolicyVersion string `json:"policy_version"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3659,6 +3665,8 @@ func (args RegistryReportArgs) MarshalJSON() ([]byte, error) {
 
 // RegistrySyncArgs carries arguments for registry.sync.
 type RegistrySyncArgs struct {
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3723,6 +3731,8 @@ func (args RegistryTokensRevokeArgs) MarshalJSON() ([]byte, error) {
 type RegistryVerifyPublisherArgs struct {
 	// Namespace slug (publisher or personal)
 	Slug string `json:"slug"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

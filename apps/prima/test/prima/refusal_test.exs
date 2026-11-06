@@ -187,7 +187,6 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
     {:not_enrolled, :setup_required},
-    {:remote, :forbidden},
     {:no_registry, :setup_required},
     {:registry_unavailable, :unavailable},
     {:registry_token_missing, :unauthenticated},

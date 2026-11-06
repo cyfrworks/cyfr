@@ -1819,7 +1819,7 @@ defmodule Cyfr.BoundariesTest do
 
            def layout(ctx, ref), do: Compendium.layout(ctx, ref)
            def sync(ctx), do: Compendium.Providers.Registry.handle(ctx, %{"action" => "sync"})
-           def accept(id, v), do: Client.signed(id, "policy.accept", %{"policy_version" => v})
+           def accept(bytes), do: Client.signed("policy.accept", bytes)
 
            def required({:error, %Compendium.OCI.Errors{} = err}),
              do: Compendium.OCI.Errors.required_version(err)

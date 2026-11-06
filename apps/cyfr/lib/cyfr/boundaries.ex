@@ -411,9 +411,9 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
+        Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
         Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning
-        Sanctum.Refusals Sanctum.RegistryCredentials
+        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
         Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
@@ -424,6 +424,11 @@ defmodule Cyfr.Boundaries do
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
           "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`, " <>
           "which also decides the fresh confirmation issuing another one needs. " <>
+          "A registry operation a key of the person's account signs is minted and its " <>
+          "answer taken by `Sanctum.SignIn` (`binding/1`, `request/3`, `answer/3`), the " <>
+          "namespace a token mint names recorded by it (`record_namespace/2`), and the " <>
+          "caller's standing read again by `Sanctum.Caller` (`revalidate_session/1`) " <>
+          "before the answer's tokens are stored. " <>
           "Removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
@@ -882,9 +887,10 @@ defmodule Cyfr.Boundaries do
       allow: ~w(Compendium),
       reason:
         "the console reads components, agents, path grammars, the projection epoch " <>
-          "and the registry's legal pages through the component domain's root facade " <>
-          "(the pages that admit a person register them through the gate, " <>
-          "`registry.register`), and a " <>
+          "and the registry's legal pages through the component domain's root facade, " <>
+          "and the sign-in page completes a registry request a passkey signed there " <>
+          "(`Compendium.complete_registry/2`), whose request was minted through the " <>
+          "gate; a " <>
           "registry refusal reaches it as a `%Prima.Refusal{}`; " <>
           "the publisher and version vocabularies it reads are Prima's. " <>
           "Boundary's exports are global, and `Compendium` exports its two paths, " <>
@@ -2016,7 +2022,6 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       origin: 0,
       registry_base_url: 1,
-      registry_host: 0,
       setup_token?: 1,
       system_context: 0
     ],
@@ -2201,6 +2206,9 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.SignIn" => [
       answer: 2,
+      answer: 3,
+      binding: 1,
+      record_namespace: 2,
       request: 2,
       request: 3
     ],

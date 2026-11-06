@@ -193,10 +193,9 @@ defmodule Sanctum.RegistryCredentials do
   end
 
   @doc """
-  Decide the caller's asking `registry` for a push token: `operation` is
-  the registry operation that mints it (`registry.tokens_issue`,
-  `registry.sync` or `registry.verify_publisher`) and `arguments` what it
-  is asked with, as text (a `"slug"` and a `"label"`, as it has them). A
+  Decide the caller's asking `registry` for a push token under a stored
+  one: `operation` is the registry operation that mints it
+  (`registry.tokens_issue`) and `arguments` what it is asked with, as text (a `"slug"` and a `"label"`, as it has them). A
   credential that outlives the session, so the fresh confirmation
   `credential_issuance` needs (`Sanctum.Consent.Authz.confirm/3`),
   consumed at once, since the issuance is one call to the registry that
