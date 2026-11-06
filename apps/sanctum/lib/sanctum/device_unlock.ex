@@ -17,11 +17,13 @@ defmodule Sanctum.DeviceUnlock do
   ## The hello
 
   A device's first connection here (`ARCHITECTURE.md` §9.3) names the key
-  it holds (`kid`), the account it is a key of (`identifier`) and, when it
-  comes with one, the capability that admits a new person: the setup
-  token or an invitation's code. `hello/2` answers a `sign_in` request
-  (`Prima.SignIn`) bound to the channel that asked, by the client id it
-  reserved for the device, and held for the key the hello named
+  it holds (`kid`), the account it is a key of (`identifier`), what holds
+  the key (`holder_kind`) and the name it shows (`display_name`), each in
+  `Prima.Device`'s grammar, and, when it comes with one, the capability
+  that admits a new person: the setup token or an invitation's code.
+  `hello/2` answers a `sign_in` request (`Prima.SignIn`) bound to the
+  channel that asked, by the client id it reserved for the device, and
+  held for the key, holder and name the hello named
   (`Sanctum.SignIn.request/3`); a setup token that is not this CYFR's, or
   an invitation code that names none, is refused before anything is held.
   The device signs the request's digest after its local unlock, and
@@ -32,7 +34,8 @@ defmodule Sanctum.DeviceUnlock do
   verdict. The device is paired in the same transaction as a new person's
   admission, right after the door's verdict for a person this CYFR holds
   (`pair/4`): the paired client, a key of the account at the head the
-  answer was verified under, and its first certificate
+  answer was verified under, with the holder and name its hello reported,
+  and its first certificate
   (`Sanctum.DeviceCerts.issue/2`), under the issuance fence. A device
   whose key already stands here as an active client of the person is
   answered a new certificate for that client instead, so a hello asked
@@ -85,14 +88,22 @@ defmodule Sanctum.DeviceUnlock do
 
   @typedoc """
   What a hello names (the module doc): the device's key, the account it is
-  a key of, and the capability a new person comes in under, when it
-  brings one.
+  a key of, what holds the key and the name it shows, and the capability
+  a new person comes in under, when it brings one.
   """
   @type hello :: %{
           required(:kid) => String.t(),
           required(:identifier) => String.t(),
+          required(:holder_kind) => String.t(),
+          required(:display_name) => String.t(),
           optional(:admission) => {:setup, String.t()} | {:invitation, String.t()} | nil
         }
+
+  @typedoc """
+  The device a hello pairs (`pair/4`): the client id the channel reserved
+  for it, what holds its key and the name it shows.
+  """
+  @type device :: %{client_id: String.t(), holder_kind: String.t(), display_name: String.t()}
 
   @typedoc "What `admit/2` answers: the paired client, its certificate and its standing."
   @type admitted :: %{
@@ -117,27 +128,36 @@ defmodule Sanctum.DeviceUnlock do
   `{:invalid_argument, sentence}`, `:no_directory`, `:unavailable`.
   """
   @spec hello(String.t(), hello()) :: {:ok, Prima.SignIn.t()} | {:error, term()}
-  def hello("pcl_" <> _ = client_id, %{kid: kid, identifier: identifier} = hello) do
-    with :ok <- named(kid, identifier),
+  def hello(
+        "pcl_" <> _ = client_id,
+        %{kid: kid, identifier: identifier, holder_kind: holder_kind, display_name: name} = hello
+      ) do
+    with :ok <- named(kid, identifier, holder_kind, name),
          {:ok, admission} <- admission(Map.get(hello, :admission)),
          {:ok, %{request: request}} <-
            Sanctum.SignIn.request(:sign_in, {:channel, client_id},
              identifier: identifier,
              kid: kid,
+             holder_kind: holder_kind,
+             display_name: name,
              admission: admission
            ) do
       {:ok, request}
     end
   end
 
-  def hello(_client_id, _hello),
-    do: {:error, {:invalid_argument, "A hello names its key and its account"}}
+  def hello(_client_id, _hello), do: unnamed()
 
-  defp named(kid, identifier) do
-    if Encoding.digest?(kid) and Encoding.identifier?(identifier),
-      do: :ok,
-      else: {:error, {:invalid_argument, "A hello names its key and its account"}}
+  defp named(kid, identifier, holder_kind, name) do
+    if Encoding.digest?(kid) and Encoding.identifier?(identifier) and
+         holder_kind in Prima.Device.holder_kinds() and Prima.Device.display_name?(name),
+       do: :ok,
+       else: unnamed()
   end
+
+  defp unnamed,
+    do:
+      {:error, {:invalid_argument, "A hello names its key, its account, its holder and its name"}}
 
   # A capability that admits nobody refuses here, before anything is held.
   defp admission(nil), do: {:ok, nil}
@@ -190,11 +210,17 @@ defmodule Sanctum.DeviceUnlock do
   # Inside a new person's admission (`Sanctum.Newcomer.admit/3`), or right
   # after the door admitted a person this CYFR holds (`Sanctum.SignIn`):
   # the device `key` of `person`'s account, verified at `head`, paired in
-  # the person's athanor under the reserved `client_id` with its first
+  # the person's athanor under the client id the channel reserved, with
+  # the holder and name its hello reported (`t:device/0`), and its first
   # certificate, in one transaction; or, where the key already stands as
   # an active client of theirs there, a new certificate for that client.
-  @spec pair(map(), String.t(), Key.t(), String.t()) :: :ok | {:error, term()}
-  def pair(%{id: user_id}, client_id, %Key{kind: :device, kid: kid, pub: pub}, head) do
+  @spec pair(map(), device(), Key.t(), String.t()) :: :ok | {:error, term()}
+  def pair(
+        %{id: user_id},
+        %{client_id: client_id, holder_kind: holder_kind, display_name: display_name},
+        %Key{kind: :device, kid: kid, pub: pub},
+        head
+      ) do
     with {:ok, athanor_id} <- athanor(user_id) do
       actor = Prima.Actor.in_athanor(athanor_id)
 
@@ -211,6 +237,8 @@ defmodule Sanctum.DeviceUnlock do
               source_kind: "device_cert",
               source_id: client_id,
               device_public_key: pub,
+              holder_kind: holder_kind,
+              display_name: display_name,
               kid: kid,
               head: head
             },

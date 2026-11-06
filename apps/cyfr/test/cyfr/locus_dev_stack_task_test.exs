@@ -211,7 +211,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       # The setup token as `cyfr init` mints it, which the boot accepts, in
       # the link printed once, as `cyfr init` prints it.
       assert link_token == setup_token
-      assert Sanctum.setup_token?(setup_token)
+      assert Prima.Device.setup_token?(setup_token)
 
       for key <- [setup_token, minted_root, backends, builds],
           do: assert(key =~ ~r/\A[0-9a-f]{64}\z/)

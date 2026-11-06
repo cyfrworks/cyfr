@@ -33,7 +33,8 @@ defmodule Sanctum.SignIn do
       `Sanctum.Invitations.code_hash/1`). Without one a new person is
       admitted only as the door admits their identifier. A channel's
       sign-in is a device's hello (`Sanctum.DeviceUnlock.hello/2`): it
-      holds the `kid` the hello named, the one key that may answer it.
+      holds the `kid` the hello named, the one key that may answer it, and
+      the holder and name the device is paired with.
     * `:confirm` — the pending confirmation `ref` of the asking context's
       own person in its athanor, still pending; the request's `subject` is
       the record's digest, which the system layer previewed before the
@@ -166,7 +167,9 @@ defmodule Sanctum.SignIn do
     * `:identifier` — the account a channel speaks for, for a
       `{:channel, id}` binding;
     * `:kid` — the device key a channel's `:sign_in` (a hello) is
-      answered by.
+      answered by;
+    * `:holder_kind`, `:display_name` — what holds that key and the name
+      the device shows, as its hello reported them.
 
   Refusals: `:no_directory` (a browser's request with no directory to
   send it to), `{:not_found, "confirmation", ref}`, `:not_pending`,
@@ -225,18 +228,17 @@ defmodule Sanctum.SignIn do
 
   # What each purpose holds beside its request.
   defp held(:sign_in, opts) do
-    case Keyword.get(opts, :admission) do
-      nil ->
-        {:ok, %{admission: nil, identifier: opts[:identifier], kid: opts[:kid]}}
-
-      {:setup, token} = admission when is_binary(token) ->
-        {:ok, %{admission: admission, identifier: opts[:identifier], kid: opts[:kid]}}
-
-      {:invitation, hash} = admission when is_binary(hash) ->
-        {:ok, %{admission: admission, identifier: opts[:identifier], kid: opts[:kid]}}
-
-      _other ->
-        {:error, {:invalid_argument, "A sign-in comes in under the setup token or an invitation"}}
+    if admission?(opts[:admission]) do
+      {:ok,
+       %{
+         admission: opts[:admission],
+         identifier: opts[:identifier],
+         kid: opts[:kid],
+         holder_kind: opts[:holder_kind],
+         display_name: opts[:display_name]
+       }}
+    else
+      {:error, {:invalid_argument, "A sign-in comes in under the setup token or an invitation"}}
     end
   end
 
@@ -276,6 +278,10 @@ defmodule Sanctum.SignIn do
 
   defp held(_purpose, _opts),
     do: {:error, {:invalid_argument, "A request is for sign_in, confirm or registry"}}
+
+  defp admission?(nil), do: true
+  defp admission?({kind, value}) when kind in [:setup, :invitation], do: is_binary(value)
+  defp admission?(_other), do: false
 
   # A person signed in, in an athanor, off the guest plane.
   defp person(%Context{plane: plane, user_id: user_id, athanor_id: athanor_id} = ctx)
@@ -574,7 +580,13 @@ defmodule Sanctum.SignIn do
          head
        ) do
     if held[:kid] == kid do
-      pair = &Sanctum.DeviceUnlock.pair(&1, client_id, key, head.head_hash)
+      device = %{
+        client_id: client_id,
+        holder_kind: held[:holder_kind],
+        display_name: held[:display_name]
+      }
+
+      pair = &Sanctum.DeviceUnlock.pair(&1, device, key, head.head_hash)
 
       with {:ok, user} <- signed_in(identifier, held.admission, head, pair),
            do: {:ok, %{purpose: :sign_in, user: user, kid: kid}}

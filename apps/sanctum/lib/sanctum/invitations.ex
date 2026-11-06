@@ -197,19 +197,16 @@ defmodule Sanctum.Invitations do
 
   @doc """
   The hash an invitation is stored under, of the code `code` as it was
-  given (base64url without padding, of 32 bytes): the lowercase hex
-  SHA-256 of its bytes. Anything else is `:invitation_invalid`, as an
-  unknown code is.
+  given (`Prima.Device.invitation_code?/1`): the lowercase hex SHA-256 of
+  its bytes. Anything else is `:invitation_invalid`, as an unknown code
+  is.
   """
   @spec code_hash(term()) :: {:ok, String.t()} | {:error, :invitation_invalid}
-  def code_hash(code) when is_binary(code) do
-    case Base.url_decode64(code, padding: false) do
-      {:ok, <<_::binary-size(@code_bytes)>> = bytes} -> {:ok, Prima.Digest.sha256_hex(bytes)}
-      _malformed -> invalid()
-    end
+  def code_hash(code) do
+    if Prima.Device.invitation_code?(code),
+      do: {:ok, code |> Base.url_decode64!(padding: false) |> Prima.Digest.sha256_hex()},
+      else: invalid()
   end
-
-  def code_hash(_code), do: invalid()
 
   @doc """
   Redeem the invitation `code_hash` names for the person `user_id`, whom

@@ -284,15 +284,6 @@ defmodule Sanctum do
   end
 
   @doc """
-  Whether `value` is an installation's setup token: exactly 64 lowercase
-  hexadecimal characters, 32 random bytes. The token admits the
-  installation's first person (`Sanctum.Newcomer`); unset, setup opens
-  nothing. It is never a platform setting or a log value.
-  """
-  @spec setup_token?(term()) :: boolean()
-  def setup_token?(value), do: is_binary(value) and Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
-
-  @doc """
   Server-internal context for background/system operations — sweepers, health
   checks, retention, cache sweep, audit fan-out, secret-store bootstrap,
   execution-record write-back.

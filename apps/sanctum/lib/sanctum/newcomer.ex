@@ -145,12 +145,13 @@ defmodule Sanctum.Newcomer do
   def setup_open(_token), do: {:error, :setup_closed}
 
   @doc """
-  Whether `token` is the configured setup token, compared in constant
-  time, whether or not setup is still open.
+  Whether `token` is spelled as a setup token is
+  (`Prima.Device.setup_token?/1`) and is the configured one, compared in
+  constant time, whether or not setup is still open.
   """
   @spec setup_token?(term()) :: boolean()
-  def setup_token?(token) when is_binary(token), do: admissible({:setup, token}, :none) == :ok
-  def setup_token?(_token), do: false
+  def setup_token?(token),
+    do: Prima.Device.setup_token?(token) and admissible({:setup, token}, :none) == :ok
 
   # ---- before the transaction ----------------------------------------------
 

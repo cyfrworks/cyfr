@@ -17,7 +17,6 @@ defmodule Arca.Schemas.PairedClient do
 
   @standings ~w(active suspended revoked)
   @source_kinds ~w(session api_key device_cert passkey)
-  @holder_kinds ~w(chip software platform)
 
   @doc """
   The standings a paired client may hold: `suspended` while a declared
@@ -36,13 +35,13 @@ defmodule Arca.Schemas.PairedClient do
   def source_kinds, do: @source_kinds
 
   @doc """
-  What holds a client's key: a TPM `chip` or a passphrase-wrapped
-  `software` file, as a protected device reports it, or the `platform`
-  that keeps a passkey, which this home records for the credential it
-  projects. Information a person reads, never an input to a decision.
+  What holds a client's key: a device's holder as its hello names it
+  (`Prima.Device.holder_kinds/0`), or the `platform` that keeps a
+  passkey, which this CYFR records for the credential it projects.
+  Information a person reads, never an input to a decision.
   """
   @spec holder_kinds() :: [String.t()]
-  def holder_kinds, do: @holder_kinds
+  def holder_kinds, do: Prima.Device.holder_kinds() ++ ["platform"]
 
   schema "paired_clients" do
     field :athanor_id, :string

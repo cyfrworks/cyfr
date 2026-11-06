@@ -14,21 +14,30 @@ defmodule Sanctum.Test.Devices do
   alias Prima.Identity.Key
   alias Prima.SignIn.DeviceAnswer
 
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
+  @doc "What holds a test device's key and the name it shows, as its hello reports them."
+  def holder, do: @holder
+
+  @doc """
+  The hello of `device` (a key pair of `account`'s) under `admission`
+  (`{:setup, token}`, `{:invitation, code}` or nil), reporting `holder`
+  (`holder/0` by default).
+  """
+  def hello(account, {pub, _priv}, admission \\ nil, holder \\ @holder) do
+    Map.merge(holder, %{kid: Key.kid(pub), identifier: account.identifier, admission: admission})
+  end
+
   @doc """
   The request the hello of `device` (a key pair of `account`'s) is
   answered, on a channel that reserved a new client id: `{client_id,
-  request}`. `admission` is the hello's (`{:setup, token}`,
-  `{:invitation, code}` or nil).
+  request}`. `admission` and `holder` are `hello/4`'s.
   """
-  def hello!(account, {pub, _priv}, admission \\ nil) do
+  def hello!(account, device, admission \\ nil, holder \\ @holder) do
     client_id = Prima.UUID7.generate_id("pcl")
 
     {:ok, request} =
-      Sanctum.DeviceUnlock.hello(client_id, %{
-        kid: Key.kid(pub),
-        identifier: account.identifier,
-        admission: admission
-      })
+      Sanctum.DeviceUnlock.hello(client_id, hello(account, device, admission, holder))
 
     {client_id, request}
   end
@@ -40,8 +49,8 @@ defmodule Sanctum.Test.Devices do
   `device` of `account` admitted by its hello under `admission`: what
   `Sanctum.DeviceUnlock.admit/2` answers, with the key and the person.
   """
-  def admitted!(account, device, admission \\ nil) do
-    {client_id, request} = hello!(account, device, admission)
+  def admitted!(account, device, admission \\ nil, holder \\ @holder) do
+    {client_id, request} = hello!(account, device, admission, holder)
     {:ok, admitted} = Sanctum.DeviceUnlock.admit(client_id, answer(request, device))
     {:ok, user} = Sanctum.Tenancy.Users.get_by_identifier(account.identifier)
     Map.merge(admitted, %{key: device, user: user})
@@ -84,17 +93,19 @@ defmodule Sanctum.Test.Devices do
   A new device of the person `user_id` paired here, as a hello pairs a key
   of their account this CYFR admitted them by: their account
   (`Sanctum.TestContext.account!/1`), the device's client in their own
-  athanor with its first certificate under the head cached here
-  (`Sanctum.DeviceUnlock`), and its channel's context from `source`.
-  Answers `%{client_id, certificate, key, ctx}`, `key` the device's key
-  pair.
+  athanor, reporting `holder` (`holder/0` by default), with its first
+  certificate under the head cached here (`Sanctum.DeviceUnlock.pair/4`),
+  and its channel's context from `source`. Answers `%{client_id,
+  certificate, key, ctx}`, `key` the device's key pair.
   """
-  def paired!(user_id, source \\ "198.51.100.40") when is_binary(user_id) do
+  def paired!(user_id, source \\ "198.51.100.40", holder \\ @holder)
+      when is_binary(user_id) do
     account = Sanctum.TestContext.account!(user_id)
     {pub, priv} = :crypto.generate_key(:eddsa, :ed25519)
     {:ok, key} = Key.new(alg: :ed25519, kind: :device, pub: pub)
     client_id = Prima.UUID7.generate_id("pcl")
-    :ok = Sanctum.DeviceUnlock.pair(%{id: user_id}, client_id, key, account.head)
+    device = Map.put(holder, :client_id, client_id)
+    :ok = Sanctum.DeviceUnlock.pair(%{id: user_id}, device, key, account.head)
 
     {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
 

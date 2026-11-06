@@ -106,6 +106,51 @@ defmodule Prima.DeviceTest do
     assert Enum.map(hellos, &Map.keys(&1["admission"] || %{})) == [["setup"], ["invitation"], []]
   end
 
+  test "the public checks of a hello's fields agree with its vectors" do
+    v = vectors()
+    hellos = for %{"message" => %{"type" => "hello"} = m} <- v["messages"], do: m
+
+    for message <- hellos do
+      assert message["holder_kind"] in Device.holder_kinds()
+      assert Device.display_name?(message["display_name"])
+
+      case message["admission"] do
+        %{"setup" => token} -> assert Device.setup_token?(token)
+        %{"invitation" => code} -> assert Device.invitation_code?(code)
+        nil -> :ok
+      end
+    end
+
+    for %{"message" => %{"type" => "hello"} = m, "field" => field} <- v["refusals"] do
+      case field do
+        "holder_kind" ->
+          refute m["holder_kind"] in Device.holder_kinds()
+
+        "display_name" ->
+          refute Device.display_name?(m["display_name"])
+
+        "admission" ->
+          case m["admission"] do
+            %{"setup" => token} = admission when map_size(admission) == 1 ->
+              refute Device.setup_token?(token)
+
+            %{"invitation" => code} = admission when map_size(admission) == 1 ->
+              refute Device.invitation_code?(code)
+
+            _not_one_capability ->
+              :ok
+          end
+
+        _other ->
+          :ok
+      end
+    end
+
+    assert Device.holder_kinds() == ~w(chip software)
+    refute Device.display_name?(String.duplicate("é", 33))
+    assert Device.display_name?(String.duplicate("é", 32))
+  end
+
   test "a first connection: device_1's hello, its signed answer, and its certificate" do
     v = vectors()
     by_type = Map.new(v["messages"], &{&1["message"]["type"], &1["message"]})
