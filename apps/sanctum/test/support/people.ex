@@ -86,7 +86,6 @@ defmodule Sanctum.Test.People do
             {:ok, _} =
               Arca.PersonIdentities.create(Prima.Actor.system(), %{
                 user_id: person.id,
-                provenance: "remote",
                 identifier: identifier,
                 directory_url: directory,
                 head_hash: head

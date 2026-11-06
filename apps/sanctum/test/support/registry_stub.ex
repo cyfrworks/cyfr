@@ -259,7 +259,6 @@ defmodule Sanctum.Test.RegistryStub do
     {:ok, _row} =
       Arca.PersonIdentities.create(Prima.Actor.system(), %{
         user_id: user_id,
-        provenance: "remote",
         identifier: state.identifier,
         directory_url: @directory,
         head_hash: state.head

@@ -78,10 +78,10 @@ defmodule Arca.SecurityTransitions.Fixtures do
     athanor
   end
 
-  # The person's local identity row, enrolled under an identifier.
+  # The person's identity row, naming their account's identifier.
   def enrolled!(user_id) do
     now = DateTime.utc_now()
-    identifier = "per_" <> Prima.Digest.sha256_hex("st-local-#{uniq()}")
+    identifier = "per_" <> Prima.Digest.sha256_hex("st-account-#{uniq()}")
 
     {1, _} =
       Arca.Repo.insert_all(Arca.Schemas.PersonIdentity, [
@@ -89,8 +89,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
           id: Prima.UUID7.generate_id("pid"),
           user_id: user_id,
           identifier: identifier,
-          provenance: "local",
-          enrollment: "enrolled",
+          head_hash: Prima.Digest.sha256("head-" <> identifier),
           directory_url: "https://dir.example",
           revision: 1,
           inserted_at: now,

@@ -209,14 +209,6 @@ defmodule Arca.PairedClientsTest do
 
     defp identity!(user_id), do: Arca.Test.People.account!(user_id)
 
-    defp marked?(user_id),
-      do:
-        Arca.Repo.exists?(
-          from(p in Arca.Schemas.PersonIdentity,
-            where: p.user_id == ^user_id and not is_nil(p.first_method_at)
-          )
-        )
-
     test "records what holds its key and the name it shows, and nothing a browser key reports",
          %{actor: actor} do
       row =
@@ -251,40 +243,29 @@ defmodule Arca.PairedClientsTest do
       assert {:error, {:invalid, _}} = PairedClients.record(actor, attrs(%{holder_kind: "chip"}))
     end
 
-    test "a first-method enrollment claims the latch once; a marking one enrolls either way", %{
-      actor: actor
-    } do
+    test "an enrollment writes its row and runs its also: step with it", %{actor: actor} do
       user_id = person!()
       identity!(user_id)
-      ok = fn _row -> {:ok, :certified} end
+      test = self()
 
-      assert {:ok, first} =
-               PairedClients.enroll(actor, device_attrs(user_id), first_method: :claim, also: ok)
+      assert {:ok, enrolled} =
+               PairedClients.enroll(actor, device_attrs(user_id),
+                 also: fn row -> {:ok, send(test, {:also, row.id})} end
+               )
 
-      assert first.holder_kind == "chip"
-      assert marked?(user_id)
-
-      assert {:error, :first_method_used} =
-               PairedClients.enroll(actor, device_attrs(user_id), first_method: :claim, also: ok)
-
-      assert {:ok, _second} =
-               PairedClients.enroll(actor, device_attrs(user_id), first_method: :mark, also: ok)
-
-      assert Arca.Repo.aggregate(from(p in PairedClient, where: p.user_id == ^user_id), :count) ==
-               2
+      assert enrolled.holder_kind == "chip"
+      assert_received {:also, id}
+      assert id == enrolled.id
     end
 
-    test "a refusal of its also: step rolls the enrollment and the latch back", %{actor: actor} do
+    test "a refusal of its also: step rolls the enrollment back", %{actor: actor} do
       user_id = person!()
       identity!(user_id)
 
       assert {:error, :not_certified} =
                PairedClients.enroll(actor, device_attrs(user_id),
-                 first_method: :claim,
                  also: fn _row -> {:error, :not_certified} end
                )
-
-      refute marked?(user_id)
 
       assert Arca.Repo.aggregate(from(p in PairedClient, where: p.user_id == ^user_id), :count) ==
                0
@@ -297,7 +278,7 @@ defmodule Arca.PairedClientsTest do
       attrs = device_attrs(user_id, %{source_id: "req_found"})
 
       {:ok, row} =
-        PairedClients.enroll(actor, attrs, first_method: :mark, also: fn _ -> {:ok, nil} end)
+        PairedClients.enroll(actor, attrs, also: fn _ -> {:ok, nil} end)
 
       assert {:ok, %{id: id}} = PairedClients.enrolled(Prima.Actor.system(), "req_found")
       assert id == row.id

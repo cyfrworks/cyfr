@@ -59,7 +59,6 @@ defmodule Arca.Test.People do
     {:ok, _row} =
       Arca.PersonIdentities.create(system, %{
         user_id: user_id,
-        provenance: "remote",
         identifier: identifier,
         directory_url: "https://dir.example",
         head_hash: head

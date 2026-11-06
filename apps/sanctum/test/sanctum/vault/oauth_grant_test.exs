@@ -182,7 +182,6 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     {:ok, _} =
       Arca.PersonIdentities.create(Prima.Actor.system(), %{
         user_id: user_id,
-        provenance: "remote",
         identifier: identifier,
         directory_url: directory
       })

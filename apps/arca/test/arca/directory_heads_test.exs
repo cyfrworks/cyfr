@@ -107,7 +107,6 @@ defmodule Arca.DirectoryHeadsTest do
           {:ok, _} =
             PersonIdentities.create(server(), %{
               user_id: person.id,
-              provenance: "remote",
               identifier: identifier,
               directory_url: "https://dir.example",
               head_hash: head || digest("read")
@@ -694,7 +693,6 @@ defmodule Arca.DirectoryHeadsRaceTest do
             {:ok, _} =
               PersonIdentities.create(server(), %{
                 user_id: person.id,
-                provenance: "remote",
                 identifier: identifier,
                 directory_url: "https://dir.example",
                 head_hash: old

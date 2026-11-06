@@ -561,43 +561,24 @@ defmodule Arca.Repo.Migrations.Baseline do
   defp people do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
-    identity_checks = [
-      known("person_identities_provenance_known", "provenance", ~w(local remote)),
-      known("person_identities_enrollment_known", "enrollment", ~w(none pending enrolled))
-    ]
-
     # One row per person this home knows: the account they were admitted
     # by, its identifier (`per_…`), the directory that orders it and the
     # head this home last read, which the cached head's advance moves
     # (`Arca.DirectoryHeads`). This home holds no key of theirs.
-    # `revision` is the row's compare-and-set token; `first_method_at`
-    # records that a fresh confirmation method ever existed, and nothing
-    # resets it.
+    # `revision` is the row's compare-and-set token.
     create table(:person_identities, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :identifier, :string
-
-      add :provenance, :string,
-        null: false,
-        check: if(sqlite?, do: Enum.at(identity_checks, 0))
-
-      add :enrollment, :string,
-        null: false,
-        default: "none",
-        check: if(sqlite?, do: Enum.at(identity_checks, 1))
-
-      add :head_hash, :string
-      add :directory_url, :text
-      add :first_method_at, :utc_datetime_usec
+      add :identifier, :string, null: false
+      add :head_hash, :string, null: false
+      add :directory_url, :text, null: false
       add :revision, :bigint, null: false, default: 1
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :person_identities, identity_checks)
     create unique_index(:person_identities, [:user_id])
-    create unique_index(:person_identities, [:identifier], where: "identifier IS NOT NULL")
+    create unique_index(:person_identities, [:identifier])
 
     log_checks = [
       known(

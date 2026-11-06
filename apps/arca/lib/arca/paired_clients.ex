@@ -157,15 +157,11 @@ defmodule Arca.PairedClients do
 
   @doc """
   Enroll a protected device's client in the actor's athanor: `record/2`'s
-  row, its `attrs` the same, written under the person's lock, the order
-  every first method takes (`Arca.DirectoryHeads.lock_person!/1`), with
-  the first-method mark (`Arca.PersonIdentities.first_method!/1`).
-  `first_method: :claim` enrolls only the person's first method, refused
-  `:first_method_used` once the mark is set; `:mark` sets it if unset and
-  enrolls either way. `also:` runs after the insert, handed the row, and
-  answers `{:ok, _}` or `{:error, reason}`, which rolls the enrollment
-  back: the certificate is issued and recorded in the same transaction.
-  Refused as `record/2` is.
+  row, its `attrs` the same, written under the person's lock, the first
+  of the standing order (`Arca.DirectoryHeads.lock_person!/1`). `also:`
+  runs after the insert, handed the row, and answers `{:ok, _}` or
+  `{:error, reason}`, which rolls the enrollment back: the certificate is
+  issued and recorded in the same transaction. Refused as `record/2` is.
   """
   @spec enroll(Prima.Actor.t(), map(), keyword()) ::
           {:ok, row()}
@@ -173,14 +169,12 @@ defmodule Arca.PairedClients do
              :no_athanor
              | :conflict
              | :not_owner
-             | :first_method_used
              | :database_error
              | {:invalid, map()}
              | term()}
   # arca:db-raise-ok the insert runs inside `owned/2`, which rescues around its transaction.
   def enroll(%Prima.Actor{athanor_id: athanor_id} = actor, %{user_id: user_id} = attrs, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_list(opts) do
-    first = Keyword.fetch!(opts, :first_method)
     also = Keyword.fetch!(opts, :also)
 
     changeset =
@@ -194,7 +188,6 @@ defmodule Arca.PairedClients do
         _locked = Arca.DirectoryHeads.lock_person!(user_id)
 
         with :ok <- fenced(changeset),
-             :ok <- first_method(user_id, first),
              {:ok, row} <- inserted(changeset),
              {:ok, _also} <- also.(Arca.Data.project(row)) do
           {:ok, row}
@@ -443,15 +436,6 @@ defmodule Arca.PairedClients do
     |> order_by([p], asc: p.inserted_at, asc: p.id)
     |> limit(1)
     |> Arca.Repo.one()
-  end
-
-  defp first_method(user_id, claim) when claim in [:claim, :mark] do
-    case {Arca.PersonIdentities.first_method!(user_id), claim} do
-      {:marked, _claim} -> :ok
-      {:already, :mark} -> :ok
-      {:already, :claim} -> {:error, :first_method_used}
-      {:no_identity, _claim} -> {:error, :no_identity}
-    end
   end
 
   # A client that is an account key names the head it was admitted under,

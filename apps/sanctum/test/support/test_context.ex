@@ -741,7 +741,6 @@ defmodule Sanctum.TestContext do
         {:ok, _row} =
           Arca.PersonIdentities.create(system, %{
             user_id: user_id,
-            provenance: "remote",
             identifier: state.identifier,
             directory_url: @test_directory,
             head_hash: state.head

@@ -1095,9 +1095,8 @@ defmodule Arca.CredentialIssuanceSandboxTest do
           %{
             id: Prima.UUID7.generate_id("pid"),
             user_id: user_id,
-            provenance: "remote",
-            enrollment: "enrolled",
             identifier: identifier,
+            head_hash: Prima.Digest.sha256("head-" <> identifier),
             directory_url: "https://directory.example",
             revision: 1,
             inserted_at: now,
@@ -1229,9 +1228,8 @@ defmodule Arca.CredentialIssuanceSandboxTest do
         %{
           id: Prima.UUID7.generate_id("pid"),
           user_id: user_id,
-          provenance: "remote",
-          enrollment: "enrolled",
           identifier: identifier,
+          head_hash: Prima.Digest.sha256("head-" <> identifier),
           directory_url: "https://directory.example",
           revision: 1,
           inserted_at: now,

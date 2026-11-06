@@ -252,7 +252,6 @@ defmodule Sanctum.Newcomer do
   defp also(admission, account, also, %{id: user_id} = person) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
            user_id: user_id,
-           provenance: "remote",
            identifier: account.identifier,
            directory_url: account.directory_url,
            head_hash: account.head_hash

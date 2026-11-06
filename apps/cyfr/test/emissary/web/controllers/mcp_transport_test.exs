@@ -297,7 +297,6 @@ defmodule Emissary.Web.MCPTransportTest do
       {:ok, _} =
         Arca.PersonIdentities.create(Prima.Actor.system(), %{
           user_id: user.id,
-          provenance: "remote",
           identifier: identifier,
           directory_url: directory
         })

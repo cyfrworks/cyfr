@@ -56,7 +56,7 @@ defmodule Cyfr.ReleaseFixtureTest do
     first = person!(fixture, "first@example.com", "fixture-first")
     assert Sanctum.Tenancy.platform_admin?(first["user_id"])
 
-    assert %PersonIdentity{enrollment: "enrolled", identifier: "per_" <> _} =
+    assert %PersonIdentity{identifier: "per_" <> _} =
              Arca.Repo.get_by!(PersonIdentity, user_id: first["user_id"])
 
     assert {:ok, %{namespace: "release-proof"}} = Sanctum.Tenancy.Users.get(first["user_id"])
