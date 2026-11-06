@@ -3,52 +3,43 @@
 
 defmodule Prima.DeviceCert do
   @moduledoc """
-  A device certificate: the person's live key, at their home, vouching
-  that a device key belongs to a paired client of theirs for one home and
-  athanor, for a short time. `tests/fixtures/device_cert.json` holds its
-  vectors, beside the challenge and proof of the pairing purposes
+  A device certificate, `cyfr-device-cert/v2`: a CYFR's own word that a
+  connected device is admitted there, for one athanor and a short time.
+  `tests/fixtures/device_cert.json` holds its vectors, beside the
+  challenge and proof of the connection purposes
   (`Prima.DeviceCert.Challenge`, `Prima.DeviceCert.Proof`);
   `tests/fixtures/device_unlock.json` holds those of the protected
   device's enrollment, unlock, confirmation and lock, and of the storage
   report (`Prima.DeviceCert.Storage`).
 
-  A certificate carries the protocol string `cyfr-device-cert/v1`, the
-  device public key, the client id, a tagged subject, the issuing home
-  (`issuer`), the home it is presented to (`audience`), the athanor, a
-  not-before and an expiry in Unix milliseconds, and the live key's
-  signature. The subject is one of:
+  A certificate carries the protocol string, the device key's `kid` as the
+  account's log lists it, the client id, the account's `identifier`,
+  `head`, the hash of the account's head the certificate was issued under,
+  the athanor, `audience`, the issuing CYFR's origin, a not-before and an
+  expiry in Unix milliseconds, and `sig`, the Ed25519 signature of that
+  CYFR's installation key. Only the CYFR that issued it verifies it, with
+  the public half it holds; nothing else ever reads one.
 
-    * `local`, a `user_id` of the issuing home. A local certificate names
-      one home as both issuer and audience, and is valid only there. Local
-      pairing needs no identifier, no directory and no `key_epoch`: the
-      home checks it under the live key it stores.
-    * `identity`, an enrolled person's `identifier` and the `key_epoch` of
-      the head the certificate was issued under. Another home accepts only
-      this subject, under the live key of a head fresher than its bound,
-      and refuses it once that head's `key_epoch` has moved on.
-
-  `verify/3` checks expiry strictly on the receiving home's clock: at or
-  after `expires_at` a certificate is refused, whatever the tolerance.
-  The clock tolerance applies to `not_before` alone, so it never extends a
-  certificate's lifetime. A certificate is not in the identity log.
+  `verify/3` refuses a certificate whose `head` is not the head its
+  paired-client row names, and checks expiry strictly on the CYFR's
+  clock: at or after `expires_at` a certificate is refused, whatever the
+  tolerance. The clock tolerance applies to `not_before` alone, so it
+  never extends a certificate's lifetime. A certificate is not in the
+  account's log.
   """
 
   alias Prima.Identity.Encoding
 
-  @protocol "cyfr-device-cert/v1"
-  @required ~w(protocol device_key client_id subject issuer audience athanor not_before expires_at)
-
-  @type subject ::
-          %{kind: :local, user_id: String.t()}
-          | %{kind: :identity, identifier: String.t(), key_epoch: String.t()}
+  @protocol "cyfr-device-cert/v2"
+  @required ~w(protocol kid client_id identifier head athanor audience not_before expires_at)
 
   @type t :: %__MODULE__{
-          device_key: binary(),
+          kid: String.t(),
           client_id: String.t(),
-          subject: subject(),
-          issuer: String.t(),
-          audience: String.t(),
+          identifier: String.t(),
+          head: String.t(),
           athanor: String.t(),
+          audience: String.t(),
           not_before: non_neg_integer(),
           expires_at: non_neg_integer(),
           sig: binary() | nil
@@ -57,31 +48,29 @@ defmodule Prima.DeviceCert do
   @type reason ::
           Encoding.reason()
           | :wrong_protocol
-          | :local_subject_elsewhere
           | :bad_signature
           | :wrong_audience
-          | :stale_key_epoch
-          | :key_epoch_required
+          | :stale_head
           | :not_yet_valid
           | :expired
 
   @enforce_keys [
-    :device_key,
+    :kid,
     :client_id,
-    :subject,
-    :issuer,
-    :audience,
+    :identifier,
+    :head,
     :athanor,
+    :audience,
     :not_before,
     :expires_at
   ]
   defstruct [
-    :device_key,
+    :kid,
     :client_id,
-    :subject,
-    :issuer,
-    :audience,
+    :identifier,
+    :head,
     :athanor,
+    :audience,
     :not_before,
     :expires_at,
     sig: nil
@@ -92,8 +81,8 @@ defmodule Prima.DeviceCert do
   def protocol, do: @protocol
 
   @doc """
-  An unsigned certificate from its fields (atom keys; the device key as raw
-  bytes). Sign it with `sign/2` under the person's live private key.
+  An unsigned certificate from its fields (atom keys). Sign it with
+  `sign/2` under the CYFR's installation key.
   """
   @spec new(map() | keyword()) :: {:ok, t()} | {:error, reason()}
   def new(attrs) do
@@ -101,12 +90,12 @@ defmodule Prima.DeviceCert do
 
     %{
       "protocol" => @protocol,
-      "device_key" => attrs[:device_key] && Encoding.b64(attrs[:device_key]),
+      "kid" => attrs[:kid],
       "client_id" => attrs[:client_id],
-      "subject" => attrs[:subject] && encode_subject(attrs[:subject]),
-      "issuer" => attrs[:issuer],
-      "audience" => attrs[:audience],
+      "identifier" => attrs[:identifier],
+      "head" => attrs[:head],
       "athanor" => attrs[:athanor],
+      "audience" => attrs[:audience],
       "not_before" => attrs[:not_before],
       "expires_at" => attrs[:expires_at]
     }
@@ -123,48 +112,48 @@ defmodule Prima.DeviceCert do
   def encode(%__MODULE__{} = cert) do
     Encoding.compact(%{
       "protocol" => @protocol,
-      "device_key" => Encoding.b64(cert.device_key),
+      "kid" => cert.kid,
       "client_id" => cert.client_id,
-      "subject" => encode_subject(cert.subject),
-      "issuer" => cert.issuer,
-      "audience" => cert.audience,
+      "identifier" => cert.identifier,
+      "head" => cert.head,
       "athanor" => cert.athanor,
+      "audience" => cert.audience,
       "not_before" => cert.not_before,
       "expires_at" => cert.expires_at,
       "sig" => cert.sig && Encoding.b64(cert.sig)
     })
   end
 
-  @doc "Sign a certificate with the person's live private key."
+  @doc "Sign a certificate with the CYFR's installation private key."
   @spec sign(t(), binary()) :: t()
-  def sign(%__MODULE__{} = cert, live_private_key) do
-    map = cert |> Map.put(:sig, nil) |> encode() |> Encoding.sign(live_private_key)
+  def sign(%__MODULE__{} = cert, installation_private_key) do
+    map = cert |> Map.put(:sig, nil) |> encode() |> Encoding.sign(installation_private_key)
     {:ok, sig} = Encoding.signature(map["sig"])
     %{cert | sig: sig}
   end
 
   @doc """
-  Check a certificate presented at `opts[:home]` under the live public key
-  the receiving home holds for its subject, and answer it.
+  Check a certificate presented at `opts[:home]` under the public half of
+  the installation key that CYFR holds, and answer it.
 
-  `opts`: `:home`, the receiving home; `:now`, its clock in milliseconds;
+  `opts`: `:home`, the CYFR's origin; `:head`, the head the certificate's
+  paired-client row names; `:now`, the CYFR's clock in milliseconds; and
   `:skew`, the clock tolerance in milliseconds, which applies to
-  `not_before` only; and, for an identity subject, `:key_epoch`, the
-  current head's. Refusals, in the order checked: a malformed certificate,
-  `:bad_signature`, `:wrong_audience`, `:key_epoch_required` and
-  `:stale_key_epoch`, `:not_yet_valid`, and `:expired` at or after
-  `expires_at`.
+  `not_before` only. Refusals, in the order checked: a malformed
+  certificate, `:bad_signature`, `:wrong_audience`, `:stale_head`,
+  `:not_yet_valid`, and `:expired` at or after `expires_at`.
   """
   @spec verify(t() | map(), binary(), keyword()) :: {:ok, t()} | {:error, reason()}
-  def verify(cert, live_key, opts) do
+  def verify(cert, installation_key, opts) do
     home = Keyword.fetch!(opts, :home)
+    head = Keyword.fetch!(opts, :head)
     now = Keyword.fetch!(opts, :now)
     skew = Keyword.fetch!(opts, :skew)
 
     with {:ok, cert} <- reread(cert),
-         :ok <- signed(cert, live_key),
-         :ok <- audience(cert, home),
-         :ok <- key_epoch(cert.subject, Keyword.get(opts, :key_epoch)),
+         :ok <- signed(cert, installation_key),
+         :ok <- same(cert.audience, home, :wrong_audience),
+         :ok <- same(cert.head, head, :stale_head),
          :ok <- window(cert, now, skew) do
       {:ok, cert}
     end
@@ -173,17 +162,12 @@ defmodule Prima.DeviceCert do
   defp reread(%__MODULE__{} = cert), do: cert |> encode() |> decode()
   defp reread(map), do: decode(map)
 
-  defp signed(cert, live_key) do
-    if Encoding.verify(encode(cert), live_key), do: :ok, else: {:error, :bad_signature}
+  defp signed(cert, installation_key) do
+    if Encoding.verify(encode(cert), installation_key), do: :ok, else: {:error, :bad_signature}
   end
 
-  defp audience(%__MODULE__{audience: home}, home), do: :ok
-  defp audience(%__MODULE__{}, _home), do: {:error, :wrong_audience}
-
-  defp key_epoch(%{kind: :local}, _current), do: :ok
-  defp key_epoch(%{kind: :identity}, nil), do: {:error, :key_epoch_required}
-  defp key_epoch(%{kind: :identity, key_epoch: current}, current), do: :ok
-  defp key_epoch(%{kind: :identity}, _current), do: {:error, :stale_key_epoch}
+  defp same(value, value, _reason), do: :ok
+  defp same(_value, _expected, reason), do: {:error, reason}
 
   defp window(cert, now, skew) do
     cond do
@@ -198,25 +182,24 @@ defmodule Prima.DeviceCert do
 
     with :ok <- Encoding.protocol(map, @protocol),
          :ok <- Encoding.fields(map, @required ++ sig, []),
-         {:ok, device_key} <- Encoding.binary(map, "device_key", Encoding.key_bytes()),
+         {:ok, kid} <- Encoding.check(map, "kid", &Encoding.digest?/1),
          {:ok, client_id} <- Encoding.check(map, "client_id", &Encoding.id?/1),
-         {:ok, subject} <- decode_subject(map["subject"]),
-         {:ok, issuer} <- Encoding.check(map, "issuer", &Encoding.home?/1),
-         {:ok, audience} <- Encoding.check(map, "audience", &Encoding.home?/1),
+         {:ok, identifier} <- Encoding.check(map, "identifier", &Encoding.identifier?/1),
+         {:ok, head} <- Encoding.check(map, "head", &Encoding.digest?/1),
          {:ok, athanor} <- Encoding.check(map, "athanor", &Encoding.id?/1),
+         {:ok, audience} <- Encoding.check(map, "audience", &Encoding.home?/1),
          {:ok, not_before} <- Encoding.check(map, "not_before", &Encoding.ms?/1),
          {:ok, expires_at} <-
            Encoding.check(map, "expires_at", &(Encoding.ms?(&1) and &1 > not_before)),
-         :ok <- local_here(subject, issuer, audience),
          {:ok, sig} <- signature(map, signed?) do
       {:ok,
        %__MODULE__{
-         device_key: device_key,
+         kid: kid,
          client_id: client_id,
-         subject: subject,
-         issuer: issuer,
-         audience: audience,
+         identifier: identifier,
+         head: head,
          athanor: athanor,
+         audience: audience,
          not_before: not_before,
          expires_at: expires_at,
          sig: sig
@@ -225,46 +208,6 @@ defmodule Prima.DeviceCert do
   end
 
   defp read(_value, _signed?), do: {:error, {:invalid_field, "certificate"}}
-
-  defp decode_subject(%{"kind" => "local"} = subject) do
-    with :ok <- sub_fields(subject, ~w(kind user_id)),
-         user_id when is_binary(user_id) <- subject["user_id"],
-         true <- Encoding.id?(user_id) and Prima.PersonId.person?(user_id) do
-      {:ok, %{kind: :local, user_id: user_id}}
-    else
-      _ -> {:error, {:invalid_field, "subject"}}
-    end
-  end
-
-  defp decode_subject(%{"kind" => "identity"} = subject) do
-    with :ok <- sub_fields(subject, ~w(kind identifier key_epoch)),
-         true <- Encoding.identifier?(subject["identifier"]),
-         true <- Encoding.digest?(subject["key_epoch"]) do
-      {:ok,
-       %{kind: :identity, identifier: subject["identifier"], key_epoch: subject["key_epoch"]}}
-    else
-      _ -> {:error, {:invalid_field, "subject"}}
-    end
-  end
-
-  defp decode_subject(_subject), do: {:error, {:invalid_field, "subject"}}
-
-  defp sub_fields(subject, fields) do
-    if Enum.sort(Map.keys(subject)) == Enum.sort(fields), do: :ok, else: :error
-  end
-
-  defp encode_subject(%{kind: :local, user_id: user_id}),
-    do: %{"kind" => "local", "user_id" => user_id}
-
-  defp encode_subject(%{kind: :identity, identifier: identifier, key_epoch: key_epoch}),
-    do: %{"kind" => "identity", "identifier" => identifier, "key_epoch" => key_epoch}
-
-  defp encode_subject(_other), do: %{"kind" => "unknown"}
-
-  # A local subject is a user id of the issuing home, meaningful nowhere else.
-  defp local_here(%{kind: :local}, home, home), do: :ok
-  defp local_here(%{kind: :local}, _issuer, _audience), do: {:error, :local_subject_elsewhere}
-  defp local_here(%{kind: :identity}, _issuer, _audience), do: :ok
 
   defp signature(_map, false), do: {:ok, nil}
 

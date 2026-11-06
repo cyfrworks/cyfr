@@ -421,7 +421,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "device_cert.json" => [
       {"apps/prima/test/prima/device_cert_test.exs",
-       ~w(certificate_protocol certificates challenge_refusals challenges homes issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals reserved_client_ids verify)}
+       ~w(certificate_protocol certificates challenge_refusals challenges issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals reserved_client_ids verify)}
     ],
     "device_pin.json" => [
       {"apps/codex/internal/holder/pin_vectors_test.go", ~w(suite rfc9497 elements)},
