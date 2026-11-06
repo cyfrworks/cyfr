@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 CYFR Works Inc. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Use your recovery code</title>
+<link rel="stylesheet" href="account.css">
+<script src="account.js" defer></script>
+</head>
+<body data-page="recover">
+<header><span class="mark">CYFR</span></header>
+<main>
+<section id="refused" hidden>
+<h1>This page cannot continue</h1>
+<p id="refused-text"></p>
+</section>
+<section id="enter" hidden>
+<h1>Use your recovery code</h1>
+<label for="code-input">Recovery code</label>
+<textarea id="code-input" rows="3" autocomplete="off" autocapitalize="characters" spellcheck="false"></textarea>
+<div class="actions"><button type="button" class="primary" id="enter-code">Continue</button></div>
+<p class="error" id="enter-error" role="alert" hidden></p>
+</section>
+<section id="account" hidden>
+<h1>Your account</h1>
+<h2>Passkeys and devices</h2>
+<ul class="keys" id="keys"></ul>
+<p class="hint" id="no-keys" hidden>Your account has no passkey or device.</p>
+<h2>Add a passkey</h2>
+<label for="passkey-name">Your name</label>
+<div class="name"><span>@</span><input id="passkey-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="39"></div>
+<div class="actions"><button type="button" class="primary" id="add-passkey">Add a passkey</button></div>
+<h2>Recovery codes</h2>
+<p class="hint">Another recovery code works beside this one.</p>
+<div class="actions"><button type="button" id="add-code">Add another recovery code</button></div>
+<p class="hint">Replacing everything removes every passkey, device and recovery code, and gives you one new recovery code.</p>
+<div class="actions"><button type="button" class="danger" id="replace">Replace everything</button></div>
+<p class="error" id="account-error" role="alert" hidden></p>
+<div class="actions"><button type="button" class="primary" id="retry" hidden>Try again</button></div>
+</section>
+<section id="show-code" hidden>
+<h1>Save your recovery code</h1>
+<p>This code is the only way back into your account if you lose your passkeys. Keep it somewhere safe and private. Nobody else holds it, and nobody can make you another.</p>
+<p class="code" id="code"></p>
+<div class="actions">
+<button type="button" id="copy">Copy</button>
+<button type="button" id="print">Print</button>
+<button type="button" class="primary" id="saved">I saved it</button>
+</div>
+<p class="error" id="code-error" role="alert" hidden></p>
+</section>
+</main>
+</body>
+</html>
