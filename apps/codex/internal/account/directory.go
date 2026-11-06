@@ -199,7 +199,7 @@ func (d Directory) Read(ctx context.Context, identifier string) (State, error) {
 		list, isList := page["entries"].([]any)
 		from, fromOK := ms(page["from"])
 		if err != nil || !ok || !isList || page["identifier"] != identifier || !fromOK || from != after+1 {
-			return State{}, errors.New("the directory answered a page that is not this account's")
+			return State{}, errors.New("the account service answered a page that is not this account's")
 		}
 		entries = append(entries, list...)
 		if page["next"] == nil {
@@ -209,13 +209,13 @@ func (d Directory) Read(ctx context.Context, identifier string) (State, error) {
 			}
 			length, _ := ms(page["length"])
 			if s.Identifier != identifier || s.Head != page["head"] || s.Seq+1 != length {
-				return State{}, errors.New("the directory answered a log that does not reach its head")
+				return State{}, errors.New("the account service answered a log that does not reach its head")
 			}
 			return s, nil
 		}
 		next, ok := ms(page["next"])
 		if !ok || len(list) == 0 || next != after+int64(len(list)) {
-			return State{}, errors.New("the directory answered a page that does not follow the last")
+			return State{}, errors.New("the account service answered a page that does not follow the last")
 		}
 		after = next
 	}
