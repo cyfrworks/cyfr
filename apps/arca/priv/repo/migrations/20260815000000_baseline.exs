@@ -1186,36 +1186,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:pairing_invitations, [:secret_hash])
     create unique_index(:pairing_invitations, [:prospective_client_id])
     create index(:pairing_invitations, [:athanor_id, :user_id, :state])
-
-    # The evaluator a home keeps for a remote software device's six-digit
-    # PIN (`Arca.DevicePinEvaluators`): its key sealed at rest, located by
-    # the digest of the identifier the device holds, and the count of
-    # attempts it charged since the device last proved a success, with the
-    # revision every charge and reset advances, the instant the next
-    # evaluation is allowed and the nonce and expiry of the last charged
-    # evaluation's reset challenge, all in Unix milliseconds. A device has
-    # its confirmed evaluator and at most one replacement not yet reset
-    # (`confirmed_at` empty); a client's revocation deletes both.
-    create table(:device_pin_evaluators, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
-      add :user_id, :string, null: false
-      add :paired_client_id, :string, null: false
-      add :identifier_digest, :binary, null: false
-      add :sealed_key, :binary, null: false
-      add :attempts, :integer, null: false, default: 0
-      add :revision, :bigint, null: false, default: 0
-      add :next_allowed_at, :bigint
-      add :reset_nonce, :binary
-      add :reset_expires_at, :bigint
-      add :confirmed_at, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    create unique_index(:device_pin_evaluators, [:identifier_digest])
-    create index(:device_pin_evaluators, [:paired_client_id])
-    create index(:device_pin_evaluators, [:athanor_id, :user_id])
   end
 
   # A closed vocabulary as a check. SQLite takes a check only inside CREATE

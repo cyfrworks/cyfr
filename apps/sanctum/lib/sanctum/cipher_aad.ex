@@ -93,22 +93,6 @@ defmodule Sanctum.CipherAAD do
     }
   end
 
-  @doc """
-  AAD for a remote device's PIN evaluator key (`:device_pin_key` purpose,
-  `Sanctum.DevicePin`): bound to the owning athanor, the evaluator's row
-  id and the paired client it evaluates for, all immutable per row, so a
-  key moved to another row, client or athanor opens nowhere.
-  """
-  @spec device_pin_key(String.t(), String.t(), String.t()) :: map()
-  def device_pin_key(athanor_id, evaluator_id, client_id) do
-    %{
-      purpose: :device_pin_key,
-      athanor: athanor_id,
-      name: evaluator_id,
-      sub: client_id
-    }
-  end
-
   @typedoc "Which of a person's private keys a sealed value holds."
   @type person_key_role :: :live | :operational | :kit_seed
 

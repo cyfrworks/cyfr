@@ -117,9 +117,7 @@ defmodule Sanctum.Pairing do
   (`device_pairing`, `begin/2` and a remote certification,
   `Sanctum.RemoteCertification`), registering a passkey
   (`passkey_registration`, `Sanctum.Passkeys.register/2`), linking a
-  door (`sign_in_methods`, `Sanctum.SignIn.link_door/3`) and giving a
-  remote device a PIN its home evaluates (`device_pin`,
-  `Sanctum.DevicePin.enroll/1`). Once the person
+  door (`sign_in_methods`, `Sanctum.SignIn.link_door/3`). Once the person
   holds, or ever held, a passkey or a paired device here, each needs a
   confirmation attributed to one of them: a passkey assertion
   (`confirmed_passkey_id`), or a confirmation given on a standing paired
@@ -182,7 +180,6 @@ defmodule Sanctum.Pairing do
   | `:pairing_revocation` | a fresh confirmation |
   | `:recovery_material` | a fresh confirmation |
   | `:device_pairing` | a fresh confirmation |
-  | `:device_pin` | a fresh confirmation |
   | `:passkey_registration` | a fresh confirmation |
   | `:remote_sign_in` | a fresh confirmation |
   | `:remote_confirmation` | a fresh confirmation, a passkey's or a protected device's |
@@ -234,7 +231,6 @@ defmodule Sanctum.Pairing do
     pairing_revocation: :fresh,
     recovery_material: :fresh,
     device_pairing: :fresh,
-    device_pin: :fresh,
     passkey_registration: :fresh,
     remote_sign_in: :fresh,
     remote_confirmation: :fresh,
@@ -263,7 +259,6 @@ defmodule Sanctum.Pairing do
           | :pairing_revocation
           | :recovery_material
           | :device_pairing
-          | :device_pin
           | :passkey_registration
           | :remote_sign_in
           | :remote_confirmation
@@ -1348,13 +1343,12 @@ defmodule Sanctum.Pairing do
   # Adding a method or a device
   # ---------------------------------------------------------------------------
 
-  @additions ~w(pairing.begin person.certify passkey.register person.link_door pin.enroll)
+  @additions ~w(pairing.begin person.certify passkey.register person.link_door)
 
   @doc """
   Whether the operation `operation` (`tool.action`) adds a way to act as
   the person here (the module doc): pairing a device, certifying one for
-  another home, registering a passkey, linking a door or giving a device
-  a PIN its home evaluates (`Sanctum.DevicePin`).
+  another home, registering a passkey or linking a door.
   """
   @spec addition?(String.t()) :: boolean()
   def addition?(operation) when is_binary(operation), do: operation in @additions

@@ -112,9 +112,8 @@
 # Before any leg starts, the gate compiles the deps into each of the
 # static, postgres and audit build paths in turn (`mix deps.loadpaths`,
 # logged in gate.deps.log): a dep's own compile writes under deps/, which
-# every build path shares (libsodium's C build in deps/libsodium/c_deps,
-# erlex's generated parser), so two cold builds started together race
-# there. Warm, each finds nothing to do.
+# every build path shares (erlex's generated parser), so two cold builds
+# started together race there. Warm, each finds nothing to do.
 # Every leg runs with ${CARGO_HOME:-$HOME/.cargo}/bin ahead on its PATH,
 # where rustup and `cargo install` put their tools, so the tests tagged
 # :requires_cargo_component, which the test helpers exclude where

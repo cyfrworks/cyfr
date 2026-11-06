@@ -32,9 +32,9 @@ defmodule Arca.PairedClients do
   (`Arca.SecurityTransitions`). Each revocation raises `updated_at`, which
   is when the row was retired, and revokes the client's device
   certificates (`Arca.DeviceCertificates`), voids the pending
-  confirmations it confirmed (`Arca.PendingConfirmations`), deletes the
-  sessions its unlock created (`Arca.SessionStorage`) and its PIN
-  evaluators (`Arca.DevicePinEvaluators`) in the same transaction.
+  confirmations it confirmed (`Arca.PendingConfirmations`) and deletes the
+  sessions its unlock created (`Arca.SessionStorage`) in the same
+  transaction.
 
   A declared restore suspends every active row (`Arca.SecurityTransitions`):
   a suspended client stands for nothing, is listed only when its standing
@@ -357,17 +357,13 @@ defmodule Arca.PairedClients do
           session_hashes: [binary()]
         }
   # What a client's revocation takes with it, in the caller's transaction:
-  # its PIN evaluators, the certificates issued to the revoked clients, the
-  # confirmations they confirmed and the sessions their unlock created,
+  # the certificates issued to the revoked clients, the confirmations they
+  # confirmed and the sessions their unlock created,
   # whose token hashes the caller drops from every memo once it commits.
   def retire_dependents!([]), do: %{certificate_ids: [], confirmation_ids: [], session_hashes: []}
 
   # arca:db-raise-ok a transaction step: its callers rescue around it.
   def retire_dependents!(client_ids) do
-    # A revoked client's PIN evaluators go with it, so its identifier
-    # evaluates nothing again (`Arca.DevicePinEvaluators`).
-    _evaluators = Arca.DevicePinEvaluators.delete_clients!(client_ids)
-
     certificates =
       DeviceCertificates.revoke_all(
         from(c in DeviceCertificate, where: c.paired_client_id in ^client_ids)

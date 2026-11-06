@@ -52,10 +52,10 @@ defmodule Prima.DeviceCertTest do
     assert v["proof_protocol"] == Challenge.protocol()
     assert v["lifetime_ms"] == Challenge.lifetime_ms()
     # The pairing purposes are this file's; the protected device's are
-    # device_unlock.json's (Prima.DeviceUnlockTest) and device_pin.json's
-    # (Prima.DevicePinTest), and together they are every purpose there is.
+    # device_unlock.json's (Prima.DeviceUnlockTest), and together they are
+    # every purpose there is.
     device_purposes =
-      for file <- ~w(device_unlock.json device_pin.json),
+      for file <- ~w(device_unlock.json),
           name <-
             "../../../../tests/fixtures/#{file}"
             |> Path.expand(__DIR__)

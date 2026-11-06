@@ -423,15 +423,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/device_cert_test.exs",
        ~w(certificate_protocol certificates challenge_refusals challenges issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals reserved_client_ids verify)}
     ],
-    "device_pin.json" => [
-      {"apps/codex/internal/holder/pin_vectors_test.go", ~w(suite rfc9497 elements)},
-      {"apps/codex/internal/shell/pin_home_test.go", ~w(exchange)},
-      {"apps/codex/internal/shell/proof_test.go", ~w(purpose_fields keys proofs verify)},
-      {"apps/prima/test/prima/device_pin_test.exs",
-       ~w(suite evaluator purpose_fields keys proofs verify delay accounting exchange)},
-      {"apps/sanctum/test/sanctum/device_pin_test.exs",
-       ~w(suite rfc9497 elements replacement exchange)}
-    ],
     "device_unlock.json" => [
       {"apps/codex/internal/shell/home_test.go", ~w(exchange)},
       {"apps/codex/internal/shell/proof_test.go",

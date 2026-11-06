@@ -117,12 +117,6 @@ same worktree refuses, naming the run that holds it.
   first `mix assets.deploy` or dev server: neither the deps' precompiled
   NIFs (wasmex's, exqlite's and lazy_html's) nor the tailwind CLI download
   through the deps' own downloads, and the script's header says why.
-- Sanctum's `libsodium` dependency builds libsodium from the source its
-  Hex package carries, which holds `configure.ac` without a generated
-  `configure`: the first compile needs a C compiler, `make`, autoconf,
-  automake and libtool (`sudo apt install build-essential autoconf
-  automake libtool` on Ubuntu, `brew install autoconf automake libtool`
-  on macOS).
 - The tests tagged `:requires_cargo_component` build real components, and
   the test helpers exclude them where `cargo-component` is not on `PATH`.
   CI runs them on both adapters, so install it

@@ -24,7 +24,6 @@ defmodule Sanctum.Provider do
   - `person` - A person's identity at their own home: enrollment, the kit, the
     live key, doors, device certificates, the sign-in carry and its assertion
   - `pairing` - Paired devices
-  - `pin` - A PIN this home evaluates for a remote software device
   - `passkey` - Passkeys at this home
   - `confirmation` - Pending confirmations of sensitive changes
   - `share` - A person's own keys offered to a thread they sit in or to everyone
@@ -102,7 +101,6 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.Profile.definition(),
       Sanctum.Providers.Person.definition(),
       Sanctum.Providers.Pairing.definition(),
-      Sanctum.Providers.Pin.definition(),
       Sanctum.Providers.Passkey.definition(),
       Sanctum.Providers.Confirmation.definition(),
       Sanctum.Providers.Share.definition()
@@ -138,7 +136,6 @@ defmodule Sanctum.Provider do
   def handle("profile", ctx, args), do: Sanctum.Providers.Profile.handle(ctx, args)
   def handle("person", ctx, args), do: Sanctum.Providers.Person.handle(ctx, args)
   def handle("pairing", ctx, args), do: Sanctum.Providers.Pairing.handle(ctx, args)
-  def handle("pin", ctx, args), do: Sanctum.Providers.Pin.handle(ctx, args)
   def handle("passkey", ctx, args), do: Sanctum.Providers.Passkey.handle(ctx, args)
   def handle("confirmation", ctx, args), do: Sanctum.Providers.Confirmation.handle(ctx, args)
   def handle("share", ctx, args), do: Sanctum.Providers.Share.handle(ctx, args)

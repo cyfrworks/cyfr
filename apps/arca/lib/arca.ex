@@ -159,7 +159,6 @@ defmodule Arca do
       DecisionLog.AuditFailure,
       DeviceCertificates,
       DeviceCertifications,
-      DevicePinEvaluators,
       DirectoryHandles,
       DirectoryHeads,
       Doors,

@@ -272,7 +272,6 @@ defmodule Arca.CipherRotationTest do
     test "names every credential table" do
       assert Enum.sort(Rotation.tables()) ==
                [
-                 :device_pin_evaluators,
                  :identity_attempts,
                  :oauth_provider_credentials,
                  :person_identities,

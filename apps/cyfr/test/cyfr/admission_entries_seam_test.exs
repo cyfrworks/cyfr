@@ -100,8 +100,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.DeviceEnrollmentController, :resume} => :device_enrollment_resume_no_token,
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
     {Emissary.Web.DeviceSessionController, :create} => :device_session_ticket_unknown,
-    {Emissary.Web.DevicePinController, :evaluate} => :device_pin_evaluator_unknown,
-    {Emissary.Web.DevicePinController, :reset} => :device_pin_reset_malformed,
     {Emissary.Web.RestoreController, :restore} => :restore_disabled,
     {Emissary.Web.RestoreController, :challenge} => :restore_challenge_disabled,
     {Emissary.Web.RestoreController, :reproof} => :restore_reproof_disabled,
@@ -588,34 +586,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
     assert json_response(conn, 403) == %{"error" => "ticket_refused"}
     {request_id_of(conn), refused("forbidden", :none)}
-  end
-
-  def device_pin_evaluator_unknown(_conn, _ctx) do
-    blinded = :libsodium_crypto_core_ristretto255.from_hash(:crypto.strong_rand_bytes(64))
-
-    conn =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post(
-        "/device/pin/evaluate",
-        Jason.encode!(%{
-          "evaluator" => Prima.DevicePin.evaluator(:crypto.strong_rand_bytes(32)),
-          "blinded" => Base.url_encode64(blinded, padding: false)
-        })
-      )
-
-    assert json_response(conn, 404) == %{"error" => "not_found"}
-    {request_id_of(conn), refused("not_found", :none)}
-  end
-
-  def device_pin_reset_malformed(_conn, _ctx) do
-    conn =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post("/device/pin/reset", Jason.encode!(%{"proof" => "nope"}))
-
-    assert json_response(conn, 400) == %{"error" => "bad_request"}
-    {request_id_of(conn), refused("invalid_argument", :none)}
   end
 
   def device_unlock_ticket_unknown(_conn, _ctx) do

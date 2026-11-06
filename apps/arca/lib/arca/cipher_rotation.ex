@@ -79,13 +79,6 @@ defmodule Arca.CipherRotation do
       sealed: [:payload_ciphertext],
       binding: [:athanor_id, :provider]
     },
-    # A remote device's PIN evaluator key (`Arca.DevicePinEvaluators`).
-    device_pin_evaluators: %{
-      schema: Arca.Schemas.DevicePinEvaluator,
-      cas: :sealed_key,
-      sealed: [:sealed_key],
-      binding: [:athanor_id, :paired_client_id]
-    },
     # A person's live and operational private keys, sealed to the person.
     # A remote person's row holds none and is not walked.
     person_identities: %{
