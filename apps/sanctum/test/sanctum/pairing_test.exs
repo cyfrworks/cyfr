@@ -297,7 +297,8 @@ defmodule Sanctum.PairingTest do
     :remote_confirmation,
     :sign_in_methods,
     :restore_reenable,
-    :restore_close
+    :restore_close,
+    :directory_tombstone
   ]
 
   describe "the action table" do

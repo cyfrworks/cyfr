@@ -189,6 +189,7 @@ defmodule Sanctum.Pairing do
   | `:sign_in_methods` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation, from a door or the kit while the person recovers |
   | `:restore_close` | a fresh confirmation, the platform administrator's |
+  | `:directory_tombstone` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
   are sensitive, and no operation makes either (each is *Not built yet*
@@ -239,7 +240,8 @@ defmodule Sanctum.Pairing do
     remote_confirmation: :fresh,
     sign_in_methods: :fresh,
     restore_reenable: :fresh,
-    restore_close: :fresh
+    restore_close: :fresh,
+    directory_tombstone: :fresh
   }
 
   # A pairing invitation: 128 random bits, alive five minutes.
@@ -268,6 +270,7 @@ defmodule Sanctum.Pairing do
           | :sign_in_methods
           | :restore_reenable
           | :restore_close
+          | :directory_tombstone
 
   @typedoc """
   An opened invitation: its raw `invitation_secret` (16 bytes, shown to

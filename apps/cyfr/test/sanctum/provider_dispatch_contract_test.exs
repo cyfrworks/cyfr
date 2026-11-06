@@ -14,8 +14,9 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   alias Sanctum.Provider
 
-  @tool_names ~w(session athanor shared_thread invitation door oauth key tincture_visibility
-                  webhook vault profile person pairing pin passkey confirmation share)
+  @tool_names ~w(session athanor shared_thread invitation door directory oauth key
+                  tincture_visibility webhook vault profile person pairing pin passkey
+                  confirmation share)
 
   @action_enums %{
     "session" => [
@@ -45,6 +46,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     ],
     "invitation" => ["create", "revoke", "list"],
     "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],
+    "directory" => ["tombstone"],
     "oauth" => ["set_client", "list", "delete_client"],
     "key" => ["create", "get", "list", "revoke", "rotate", "reenable"],
     "tincture_visibility" => ["get"],
@@ -64,7 +66,6 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "grants", "revoke"],
     "person" => [
       "status",
-      "rotate",
       "recovery_code",
       "recovery_code_saved",
       "link_door",
@@ -93,6 +94,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "shared_thread" => "Unknown action: shared_thread.___no_such_action___",
     "invitation" => "Unknown action: invitation.___no_such_action___",
     "door" => "Unknown action: door.___no_such_action___",
+    "directory" => "Unknown action: directory.___no_such_action___",
     "oauth" => "Invalid oauth action. Use: set_client, list, or delete_client",
     "key" => "Invalid key action. Use: create, get, list, revoke, rotate, or reenable",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
@@ -112,7 +114,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 17 tools, in order" do
+    test "exactly these 18 tools, in order" do
       assert Enum.map(Provider.tools(), & &1.name) == @tool_names
     end
 

@@ -20,6 +20,7 @@ const (
 	Component          = "component"
 	Confirmation       = "confirmation"
 	Decision           = "decision"
+	Directory          = "directory"
 	Door               = "door"
 	Execution          = "execution"
 	Feed               = "feed"
@@ -112,6 +113,7 @@ const (
 	DecisionGetGlobal        = "get_global"
 	DecisionList             = "list"
 	DecisionListGlobal       = "list_global"
+	DirectoryTombstone       = "tombstone"
 	DoorAllow                = "allow"
 	DoorDeny                 = "deny"
 	DoorList                 = "list"
@@ -331,6 +333,7 @@ var Actions = map[string][]string{
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
 	"confirmation":        {"cancel", "confirm", "pending", "reauth"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
+	"directory":           {"tombstone"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
@@ -1360,6 +1363,21 @@ func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: DecisionListGlobal, fields: fields(args)})
+}
+
+// DirectoryTombstoneArgs carries arguments for directory.tombstone.
+type DirectoryTombstoneArgs struct {
+	// The account's identifier (per_…)
+	Identifier string `json:"identifier"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DirectoryTombstoneArgs) MarshalJSON() ([]byte, error) {
+	type fields DirectoryTombstoneArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DirectoryTombstone, fields: fields(args)})
 }
 
 // DoorAllowArgs carries arguments for door.allow.

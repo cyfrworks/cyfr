@@ -54,7 +54,7 @@ defmodule Emissary.Web.DirectoryController do
   | 422 | `wrong_directory` | the genesis names another directory than this node's origin |
   | 429 | `rate_limited` | `retry_after` seconds, and the header |
   | 500 | `corrupt` | the stored log does not verify |
-  | 503 | `capacity` | `exhausted`: `identities` or `log_bytes` with `retry-after: 60`, or `rotations` (the identifier's 100 verified writes a day by a listed key) with the seconds left in its window |
+  | 503 | `capacity` | `exhausted`: `identities` or `log_bytes` with `retry-after: 60`, or `writes` (the identifier's 100 verified writes a day by a listed key) with the seconds left in its window |
   | 503 | `unavailable` | the store or settings did not answer; `retry-after: 1` |
   """
 
@@ -215,9 +215,9 @@ defmodule Emissary.Web.DirectoryController do
       {503, :unavailable, %{"error" => "capacity", "exhausted" => Atom.to_string(which)},
        [{"retry-after", "60"}]}
 
-  defp refusal({:capacity, :rotations, seconds}),
+  defp refusal({:capacity, :writes, seconds}),
     do:
-      {503, :unavailable, %{"error" => "capacity", "exhausted" => "rotations"},
+      {503, :unavailable, %{"error" => "capacity", "exhausted" => "writes"},
        [{"retry-after", Integer.to_string(seconds)}]}
 
   defp refusal(:unavailable),

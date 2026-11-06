@@ -93,6 +93,7 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.SharedThread.definition(),
       Sanctum.Providers.Invitation.definition(),
       Sanctum.Providers.Door.definition(),
+      Sanctum.Providers.Directory.definition(),
       Sanctum.Providers.OAuth.definition(),
       Sanctum.Providers.Key.definition(),
       Sanctum.Providers.TinctureVisibility.definition(),
@@ -125,6 +126,7 @@ defmodule Sanctum.Provider do
   def handle("shared_thread", ctx, args), do: Sanctum.Providers.SharedThread.handle(ctx, args)
   def handle("invitation", ctx, args), do: Sanctum.Providers.Invitation.handle(ctx, args)
   def handle("door", ctx, args), do: Sanctum.Providers.Door.handle(ctx, args)
+  def handle("directory", ctx, args), do: Sanctum.Providers.Directory.handle(ctx, args)
   def handle("oauth", ctx, args), do: Sanctum.Providers.OAuth.handle(ctx, args)
   def handle("key", ctx, args), do: Sanctum.Providers.Key.handle(ctx, args)
 

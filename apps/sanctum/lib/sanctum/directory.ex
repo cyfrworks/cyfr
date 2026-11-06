@@ -57,7 +57,7 @@ defmodule Sanctum.Directory do
        minute and spends the identifier's day: at most 100 verified
        writes in a durable 24-hour window, claimed after the signature
        verifies and before the write, so one then refused as a stale head
-       still spends one. Past it the answer is `{:capacity, :rotations,
+       still spends one. Past it the answer is `{:capacity, :writes,
        seconds}`. An entry appended after the genesis that a recovery key
        signed may take all 60 a minute, is exempt from the day, and may
        spend the store's recovery reserve.
@@ -131,7 +131,7 @@ defmodule Sanctum.Directory do
           | {:stale_head, String.t()}
           | {:rate_limited, pos_integer()}
           | {:capacity, :identities | :log_bytes}
-          | {:capacity, :rotations, pos_integer()}
+          | {:capacity, :writes, pos_integer()}
 
   @typedoc "A write's answer: the identifier, the entry's position and hash, and its result."
   @type written :: %{
@@ -360,7 +360,7 @@ defmodule Sanctum.Directory do
   # ---- the bounds --------------------------------------------------------------
 
   # Each bound is `{bucket, key, cap, window_ms, over}`: `over` is what a
-  # request past it is told, a rate limit or the day's rotation capacity.
+  # request past it is told, a rate limit or the day's write capacity.
   defp every_request(source),
     do: [
       {:directory_source, source, @per_source, @window_ms, :rate},
@@ -384,7 +384,7 @@ defmodule Sanctum.Directory do
     do: [
       {:directory_signed, identifier, @signed_per_identifier - @recovery_reserve, @window_ms,
        :rate},
-      {:directory_rotation_daily, identifier, @writes_per_day, @day_ms, :rotations}
+      {:directory_writes_daily, identifier, @writes_per_day, @day_ms, :writes}
     ]
 
   defp signed(identifier, :recovery),
@@ -416,7 +416,7 @@ defmodule Sanctum.Directory do
   end
 
   defp over(:rate, seconds), do: {:error, {:rate_limited, seconds}}
-  defp over(:rotations, seconds), do: {:error, {:capacity, :rotations, seconds}}
+  defp over(:writes, seconds), do: {:error, {:capacity, :writes, seconds}}
 
   defp seconds(ms), do: max(div(ms + 999, 1000), 1)
 
