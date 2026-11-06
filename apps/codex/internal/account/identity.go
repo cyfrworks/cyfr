@@ -155,12 +155,18 @@ func SigningBytes(m map[string]any) ([]byte, error) { return JCS(clone(m, "sig")
 
 // Sign is m with sig, Ed25519 under key over SigningBytes(m).
 func Sign(m map[string]any, key ed25519.PrivateKey) (map[string]any, error) {
+	return SignedBy(m, func(msg []byte) []byte { return ed25519.Sign(key, msg) })
+}
+
+// SignedBy is m with sig, sign's Ed25519 signature over SigningBytes(m):
+// for a key a holder keeps, which signs without handing its seed out.
+func SignedBy(m map[string]any, sign func([]byte) []byte) (map[string]any, error) {
 	msg, err := SigningBytes(m)
 	if err != nil {
 		return nil, err
 	}
 	out := clone(m, "sig")
-	out["sig"] = B64(ed25519.Sign(key, msg))
+	out["sig"] = B64(sign(msg))
 	return out, nil
 }
 

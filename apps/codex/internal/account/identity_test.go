@@ -207,3 +207,24 @@ func keyMaps(keys []Key) []any {
 }
 
 func itoa64(n int64) string { b, _ := json.Marshal(n); return string(b) }
+
+// JCS sorts keys by UTF-16 code units and escapes strings as ECMAScript
+// does; a fraction, a null and an integer past 2^53-1 are outside its
+// domain, the top-level field named.
+func TestJCS_SortsByUTF16AndRefusesWhatIsOutsideItsDomain(t *testing.T) {
+	got, err := JCS(map[string]any{"\U0001F600": 1, "￿": 2, "a": "<&> \x01\"\\", "n": json.Number("-0"), "z": []any{true, "x"}})
+	want := `{"a":"<&>` + " " + `\u0001\"\\","n":0,"z":[true,"x"],"` + "\U0001F600" + `":1,"` + "￿" + `":2}`
+	if err != nil || string(got) != want {
+		t.Fatalf("%s (%v)\nwant %s", got, err, want)
+	}
+	for name, v := range map[string]map[string]any{
+		"a fraction":    {"x": json.Number("1.5")},
+		"a null":        {"x": []any{nil}},
+		"past 2^53 - 1": {"x": json.Number("9007199254740992")},
+		"an exponent":   {"x": json.Number("1e3")},
+	} {
+		if _, err := JCS(v); err == nil || err.(*JCSError).Field != "x" {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
