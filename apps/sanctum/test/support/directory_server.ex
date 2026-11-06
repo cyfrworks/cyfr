@@ -478,6 +478,70 @@ defmodule Sanctum.Test.DirectoryServer do
     %{account | devices: account.devices ++ [device]}
   end
 
+  @doc """
+  A new passkey the account's recovery key adds, published in `dir`: a
+  P-256 key pair and a credential id, kept in the account's `passkeys`
+  (`%{pub, priv, credential_id}`), newest last.
+  """
+  @spec add_passkey!(pid(), map()) :: map()
+  def add_passkey!(dir, account) do
+    {pub, priv} = :crypto.generate_key(:ecdh, :secp256r1)
+    credential_id = :crypto.strong_rand_bytes(16)
+    {:ok, key} = Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: credential_id)
+    account = extend!(account, kind: :add_key, key: key)
+    publish(dir, account.identifier, account.log)
+    passkey = %{pub: pub, priv: priv, credential_id: credential_id}
+    Map.update(account, :passkeys, [passkey], &(&1 ++ [passkey]))
+  end
+
+  @doc """
+  The account pages' answer to `request` by the account's `passkey`, as a
+  browser at the account's directory would return it: an assertion over
+  the request's digest, with user presence and verification, at the
+  directory's origin and host. `opts` overrides what the assertion says
+  (`:origin`, `:host`, `:flags`, `:identifier`).
+  """
+  @spec passkey_answer(Prima.SignIn.t(), map(), map(), keyword()) ::
+          Prima.SignIn.PasskeyAnswer.t()
+  def passkey_answer(request, account, passkey, opts \\ []) do
+    {origin, host} = Prima.Identity.Encoding.directory_origin(account.url)
+    signer = if request.purpose == :registry, do: Key.kid(passkey.pub)
+
+    digest =
+      if request.purpose == :registry,
+        do: Prima.SignIn.digest(request, signer),
+        else: Prima.SignIn.digest(request)
+
+    authenticator_data =
+      :crypto.hash(:sha256, Keyword.get(opts, :host, host)) <>
+        <<Keyword.get(opts, :flags, 0x05)>> <> <<0::32>>
+
+    client_data =
+      Jason.encode!(%{
+        "type" => "webauthn.get",
+        "challenge" => Prima.Identity.Encoding.b64(digest),
+        "origin" => Keyword.get(opts, :origin, origin)
+      })
+
+    signature =
+      :crypto.sign(
+        :ecdsa,
+        :sha256,
+        authenticator_data <> :crypto.hash(:sha256, client_data),
+        [passkey.priv, :secp256r1]
+      )
+
+    %Prima.SignIn.PasskeyAnswer{
+      challenge: request.challenge,
+      identifier: Keyword.get(opts, :identifier, account.identifier),
+      credential_id: passkey.credential_id,
+      authenticator_data: authenticator_data,
+      client_data: client_data,
+      signature: signature,
+      signer: signer
+    }
+  end
+
   @doc "The account's key `kid` removed by its recovery key, published in `dir`."
   @spec remove_key!(pid(), map(), String.t()) :: map()
   def remove_key!(dir, account, kid) do
