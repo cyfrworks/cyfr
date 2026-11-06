@@ -11,8 +11,9 @@
 #                       read from the tailnet state) in .env and in the
 #                       running cyfr
 #   serve_config_holds  the complete Serve configuration
-#   preview_holds       the complete preview: old and new words, the
-#                       address-change steps and the command's refusal
+#   preview_holds       the complete preview: the new head's words, the
+#                       fields that change, the address-change steps and
+#                       the command's refusal
 #   cookie_holds        the exact signed-out and signed-in redirects
 #   anonymous_refused   a forged anonymous request and the plain one each
 #                       refused as the home refuses an anonymous request
@@ -168,29 +169,25 @@ for i, s in enumerate(re.findall(r"\"(?:[^\"\\\\]|\\\\.)*\"", m.group(1)), 1):
     print(f"  {i}. {json.loads(s)}")' "$ROOT/apps/codex/internal/access/switch.go")"
 cat >"$scratch/preview" <<LOG
 \$ cyfr access tailnet
-This changes how CYFR is reached:
-  Who can reach CYFR: your devices on Tailscale, and people you share this machine with → your devices on Tailscale, and people you share this machine with
-  Address: https://cyfr.proof.ts.net → https://cyfr-1.proof.ts.net
-  Certificate email: none → none
-  Ports opened on this machine: none → none
-  Tailnet machine: cyfr.proof.ts.net (nA) → cyfr-1.proof.ts.net (nB)
+CYFR will be reached by your devices on Tailscale at https://cyfr-1.proof.ts.net.
+  Tailnet machine: cyfr.proof.ts.net → a new machine, cyfr-1.proof.ts.net
 The address changes, so:
 $changes
 Your CYFR identity does not change.
-Error: The change above was shown, not made: cyfr access makes a change only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make the change, or on a terminal to confirm it
+Error: Nothing changed: there is no terminal to confirm the change on. Run it again with --yes to make the change, or at a terminal
 LOG
 expect pass "the complete preview of A to B" preview_holds "$scratch/preview" "$a" "$b"
 mutate_preview() {
   sed "$1" "$scratch/preview" >"$scratch/preview-$2"
   expect fail "$3" preview_holds "$scratch/preview-$2" "$a" "$b"
 }
-mutate_preview 's|https://cyfr.proof.ts.net → https://cyfr-1.proof.ts.net|https://cyfr-1.proof.ts.net → https://cyfr.proof.ts.net|' swapped "the transition shown the wrong way"
-mutate_preview 's|  Certificate email: none → none|  Certificate email: none → ops@example.com|' email "another new email shown"
-mutate_preview 's|  Ports opened on this machine: none → none|  Ports opened on this machine: none → 80 and 443|' ports "other new ports shown"
+mutate_preview 's|cyfr.proof.ts.net → a new machine, cyfr-1.proof.ts.net|cyfr-1.proof.ts.net → a new machine, cyfr.proof.ts.net|' swapped "the transition shown the wrong way"
+mutate_preview 's|at https://cyfr-1.proof.ts.net\.$|at https://cyfr.proof.ts.net.|' address "the old address shown as the new one"
+mutate_preview '/^  Tailnet machine:/a\  Certificate email: none → ops@example.com' email "an email shown that does not change"
+mutate_preview '/^  Tailnet machine:/a\  Ports opened on this machine: none → none' ports "a row shown that does not change"
 mutate_preview '/  Tailnet machine:/d' no-machine "the tailnet machine's change not shown"
-mutate_preview 's|(nB)|(nC)|' other-node "another new node id shown"
-mutate_preview 's|cyfr.proof.ts.net (nA)|cyfr.proof.ts.net (nB)|' same-node "the old node shown as the new one"
-mutate_preview 's|Who can reach CYFR: your devices|Who can reach CYFR: anyone|' who "another old audience shown"
+mutate_preview 's|a new machine, cyfr-1.proof.ts.net$|a new machine, cyfr-1.proof.ts.net (nB)|' node-id "the new node id shown"
+mutate_preview 's|by your devices on Tailscale|by anyone|' who "another audience shown"
 mutate_preview '/^  2\. /d' step "an address-change step dropped"
 mutate_preview '/^Your CYFR identity/a\  5. An extra step.' extra "a line added to the preview"
 # shellcheck disable=SC2016
@@ -198,11 +195,11 @@ mutate_preview '$d' refusal "the refusal after it missing"
 # shellcheck disable=SC2016
 mutate_preview '$c\panic: failed while parsing --yes' panic "a failure naming --yes in place of the refusal"
 # shellcheck disable=SC2016
-mutate_preview '$s/, or on a terminal to confirm it$//' cut "the refusal cut short"
+mutate_preview '$s/, or at a terminal$//' cut "the refusal cut short"
 # shellcheck disable=SC2016
 mutate_preview '$s/^Error: //' bare "the refusal not printed as the command's error"
 # shellcheck disable=SC2016
-mutate_preview '$s/shown, not made/made/' made "a refusal saying the change was made"
+mutate_preview '$s/Nothing changed/The change was made/' made "a refusal saying the change was made"
 expect fail "the preview read against another new head" preview_holds "$scratch/preview" "$a" "${b//cyfr-1/cyfr-2}"
 expect fail "the preview read against another old head" preview_holds "$scratch/preview" "${a//cyfr.proof/cyfr-0.proof}" "$b"
 

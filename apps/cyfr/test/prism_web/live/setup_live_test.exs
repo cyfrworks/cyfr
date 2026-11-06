@@ -152,7 +152,7 @@ defmodule PrismWeb.SetupLiveTest do
       assert has_element?(
                view,
                ~s([data-test="admission-error"]),
-               "The passkey was not created, so nothing was saved. Try again."
+               "The passkey was not created. Try again."
              )
 
       assert has_element?(view, ~s([data-test="admission-create"]))
@@ -185,8 +185,10 @@ defmodule PrismWeb.SetupLiveTest do
       assert has_element?(
                view,
                ~s([data-test="admission-error"]),
-               "This CYFR does not reach cyfr.run, so it cannot make your name. Ask whoever runs this CYFR."
+               "This CYFR does not reach cyfr.run, so it cannot make your name."
              )
+
+      refute render(view) =~ "Ask whoever runs this CYFR."
 
       refute has_element?(view, ~s([data-test="admission-code"]))
       assert {people(), passkeys(), admins()} == {0, 0, 0}
@@ -382,8 +384,10 @@ defmodule PrismWeb.SetupLiveTest do
       assert has_element?(
                view,
                ~s([data-test="admission-code"]),
-               "cyfr.run refused this identity. Ask whoever runs this CYFR."
+               "cyfr.run refused this identity."
              )
+
+      refute render(view) =~ "Ask whoever runs this CYFR."
 
       for control <- ~w(admission-retry admission-saved admission-rename) do
         refute has_element?(view, ~s([data-test="#{control}"])), control
@@ -503,8 +507,10 @@ defmodule PrismWeb.SetupLiveTest do
       assert has_element?(
                view,
                ~s([data-test="admission-code"]),
-               "This CYFR does not reach cyfr.run, so it cannot make your name. Ask whoever runs this CYFR."
+               "This CYFR does not reach cyfr.run, so it cannot make your name."
              )
+
+      refute render(view) =~ "Ask whoever runs this CYFR."
 
       for control <- ~w(admission-retry admission-saved admission-rename) do
         refute has_element?(view, ~s([data-test="#{control}"])), control

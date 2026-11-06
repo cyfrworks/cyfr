@@ -51,7 +51,7 @@ var updateCmd = &cobra.Command{
 
 The program: when a release newer than this one is published, pre-releases aside, cyfr update installs it: a Homebrew cask install through brew, any other install by downloading the release's archive for this platform, verifying it against the release's checksums.txt signed by the release workflow for that tag, and only then replacing this program's file. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. In a directory that holds no compose file the update stops here.
 
-The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none). A CYFR whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
+The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported.
@@ -484,7 +484,7 @@ func (u *updater) offer(yes bool) (bool, error) {
 		return false, nil
 	}
 	if !askTerminal() {
-		return true, errors.New("The update above was shown, not made: cyfr update changes CYFR only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it")
+		return true, errors.New("Nothing changed: there is no terminal to confirm the update on. Run it again with --yes to make it, or at a terminal")
 	}
 	// The question ends with an interrupt as the steps before the stop do,
 	// and exits as an interrupted question does.
@@ -493,7 +493,8 @@ func (u *updater) offer(yes bool) (bool, error) {
 		return true, interruption{errUpdateInterrupted}
 	}
 	if a = strings.ToLower(a); a != "yes" && a != "y" {
-		return true, errors.New("CYFR was not updated: the update was not confirmed. Nothing was changed")
+		fmt.Fprintln(u.out, "Nothing changed. Run cyfr update again when you want this release.")
+		return true, nil
 	}
 	return false, nil
 }

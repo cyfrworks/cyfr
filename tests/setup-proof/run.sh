@@ -20,9 +20,11 @@
 #            CYFR's directory and registry are `.invalid` names
 #            (compose.yml); the same link in another browser then closed,
 #            and the command exited 0, its address gone.
-#   refusal  `cyfr setup` again in that project: exit 1 with the sentence
-#            of an existing CYFR, which points at `cyfr access`, nothing
-#            written and nothing served at the port asked for.
+#   again    `cyfr setup` again in that project: exit 0 with the next
+#            step of the CYFR whose first person the pages made, `cyfr
+#            open` (its log holds the set-up line after the boot's
+#            not-set-up line), nothing written and nothing served at the
+#            port asked for.
 #
 # Usage: tests/setup-proof/run.sh
 # Env: SETUP_PROOF_IMAGE (default cyfr:setup-proof), built from this tree
@@ -192,19 +194,21 @@ if compose_in "$LOCAL" logs --no-color cyfr 2>&1 | grep -qF "$token"; then
 fi
 ok "CYFR runs at http://localhost:$LOCAL_PORT, its first person made, and cyfr setup exited 0"
 
-step "refusal: cyfr setup again where .env exists"
+step "again: cyfr setup where .env exists says the next step"
 port="$(free_port)"
+cp "$WORK/$LOCAL/.env" "$WORK/$LOCAL.env.before"
 setup_start "$LOCAL" --port "$port"
 setup_wait 30
-want='.env says CYFR is reached as local, and cyfr setup leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it'
-[ "$SETUP_STATUS" = 1 ] || fail "cyfr setup over an existing .env exited $SETUP_STATUS"
-grep -qxF "Error: $want" "$WORK/$LOCAL.setup.log" || fail "cyfr setup over an existing .env said: $(cat "$WORK/$LOCAL.setup.log")"
-[ "$(wc -l <"$WORK/$LOCAL.setup.log")" = 1 ] || fail "cyfr setup over an existing .env said more: $(cat "$WORK/$LOCAL.setup.log")"
+[ "$SETUP_STATUS" = 0 ] || fail "cyfr setup over an existing .env exited $SETUP_STATUS: $(cat "$WORK/$LOCAL.setup.log")"
+first="$(cat "$WORK/$LOCAL.setup.log")"
+[ "$first" = "CYFR is set up and has its first person. cyfr open opens it." ] ||
+  fail "cyfr setup over an existing .env said: $first"
+cmp -s "$WORK/$LOCAL/.env" "$WORK/$LOCAL.env.before" || fail "cyfr setup over an existing .env changed .env"
 [ ! -e "$WORK/$LOCAL/.cyfr/setup.url" ] || fail "cyfr setup over an existing .env wrote an address"
 if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/"; then
-  fail "something answers at 127.0.0.1:$port after the refusal"
+  fail "something answers at 127.0.0.1:$port after cyfr setup said the next step"
 fi
-ok "refused with the existing CYFR's sentence, exit 1, nothing written or served"
+ok "said the next step ($first), exit 0, nothing written or served"
 
 echo
 echo "setup proof: passed; the record is $OUT/setup-proof.json"

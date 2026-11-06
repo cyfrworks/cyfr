@@ -210,13 +210,14 @@ func TestInitForgetsTheLoginWithTheRealSudo(t *testing.T) {
 	}
 }
 
-// Declining changes nothing and says so.
+// Declining changes nothing, says so with the next step, and ends init as
+// no failure.
 func TestInitDeclined(t *testing.T) {
 	s := standInMachine(t)
 	askInput = strings.NewReader("no\n")
-	_, _, err := prepare(t)
-	if err == nil || err.Error() != "Nothing was installed. Run `cyfr init` again when you want to continue" {
-		t.Fatalf("err = %v", err)
+	ended, out, err := prepare(t)
+	if !ended || err != nil || !strings.HasSuffix(out, "[no]: Nothing was installed. Run cyfr init again when you want to continue.\n") {
+		t.Fatalf("ended %t, err = %v:\n%s", ended, err, out)
 	}
 	if s.applied != nil || s.forgotten != 0 {
 		t.Errorf("applied %v, forgotten %d", s.applied, s.forgotten)
