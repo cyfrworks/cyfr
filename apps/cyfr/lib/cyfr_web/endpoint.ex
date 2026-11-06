@@ -183,8 +183,7 @@ defmodule CyfrWeb.Endpoint do
     at: "/",
     from: :cyfr,
     gzip: not code_reloading?,
-    only: CyfrWeb.static_paths(),
-    cache_static_manifest: "priv/static/cache_manifest.json"
+    only: CyfrWeb.static_paths()
   )
 
   # Code reloading can be explicitly enabled under the

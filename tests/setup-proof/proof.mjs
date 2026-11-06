@@ -90,6 +90,21 @@ try {
   }
   await heading("Set up CYFR").waitFor({ timeout: 120_000 });
 
+  // An earlier install at this origin can leave the undigested bundle
+  // cached. The release must name its own bundle, bypassing that entry.
+  await page.evaluate(() => navigator.serviceWorker.ready.then(() => true));
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  await page.evaluate(async () => {
+    const cache = await caches.open("cyfr-static-v1");
+    await cache.put("/assets/app.js", new Response("window.cachedSetupBundle = true", {
+      headers: { "content-type": "text/javascript" },
+    }));
+  });
+  await page.reload();
+  check("setup loads the release's bundle despite an older bundle in the service-worker cache",
+    await page.evaluate(() => window.cachedSetupBundle !== true));
+  await heading("Set up CYFR").waitFor();
+
   // The first screen: the name typed, and the check under it saying the
   // registry did not answer (its name is .invalid, compose.yml), which
   // leaves "Create a passkey" enabled.
