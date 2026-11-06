@@ -155,7 +155,8 @@ defmodule Opus.Programs.Definition do
           login_command: String.t() | nil,
           home: :scratch | :kept,
           memory_bytes: pos_integer() | nil,
-          home_max_bytes: pos_integer() | nil
+          home_max_bytes: pos_integer() | nil,
+          hosts: [String.t(), ...] | nil
         }
 
   @doc """
@@ -166,8 +167,13 @@ defmodule Opus.Programs.Definition do
   sessions run in (`login_entry_id`; whether it is one is the caller's to
   check); `memory_bytes` lies in the keeper's range; `home_max_bytes` is a
   kept home's alone, at least 1 MiB; `login_command` meets
-  `Prima.LocusBackends.check_command/1`. Answers the columns to store, every
-  one named (nil when absent), or `{:error, {:invalid_argument, message}}`.
+  `Prima.LocusBackends.check_command/1`; `hosts`, the only hosts the
+  program reaches beside the resolver and the deployment's private hosts,
+  is a list the keeper takes (`Prima.KeeperProtocol.valid_hosts?/1`: 1 to
+  32 distinct exact hostnames, no wildcard, scheme, port or trailing dot),
+  stored as its JSON text; absent, the program reaches public hosts.
+  Answers the columns to store, every one named (nil when absent), or
+  `{:error, {:invalid_argument, message}}`.
   """
   @spec validate_row(map()) :: {:ok, map()} | {:error, {:invalid_argument, String.t()}}
   def validate_row(%{"transport" => transport} = config) when transport in ["stdio", "pipe"] do
@@ -178,21 +184,23 @@ defmodule Opus.Programs.Definition do
          :ok <- check_memory(config["memory_bytes"]),
          :ok <- check_home_max(home, config["home_max_bytes"]),
          :ok <- check_login_command(config["login_command"]),
-         {:ok, entry} <- check_login_entry(transport, home, config["login_entry_id"]) do
+         {:ok, entry} <- check_login_entry(transport, home, config["login_entry_id"]),
+         {:ok, hosts} <- check_hosts(config["hosts"]) do
       {:ok,
        %{
          home: home,
          memory_bytes: config["memory_bytes"],
          home_max_bytes: config["home_max_bytes"],
          login_command: config["login_command"],
-         login_entry_id: entry
+         login_entry_id: entry,
+         hosts: hosts
        }}
     end
   end
 
   def validate_row(_config), do: invalid("Only a stdio or pipe server is a program")
 
-  @program_keys ~w(home memory_bytes home_max_bytes login_command login_entry_id)
+  @program_keys ~w(home memory_bytes home_max_bytes login_command login_entry_id hosts)
 
   @doc "The config keys that are a program's settings, stored as columns rather than in `config_json`."
   @spec program_keys() :: [String.t()]
@@ -248,6 +256,66 @@ defmodule Opus.Programs.Definition do
     end
   end
 
+  defp check_hosts(nil), do: {:ok, nil}
+
+  defp check_hosts(hosts) do
+    if KeeperProtocol.valid_hosts?(hosts),
+      do: {:ok, Jason.encode!(hosts)},
+      else:
+        invalid(
+          "config.hosts names 1 to #{KeeperProtocol.request_bounds().max_hosts} distinct " <>
+            "hostnames, each exact and lowercase: no wildcard, scheme, port or trailing dot"
+        )
+  end
+
+  @doc """
+  A row's settings as its `config` shows them: each program key it holds,
+  `hosts` as the list it stores. An `http` row holds none.
+  """
+  @spec settings(map()) :: %{String.t() => term()}
+  def settings(%{transport: "http"}), do: %{}
+
+  def settings(row) do
+    for key <- @program_keys,
+        value = setting(row, key),
+        value != nil,
+        into: %{},
+        do: {key, value}
+  end
+
+  defp setting(row, "hosts") do
+    case stored_hosts(row) do
+      {:ok, hosts} -> hosts
+      {:error, _} -> Map.get(row, :hosts)
+    end
+  end
+
+  defp setting(row, key), do: Map.get(row, String.to_existing_atom(key))
+
+  # The stored network list: absent, or the JSON text of a list the keeper
+  # takes. Anything else is refused, never read as no list, which would
+  # open the program to every public host.
+  defp stored_hosts(row) do
+    case Map.get(row, :hosts) do
+      nil ->
+        {:ok, nil}
+
+      text when is_binary(text) ->
+        case Jason.decode(text) do
+          {:ok, hosts} ->
+            if KeeperProtocol.valid_hosts?(hosts), do: {:ok, hosts}, else: unreadable()
+
+          {:error, _} ->
+            unreadable()
+        end
+
+      _other ->
+        unreadable()
+    end
+  end
+
+  defp unreadable, do: invalid("The program's stored hosts do not read; save the program again")
+
   # A kept stdio row's sessions run in its login entry's home; a pipe row's
   # catalyst names its entry by its need, so the row names none.
   defp check_login_entry("stdio", "kept", entry) when is_binary(entry) and entry != "",
@@ -266,20 +334,26 @@ defmodule Opus.Programs.Definition do
 
   @doc """
   The programs a stored row defines: one per validated backend, each with
-  the row's program settings.
+  the row's program settings, or the refusal of a row whose stored hosts
+  do not read.
   """
-  @spec programs(map(), [backend()]) :: [program()]
+  @spec programs(map(), [backend()]) ::
+          {:ok, [program()]} | {:error, {:invalid_argument, String.t()}}
   def programs(row, backends) do
-    for backend <- backends do
-      %{
-        name: backend["name"],
-        command: backend["command"],
-        env: backend["env"],
-        login_command: Map.get(row, :login_command),
-        home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
-        memory_bytes: Map.get(row, :memory_bytes),
-        home_max_bytes: Map.get(row, :home_max_bytes)
-      }
+    with {:ok, hosts} <- stored_hosts(row) do
+      {:ok,
+       for backend <- backends do
+         %{
+           name: backend["name"],
+           command: backend["command"],
+           env: backend["env"],
+           login_command: Map.get(row, :login_command),
+           home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
+           memory_bytes: Map.get(row, :memory_bytes),
+           home_max_bytes: Map.get(row, :home_max_bytes),
+           hosts: hosts
+         }
+       end}
     end
   end
 
@@ -293,7 +367,8 @@ defmodule Opus.Programs.Definition do
       env_names: program.env |> Map.keys() |> Enum.sort(),
       home: program.home,
       memory_bytes: program.memory_bytes,
-      home_max_bytes: program.home_max_bytes
+      home_max_bytes: program.home_max_bytes,
+      hosts: program.hosts
     }
   end
 

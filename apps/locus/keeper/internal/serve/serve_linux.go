@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/guard"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -164,6 +165,15 @@ func Main(args []string) int {
 	}
 	for _, spec := range cfg.Pools {
 		s.pools[spec.Name] = pool.New(spec)
+	}
+	if cfg.Guard != "" {
+		netns, err := os.Readlink("/proc/self/ns/net")
+		if err != nil {
+			log.Error("refusing to start: reading this network namespace: %v", err)
+			return ExitConfig
+		}
+		s.guard = guard.NewClient(cfg.Guard, netns)
+		log.Info("egress: every spawn's is set at the guard on %s before it starts", cfg.Guard)
 	}
 	s.memory = delegateMemory(log)
 	return s.run()
@@ -366,6 +376,9 @@ type server struct {
 	// memory makes the cgroups of memory-bounded spawns; nil where the
 	// keeper cannot, and a spawn asking for a bound is refused.
 	memory *cgroup.Manager
+	// guard holds each spawn's uid to what its request names it may reach
+	// (--guard); nil for a keeper without one, whose spawns name no hosts.
+	guard egressGuard
 
 	// mu guards pools, spawns and waiters, and is held across every fork,
 	// reap and signal, so a pid is never signalled after it was reaped.
@@ -697,8 +710,14 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		s.send(protocol.NewError(req.ID, "", protocol.CodeMemoryUnavailable))
 		return
 	}
+	reach, code, err := s.spawnEgress(req)
+	if err != nil {
+		s.log.Warn("spawn %s refused: %v", req.ID, err)
+		s.send(protocol.NewError(req.ID, "", code))
+		return
+	}
 	if req.HomeMode == protocol.HomeKept {
-		s.handleKeptSpawn(req)
+		s.handleKeptSpawn(req, reach)
 		return
 	}
 	s.mu.Lock()
@@ -726,7 +745,6 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	}
 
 	sp := &spawn{pool: p, account: s.accounts[uid], exitReported: make(chan struct{}), retired: make(chan struct{})}
-	var err error
 	if sp.id, err = randomHex(16); err == nil {
 		var name string
 		if name, err = home.NewName(uid); err == nil {
@@ -740,6 +758,12 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		return
 	}
 
+	if err := s.setEgress(uid, reach); err != nil {
+		s.log.Error("spawn %s on uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
+		s.retire(sp, 0, false)
+		s.send(protocol.NewError(req.ID, "", protocol.CodeGuardUnavailable))
+		return
+	}
 	if code, err := s.launch(sp, req); err != nil {
 		s.log.Error("spawn %s on uid %d: %v", req.ID, uid, err)
 		s.retire(sp, 0, false)
@@ -1052,6 +1076,12 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 					s.log.Warn("spawn %s: removing the memory group of uid %d: %v", sp.id, uid, err)
 				}
 			}
+			// A clean uid's egress is cleared before the pool may give it to
+			// another spawn, whose own setting it would otherwise race; a
+			// quarantined one keeps its rules while anything of it remains.
+			if clean {
+				s.clearEgress(uid)
+			}
 
 			s.mu.Lock()
 			if clean {
@@ -1173,34 +1203,42 @@ func (s *server) waitClear(uid int) bool {
 	}
 }
 
-// sweeper retries retirement of quarantined uids and returns each to its
-// pool once nothing of it remains.
+// sweeper retries retirement of quarantined uids every sweepInterval.
 func (s *server) sweeper() {
 	tick := time.NewTicker(sweepInterval)
 	defer tick.Stop()
 	for range tick.C {
-		type entry struct {
-			pool *pool.Pool
-			uid  int
+		s.sweep()
+	}
+}
+
+// sweep retries retirement of every quarantined uid, kept or pooled, and
+// returns each pooled one to its pool once nothing of it remains.
+func (s *server) sweep() {
+	type entry struct {
+		pool *pool.Pool
+		uid  int
+	}
+	var todo []entry
+	s.mu.Lock()
+	for _, p := range s.pools {
+		for _, uid := range p.Quarantined() {
+			todo = append(todo, entry{p, uid})
 		}
-		var todo []entry
+	}
+	s.mu.Unlock()
+	s.sweepKept()
+	for _, e := range todo {
+		if !s.scrub(s.accounts[e.uid], 0, nil, "") {
+			continue
+		}
+		// Its rules stood while anything of it remained; it is cleared
+		// before the pool gives it to another spawn.
+		s.clearEgress(e.uid)
 		s.mu.Lock()
-		for _, p := range s.pools {
-			for _, uid := range p.Quarantined() {
-				todo = append(todo, entry{p, uid})
-			}
-		}
+		_ = e.pool.Release(e.uid)
 		s.mu.Unlock()
-		s.sweepKept()
-		for _, e := range todo {
-			if !s.scrub(s.accounts[e.uid], 0, nil, "") {
-				continue
-			}
-			s.mu.Lock()
-			_ = e.pool.Release(e.uid)
-			s.mu.Unlock()
-			s.log.Info("uid %d returned to pool %s", e.uid, e.pool.Spec().Name)
-		}
+		s.log.Info("uid %d returned to pool %s", e.uid, e.pool.Spec().Name)
 	}
 }
 

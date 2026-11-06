@@ -95,6 +95,8 @@ func (s *server) sweepKept() {
 		lock.Lock()
 		clean := s.scrub(KeptAccount(uid), 0, nil, path)
 		if clean {
+			// Its rules stood while anything of it remained.
+			s.clearEgress(uid)
 			s.mu.Lock()
 			delete(s.keptQuarantined, uid)
 			s.mu.Unlock()
@@ -119,8 +121,10 @@ func (s *server) keptHome(path string, uid *uint64) (int, error) {
 // handleKeptSpawn starts a spawn in a made kept home, under the home's own
 // uid and no uid of a pool, refused as CodeHomeOverCap when the home already
 // holds its home_max_bytes. Its start holds the uid's lock, so it never
-// starts during the uid's full retirement or a home request.
-func (s *server) handleKeptSpawn(req *protocol.Request) {
+// starts during the uid's full retirement or a home request, and sets the
+// uid's egress at the guard under it: every session of the home shares the
+// uid, so the uid reaches what its latest spawn resolved.
+func (s *server) handleKeptSpawn(req *protocol.Request, reach egress) {
 	uid, err := s.keptHome(req.HomePath, req.HomeUID)
 	if err != nil {
 		s.log.Warn("spawn %s refused: %v", req.ID, err)
@@ -187,6 +191,22 @@ func (s *server) handleKeptSpawn(req *protocol.Request) {
 			s.send(protocol.NewError(req.ID, "", protocol.CodeHomeOverCap))
 			return
 		}
+	}
+	if err := s.setEgress(uid, reach); err != nil {
+		// The guard may have applied what it did not confirm: the uid is
+		// cleared when no other session of it runs. One that runs keeps
+		// what the guard holds, which a failed change leaves refused every
+		// public address, since a clear would open that session.
+		s.mu.Lock()
+		siblings := s.keptLive[uid]
+		s.mu.Unlock()
+		if siblings == 0 {
+			s.clearEgress(uid)
+		}
+		lock.Unlock()
+		s.log.Error("spawn %s on kept uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
+		s.send(protocol.NewError(req.ID, "", protocol.CodeGuardUnavailable))
+		return
 	}
 	s.mu.Lock()
 	s.keptMaps()
@@ -256,6 +276,9 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 				lock := s.keptLock(uid)
 				lock.Lock()
 				clean := s.scrub(sp.account, 0, nil, sp.home)
+				if clean {
+					s.clearEgress(uid)
+				}
 				lock.Unlock()
 				s.mu.Lock()
 				delete(s.keptRetiring, uid)
@@ -336,6 +359,7 @@ func (s *server) handleHome(req *protocol.Request) {
 			s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
 			return
 		}
+		s.clearEgress(uid)
 		s.mu.Lock()
 		s.keptMaps()
 		delete(s.keptQuarantined, uid)

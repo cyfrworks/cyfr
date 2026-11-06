@@ -214,7 +214,7 @@ Guest egress is a HostAPI operation: Opus decides it under the attempt's authori
 
 ### 5.7 Isolation of untrusted processes
 
-Untrusted processes run apart from the control plane and from each other, with restricted privileges, bounded resources and full cleanup before reuse; a runner holds no route, and its traffic with the control plane is signed and versioned. A kept home's uid is never given to another owner: no pool holds it, and only the processes of that home's own sessions run under it. *Not built yet:* perception bodies; a program's network list, the hosts its row names.
+Untrusted processes run apart from the control plane and from each other, with restricted privileges, bounded resources and full cleanup before reuse; a runner holds no route, and its traffic with the control plane is signed and versioned. A kept home's uid is never given to another owner: no pool holds it, and only the processes of that home's own sessions run under it. A program reaches the hosts its row names or, with none, public hosts, beside the deployment's private hosts: its island's egress guard holds every spawn uid, pooled or kept, to the addresses its keeper resolved when the process started, and a process it cannot so hold never starts. *Not built yet:* perception bodies.
 
 ### 5.8 Separate meanings
 

@@ -117,6 +117,8 @@ defmodule Prima.Destination do
   @label "[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?"
   @hostname Regex.compile!("\\A(?=.{1,253}\\z)#{@label}(?:\\.#{@label})*\\z")
   @wildcard_base Regex.compile!("\\A(?=.{1,253}\\z)#{@label}(?:\\.#{@label})+\\z")
+  # An address literal's last label: digits alone.
+  @numeric_last_label ~r/(?:\A|\.)[0-9]+\z/
 
   @max_path_bytes 1024
   @max_entries 32
@@ -278,6 +280,21 @@ defmodule Prima.Destination do
   def valid_host?("*." <> base), do: Regex.match?(@wildcard_base, base)
   def valid_host?(host) when is_binary(host), do: Regex.match?(@hostname, host)
   def valid_host?(_host), do: false
+
+  @doc """
+  Whether `host` is an exact hostname of the grammar and no address
+  literal: lowercase labels, no wildcard, scheme, port or trailing dot,
+  and a last label that is not all digits, so `1.1.1.1` is refused as the
+  grammar refuses IPv6's colons and brackets. A program's network list
+  (`Prima.LocusBackends`, `Prima.KeeperProtocol`) names hosts in it, since
+  it is enforced on the addresses a name resolves to: a wildcard resolves
+  to none, and an address names no host.
+  """
+  @spec exact_host?(term()) :: boolean()
+  def exact_host?(host) when is_binary(host),
+    do: Regex.match?(@hostname, host) and not Regex.match?(@numeric_last_label, host)
+
+  def exact_host?(_host), do: false
 
   @doc """
   Whether `path` is in the path grammar the module doc names: begins with

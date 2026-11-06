@@ -1143,7 +1143,7 @@ defmodule Opus.Programs.Box do
 
     with {:ok, row} <- fence_one(owner),
          {:ok, backends} <- Definition.validate(Arca.McpServerStorage.config(row)["backends"]),
-         programs = Definition.programs(row, backends),
+         {:ok, programs} <- Definition.programs(row, backends),
          :ok <- within_share(spec, length(programs)),
          {:ok, sealed} <- seal_env(spec, keys.seal, programs) do
       # A definition's warnings never stop its programs: the administrator

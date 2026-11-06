@@ -94,7 +94,23 @@ defmodule Prima.KeeperProtocolTest do
     "spawn member on a pool request" => "home_mode",
     "control false on a request that is not a spawn" => "control",
     "home_make with an unknown field" => "extra",
-    "home_measure without a uid" => "uid"
+    "home_measure without a uid" => "uid",
+    "hosts that is empty" => "hosts",
+    "hosts with a wildcard" => "hosts",
+    "hosts with a scheme" => "hosts",
+    "hosts with a port" => "hosts",
+    "hosts with a capital letter" => "hosts",
+    "hosts with a trailing dot" => "hosts",
+    "hosts naming one twice" => "hosts",
+    "hosts beyond the maximum" => "hosts",
+    "hosts that is not a list" => "hosts",
+    "hosts that is null" => "hosts",
+    "hosts on an isolated spawn" => "hosts",
+    "hosts on a request that is not a spawn" => "hosts",
+    "hosts naming an IPv4 address" => "hosts",
+    "hosts naming an IPv4 address beside a hostname" => "hosts",
+    "hosts naming an IPv6 address" => "hosts",
+    "hosts naming a bracketed IPv6 address" => "hosts"
   }
 
   # Every member name the vectors' requests carry, at every depth, as the
@@ -102,8 +118,8 @@ defmodule Prima.KeeperProtocolTest do
   # makes.
   @members Map.new(
              ~w(argv attach control core env extra fsize grace_ms home_max_bytes home_mode
-                home_path home_uid id isolation memory_bytes nofile nproc path pool pty rlimits
-                sig spawn_id token type uid v)a,
+                home_path home_uid hosts id isolation memory_bytes nofile nproc path pool pty
+                rlimits sig spawn_id token type uid v)a,
              &{Atom.to_string(&1), &1}
            )
 

@@ -33,6 +33,9 @@ type Config struct {
 	// Kept is the kept-homes root and uid range, nil for a keeper that
 	// keeps no homes.
 	Kept *home.Kept
+	// Guard is the socket of the island's egress guard's control (package
+	// guard), empty for a keeper whose spawns name no hosts.
+	Guard string
 }
 
 type poolFlags []pool.Spec
@@ -49,7 +52,7 @@ func (p *poolFlags) Set(value string) error {
 }
 
 // Usage is the command line `serve` accepts.
-const Usage = "cyfr-locus serve --pool <name>:<first>-<last>[:netns] [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --client-user <user> -- <command> [args…]"
+const Usage = "cyfr-locus serve --pool <name>:<first>-<last>[:netns] [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]"
 
 // ParseArgs parses the arguments after `serve`. Pools may repeat but must
 // have distinct names and disjoint ranges.
@@ -63,6 +66,7 @@ func ParseArgs(args []string) (Config, error) {
 	fs.StringVar(&cfg.ClientUser, "client-user", "", "user the client command runs as")
 	var kept string
 	fs.StringVar(&kept, "kept-homes", "", "the kept-homes root and the uids its homes own, <dir>:<first>-<last>")
+	fs.StringVar(&cfg.Guard, "guard", "", "the socket of the island's egress guard's control")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -104,6 +108,9 @@ func ParseArgs(args []string) (Config, error) {
 		if k.Root == cfg.HomeRoot || strings.HasPrefix(k.Root, cfg.HomeRoot+"/") || strings.HasPrefix(cfg.HomeRoot, k.Root+"/") {
 			return Config{}, errors.New("--kept-homes and --home-root must not hold one another")
 		}
+	}
+	if cfg.Guard != "" && (!filepath.IsAbs(cfg.Guard) || filepath.Clean(cfg.Guard) != cfg.Guard) {
+		return Config{}, errors.New("--guard must be a clean absolute path")
 	}
 	if cfg.ClientUser == "" {
 		return Config{}, errors.New("--client-user is required")

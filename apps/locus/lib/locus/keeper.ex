@@ -79,7 +79,10 @@ defmodule Locus.Keeper do
   `home_retire/2` ask cyfr-locus, which acts as the home's uid. A spec
   naming a made kept `home` spawns there under the home's uid, with its
   `home_max_bytes` and `pty`; one naming a home not made is refused
-  `home_absent` before cyfr-locus is asked. Without a kept-homes root,
+  `home_absent` before cyfr-locus is asked. A spec's `hosts` goes with its
+  spawn (`Prima.KeeperProtocol`): cyfr-locus resolves them and has the
+  island's guard hold the spawn's uid to their addresses, refusing the
+  spawn `hosts_unresolved` or `guard_unavailable`. Without a kept-homes root,
   every home call and every spec naming a home is refused `unavailable`;
   a range every uid of which a home owns, `capacity`.
 
@@ -353,7 +356,8 @@ defmodule Locus.Keeper do
       isolation: Map.get(spec, :isolation),
       home: Map.get(spec, :home),
       home_max_bytes: Map.get(spec, :home_max_bytes),
-      pty: Map.get(spec, :pty, false) == true
+      pty: Map.get(spec, :pty, false) == true,
+      hosts: Map.get(spec, :hosts)
     }
 
     try do
@@ -1203,6 +1207,7 @@ defmodule Locus.Keeper do
       |> put_given(:control, opts.control || nil)
       |> Map.merge(home)
       |> put_given(:pty, opts.pty || nil)
+      |> put_given(:hosts, opts.hosts)
 
     # A spawn with a control channel is answered once its request is
     # written; a long-lived spawn once cyfr-locus reports it spawned.

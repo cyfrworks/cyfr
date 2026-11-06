@@ -2140,6 +2140,8 @@ type McpServersCreateArgsConfig struct {
 	LoginCommand Field[string] `json:"login_command,omitzero"`
 	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
 	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
+	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
+	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`
 }
@@ -2364,6 +2366,8 @@ type McpServersUpdateArgsConfig struct {
 	LoginCommand Field[string] `json:"login_command,omitzero"`
 	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
 	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
+	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
+	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`
 }

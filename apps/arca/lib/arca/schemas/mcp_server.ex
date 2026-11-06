@@ -13,7 +13,9 @@ defmodule Arca.Schemas.McpServer do
   that survives it; `memory_bytes` and `home_max_bytes` are its bounds
   (nil: the service's own bound, the homes volume), `login_command` what a
   sign-in runs, and `login_entry_id` the login entry a kept `stdio` row's
-  sessions run in. `hosts` (a JSON network list) is written by nothing yet.
+  sessions run in. `hosts` is a program's network list as JSON text, the
+  only hosts it reaches (`Opus.Programs.Definition`), nil for every public
+  host.
   `epoch` rises with every change to the row, and so does `revision`, the
   counter a fenced publication compares (`Arca.FencedPublication`).
   `created_by` is the id of the person who created it, set once.

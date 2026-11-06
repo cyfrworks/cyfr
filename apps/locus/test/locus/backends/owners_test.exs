@@ -29,6 +29,18 @@ defmodule Locus.Backends.OwnersTest do
   @idle "exec cat >/dev/null"
   @home "vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b"
 
+  defmodule HostsLauncher do
+    @moduledoc false
+    # A session launcher that tells its server each spec it is asked to
+    # start and refuses it as its server's code says, as cyfr-locus refuses
+    # a spawn whose hosts resolve to nothing or whose egress its guard does
+    # not confirm.
+    def spawn({test, code}, spec) do
+      send(test, {:spec, spec})
+      {:error, {:refused, code}}
+    end
+  end
+
   defmodule Stub do
     @moduledoc false
     # The pool a test sets (an answer, or `:hang` for a launcher that
@@ -124,7 +136,8 @@ defmodule Locus.Backends.OwnersTest do
         env: %{},
         home: :scratch,
         memory_bytes: nil,
-        home_max_bytes: nil
+        home_max_bytes: nil,
+        hosts: nil
       },
       Map.new(opts)
     )
@@ -303,6 +316,31 @@ defmodule Locus.Backends.OwnersTest do
       assert {:error, :bad_request} = sync(owners, "srv", {1, 1}, idle_programs(max + 1))
       assert {:ok, %{programs: programs}} = sync(owners, "srv", {1, 2}, idle_programs(max))
       assert length(programs) == max
+    end
+  end
+
+  describe "a program's hosts" do
+    test "go with each process it starts, and a process refused for them refuses the open so",
+         ctx do
+      for code <- ~w(hosts_unresolved guard_unavailable) do
+        owners =
+          start_owners(ctx,
+            session_opts: [launcher: HostsLauncher, launcher_server: {self(), code}]
+          )
+
+        listed = [program("listed", @idle, hosts: ["api.example.com"]), program("open", @idle)]
+        assert {:ok, _} = sync(owners, "srv", {1, 1}, listed)
+
+        assert {:error, refusal} = open(owners, "srv", {1, 1}, "listed", key: "k")
+        assert refusal == String.to_existing_atom(code)
+        assert_receive {:spec, %{hosts: ["api.example.com"]}}
+
+        assert {:error, _} = open(owners, "srv", {1, 1}, "open", key: "k")
+        assert_receive {:spec, spec}
+        refute Map.has_key?(spec, :hosts)
+
+        stop_supervised!(Owners)
+      end
     end
   end
 

@@ -16,7 +16,11 @@ defmodule PrismWeb.ProgramsLive do
   A program's home is `scratch`, made for each process and scrubbed when
   it ends, or `kept`, one folder per login entry that survives retirement.
   A row may set its memory bound and a kept home's disk bound, and a
-  program that signs in names its `login_command`.
+  program that signs in names its `login_command`. A program's hosts are
+  its network list: the only hosts it reaches beside the deployment's
+  private hosts, exact names resolved each time it starts, which the
+  program forms set and an expanded program row changes (`mcp_servers.update`
+  with the row's config and the new list); none named, every public host.
 
   Forms add an http server (its config as JSON), a stdio server and a pipe
   program. A kept row offers **Sign in**: the sign-in terminal
@@ -266,6 +270,35 @@ defmodule PrismWeb.ProgramsLive do
   def handle_event("reset_home", _params, socket),
     do: {:noreply, put_flash(socket, :error, "Choose the login entry whose folder to reset.")}
 
+  # A program's network list changes with the rest of its config as it is
+  # stored, since an update replaces the config whole, at the epoch the
+  # row was read at.
+  def handle_event("set_hosts", %{"name" => name} = params, socket) do
+    detail = socket.assigns.detail
+
+    config =
+      detail
+      |> config()
+      |> Map.delete("hosts")
+      |> put_present("hosts", host_list(params))
+
+    case call_tool(socket, "mcp_servers/update", %{
+           "name" => name,
+           "epoch" => detail && detail[:epoch],
+           "config" => config
+         }) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> refresh_servers()
+         |> expand_server(name)
+         |> put_flash(:info, "The program's hosts are saved; its next start resolves them.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Saving the hosts failed: #{error_message(reason)}")}
+    end
+  end
+
   @impl true
   def handle_params(params, _uri, socket) do
     # Paint the frame first — refresh_servers probes every server.
@@ -403,7 +436,16 @@ defmodule PrismWeb.ProgramsLive do
        %{"env" => env, "home" => home}
        |> put_present("memory_bytes", memory)
        |> put_present("home_max_bytes", if(home == "kept", do: disk))
-       |> put_present("login_command", blank_nil(trimmed(params, "login_command")))}
+       |> put_present("login_command", blank_nil(trimmed(params, "login_command")))
+       |> put_present("hosts", host_list(params))}
+    end
+  end
+
+  # The hosts a form names, split on commas and white space; none, no list.
+  defp host_list(params) do
+    case String.split(params["hosts"] || "", [",", " ", "\n", "\t", "\r"], trim: true) do
+      [] -> nil
+      hosts -> hosts
     end
   end
 
@@ -886,7 +928,29 @@ defmodule PrismWeb.ProgramsLive do
                         >
                           {entry_name(@logins, config(@detail)["login_entry_id"]) || "none named"}
                         </dd>
+                        <dt class="text-gray-500">Hosts</dt>
+                        <dd class="font-mono text-gray-300" data-test="program-hosts">
+                          {Enum.join(config(@detail)["hosts"] || ["every public host"], ", ")}
+                        </dd>
                       </dl>
+                      <form
+                        :if={@detail && server[:transport] in ["stdio", "pipe"]}
+                        id={"hosts-" <> server[:name]}
+                        phx-submit="set_hosts"
+                        class="flex flex-wrap items-end gap-2"
+                      >
+                        <input type="hidden" name="name" value={server[:name]} />
+                        <div class="grow">
+                          <label class="block text-xs text-gray-500 uppercase mb-1">Hosts</label>
+                          <.input
+                            name="hosts"
+                            value={Enum.join(config(@detail)["hosts"] || [], ", ")}
+                            placeholder="every public host"
+                            class="font-mono"
+                          />
+                        </div>
+                        <.button type="submit" variant="secondary">Save hosts</.button>
+                      </form>
                       <div :if={@detail && programs(@detail) != []} class="space-y-2">
                         <h4 class="text-sm font-medium text-gray-400 mb-2">Programs</h4>
                         <div
@@ -1018,6 +1082,22 @@ defmodule PrismWeb.ProgramsLive do
         <label class="block text-xs text-gray-500 uppercase mb-1">Disk bound (MiB, kept)</label>
         <.input name="disk_mib" placeholder="the folders' volume" class="font-mono" />
       </div>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 uppercase mb-1">Hosts</label>
+      <.input
+        name="hosts"
+        value={Enum.join(@prefill["hosts"] || [], ", ")}
+        placeholder="every public host"
+        class="font-mono"
+      />
+      <p class="text-xs text-gray-600 mt-1" data-test="hosts-help">
+        The only hosts the program reaches, beside the deployment's private hosts: exact names
+        such as <code class="text-gray-500">api.anthropic.com</code>, separated by commas, with
+        no wildcard, scheme or port, resolved each time it starts. Left empty, it reaches every
+        public host. A name that shares an address with another, as names behind one CDN or
+        front end do, admits that other too.
+      </p>
     </div>
     <div :if={@kind == "stdio"}>
       <label class="block text-xs text-gray-500 uppercase mb-1">Login entry (kept folder)</label>

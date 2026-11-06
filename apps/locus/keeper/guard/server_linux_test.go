@@ -1,0 +1,211 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+//go:build linux
+
+package guard
+
+import (
+	"errors"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/cyfr/locus/keeper/internal/logx"
+)
+
+// fakeGuard serves the control on a socket of the test's own, recording
+// each run of the guard script its server would make.
+type fakeGuard struct {
+	path string
+	mu   sync.Mutex
+	runs [][]string
+	fail bool
+	// ended receives once each connection's cleanup is done.
+	ended chan struct{}
+}
+
+func startFake(t *testing.T, netns string) *fakeGuard {
+	t.Helper()
+	f := &fakeGuard{path: filepath.Join(t.TempDir(), "guard.sock"), ended: make(chan struct{}, 16)}
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: f.path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	s := &server{log: logx.New("cyfr-guard-test"), ranges: []Range{{20001, 20032}, {40001, 49999}}, netns: netns,
+		apply: func(args ...string) error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.runs = append(f.runs, args)
+			if f.fail {
+				return errors.New("forced failure")
+			}
+			return nil
+		},
+		onEnd: func() { f.ended <- struct{}{} }}
+	go func() {
+		for {
+			conn, err := l.AcceptUnix()
+			if err != nil {
+				return
+			}
+			go s.serve(conn)
+		}
+	}()
+	return f
+}
+
+func (f *fakeGuard) taken() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.runs...)
+}
+
+func TestAdmitAndClear(t *testing.T) {
+	f := startFake(t, "net:[1]")
+	c := NewClient(f.path, "net:[1]")
+	addrs := []netip.Addr{netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("::ffff:5.6.7.8"), netip.MustParseAddr("2606:4700::1111")}
+	if err := c.Admit(40001, addrs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Clear(20001); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"admit", "40001", "1.2.3.4", "5.6.7.8", "2606:4700::1111"}, {"clear", "20001"}}
+	if got := f.taken(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the guard ran %v, want %v", got, want)
+	}
+}
+
+func TestRefusals(t *testing.T) {
+	f := startFake(t, "net:[1]")
+	c := NewClient(f.path, "net:[1]")
+	if err := c.Admit(30001, []netip.Addr{netip.MustParseAddr("1.2.3.4")}); err == nil || !strings.Contains(err.Error(), "no spawn's") {
+		t.Fatalf("a uid outside the ranges was not refused: %v", err)
+	}
+	if len(f.taken()) != 0 {
+		t.Fatal("a refused request ran the guard")
+	}
+	f.fail = true
+	if err := c.Clear(40001); err == nil || !strings.Contains(err.Error(), "could not install") {
+		t.Fatalf("a failed change was not refused: %v", err)
+	}
+	f.fail = false
+	if err := c.Clear(40001); err != nil {
+		t.Fatalf("the connection did not survive a refusal: %v", err)
+	}
+	if err := c.Admit(40001, nil); err == nil {
+		t.Fatal("an admit of no address was sent")
+	}
+}
+
+func TestOtherNamespaceIsNoGuard(t *testing.T) {
+	f := startFake(t, "net:[2]")
+	c := NewClient(f.path, "net:[1]")
+	err := c.Clear(40001)
+	if err == nil || !strings.Contains(err.Error(), "recreated") {
+		t.Fatalf("a guard of another namespace was taken: %v", err)
+	}
+	if len(f.taken()) != 0 {
+		t.Fatal("a request reached a guard of another namespace")
+	}
+}
+
+func TestNoGuardIsAnError(t *testing.T) {
+	c := NewClient(filepath.Join(t.TempDir(), "absent.sock"), "net:[1]")
+	if err := c.Clear(40001); err == nil {
+		t.Fatal("a guard that is not there answered")
+	}
+}
+
+// A connection that ends leaves every uid it admitted, and did not clear
+// since, refused every public address.
+func TestLostConnectionRefusesItsUIDs(t *testing.T) {
+	f := startFake(t, "net:[1]")
+	c := NewClient(f.path, "net:[1]")
+	one := []netip.Addr{netip.MustParseAddr("1.2.3.4")}
+	for _, uid := range []int{40002, 40001, 20005} {
+		if err := c.Admit(uid, one); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Clear(20005); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.drop()
+	c.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(f.taken()) < 6 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := f.taken()[4:]
+	if want := [][]string{{"admit", "40001"}, {"admit", "40002"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the connection ended the guard ran %v, want %v", got, want)
+	}
+	// The client dials again.
+	if err := c.Clear(40001); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A connection that ends refuses only the uids whose latest admission it
+// made: one a newer connection admitted since keeps that admission.
+func TestALostConnectionLeavesANewerConnectionsAdmissions(t *testing.T) {
+	f := startFake(t, "net:[1]")
+	old, newer := NewClient(f.path, "net:[1]"), NewClient(f.path, "net:[1]")
+	one := []netip.Addr{netip.MustParseAddr("1.2.3.4")}
+	for _, uid := range []int{40001, 40002} {
+		if err := old.Admit(uid, one); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := newer.Admit(40001, []netip.Addr{netip.MustParseAddr("5.6.7.8")}); err != nil {
+		t.Fatal(err)
+	}
+	old.mu.Lock()
+	old.drop()
+	old.mu.Unlock()
+	select {
+	case <-f.ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ended connection's cleanup did not finish")
+	}
+	got := f.taken()[3:]
+	if want := [][]string{{"admit", "40002"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the older connection ended the guard ran %v, want only uid 40002 refused", got)
+	}
+}
+
+// The control's socket is root's alone: its folder 0700 and the socket
+// 0600, as the package says.
+func TestListenMakesARootOnlySocket(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("listening in a folder root owns needs root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "guard.sock")
+	l, err := listen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	socket, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder, err := os.Lstat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if socket.Mode()&os.ModeSocket == 0 || socket.Mode().Perm() != 0o600 || folder.Mode().Perm() != 0o700 {
+		t.Fatalf("the socket is %v and its folder %v, want a socket 0600 in a folder 0700", socket.Mode(), folder.Mode())
+	}
+}

@@ -7,7 +7,7 @@
 //
 // Client to keeper:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":true}
+//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":true,"hosts":[…]}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
@@ -90,6 +90,26 @@
 // makes the home 0700, `home_measure` answers the bytes allocated under it,
 // and `home_retire` ends every process of the uid and removes the home.
 //
+// A spawn's `hosts` names the only hosts its command may reach beyond
+// the resolver and the deployment's private hosts: 1..MaxHosts distinct
+// exact hostnames (ValidHost: lowercase, no wildcard, scheme, port or
+// trailing dot, and no address literal), never on an isolated spawn, which
+// reaches nothing.
+// Absent keeps the island's public-hosts rule. A keeper given `--guard`
+// resolves the names at the spawn, and only then, and has the island's
+// egress guard admit those addresses for the spawn's uid and refuse it
+// every other public one (package guard); a spawn without `hosts` has the
+// guard clear the uid back to the island's rule. Either is confirmed
+// before the command starts: a name that resolves to no address refuses
+// the spawn as CodeHostsUnresolved, and a guard that does not confirm, or
+// a keeper given no `--guard` for a spawn naming hosts, as
+// CodeGuardUnavailable; no such spawn is ever started open. A guard
+// confirms only once its greeting names the keeper's own network
+// namespace: one that names another (a guard restarted into a new
+// namespace while the keeper's still runs in the old) confirms nothing,
+// and every spawn of a keeper given `--guard` is refused until the service
+// is recreated behind it.
+//
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
 // runtime opens descriptors of its own before it can inspect fd 3 tells the
@@ -168,6 +188,13 @@ const (
 	// finish), or live under another home. A client drawing a uid for a new
 	// home takes another.
 	CodeUIDBusy = "uid_busy"
+	// CodeHostsUnresolved refuses a spawn one of whose hosts resolves to no
+	// address.
+	CodeHostsUnresolved = "hosts_unresolved"
+	// CodeGuardUnavailable refuses a spawn whose egress the island's guard
+	// did not confirm: no guard (--guard), a guard that cannot be reached
+	// or judges another network namespace, or one that refused the change.
+	CodeGuardUnavailable = "guard_unavailable"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors
@@ -195,6 +222,8 @@ const (
 	// MaxHomeBytes is the most a kept home's bound may be, a number every
 	// client's JSON carries exactly.
 	MaxHomeBytes = 1 << 50
+	// MaxHosts is the most hosts a spawn may name.
+	MaxHosts = 32
 )
 
 // Signals a `signal` request may name.
@@ -216,7 +245,27 @@ var (
 	spawnIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	tokenPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	// hostPattern is an exact hostname of the egress domain grammar
+	// (Prima.Destination's): lowercase labels of letters, digits, hyphens
+	// and underscores, neither starting nor ending with a hyphen, of at
+	// most 63 bytes each, joined by dots.
+	hostPattern = regexp.MustCompile(`^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$`)
 )
+
+// MaxHostBytes is the longest a host may be.
+const MaxHostBytes = 253
+
+// ValidHost reports whether host is an exact hostname a spawn may name:
+// never an address literal, so a name whose last label is all digits
+// (1.1.1.1, 10.0.0.1) is refused, as the pattern refuses IPv6's colons and
+// brackets.
+func ValidHost(host string) bool {
+	if len(host) > MaxHostBytes || !hostPattern.MatchString(host) {
+		return false
+	}
+	last := host[strings.LastIndexByte(host, '.')+1:]
+	return strings.Trim(last, "0123456789") != ""
+}
 
 // Limits are the resource limits applied to a spawned process; each is set
 // as both its soft and hard limit.
@@ -343,6 +392,9 @@ type Request struct {
 	HomeUID      *uint64 `json:"home_uid,omitempty"`
 	HomeMaxBytes *uint64 `json:"home_max_bytes,omitempty"`
 	Pty          *bool   `json:"pty,omitempty"`
+	// Hosts are the only hosts a spawn may reach (beside the resolver and
+	// the private hosts); absent keeps the island's public-hosts rule.
+	Hosts []string `json:"hosts,omitempty"`
 	// Path and UID name the kept home of a home request.
 	Path string  `json:"path,omitempty"`
 	UID  *uint64 `json:"uid,omitempty"`
@@ -466,8 +518,8 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty") {
-		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes and pty")
+	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
+		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -496,7 +548,35 @@ func validateSpawn(req *Request) error {
 	if err := ValidateAttach(*req.Attach); err != nil {
 		return err
 	}
+	if err := validateHosts(req); err != nil {
+		return err
+	}
 	return validateHome(req)
+}
+
+// validateHosts checks a spawn's hosts: when present, 1..MaxHosts distinct
+// exact hostnames, on a spawn that is not isolated.
+func validateHosts(req *Request) error {
+	if !req.present["hosts"] {
+		return nil
+	}
+	if req.present["isolation"] {
+		return errors.New("an isolated spawn reaches nothing: it takes no hosts")
+	}
+	if len(req.Hosts) == 0 || len(req.Hosts) > MaxHosts {
+		return fmt.Errorf("hosts must hold 1..%d hostnames", MaxHosts)
+	}
+	seen := make(map[string]bool, len(req.Hosts))
+	for i, host := range req.Hosts {
+		if !ValidHost(host) {
+			return fmt.Errorf("hosts[%d] must be an exact lowercase hostname of at most %d bytes", i, MaxHostBytes)
+		}
+		if seen[host] {
+			return fmt.Errorf("hosts[%d] is named twice", i)
+		}
+		seen[host] = true
+	}
+	return nil
 }
 
 func validateHome(req *Request) error {

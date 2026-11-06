@@ -1092,6 +1092,30 @@ defmodule Locus.KeeperTest do
                Keeper.spawn(name, Map.put(spec, :home, "vlt_a"))
     end
 
+    test "a spawn's hosts go with it, and a spawn refused for them is the keeper's code" do
+      %{name: name, fake: fake} = FakeKeeper.start_client!()
+      spec = %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456}
+
+      assert {:ok, _handle} =
+               Keeper.spawn(
+                 name,
+                 Map.put(spec, :hosts, ["api.example.com", "registry.npmjs.org"])
+               )
+
+      assert {:ok, _handle} = Keeper.spawn(name, spec)
+
+      assert [listed, open] = for(%{"type" => "spawn"} = r <- FakeKeeper.requests(fake), do: r)
+      assert listed["hosts"] == ["api.example.com", "registry.npmjs.org"]
+      refute Map.has_key?(open, "hosts")
+
+      for code <- ~w(hosts_unresolved guard_unavailable) do
+        :ok = FakeKeeper.mode(fake, String.to_existing_atom(code))
+
+        assert {:error, {:refused, ^code}} =
+                 Keeper.spawn(name, Map.put(spec, :hosts, ["api.example.com"]))
+      end
+    end
+
     test "a refused home request is the keeper's code", %{root: root, uid: uid} do
       %{name: name, fake: fake} = kept_client(root, uid, uid)
       :ok = FakeKeeper.mode(fake, :home_refused)

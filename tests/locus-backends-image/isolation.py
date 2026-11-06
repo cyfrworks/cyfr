@@ -41,6 +41,11 @@ Driven only by requests signed as CYFR signs them (harness.py):
 - A backend's listener on the shared loopback is reached by the container's
   root and refused to another owner's backend, on the loopback, on `::1`
   and on the island's own address.
+- A program in a kept folder, under a uid of the kept range, is held to the
+  same rule: its connections to the service's own listener and to another
+  owner's backend's listener, on the loopback, on `::1` and on the island's
+  own address, are refused, each counted on the guard's loopback rule for
+  the kept range.
 - A guard started with an ip6tables that fails writes no ready file, never
   turns healthy, names the rule that failed, and the service behind it is
   never started.
@@ -49,6 +54,7 @@ Prerequisites: harness.py's. Usage: tests/locus-backends-image/isolation.py IMAG
 """
 
 import ipaddress
+import json
 import os
 import re
 import sys
@@ -57,7 +63,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, KEPT_ROOT, NETWORK, POOL_FIRST, POOL_LAST, PORT,
+    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, NETWORK,
+    POOL_FIRST, POOL_LAST, PORT,
     PROBE, PROJECT_PREFIX, REFUSED, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE,
     Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run,
     image_user_name, wait_healthy, wire_json,
@@ -67,6 +74,7 @@ from harness import (  # noqa: E402
 import imagesuite  # noqa: E402
 
 ALPHA, BETA = owner_of("alpha"), owner_of("beta")
+KEPT_OWNER, KEPT_ENTRY = owner_of("kept"), "vlt_isolation-kept"
 ALPHA_SECRET = "alpha-secret-value"
 NO_CAPS = "0000000000000000"
 PROBE_TOOLS = ["echo_env", "exit", "fail", "hog", "read_environ", "read_path", "run", "signal", "spawn_daemon",
@@ -263,6 +271,39 @@ def test_sibling_loopback(stack, c, listener, intruder):
     expect(sum(rose.values()) >= 3, "each refusal counted on the guard's loopback rule for the island's uids", rose)
 
 
+def test_kept_loopback(stack, c, listener):
+    """A kept program's session against the service's own listener and `listener`'s, which test_sibling_loopback started."""
+    own = island_address(stack)
+    status, answer, _ = c.sync(KEPT_OWNER, [probe(home="kept")])
+    expect(status == 200, "an owner of a kept program is synced", answer)
+    session = c.mcp(KEPT_OWNER, "probe", home_id=KEPT_ENTRY)
+
+    def run_kept(argv):
+        status, answer = session.call("run", {"argv": argv})
+        result = (answer or {}).get("result") or {}
+        expect(status == 200 and not result.get("isError") and "content" in result, f"the kept session ran {argv[0]}",
+               [status, answer])
+        return json.loads(result["content"][0]["text"])
+
+    who = json.loads(session.call("whoami", {})[1]["result"]["content"][0]["text"])
+    expect(KEPT_FIRST <= who["uid"] <= KEPT_LAST, "the kept program runs under a uid of the kept range", who)
+    targets = [f"127.0.0.1:{PORT}", f"127.0.0.1:{SIBLING_PORT}", f"[::1]:{SIBLING_PORT}", f"{own}:{SIBLING_PORT}"]
+    before = stack.guard_counters()
+    probed = run_kept(["node", "-e", CONNECT_PROBE, "targets", *targets])
+    after = stack.guard_counters()
+    codes = fields(probed.get("stdout"))
+    detail = {"codes": codes, "probe": probed, "kept_uid": who["uid"], "listener": c.tool(listener, "probe__whoami")["uid"]}
+    expect(probed["status"] == 0 and len(codes) == len(targets) and all(codes.get(t) in REFUSED for t in targets),
+           "a kept program's connections to the service's own listener and to another owner's listener, on the loopback, "
+           "on ::1 and on the island's own address, are refused", detail)
+    kept_rule = f"--uid-owner {KEPT_FIRST}-{KEPT_LAST} -m addrtype --dst-type LOCAL -j REJECT"
+    rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after if kept_rule in rule}
+    expect(sum(rose.values()) >= len(targets), "each refusal counted on the guard's loopback rule for the kept range",
+           {"rose": rose, "rules": [rule for rule in after if "--dst-type LOCAL" in rule]})
+    c.close(KEPT_OWNER, session.session)
+    c.release([KEPT_OWNER])
+
+
 def kill_in(container, pid, what):
     """`kill -KILL pid` in `container`, where `pid` is, or ends, the
     container's main process. The shell exits 0 when it outlives its kill,
@@ -415,6 +456,7 @@ def main():
         # ————— the island's egress —————
         test_egress(stack, c, ALPHA)
         test_sibling_loopback(stack, c, ALPHA, BETA)
+        test_kept_loopback(stack, c, ALPHA)
 
         # ————— retirement —————
         daemon = c.tool(ALPHA, "probe__spawn_daemon")["pid"]

@@ -219,7 +219,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_PORT",
      "The loopback listener's port (default 4000), which the stack publishes on this machine's loopback alone; CYFR's address with local access is `http://localhost:<CYFR_PORT>`."},
     {"CYFR_PRIVATE_EGRESS_TARGETS",
-     "The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus-backends`. Link-local addresses are always refused, and a run's egress never uses this list. The stack's builds and backends reach public hosts and the hosts named here, and nothing else: each island's egress guard (the `locus-builds-guard` and `locus-backends-guard` services) refuses every link-local and metadata address, the control plane, every other private address, and one spawn's reach into another's listener on the island's shared loopback."},
+     "The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus-backends`. Link-local addresses are always refused, and a run's egress never uses this list. The stack's builds reach public hosts and the hosts named here, and a program the hosts its row names or, with none, public hosts, and the hosts named here, and nothing else: each island's egress guard (the `locus-builds-guard` and `locus-backends-guard` services) refuses every link-local and metadata address, the control plane, every other private address, and one spawn's reach into another's listener on the island's shared loopback."},
     {"CYFR_PROMETHEUS_METRICS",
      "Prometheus metrics at `/metrics` on the API port (default off)."},
     {"CYFR_PROXY_BIND_ADDRESS",

@@ -458,8 +458,13 @@ services:
     # and the uids they own: a kept home, one per login entry, holds one
     # uid of 40001-49999 for its life, which no pool and no other home is
     # given. The range lies outside the image's users and every pool; the
-    # keeper refuses one that does not.
-    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    # keeper refuses one that does not. --guard names the control of this
+    # island's guard (the `guard-control` volume below): before each
+    # program's process starts, the keeper resolves the hosts its row names
+    # and has the guard hold its uid to their addresses, or to the public
+    # hosts for a row that names none, and a process it cannot so hold is
+    # never started.
+    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]
     # The release's settings from .env.locus, one file for every role. The
     # service never sees the rest of .env: not the keyring, not the
     # database, not the runtime's root, not the builds key, and refuses to
@@ -480,10 +485,11 @@ services:
     # locus-builds, locus-runtime and caddy never see port 4101. The
     # network is not `internal` — `npx` needs the registry and a backend
     # its upstream API — and what a backend reaches out to is the guard's
-    # rules (cyfr-guard): public hosts and the private hosts
-    # CYFR_PRIVATE_EGRESS_TARGETS names, nothing link-local, no metadata
-    # address, not the control plane, no other private address, and no
-    # listener of another backend on the shared loopback. The guard's
+    # rules (cyfr-guard): the hosts its row names or, with none, public
+    # hosts, and the private hosts CYFR_PRIVATE_EGRESS_TARGETS names;
+    # nothing link-local, no metadata address, not the control plane, no
+    # other private address, and no listener of another backend on the
+    # shared loopback. The guard's
     # namespace is the container's only network, so listening on every
     # interface is listening on it. The service starts only once the guard
     # is healthy, which it is only with every rule installed; a guard that
@@ -510,9 +516,12 @@ services:
     # home_max_bytes; it is never under data/ and no backup carries it.
     # The image makes its root root's and the locus group's, 1773, which a
     # new volume takes: the release lists it to draw a free uid, and a
-    # home's uid makes its own folder without listing the others.
+    # home's uid makes its own folder without listing the others. The
+    # guard's control, read-only here: its folder is root's own, 0700, so
+    # in this container the keeper alone reaches it.
     volumes:
       - homes:/var/lib/locus/kept
+      - guard-control:/run/cyfr-guard-control:ro
     # Shutdown retires every backend and drains in-flight requests;
     # compose's default 10s is tight when several backends are up.
     stop_grace_period: 15s
@@ -537,7 +546,10 @@ services:
 
   # The backends island's egress guard, as the builds island's: cyfr-guard
   # in the namespace locus-backends shares, NET_ADMIN alone, the island's
-  # service name as its alias, healthy only with every rule installed.
+  # service name as its alias, healthy only with every rule installed. It
+  # also serves the island's keeper its control (CYFR_GUARD_CONTROL, on the
+  # `guard-control` volume, the one other place it writes): the addresses
+  # each program's uid may reach, set before the program starts.
   locus-backends-guard:
     container_name: cyfr-locus-backends-guard
     image: ghcr.io/cyfrworks/cyfr-locus:latest
@@ -559,9 +571,14 @@ services:
     tmpfs:
       - /run/cyfr-guard:mode=0755,size=1m
     environment:
-      - CYFR_GUARD_POOL=20001-20032
+      # Every uid the backends keeper runs a program under: its pool and
+      # the kept folders' uids (its --pool and --kept-homes ranges).
+      - CYFR_GUARD_POOL=20001-20032,40001-49999
       - CYFR_GUARD_CONTROL_PLANE=172.16.230.2
       - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
+      - CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock
+    volumes:
+      - guard-control:/run/cyfr-guard-control
     networks:
       locus-backends:
         aliases:
@@ -757,6 +774,10 @@ networks:
 
 volumes:
   homes:
+  # The backends guard's control socket, which the guard alone writes; the
+  # backends service mounts it read-only. Nothing in it outlives the guard:
+  # a guard that starts removes a socket an earlier one left.
+  guard-control:
   caddy_data:
   caddy_config:
   tailscale_state:
