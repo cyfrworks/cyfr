@@ -1129,7 +1129,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp lent_entry(ctx, bound, {dep, label}) do
-    with {:ok, entry} <- fetch_active_entry(ctx, bound.entry_id),
+    with {:ok, entry} <- fetch_bindable_entry(ctx, bound.entry_id),
          {:ok, live_digest} <- VaultReader.binding_digest(entry),
          :ok <- check_lender_digest(live_digest, bound, dep, label),
          {:ok, destination} <- BlobBuilder.entry_destination(entry) do
@@ -1570,7 +1570,7 @@ defmodule Sanctum.Consent.Commit do
           do: {edge_key, vault}
 
     Enum.reduce_while(vaults, {:ok, [], %{}}, fn {edge_key, vault}, {:ok, acc, entries} ->
-      with {:ok, entry} <- fetch_active_entry(ctx, vault["entry_id"]),
+      with {:ok, entry} <- fetch_bindable_entry(ctx, vault["entry_id"]),
            {:ok, live_digest} <- VaultReader.binding_digest(entry),
            true <-
              Plug.Crypto.secure_compare(live_digest, vault["binding_digest"] || "") ||
@@ -1884,7 +1884,7 @@ defmodule Sanctum.Consent.Commit do
   # (`Sanctum.Shares.binding/2`), at the digest its source derives.
   # Nothing is unsealed.
   defp fetch_bound(ctx, {:own, id}, _need) do
-    with {:ok, entry} <- fetch_active_entry(ctx, id),
+    with {:ok, entry} <- fetch_bindable_entry(ctx, id),
          {:ok, digest} <- VaultReader.binding_digest(entry) do
       {:ok,
        %{
@@ -2112,11 +2112,17 @@ defmodule Sanctum.Consent.Commit do
      "The binding for #{name} names no #{key}; a projection names the #{key} it reads"}
   end
 
-  defp fetch_active_entry(ctx, entry_id) do
+  # An entry the plan offers (`Sanctum.Consent.Plan.bindable?/1`): an
+  # active one, or a login entry whose program is not signed in yet.
+  defp fetch_bindable_entry(ctx, entry_id) do
     case Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry_id) do
-      {:ok, %{status: "active"} = entry} -> {:ok, entry}
-      {:ok, %{status: status}} -> {:error, {:entry_unavailable, entry_id, status}}
-      {:error, reason} -> {:error, {:entry_unavailable, entry_id, reason}}
+      {:ok, entry} = found when is_map(entry) ->
+        if Sanctum.Consent.Plan.bindable?(entry),
+          do: found,
+          else: {:error, {:entry_unavailable, entry_id, entry.status}}
+
+      {:error, reason} ->
+        {:error, {:entry_unavailable, entry_id, reason}}
     end
   end
 
@@ -2849,7 +2855,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp live_digest(ctx, %{entry_id: id}) do
-    with {:ok, entry} <- fetch_active_entry(ctx, id), do: VaultReader.binding_digest(entry)
+    with {:ok, entry} <- fetch_bindable_entry(ctx, id), do: VaultReader.binding_digest(entry)
   end
 
   # ---------------------------------------------------------------------------

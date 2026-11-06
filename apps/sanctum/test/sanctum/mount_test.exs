@@ -36,9 +36,8 @@ defmodule Sanctum.MountTest do
 
   defp login!(ctx, program \\ "claude", name \\ nil) do
     {:ok, view} =
-      TestContext.create_vault(ctx, %{
+      TestContext.create_signed_in_login(ctx, %{
         name: name || "login-#{System.unique_integer([:positive])}",
-        kind: "login",
         program: program
       })
 
@@ -314,6 +313,25 @@ defmodule Sanctum.MountTest do
 
       :ok = Sanctum.Vault.delete(ctx, entry.id)
       assert {:error, :not_found} = Mount.login_entry(ctx, entry.id, "claude")
+    end
+
+    test "a new login entry waits on its program's sign-in, which admits it, and its exit 0 " <>
+           "makes it active",
+         %{ctx: ctx} do
+      {:ok, view} =
+        TestContext.create_vault(ctx, %{name: "fresh", kind: "login", program: "claude"})
+
+      assert view.status == "needs_reauth"
+
+      # Nothing but a sign-in reaches it: a mount and a plain pick refuse it.
+      assert {:error, {:entry_unavailable, "needs_reauth"}} =
+               Mount.login_entry(ctx, view.id, "claude")
+
+      assert {:ok, %{status: "needs_reauth"}} =
+               Mount.login_entry(ctx, view.id, "claude", for: :sign_in)
+
+      assert :ok = Mount.signed_in(ctx, view.id)
+      assert {:ok, %{status: "active"}} = Mount.login_entry(ctx, view.id, "claude")
     end
 
     test "a sign-in admits an entry a restore left needs_reauth, and its exit 0 makes it active",

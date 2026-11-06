@@ -1263,8 +1263,9 @@ defmodule Opus.Programs.Box do
   # renewal asks again that the entry is an active login entry of the
   # row's athanor naming the row: one revoked, suspended by a restore or
   # deleted releases the owner. A vault that cannot answer releases it too:
-  # nothing runs in a home whose entry cannot be shown live. An entry a
-  # restore left needs_reauth is admitted for a sign-in alone, as
+  # nothing runs in a home whose entry cannot be shown live. An entry whose
+  # program is not signed in (needs_reauth: a new entry, or one a restore
+  # left) is admitted for a sign-in alone, as
   # `Sanctum.Mount.login_entry/4` with `for: :sign_in` admits it: an owner
   # held by a sign-in keeps it (`:sign_in_only`), and its other holders, an
   # MCP server's sessions, stand down. A pipe row's entry is its catalyst's

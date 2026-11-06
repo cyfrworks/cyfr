@@ -64,7 +64,7 @@ defmodule Opus.ProgramsMountsTest do
 
   defp login_entry(ctx, name, program) do
     {:ok, entry} =
-      Sanctum.TestContext.create_vault(ctx, %{name: name, kind: "login", program: program})
+      Sanctum.TestContext.create_signed_in_login(ctx, %{name: name, program: program})
 
     entry.id
   end

@@ -450,6 +450,17 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
+  A login entry whose program has signed in: `create_vault/2` with
+  `kind: "login"`, which makes it waiting on its sign-in, then the sign-in
+  whose command exited 0 (`Sanctum.Mount.signed_in/2`).
+  """
+  def create_signed_in_login(%Context{} = ctx, params) do
+    with {:ok, view} <- create_vault(ctx, Map.put(params, :kind, "login")),
+         :ok <- Sanctum.Mount.signed_in(ctx, view.id),
+         do: {:ok, %{view | status: "active"}}
+  end
+
+  @doc """
   `Sanctum.Vault.rotate/2` under the confirmation it needs
   (`confirmed_change/4`), naming the entry as the vault names it.
   """

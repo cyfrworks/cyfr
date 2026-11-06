@@ -401,17 +401,24 @@ defmodule Sanctum.VaultTest do
       assert {:error, {:invalid_kind, _}} = Vault.create(ctx, %{name: "x", kind: "wand"})
     end
 
-    test "a login entry names its program, holds no material and is attach-only", %{ctx: ctx} do
+    test "a login entry names its program, holds no material, is attach-only and starts " <>
+           "waiting on its program's sign-in",
+         %{ctx: ctx} do
       assert {:ok, view} = create(ctx, %{name: "claude", kind: "login", program: "claude"})
 
       assert view.kind == "login"
+      assert view.status == "needs_reauth"
       assert view.destination == %{"program" => "claude"}
       assert view.attach_only == true
       assert view.field_names == []
 
       row = row!(ctx, view.id)
       assert row.destination == ~s({"program":"claude"})
+      assert row.status == "needs_reauth"
       assert payload!(ctx, view.id)["fields"] == %{}
+
+      # Every other kind holds its material from the start.
+      assert create!(ctx).status == "active"
     end
 
     test "a login entry takes nothing beside its program", %{ctx: ctx} do
@@ -488,6 +495,8 @@ defmodule Sanctum.VaultTest do
 
     test "a login entry is never dispensed, disclosed or attached", %{ctx: ctx} do
       {:ok, view} = create(ctx, %{name: "claude", kind: "login", program: "claude"})
+      # Signed in, so its status refuses nothing and its kind is what does.
+      :ok = Sanctum.Mount.signed_in(ctx, view.id)
       row = row!(ctx, view.id)
       resource = %{entry_id: view.id, binding_digest: row.binding_digest}
 

@@ -1008,7 +1008,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           Not connected — the model has no key yet
         </span>
         <span :if={match?({:needs_sign_in, _}, @model_status)} class="text-amber-300">
-          Not signed in — its program signs in on the Programs page
+          Program not signed in — it signs in on the Programs page
         </span>
         <%!-- A consent that exists but is damaged, or could not be read, is
              no key to connect: no Connect button is offered over it. --%>

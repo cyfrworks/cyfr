@@ -320,6 +320,9 @@ defmodule Sanctum.Vault do
   `{"program": name}`, it is attach-only, and its id is the id of the kept
   home the program runs in (`Sanctum.Mount`); the box that holds the home
   draws the home's uid when it first makes it, so the entry stores none.
+  It starts `needs_reauth`, its program not signed in: a sign-in of the
+  program whose command exits 0 makes it active (`Sanctum.Mount.signed_in/2`),
+  so nothing mounts it for a run before then.
 
   An `oauth` entry names its provider (`:provider_required`), and its
   endpoints are fixed here and never change: a provider hint with a preset
@@ -370,7 +373,7 @@ defmodule Sanctum.Vault do
                  id: id,
                  name: name,
                  kind: kind,
-                 status: "active",
+                 status: starting_status(kind),
                  sealed_payload: sealed,
                  binding_digest: digest
                }),
@@ -779,6 +782,11 @@ defmodule Sanctum.Vault do
     do: {:error, :program_destination_login_only}
 
   defp create_destination(_kind, params), do: required_destination(params)
+
+  # A login entry's program is not signed in when the entry is made; every
+  # other entry holds its material from the start.
+  defp starting_status("login"), do: "needs_reauth"
+  defp starting_status(_kind), do: "active"
 
   # Where an entry's material may go: named by the caller, never defaulted,
   # and stored as the destination's canonical text, the bytes its binding
