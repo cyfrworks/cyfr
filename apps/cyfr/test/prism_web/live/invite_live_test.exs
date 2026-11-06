@@ -95,6 +95,7 @@ defmodule PrismWeb.InviteLiveTest do
 
     name!(view, "mira")
     assert has_element?(view, ~s([data-check="free"]))
+    labelled!(view, "invite", "mira")
     identity = admit!(view, "invite")
 
     %{redeemed_by: user_id} = Arca.Repo.get!(Invitation, id)
@@ -210,7 +211,7 @@ defmodule PrismWeb.InviteLiveTest do
       )
 
     {_redeemed, redeemed_code} = invite!(ctx)
-    {:ok, options} = Sanctum.Passkeys.newcomer_options()
+    {:ok, options} = Sanctum.Passkeys.newcomer_options("mira")
 
     {:ok, _} =
       Sanctum.Newcomer.admit(

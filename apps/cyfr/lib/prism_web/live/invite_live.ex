@@ -20,7 +20,7 @@ defmodule PrismWeb.InviteLive do
   Otherwise the newcomer meets the two screens (`PrismWeb.AdmissionCard`),
   the name field filled with the name the invitation carries, if any, and
   checked against cyfr.run under the code the page holds. The passkey
-  (`Sanctum.Passkeys.newcomer_options/0`) whose registration, with the
+  (`Sanctum.Passkeys.newcomer_options/1`) whose registration, with the
   name and the recovery secret and request id the browser drew, is the
   invitation admission's credential (`Sanctum.Newcomer.admit/2` with
   `{:invitation, code}`) makes the person, their keys, their athanor, the
@@ -108,7 +108,7 @@ defmodule PrismWeb.InviteLive do
       true ->
         with {:ok, _invitation} <- Sanctum.Invitations.lookup(code),
              {:ok, %{public_key: public_key, registration: registration}} <-
-               Sanctum.Passkeys.newcomer_options() do
+               Sanctum.Passkeys.newcomer_options(socket.assigns.admission_name) do
           {:reply, %{public_key: public_key, registration: registration},
            assign(socket, :admission_error, nil)}
         else
