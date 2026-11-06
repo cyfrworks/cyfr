@@ -299,7 +299,7 @@ run_case "CYFR_VERSION names a pre-release exactly" ok \
      [ \"\$version\" = 0.6.0-alpha.1 ]" \
     "resolved 0.6.0-alpha.1"
 
-# macOS's closing tip offers the Homebrew cask for a bare version alone:
+# macOS's tip offers the Homebrew cask for a bare version alone:
 # the cask installs the latest release that is not a pre-release, so a
 # pre-release is told the cask follows the first such release.
 run_case "a bare version's tip is the Homebrew cask" ok \

@@ -404,7 +404,7 @@ func init() {
 
 var initCmd = &cobra.Command{
 	Use:     "init",
-	Short:   "Scaffold a CYFR project reached from this machine and mint the stack's keys into .env",
+	Short:   "Set up a new CYFR in this directory, at a terminal: its files, keys and images, ready for cyfr up",
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
@@ -414,7 +414,7 @@ On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init f
 
 The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with a passkey, and after a change of address it lets the administrator back in. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. A headless CYFR (CYFR_HEADLESS=on) serves no page, so its first person runs 'cyfr login --setup' in this directory instead. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with a passkey, and after a change of address it lets the administrator back in. 'cyfr login --setup' in this directory sets up the first person at this terminal instead, with this command line as their device; a headless CYFR (CYFR_HEADLESS=on) serves no page, so there it is the only way. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
 	Example: `  cyfr init
@@ -442,38 +442,12 @@ type initOptions struct {
 	continuation  []string
 }
 
-// accessChoice is the mode init applies to a new home, with its inputs.
-type accessChoice struct {
-	accessOptions
-	mode string
-}
-
-// initFace is how one run of init meets the person setting the home up:
-// the terminal (runInit), or the setup pages (cyfr setup). Every step and
-// its order are initProject's either way.
-type initFace struct {
-	// choice is how a new home is reached, local when its mode is empty.
-	choice accessChoice
-	// apply applies a new home's mode, other than local, to its stopped
-	// stack and answers the head it switched to (applyInitAccess).
-	apply func(ctx context.Context, c accessChoice) (access.Head, error)
-	// step, when set, is told the step init begins (the init* steps).
-	step func(name string)
-}
-
-// The steps a run of init begins, as initFace.step is told them.
+// The steps a run of init begins, as initProject's step is told them.
 const (
 	initStepFiles    = "files"
 	initStepSettings = "settings"
-	initStepAccess   = "access"
 	initStepImages   = "images"
 )
-
-func (f initFace) begin(name string) {
-	if f.step != nil {
-		f.step(name)
-	}
-}
 
 // runInit is `cyfr init` in the working directory, asking on the terminal:
 // the machine's missing requirements first (prepareMachine), then, for a
@@ -496,7 +470,7 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 			return err
 		}
 	}
-	if err := initProject(ctx, o, initFace{}, out, errOut); err != nil {
+	if err := initProject(ctx, o, nil, out, errOut); err != nil {
 		return err
 	}
 	if !fresh || !fileExists(".env") {
@@ -520,26 +494,26 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 // initEnding is init's last word on the new CYFR in the working directory,
 // reached from this machine: its address, the ways to reach it from
 // elsewhere, and the next step, which on screen is the reboot that shows
-// setup there, and otherwise the setup link (sshTunnel's line beside it on
-// a machine with no display). A headless CYFR serves no setup page.
+// setup there, and otherwise the setup link or cyfr login --setup at this
+// terminal (sshTunnel's line beside them on a machine with no display). A
+// headless CYFR serves no setup page.
 func initEnding(out io.Writer, screen bool) {
 	values, _ := access.ReadEnvValues(".env")
 	port := existingSelection(".env").port
 	address := access.Describe(access.Head{Mode: access.ModeLocal, Port: port}).Address
 	fmt.Fprintln(out, "")
 	fmt.Fprintf(out, "CYFR is reached from this machine, at %s.\n", address)
-	fmt.Fprintln(out, "To reach it from your phone and laptop too: cyfr access tailnet. From the internet: cyfr access public --domain <your domain>.")
+	fmt.Fprintln(out, "To reach it from your phone and laptop too, run cyfr access tailnet before its first person is set up, since passkeys belong to the address. From the internet: cyfr access public --domain <your domain>.")
 	if headless(values) {
 		fmt.Fprintln(out, "CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.")
 		return
 	}
-	fmt.Fprintln(out, "A new address costs every passkey; the setup link gets the administrator back in.")
 	if screen {
 		fmt.Fprintln(out, "Next: cyfr up, then sudo reboot.")
 		fmt.Fprintln(out, "At power-on this screen opens CYFR's setup page, which sets up its first person with a passkey.")
 		return
 	}
-	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person.\n", hyperlink(out, setupLink(address, values)))
+	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person with a passkey in your browser, or run cyfr login --setup at this terminal.\n", hyperlink(out, setupLink(address, values)))
 	if !hasDisplay() {
 		fmt.Fprintln(out, sshTunnel(port))
 	}
@@ -558,9 +532,10 @@ func sshTunnel(port int) string {
 	return "From another computer: ssh -L " + p + ":127.0.0.1:" + p + " " + account + "@" + host + ", then open the link there."
 }
 
-// initProject is cyfr init in the working directory, meeting its person
-// through face.
-func initProject(ctx context.Context, o initOptions, face initFace, out, errOut io.Writer) error {
+// initProject is cyfr init in the working directory; step, when set, is
+// told each step it begins (the initStep* names), as the setup pages show
+// them.
+func initProject(ctx context.Context, o initOptions, step func(name string), out, errOut io.Writer) error {
 	releaseBuild := version.Version != "dev" && version.Version != ""
 
 	// What init cannot complete is refused before anything is written: a
@@ -572,9 +547,10 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 			return err
 		}
 	}
-	choice := face.choice
-	if choice.mode == "" {
-		choice.mode = access.ModeLocal
+	begin := func(name string) {
+		if step != nil {
+			step(name)
+		}
 	}
 
 	// An existing .env gains the keys it lacks before anything else
@@ -611,7 +587,7 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	// for dev builds (version.Version=="dev"/""). A download that fails
 	// warns and init goes on; a release that fails verification stops
 	// it (scaffoldDownloadFailure).
-	face.begin(initStepFiles)
+	begin(initStepFiles)
 	if err := downloadScaffold(version.Version); err != nil {
 		if stop := scaffoldDownloadFailure(version.Version, err, errOut); stop != nil {
 			// What --force removed is named here too: the refusal
@@ -637,9 +613,8 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	// user where to get it.
 	envCreated := false
 	sel := existingSelection(".env")
-	var head access.Head
 	if !envExisted && fileExists(".env.example") {
-		face.begin(initStepSettings)
+		begin(initStepSettings)
 		text, changes, d, err := newEnv(".env.example")
 		if err != nil {
 			return err
@@ -649,8 +624,7 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 		}
 		envCreated = true
 		envChanges = changes
-		head = d.Head
-		sel = selection{profiles: head.Profiles, port: head.Port}
+		sel = selection{profiles: d.Head.Profiles, port: d.Head.Port}
 	}
 
 	// Generate .gitignore if it doesn't already exist (idempotent), before
@@ -670,42 +644,16 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	_ = os.MkdirAll("data", 0755)
 	_ = scaffold.MakeDir("aqua")
 
-	// The mode the pages answered, applied as a switch of the stopped
-	// stack; a refusal or a join that ends without the machine leaves it
-	// local, and init reports that last.
-	var accessErr error
-	switch {
-	case envCreated && choice.mode != access.ModeLocal:
-		face.begin(initStepAccess)
-		applied, err := face.apply(ctx, choice)
-		local := startedLocally{}
-		switch {
-		case errors.As(err, &local):
-			head, accessErr = applied, err
-			sel = selection{profiles: head.Profiles, port: head.Port}
-		case err != nil:
-			accessErr = fmt.Errorf("%w\n%s", err, leftLocal(choice.mode))
-		default:
-			head = applied
-			sel = selection{profiles: head.Profiles, port: head.Port}
-		}
-	case !envCreated && !envExisted && choice.mode != access.ModeLocal:
-		// The answers were asked for a release's .env.example that its
-		// download did not lay down.
-		accessErr = fmt.Errorf("CYFR was not set up to be reached as answered (%s): there is no .env.example to write .env from", choice.mode)
-	}
-
 	// Warm-pull the images docker-compose.yml starts with the head's
 	// profiles (cyfr, and cyfr-locus for locus-runtime and locus-backends,
-	// the same image serving locus-builds with builds on, and the proxy
-	// of a tailnet or public home). A release's compose names each as
-	// <repository>:<version>@<digest>, and `docker pull` of such a
-	// reference pulls by the digest, so the warm pull fetches exactly the
-	// images the verified scaffold names. Falls back to the published cyfr
+	// the same image serving locus-builds with builds on). A release's
+	// compose names each as <repository>:<version>@<digest>, and `docker
+	// pull` of such a reference pulls by the digest, so the warm pull
+	// fetches exactly the images the verified scaffold names. Falls back to the published cyfr
 	// image on a dev build (no compose). The pulls run outside the lock
 	// and change nothing of the stack, so they are no call of the engine.
 	if !o.noPull {
-		face.begin(initStepImages)
+		begin(initStepImages)
 		images := imagesFromCompose("docker-compose.yml", sel.profiles)
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
@@ -772,7 +720,7 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 		fmt.Fprintln(out, "   versions. Copy those files from a repo checkout, or run the server from")
 		fmt.Fprintln(out, "   the checkout itself as CONTRIBUTING.md's \"Running from source\" says.")
 	}
-	return accessErr
+	return nil
 }
 
 // headlessVar is the switch that makes CYFR headless: the API and /mcp,
@@ -792,12 +740,6 @@ func headless(values map[string]string) bool {
 // records.
 func setupLink(address string, values map[string]string) string {
 	return address + "/setup#" + strings.TrimSpace(values[setupTokenVar])
-}
-
-// leftLocal is what a new home whose mode was not applied is told: it is
-// reached from this computer only, and `cyfr access <mode>` changes that.
-func leftLocal(mode string) string {
-	return fmt.Sprintf("CYFR is set up to be reached from this computer only; `cyfr access %s` changes that", mode)
 }
 
 // existingAccess is the mode the existing .env at path says its home is
@@ -824,53 +766,6 @@ func existingAccess(path string) (string, error) {
 // current, is reached, for command, which sets up a new one.
 func existingHomeRefusal(command, current string) error {
 	return fmt.Errorf(".env says CYFR is reached as %s, and %s leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current, command)
-}
-
-// checkTarget refuses a target Derive refuses for its own inputs: an
-// option outside its mode, a domain or an email that is not one. The port
-// and the builds URL are the template's here, and the tailnet machine a
-// stand-in, since only the target's own inputs are checked.
-func checkTarget(t access.Target) error {
-	_, err := access.Derive(t, access.Current{Port: 4000}, &access.Join{Name: "cyfr.tailnet.ts.net", NodeID: "nCheck"})
-	return engineFailure(err)
-}
-
-// applyInitAccess applies the mode the setup pages chose for a new home as
-// an engine switch of its stopped stack, the tailnet joined first for
-// tailnet as choice meets the join, and answers the head it switched to.
-// Any failure leaves the home as .env holds it, local.
-func applyInitAccess(ctx context.Context, c accessChoice, choice joinChoice, out io.Writer) (access.Head, error) {
-	id, err := newRequestID()
-	if err != nil {
-		return access.Head{}, err
-	}
-	e, unlock, _, err := openLocked(ctx, "init", out)
-	if err != nil {
-		return access.Head{}, err
-	}
-	defer unlock()
-	target := access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
-	p, join, err := previewTarget(ctx, e, target, id, c.accessOptions, nil, out, choice)
-	if err != nil {
-		return access.Head{}, err
-	}
-	rec, err := e.Switch(context.WithoutCancel(ctx), access.SwitchRequest{
-		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
-		Content: requestContent(target, c.accessOptions, nil),
-	})
-	head := p.New
-	if rec.FinalHead != nil {
-		head = *rec.FinalHead
-	}
-	// A switch that started the home on this machine alone made the
-	// change; its head is .env's, and its failure says what is left.
-	if err := answerFailure(rec, err); err != nil {
-		if local := (startedLocally{}); errors.As(err, &local) {
-			return head, err
-		}
-		return access.Head{}, err
-	}
-	return head, nil
 }
 
 // localHead is the head a new home's .env starts from, reached from this
@@ -1054,7 +949,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints. A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so there 'cyfr login --setup' in this directory sets up its first person.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints, or by 'cyfr login --setup' in this directory, at this terminal. A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so there 'cyfr login --setup' is the only way.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1138,7 +1033,8 @@ func runUp(ctx context.Context, out io.Writer) error {
 // screen when the cyfr-screen service shows it, a reboot away when it is
 // enabled and has not started; otherwise through the setup link, which a
 // local CYFR on a machine with no display reaches through sshTunnel's
-// line. A headless CYFR serves no setup page.
+// line, or cyfr login --setup at this terminal. A headless CYFR serves no
+// setup page.
 func setupNext(out io.Writer, head access.Head) {
 	values, _ := access.ReadEnvValues(".env")
 	if headless(values) {
@@ -1153,9 +1049,9 @@ func setupNext(out io.Writer, head access.Head) {
 	case enabled:
 		fmt.Fprintln(out, "Now run sudo reboot. This screen opens setup at power-on.")
 	case head.Mode == access.ModeTailnet:
-		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person.\n", link)
+		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person with a passkey, or run cyfr login --setup here.\n", link)
 	default:
-		fmt.Fprintf(out, "Open %s to set up its first person.\n", link)
+		fmt.Fprintf(out, "Open %s to set up its first person with a passkey in your browser, or run cyfr login --setup here.\n", link)
 		if head.Mode == access.ModeLocal && !hasDisplay() {
 			fmt.Fprintln(out, sshTunnel(head.Port))
 		}

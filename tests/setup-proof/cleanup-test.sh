@@ -64,7 +64,6 @@ CONTROL="$BASE/control"
 PROJECTS=()
 PROOF_PID=""
 SETUP_PID=""
-STANDIN_IMAGE="cyfr-setup-cleanup-test-never-built:$CONTAINER"
 IMAGE="cyfr-setup-cleanup-test-never-used:$CONTAINER"
 compose_in() { echo "no project is made here" >&2; return 1; }
 # shellcheck source=tests/browser/harness.sh

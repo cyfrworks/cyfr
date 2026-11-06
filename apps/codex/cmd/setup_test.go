@@ -8,15 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -69,49 +67,22 @@ func ended(t *testing.T, sess *setupSession) setup.State {
 	return sess.State()
 }
 
-// approvedJoins makes each join the stack is asked for show its approval
-// link, named for its machine, then wait for the test to approve it
-// (approve) or for its cancellation; a join answered fail first ends with
-// that receipt instead.
-func approvedJoins(s *fakeStack, approve <-chan struct{}, fail ...access.Receipt) {
-	s.join = func(ctx context.Context, r access.JoinRequest) (access.Receipt, error) {
-		machine := joinName(accessOptions{hostname: r.Hostname})
-		r.OnAuthURL("https://login.tailscale.com/a/approve-" + machine)
-		if len(s.joins) <= len(fail) {
-			rec := fail[len(s.joins)-1]
-			rec.RequestID = r.ID
-			return rec, nil
-		}
-		select {
-		case <-approve:
-		case <-ctx.Done():
-			return access.Receipt{}, ctx.Err()
-		}
-		name := machine + ".tail1234.ts.net"
-		s.joined["join-"+r.ID] = access.Join{Name: name, NodeID: "nTESTNODE1CNTRL"}
-		rec := okReceipt("join")
-		rec.RequestID = r.ID
-		rec.Payload = map[string]string{"join_id": "join-" + r.ID, "name": name, "node_id": "nTESTNODE1CNTRL"}
-		return rec, nil
-	}
-}
-
-// A local home: the pages' answers are written into .env as init writes
-// them, and the home started; the pages move to its setup link, the setup
-// page at its address with .env's setup token in the fragment.
-func TestSetupWritesTheAnswersAndStartsALocalHome(t *testing.T) {
+// The pages ask nothing: the start writes .env as cyfr init writes it,
+// reached from this device, and starts CYFR; the pages move to its setup
+// link, the setup page at its address with .env's setup token in the
+// fragment.
+func TestSetupWritesEnvAndStartsCYFR(t *testing.T) {
 	s, sess, out := newSetupRun(t)
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); err != nil {
+	if err := sess.Start(); err != nil {
 		t.Fatal(err)
 	}
 	st := ended(t, sess)
-	want := setup.State{Phase: setup.PhaseDone, Mode: access.ModeLocal, Address: "http://localhost:4000",
-		SetupURL: "http://localhost:4000/setup#" + setupTokenOf(t), Moves: true}
-	if st.Phase != want.Phase || st.Mode != want.Mode || st.Address != want.Address || st.SetupURL != want.SetupURL || st.Moves != want.Moves || st.Sentence != "" {
+	want := setup.State{Phase: setup.PhaseDone, Address: "http://localhost:4000", SetupURL: "http://localhost:4000/setup#" + setupTokenOf(t)}
+	if !reflect.DeepEqual(st, want) {
 		t.Fatalf("the run ended %+v, want %+v\n%s", st, want, out)
 	}
 	if err := sess.result(); err != nil {
-		t.Errorf("a home up as asked ends the process with %v", err)
+		t.Errorf("CYFR up ends the process with %v", err)
 	}
 	if accessOf(t) != access.ModeLocal {
 		t.Errorf(".env is reached as %s", accessOf(t))
@@ -122,265 +93,59 @@ func TestSetupWritesTheAnswersAndStartsALocalHome(t *testing.T) {
 	if holder := s.held(); holder != "" {
 		t.Errorf("the run left the lock held by %s", holder)
 	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); !errors.Is(err, setup.ErrNotNow) {
+	if err := sess.Start(); !errors.Is(err, setup.ErrNotNow) {
 		t.Errorf("a second start answered %v", err)
 	}
 }
 
-// A headless CYFR serves no setup page: the pages name no setup link and
-// move nowhere, and say its first person runs `cyfr login --setup`.
-func TestSetupOnAHeadlessCYFRNamesLoginSetup(t *testing.T) {
-	_, sess, out := newSetupRun(t)
-	example, err := os.ReadFile(".env.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(".env.example", append(example, []byte("CYFR_HEADLESS=on\n")...), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); err != nil {
-		t.Fatal(err)
-	}
-	st := ended(t, sess)
-	if st.Phase != setup.PhaseDone || !st.Headless || st.SetupURL != "" || st.Address != "http://localhost:4000" {
-		t.Fatalf("the run ended %+v, want a headless CYFR done with no setup link\n%s", st, out)
-	}
-}
-
 // The steps a run shows are init's, in its order, then the start: the
-// access step for a home reached from other devices, the images unless
-// --no-pull; a run shows them from its start.
+// images unless --no-pull; a run shows them from its start.
 func TestSetupNamesItsSteps(t *testing.T) {
-	for _, c := range []struct {
-		mode   string
-		noPull bool
-		want   []string
-	}{
-		{access.ModeLocal, true, []string{"files", "settings", "start"}},
-		{access.ModeLocal, false, []string{"files", "settings", "images", "start"}},
-		{access.ModeTailnet, true, []string{"files", "settings", "access", "start"}},
-		{access.ModePublic, false, []string{"files", "settings", "access", "images", "start"}},
+	for noPull, want := range map[bool][]string{
+		true:  {"files", "settings", "start"},
+		false: {"files", "settings", "images", "start"},
 	} {
-		if got := setupSteps(c.mode, c.noPull); !slices.Equal(got, c.want) {
-			t.Errorf("%s (no pull %v) has the steps %v, want %v", c.mode, c.noPull, got, c.want)
+		if got := setupSteps(noPull); !slices.Equal(got, want) {
+			t.Errorf("no pull %v has the steps %v, want %v", noPull, got, want)
 		}
 	}
 	_, sess, _ := newSetupRun(t)
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
+	if err := sess.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if st := sess.State(); !slices.Equal(st.Steps, setupSteps(access.ModeTailnet, true)) || st.Mode != access.ModeTailnet {
+	if st := sess.State(); !slices.Equal(st.Steps, setupSteps(true)) {
 		t.Errorf("the run began %+v", st)
 	}
 	ended(t, sess)
 }
 
-// A tailnet home's join shows its approval link and the machine's name;
-// a new name cancels the waiting join and joins again under it, a new
-// request, and a name the join refuses is refused before anything is
-// cancelled. The approved machine's home is switched, started, and its
-// setup link not moved to: this device does not reach its tailnet address.
-func TestSetupShowsTheJoinAndTakesANewName(t *testing.T) {
+// A start that fails shows why and offers it again, the only offer; the
+// start again that succeeds is done at the setup link.
+func TestSetupOffersTheStartAgain(t *testing.T) {
 	s, sess, out := newSetupRun(t)
-	approve := make(chan struct{})
-	approvedJoins(s, approve)
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
+	s.startErr = errors.New("cyfr did not become healthy")
+	s.composeErr = errors.New("no compose here")
+	if err := sess.Start(); err != nil {
 		t.Fatal(err)
 	}
-	st := awaitPhase(t, sess, setup.PhaseApproval)
-	if st.AuthURL != "https://login.tailscale.com/a/approve-cyfr" || st.Name != "cyfr" || st.Step != initStepAccess {
-		t.Fatalf("the waiting join shows %+v", st)
+	st := awaitPhase(t, sess, setup.PhaseProblem)
+	if st.Sentence != "cyfr did not become healthy" || !slices.Equal(st.Offers, []string{setup.OfferRetry}) || st.Step != setupStepStart {
+		t.Fatalf("the failed start shows %+v", st)
 	}
-	refusal := access.Refuse("access_invalid", map[string]string{"input": "home_1", "kind": "tailnet_name", "rule": "a machine name is 1 to 63 lowercase letters, digits and hyphens, beginning and ending with a letter or a digit"}).Message()
-	if err := sess.Rename("home_1"); err == nil || err.Error() != refusal {
-		t.Fatalf("a name the join refuses answered %v, want %q", err, refusal)
+	if err := sess.Choose("local"); !errors.Is(err, setup.ErrNotNow) {
+		t.Errorf("an offer not made answered %v", err)
 	}
-	if st := sess.State(); st.Phase != setup.PhaseApproval || s.cancels != 0 {
-		t.Fatalf("a refused name cancelled the join: %+v, %d cancels", st, s.cancels)
-	}
-	// The name is the one the join asks for, as the join reads it.
-	if err := sess.Rename(" Home "); err != nil {
+	s.startErr = nil
+	if err := sess.Choose(setup.OfferRetry); err != nil {
 		t.Fatal(err)
 	}
-	for sess.State().AuthURL != "https://login.tailscale.com/a/approve-home" {
-		awaitPhase(t, sess, setup.PhaseApproval)
+	if st := ended(t, sess); st.Phase != setup.PhaseDone || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) || s.starts != 2 || len(s.switches) != 0 {
+		t.Fatalf("the start again ended %+v after %d starts and switches %+v\n%s", st, s.starts, s.switches, out)
 	}
-	// The waiting machine never joined, so the new name joins as a new
-	// machine: its state, which holds the old name, goes.
-	if st := sess.State(); st.Name != "home" || s.cancels != 1 || len(s.joins) != 2 || s.joins[1].Hostname != "home" || !s.joins[1].NewNode || s.joins[0].NewNode || s.joins[0].ID == s.joins[1].ID {
-		t.Fatalf("the new name: %+v, %d cancels, joins %+v", st, s.cancels, s.joins)
-	}
-	close(approve)
-	st = ended(t, sess)
-	if st.Phase != setup.PhaseDone || st.Address != "https://home.tail1234.ts.net" || st.SetupURL != "https://home.tail1234.ts.net/setup#"+setupTokenOf(t) || st.Moves || st.Mode != access.ModeTailnet {
-		t.Fatalf("the run ended %+v\n%s", st, out)
-	}
-	if host, _ := projectEnv(t).value("CYFR_HOST"); host != "home.tail1234.ts.net" || accessOf(t) != access.ModeTailnet || s.starts != 1 || len(s.switches) != 1 {
-		t.Errorf(".env's host is %q as %s, after %d starts and %d switches", host, accessOf(t), s.starts, len(s.switches))
-	}
-	if !strings.Contains(out.String(), "This machine is on your tailnet as home.tail1234.ts.net.") {
-		t.Errorf("the run's output does not name the machine:\n%s", out)
-	}
-}
-
-// "Use only this device instead" cancels the waiting join: nothing is
-// switched, and the home is started on this device and moved to.
-func TestSetupCancelsTheJoinForThisDeviceOnly(t *testing.T) {
-	s, sess, out := newSetupRun(t)
-	approvedJoins(s, make(chan struct{}))
-	if err := sess.Cancel(); !errors.Is(err, setup.ErrNotNow) {
-		t.Errorf("a cancel before any join answered %v", err)
-	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
-		t.Fatal(err)
-	}
-	awaitPhase(t, sess, setup.PhaseApproval)
-	if err := sess.Cancel(); err != nil {
-		t.Fatal(err)
-	}
-	st := ended(t, sess)
-	if st.Phase != setup.PhaseDone || st.Address != "http://localhost:4000" || !st.Moves || st.Mode != access.ModeLocal {
-		t.Fatalf("the run ended %+v\n%s", st, out)
-	}
-	if s.cancels != 1 || len(s.switches) != 0 || s.starts != 1 || accessOf(t) != access.ModeLocal {
-		t.Errorf("%d cancels, %d switches, %d starts, the home %s", s.cancels, len(s.switches), s.starts, accessOf(t))
-	}
-	if err := sess.result(); err != nil {
-		t.Errorf("a home started as chosen ends the process with %v", err)
-	}
-}
-
-// A join that expires leaves the home local and says so, as init does,
-// offering the join again or the home on this device only; the join again
-// is a new request, and this device only starts the home unswitched.
-func TestSetupOffersTheJoinAgainWhenItFails(t *testing.T) {
-	expired := access.Receipt{Op: "join", State: "completed", Outcome: "failed", Code: "tailnet_join_expired"}
-	for _, offer := range []string{setup.OfferRetry, setup.OfferLocal} {
-		t.Run(offer, func(t *testing.T) {
-			s, sess, out := newSetupRun(t)
-			approve := make(chan struct{})
-			close(approve)
-			approvedJoins(s, approve, expired)
-			if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
-				t.Fatal(err)
-			}
-			st := awaitPhase(t, sess, setup.PhaseProblem)
-			want := access.Refuse("tailnet_join_expired", nil).Message() + "\n" + leftLocal(access.ModeTailnet)
-			if st.Sentence != want || !slices.Equal(st.Offers, []string{setup.OfferRetry, setup.OfferLocal}) {
-				t.Fatalf("the expired join shows %+v, want %q", st, want)
-			}
-			if err := sess.Choose("elsewhere"); !errors.Is(err, setup.ErrNotNow) {
-				t.Errorf("an offer not made answered %v", err)
-			}
-			if err := sess.Choose(offer); err != nil {
-				t.Fatal(err)
-			}
-			st = ended(t, sess)
-			if offer == setup.OfferRetry {
-				if st.Phase != setup.PhaseDone || st.Mode != access.ModeTailnet || len(s.joins) != 2 || s.joins[0].ID == s.joins[1].ID || s.joins[1].NewNode || len(s.switches) != 1 {
-					t.Fatalf("the join again ended %+v after joins %+v\n%s", st, s.joins, out)
-				}
-				return
-			}
-			if st.Phase != setup.PhaseDone || st.Mode != access.ModeLocal || !st.Moves || len(s.joins) != 1 || len(s.switches) != 0 || s.starts != 1 {
-				t.Fatalf("this device only ended %+v after %d joins and %d switches\n%s", st, len(s.joins), len(s.switches), out)
-			}
-		})
-	}
-}
-
-// A start that fails shows why, offering it again, or for a home reached
-// from other devices the home on this device only: a switch to local, then
-// the start; once local, only the start again is offered.
-func TestSetupOffersTheStartAgainOrThisDeviceOnly(t *testing.T) {
-	for _, offer := range []string{setup.OfferRetry, setup.OfferLocal} {
-		t.Run(offer, func(t *testing.T) {
-			s, sess, out := newSetupRun(t)
-			s.startErr = errors.New("cyfr did not become healthy")
-			s.composeErr = errors.New("no compose here")
-			if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
-				t.Fatal(err)
-			}
-			st := awaitPhase(t, sess, setup.PhaseProblem)
-			if st.Sentence != "cyfr did not become healthy" || !slices.Equal(st.Offers, []string{setup.OfferRetry, setup.OfferLocal}) || st.Joined != "cyfr.tail1234.ts.net" || st.Starting != access.ModeTailnet {
-				t.Fatalf("the failed start shows %+v", st)
-			}
-			if offer == setup.OfferRetry {
-				s.startErr = nil
-				if err := sess.Choose(setup.OfferRetry); err != nil {
-					t.Fatal(err)
-				}
-				if st := ended(t, sess); st.Phase != setup.PhaseDone || st.Mode != access.ModeTailnet || s.starts != 2 {
-					t.Fatalf("the start again ended %+v after %d starts\n%s", st, s.starts, out)
-				}
-				return
-			}
-			if err := sess.Choose(setup.OfferLocal); err != nil {
-				t.Fatal(err)
-			}
-			// Choose ended the problem shown: the one awaited is the
-			// local home's.
-			if st := awaitPhase(t, sess, setup.PhaseProblem); !slices.Equal(st.Offers, []string{setup.OfferRetry}) || accessOf(t) != access.ModeLocal || st.Starting != access.ModeLocal {
-				t.Fatalf("the local home's failed start shows %+v, the home %s", st, accessOf(t))
-			}
-			s.startErr = nil
-			if err := sess.Choose(setup.OfferRetry); err != nil {
-				t.Fatal(err)
-			}
-			st = ended(t, sess)
-			if st.Phase != setup.PhaseDone || st.Mode != access.ModeLocal || !st.Moves || len(s.switches) != 2 || s.switches[1].Target.Mode != access.ModeLocal {
-				t.Fatalf("this device only ended %+v after switches %+v\n%s", st, s.switches, out)
-			}
-		})
-	}
-}
-
-// A start that leaves the home on this machine only is done at this
-// machine's own address, its sentence shown and the browser not moved past
-// it; the process exits 3.
-func TestSetupReportsAStartOnThisMachineOnly(t *testing.T) {
-	s, sess, _ := newSetupRun(t)
-	s.startReceipt = startedLocalReceipt("start")
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
-		t.Fatal(err)
-	}
-	st := ended(t, sess)
-	want := access.Refuse("tailnet_node_mismatch", mismatch()).Message()
-	if st.Phase != setup.PhaseDone || st.Address != "http://localhost:4000" || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) || st.Sentence != want || st.Moves {
-		t.Fatalf("the run ended %+v, want localhost with %q", st, want)
-	}
-	if err := sess.result(); ExitStatus(err) != exitStartedLocally {
-		t.Errorf("the process exits %d (%v), want 3", ExitStatus(err), err)
-	}
-}
-
-// The answers the start would refuse are refused before anything is
-// written, each with its sentence: a mode that is none, a public home's
-// domain or certificate email that is not one.
-func TestSetupRefusesAnswersBeforeWriting(t *testing.T) {
-	s, sess, _ := newSetupRun(t)
-	for _, c := range []struct {
-		a    setup.Answers
-		want string
-	}{
-		{setup.Answers{Mode: "tls"}, `"tls" is none of them`},
-		{setup.Answers{Mode: access.ModePublic, Domain: "localhost"}, "`localhost` is not a valid domain"},
-		{setup.Answers{Mode: access.ModePublic}, "Type the domain CYFR is reached at"},
-		{setup.Answers{Mode: access.ModePublic, Domain: "cyfr.example.com", ACMEEmail: "nope"}, "`nope` is not a valid email address"},
-		{setup.Answers{Mode: access.ModeLocal, Domain: "cyfr.example.com"}, "for public access alone"},
-	} {
-		if err := sess.Start(c.a); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("the start of %+v answered %v, want %q", c.a, err, c.want)
-		}
-	}
-	if st := sess.State(); st.Phase != setup.PhaseAnswering || s.locks != 0 {
-		t.Errorf("refused answers began %+v", st)
-	}
-	nothingWritten(t, ".env.example")
 }
 
 // A project whose .env exists is refused as init refuses changing an
-// existing home, before anything is served or written, and so is a start
+// existing CYFR, before anything is served or written, and so is a start
 // once .env exists.
 func TestSetupRefusesAnExistingHome(t *testing.T) {
 	for _, c := range []struct{ env, want string }{
@@ -402,14 +167,14 @@ func TestSetupRefusesAnExistingHome(t *testing.T) {
 		nothingWritten(t, ".env", ".env.example")
 	}
 
-	_, sess, _ := newSetupRun(t)
+	s, sess, _ := newSetupRun(t)
 	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); err == nil || !strings.Contains(err.Error(), "cyfr setup leaves how an existing CYFR is reached alone") {
+	if err := sess.Start(); err == nil || !strings.Contains(err.Error(), "cyfr setup leaves how an existing CYFR is reached alone") {
 		t.Errorf("a start once .env exists answered %v", err)
 	}
-	if st := sess.State(); st.Phase != setup.PhaseAnswering {
+	if st := sess.State(); st.Phase != setup.PhaseReady || s.locks != 0 {
 		t.Errorf("the refused start began %+v", st)
 	}
 }
@@ -503,10 +268,10 @@ func awaitEnd(t *testing.T, done <-chan error) error {
 }
 
 // cyfr setup serves its pages on loopback, writing their address to
-// .cyfr/setup.url and printing it, until the pages have read the home up;
+// .cyfr/setup.url and printing it, until the pages have read CYFR up;
 // then it stops serving, removes the address, keeping its lock's file,
 // and exits 0.
-func TestSetupServesThePagesUntilTheyReadTheHomeUp(t *testing.T) {
+func TestSetupServesThePagesUntilTheyReadCYFRUp(t *testing.T) {
 	newInitProject(t)
 	useFakeEngine(t)
 	var out bytes.Buffer
@@ -518,10 +283,10 @@ func TestSetupServesThePagesUntilTheyReadTheHomeUp(t *testing.T) {
 	if info, err := os.Stat(setupURLFile); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("%s is %v (%v), want mode 0600", setupURLFile, info.Mode(), err)
 	}
-	if _, status := c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeLocal}); status != http.StatusOK {
+	if _, status := c.do(http.MethodPost, "/api/start", struct{}{}); status != http.StatusOK {
 		t.Fatalf("the start answered %d", status)
 	}
-	if st := c.await(setup.PhaseDone); st.Address != "http://localhost:4000" || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) || !st.Moves {
+	if st := c.await(setup.PhaseDone); st.Address != "http://localhost:4000" || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) {
 		t.Errorf("the pages read %+v", st)
 	}
 	if err := awaitEnd(t, done); err != nil {
@@ -548,18 +313,18 @@ func TestSetupStopsAWhileAfterAnEndNoPageReads(t *testing.T) {
 	setupLinger = 50 * time.Millisecond
 	done := runSetupInBackground(context.Background(), io.Discard)
 	c := openPages(t)
-	c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeLocal})
+	c.do(http.MethodPost, "/api/start", struct{}{})
 	if err := awaitEnd(t, done); err != nil {
 		t.Fatalf("cyfr setup ended with %v", err)
 	}
 	if accessOf(t) != access.ModeLocal {
-		t.Errorf("the home was not set up")
+		t.Errorf("CYFR was not set up")
 	}
 }
 
 // Interrupted before the start, cyfr setup writes nothing and leaves
-// nothing; interrupted while the join waits, the join is cancelled and
-// the home left local and unstarted, as init leaves it, and it says so.
+// nothing; interrupted while a failed start waits for the person's choice,
+// it ends with the start's failure, .env written and CYFR not started.
 func TestSetupInterrupted(t *testing.T) {
 	t.Run("before the start", func(t *testing.T) {
 		newInitProject(t)
@@ -576,24 +341,23 @@ func TestSetupInterrupted(t *testing.T) {
 			t.Errorf(".cyfr holds %v, want the setup's lock alone", entries)
 		}
 	})
-	t.Run("while the join waits", func(t *testing.T) {
+	t.Run("while a failed start waits", func(t *testing.T) {
 		newInitProject(t)
 		s := useFakeEngine(t)
-		approvedJoins(s, make(chan struct{}))
+		s.startErr = errors.New("cyfr did not become healthy")
+		s.composeErr = errors.New("no compose here")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		done := runSetupInBackground(ctx, io.Discard)
 		c := openPages(t)
-		c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeTailnet})
-		c.await(setup.PhaseApproval)
+		c.do(http.MethodPost, "/api/start", struct{}{})
+		c.await(setup.PhaseProblem)
 		cancel()
-		err := awaitEnd(t, done)
-		want := fmt.Sprintf("cyfr setup was interrupted. %s\n%s", access.Refuse("tailnet_join_cancelled", nil).Message(), leftLocal(access.ModeTailnet))
-		if err == nil || err.Error() != want {
-			t.Errorf("cyfr setup answered %v, want %q", err, want)
+		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted. cyfr did not become healthy" {
+			t.Errorf("cyfr setup answered %v", err)
 		}
-		if s.cancels != 1 || s.starts != 0 || accessOf(t) != access.ModeLocal {
-			t.Errorf("%d cancels, %d starts, the home %s", s.cancels, s.starts, accessOf(t))
+		if s.starts != 1 || accessOf(t) != access.ModeLocal {
+			t.Errorf("%d starts, CYFR reached as %s", s.starts, accessOf(t))
 		}
 	})
 }
@@ -646,133 +410,6 @@ func TestSetupRefusesASecondSetupInTheProject(t *testing.T) {
 	openPages(t)
 	stopAgain()
 	awaitEnd(t, third)
-}
-
-// receiptBlocker is the docker of a project whose stack never ran: every
-// `docker ps` answers no container, and every other call is refused. Armed
-// with a receipt's path, its first `ps` makes a directory there, after the
-// switch has looked its id up and before it commits, so the switch's
-// receipt cannot be written once .env is.
-type receiptBlocker struct {
-	mu      sync.Mutex
-	receipt string
-	blocked bool
-}
-
-func (d *receiptBlocker) Run(ctx context.Context, c access.Call) (access.Result, error) {
-	if len(c.Args) == 0 || c.Args[0] != "ps" {
-		return access.Result{}, fmt.Errorf("no docker call but ps is answered here: %v", c.Args)
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.receipt != "" && !d.blocked {
-		d.blocked = true
-		if err := os.Mkdir(d.receipt, 0o700); err != nil {
-			return access.Result{}, err
-		}
-	}
-	return access.Result{}, nil
-}
-
-// blockedReceiptEngine is the access engine itself over a receiptBlocker,
-// its first switch's receipt blocked and the block gone once that switch
-// answers, so recovery writes it; its stack checks and starts answer as a
-// started home.
-type blockedReceiptEngine struct {
-	*access.Engine
-	d   *receiptBlocker
-	dir string
-}
-
-func (e *blockedReceiptEngine) Switch(ctx context.Context, r access.SwitchRequest) (access.Receipt, error) {
-	e.d.mu.Lock()
-	first := !e.d.blocked && e.d.receipt == ""
-	if first {
-		e.d.receipt = filepath.Join(e.dir, ".cyfr", "receipts", r.ID+".json")
-	}
-	e.d.mu.Unlock()
-	if first {
-		defer os.Remove(e.d.receipt)
-	}
-	return e.Engine.Switch(ctx, r)
-}
-
-func (e *blockedReceiptEngine) CheckStack(context.Context) error { return nil }
-
-func (e *blockedReceiptEngine) Start(context.Context, string) (access.Receipt, error) {
-	h, err := e.Head()
-	if err != nil {
-		return access.Receipt{}, err
-	}
-	return access.Receipt{Op: "start", State: "completed", Outcome: "ok", FinalHead: &h}, nil
-}
-
-// switchFailsAfterCommit makes the session's engine the access engine
-// whose first switch commits .env and then fails writing its receipt, and
-// starts a public home's run on it: the run shows the failure, .env public
-// and the change's journal unfinished.
-func switchFailsAfterCommit(t *testing.T, sess *setupSession) setup.State {
-	t.Helper()
-	d := &receiptBlocker{}
-	openEngine = func(dir string) (stackEngine, error) {
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			return nil, err
-		}
-		e, err := access.Open(abs, d)
-		if err != nil {
-			return nil, err
-		}
-		return &blockedReceiptEngine{Engine: e, d: d, dir: abs}, nil
-	}
-	if err := sess.Start(setup.Answers{Mode: access.ModePublic, Domain: "home.example.com"}); err != nil {
-		t.Fatal(err)
-	}
-	st := awaitPhase(t, sess, setup.PhaseProblem)
-	if !d.blocked || accessOf(t) != access.ModePublic || !fileExists(filepath.Join(".cyfr", "journal.json")) {
-		t.Fatalf("the switch did not fail after its commit: blocked %v, the home %s, %+v", d.blocked, accessOf(t), st)
-	}
-	if strings.Contains(st.Sentence, leftLocal(access.ModePublic)) || !slices.Equal(st.Offers, []string{setup.OfferRetry, setup.OfferLocal}) {
-		t.Errorf("the failed switch shows %+v: a home .env holds public is not said to be local", st)
-	}
-	return st
-}
-
-// "Start on this device only" after a switch that committed .env and
-// then failed: the engine's recovery establishes what the switch left,
-// then the home is switched to local and started on this device, as the
-// start step says.
-func TestSetupThisDeviceOnlyAfterAFailedSwitchIsLocal(t *testing.T) {
-	_, sess, out := newSetupRun(t)
-	switchFailsAfterCommit(t, sess)
-	if err := sess.Choose(setup.OfferLocal); err != nil {
-		t.Fatal(err)
-	}
-	st := ended(t, sess)
-	if st.Phase != setup.PhaseDone || st.Mode != access.ModeLocal || st.Address != "http://localhost:4000" || accessOf(t) != access.ModeLocal {
-		t.Fatalf("this device only ended %+v, the home %s\n%s", st, accessOf(t), out)
-	}
-	if fileExists(filepath.Join(".cyfr", "journal.json")) {
-		t.Errorf("the switch's journal is left unfinished")
-	}
-}
-
-// "Try again" after a switch that committed .env and then failed: the
-// engine's recovery finishes the change, which is what was asked, and the
-// home starts as asked, not refused as unchanged.
-func TestSetupTryAgainAfterAFailedSwitchTakesItsRecovery(t *testing.T) {
-	_, sess, out := newSetupRun(t)
-	switchFailsAfterCommit(t, sess)
-	if err := sess.Choose(setup.OfferRetry); err != nil {
-		t.Fatal(err)
-	}
-	st := ended(t, sess)
-	if st.Phase != setup.PhaseDone || st.Mode != access.ModePublic || st.Address != "https://home.example.com" || accessOf(t) != access.ModePublic {
-		t.Fatalf("the change again ended %+v, the home %s\n%s", st, accessOf(t), out)
-	}
-	if fileExists(filepath.Join(".cyfr", "journal.json")) {
-		t.Errorf("the switch's journal is left unfinished")
-	}
 }
 
 // On a machine with a display cyfr setup opens its pages in the default

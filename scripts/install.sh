@@ -79,12 +79,15 @@ main() {
     if [ "$os" = "darwin" ]; then
         homebrew_tip "$version"
     fi
+
+    printf "\nNext: mkdir my-cyfr && cd my-cyfr && cyfr init\n"
 }
 
-# macOS's closing tip for the version $1 installed. The Homebrew cask
-# installs the latest release that is not a pre-release, so it is offered
-# for a bare version alone; a pre-release (0.6.0-alpha.1, a version with a
-# pre-release part) is told the cask follows the first such release.
+# macOS's tip for the version $1 installed, before the next step. The
+# Homebrew cask installs the latest release that is not a pre-release, so
+# it is offered for a bare version alone; a pre-release (0.6.0-alpha.1, a
+# version with a pre-release part) is told the cask follows the first such
+# release.
 homebrew_tip() {
     case "$1" in
         *-*)

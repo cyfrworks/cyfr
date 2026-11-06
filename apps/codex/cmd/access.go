@@ -241,8 +241,7 @@ var (
 	askInput    io.Reader = os.Stdin
 )
 
-// accessOptions are the inputs of the mode `cyfr access` applies, and
-// that the setup pages answer.
+// accessOptions are the inputs of the mode `cyfr access` applies.
 type accessOptions struct {
 	domain, acmeEmail, keyFile, hostname string
 	newNode, noOpen                      bool
@@ -302,10 +301,9 @@ func readAuthKey(path string) ([]byte, error) {
 
 // joinTailnet runs the engine's join under request id, printing the
 // approval link while it waits for one, and answers the join id of the
-// joined machine; choice's hooks are told the link and the machine's name
-// as they are printed. An interrupt cancels the waiting join, whose
-// container outlives this command otherwise, and answers
-// tailnet_join_cancelled.
+// joined machine; choice's hook is told the link as it is printed. An
+// interrupt cancels the waiting join, whose container outlives this
+// command otherwise, and answers tailnet_join_cancelled.
 func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions, key []byte, out io.Writer, choice joinChoice) (string, error) {
 	req := access.JoinRequest{
 		ID:       id,
@@ -341,9 +339,6 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions,
 	}
 	if name := rec.Payload["name"]; name != "" {
 		fmt.Fprintf(out, "This machine is on your tailnet as %s.\n", name)
-		if choice.onJoined != nil {
-			choice.onJoined(name)
-		}
 	}
 	return joinID, nil
 }
@@ -353,13 +348,11 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions,
 // --new-node replaces ("" when previewTarget names none), and its error
 // refuses the join; optionsGiven says --hostname or
 // --tailscale-auth-key-file was given, which apply to a new join alone.
-// onAuthURL and onJoined, when set, are told the approval link and the
-// joined machine's name.
+// onAuthURL, when set, is told the approval link.
 type joinChoice struct {
 	confirm      func(current string) error
 	optionsGiven bool
 	onAuthURL    func(url string)
-	onJoined     func(name string)
 }
 
 // joined is the join a preview made: its id, "" when the preview needed
