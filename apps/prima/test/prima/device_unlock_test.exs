@@ -37,6 +37,17 @@ defmodule Prima.DeviceUnlockTest do
     )
   end
 
+  # A refusal as Prima answers it, its field included: a challenge
+  # mismatch names the field that differs, a malformed proof the field
+  # its shape refuses.
+  defp refusal(%{"error" => "challenge_mismatch", "field" => field}),
+    do: {:error, {:challenge_mismatch, String.to_existing_atom(field)}}
+
+  defp refusal(%{"error" => error, "field" => field}),
+    do: {:error, {String.to_existing_atom(error), field}}
+
+  defp refusal(%{"error" => error}), do: {:error, String.to_existing_atom(error)}
+
   test "the protocol, the field lists and the sizes are the implementation's" do
     v = vectors()
     common = v["common_fields"]
@@ -124,20 +135,8 @@ defmodule Prima.DeviceUnlockTest do
         end
 
       case vector do
-        %{"result" => "ok"} ->
-          assert result == :ok, name
-
-        %{"error" => "challenge_mismatch", "field" => field} ->
-          assert result == {:error, {:challenge_mismatch, String.to_existing_atom(field)}}, name
-
-        # The file names no field for a malformed proof: the reason is
-        # held, and that it names one.
-        %{"error" => error} when error in ~w(invalid_field unknown_field missing_field) ->
-          assert {:error, {reason, field}} = result, name
-          assert Atom.to_string(reason) == error and is_binary(field), name
-
-        %{"error" => error} ->
-          assert result == {:error, String.to_existing_atom(error)}, name
+        %{"result" => "ok"} -> assert result == :ok, name
+        refused -> assert result == refusal(refused), name
       end
     end
   end

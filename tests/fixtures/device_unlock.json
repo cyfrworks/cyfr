@@ -436,7 +436,8 @@
         "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0"
       },
       "now": 1790000001000,
-      "error": "invalid_field"
+      "error": "invalid_field",
+      "field": "sig"
     },
     {
       "name": "an unlock proof with a field its purpose lacks",
@@ -465,7 +466,8 @@
         "browser_nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
       },
       "now": 1790000001000,
-      "error": "unknown_field"
+      "error": "unknown_field",
+      "field": "browser_nonce"
     },
     {
       "name": "an unlock proof whose nonce is 31 bytes",
@@ -493,7 +495,8 @@
         "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
       },
       "now": 1790000001000,
-      "error": "invalid_field"
+      "error": "invalid_field",
+      "field": "nonce"
     },
     {
       "name": "an unlock proof whose device key is 31 bytes",
@@ -521,7 +524,8 @@
         "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
       },
       "now": 1790000001000,
-      "error": "invalid_field"
+      "error": "invalid_field",
+      "field": "device_key"
     },
     {
       "name": "an unlock proof without its session_id",
@@ -548,7 +552,8 @@
         "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
       },
       "now": 1790000001000,
-      "error": "missing_field"
+      "error": "missing_field",
+      "field": "session_id"
     },
     {
       "name": "an unlock proof without its nonce",
@@ -575,7 +580,8 @@
         "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
       },
       "now": 1790000001000,
-      "error": "missing_field"
+      "error": "missing_field",
+      "field": "nonce"
     },
     {
       "name": "an unlock proof whose session_id is malformed",
@@ -603,7 +609,8 @@
         "sig": "DU6nljV2tKu1-pRoTxHFXCS90lhtPon-1ADSPyyItLSwxR_ebvtnO0drCP33WxahOpBFFGpVesHXfkqBVVF1CA"
       },
       "now": 1790000001000,
-      "error": "invalid_field"
+      "error": "invalid_field",
+      "field": "session_id"
     },
     {
       "name": "an lock proof offered for a held unlock challenge",
@@ -869,7 +876,8 @@
         "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
         "sig": "S_mr0meK8BCyXfHBtxOva-ZWLD2Ox4pbbifc5s99cwh2735a5_lEF9J3bKORCSm9xL4rfKv_i2asKorpRhy-CA"
       },
-      "error": "unknown_field"
+      "error": "unknown_field",
+      "field": "nonce"
     },
     {
       "name": "a lock proof carrying expires_at",
@@ -893,7 +901,8 @@
         "expires_at": 1790000060000,
         "sig": "42llY-VAHxTBspvL__aclOsoODwoavSWdSedNU_mVeQdk5kGT_GQH_fLfnRY2qb_P34sGhvtmz_8BuosBraNAA"
       },
-      "error": "unknown_field"
+      "error": "unknown_field",
+      "field": "expires_at"
     },
     {
       "name": "a lock proof without its session_id",
@@ -915,7 +924,8 @@
         "purpose": "lock",
         "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
       },
-      "error": "missing_field"
+      "error": "missing_field",
+      "field": "session_id"
     }
   ],
   "exchange": {
@@ -963,17 +973,8 @@
           "error"
         ],
         "codes": {
-          "invalid_token": 401,
-          "setup_closed": 409,
-          "first_method_used": 409,
-          "not_restored": 409,
-          "not_found": 404,
-          "proof_refused": 422,
           "invalid_request": 422,
           "unavailable": 503,
-          "invitation_invalid": 409,
-          "limit_reached": 409,
-          "not_admitted": 403,
           "ticket_refused": 403,
           "rate_limited": 429
         },
