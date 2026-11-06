@@ -261,6 +261,29 @@
         }
       },
       {
+        "kind": "credential",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "binding_key": "reagent:local.weather|catalyst:local.coder|claude|default",
+          "choice_required": false,
+          "destination": {
+            "program": "claude"
+          },
+          "disclosed": false,
+          "edge": "catalyst:local.coder|claude",
+          "fields": {},
+          "lifetime": {
+            "kind": "standing",
+            "until": null
+          },
+          "name": "claude-login",
+          "scopes": [],
+          "source": "own",
+          "suggested": true
+        }
+      },
+      {
         "kind": "egress",
         "narrowed": true,
         "node": "reagent:local.weather",

@@ -703,6 +703,54 @@ defmodule PrismWeb.ConsentSheetComponentTest do
            ]
   end
 
+  test "a login need names its program, and its entry is mounted into the program's kept " <>
+         "folder, never sent to a host" do
+    login = fn name, candidates, opts ->
+      name
+      |> key_need(
+        "to run Claude Code on your own plan",
+        candidates,
+        [kind: "login", provider: nil, hosts: nil, fields: []] ++ opts
+      )
+      |> Map.put(:program, "claude")
+    end
+
+    entry =
+      own("vlt_login", "claude-login", %{
+        kind: "login",
+        provider: nil,
+        destination: %{"program" => "claude"},
+        field_names: [],
+        fields: %{}
+      })
+
+    plan = %{
+      source_ref: "catalyst:local.sheet-login",
+      candidates: [],
+      dependency_needs: [],
+      needs: [
+        login.("claude", [entry], suggested: %{entry_id: "vlt_login"}),
+        login.("other", [], required: false)
+      ]
+    }
+
+    html = sheet(plan, athanor_route: "@me")
+    claude = need_html(html, "claude")
+
+    assert texts(claude, ".consent-sheet__need-what") == ["login for claude, required"]
+
+    assert texts(claude, ~s([data-test="grant-pick"] .consent-sheet__fields)) == [
+             "an entry of this athanor, mounted into claude's kept folder"
+           ]
+
+    assert texts(need_html(html, "other"), ".consent-sheet__empty") == [
+             "Add a vault entry for claude first."
+           ]
+
+    refute html =~ "://"
+    refute html =~ "CYFR attaches"
+  end
+
   describe "a candidate with no automatic map" do
     setup %{conn: conn} do
       user = test_user()
