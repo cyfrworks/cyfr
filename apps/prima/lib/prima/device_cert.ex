@@ -9,8 +9,8 @@ defmodule Prima.DeviceCert do
   challenge and proof of the connection purposes
   (`Prima.DeviceCert.Challenge`, `Prima.DeviceCert.Proof`);
   `tests/fixtures/device_unlock.json` holds those of the protected
-  device's enrollment, unlock, confirmation and lock, and of the storage
-  report (`Prima.DeviceCert.Storage`).
+  device's unlock and lock, and of the storage report
+  (`Prima.DeviceCert.Storage`).
 
   A certificate carries the protocol string, the device key's `kid` as the
   account's log lists it, the client id, the account's `identifier`,
@@ -232,25 +232,17 @@ defmodule Prima.DeviceCert.Challenge do
     * `connect` — a paired client proving its key on a new connection.
     * `renew` — a paired client proving the key its paired-client row
       stores, before a replacement certificate is issued.
-    * `pair` — pairing completion proving the key it submits, bound to
-      the prospective client id the invitation reserved.
-    * `enroll` — a protected device enrolling its key at an admission:
-      `admission` (`setup`, `restore`, `invitation` or `open`) and the enrollment's
-      `request_id`, with the athanor and client id the home reserved.
     * `unlock` — a protected device unlocking: `session_id`, the one
       session the ticket exchange will create.
-    * `confirm` — a protected device confirming one pending change:
-      `ref`, its public ref, and `digest`, the stored record's
-      `Prima.Confirmation.digest/1`. Its expiry is capped by the record's.
     * `lock` — the retirement of exactly the session `session_id` names.
       It has no nonce and no expiry: it can only end one uniquely named
       session, so the device signs it at unlock and submits it whenever it
       locks. `Prima.DeviceCert.Proof.verify_lock/2` is its one verifier.
 
-  `tests/fixtures/device_cert.json` holds the first three purposes'
-  vectors and `tests/fixtures/device_unlock.json` the other four's. A fresh
-  challenge is held for one connection, completion or exchange and
-  consumed at most once; a disconnect discards it. Because it binds
+  `tests/fixtures/device_cert.json` holds the first two purposes'
+  vectors and `tests/fixtures/device_unlock.json` the other two's. A fresh
+  challenge is held for one connection or exchange and consumed at most
+  once; a disconnect discards it. Because it binds
   purpose, home, athanor, client and device key, a proof made for one
   never verifies as another's: a proof of one purpose is refused for
   every other, and a proof for one client, home, athanor or key is
@@ -267,26 +259,15 @@ defmodule Prima.DeviceCert.Challenge do
   @purpose_fields %{
     connect: [],
     renew: [],
-    pair: [],
-    enroll: [:admission, :request_id],
     unlock: [:session_id],
-    confirm: [:ref, :digest],
     lock: [:session_id]
   }
   @purposes Map.new(@purpose_fields, fn {purpose, _fields} ->
               {Atom.to_string(purpose), purpose}
             end)
-  @fresh [:connect, :renew, :pair, :enroll, :unlock, :confirm]
-  @admissions %{
-    "setup" => :setup,
-    "restore" => :restore,
-    "invitation" => :invitation,
-    "open" => :open
-  }
+  @fresh [:connect, :renew, :unlock]
 
-  @type purpose ::
-          :connect | :renew | :pair | :enroll | :unlock | :confirm | :lock
-  @type admission :: :setup | :restore | :invitation | :open
+  @type purpose :: :connect | :renew | :unlock | :lock
   @type t :: %__MODULE__{
           purpose: purpose(),
           home: String.t(),
@@ -295,11 +276,7 @@ defmodule Prima.DeviceCert.Challenge do
           device_key: binary(),
           nonce: binary() | nil,
           expires_at: non_neg_integer() | nil,
-          admission: admission() | nil,
-          request_id: String.t() | nil,
-          session_id: String.t() | nil,
-          ref: String.t() | nil,
-          digest: String.t() | nil
+          session_id: String.t() | nil
         }
 
   @enforce_keys [:purpose, :home, :athanor, :client_id, :device_key]
@@ -311,11 +288,7 @@ defmodule Prima.DeviceCert.Challenge do
     :device_key,
     nonce: nil,
     expires_at: nil,
-    admission: nil,
-    request_id: nil,
-    session_id: nil,
-    ref: nil,
-    digest: nil
+    session_id: nil
   ]
 
   @doc "The protocol string a challenge and its proof carry."
@@ -330,9 +303,9 @@ defmodule Prima.DeviceCert.Challenge do
   @spec nonce_bytes() :: pos_integer()
   def nonce_bytes, do: @nonce_bytes
 
-  @doc "Every purpose, the three pairing ones first."
+  @doc "Every purpose, the two connection ones first."
   @spec purposes() :: [purpose()]
-  def purposes, do: [:connect, :renew, :pair, :enroll, :unlock, :confirm, :lock]
+  def purposes, do: [:connect, :renew, :unlock, :lock]
 
   @doc "The fields a purpose adds to the binding (and, when fresh, the nonce and expiry)."
   @spec purpose_fields(purpose()) :: [atom()]
@@ -344,11 +317,9 @@ defmodule Prima.DeviceCert.Challenge do
 
   @doc """
   A challenge from its attributes: `:purpose`, `:home`, `:athanor`,
-  `:client_id`, `:device_key` (raw bytes) and the purpose's own fields
-  (`:admission` as an atom). A fresh purpose takes `:now` (milliseconds)
-  and the `:nonce` its issuer drew, and expires `lifetime_ms/0` after
-  `:now`, or at `:not_after` when that is sooner (a confirmation's own
-  expiry).
+  `:client_id`, `:device_key` (raw bytes) and the purpose's own fields.
+  A fresh purpose takes `:now` (milliseconds) and the `:nonce` its issuer
+  drew, and expires `lifetime_ms/0` after `:now`.
   """
   @spec new(map() | keyword()) :: {:ok, t()} | {:error, Encoding.reason() | :wrong_protocol}
   def new(attrs) do
@@ -367,15 +338,14 @@ defmodule Prima.DeviceCert.Challenge do
 
     own =
       for field <- Map.get(@purpose_fields, Map.get(@purposes, purpose), []), into: %{} do
-        value = attrs[field]
-        {Atom.to_string(field), if(is_atom(value) and value, do: to_string(value), else: value)}
+        {Atom.to_string(field), attrs[field]}
       end
 
     fresh =
       if Map.get(@purposes, purpose) in @fresh do
         %{
           "nonce" => is_binary(attrs[:nonce]) && Encoding.b64(attrs[:nonce]),
-          "expires_at" => expiry(attrs[:now], attrs[:not_after])
+          "expires_at" => is_integer(attrs[:now]) && attrs[:now] + @lifetime_ms
         }
       else
         %{}
@@ -383,10 +353,6 @@ defmodule Prima.DeviceCert.Challenge do
 
     fields |> Map.merge(own) |> Map.merge(fresh) |> decode()
   end
-
-  defp expiry(now, nil) when is_integer(now), do: now + @lifetime_ms
-  defp expiry(now, cap) when is_integer(now) and is_integer(cap), do: min(now + @lifetime_ms, cap)
-  defp expiry(_now, _cap), do: false
 
   @doc "Read a challenge from its JSON map: exactly its purpose's fields."
   @spec decode(term()) :: {:ok, t()} | {:error, Encoding.reason() | :wrong_protocol}
@@ -438,8 +404,7 @@ defmodule Prima.DeviceCert.Challenge do
 
     own =
       for field <- Map.fetch!(@purpose_fields, purpose), into: %{} do
-        value = Map.fetch!(challenge, field)
-        {Atom.to_string(field), if(is_atom(value), do: Atom.to_string(value), else: value)}
+        {Atom.to_string(field), Map.fetch!(challenge, field)}
       end
 
     binding |> Map.merge(fresh) |> Map.merge(own)
@@ -468,22 +433,17 @@ defmodule Prima.DeviceCert.Challenge do
 
   defp fresh(_map, _lock), do: {:ok, %{}}
 
+  # A purpose's own fields are ids (`session_id`).
   defp own(map, purpose) do
     Enum.reduce_while(Map.fetch!(@purpose_fields, purpose), {:ok, %{}}, fn field, {:ok, acc} ->
-      case own_field(field, map[Atom.to_string(field)]) do
+      name = Atom.to_string(field)
+
+      case Encoding.check(map, name, &Encoding.id?/1) do
         {:ok, value} -> {:cont, {:ok, Map.put(acc, field, value)}}
-        :error -> {:halt, {:error, {:invalid_field, Atom.to_string(field)}}}
+        {:error, _invalid} = error -> {:halt, error}
       end
     end)
   end
-
-  defp own_field(:admission, value), do: Map.fetch(@admissions, value)
-  defp own_field(:ref, value), do: ok_if(Prima.Confirmation.ref?(value), value)
-  defp own_field(:digest, value), do: ok_if(Encoding.digest?(value), value)
-  defp own_field(_id, value), do: ok_if(Encoding.id?(value), value)
-
-  defp ok_if(true, value), do: {:ok, value}
-  defp ok_if(false, _value), do: :error
 end
 
 defmodule Prima.DeviceCert.Proof do
@@ -522,11 +482,7 @@ defmodule Prima.DeviceCert.Proof do
     :device_key,
     :nonce,
     :expires_at,
-    :admission,
-    :request_id,
-    :session_id,
-    :ref,
-    :digest
+    :session_id
   ]
 
   @doc "Answer a challenge with the device's private key."

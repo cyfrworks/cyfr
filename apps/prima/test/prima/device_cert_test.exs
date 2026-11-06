@@ -51,7 +51,7 @@ defmodule Prima.DeviceCertTest do
     assert v["certificate_protocol"] == DeviceCert.protocol()
     assert v["proof_protocol"] == Challenge.protocol()
     assert v["lifetime_ms"] == Challenge.lifetime_ms()
-    # The pairing purposes are this file's; the protected device's are
+    # The connection purposes are this file's; the protected device's are
     # device_unlock.json's (Prima.DeviceUnlockTest), and together they are
     # every purpose there is.
     device_purposes =
@@ -68,7 +68,7 @@ defmodule Prima.DeviceCertTest do
     assert v["purposes"] ++ Enum.sort(device_purposes) ==
              Enum.map(Challenge.purposes(), &Atom.to_string/1)
              |> then(fn all ->
-               Enum.take(all, 3) ++ Enum.sort(Enum.drop(all, 3))
+               Enum.take(all, 2) ++ Enum.sort(Enum.drop(all, 2))
              end)
 
     assert DeviceCert.protocol() != Challenge.protocol()
@@ -203,7 +203,6 @@ defmodule Prima.DeviceCertTest do
       for {name, device} <- [
             {"connect", "device_1"},
             {"renew", "device_1"},
-            {"pair", "device_1"},
             {"by_another_key", "device_2"}
           ] do
         proof = v["proofs"][name]
@@ -235,33 +234,6 @@ defmodule Prima.DeviceCertTest do
             assert tag(result) == error, name
         end
       end
-    end
-
-    test "a pairing proof and a connect or renewal proof never stand in for each other" do
-      v = vectors()
-      proof = fn name -> v["proofs"][name] end
-      held = fn name -> elem(Challenge.decode(v["challenges"][name]), 1) end
-      now = v["issued_at"] + 1000
-
-      assert held.("pair").purpose == :pair
-      assert held.("pair").client_id in v["reserved_client_ids"]
-      assert Proof.verify(proof.("pair"), held.("pair"), now) == :ok
-
-      for {presented, expected} <- [
-            {"pair", "connect"},
-            {"pair", "renew"},
-            {"connect", "pair"},
-            {"renew", "pair"}
-          ] do
-        assert Proof.verify(proof.(presented), held.(expected), now) ==
-                 {:error, {:challenge_mismatch, :purpose}},
-               "#{presented} for #{expected}"
-      end
-
-      assert held.("pair_other_client").client_id != held.("pair").client_id
-
-      assert Proof.verify(proof.("pair"), held.("pair_other_client"), now) ==
-               {:error, {:challenge_mismatch, :client_id}}
     end
 
     test "every malformed challenge is refused, and a proof needs its signature" do

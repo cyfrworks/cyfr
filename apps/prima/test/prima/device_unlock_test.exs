@@ -5,7 +5,7 @@ defmodule Prima.DeviceUnlockTest do
   @moduledoc """
   The protected device's proof purposes as data
   (`tests/fixtures/device_unlock.json`): each purpose takes exactly its
-  fields; the four worked proofs are the device key's signatures over
+  fields; the two worked proofs are the device key's signatures over
   their exact challenges and read back to their bytes; every proof is held
   to the challenge the home holds (none, once consumed) at its time, to
   its result; a lock proof needs no clock and the fresh verifier never
@@ -37,10 +37,6 @@ defmodule Prima.DeviceUnlockTest do
     )
   end
 
-  defp tag({:error, reason}), do: tag(reason)
-  defp tag({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
-  defp tag(reason) when is_atom(reason), do: Atom.to_string(reason)
-
   test "the protocol, the field lists and the sizes are the implementation's" do
     v = vectors()
     common = v["common_fields"]
@@ -61,13 +57,6 @@ defmodule Prima.DeviceUnlockTest do
       assert Enum.sort(Map.keys(Map.delete(v["proofs"][name], "sig"))) == Enum.sort(expected),
              name
     end
-
-    assert v["purpose_fields"]["enroll"]["admissions"] == [
-             "setup",
-             "restore",
-             "invitation",
-             "open"
-           ]
   end
 
   test "every public key derives from its seed" do
@@ -91,7 +80,7 @@ defmodule Prima.DeviceUnlockTest do
     end
   end
 
-  test "new/1 builds each worked challenge, a confirmation's capped by its record" do
+  test "new/1 builds each worked challenge" do
     v = vectors()
     now = 1_790_000_000_000
 
@@ -114,24 +103,6 @@ defmodule Prima.DeviceUnlockTest do
       assert {:ok, built} = Challenge.new(attrs), name
       assert Challenge.encode(built) == challenge, name
     end
-
-    confirm = Map.delete(v["proofs"]["confirm"], "sig")
-
-    {:ok, capped} =
-      Challenge.new(
-        purpose: :confirm,
-        home: confirm["home"],
-        athanor: confirm["athanor"],
-        client_id: confirm["client_id"],
-        device_key: unb64(confirm["device_key"]),
-        nonce: unb64(confirm["nonce"]),
-        now: now,
-        not_after: now + 10_000,
-        ref: confirm["ref"],
-        digest: confirm["digest"]
-      )
-
-    assert capped.expires_at == now + 10_000
   end
 
   test "every proof is held to the challenge the home holds, to its result" do
@@ -159,8 +130,14 @@ defmodule Prima.DeviceUnlockTest do
         %{"error" => "challenge_mismatch", "field" => field} ->
           assert result == {:error, {:challenge_mismatch, String.to_existing_atom(field)}}, name
 
+        # The file names no field for a malformed proof: the reason is
+        # held, and that it names one.
+        %{"error" => error} when error in ~w(invalid_field unknown_field missing_field) ->
+          assert {:error, {reason, field}} = result, name
+          assert Atom.to_string(reason) == error and is_binary(field), name
+
         %{"error" => error} ->
-          assert tag(result) == error, name
+          assert result == {:error, String.to_existing_atom(error)}, name
       end
     end
   end
