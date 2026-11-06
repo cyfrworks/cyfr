@@ -14,13 +14,14 @@ import {here} from "./common.js"
 import {answer, digest, fragment, parseFragment, readRequest} from "../sign_in.js"
 import {$, attempt, only, say, words} from "../view.js"
 
+// Each operation in words, naming every field of the body it signs.
 const OPERATIONS = {
   "handle.claim": ({handle}, at) => `Claim the name @${handle} at ${at}`,
   "policy.accept": ({policy_version}, at) => `Accept the terms (version ${policy_version}) at ${at}`,
   "tokens.mint": ({label}, at) => `Create a publishing token named “${label}” at ${at}`,
-  "appeal.file": (_body, at) => `File an appeal at ${at}`,
+  "appeal.file": ({action_type, action_ref, argument}, at) => `Appeal the ${action_type} ${action_ref} at ${at}, saying: “${argument}”`,
   "publisher.claim": ({slug}, at) => `Claim the publisher name ${slug} at ${at}`,
-  "publisher.verify": ({slug}, at) => `Confirm the publisher name ${slug} at ${at}`
+  "publisher.verify": ({slug, label}, at) => `Confirm the publisher name ${slug} at ${at}, with a publishing token named “${label}”`
 }
 
 /** What the person is asked to sign, in words. */

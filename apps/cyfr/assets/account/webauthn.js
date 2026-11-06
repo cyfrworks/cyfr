@@ -65,7 +65,11 @@ async function signed(assertion, pub) {
 
 // WebCrypto takes an ECDSA signature as r ‖ s, 32 bytes each; WebAuthn
 // returns the DER SEQUENCE of two INTEGERs. Anything but exactly that
-// sequence, in short-form lengths, is no signature.
+// sequence, in short-form lengths, is no signature: DER spells each
+// positive integer in its fewest bytes, so a leading zero is there only
+// before a byte whose high bit is set, and a high bit with none before it
+// is a negative number. Either other spelling is refused, as the other
+// sides' verifiers refuse it.
 function derToRaw(der) {
   if (der.length < 8 || der[0] !== 0x30 || der[1] !== der.length - 2) return null
   const r = integer(der, 2)
@@ -79,7 +83,11 @@ function integer(der, at) {
   const size = der[at + 1]
   if (size < 1 || size > 33 || at + 2 + size > der.length) return null
   let value = der.subarray(at + 2, at + 2 + size)
-  while (value.length > 1 && value[0] === 0) value = value.subarray(1)
+  if (value[0] >= 0x80) return null
+  if (value[0] === 0 && value.length > 1) {
+    if (value[1] < 0x80) return null
+    value = value.subarray(1)
+  }
   if (value.length > 32) return null
   const padded = new Uint8Array(32)
   padded.set(value, 32 - value.length)

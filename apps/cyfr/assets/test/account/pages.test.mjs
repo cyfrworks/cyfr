@@ -10,9 +10,9 @@ import {extend, walk} from "../../account/identity.js"
 import {Unreachable} from "../../account/network.js"
 import {readDevice, adding} from "../../account/pages/add.js"
 import {here} from "../../account/pages/common.js"
-import {listing, removal} from "../../account/pages/devices.js"
+import {listing, removal, run as devicesRun} from "../../account/pages/devices.js"
 import {Creation} from "../../account/pages/new.js"
-import {Recovery} from "../../account/pages/recover.js"
+import {Recovery, run as recoveryRun} from "../../account/pages/recover.js"
 import {describe as describeRequest, readSigned, sign} from "../../account/pages/sign.js"
 import {digest, fragment, parseFragment} from "../../account/sign_in.js"
 
@@ -93,8 +93,9 @@ function der(raw) {
 // as cyfr.run checks it (a genesis walked, an entry extended onto the
 // head), and `lose(path)` drops the answer to the next write on a path
 // after applying it, as a network that fails on the way back does.
-function world({policy = {version: "v1", url: `${ORIGIN}/terms`}} = {}) {
+function world({policy = {version: "v1", url: `${ORIGIN}/terms`}, required = null} = {}) {
   const logs = new Map()
+  const accepted = new Map()
   const handles = new Map()
   const sent = []
   const losing = new Set()
@@ -132,12 +133,18 @@ function world({policy = {version: "v1", url: `${ORIGIN}/terms`}} = {}) {
     const {sig, ...unsigned} = request
     if (!(await crypto.subtle.verify("Ed25519", key, unb64(sig, 64), utf8(jcs(unsigned))))) return envelope(401, "BAD_SIGNATURE")
     sent.push(request)
-    if (path === "/v1/legal/accept") return json(200, {accepted: request.body.policy_version})
+    if (path === "/v1/legal/accept") {
+      accepted.set(request.identifier, request.body.policy_version)
+      return json(200, {accepted: request.body.policy_version})
+    }
+    if (required.version && accepted.get(request.identifier) !== required.version) return envelope(412, "POLICY_ACCEPTANCE_REQUIRED")
     const holder = handles.get(request.body.handle)
     if (holder && holder !== request.identifier) return envelope(409, "SLUG_TAKEN")
     handles.set(request.body.handle, request.identifier)
     return json(200, {handle: request.body.handle})
   }
+
+  required = {version: required}
 
   async function fetch(url, init = {}) {
     const {pathname, search} = new URL(url)
@@ -161,7 +168,7 @@ function world({policy = {version: "v1", url: `${ORIGIN}/terms`}} = {}) {
     return json(200, {identifier, from: after + 1, next: null, head: state.head, length: entries.length, entries: entries.slice(after + 1)})
   }
 
-  return {fetch, logs, handles, sent, lose: (path) => losing.add(path)}
+  return {fetch, logs, handles, sent, required, lose: (path) => losing.add(path)}
 }
 
 function memoryStorage() {
@@ -482,5 +489,177 @@ describe("/account/recover", () => {
     await recovery.addPasskey("alice")
     const {state} = await walk(net.logs.get(identifier))
     assert.equal(state.keys[0].credential_id, identity.keys.passkey_1.credential_id)
+  })
+})
+
+// The pages' DOM as their HTML declares it: every element with an id,
+// enough of each for `run` to wire it and a test to click it.
+function documentFor(page) {
+  class Element {
+    constructor(id = "") {
+      Object.assign(this, {id, children: [], handlers: {}, hidden: false, disabled: false, checked: false, textContent: "", value: ""})
+    }
+    append(...children) {
+      this.children.push(...children)
+    }
+    replaceChildren(...children) {
+      this.children = children
+    }
+    addEventListener(event, handler) {
+      this.handlers[event] = handler
+    }
+    click() {
+      return this.handlers.click()
+    }
+  }
+  const html = readFileSync(new URL(`../../account/${page}.html`, import.meta.url), "utf8")
+  const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, new Element(id)]))
+  const sections = [...html.matchAll(/<section id="([^"]+)"/g)].map(([, id]) => elements.get(id))
+  return {
+    getElementById: (id) => elements.get(id),
+    querySelectorAll: () => sections,
+    createElement: () => new Element(),
+    createTextNode: (textContent) => ({textContent})
+  }
+}
+
+// `env` whose next log read after a write fails, as a network that drops
+// once the write was answered.
+function failingReadAfterWrite(env) {
+  const original = env.fetch
+  let failNext = false
+  env.fetch = async (url, init) => {
+    if (init?.method === "POST") {
+      const response = await original(url, init)
+      failNext = true
+      return response
+    }
+    if (failNext && url.includes("/directory/v1/per_")) {
+      failNext = false
+      throw new TypeError("network")
+    }
+    return original(url, init)
+  }
+  return env
+}
+
+describe("review regressions", () => {
+  test("keeps the four signed objects before the first request is sent, and sends the kept bytes", async () => {
+    const net = world()
+    const storage = memoryStorage()
+    const passkey = await authenticator(identity.keys.passkey_1, null)
+    const creation = await Creation.open(environment(passkey, net, {storage}))
+    await creation.begin("alice")
+    await creation.savedCode()
+    assert.equal(net.logs.size, 0, "nothing is sent at I saved it")
+    const [kept] = creation.attempts.list()
+    assert.equal(kept.genesis.kind, "genesis")
+    assert.equal(kept.add_key.kind, "add_key")
+    assert.equal(JSON.parse(kept.accept.bytes).body.policy_version, "v1")
+    assert.equal(JSON.parse(kept.claim.bytes).body.handle, "alice")
+    await creation.submit()
+    assert.deepEqual(net.sent.map((request) => jcs(request)), [kept.accept.bytes, kept.claim.bytes])
+  })
+
+  test("a resume accepts only the version the person accepted, and a newer one only when asked again", async () => {
+    const policy = {version: "v1", url: `${ORIGIN}/terms`}
+    const net = world({policy})
+    const storage = memoryStorage()
+    const passkey = await authenticator(identity.keys.passkey_1, null)
+    const first = await Creation.open(environment(passkey, net, {storage}))
+    const code = await first.begin("alice")
+    await first.savedCode()
+    net.lose("/directory/v1/register")
+    await assert.rejects(first.submit(), Unreachable)
+
+    policy.version = "v2"
+    net.required.version = "v2"
+    const env = environment(passkey, net, {storage})
+    env.clock.now += 10 * 60 * 1000
+    const resumed = await Creation.open(env)
+    await resumed.resume(resumed.attempts.list()[0], code)
+    await assert.rejects(resumed.submit(), {reason: "policy_changed"})
+    assert.deepEqual(
+      net.sent.filter((request) => request.operation === "policy.accept").map((request) => request.body.policy_version),
+      ["v1"],
+      "the expired v1 acceptance is signed again as v1, never as v2"
+    )
+    resumed.acceptPolicy()
+    await resumed.submit()
+    assert.deepEqual(
+      net.sent.filter((request) => request.operation === "policy.accept").map((request) => request.body.policy_version),
+      ["v1", "v2"]
+    )
+    assert.equal(net.handles.get("alice"), resumed.attempt.identifier)
+  })
+
+  test("sends a kept registry request once: after a lost response it is signed again with a fresh nonce", async () => {
+    const net = world()
+    const passkey = await authenticator(identity.keys.passkey_1, null)
+    const creation = await Creation.open(environment(passkey, net))
+    await creation.begin("alice")
+    await creation.savedCode()
+    net.lose("/v1/legal/accept")
+    await assert.rejects(creation.submit(), Unreachable)
+    await creation.submit()
+    const accepts = net.sent.filter((request) => request.operation === "policy.accept")
+    assert.equal(accepts.length, 2)
+    assert.notEqual(accepts[0].nonce, accepts[1].nonce)
+  })
+
+  test("words every field of every registry operation's signed body", () => {
+    const bodies = {
+      "handle.claim": {handle: "mira"},
+      "policy.accept": {policy_version: "2026-11"},
+      "tokens.mint": {label: "laptop token"},
+      "appeal.file": {action_type: "takedown", action_ref: "case-123", argument: "This names another component."},
+      "publisher.claim": {slug: "example.com"},
+      "publisher.verify": {slug: "example.com", label: "founder token"}
+    }
+    for (const [operation, body] of Object.entries(bodies)) {
+      const request = structuredClone(signIn.requests.registry.request)
+      Object.assign(request.registry_request, {operation, body})
+      const words = describeRequest(request)
+      for (const value of Object.values(body)) assert.ok(words.includes(value), `${operation}: ${words}`)
+      assert.ok(words.includes("cyfr.run"), words)
+    }
+  })
+
+  test("devices: a removal whose log read failed is sent again unchanged, without another passkey prompt", async () => {
+    const net = world()
+    const account = await accountWithPasskey(net)
+    const device = identity.keys.device_1
+    const flow = adding(account.env, await here(account.env), await readDevice(new URLSearchParams({key: device.public, alg: "ed25519", kind: "device", code: device.kid.slice(7, 23)})))
+    await flow.sign()
+    await flow.send()
+    const doc = documentFor("devices")
+    await devicesRun(doc, failingReadAfterWrite(account.env))
+    await doc.getElementById("open").click()
+    const remove = doc.getElementById("keys").children[1].children[1]
+    await remove.click()
+    assert.match(doc.getElementById("list-error").textContent, /could not be reached/)
+    const prompts = account.passkey.calls.length
+    await remove.click()
+    assert.equal(doc.getElementById("list-error").textContent, "")
+    assert.equal(account.passkey.calls.length, prompts)
+    assert.equal(doc.getElementById("keys").children.length, 1)
+    assert.equal(net.logs.get(account.identifier).length, 4)
+  })
+
+  test("recover: an entry whose log read failed stays pending, and Retry sends it again", async () => {
+    const net = world()
+    const {env, code, identifier} = await accountWithPasskey(net)
+    const doc = documentFor("recover")
+    await recoveryRun(doc, failingReadAfterWrite(env))
+    doc.getElementById("code-input").value = code
+    await doc.getElementById("enter-code").click()
+    await doc.getElementById("keys").children[0].children[1].click()
+    assert.equal(net.logs.get(identifier).length, 3)
+    assert.match(doc.getElementById("account-error").textContent, /could not be reached/)
+    assert.equal(doc.getElementById("retry").hidden, false)
+    await doc.getElementById("retry").click()
+    assert.equal(doc.getElementById("account-error").textContent, "")
+    assert.equal(doc.getElementById("keys").children.length, 0)
+    assert.equal(net.logs.get(identifier).length, 3)
   })
 })

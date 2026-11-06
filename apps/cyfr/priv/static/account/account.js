@@ -192,7 +192,11 @@
     const size = der[at + 1];
     if (size < 1 || size > 33 || at + 2 + size > der.length) return null;
     let value = der.subarray(at + 2, at + 2 + size);
-    while (value.length > 1 && value[0] === 0) value = value.subarray(1);
+    if (value[0] >= 128) return null;
+    if (value[0] === 0 && value.length > 1) {
+      if (value[1] < 128) return null;
+      value = value.subarray(1);
+    }
     if (value.length > 32) return null;
     const padded = new Uint8Array(32);
     padded.set(value, 32 - value.length);
@@ -785,6 +789,15 @@
     const made = await env2.passkeys.assert({ challenge: await challenge(entry), allow: [session.credentialId] });
     return attach(entry, { authenticator_data: made.authenticatorData, client_data: made.clientData, signature: made.signature });
   }
+  async function appendOnce(dir, identifier2, entry, retry) {
+    if (retry) {
+      const read2 = await dir.read(identifier2);
+      const held = read2.entries[entry.seq];
+      if (held && jcs(held) === jcs(entry)) return read2;
+    }
+    await dir.append(identifier2, entry);
+    return dir.read(identifier2);
+  }
   var shortCode = (kid2) => kid2.slice("sha256:".length, "sha256:".length + 16);
   function addedAt(entries) {
     const at = /* @__PURE__ */ new Map();
@@ -815,6 +828,7 @@
     no_passkey: "This account has no passkey. Add one with your recovery code first.",
     name_taken: "That name is taken. Choose another.",
     name_invalid: "A name is 1 to 39 lowercase letters, digits and single hyphens, starting and ending with a letter or digit.",
+    policy_changed: "The terms changed. Accept the new terms to finish.",
     name_elsewhere: "That name is not this account's. Type the name of the account this code recovers.",
     not_a_code: "That is not a recovery code. Check what you typed.",
     typo: "That recovery code has a typo. Check each group and try again.",
@@ -962,10 +976,10 @@
           remove.addEventListener(
             "click",
             () => attempt(doc, remove, "list-error", async () => {
-              if (pending?.kid !== key.kid) pending = { kid: key.kid, entry: await removal(env2, session, key.kid) };
-              await place.directory.append(session.identifier, pending.entry);
+              const retry = pending?.kid === key.kid;
+              if (!retry) pending = { kid: key.kid, entry: await removal(env2, session, key.kid) };
+              session = { ...session, ...await appendOnce(place.directory, session.identifier, pending.entry, retry) };
               pending = null;
-              session = { ...session, ...await place.directory.read(session.identifier) };
               draw();
             })
           );
@@ -1207,9 +1221,9 @@
     "handle.claim": ({ handle }, at) => `Claim the name @${handle} at ${at}`,
     "policy.accept": ({ policy_version }, at) => `Accept the terms (version ${policy_version}) at ${at}`,
     "tokens.mint": ({ label }, at) => `Create a publishing token named \u201C${label}\u201D at ${at}`,
-    "appeal.file": (_body, at) => `File an appeal at ${at}`,
+    "appeal.file": ({ action_type, action_ref, argument }, at) => `Appeal the ${action_type} ${action_ref} at ${at}, saying: \u201C${argument}\u201D`,
     "publisher.claim": ({ slug: slug2 }, at) => `Claim the publisher name ${slug2} at ${at}`,
-    "publisher.verify": ({ slug: slug2 }, at) => `Confirm the publisher name ${slug2} at ${at}`
+    "publisher.verify": ({ slug: slug2, label }, at) => `Confirm the publisher name ${slug2} at ${at}, with a publishing token named \u201C${label}\u201D`
   };
   function describe(request) {
     if (request.purpose === "sign_in") return `Sign in to ${request.audience}`;
@@ -1292,19 +1306,24 @@
       const first = await signWith(genesis({ directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer }), key);
       const identifier2 = await identifier(first);
       this.key = key;
-      this.attempt = { identifier: identifier2, name, genesis: first, step: "passkey", created_at: this.env.now() };
+      const accepted = this.config.policy?.version ?? null;
+      this.attempt = { identifier: identifier2, name, accepted, genesis: first, step: "passkey", created_at: this.env.now() };
       const code = await codeFor(identifier2, secret);
       secret.fill(0);
       return code;
     }
-    /** "I saved it": create the passkey, sign its `add_key`, and keep the attempt. */
+    /** "I saved it": create the passkey, sign its `add_key` and the two registry requests, and keep them all. */
     async savedCode() {
-      const { identifier: identifier2, name, genesis: first } = this.attempt;
+      const { identifier: identifier2, name, accepted, genesis: first } = this.attempt;
       const { credentialId, pub } = await this.env.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: this.env.random(32) });
       const { state } = await walk([first]);
       const entry = next(state, "add_key", { key: await keyOf({ pub, credentialId }) }, { at: this.env.now(), signer: this.key.signer });
-      this.attempt = { ...this.attempt, add_key: await signWith(entry, this.key), step: "register" };
-      this.attempts.save(this.attempt);
+      this.keep({
+        add_key: await signWith(entry, this.key),
+        accept: accepted === null ? null : await this.signed("policy.accept", { policy_version: accepted }),
+        claim: await this.signed("handle.claim", { handle: name }),
+        step: "register"
+      });
     }
     /** Continue an attempt kept in this browser with the code the person typed. */
     async resume(kept, text2) {
@@ -1313,10 +1332,17 @@
       this.key = key;
       this.attempt = kept;
     }
-    /** A new name for an account whose name was taken meanwhile. */
+    /** A new name for an account whose name was taken meanwhile; its claim is signed when sent. */
     rename(name) {
       if (!isHandle(name)) refuse("name_invalid");
-      this.attempt = { ...this.attempt, name };
+      this.keep({ name, claim: null });
+    }
+    /** The person accepted the policy this page's configuration names now, the registry having asked for it. */
+    acceptPolicy() {
+      this.keep({ accepted: this.config.policy.version, accept: null });
+    }
+    keep(fields2) {
+      this.attempt = { ...this.attempt, ...fields2 };
       this.attempts.save(this.attempt);
     }
     /** Submit from the step reached, saving each step as it completes; resolves once the name is the account's. */
@@ -1343,15 +1369,30 @@
         refuse("name_taken");
       }
       if (found.error !== "handle_not_found") refuse(found.error);
-      if (this.config.policy) await this.send("policy.accept", { policy_version: this.config.policy.version });
+      const { accepted, accept } = this.attempt;
+      if (accepted !== null && !accept?.done) {
+        await this.send("accept", "policy.accept", { policy_version: accepted });
+        this.keep({ accept: { ...this.attempt.accept, done: true } });
+      }
       try {
-        await this.send("handle.claim", { handle: name });
+        await this.send("claim", "handle.claim", { handle: name });
       } catch (error) {
         if (error instanceof Refusal && error.reason === "handle_taken") refuse("name_taken");
+        if (error instanceof Refusal && error.reason === "policy_required") refuse("policy_changed");
         throw error;
       }
     }
-    async send(operation, body) {
+    // Send the kept request `field` once: it is marked sent, and saved,
+    // before it goes, and one sent before or past its expiry is signed again
+    // with the same body.
+    async send(field, operation, body) {
+      let kept = this.attempt[field];
+      if (!kept || kept.sent || this.env.now() >= kept.expires_at) kept = await this.signed(operation, body);
+      this.keep({ [field]: { ...kept, sent: true } });
+      return this.registry.send(operation, kept.bytes);
+    }
+    // A registry request signed by the recovery key: the bytes sent and when they expire.
+    async signed(operation, body) {
       const request = compose({
         registry: this.registry.host,
         operation,
@@ -1361,7 +1402,7 @@
         now: this.env.now(),
         body
       });
-      return this.registry.send(operation, await signWith2(request, this.key));
+      return { bytes: await signWith2(request, this.key), expires_at: request.expires_at };
     }
   };
   async function run4(doc, env2) {
@@ -1404,6 +1445,12 @@
         if (error instanceof Refusal && error.reason === "name_taken") {
           $(doc, "rename-name").value = "";
           only(doc, "rename");
+          return;
+        }
+        if (error instanceof Refusal && error.reason === "policy_changed" && creation.config.policy) {
+          $(doc, "policy-again-link").href = creation.config.policy.url;
+          $(doc, "accept-again").checked = false;
+          only(doc, "policy-again");
           return;
         }
         say(doc, "working-error", words(error));
@@ -1456,6 +1503,18 @@
         const name = $(doc, "rename-name").value.trim().toLowerCase();
         await creation.check(name);
         creation.rename(name);
+        await proceed();
+      })
+    );
+    const acceptAgain = $(doc, "accept-again");
+    const again = $(doc, "policy-again-submit");
+    const readyAgain = () => again.disabled = !acceptAgain.checked;
+    acceptAgain.addEventListener("change", readyAgain);
+    readyAgain();
+    again.addEventListener(
+      "click",
+      () => attempt(doc, again, "policy-again-error", async () => {
+        creation.acceptPolicy();
         await proceed();
       })
     );
@@ -1514,14 +1573,20 @@
     sign(kind, own) {
       return signWith(next(this.state, kind, own, { at: this.env.now(), signer: this.key.signer }), this.key);
     }
-    /** Append `entry`, or the one still pending after a lost response, then read the log again. */
-    async submit(entry = this.pending) {
-      this.pending = entry;
-      await this.place.directory.append(this.identifier, entry);
+    /**
+     * Append `entry`, then read the log again; with no entry, retry the one
+     * still pending. An entry stays pending until a read shows it: after a
+     * lost response, or a read that failed (`appendOnce`).
+     */
+    async submit(entry) {
+      const retry = entry === void 0;
+      if (!retry) this.pending = entry;
+      const { kind } = this.pending;
+      const read2 = await appendOnce(this.place.directory, this.identifier, this.pending, retry);
       this.pending = null;
-      if (entry.kind === "recover") this.key = this.fresh.key;
-      if (entry.kind === "recover" || entry.kind === "add_recovery") this.fresh = null;
-      Object.assign(this, await this.place.directory.read(this.identifier));
+      if (kind === "recover") this.key = this.fresh.key;
+      if (kind === "recover" || kind === "add_recovery") this.fresh = null;
+      Object.assign(this, read2);
     }
     /** The account's keys as the page lists them. */
     keys() {

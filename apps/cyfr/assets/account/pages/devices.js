@@ -9,7 +9,7 @@
 // recovery code removes it.
 
 import {next} from "../identity.js"
-import {addedAt, here, keyLabel, namedByPasskey, shortCode, signedByPasskey} from "./common.js"
+import {addedAt, appendOnce, here, keyLabel, namedByPasskey, shortCode, signedByPasskey} from "./common.js"
 import {$, attempt, only, say, words} from "../view.js"
 
 /** The account's keys as the page lists them. */
@@ -40,7 +40,8 @@ export async function run(doc, env) {
   }
   only(doc, "ask")
   let session = null
-  // The removal last signed, sent again unchanged after a lost response.
+  // The removal last signed, sent again unchanged until the log read after
+  // it shows it: after a lost response, or a read that failed.
   let pending = null
 
   const draw = () => {
@@ -55,10 +56,10 @@ export async function run(doc, env) {
         remove.textContent = "Remove"
         remove.addEventListener("click", () =>
           attempt(doc, remove, "list-error", async () => {
-            if (pending?.kid !== key.kid) pending = {kid: key.kid, entry: await removal(env, session, key.kid)}
-            await place.directory.append(session.identifier, pending.entry)
+            const retry = pending?.kid === key.kid
+            if (!retry) pending = {kid: key.kid, entry: await removal(env, session, key.kid)}
+            session = {...session, ...(await appendOnce(place.directory, session.identifier, pending.entry, retry))}
             pending = null
-            session = {...session, ...(await place.directory.read(session.identifier))}
             draw()
           })
         )

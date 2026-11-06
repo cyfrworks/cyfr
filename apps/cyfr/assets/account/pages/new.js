@@ -4,16 +4,20 @@
 // /account/new#name=&request=: an account made in this browser (plan §7).
 //
 // The order: the name is checked at the registry and the policy, when the
-// registry names one, accepted by a checkbox; "Create your account" draws the recovery secret and signs
-// the genesis with its key, and the code is shown; "I saved it" creates
-// the passkey, signs its `add_key` with the recovery key, keeps the signed
-// entries in localStorage (`attempts.js`) and submits in order: register,
-// append, then the name (`policy.accept` when there is a policy, and
-// `handle.claim`, signed fresh each time they are sent). Register and append resend the same bytes
-// after a lost response, and the directory's `exists` is success. The
-// name step reads the handle first, so a claim whose response was lost is
-// reconciled: ours is done, another's asks for a new name, free signs a
-// fresh claim. The recovery key stays in page memory until the name is
+// registry names one, accepted by a checkbox; "Create your account" draws
+// the recovery secret and signs the genesis with its key, and the code is
+// shown; "I saved it" creates the passkey and signs, with the recovery
+// key, its `add_key`, the `policy.accept` of the version the person
+// accepted and the `handle.claim`, keeps all four in localStorage
+// (`attempts.js`) before anything is sent, and submits in order: register,
+// append, then the name. Register and append resend the same bytes after
+// a lost response, and the directory's `exists` is success. A registry
+// request is sent at most once, since its nonce is spent once: one sent
+// before, or past its expiry, is signed again with the same body, so a
+// resume never accepts a version the person did not; a newer version the
+// registry asks for is asked of the person again. The name step reads the
+// handle first, so a claim whose response was lost is reconciled: ours is
+// done, another's asks for a new name, free signs a fresh claim. The recovery key stays in page memory until the name is
 // reconciled; a resume in a new tab asks for the code to re-derive it.
 // The account never depends on the name. A tab closed before "I saved it"
 // made nothing.
@@ -59,20 +63,25 @@ export class Creation {
     const first = await signWith(genesis({directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer}), key)
     const identifier = await identifierOf(first)
     this.key = key
-    this.attempt = {identifier, name, genesis: first, step: "passkey", created_at: this.env.now()}
+    const accepted = this.config.policy?.version ?? null
+    this.attempt = {identifier, name, accepted, genesis: first, step: "passkey", created_at: this.env.now()}
     const code = await codeFor(identifier, secret)
     secret.fill(0)
     return code
   }
 
-  /** "I saved it": create the passkey, sign its `add_key`, and keep the attempt. */
+  /** "I saved it": create the passkey, sign its `add_key` and the two registry requests, and keep them all. */
   async savedCode() {
-    const {identifier, name, genesis: first} = this.attempt
+    const {identifier, name, accepted, genesis: first} = this.attempt
     const {credentialId, pub} = await this.env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: this.env.random(32)})
     const {state} = await walk([first])
     const entry = next(state, "add_key", {key: await keyOf({pub, credentialId})}, {at: this.env.now(), signer: this.key.signer})
-    this.attempt = {...this.attempt, add_key: await signWith(entry, this.key), step: "register"}
-    this.attempts.save(this.attempt)
+    this.keep({
+      add_key: await signWith(entry, this.key),
+      accept: accepted === null ? null : await this.signed("policy.accept", {policy_version: accepted}),
+      claim: await this.signed("handle.claim", {handle: name}),
+      step: "register"
+    })
   }
 
   /** Continue an attempt kept in this browser with the code the person typed. */
@@ -83,10 +92,19 @@ export class Creation {
     this.attempt = kept
   }
 
-  /** A new name for an account whose name was taken meanwhile. */
+  /** A new name for an account whose name was taken meanwhile; its claim is signed when sent. */
   rename(name) {
     if (!isHandle(name)) refuse("name_invalid")
-    this.attempt = {...this.attempt, name}
+    this.keep({name, claim: null})
+  }
+
+  /** The person accepted the policy this page's configuration names now, the registry having asked for it. */
+  acceptPolicy() {
+    this.keep({accepted: this.config.policy.version, accept: null})
+  }
+
+  keep(fields) {
+    this.attempt = {...this.attempt, ...fields}
     this.attempts.save(this.attempt)
   }
 
@@ -117,16 +135,32 @@ export class Creation {
       refuse("name_taken")
     }
     if (found.error !== "handle_not_found") refuse(found.error)
-    if (this.config.policy) await this.send("policy.accept", {policy_version: this.config.policy.version})
+    const {accepted, accept} = this.attempt
+    if (accepted !== null && !accept?.done) {
+      await this.send("accept", "policy.accept", {policy_version: accepted})
+      this.keep({accept: {...this.attempt.accept, done: true}})
+    }
     try {
-      await this.send("handle.claim", {handle: name})
+      await this.send("claim", "handle.claim", {handle: name})
     } catch (error) {
       if (error instanceof Refusal && error.reason === "handle_taken") refuse("name_taken")
+      if (error instanceof Refusal && error.reason === "policy_required") refuse("policy_changed")
       throw error
     }
   }
 
-  async send(operation, body) {
+  // Send the kept request `field` once: it is marked sent, and saved,
+  // before it goes, and one sent before or past its expiry is signed again
+  // with the same body.
+  async send(field, operation, body) {
+    let kept = this.attempt[field]
+    if (!kept || kept.sent || this.env.now() >= kept.expires_at) kept = await this.signed(operation, body)
+    this.keep({[field]: {...kept, sent: true}})
+    return this.registry.send(operation, kept.bytes)
+  }
+
+  // A registry request signed by the recovery key: the bytes sent and when they expire.
+  async signed(operation, body) {
     const request = compose({
       registry: this.registry.host,
       operation,
@@ -136,7 +170,7 @@ export class Creation {
       now: this.env.now(),
       body
     })
-    return this.registry.send(operation, await signRequest(request, this.key))
+    return {bytes: await signRequest(request, this.key), expires_at: request.expires_at}
   }
 }
 
@@ -183,6 +217,12 @@ export async function run(doc, env) {
       if (error instanceof Refusal && error.reason === "name_taken") {
         $(doc, "rename-name").value = ""
         only(doc, "rename")
+        return
+      }
+      if (error instanceof Refusal && error.reason === "policy_changed" && creation.config.policy) {
+        $(doc, "policy-again-link").href = creation.config.policy.url
+        $(doc, "accept-again").checked = false
+        only(doc, "policy-again")
         return
       }
       say(doc, "working-error", words(error))
@@ -235,6 +275,18 @@ export async function run(doc, env) {
       const name = $(doc, "rename-name").value.trim().toLowerCase()
       await creation.check(name)
       creation.rename(name)
+      await proceed()
+    })
+  )
+
+  const acceptAgain = $(doc, "accept-again")
+  const again = $(doc, "policy-again-submit")
+  const readyAgain = () => (again.disabled = !acceptAgain.checked)
+  acceptAgain.addEventListener("change", readyAgain)
+  readyAgain()
+  again.addEventListener("click", () =>
+    attempt(doc, again, "policy-again-error", async () => {
+      creation.acceptPolicy()
       await proceed()
     })
   )

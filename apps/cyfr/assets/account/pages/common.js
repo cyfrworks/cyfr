@@ -4,7 +4,7 @@
 // What the pages that change an account share: the directory this page
 // is served by, an account named by a passkey, and an entry signed by it.
 
-import {b64, refuse} from "../encoding.js"
+import {b64, jcs, refuse} from "../encoding.js"
 import {attach, challenge} from "../identity.js"
 import {directory, readConfig, registry} from "../network.js"
 
@@ -37,6 +37,22 @@ export async function namedByPasskey(env, dir) {
 export async function signedByPasskey(env, session, entry) {
   const made = await env.passkeys.assert({challenge: await challenge(entry), allow: [session.credentialId]})
   return attach(entry, {authenticator_data: made.authenticatorData, client_data: made.clientData, signature: made.signature})
+}
+
+/**
+ * Append `entry` and answer the log read after it. A `retry` of an entry
+ * whose response or read was lost reads first: when the log already holds
+ * it, it is not sent again; otherwise the same bytes are, and the
+ * directory's `exists` is success.
+ */
+export async function appendOnce(dir, identifier, entry, retry) {
+  if (retry) {
+    const read = await dir.read(identifier)
+    const held = read.entries[entry.seq]
+    if (held && jcs(held) === jcs(entry)) return read
+  }
+  await dir.append(identifier, entry)
+  return dir.read(identifier)
 }
 
 /** A key's short code, as a device shows it: the first 16 hex digits of its kid. */

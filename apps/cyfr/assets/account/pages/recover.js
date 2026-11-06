@@ -14,7 +14,7 @@ import {refuse} from "../encoding.js"
 import {keyOf, next, signWith, userId} from "../identity.js"
 import {codeFor, drawRecovery, readCode} from "../recovery.js"
 import {isHandle} from "../registry.js"
-import {addedAt, here, keyLabel, shortCode} from "./common.js"
+import {addedAt, appendOnce, here, keyLabel, shortCode} from "./common.js"
 import {$, attempt, copyCode, drawCode, only, say, words} from "../view.js"
 
 export class Recovery {
@@ -64,14 +64,20 @@ export class Recovery {
     return signWith(next(this.state, kind, own, {at: this.env.now(), signer: this.key.signer}), this.key)
   }
 
-  /** Append `entry`, or the one still pending after a lost response, then read the log again. */
-  async submit(entry = this.pending) {
-    this.pending = entry
-    await this.place.directory.append(this.identifier, entry)
+  /**
+   * Append `entry`, then read the log again; with no entry, retry the one
+   * still pending. An entry stays pending until a read shows it: after a
+   * lost response, or a read that failed (`appendOnce`).
+   */
+  async submit(entry) {
+    const retry = entry === undefined
+    if (!retry) this.pending = entry
+    const {kind} = this.pending
+    const read = await appendOnce(this.place.directory, this.identifier, this.pending, retry)
     this.pending = null
-    if (entry.kind === "recover") this.key = this.fresh.key
-    if (entry.kind === "recover" || entry.kind === "add_recovery") this.fresh = null
-    Object.assign(this, await this.place.directory.read(this.identifier))
+    if (kind === "recover") this.key = this.fresh.key
+    if (kind === "recover" || kind === "add_recovery") this.fresh = null
+    Object.assign(this, read)
   }
 
   /** The account's keys as the page lists them. */

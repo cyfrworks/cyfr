@@ -85,6 +85,36 @@ describe("identity.json", () => {
     }
   })
 
+  test("refuses a signature whose DER integers are not in their fewest bytes, or are negative", async () => {
+    const c = vectors.webauthn.find((v) => v.result === "ok")
+    const bytes = Object.fromEntries(Object.entries(c.assertion).map(([field, value]) => [field, unb64(value, 1, 16384)]))
+    const pub = unb64(vectors.keys[c.key].public, 65)
+    const check = (signature) => verifyAssertion({...bytes, signature}, pub, unb64(c.challenge, 32), c.origin, c.rp_id)
+    const der = bytes.signature
+    assert.equal(await check(der), "ok")
+
+    const rStart = 4
+    const rSize = der[3]
+    const sStart = rStart + rSize + 2
+    const sSize = der[rStart + rSize + 1]
+    const padded = (start) => {
+      const out = new Uint8Array([...der.subarray(0, start), 0, ...der.subarray(start)])
+      out[1]++
+      out[start - 1]++
+      return out
+    }
+    assert.equal(await check(padded(rStart)), "bad_signature", "a redundant zero before r")
+    assert.equal(await check(padded(sStart)), "bad_signature", "a redundant zero before s")
+
+    const [start, size] = der[rStart] === 0 ? [rStart, rSize] : [sStart, sSize]
+    assert.equal(der[start], 0, "one integer of the vector needs its leading zero")
+    const negative = new Uint8Array([...der.subarray(0, start), ...der.subarray(start + 1)])
+    negative[1]--
+    negative[start - 1]--
+    assert.ok(size === 33)
+    assert.equal(await check(negative), "bad_signature", "an integer whose high bit makes it negative")
+  })
+
   test("a hex identifier and its digest bytes are one value", () => {
     const {identifier: alice} = vectors.identifiers.alice
     assert.deepEqual(userId(alice), fromHex(alice.slice(4)))
