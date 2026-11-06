@@ -4,11 +4,10 @@
 defmodule Arca.PersonIdentitiesTest do
   @moduledoc """
   A person's identity row: one per person, written beside the person row
-  inside the mint's own transaction (`also:`), local with a sealed key set
-  and no identifier, or an account's (remote): its identifier, its
-  directory and the head read, and no key; read by the
-  person or the platform, and looked up by identifier only by the
-  platform's own actor.
+  inside the mint's own transaction (`also:`), the account they were
+  admitted by: its identifier, its directory and the head read, and no
+  key; read by the person or the platform, and looked up by identifier
+  only by the platform's own actor.
   """
 
   # Takes the cell's slot, which is process-wide; each case restores it.
@@ -55,8 +54,6 @@ defmodule Arca.PersonIdentitiesTest do
 
   defp server, do: Prima.Actor.system()
 
-  defp key, do: :crypto.strong_rand_bytes(32)
-
   defp identifier, do: "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
 
   defp person_attrs do
@@ -83,14 +80,13 @@ defmodule Arca.PersonIdentitiesTest do
      }}
   end
 
-  defp local_attrs(user_id) do
+  defp account_attrs(user_id) do
     %{
       user_id: user_id,
-      provenance: "local",
-      live_public_key: key(),
-      operational_public_key: key(),
-      live_key_sealed: "sealed-live",
-      operational_key_sealed: "sealed-op"
+      provenance: "remote",
+      identifier: identifier(),
+      directory_url: "https://dir.example",
+      head_hash: Prima.Digest.sha256("head-#{System.unique_integer()}")
     }
   end
 
@@ -101,60 +97,10 @@ defmodule Arca.PersonIdentitiesTest do
   end
 
   describe "create/2" do
-    test "one key set per person" do
+    test "one row per person" do
       person = person!()
-      assert {:ok, _} = PersonIdentities.create(server(), local_attrs(person.id))
-      assert {:error, :conflict} = PersonIdentities.create(server(), local_attrs(person.id))
-    end
-
-    test "a local row names two distinct keys and their sealed halves, and no identifier" do
-      person = person!()
-      same = key()
-
-      assert {:error, {:invalid, %{operational_public_key: _}}} =
-               PersonIdentities.create(server(), %{
-                 local_attrs(person.id)
-                 | live_public_key: same,
-                   operational_public_key: same
-               })
-
-      assert {:error, {:invalid, %{live_key_sealed: _}}} =
-               PersonIdentities.create(
-                 server(),
-                 Map.delete(local_attrs(person.id), :live_key_sealed)
-               )
-
-      assert {:error, {:invalid, %{head_hash: _, directory_url: _}}} =
-               PersonIdentities.create(
-                 server(),
-                 Map.put(local_attrs(person.id), :identifier, identifier())
-               )
-
-      assert {:error, {:invalid, %{head_hash: _}}} =
-               PersonIdentities.create(
-                 server(),
-                 Map.put(local_attrs(person.id), :head_hash, Prima.Digest.sha256("head"))
-               )
-    end
-
-    test "a restored local person is written enrolled, with the head its keys belong to" do
-      person = person!()
-      id = identifier()
-      head = Prima.Digest.sha256("recover-entry")
-
-      assert {:ok, row} =
-               PersonIdentities.create(
-                 server(),
-                 Map.merge(local_attrs(person.id), %{
-                   identifier: id,
-                   head_hash: head,
-                   directory_url: "https://dir.example"
-                 })
-               )
-
-      assert row.enrollment == "enrolled"
-      assert row.identifier == id
-      assert row.head_hash == head
+      assert {:ok, _} = PersonIdentities.create(server(), account_attrs(person.id))
+      assert {:error, :conflict} = PersonIdentities.create(server(), account_attrs(person.id))
     end
 
     test "an account's row is its identifier, its directory and the head read, and no key" do
@@ -170,15 +116,6 @@ defmodule Arca.PersonIdentitiesTest do
         head_hash: head
       }
 
-      assert {:error, {:invalid, %{live_public_key: _}}} =
-               PersonIdentities.create(server(), Map.put(account, :live_public_key, key()))
-
-      assert {:error, {:invalid, %{genesis_hash: _}}} =
-               PersonIdentities.create(
-                 server(),
-                 Map.put(account, :genesis_hash, Prima.Digest.sha256("genesis"))
-               )
-
       assert {:error, {:invalid, %{head_hash: _}}} =
                PersonIdentities.create(server(), Map.delete(account, :head_hash))
 
@@ -187,7 +124,7 @@ defmodule Arca.PersonIdentitiesTest do
       assert row.provenance == "remote"
       assert row.enrollment == "enrolled"
       assert row.head_hash == head
-      assert is_nil(row.genesis_hash)
+      refute Map.has_key?(row, :live_key_sealed) or Map.has_key?(row, :genesis_hash)
       assert {:ok, %{user_id: user_id}} = PersonIdentities.lookup_identifier(server(), id)
       assert user_id == person.id
 
@@ -197,21 +134,26 @@ defmodule Arca.PersonIdentitiesTest do
                PersonIdentities.create(server(), %{account | user_id: other.id})
     end
 
-    test "only the platform's own actor writes, and provenance is closed" do
+    test "only the platform's own actor writes, and only an account's row" do
       person = person!()
 
       assert {:error, :cross_tenant} =
-               PersonIdentities.create(%Prima.Actor{user_id: person.id}, local_attrs(person.id))
+               PersonIdentities.create(%Prima.Actor{user_id: person.id}, account_attrs(person.id))
 
-      assert {:error, {:invalid, %{provenance: _}}} =
-               PersonIdentities.create(server(), %{local_attrs(person.id) | provenance: "door"})
+      for provenance <- ~w(local door) do
+        assert {:error, {:invalid, %{provenance: _}}} =
+                 PersonIdentities.create(server(), %{
+                   account_attrs(person.id)
+                   | provenance: provenance
+                 })
+      end
     end
   end
 
   describe "reading" do
     test "a person reads their own row; another person and a tenant actor do not" do
       person = person!()
-      {:ok, _} = PersonIdentities.create(server(), local_attrs(person.id))
+      {:ok, _} = PersonIdentities.create(server(), account_attrs(person.id))
 
       assert {:ok, %{user_id: user_id}} =
                PersonIdentities.get(%Prima.Actor{user_id: person.id}, person.id)
@@ -238,7 +180,7 @@ defmodule Arca.PersonIdentitiesTest do
   describe "the first-method mark" do
     test "is set once and never cleared" do
       person = person!()
-      {:ok, _} = PersonIdentities.create(server(), local_attrs(person.id))
+      {:ok, _} = PersonIdentities.create(server(), account_attrs(person.id))
 
       assert {:ok, :marked} =
                Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
@@ -252,7 +194,7 @@ defmodule Arca.PersonIdentitiesTest do
 
     test "reads open before it is set and closed after, open for a person with no row, and only to the person or the platform" do
       person = person!()
-      {:ok, _} = PersonIdentities.create(server(), local_attrs(person.id))
+      {:ok, _} = PersonIdentities.create(server(), account_attrs(person.id))
       own = %Prima.Actor{user_id: person.id}
 
       assert {:ok, true} = PersonIdentities.first_method_open?(own, person.id)

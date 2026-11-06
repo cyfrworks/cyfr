@@ -1053,24 +1053,19 @@ defmodule Arca.PendingConfirmationsRaceTest do
   } do
     test = self()
 
+    identifier = "per_" <> Prima.Digest.sha256_hex("race-#{System.unique_integer([:positive])}")
+
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(where(Arca.Schemas.Passkey, user_id: ^user_id))
         Arca.Repo.delete_all(where(Arca.Schemas.PersonIdentity, user_id: ^user_id))
+        Arca.Repo.delete_all(where(Arca.Schemas.DirectoryHead, identifier: ^identifier))
       end)
     end)
 
     passkey =
       unboxed(fn ->
-        {:ok, _} =
-          Arca.PersonIdentities.create(server(), %{
-            user_id: user_id,
-            provenance: "local",
-            live_public_key: :crypto.strong_rand_bytes(32),
-            operational_public_key: :crypto.strong_rand_bytes(32),
-            live_key_sealed: "l",
-            operational_key_sealed: "o"
-          })
+        _account = Arca.Test.People.account!(user_id, identifier: identifier)
 
         {:ok, passkey} =
           Arca.Passkeys.register(%Prima.Actor{user_id: user_id}, %{

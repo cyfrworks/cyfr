@@ -22,7 +22,7 @@ defmodule Arca.PairedClientsTest do
 
   alias Arca.ControlPlane
   alias Arca.PairedClients
-  alias Arca.Schemas.{CellLease, PairedClient, RestorePerson}
+  alias Arca.Schemas.{CellLease, PairedClient}
 
   @keys [
     {Arca.ControlPlane, :standing},
@@ -108,22 +108,6 @@ defmodule Arca.PairedClientsTest do
       )
 
     person.id
-  end
-
-  # The person's open row of a declared restore, as the transition writes it.
-  defp recovering!(user_id) do
-    restore_id = Prima.UUID7.generate_id("rst")
-    Arca.Repo.insert!(%RestorePerson{restore_id: restore_id, user_id: user_id, open: true})
-    restore_id
-  end
-
-  defp open?(user_id, restore_id) do
-    Arca.Repo.one(
-      from(r in RestorePerson,
-        where: r.user_id == ^user_id and r.restore_id == ^restore_id,
-        select: r.open
-      )
-    )
   end
 
   defp standing(id),
@@ -223,17 +207,7 @@ defmodule Arca.PairedClientsTest do
       )
     end
 
-    defp identity!(user_id) do
-      {:ok, _} =
-        Arca.PersonIdentities.create(Prima.Actor.system(), %{
-          user_id: user_id,
-          provenance: "local",
-          live_public_key: :crypto.strong_rand_bytes(32),
-          operational_public_key: :crypto.strong_rand_bytes(32),
-          live_key_sealed: "sealed-live",
-          operational_key_sealed: "sealed-op"
-        })
-    end
+    defp identity!(user_id), do: Arca.Test.People.account!(user_id)
 
     defp marked?(user_id),
       do:
@@ -427,106 +401,6 @@ defmodule Arca.PairedClientsTest do
 
       assert there_id == there.id
       assert {:error, :no_athanor} = PairedClients.list(Prima.Actor.system(), standing: :all)
-    end
-  end
-
-  describe "reenable/4" do
-    test "moves a suspended client active under its verifier and closes its person's restore alone",
-         %{actor: actor} do
-      user_id = person!()
-      bystander = person!()
-      client = actor |> record!(%{user_id: user_id}) |> suspend!()
-      restore_id = recovering!(user_id)
-      bystanders = recovering!(bystander)
-      test = self()
-
-      verify = fn row ->
-        send(test, {:verified, row})
-        :ok
-      end
-
-      assert {:ok, %{standing: "active", closed_restore_ids: [^restore_id]} = row} =
-               PairedClients.reenable(actor, user_id, client.id, verify: verify)
-
-      refute is_struct(row)
-      assert row.id == client.id
-
-      # The verifier saw the row as it stood under the lock: suspended.
-      assert_received {:verified, %{id: id, standing: "suspended"} = seen}
-      assert id == client.id
-      refute is_struct(seen)
-
-      assert standing(client.id) == "active"
-      assert open?(user_id, restore_id) == false
-      assert open?(bystander, bystanders) == true
-
-      # Nothing to re-enable twice, and a person with no open row closes none.
-      assert {:error, :not_suspended} =
-               PairedClients.reenable(actor, user_id, client.id, verify: verify)
-
-      other = actor |> record!(%{user_id: user_id}) |> suspend!()
-
-      assert {:ok, %{closed_restore_ids: []}} =
-               PairedClients.reenable(actor, user_id, other.id, verify: verify)
-    end
-
-    test "a verifier's refusal rolls everything back", %{actor: actor} do
-      user_id = person!()
-      client = actor |> record!(%{user_id: user_id}) |> suspend!()
-      restore_id = recovering!(user_id)
-
-      assert {:error, :not_this_proof} =
-               PairedClients.reenable(actor, user_id, client.id,
-                 verify: fn _row -> {:error, :not_this_proof} end
-               )
-
-      assert standing(client.id) == "suspended"
-      assert open?(user_id, restore_id) == true
-    end
-
-    test "a revoked client is never revived; another person's or athanor's is not found", %{
-      actor: actor
-    } do
-      user_id = person!()
-      restore_id = recovering!(user_id)
-      ok = fn _row -> :ok end
-
-      revoked = actor |> record!(%{user_id: user_id}) |> suspend!()
-      {:ok, %{standing: "revoked"}} = PairedClients.revoke(actor, revoked.id)
-      assert {:error, :revoked} = PairedClients.reenable(actor, user_id, revoked.id, verify: ok)
-      assert standing(revoked.id) == "revoked"
-
-      suspended = actor |> record!(%{user_id: user_id}) |> suspend!()
-      other = Prima.Actor.in_athanor("ath_pcl_other_#{System.unique_integer([:positive])}")
-
-      assert {:error, :not_found} =
-               PairedClients.reenable(other, user_id, suspended.id, verify: ok)
-
-      assert {:error, :not_found} =
-               PairedClients.reenable(actor, person!(), suspended.id, verify: ok)
-
-      assert {:error, :no_athanor} =
-               PairedClients.reenable(Prima.Actor.system(), user_id, suspended.id, verify: ok)
-
-      assert standing(suspended.id) == "suspended"
-      assert open?(user_id, restore_id) == true
-    end
-
-    test "a stale owner re-enables nothing", %{actor: actor, slot: slot} do
-      user_id = person!()
-      client = actor |> record!(%{user_id: user_id}) |> suspend!()
-      restore_id = recovering!(user_id)
-
-      {1, _} =
-        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
-          set: [owner: "someone-else", generation: slot.generation + 1]
-        )
-
-      assert {:error, :not_owner} =
-               PairedClients.reenable(actor, user_id, client.id, verify: fn _row -> :ok end)
-
-      assert standing(client.id) == "suspended"
-      assert open?(user_id, restore_id) == true
     end
   end
 

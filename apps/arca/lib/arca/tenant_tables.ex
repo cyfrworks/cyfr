@@ -132,11 +132,11 @@ defmodule Arca.TenantTables do
   # each member's environment pins of them: node facts every member reads
   # alike, which no athanor owns.
   #
-  # `person_identities`, `identity_attempts`, `identity_log_entries`,
-  # `directory_heads` and `carry_actions` are a person's identity and
-  # their carries, which are not an athanor's to delete: a person's keys
-  # and identifier outlive their athanor, a directory orders
-  # identifiers, and a carry moves a person between homes.
+  # `person_identities`, `identity_log_entries`, `directory_heads` and
+  # `carry_actions` are a person's identity and their carries, which are
+  # not an athanor's to delete: a person's identifier outlives their
+  # athanor, a directory orders identifiers, and a carry moves a person
+  # between homes.
   # `directory_handles` and `directory_nonces` are the handle registry a
   # directory serves beside it: an account's name and the requests it
   # spent, which no athanor holds.
@@ -148,17 +148,12 @@ defmodule Arca.TenantTables do
   # company sign-in and the sign-ins they have in flight: the person's,
   # deleted with their `users` row, never with an athanor.
   #
-  # `restore_people` is a person's period after a declared restore. Its
-  # owner is the person: each row references `users` and is deleted with
-  # it, never with an athanor, and a person's denial leaves it.
-  #
   # `device_certifications` are what this home certified for its people's
   # devices at other homes: the athanor each names is the other home's,
   # and the row goes with the person.
   #
-  # `installation_claims` are the node's claims by a restore, and
-  # `request_rate_windows` the node's pre-authentication limits: no
-  # session, and so no athanor, stands behind either.
+  # `request_rate_windows` are the node's pre-authentication limits: no
+  # session, and so no athanor, stands behind them.
   #
   # `shared_threads`, `shared_thread_members` and `shared_messages` are a
   # place several people talk in, its people and what they say: no athanor
@@ -174,7 +169,6 @@ defmodule Arca.TenantTables do
     "platform_settings",
     "settings_pins",
     "person_identities",
-    "identity_attempts",
     "identity_log_entries",
     "directory_heads",
     "directory_handles",
@@ -183,9 +177,7 @@ defmodule Arca.TenantTables do
     "passkeys",
     "company_authorizations",
     "company_login_attempts",
-    "restore_people",
     "device_certifications",
-    "installation_claims",
     "request_rate_windows",
     "shared_threads",
     "shared_thread_members",

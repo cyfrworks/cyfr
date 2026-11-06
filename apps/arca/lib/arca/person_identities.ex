@@ -4,22 +4,11 @@
 defmodule Arca.PersonIdentities do
   @moduledoc """
   A person's identity at this home (`Arca.Schemas.PersonIdentity`): one
-  row beside each person row.
-
-  ## An account's row
-
-  A person admitted by their account (`remote`) is its identifier, the
-  directory that orders it and the head this home last read
-  (`ARCHITECTURE.md` §9.1): this home holds no key of theirs. The head
-  moves with the cached head's advance (`Arca.DirectoryHeads`), in its
-  transaction.
-
-  ## A local row
-
-  `local` rows hold the key set this home minted at the person's first
-  admitted sign-in, and no identifier until enrollment is accepted
-  (`Arca.IdentityAttempts`). Provenance is written once and never
-  changes.
+  row beside each person row, the account they were admitted by: its
+  identifier, the directory that orders it and the head this home last
+  read (`ARCHITECTURE.md` §9.1). This home holds no key of theirs. The
+  head moves with the cached head's advance (`Arca.DirectoryHeads`), in
+  its transaction.
 
   ## Who reads
 
@@ -30,8 +19,7 @@ defmodule Arca.PersonIdentities do
   `:not_found`, `:cross_tenant`, `:conflict` (a person already has a row,
   or the identifier is another person's), `{:invalid, errors}`,
   `:not_owner` (a member that no longer owns its slot) and
-  `:database_error`. Rows are plain maps (`Arca.Data`), sealed bytes
-  included: only the caller that sealed them can open them.
+  `:database_error`. Rows are plain maps (`Arca.Data`).
   """
 
   import Ecto.Query
@@ -42,28 +30,17 @@ defmodule Arca.PersonIdentities do
   # this member still owns its slot on the database's clock
   # (`Arca.Repo.owned/2`), so a stale owner writes nothing.
 
-  @key_bytes 32
-
   @typedoc "A person's identity row, as a plain map."
   @type row :: map()
 
   @doc """
-  Write a person's identity row. `attrs` names the `:user_id` and the
-  `:provenance`:
-
-    * `"local"` — `:live_public_key`, `:operational_public_key` (distinct
-      32-byte Ed25519 keys) and their sealed private halves
-      `:live_key_sealed` and `:operational_key_sealed`. Unenrolled, with
-      no identifier, at a first sign-in; enrolled when a restore mints the
-      person, with the `:identifier`, the `:head_hash` its keys belong to,
-      the `:directory_url` and optionally the `:genesis_hash`.
-    * `"remote"` — an account's row: the `:identifier`, the
-      `:directory_url` of its genesis and the `:head_hash` this home read;
-      no key.
+  Write a person's identity row: `attrs` names the `:user_id`, the
+  `:provenance` `"remote"`, the account's `:identifier`, the
+  `:directory_url` of its genesis and the `:head_hash` this home read.
 
   Written once per person: a second row is `{:error, :conflict}`. Runs in
-  its own locking transaction, nested in a caller's (the `also:` closure a
-  first sign-in passes `Arca.Users.mint/4`), and proves this member still
+  its own locking transaction, nested in a caller's (the `also:` closure
+  an admission passes `Arca.Users.mint/4`), and proves this member still
   owns its slot first.
   """
   @spec create(Prima.Actor.t(), map()) ::
@@ -146,88 +123,6 @@ defmodule Arca.PersonIdentities do
   # ---- steps inside another store's transaction --------------------------------
 
   @doc false
-  @spec enrolling!(String.t()) :: non_neg_integer()
-  # A local person's enrollment opens: `none` → `pending`, in the caller's
-  # transaction (`Arca.IdentityAttempts`). Answers the count it moved.
-  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
-  def enrolling!(user_id) do
-    step(
-      from(p in PersonIdentity,
-        where:
-          p.user_id == ^user_id and p.provenance == "local" and p.enrollment == "none" and
-            is_nil(p.identifier)
-      ),
-      enrollment: "pending"
-    )
-  end
-
-  @doc false
-  @spec unenrolled!(String.t()) :: non_neg_integer()
-  # A refused or abandoned enrollment returns the person to `none`.
-  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
-  def unenrolled!(user_id) do
-    step(
-      from(p in PersonIdentity,
-        where: p.user_id == ^user_id and p.enrollment == "pending" and is_nil(p.identifier)
-      ),
-      enrollment: "none"
-    )
-  end
-
-  @doc false
-  @spec enrolled!(String.t(), map()) :: non_neg_integer()
-  # An accepted enrollment writes the identifier, the genesis and head it
-  # names and the directory it is registered at: `pending` → `enrolled`.
-  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
-  def enrolled!(user_id, %{identifier: identifier} = facts) do
-    step(
-      from(p in PersonIdentity,
-        where:
-          p.user_id == ^user_id and p.provenance == "local" and p.enrollment == "pending" and
-            is_nil(p.identifier)
-      ),
-      enrollment: "enrolled",
-      identifier: identifier,
-      genesis_hash: facts.genesis_hash,
-      head_hash: facts.head_hash,
-      directory_url: facts.directory_url
-    )
-  end
-
-  @doc false
-  @spec activate_keys!(String.t(), String.t(), keyword()) :: non_neg_integer()
-  # A rotation or recovery activates staged keys: the live key (and, for a
-  # recovery, the operational key) replaced and the head moved, only while
-  # the row still reads the head the attempt extended.
-  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
-  def activate_keys!(user_id, expected_head, set) when is_list(set) do
-    step(
-      from(p in PersonIdentity,
-        where: p.user_id == ^user_id and p.provenance == "local" and p.head_hash == ^expected_head
-      ),
-      set
-    )
-  end
-
-  @doc false
-  @spec recovered_head!(String.t(), String.t(), String.t()) :: non_neg_integer()
-  # A committed `recover` that kept the person's online keys (another
-  # printed kit) moves their head to it, only while the row still reads the
-  # head the recover was staged at: the head is the `key_epoch` every
-  # certificate and session of theirs names.
-  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
-  def recovered_head!(user_id, expected_head, entry_hash) do
-    step(
-      from(p in PersonIdentity,
-        where:
-          p.user_id == ^user_id and p.provenance == "local" and p.enrollment == "enrolled" and
-            p.head_hash == ^expected_head
-      ),
-      head_hash: entry_hash
-    )
-  end
-
-  @doc false
   @spec first_method!(String.t()) :: :marked | :already | :no_identity
   # Record, once and for good, that a fresh confirmation method exists for
   # the person: nothing clears the mark, so revoking every method never
@@ -270,33 +165,6 @@ defmodule Arca.PersonIdentities do
     count
   end
 
-  defp build(%{provenance: "local"} = attrs) do
-    errors =
-      []
-      |> required(attrs, :user_id, &(is_binary(&1) and &1 != ""))
-      |> required(attrs, :live_public_key, &key?/1)
-      |> required(attrs, :operational_public_key, &key?/1)
-      |> required(attrs, :live_key_sealed, &sealed?/1)
-      |> required(attrs, :operational_key_sealed, &sealed?/1)
-      |> distinct_keys(attrs)
-      |> local_identity(attrs)
-
-    enrolled? = not is_nil(attrs[:identifier])
-
-    row(errors, attrs, %{
-      provenance: "local",
-      enrollment: if(enrolled?, do: "enrolled", else: "none"),
-      live_public_key: attrs[:live_public_key],
-      operational_public_key: attrs[:operational_public_key],
-      live_key_sealed: attrs[:live_key_sealed],
-      operational_key_sealed: attrs[:operational_key_sealed],
-      identifier: attrs[:identifier],
-      genesis_hash: if(enrolled?, do: attrs[:genesis_hash]),
-      head_hash: if(enrolled?, do: attrs[:head_hash]),
-      directory_url: if(enrolled?, do: attrs[:directory_url])
-    })
-  end
-
   defp build(%{provenance: "remote"} = attrs) do
     errors =
       []
@@ -304,13 +172,6 @@ defmodule Arca.PersonIdentities do
       |> required(attrs, :identifier, &Prima.Identity.Encoding.identifier?/1)
       |> required(attrs, :directory_url, &Prima.Identity.Encoding.directory_url?/1)
       |> required(attrs, :head_hash, &Prima.Identity.Encoding.digest?/1)
-      |> absent(attrs, [
-        :genesis_hash,
-        :live_public_key,
-        :operational_public_key,
-        :live_key_sealed,
-        :operational_key_sealed
-      ])
 
     row(errors, attrs, %{
       provenance: "remote",
@@ -321,7 +182,7 @@ defmodule Arca.PersonIdentities do
     })
   end
 
-  defp build(_attrs), do: {:error, {:invalid, %{provenance: ["is local or remote"]}}}
+  defp build(_attrs), do: {:error, {:invalid, %{provenance: ["is remote"]}}}
 
   defp row([], attrs, fields) do
     now = DateTime.utc_now()
@@ -332,7 +193,6 @@ defmodule Arca.PersonIdentities do
          id: Prima.UUID7.generate_id("pid"),
          user_id: attrs.user_id,
          identifier: nil,
-         genesis_hash: nil,
          head_hash: nil,
          first_method_at: nil,
          revision: 1,
@@ -348,45 +208,6 @@ defmodule Arca.PersonIdentities do
   defp required(errors, attrs, field, valid?) do
     if valid?.(Map.get(attrs, field)), do: errors, else: [{field, ["is required"]} | errors]
   end
-
-  defp optional(errors, attrs, field, valid?) do
-    case Map.get(attrs, field) do
-      nil -> errors
-      value -> if valid?.(value), do: errors, else: [{field, ["is malformed"]} | errors]
-    end
-  end
-
-  defp absent(errors, attrs, fields) do
-    Enum.reduce(fields, errors, fn field, acc ->
-      if is_nil(Map.get(attrs, field)),
-        do: acc,
-        else: [{field, ["is not this provenance's"]} | acc]
-    end)
-  end
-
-  # A local person is written unenrolled at their first sign-in, or already
-  # enrolled when a restore mints them: then with the identifier, the head
-  # the restored keys belong to and the directory, and never one without
-  # the others.
-  defp local_identity(errors, %{identifier: identifier} = attrs) when not is_nil(identifier) do
-    errors
-    |> required(attrs, :identifier, &Prima.Identity.Encoding.identifier?/1)
-    |> required(attrs, :head_hash, &Prima.Identity.Encoding.digest?/1)
-    |> required(attrs, :directory_url, &Prima.Identity.Encoding.directory_url?/1)
-    |> optional(attrs, :genesis_hash, &Prima.Identity.Encoding.digest?/1)
-  end
-
-  defp local_identity(errors, attrs),
-    do: absent(errors, attrs, [:genesis_hash, :head_hash, :directory_url])
-
-  defp distinct_keys(errors, %{live_public_key: live, operational_public_key: live})
-       when is_binary(live),
-       do: [{:operational_public_key, ["must differ from the live key"]} | errors]
-
-  defp distinct_keys(errors, _attrs), do: errors
-
-  defp key?(value), do: is_binary(value) and byte_size(value) == @key_bytes
-  defp sealed?(value), do: is_binary(value) and value != ""
 
   defp found(nil), do: {:error, :not_found}
   defp found(%PersonIdentity{} = row), do: {:ok, row}

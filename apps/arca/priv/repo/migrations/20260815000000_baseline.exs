@@ -26,12 +26,11 @@ defmodule Arca.Repo.Migrations.Baseline do
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
-  A person's identity, keys, identity attempts, carries, passkeys,
-  post-restore period, company sign-in and company sign-in attempts, the
-  directory's log and the handles and spent nonces of the registry beside
-  it, the cached heads of other
-  people's logs, the installation claim and the pre-authentication rate
-  windows are not an athanor's either (`people/0`), and neither is a
+  A person's identity, carries, passkeys, company sign-in and company
+  sign-in attempts, the directory's log and the handles and spent nonces
+  of the registry beside it, the cached heads of other people's logs and
+  the pre-authentication rate windows are not an athanor's either
+  (`people/0`), and neither is a
   command line's pending sign-in (`identity/0`), which no one owns until
   the session its approval mints. A shared thread, its people and its
   messages are no athanor's (`shared_threads/0`): a place several people
@@ -102,7 +101,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # How a person was made here (`Arca.Users.mint/4`): the admission that
     # wrote their row, and nothing else ever writes it.
     user_admission =
-      known("users_admission_known", "admission", ~w(setup invitation open remote restore))
+      known("users_admission_known", "admission", ~w(setup invitation open remote))
 
     # The door's entries: an allow names a person identifier or the
     # wildcard, a deny names a person of this server or a person identifier.
@@ -171,8 +170,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :last_seen_at, :utc_datetime_usec, null: false
       add :denied_at, :utc_datetime_usec
       # The platform administrator's mark: the installation's first person,
-      # written by their admission (setup, or a restore onto an empty
-      # installation) and by nothing else; a denial clears it.
+      # written by their admission (setup) and by nothing else; a denial
+      # clears it.
       add :platform_admin_at, :utc_datetime_usec
 
       add :security_generation, :bigint,
@@ -509,8 +508,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     # which alone decides what the client may do. A revoked row is
     # terminal; a standing transition revokes a person's rows in its own
     # transaction (`Arca.SecurityTransitions`). A declared restore
-    # suspends every standing row until the person re-enables it. A
-    # protected device enrolled with a local unlock reports what holds its
+    # suspends every standing row for good: a device comes back by a fresh
+    # hello, as a new row. A protected device enrolled with a local unlock reports what holds its
     # key (`holder_kind`: a TPM `chip` or a passphrase-wrapped `software`
     # file) and the name it shows (`display_name`): information a person
     # reads, never an input to a decision. A passkey is projected here as
@@ -519,8 +518,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # credential in its person's own athanor, standing as the credential
     # stands (`Arca.PairedClients.project_passkey!/1`). Its `passkey_id`
     # references the credential, so it goes with it: a credential goes with
-    # its person, and no client is left naming a person who is gone, which
-    # a declared restore's record of every holder's person would refuse.
+    # its person, and no client is left naming a person who is gone.
     create table(:paired_clients, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -563,14 +561,13 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
-  # People: identity, keys, the directory, carries, passkeys, installation
+  # People: identity, the directory, carries, passkeys, rate windows
   # ==========================================================================
 
-  # None of these rows is an athanor's: a person's identity, keys,
-  # passkeys and post-restore period outlive their athanor, a directory
-  # orders identifiers, and the installation claim and the
-  # pre-authentication rate windows are the node's. Arca stores bytes and hashes here and
-  # verifies no signature.
+  # None of these rows is an athanor's: a person's identity and passkeys
+  # outlive their athanor, a directory orders identifiers, and the
+  # pre-authentication rate windows are the node's. Arca stores bytes and
+  # hashes here and verifies no signature.
   defp people do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
@@ -579,14 +576,13 @@ defmodule Arca.Repo.Migrations.Baseline do
       known("person_identities_enrollment_known", "enrollment", ~w(none pending enrolled))
     ]
 
-    # One row per person this home knows. An account's row (`remote`) is
-    # its identifier (`per_…`), the directory that orders it and the head
-    # this home last read, which the cached head's advance moves
-    # (`Arca.DirectoryHeads`). A `local` row is the person key set this
-    # home minted, the private halves sealed under the person's own frame
-    # (never an athanor's vault), with its enrollment. `revision` is the
-    # row's compare-and-set token; `first_method_at` records that a fresh
-    # confirmation method ever existed, and nothing resets it.
+    # One row per person this home knows: the account they were admitted
+    # by, its identifier (`per_…`), the directory that orders it and the
+    # head this home last read, which the cached head's advance moves
+    # (`Arca.DirectoryHeads`). This home holds no key of theirs.
+    # `revision` is the row's compare-and-set token; `first_method_at`
+    # records that a fresh confirmation method ever existed, and nothing
+    # resets it.
     create table(:person_identities, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
@@ -601,11 +597,6 @@ defmodule Arca.Repo.Migrations.Baseline do
         default: "none",
         check: if(sqlite?, do: Enum.at(identity_checks, 1))
 
-      add :live_public_key, :binary
-      add :operational_public_key, :binary
-      add :live_key_sealed, :binary
-      add :operational_key_sealed, :binary
-      add :genesis_hash, :string
       add :head_hash, :string
       add :directory_url, :text
       add :first_method_at, :utc_datetime_usec
@@ -617,73 +608,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     checked(sqlite?, :person_identities, identity_checks)
     create unique_index(:person_identities, [:user_id])
     create unique_index(:person_identities, [:identifier], where: "identifier IS NOT NULL")
-
-    attempt_checks = [
-      known("identity_attempts_kind_known", "kind", ~w(enrollment holder restore rotation)),
-      known(
-        "identity_attempts_phase_known",
-        "phase",
-        ~w(staged submitted accepted refused superseded keys_active minted completed)
-      )
-    ]
-
-    # Enrollment, added-kit (`holder`), restore and rotation attempts, keyed
-    # by their request id, each advanced through its phases by conditional
-    # writes so a killed attempt resumes from the phase it reached. The
-    # submission is immutable: the genesis bytes, or the entry or recover
-    # request bytes, and their digest. Staged keys and a pending kit seed
-    # are sealed; a restore names the installation token digest it claimed;
-    # an enrollment holds the name its person wants registered.
-    create table(:identity_attempts, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 0))
-      add :request_id, :string, null: false
-      add :user_id, :string
-      add :identifier, :string
-      add :directory_url, :text
-      add :phase, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 1))
-      add :genesis, :binary
-      add :entry, :binary
-      add :entry_hash, :string
-      add :expected_head, :string
-      add :expected_revision, :integer
-      add :request_digest, :string, null: false
-      add :token_digest, :string
-      add :staged_live_public_key, :binary
-      add :staged_operational_public_key, :binary
-      add :staged_live_key_sealed, :binary
-      add :staged_operational_key_sealed, :binary
-      add :kit_seed_sealed, :binary
-      add :kit_acknowledged_at, :utc_datetime_usec
-      add :name, :text
-      add :outcome, :text
-      add :reproof_challenge_digest, :string
-      add :reproof_expires_at, :utc_datetime_usec
-      add :revision, :bigint, null: false, default: 1
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :identity_attempts, attempt_checks)
-    create unique_index(:identity_attempts, [:request_id])
-    create unique_index(:identity_attempts, [:token_digest], where: "token_digest IS NOT NULL")
-    create index(:identity_attempts, [:user_id])
-
-    # One attempt in progress per person and kind: two enrollments racing
-    # for one person leave one durable attempt.
-    create unique_index(:identity_attempts, [:user_id],
-             where:
-               "kind = 'enrollment' AND user_id IS NOT NULL AND " <>
-                 "phase IN ('staged', 'submitted', 'accepted')",
-             name: :identity_attempts_active_enrollment_index
-           )
-
-    create unique_index(:identity_attempts, [:user_id],
-             where:
-               "kind = 'rotation' AND user_id IS NOT NULL AND " <>
-                 "phase IN ('staged', 'submitted', 'accepted', 'keys_active')",
-             name: :identity_attempts_active_rotation_index
-           )
 
     log_checks = [
       known(
@@ -871,31 +795,6 @@ defmodule Arca.Repo.Migrations.Baseline do
              name: :passkeys_live_credential_index
            )
 
-    restore_open = %{
-      name: "restore_people_open_until_closed",
-      expr: "open = (closed_at IS NULL)"
-    }
-
-    # The period after a declared restore, one row per person: while a
-    # person's row is open, their confirmation comes from a door this home
-    # re-authenticates or from the recovery kit, never from a suspended
-    # method. The row closes when the person re-enables a method, so each
-    # person recovers on their own. The person owns it: it goes with their
-    # `users` row and never with an athanor.
-    create table(:restore_people, primary_key: false) do
-      add :restore_id, :string, primary_key: true, null: false
-
-      add :user_id, references(:users, type: :string, on_delete: :delete_all),
-        primary_key: true,
-        null: false
-
-      add :open, :boolean, null: false, default: true, check: if(sqlite?, do: restore_open)
-      add :closed_at, :utc_datetime_usec
-    end
-
-    checked(sqlite?, :restore_people, [restore_open])
-    create index(:restore_people, [:user_id, :open])
-
     # A person's company sign-in (`Arca.CompanyAuthorizations`): the
     # company configuration it was given under (the OpenID Connect issuer
     # and client id, or the WorkOS organization and connection), the
@@ -934,33 +833,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:company_login_attempts, [:state_hash])
     create index(:company_login_attempts, [:user_id])
     create index(:company_login_attempts, [:expires_at])
-
-    claim_state = known("installation_claims_state_known", "state", ~w(pending ended))
-
-    # The installation claims: a row per restore's claim of an empty node,
-    # bound to the token digest, request and identifier it claimed for,
-    # and ended with the attempt it bound. At most one is pending, and a
-    # token digest claims once, ever.
-    create table(:installation_claims, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :token_digest, :string, null: false
-      add :request_id, :string, null: false
-      add :identifier, :string, null: false
-      add :state, :string, null: false, check: if(sqlite?, do: claim_state)
-      add :outcome, :string
-      add :claimed_at, :utc_datetime_usec, null: false
-      add :ended_at, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :installation_claims, [claim_state])
-    create unique_index(:installation_claims, [:token_digest])
-
-    create unique_index(:installation_claims, [:state],
-             where: "state = 'pending'",
-             name: :installation_claims_one_pending_index
-           )
 
     # Pre-authentication request limits, one fixed window per bucket and
     # hashed key, counted on the database's clock and shared by every

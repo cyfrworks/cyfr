@@ -39,17 +39,14 @@ defmodule Arca.SecurityTransitions do
   A declared restore (`restore/1`) consumes the marker `cyfr restore`
   writes (`mark_restore/1`): it raises every person's and athanor's
   standing, retires every session, suspends every key, webhook, paired
-  client and passkey, revokes every open invitation to become a person
-  here (`Arca.Invitations`), blocks every profile and stored credential,
-  revokes every share, drops every standing allow, once binding and pending confirmation,
-  settles every open run terminal, and opens one `restore_people` row for
-  each person who held a passkey or device it suspended: a person who
-  signs in only through a door has nothing to re-enable, and every
-  confirmation of theirs already comes from one.
-  This module owns those rows — written, read (`restore_open/2`,
-  `restore_checklist/2`) and closed
-  (`close_restore!/1`) — and the kit's challenges and credential the
-  recovering person proves their kit with.
+  client and passkey, revokes every device certificate and every open
+  invitation to become a person here (`Arca.Invitations`), blocks every
+  profile and stored credential, revokes every share, drops every
+  standing allow, once binding and pending confirmation, and settles
+  every open run terminal. It suspends this home's own bindings and no
+  account key, which no home holds: a device comes back by a fresh hello,
+  a browser by a fresh sign-in, and a key or webhook by its owner's
+  re-enable (`restore_checklist/2` lists what is left).
 
   Every real change of a standing raises the row's `security_generation`
   in the same statement. A credential is issued only against the
@@ -79,9 +76,8 @@ defmodule Arca.SecurityTransitions do
   them, which no holder of the census lock locks before taking it. A
   transition taking only a suffix of that order never goes back for an
   earlier lock. A declared restore takes its marker's row first, which
-  nothing else locks, then every person and every athanor in id order. A
-  re-enable takes its item's row, then the person's `restore_people` row,
-  then the kit's `server_meta` row. On PostgreSQL the order is the deadlock rule; on SQLite
+  nothing else locks, then every person and every athanor in id order.
+  On PostgreSQL the order is the deadlock rule; on SQLite
   the write lock every transaction takes at entry is the lock and the
   order is code order (`Arca.Repo.locking_transaction/2`).
 
@@ -159,7 +155,6 @@ defmodule Arca.SecurityTransitions do
     PendingConfirmation,
     PersonIdentity,
     Profile,
-    RestorePerson,
     ServerMeta,
     Session,
     Share,
@@ -183,10 +178,6 @@ defmodule Arca.SecurityTransitions do
   @open_confirmation ~w(pending confirmed)
   # The declared restore's marker (`mark_restore/1`, `restore/1`).
   @restore_marker "restore_pending"
-  # The kit's challenges, one `server_meta` row each, keyed by digest.
-  @challenge_prefix "restore_kit_challenge:"
-  # The kit credentials, one `server_meta` row each, keyed by digest.
-  @credential_prefix "restore_kit:"
 
   @typedoc "The caller's policy over the locked rows."
   @type verify :: (map() -> :ok | {:error, term()})
@@ -714,7 +705,8 @@ defmodule Arca.SecurityTransitions do
   it issues nothing, and an invitation issued before it admits no one
   (`Arca.Invitations`). It deletes every session; suspends every
   unrevoked API key, every webhook, every active paired client and every
-  active passkey; revokes every frame credential, every pending pairing
+  active passkey; revokes every frame credential, every device
+  certificate (`Arca.DeviceCertificates`), every pending pairing
   invitation and every open admission invitation
   (`Arca.Invitations.revoke_all!/0`); deletes every pending confirmation
   (`Arca.PendingConfirmations.delete_all!/0`); moves every active profile
@@ -729,15 +721,11 @@ defmodule Arca.SecurityTransitions do
   its attempt `lapsed` with outcome `uncertain` and the attempt's pending
   write intents `uncertain`, a turn `uncertain` with its open steps. Rows
   already suspended, blocked, revoked or tombstoned keep their state. It
-  then closes every recovery an earlier restore left open, as superseded,
-  with every kit credential and challenge it left, writes one open
-  `restore_people` row for each person who holds a method it suspended,
-  or one an earlier restore suspended and they have not re-enabled — a
-  passkey or a paired client — and deletes the marker it read, so a retry after commit finds no marker and moves
-  nothing, and a crash before commit leaves the marker for the next boot.
-
-  The thread freeze is what those rows mean: a shared thread with a
-  member whose row is open admits no new member (`frozen_shared_threads/0`).
+  then deletes the marker it read, so a retry after commit finds no
+  marker and moves nothing, and a crash before commit leaves the marker
+  for the next boot. A suspended paired client stays suspended: its
+  device comes back by a fresh hello, as a new client
+  (`Sanctum.DeviceUnlock`).
 
   Every statement's postcondition is read before commit; a survivor rolls
   the whole transition back as `:postcondition_failed`. A lost slot is
@@ -754,110 +742,11 @@ defmodule Arca.SecurityTransitions do
   end
 
   @doc """
-  The restore id of the person's open `restore_people` row, or nil when
-  they have none: while it is open their confirmation comes from a door
-  this home re-authenticates or from their recovery kit.
-  """
-  @spec restore_open(Prima.Actor.t(), String.t()) ::
-          {:ok, String.t() | nil} | {:error, :cross_tenant | :database_error}
-  def restore_open(%Prima.Actor{scope: :platform, system: true}, user_id)
-      when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.SecurityTransitions.restore_open", fn ->
-      {:ok, Arca.Repo.one(open_rows(user_id))}
-    end)
-    |> Arca.Data.project()
-  end
-
-  def restore_open(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
-
-  @doc false
-  @spec restore_open!(String.t()) :: String.t() | nil
-  # `restore_open/2` inside the caller's locking transaction, the person's
-  # open row locked, so a close that commits first is seen and one that
-  # starts later waits.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def restore_open!(user_id) when is_binary(user_id) do
-    user_id |> open_rows() |> QueryHelpers.for_update() |> Arca.Repo.one()
-  end
-
-  @doc false
-  @spec close_restore!(String.t()) :: [String.t()]
-  # Close the person's open rows in the caller's locking transaction: the
-  # write that re-enabled one of their methods, or a platform
-  # administrator's activation of one for them. Their kit credential goes
-  # with it. Another person's row is never touched.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def close_restore!(user_id) when is_binary(user_id) do
-    now = Arca.ServerMetaStorage.now!()
-
-    {_count, ids} =
-      Arca.Repo.update_all(
-        from(r in RestorePerson,
-          where: r.user_id == ^user_id and r.open == true,
-          select: r.restore_id
-        ),
-        set: [open: false, closed_at: now]
-      )
-
-    drop_credentials!(user_id)
-    Enum.sort(ids || [])
-  end
-
-  @doc """
-  A platform administrator's close of the person `user_id`'s recovery from
-  a declared restore (`person.close_recovery`), in one locking
-  transaction: `opts[:verify]` is asked first over `%{user_id: user_id}`
-  (the administrator's confirmation is consumed there, under their own
-  locks), then the person's open row is locked and every open row of
-  theirs closed, with their kit credential. Another person's row is never
-  touched. `{:error, :not_recovering}` when the person has none open.
-  """
-  @spec close_restore(Prima.Actor.t(), String.t(), keyword()) ::
-          {:ok, %{closed_restore_ids: [String.t()]}} | {:error, term()}
-  def close_restore(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
-      when is_binary(user_id) and is_list(opts) do
-    verify = Keyword.fetch!(opts, :verify)
-
-    Arca.Repo.Errors.with_db_rescue("Arca.SecurityTransitions.close_restore", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        with :ok <- verify.(%{user_id: user_id}),
-             restore_id when is_binary(restore_id) <- restore_open!(user_id) do
-          %{closed_restore_ids: close_restore!(user_id)}
-        else
-          nil -> Arca.Repo.rollback(:not_recovering)
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def close_restore(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
-
-  @doc false
-  @spec frozen_shared_threads() :: Ecto.Query.t()
-  # The ids of every shared thread a declared restore holds: one of its
-  # people still has an open `restore_people` row. A query the caller runs
-  # in its own transaction under the thread's lock, as a seat, an
-  # invitation and an activation do (`Arca.SharedThreadMembers`), so no one
-  # new is seated in such a thread by any path until each has recovered.
-  def frozen_shared_threads do
-    from(m in SharedThreadMember,
-      join: r in RestorePerson,
-      on: r.user_id == m.user_id and r.open == true,
-      where: m.status == "active",
-      select: m.thread_id
-    )
-  end
-
-  @doc """
-  The person's restore checklist: the open restore, whether any declared
-  restore ever found them (`restored`), and every API key and webhook
-  they created, paired client and passkey of theirs held suspended; and
-  every profile needing consent and every vault entry needing
-  re-authentication in their athanor. Each item is a plain map
-  of the fields the checklist shows, never a hash, a secret or sealed
-  bytes.
+  The person's restore checklist: every API key and webhook they created
+  that a declared restore holds suspended, and every profile needing
+  consent and every vault entry needing re-authentication in their
+  athanor. Each item is a plain map of the fields the checklist shows,
+  never a hash, a secret or sealed bytes.
   """
   @spec restore_checklist(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :cross_tenant | :database_error}
@@ -871,158 +760,6 @@ defmodule Arca.SecurityTransitions do
 
   def restore_checklist(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
-  @doc """
-  Hold a kit challenge for the person's open restore `restore_id`: a row
-  of its own, keyed by the challenge's digest, until it is redeemed or
-  expires, so a challenge anyone asks for never displaces another one the
-  person is answering, nor their kit credential. Expired challenges are
-  removed as a new one is held. `{:error, :closed}` when the person has
-  no open row under that restore; `{:error, :not_owner}` on a member whose
-  slot was taken over.
-  """
-  @spec put_kit_challenge(Prima.Actor.t(), String.t(), String.t(), String.t(), DateTime.t()) ::
-          :ok | {:error, :closed | :not_owner | :cross_tenant | :database_error}
-  def put_kit_challenge(
-        %Prima.Actor{scope: :platform, system: true},
-        user_id,
-        restore_id,
-        digest,
-        %DateTime{} = expires_at
-      )
-      when is_binary(user_id) and is_binary(restore_id) and is_binary(digest) do
-    kit_write("Arca.SecurityTransitions.put_kit_challenge", user_id, restore_id, fn ->
-      drop_expired_challenges()
-
-      put_meta(
-        challenge_key(digest),
-        %{"u" => user_id, "r" => restore_id, "e" => DateTime.to_unix(expires_at, :millisecond)}
-      )
-    end)
-  end
-
-  def put_kit_challenge(%Prima.Actor{}, _user_id, _restore_id, _digest, _expires_at),
-    do: {:error, :cross_tenant}
-
-  @doc """
-  Redeem the kit challenge whose digest is `challenge_digest`, held for
-  this person's open restore `restore_id`, once and before its expiry on
-  the database's clock, for the person's kit credential: its digest and
-  expiry replace any credential they held. One transaction, with the
-  person's open row locked first and the challenge deleted as it is
-  redeemed. `{:error, :challenge_refused}` for no such challenge, another
-  person's or restore's, an expired one or one already redeemed;
-  `{:error, :closed}` when the row has closed.
-  """
-  @spec redeem_kit_challenge(
-          Prima.Actor.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          DateTime.t()
-        ) ::
-          :ok
-          | {:error, :challenge_refused | :closed | :not_owner | :cross_tenant | :database_error}
-  def redeem_kit_challenge(
-        %Prima.Actor{scope: :platform, system: true},
-        user_id,
-        restore_id,
-        challenge_digest,
-        credential_digest,
-        %DateTime{} = expires_at
-      )
-      when is_binary(user_id) and is_binary(restore_id) and is_binary(challenge_digest) and
-             is_binary(credential_digest) do
-    kit_write("Arca.SecurityTransitions.redeem_kit_challenge", user_id, restore_id, fn ->
-      with :ok <- take_challenge(challenge_digest, user_id, restore_id) do
-        drop_credentials!(user_id)
-
-        put_meta(credential_key(credential_digest), %{
-          "u" => user_id,
-          "r" => restore_id,
-          "e" => DateTime.to_unix(expires_at, :millisecond)
-        })
-      end
-    end)
-  end
-
-  def redeem_kit_challenge(%Prima.Actor{}, _user, _restore, _challenge, _credential, _expires),
-    do: {:error, :cross_tenant}
-
-  @doc """
-  The person's kit credential whose digest is `credential_digest`, while
-  it is unexpired on the database's clock, the person's row under its
-  restore is open and the person is in good standing (not denied):
-  `{:ok, restore_id}`, else `{:error, :not_standing}`.
-  """
-  @spec kit_credential(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, String.t()} | {:error, :not_standing | :cross_tenant | :database_error}
-  def kit_credential(%Prima.Actor{scope: :platform, system: true}, user_id, credential_digest)
-      when is_binary(user_id) and is_binary(credential_digest) do
-    Arca.Repo.Errors.with_db_rescue("Arca.SecurityTransitions.kit_credential", fn ->
-      kit_stands!(user_id, credential_digest)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def kit_credential(%Prima.Actor{}, _user_id, _digest), do: {:error, :cross_tenant}
-
-  @doc """
-  Whose kit credential the digest `credential_digest` names: `{:ok,
-  user_id}` while it is held, else `{:error, :not_standing}`. The
-  credential carries no person, so a bearer is found by its digest alone;
-  whether it still stands is `kit_credential/3`'s.
-  """
-  @spec kit_holder(Prima.Actor.t(), String.t()) ::
-          {:ok, String.t()} | {:error, :not_standing | :cross_tenant | :database_error}
-  def kit_holder(%Prima.Actor{scope: :platform, system: true}, credential_digest)
-      when is_binary(credential_digest) do
-    Arca.Repo.Errors.with_db_rescue("Arca.SecurityTransitions.kit_holder", fn ->
-      with %ServerMeta{value: value} <-
-             Arca.Repo.get(ServerMeta, credential_key(credential_digest)),
-           {:ok, %{"u" => user_id}} when is_binary(user_id) <- Jason.decode(value) do
-        {:ok, user_id}
-      else
-        _none -> {:error, :not_standing}
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  def kit_holder(%Prima.Actor{}, _digest), do: {:error, :cross_tenant}
-
-  @doc false
-  @spec kit_stands!(String.t(), String.t()) :: {:ok, String.t()} | {:error, :not_standing}
-  # `kit_credential/3` inside the caller's transaction: the write a kit
-  # credential authorizes reads it standing there, after the person's open
-  # row (`restore_open!/1`) is locked.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def kit_stands!(user_id, credential_digest) do
-    now = Arca.ServerMetaStorage.now!()
-
-    with %ServerMeta{value: value} <-
-           Arca.Repo.get(ServerMeta, credential_key(credential_digest)),
-         {:ok, %{"u" => holder, "r" => restore_id, "e" => expires}} <- Jason.decode(value),
-         true <- holder == user_id,
-         true <- is_integer(expires) and DateTime.to_unix(now, :millisecond) < expires,
-         true <- Arca.Repo.exists?(open_row(user_id, restore_id)),
-         true <- standing?(user_id) do
-      {:ok, restore_id}
-    else
-      _no -> {:error, :not_standing}
-    end
-  end
-
-  # The person in good standing, read under a shared lock on their row: a
-  # denial that committed first is seen, and one that starts later waits
-  # for the write this check admits.
-  defp standing?(user_id) do
-    from(u in User, where: u.id == ^user_id and u.status == "active", select: u.id)
-    |> QueryHelpers.for_share()
-    |> Arca.Repo.one()
-    |> is_binary()
-  end
-
   defp declared_restore(slot) do
     with :ok <- slot_holds(slot) do
       case lock_marker() do
@@ -1032,7 +769,7 @@ defmodule Arca.SecurityTransitions do
         %ServerMeta{value: restore_id} ->
           change = restore_rows(restore_id)
 
-          with :ok <- restore_holds(restore_id, change.user_ids),
+          with :ok <- restore_holds(),
                :ok <- slot_holds(slot) do
             change
           else
@@ -1067,16 +804,6 @@ defmodule Arca.SecurityTransitions do
     _user_ids = lock_all(User)
     _athanor_ids = lock_all(Athanor)
 
-    # The people whose methods the restore suspends, read before it does,
-    # and those whose methods an earlier restore still holds suspended:
-    # each has a passkey or device to re-enable, and only they recover.
-    holders = method_holders()
-
-    # An earlier restore's recovery ends here: its rows close as
-    # superseded, and its kit credentials and challenges go, so no proof
-    # made against the earlier backup re-enables anything after this one.
-    superseded = supersede_recoveries(now)
-
     generations = raise_generations(User, now)
     athanor_generations = raise_generations(Athanor, now)
 
@@ -1102,6 +829,10 @@ defmodule Arca.SecurityTransitions do
         standing: "suspended",
         updated_at: now
       )
+
+    # Every certificate this home issued ends: a device comes back by a
+    # fresh hello, which pairs it anew and issues its own.
+    %{certificate_ids: certificate_ids} = DeviceCertificates.revoke_all(DeviceCertificate)
 
     invitation_ids = PairingInvitations.revoke_all(PairingInvitation)
     admission_invitation_ids = Invitations.revoke_all!()
@@ -1153,9 +884,6 @@ defmodule Arca.SecurityTransitions do
 
     runs = settle_runs(now)
 
-    people = Enum.map(holders, &%{restore_id: restore_id, user_id: &1, open: true})
-    Arca.Repo.insert_all(RestorePerson, people, on_conflict: :nothing)
-
     {1, _} =
       Arca.Repo.delete_all(
         from(m in ServerMeta, where: m.key == ^@restore_marker and m.value == ^restore_id)
@@ -1163,8 +891,6 @@ defmodule Arca.SecurityTransitions do
 
     Map.merge(runs, %{
       restore_id: restore_id,
-      superseded_restore_ids: superseded,
-      user_ids: holders,
       user_generations: generations,
       athanor_generations: athanor_generations,
       revoked_session_hashes: hashes || [],
@@ -1172,6 +898,7 @@ defmodule Arca.SecurityTransitions do
       suspended_webhook_ids: webhook_ids,
       revoked_frame_credential_ids: frame_ids,
       suspended_paired_client_ids: client_ids,
+      revoked_device_certificate_ids: certificate_ids,
       revoked_pairing_invitation_ids: invitation_ids,
       revoked_admission_invitation_ids: admission_invitation_ids,
       suspended_passkey_ids: passkey_ids,
@@ -1189,45 +916,6 @@ defmodule Arca.SecurityTransitions do
     from(r in schema, order_by: [asc: r.id], select: r.id)
     |> QueryHelpers.for_update()
     |> Arca.Repo.all()
-  end
-
-  # Everyone holding a passkey or a paired client that is active, or that
-  # an earlier restore suspended and they have not yet re-enabled.
-  # arca:unscoped-ok a declared restore reads every person's methods, across every athanor.
-  defp method_holders do
-    passkeys =
-      from(p in Passkey, where: p.state in ["active", "suspended"], select: p.user_id)
-
-    clients =
-      from(c in PairedClient,
-        where: c.standing in ["active", "suspended"],
-        select: c.user_id
-      )
-
-    passkeys
-    |> union(^clients)
-    |> Arca.Repo.all()
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
-
-  # Every open recovery closed, and every kit credential and challenge
-  # deleted: what an earlier restore left standing.
-  # arca:unscoped-ok a declared restore supersedes every earlier recovery of the server.
-  defp supersede_recoveries(now) do
-    {_count, closed} =
-      Arca.Repo.update_all(
-        from(r in RestorePerson, where: r.open == true, select: r.restore_id),
-        set: [open: false, closed_at: now]
-      )
-
-    kits =
-      from(m in ServerMeta,
-        where: like(m.key, "restore_kit:%") or like(m.key, ^(@challenge_prefix <> "%"))
-      )
-
-    {_count, _} = Arca.Repo.delete_all(kits)
-    closed |> List.wrap() |> Enum.uniq() |> Enum.sort()
   end
 
   defp raise_generations(schema, now) do
@@ -1300,10 +988,9 @@ defmodule Arca.SecurityTransitions do
   end
 
   # The restore's postconditions, read in its transaction: nothing it
-  # moves is left standing, every person holds an open row under it, and
-  # its marker is gone.
+  # moves is left standing, and its marker is gone.
   # arca:unscoped-ok the postconditions of a declared restore, read across the server.
-  defp restore_holds(restore_id, holders) do
+  defp restore_holds do
     {profile_from, _} = StatusTransitions.restored(:profiles)
     {entry_from, _} = StatusTransitions.restored(:credentials)
     {share_from, _} = StatusTransitions.restored(:shares)
@@ -1314,6 +1001,7 @@ defmodule Arca.SecurityTransitions do
       from(w in Webhook, where: w.suspended == false),
       from(f in FrameCredential, where: f.state != "revoked"),
       from(p in PairedClient, where: p.standing == "active"),
+      from(c in DeviceCertificate, where: c.state != "revoked"),
       from(i in PairingInvitation, where: i.state == "pending"),
       from(i in Invitation, where: is_nil(i.redeemed_at) and is_nil(i.revoked_at)),
       from(p in Passkey, where: p.state == "active"),
@@ -1329,22 +1017,7 @@ defmodule Arca.SecurityTransitions do
         where: a.state in ^Prima.ExecutionState.open_attempt_states()
       ),
       from(t in Turn, where: t.status in ^Prima.TurnState.open_statuses()),
-      from(m in ServerMeta, where: m.key == ^@restore_marker),
-      from(r in RestorePerson, where: r.open == true and r.restore_id != ^restore_id),
-      from(m in ServerMeta,
-        where:
-          like(m.key, ^(@credential_prefix <> "%")) or like(m.key, ^(@challenge_prefix <> "%"))
-      ),
-      from(u in User,
-        where:
-          u.id in ^holders and
-            u.id not in subquery(
-              from(r in RestorePerson,
-                where: r.restore_id == ^restore_id and r.open == true,
-                select: r.user_id
-              )
-            )
-      )
+      from(m in ServerMeta, where: m.key == ^@restore_marker)
     ]
 
     if Enum.any?(survivors, &Arca.Repo.exists?/1),
@@ -1352,25 +1025,8 @@ defmodule Arca.SecurityTransitions do
       else: :ok
   end
 
-  defp open_rows(user_id) do
-    from(r in RestorePerson,
-      where: r.user_id == ^user_id and r.open == true,
-      order_by: [desc: r.restore_id],
-      limit: 1,
-      select: r.restore_id
-    )
-  end
-
-  defp open_row(user_id, restore_id) do
-    from(r in RestorePerson,
-      where: r.user_id == ^user_id and r.restore_id == ^restore_id and r.open == true
-    )
-  end
-
   # arca:unscoped-ok one person's checklist, across their own athanor and what they made.
   defp checklist(user_id) do
-    restore_id = Arca.Repo.one(open_rows(user_id))
-
     athanor_ids =
       from(a in Athanor, where: a.owner_user_id == ^user_id, select: a.id)
 
@@ -1378,8 +1034,6 @@ defmodule Arca.SecurityTransitions do
     {_, entry_status} = StatusTransitions.restored(:credentials)
 
     %{
-      restore_id: restore_id,
-      restored: Arca.Repo.exists?(from(r in RestorePerson, where: r.user_id == ^user_id)),
       api_keys:
         Arca.Repo.all(
           from(k in ApiKey,
@@ -1394,25 +1048,6 @@ defmodule Arca.SecurityTransitions do
             where: w.created_by == ^user_id and w.suspended == true,
             order_by: [asc: w.id],
             select: %{id: w.id, name: w.name, athanor_id: w.athanor_id}
-          )
-        ),
-      paired_clients:
-        Arca.Repo.all(
-          # A passkey's platform holder moves with its credential, listed
-          # below.
-          from(p in PairedClient,
-            where:
-              p.user_id == ^user_id and p.standing == "suspended" and p.source_kind != "passkey",
-            order_by: [asc: p.id],
-            select: %{id: p.id, athanor_id: p.athanor_id}
-          )
-        ),
-      passkeys:
-        Arca.Repo.all(
-          from(p in Passkey,
-            where: p.user_id == ^user_id and p.state == "suspended",
-            order_by: [asc: p.id],
-            select: %{id: p.id, rp_id: p.rp_id}
           )
         ),
       profiles:
@@ -1437,107 +1072,6 @@ defmodule Arca.SecurityTransitions do
           )
         )
     }
-  end
-
-  # A kit credential's row, keyed by the bearer's digest: the bearer is
-  # random bytes alone (`Prima.CredentialShape`'s `:restore_kit_credential`).
-  defp credential_key("sha256:" <> hex), do: @credential_prefix <> hex
-  defp credential_key(other), do: @credential_prefix <> other
-
-  # The person's kit credentials, deleted: a new one replaces them, and a
-  # closed recovery leaves none.
-  # arca:unscoped-ok the restore's credential rows are server facts, read for one person.
-  defp drop_credentials!(user_id) do
-    held =
-      from(m in ServerMeta,
-        where: like(m.key, ^(@credential_prefix <> "%")),
-        select: {m.key, m.value}
-      )
-      |> Arca.Repo.all()
-      |> Enum.flat_map(fn {key, value} ->
-        case Jason.decode(value) do
-          {:ok, %{"u" => ^user_id}} -> [key]
-          _another -> []
-        end
-      end)
-
-    if held != [], do: Arca.Repo.delete_all(from(m in ServerMeta, where: m.key in ^held))
-    :ok
-  end
-
-  # A kit write: under the live ownership fence (`Arca.Repo.owned/2`), one
-  # locking transaction with the person's open row under `restore_id`
-  # locked first, so a close that commits first refuses it.
-  defp kit_write(tag, user_id, restore_id, body) do
-    tag
-    |> Arca.Repo.owned(fn ->
-      locked = open_row(user_id, restore_id) |> QueryHelpers.for_update() |> Arca.Repo.one()
-
-      case if(locked, do: body.(), else: {:error, :closed}) do
-        :ok -> {:ok, :ok}
-        {:error, _reason} = refusal -> refusal
-      end
-    end)
-    |> case do
-      {:ok, :ok} -> :ok
-      {:error, _reason} = refusal -> refusal
-    end
-  end
-
-  defp challenge_key("sha256:" <> hex), do: @challenge_prefix <> hex
-  defp challenge_key(other), do: @challenge_prefix <> other
-
-  defp put_meta(key, value) do
-    row = %{key: key, value: Jason.encode!(value), updated_at: Arca.ServerMetaStorage.now!()}
-
-    Arca.Repo.insert_all(ServerMeta, [row],
-      on_conflict: {:replace, [:value, :updated_at]},
-      conflict_target: :key
-    )
-
-    :ok
-  end
-
-  # The challenge, deleted as it is read: only a delete that found it
-  # redeems it, so two redemptions racing for it never both do.
-  defp take_challenge(digest, user_id, restore_id) do
-    now = DateTime.to_unix(Arca.ServerMetaStorage.now!(), :millisecond)
-
-    case Arca.Repo.delete_all(
-           from(m in ServerMeta, where: m.key == ^challenge_key(digest), select: m.value)
-         ) do
-      {1, [value]} ->
-        case Jason.decode(value) do
-          {:ok, %{"u" => ^user_id, "r" => ^restore_id, "e" => expires}}
-          when is_integer(expires) and now < expires ->
-            :ok
-
-          _another ->
-            {:error, :challenge_refused}
-        end
-
-      {0, _} ->
-        {:error, :challenge_refused}
-    end
-  end
-
-  # arca:unscoped-ok the restore's challenge rows are server facts, keyed by their digest.
-  defp drop_expired_challenges do
-    now = DateTime.to_unix(Arca.ServerMetaStorage.now!(), :millisecond)
-    prefix = @challenge_prefix <> "%"
-
-    expired =
-      from(m in ServerMeta, where: like(m.key, ^prefix), select: {m.key, m.value})
-      |> Arca.Repo.all()
-      |> Enum.flat_map(fn {key, value} ->
-        case Jason.decode(value) do
-          {:ok, %{"e" => expires}} when is_integer(expires) and expires > now -> []
-          _expired_or_unreadable -> [key]
-        end
-      end)
-
-    if expired != [], do: Arca.Repo.delete_all(from(m in ServerMeta, where: m.key in ^expired))
-    :ok
   end
 
   # ---- locks -----------------------------------------------------------------

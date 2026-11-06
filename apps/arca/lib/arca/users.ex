@@ -224,8 +224,6 @@ defmodule Arca.Users do
 
     * `admission:` (required) — how the person is made here
       (`Arca.Schemas.User.admissions/0`), recorded on their row.
-    * `restore:` — the installation claim a restore's mint names
-      (`%{request_id: …, token_digest: …}`), never a caller's argument.
     * `verify:` — the higher owner's check (`ARCHITECTURE.md` §4.4), run
       inside the transaction after the installation guard and before any
       row is written. A zero-arity function answering `:ok` or
@@ -240,17 +238,11 @@ defmodule Arca.Users do
       call.
 
   The installation guard runs first, inside the same transaction
-  (`Arca.InstallationClaims.guard!/2`): the installation's first person is
-  made only by `setup` or a restore, and is written with the platform
-  administrator's mark (`users.platform_admin_at`) in this transaction; no
-  other mint writes it. Every other admission onto an empty node is
-  `:not_set_up`; a pending restore claim, or a node with no person whose
-  installed mode is `:restore_reserved`, refuses everything but its
-  restore (`:restore_reserved`); a restore is `:not_claimed` unless its
-  claim is pending exactly as named, and `:not_empty` on a node that
-  holds a person; a `setup` on a node that holds a person is
-  `:setup_closed`. A node whose boot installed no mode raises
-  `Arca.InstallationClaims.NotInstalledError` and mints nothing.
+  (`Arca.InstallationClaims.guard!/1`): the installation's first person is
+  made only by `setup`, and is written with the platform administrator's
+  mark (`users.platform_admin_at`) in this transaction; no other mint
+  writes it. Every other admission onto an empty node is `:not_set_up`,
+  and a `setup` on a node that holds a person is `:setup_closed`.
 
   `identity_attrs` is the sign-in method linked with the person, or nil
   for none. A concurrent mint naming the same identity wins the unique
@@ -260,10 +252,7 @@ defmodule Arca.Users do
   @spec mint(Prima.Actor.t(), map(), map() | nil, keyword()) ::
           {:ok, map()}
           | {:error,
-             :restore_reserved
-             | :not_claimed
-             | :not_empty
-             | :not_set_up
+             :not_set_up
              | :setup_closed
              | :not_owner
              | term()}
@@ -286,7 +275,6 @@ defmodule Arca.Users do
   def mint(%Prima.Actor{}, _user_attrs, _identity_attrs, _opts), do: {:error, :cross_tenant}
 
   defp mint_guarded(actor, admission, user_attrs, identity_attrs, opts) do
-    restore = Keyword.get(opts, :restore)
     verify = Keyword.get(opts, :verify, fn -> :ok end)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
     user_attrs = user_attrs |> Map.new() |> Map.put(:admission, admission)
@@ -296,7 +284,7 @@ defmodule Arca.Users do
         identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
 
     Arca.Repo.owned("Arca.Users.mint", fn ->
-      case Arca.InstallationClaims.guard!(admission, restore) do
+      case Arca.InstallationClaims.guard!(admission) do
         {:error, _reason} = refusal ->
           refusal
 

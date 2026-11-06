@@ -21,13 +21,6 @@ rescue
   Prima.Caps.NotInstalledError -> Prima.Caps.install!(Arca.Test.Caps)
 end
 
-# The installation mode every person mint reads. Sanctum's boot installs
-# it, and no Sanctum starts here, so the suite installs the ordinary mode
-# itself — only when nothing has, exactly as the ports above.
-unless Arca.InstallationClaims.installed?() do
-  Arca.InstallationClaims.install_mode!(:ordinary)
-end
-
 # The boot identity, the storage roots, the schema check, the sandbox mode
 # and the seeded athanors, as every database app's suite has them.
 Arca.Test.SuiteBoot.boot!(seed: &Arca.Test.Actor.seed_athanors!/0, stand_ins: true)

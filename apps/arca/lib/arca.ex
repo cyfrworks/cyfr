@@ -172,7 +172,6 @@ defmodule Arca do
       FrameCredentials,
       Files,
       Health,
-      IdentityAttempts,
       IdentityLog,
       InstallationClaims,
       Invitations,

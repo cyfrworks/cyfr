@@ -93,8 +93,7 @@ defmodule Arca.DeviceCertificationsTest do
       identifier: identifier,
       provenance: "local",
       enrollment: "enrolled",
-      head_hash: head,
-      genesis_hash: head
+      head_hash: head
     })
 
     %{id: person.id, identifier: identifier, head: head}

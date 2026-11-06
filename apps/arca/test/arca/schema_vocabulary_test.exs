@@ -62,7 +62,7 @@ defmodule Arca.SchemaVocabularyTest do
       {"consumer_receipts", "consumer_receipts_outcome_known", "outcome",
        Arca.ConsumerReceipts.outcomes()},
       # A declared restore suspends an active client or passkey
-      # (`Arca.SecurityTransitions.restore/1`) until its person re-enables it.
+      # (`Arca.SecurityTransitions.restore/1`), for good.
       {"paired_clients", "paired_clients_standing_known", "standing",
        Arca.Schemas.PairedClient.standings()},
       # What holds a client's key: a protected device's report, or the
@@ -308,11 +308,12 @@ defmodule Arca.SchemaVocabularyTest do
 
   describe "a person's admission" do
     test "lands every admission, and refuses any other and none" do
-      for admission <- ~w(setup invitation open remote restore) do
+      for admission <- ~w(setup invitation open remote) do
         assert {1, _} = insert!("users", person(admission))
       end
 
       refused!("users", person("github"), "users_admission_known")
+      refused!("users", person("restore"), "users_admission_known")
 
       refused!("users", person(nil), [
         "users_admission_known",
@@ -476,58 +477,6 @@ defmodule Arca.SchemaVocabularyTest do
           seat(thread.id, status, user, identifier),
           "shared_thread_members_seat_whole"
         )
-      end
-    end
-  end
-
-  describe "a person's recovery from a declared restore" do
-    test "is open exactly while it has no closing time, and a text false is refused" do
-      user = id("usr")
-
-      {1, _} =
-        insert!("users", %{
-          id: user,
-          admission: "open",
-          email: "#{user}@example.com",
-          first_seen_at: now(),
-          last_seen_at: now(),
-          created_at: now(),
-          updated_at: now()
-        })
-
-      # Written through the typed schema, as `Arca.SecurityTransitions` writes.
-      row = fn open, closed_at ->
-        %{
-          restore_id: id("rst"),
-          user_id: user,
-          open: open,
-          closed_at: closed_at && DateTime.utc_now()
-        }
-      end
-
-      table = Arca.Schemas.RestorePerson
-      assert {1, _} = insert!(table, row.(true, nil))
-      assert {1, _} = insert!(table, row.(false, :closed))
-      refused!(table, row.(true, :closed), "restore_people_open_until_closed")
-      refused!(table, row.(false, nil), "restore_people_open_until_closed")
-
-      # SQLite stores an untyped `false` as the text 'false', which the
-      # CHECK refuses: every write goes through `Arca.Schemas.RestorePerson`.
-      if sqlite?() do
-        message =
-          try do
-            Arca.Repo.query!(
-              "INSERT INTO restore_people (restore_id, user_id, open, closed_at) " <>
-                "VALUES (?1, ?2, 'false', ?3)",
-              [id("rst"), user, now()]
-            )
-
-            nil
-          rescue
-            error -> Exception.message(error)
-          end
-
-        assert message =~ "restore_people_open_until_closed"
       end
     end
   end

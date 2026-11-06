@@ -5,15 +5,9 @@ defmodule Arca.Schemas.PersonIdentity do
   @moduledoc """
   Ecto schema for the `person_identities` table (backs
   `Arca.PersonIdentities`): one row per person this home knows, beside
-  their `users` row.
-
-  `provenance` is `remote` for a person admitted by their account (the
-  row is its identifier, its directory and the head this home last read)
-  or `local` for the key set this home minted; it is a fact on the row
-  and never read from the door a person last used.
-  `enrollment` is `none`, `pending` (an enrollment attempt is open) or
-  `enrolled` (the row carries the identifier). The private halves of the
-  live and operational keys are sealed bytes Arca never opens.
+  their `users` row: the account they were admitted by, its identifier,
+  its directory and the head this home last read. `provenance` is
+  `remote` and `enrollment` `enrolled` on every row this home writes.
   """
 
   use Ecto.Schema
@@ -38,11 +32,6 @@ defmodule Arca.Schemas.PersonIdentity do
     field :identifier, :string
     field :provenance, :string
     field :enrollment, :string, default: "none"
-    field :live_public_key, :binary
-    field :operational_public_key, :binary
-    field :live_key_sealed, :binary, redact: true
-    field :operational_key_sealed, :binary, redact: true
-    field :genesis_hash, :string
     field :head_hash, :string
     field :directory_url, :string
     field :first_method_at, :utc_datetime_usec

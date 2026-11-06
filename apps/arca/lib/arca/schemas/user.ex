@@ -39,7 +39,7 @@ defmodule Arca.Schemas.User do
   @primary_key {:id, :string, autogenerate: false}
 
   @statuses ["active", "denied"]
-  @admissions ~w(setup invitation open remote restore)
+  @admissions ~w(setup invitation open remote)
 
   @type t :: %__MODULE__{}
 

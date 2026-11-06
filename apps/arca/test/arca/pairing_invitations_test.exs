@@ -315,52 +315,6 @@ defmodule Arca.PairingInvitationsTest do
     assert clients(actor) == 1
   end
 
-  test "a device paired fresh ends its person's recovery from a restore and no one else's", %{
-    actor: actor,
-    person: person,
-    passkey: passkey
-  } do
-    restore_id = Prima.UUID7.generate_id("rst")
-    other = "usr_other_#{System.unique_integer([:positive])}"
-
-    {:ok, _} =
-      Arca.Test.People.mint(
-        Prima.Actor.system(),
-        %{
-          id: other,
-          provider: "github",
-          first_seen_at: DateTime.utc_now(),
-          last_seen_at: DateTime.utc_now(),
-          created_at: DateTime.utc_now(),
-          updated_at: DateTime.utc_now()
-        },
-        %{
-          key: "github|https://github.com|#{other}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: other,
-          first_seen_at: DateTime.utc_now(),
-          last_seen_at: DateTime.utc_now()
-        }
-      )
-
-    {2, _} =
-      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
-        %{restore_id: restore_id, user_id: person.id, open: true},
-        %{restore_id: restore_id, user_id: other, open: true}
-      ])
-
-    {_invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
-
-    assert {:ok, %{client: _client}} =
-             PairingInvitations.consume(actor, hash, digest, &admits/1, issue(actor))
-
-    assert {:ok, nil} = Arca.SecurityTransitions.restore_open(Prima.Actor.system(), person.id)
-
-    assert {:ok, ^restore_id} =
-             Arca.SecurityTransitions.restore_open(Prima.Actor.system(), other)
-  end
-
   test "a failed issuance rolls everything back and the invitation stays pending", %{
     actor: actor,
     person: person,
@@ -1394,16 +1348,17 @@ defmodule Arca.PairingInvitationsTest.Confirmations do
 
   @type t :: %{secret: String.t(), ref: String.t(), expected: map()}
 
-  @doc "A local identity row's attributes for `user_id`: no method yet, its latch open."
+  @doc "An account's identity row's attributes for `user_id`: no method yet, its latch open."
   @spec identity(String.t()) :: map()
   def identity(user_id) do
+    n = System.unique_integer([:positive])
+
     %{
       user_id: user_id,
-      provenance: "local",
-      live_public_key: :crypto.strong_rand_bytes(32),
-      operational_public_key: :crypto.strong_rand_bytes(32),
-      live_key_sealed: "sealed-live",
-      operational_key_sealed: "sealed-op"
+      provenance: "remote",
+      identifier: "per_" <> Prima.Digest.sha256_hex("pairing-#{n}"),
+      directory_url: "https://dir.example",
+      head_hash: Prima.Digest.sha256("pairing-head-#{n}")
     }
   end
 
