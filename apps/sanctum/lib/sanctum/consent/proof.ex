@@ -16,8 +16,8 @@ defmodule Sanctum.Consent.Proof do
 
   **It is a token, not a human-presence assertion.** Any code holding the
   interactive session can walk plan → preview → commit unattended. Genuine
-  presence, where it is wanted, is a separate step
-  (`Sanctum.Auth.DeviceFlow`, `Sanctum.Auth.EmailVerification`).
+  presence, where it is wanted, is a separate step: a fresh confirmation
+  by a key of the person's account (`Sanctum.Consent.Authz`).
 
   ## Consumption is unconditional
 

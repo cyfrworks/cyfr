@@ -15,7 +15,7 @@ defmodule Sanctum.Consent.Authz do
 
   | Caller | May consent |
   |---|---|
-  | A Sanctum session (`:oidc`) | yes — Prism web, the CLI, and device-flow-derived sessions all land here |
+  | A Sanctum session (`:oidc`) | yes — Prism web and the CLI land here |
   | A paired device (`:device`), naming its paired client | yes — the person's own interactive client, on its device channel |
   | An API key with a capability pinned to this exact commit digest | yes, and only for that one commit |
   | A tincture token, webhook, cron, system, or unauthenticated caller | no |
@@ -45,8 +45,9 @@ defmodule Sanctum.Consent.Authz do
   and its exact arguments, with the affected resource by name and any
   public facts for the preview. Nothing a client holds satisfies one; the
   proof is a pending confirmation (`Prima.Confirmation`, stored by
-  `Arca.PendingConfirmations`), proven by a passkey assertion or a fresh
-  re-authentication, and consumed once.
+  `Arca.PendingConfirmations`), confirmed by a key of the person's
+  account signing this CYFR's `confirm` request that names it
+  (`Sanctum.SignIn`), and consumed once.
 
   An action that needs no fresh confirmation (`Sanctum.Pairing.sensitive?/1`)
   is answered `:ok`: the site's own checks of who may act decide. For a
@@ -56,16 +57,11 @@ defmodule Sanctum.Consent.Authz do
       an athanor, and must not be on the guest plane; an API key's
       context opens one for the key's creator, so an MCP caller receives
       the signal and confirms in Prism;
-    * a person whose keys are at another home has their head read fresh
-      from their directory (`Sanctum.IdentityFreshness.fresh!/2`) when the
-      change is asked or repeated, outside any transaction, and the record
-      opened binds its `key_epoch`, so a rotation or a recovery voids it
-      (`Arca.DirectoryHeads.advance/4`); a directory that cannot be read
-      pauses the change (`:identity_stale`). Inside a caller's
-      transaction, where `consume/2` runs, the head is read from the cache
-      alone, as the request's revalidation left it. The proof is still
-      this home's own: a passkey registered here or a fresh method this
-      home verifies;
+    * the record binds no key until a key confirms it: the confirming
+      answer is verified against the account's log within freshness's
+      bound, the record names that key and the head it was verified under,
+      and a refresh that removes the key voids it
+      (`Arca.DirectoryHeads.advance/5`);
     * when the context names a confirmation (`confirmation_id`, the
       secret its signal answered), the caller's standing is read again
       and the record is consumed: it must be confirmed, unexpired and
@@ -478,7 +474,6 @@ defmodule Sanctum.Consent.Authz do
   # person whose keys are here; and the preview the record binds.
   defp sensitive(ctx, action, change, mode) do
     with :ok <- confirmer(ctx),
-         {:ok, epoch} <- identity_epoch(ctx.user_id, mode),
          {:ok, preview} <- preview(ctx, change) do
       expected = %{
         user_id: ctx.user_id,
@@ -490,10 +485,10 @@ defmodule Sanctum.Consent.Authz do
 
       case ctx.confirmation_id do
         id when is_binary(id) and id != "" ->
-          named(ctx, {action, change, preview, epoch}, expected, id, mode)
+          named(ctx, {action, change, preview}, expected, id, mode)
 
         _none ->
-          ask(ctx, {action, change, preview, epoch}, mode)
+          ask(ctx, {action, change, preview}, mode)
       end
     end
   end
@@ -510,53 +505,14 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  # A person whose keys are held at another home: their head's `key_epoch`,
-  # read fresh from their directory before their fresh confirmation, never
-  # from their own home, which may be the stolen one. Inside a caller's
-  # transaction (a `consume/2`, or a caller that holds one open) the
-  # directory is never read: the cache answers, within its bound, as the
-  # request's own revalidation outside the transaction left it. A local
-  # person binds none; a person whose identity row, minted with their
-  # person row, is missing is damage.
-  defp identity_epoch(user_id, mode) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
-        identifier
-        |> remote_head(mode == :consume or Arca.in_transaction?())
-        |> case do
-          {:ok, %{key_epoch: epoch}} -> {:ok, epoch}
-          {:refused, :identity_stale} -> {:error, :identity_stale}
-          {:error, :unavailable} -> {:error, :unavailable}
-        end
-
-      {:ok, %{provenance: "remote"}} ->
-        {:error, :unavailable}
-
-      {:ok, _local} ->
-        {:ok, nil}
-
-      {:error, :not_found} ->
-        if Prima.PersonId.person?(user_id),
-          do: {:error, {:corrupt, :person_identity}},
-          else: {:ok, nil}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp remote_head(identifier, true = _in_transaction),
-    do: Sanctum.IdentityFreshness.fresh?(identifier)
-
-  defp remote_head(identifier, false), do: Sanctum.IdentityFreshness.fresh!(identifier)
-
   # The secret-free preview the deciding site's request yields: this home,
   # the athanor by name, the operation, the resource by name and the
   # public facts the site passed. A detail named as a secret refuses.
   defp preview(ctx, change) do
-    with {:ok, athanor} <- athanor_name(ctx.athanor_id) do
+    with {:ok, athanor} <- athanor_name(ctx.athanor_id),
+         {:ok, home} <- home() do
       case Prima.Confirmation.Preview.new(
-             home: Sanctum.Person.home(),
+             home: home,
              athanor: athanor,
              operation: change.operation,
              resource: Map.get(change, :resource),
@@ -684,15 +640,16 @@ defmodule Sanctum.Consent.Authz do
   # transaction opens nothing.
   defp ask(_ctx, _asked, :consume), do: {:error, :invalid_request}
 
-  defp ask(ctx, {action, change, preview, epoch}, _mode) do
+  defp ask(ctx, {action, change, preview}, _mode) do
     secret = Prima.CredentialShape.mint(:confirmation_secret)
 
     with {:ok, seconds} <- confirmation_seconds(),
+         {:ok, home} <- home(),
          {:ok, record} <-
            Prima.Confirmation.new(
              id: Prima.Confirmation.ref(secret),
-             home: Sanctum.Person.home(),
-             rp_id: Sanctum.Passkeys.rp_id(),
+             home: home,
+             rp_id: Prima.Identity.Encoding.home_host(home),
              athanor: ctx.athanor_id,
              person: ctx.user_id,
              operation: change.operation,
@@ -705,18 +662,12 @@ defmodule Sanctum.Consent.Authz do
       case PendingConfirmations.open(Context.actor(ctx), %{
              record: record,
              opener: opener(ctx),
-             asker: asker(ctx),
-             identity_key_epoch: epoch
+             asker: asker(ctx)
            }) do
         {:ok, row} ->
           announce_voided(ctx, Map.get(row, :voided, []))
           announce(:opened, row)
           {:error, {:confirmation_required, signal(secret, row)}}
-
-        # A remote person's head moved between its fresh read and the open:
-        # the change pauses, as one whose head could not be confirmed does.
-        {:error, :stale_key_epoch} ->
-          {:error, :identity_stale}
 
         {:error, reason} ->
           Logger.warning(
@@ -800,7 +751,16 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  defp asker(%Context{}), do: named_asker("unbound", Sanctum.Person.home())
+  defp asker(%Context{}), do: named_asker("unbound", Sanctum.origin())
+
+  # This CYFR's origin in its one spelling, which a record and its preview
+  # name. An origin served under a path names no record.
+  defp home do
+    case Prima.Identity.Encoding.canonical_home(Sanctum.origin()) do
+      {:ok, home} -> {:ok, home}
+      :error -> {:error, :unavailable}
+    end
+  end
 
   # The name is cut to at most 255 bytes at a UTF-8 boundary, never 255
   # graphemes, so however many bytes its characters take the asker stays
