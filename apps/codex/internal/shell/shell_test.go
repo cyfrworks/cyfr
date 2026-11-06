@@ -18,17 +18,19 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/disk"
 	"github.com/cyfr/codex/internal/holder"
 )
 
-// box is one screen under test: its shell, its pages and the home it
+// box is one screen under test: its shell, its pages and the CYFR it
 // talks to.
 type box struct {
 	t        *testing.T
 	home     *fakeHome
 	shell    *Shell
 	srv      *Server
+	dir      string
 	record   string
 	restarts atomic.Int32
 	now      atomic.Int64
@@ -36,15 +38,16 @@ type box struct {
 
 func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	t.Helper()
-	b := &box{t: t, home: home, record: filepath.Join(dir, "holder.json")}
+	b := &box{t: t, home: home, dir: dir, record: filepath.Join(dir, "holder.json")}
 	b.now.Store(time.Now().UnixNano())
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
-		Tokens:  func() string { return home.setupToken },
-		Restart: func() { b.restarts.Add(1) },
-		Detect:  func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
-		Now:     func() time.Time { return time.Unix(0, b.now.Load()) },
-		Chip:    func() bool { return false },
+		Directory: home.accounts.URL(),
+		Tokens:    func() string { return home.setupToken },
+		Restart:   func() { b.restarts.Add(1) },
+		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
+		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
+		Chip:      func() bool { return false },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,20 +96,22 @@ func otherPassphrase(t *testing.T, p string) string {
 
 var codeShape = regexp.MustCompile(`<p class="code">([^<]+)</p>`)
 
-// passphrase is the one the setup page shows.
-func (b *box) passphrase() string {
+// shown is the first code-styled text the page shows: the passphrase on
+// the setup page, the recovery code on its own.
+func (b *box) shown() string {
 	b.t.Helper()
 	m := codeShape.FindStringSubmatch(b.page())
 	if m == nil {
-		b.t.Fatal("the setup page shows no passphrase")
+		b.t.Fatalf("the page shows no code:\n%s", b.page())
 	}
 	return m[1]
 }
 
-// setUp sets the box up as name, through the pages, to the recovery page.
+// setUp sets the box up as name, through the pages, to the recovery page,
+// and answers its passphrase.
 func (b *box) setUp(name string) string {
 	b.t.Helper()
-	p := b.passphrase()
+	p := b.shown()
 	w := b.post("/setup", url.Values{"name": {name}, "secret": {p}, "again": {p}})
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
 		b.t.Fatalf("setup answered %d %q", w.Code, w.Header().Get("Location"))
@@ -124,15 +129,24 @@ func ticketOf(t *testing.T, w *httptest.ResponseRecorder, home *fakeHome) string
 	return strings.TrimPrefix(loc, prefix)
 }
 
+func (b *box) client() ClientRecord {
+	c, err := ClientFile(filepath.Join(b.dir, "client.json")).Load()
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	return c
+}
+
 // A box without a chip refuses six digits and sets up with the generated
-// passphrase given twice: its key is written before CYFR is asked, the
-// recovery code is shown and, once said saved, Chrome goes into Prism
-// with a one-time ticket in the fragment. CYFR never hears the
-// passphrase.
-func TestSetup_SetsUpWithThePassphraseAndOpensPrism(t *testing.T) {
+// passphrase given twice: its key is written and its account composed,
+// and the recovery code shown, before anything is sent; once the code is
+// said saved, the account is made with the box its first device and the
+// name its own, the box says hello under the setup token, and the browser
+// goes into Prism with a one-time ticket in the fragment. Neither CYFR nor
+// the account service hears the passphrase.
+func TestSetup_MakesTheAccountAndOpensPrism(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
-	home.recordPath = b.record
 
 	if !strings.Contains(b.page(), "This box keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted.") {
 		t.Fatal("setup does not warn about the unencrypted data volume")
@@ -141,8 +155,8 @@ func TestSetup_SetsUpWithThePassphraseAndOpensPrism(t *testing.T) {
 	if page := b.page(); !strings.Contains(page, "needs the six-word passphrase") {
 		t.Fatalf("six digits were not refused:\n%s", page)
 	}
-	if _, err := os.Stat(b.record); !os.IsNotExist(err) || home.heard("123456") || len(home.opsSeen()) != 0 {
-		t.Fatal("a refused PIN made a key or reached CYFR")
+	if _, err := os.Stat(b.record); !os.IsNotExist(err) || home.heard("123456") || home.accounts.Writes != 0 {
+		t.Fatal("a refused PIN made a key or reached anything")
 	}
 
 	p := b.setUp("alice")
@@ -150,104 +164,184 @@ func TestSetup_SetsUpWithThePassphraseAndOpensPrism(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("the key record: %v %v", info, err)
 	}
-	if !slices.Equal(home.recordAtChallenge, []bool{true}) || home.completes != 1 {
-		t.Fatalf("the key was not written before CYFR was asked (%v), or completes %d", home.recordAtChallenge, home.completes)
-	}
 	page := b.page()
-	if !strings.Contains(page, "CYFR-TEST-RECOVERY-CODE") || !strings.Contains(page, "<svg") || !strings.Contains(page, `id="print"`) {
+	code := b.shown()
+	if !strings.HasPrefix(code, "CYFR-") || !strings.Contains(page, "<svg") || !strings.Contains(page, `id="print"`) || !strings.Contains(page, "@alice") {
 		t.Fatalf("the recovery page shows no code, QR or Print:\n%s", page)
 	}
+	if home.accounts.Writes != 0 || len(home.hellosSeen()) != 0 {
+		t.Fatal("something was sent before the recovery code was said saved")
+	}
 	w := b.post("/saved", nil)
-	ticket := ticketOf(t, w, home)
-	if ticket != "TICKET-ses_1" {
+	if ticket := ticketOf(t, w, home); ticket != "TICKET-ses_1" {
 		t.Fatalf("ticket %q", ticket)
 	}
-	if strings.Contains(b.page(), "CYFR-TEST-RECOVERY-CODE") {
+	if strings.Contains(b.page(), code) {
 		t.Fatal("the recovery code is still shown after I saved it")
 	}
-	if got := home.opsSeen(); !slices.Equal(got, []string{"registry.register", "person.recovery_code_saved", "session.unlock", "session.unlock"}) {
+	rec, _ := holder.Load(b.record)
+	identifier, _, err := account.DecodeRecoveryCode(code)
+	if err != nil || rec.Identifier != identifier || rec.Directory != home.accounts.URL() {
+		t.Fatalf("the record names %s, the code %s (%v)", rec.Identifier, identifier, err)
+	}
+	st := home.accounts.State(t, identifier)
+	if _, listed := st.Key(account.Kid(rec.PublicKey)); !listed || home.accounts.Holder("alice") != identifier {
+		t.Fatal("the account does not list the box, or does not hold the name")
+	}
+	hellos := home.hellosSeen()
+	if len(hellos) != 1 || hellos[0]["identifier"] != identifier || hellos[0]["holder_kind"] != "software" ||
+		hellos[0]["display_name"] != "CYFR screen" || hellos[0]["admission"].(map[string]any)["setup"] != home.setupToken {
+		t.Fatalf("hellos %v", hellos)
+	}
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) == 0 {
+		t.Fatalf("the client kept %+v", c)
+	}
+	if got := home.opsSeen(); !slices.Equal(got, []string{"session.unlock", "session.unlock"}) {
 		t.Fatalf("operations %v", got)
 	}
 	if home.heard(p) || home.heard(strings.ReplaceAll(p, " ", "+")) {
 		t.Fatal("CYFR heard the passphrase")
-	}
-	rec, _ := holder.Load(b.record)
-	if rec.RequestID != "" || rec.ClientID == "" || len(rec.Certificate) == 0 {
-		t.Fatalf("the record after setup: %+v", rec)
 	}
 	if caps := home.capabilities; len(caps) == 0 || !slices.Equal(caps[0], []string{"root_encrypted", "data_unencrypted"}) {
 		t.Fatalf("capabilities %v", caps)
 	}
 }
 
-// A complete whose answer is lost is recovered by resume with the same key
-// and request: CYFR enrolls one key, once.
-func TestSetup_ALostAnswerIsResumedWithTheSameKey(t *testing.T) {
+// A lost answer to a write is sent again by Try again with the same bytes:
+// the account is made once.
+func TestSetup_ALostAnswerLandsOnce(t *testing.T) {
 	home := newFakeHome(t)
-	home.dropComplete = true
 	b := newBox(t, home, t.TempDir())
 	b.setUp("alice")
-	if home.completes != 1 || home.resumes != 1 || len(home.enrolled) != 1 {
-		t.Fatalf("completes %d resumes %d enrolled %d", home.completes, home.resumes, len(home.enrolled))
+	home.accounts.Lose = 1
+	b.post("/saved", nil)
+	if page := b.page(); !strings.Contains(page, "Your account is not finished") || !strings.Contains(page, "could not be reached") {
+		t.Fatalf("the lost answer says nothing:\n%s", page)
 	}
-	if !strings.Contains(b.page(), "CYFR-TEST-RECOVERY-CODE") {
-		t.Fatal("the resumed setup shows no recovery code")
+	ticketOf(t, b.post("/saved", nil), home)
+	rec, _ := holder.Load(b.record)
+	if len(home.accounts.Log(rec.Identifier)) != 2 || home.accounts.Writes != 3 {
+		t.Fatalf("the log holds %d entries after %d writes", len(home.accounts.Log(rec.Identifier)), home.accounts.Writes)
 	}
 }
 
-// A setup interrupted before CYFR answered keeps its key: the next run of
-// the shell, from the record alone, finishes it with the same key and
-// request, never a new one.
-func TestFinish_ARestartedShellFinishesWithTheSameKey(t *testing.T) {
+// A box restarted while its account was being made finishes it from the
+// recovery code alone, which re-derives the recovery key: the same
+// account, never another.
+func TestSetup_ARestartedBoxFinishesWithTheRecoveryCode(t *testing.T) {
 	home := newFakeHome(t)
-	home.downComplete = true
 	dir := t.TempDir()
 	b := newBox(t, home, dir)
 	p := b.setUp("alice")
-	if !strings.Contains(b.page(), "Setting up did not finish") {
-		t.Fatal("the interrupted setup says nothing")
-	}
-	first, _ := holder.Load(b.record)
-	if first == nil || len(first.Certificate) != 0 {
-		t.Fatal("no key record kept, or a certificate from nowhere")
-	}
+	code := b.shown()
+	home.accounts.Down = true
+	b.post("/saved", nil)
 
 	again := newBox(t, home, dir)
-	if !strings.Contains(again.page(), "Finish setting up") {
-		t.Fatal("the restarted shell does not offer to finish")
+	if page := again.page(); !strings.Contains(page, "Finish your account") || !strings.Contains(page, "@alice") {
+		t.Fatalf("the restarted box does not offer to finish:\n%s", page)
 	}
-	again.post("/finish", url.Values{"name": {"alice"}, "secret": {p}})
-	rec, _ := holder.Load(again.record)
-	e := home.enrolled[first.RequestID]
-	if e == nil || len(home.enrolled) != 1 || string(e.key) != string(first.PublicKey) || len(rec.Certificate) == 0 {
-		t.Fatalf("finished with another key or request: %+v", home.enrolled)
+	home.accounts.Down = false
+	again.post("/resume", url.Values{"code": {"CYFR-0000"}})
+	if !strings.Contains(again.page(), "not a recovery code") {
+		t.Fatal("a wrong code was not said")
+	}
+	w := again.post("/resume", url.Values{"code": {strings.ToLower(code)}})
+	if loc := w.Header().Get("Location"); loc != "/" {
+		t.Fatalf("resume answered %q", loc)
+	}
+	if !strings.Contains(again.page(), "CYFR is locked") {
+		t.Fatalf("the finished account does not ask the passphrase:\n%s", again.page())
+	}
+	ticketOf(t, again.post("/unlock", url.Values{"secret": {p}}), home)
+	identifier, _, _ := account.DecodeRecoveryCode(code)
+	if home.accounts.Holder("alice") != identifier {
+		t.Fatal("the resumed account does not hold its name")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "attempt.json")); !os.IsNotExist(err) {
+		t.Fatal("the finished attempt is still kept")
 	}
 }
 
-// A name cyfr.run holds for someone else asks for another, and cyfr.run
-// not answering asks to try again; neither enrolls anyone again.
-func TestSetup_ANameConflictOrOutageNeverEnrollsAgain(t *testing.T) {
+// A name someone took after it was checked asks for another: the account
+// is made, and takes the next free name.
+func TestSetup_ATakenNameAsksAnother(t *testing.T) {
 	home := newFakeHome(t)
-	home.taken["alice"] = true
-	home.registryDown = 1
 	b := newBox(t, home, t.TempDir())
 	b.setUp("alice")
-	if page := b.page(); !strings.Contains(page, "cyfr.run did not answer") || !strings.Contains(page, `action="/name"`) {
-		t.Fatalf("the outage asks nothing:\n%s", page)
+	home.accounts.Hold("alice", "per_"+strings.Repeat("0", 64))
+	b.post("/saved", nil)
+	if page := b.page(); !strings.Contains(page, "Someone holds the name @alice") || !strings.Contains(page, `action="/name"`) {
+		t.Fatalf("the taken name asks nothing:\n%s", page)
 	}
-	b.post("/name", url.Values{"name": {"alice"}})
-	if page := b.page(); !strings.Contains(page, "Someone holds the name alice") {
-		t.Fatalf("the conflict asks nothing:\n%s", page)
+	ticketOf(t, b.post("/name", url.Values{"name": {"alice2"}}), home)
+	rec, _ := holder.Load(b.record)
+	if home.accounts.Holder("alice2") != rec.Identifier || len(home.accounts.Log(rec.Identifier)) != 2 {
+		t.Fatal("the account was made twice, or took no name")
 	}
-	if w := b.post("/saved", nil); w.Header().Get("Location") != "/" {
-		t.Fatal("I saved it passed a name not yet taken")
+}
+
+// Where the account service names terms, setting up without accepting
+// them makes nothing and shows them; accepted, the acceptance precedes the
+// name's claim, and newer terms the registry asks for meanwhile are asked
+// again before it.
+func TestSetup_TheTermsAreAcceptedFirst(t *testing.T) {
+	home := newFakeHome(t)
+	home.accounts.Policy = &account.Policy{Version: "2026-10", URL: "https://cyfr.example/terms"}
+	b := newBox(t, home, t.TempDir())
+	if page := b.page(); !strings.Contains(page, "I accept the terms at https://cyfr.example/terms") {
+		t.Fatalf("the setup page shows no terms:\n%s", page)
 	}
-	b.post("/name", url.Values{"name": {"alice2"}})
-	if !strings.Contains(b.page(), "CYFR-TEST-RECOVERY-CODE") {
-		t.Fatal("the recovery code does not follow the name")
+	p := b.shown()
+	b.post("/setup", url.Values{"name": {"alice"}, "secret": {p}, "again": {p}})
+	if _, err := os.Stat(b.record); !os.IsNotExist(err) || !strings.Contains(b.page(), "accept the terms") {
+		t.Fatal("setting up without the terms made a key, or said nothing")
 	}
-	if home.completes != 1 || len(home.enrolled) != 1 {
-		t.Fatalf("enrolled again: completes %d", home.completes)
+	b.post("/setup", url.Values{"name": {"alice"}, "secret": {p}, "again": {p}, "accept": {"yes"}})
+	home.accounts.Policy = &account.Policy{Version: "2026-11", URL: "https://cyfr.example/terms"}
+	b.post("/saved", nil)
+	if page := b.page(); !strings.Contains(page, "terms changed") || !strings.Contains(page, `name="accept"`) {
+		t.Fatalf("newer terms are not asked:\n%s", page)
+	}
+	ticketOf(t, b.post("/saved", url.Values{"accept": {"yes"}}), home)
+	rec, _ := holder.Load(b.record)
+	if home.accounts.Accepted(rec.Identifier) != "2026-11" || home.accounts.Holder("alice") != rec.Identifier {
+		t.Fatal("the newer terms were not accepted before the name")
+	}
+}
+
+// A box added to an account of the person's: its key made under the
+// passphrase, its code and the address that adds it shown, and once a
+// device of theirs approved it, the account's name typed finds it listed;
+// its first unlock says hello under the setup token.
+func TestSetup_AnAccountOfYoursAddsThisBox(t *testing.T) {
+	home := newFakeHome(t)
+	identifier, dev, _ := home.account(t, "mira")
+	b := newBox(t, home, t.TempDir())
+	p := b.shown()
+	b.post("/make", url.Values{"secret": {p}, "again": {p}})
+	rec, _ := holder.Load(b.record)
+	kid := account.Kid(rec.PublicKey)
+	page := b.page()
+	addURL := home.accounts.URL() + "/account/add#key=" + b64(rec.PublicKey) + "&alg=ed25519&kind=device&code=" + kid[7:23]
+	if !strings.Contains(page, kid[7:23]) || !strings.Contains(page, addURL) || !strings.Contains(page, "cyfr device approve "+b64(rec.PublicKey)) || !strings.Contains(page, "<svg") {
+		t.Fatalf("the enroll page:\n%s", page)
+	}
+	old := enrollWait
+	enrollWait = 50 * time.Millisecond
+	t.Cleanup(func() { enrollWait = old })
+	b.post("/enroll", url.Values{"name": {"mira"}})
+	if !strings.Contains(b.page(), "not on @mira's account yet") {
+		t.Fatal("an unapproved box says nothing")
+	}
+	home.approve(t, identifier, dev, rec.PublicKey)
+	b.post("/enroll", url.Values{"name": {"@mira"}})
+	if !strings.Contains(b.page(), "CYFR is locked") {
+		t.Fatalf("the approved box does not ask its passphrase:\n%s", b.page())
+	}
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	if hellos := home.hellosSeen(); len(hellos) != 1 || hellos[0]["identifier"] != identifier || hellos[0]["admission"] == nil {
+		t.Fatalf("hellos %v", hellos)
 	}
 }
 
@@ -294,25 +388,38 @@ func TestLock_RetiresEachSessionAndUnlockNeedsTheSecretAgain(t *testing.T) {
 	}
 }
 
-// A channel the home ends locks the box, saying why.
+// A standing the CYFR ends locks the box, saying why, and drops the
+// certificate: the next unlock says hello again, with no setup token, and
+// the CYFR's door decides.
 func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 	p := setUpAndOpen(t, home, b)
-	home.closeChannels(4403)
+	home.revoke()
 	deadline := time.Now().Add(5 * time.Second)
 	for b.shell.Unlocked() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "a restore from a backup suspended it, or it was removed") {
-		t.Fatal("a revoked pairing did not lock the box")
+	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "it was removed, or CYFR does not admit your account") {
+		t.Fatal("an ended standing did not lock the box")
+	}
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
+		t.Fatalf("the client kept %+v", c)
 	}
 	home.mu.Lock()
-	home.closeWith = 4403
+	home.members = map[string]bool{}
 	home.mu.Unlock()
 	b.post("/unlock", url.Values{"secret": {p}})
-	if !strings.Contains(b.page(), "a restore from a backup suspended it, or it was removed") || b.shell.Unlocked() {
-		t.Fatal("a revoked box unlocked")
+	if !strings.Contains(b.page(), "it was removed, or CYFR does not admit your account") || b.shell.Unlocked() {
+		t.Fatal("a box the door refuses unlocked")
+	}
+	home.mu.Lock()
+	home.openDoor = true
+	home.mu.Unlock()
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	hellos := home.hellosSeen()
+	if len(hellos) != 3 || hellos[2]["admission"] != nil {
+		t.Fatalf("hellos %v", hellos)
 	}
 	_ = websocket.StatusNormalClosure
 }

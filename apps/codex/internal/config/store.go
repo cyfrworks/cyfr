@@ -21,12 +21,15 @@ type Config struct {
 // the file, once, as it is deleted; the command line says so.
 var SignedOut = func(contexts []string) {}
 
-// Context is a named server connection. It holds no credential: the
-// command line proves the person with its own device (cyfr login), whose
-// session lives only in memory, and unattended work brings an API key by
-// --token or CYFR_TOKEN.
+// Context is a named server connection and this command line's standing
+// there: the client CYFR admitted its device key as and the certificate it
+// connects under, both CYFR's own word and neither a credential alone (the
+// key, unlocked, proves the person; cyfr login). The session lives only in
+// memory, and unattended work brings an API key by --token or CYFR_TOKEN.
 type Context struct {
-	URL string `json:"url"`
+	URL         string          `json:"url"`
+	ClientID    string          `json:"client_id,omitempty"`
+	Certificate json.RawMessage `json:"certificate,omitempty"`
 }
 
 // DefaultConfigDir returns ~/.cyfr.
