@@ -18,13 +18,11 @@ defmodule Sanctum.AdmissionCapacityTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
-  import Sanctum.Test.Newcomers, only: [identity: 0]
 
   alias Arca.Schemas.User
   alias Sanctum.Newcomer
   alias Sanctum.Tenancy.Athanors
   alias Sanctum.Test.Settings
-  alias Sanctum.TestContext.Authenticator
 
   @token String.duplicate("c4", 32)
 
@@ -46,18 +44,24 @@ defmodule Sanctum.AdmissionCapacityTest do
     :ok
   end
 
-  defp registration do
-    {:ok, options} = Sanctum.Passkeys.newcomer_options("newcomer")
-    Authenticator.registration(Authenticator.new("cap|#{System.unique_integer()}"), options)
+  # A new account, as a verified answer names it: its identifier, its
+  # directory and the head its signature was verified under.
+  defp account do
+    n = System.unique_integer([:positive])
+
+    %{
+      identifier: "per_" <> Prima.Digest.sha256_hex("capacity-#{n}"),
+      directory_url: Sanctum.Test.Newcomers.directory(),
+      head_hash: Prima.Digest.sha256("capacity-head-#{n}")
+    }
   end
 
-  defp open, do: Newcomer.admit(:open, {:passkey, registration(), identity()})
+  defp open, do: Newcomer.admit(:open, account())
   defp people, do: Arca.Repo.aggregate(User, :count)
 
   # The administrator, and the door open to anyone.
   defp set_up! do
-    {:ok, %{person: admin}} =
-      Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
+    {:ok, %{person: admin}} = Newcomer.admit({:setup, @token}, account())
 
     {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
     admin
@@ -104,8 +108,7 @@ defmodule Sanctum.AdmissionCapacityTest do
     mint_rate!(0)
 
     capture_log(fn ->
-      assert {:ok, %{person: admin}} =
-               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
+      assert {:ok, %{person: admin}} = Newcomer.admit({:setup, @token}, account())
 
       assert {:ok, %{status: "active"}} = Athanors.get_by_owner(admin.id)
     end)
@@ -154,14 +157,11 @@ defmodule Sanctum.AdmissionCapacityTest do
     test "a bound the store cannot answer refuses" do
       _admin = set_up!()
       mint_rate!(5)
-      # The ceremony is drawn before the store breaks: its options read it.
-      credential = registration()
       Settings.break_store!()
 
       log =
         capture_log(fn ->
-          assert {:error, {:cap_unverifiable, :mint_per_hour}} =
-                   Newcomer.admit(:open, {:passkey, credential, identity()})
+          assert {:error, {:cap_unverifiable, :mint_per_hour}} = open()
         end)
 
       assert log =~ "mint_per_hour could not be read"
@@ -170,14 +170,12 @@ defmodule Sanctum.AdmissionCapacityTest do
     test "a stale bound is refused, not served" do
       _admin = set_up!()
       mint_rate!(5)
-      credential = registration()
       Settings.expire("mint_per_hour")
       Settings.break_store!()
 
       log =
         capture_log(fn ->
-          assert {:error, {:cap_unverifiable, :mint_per_hour}} =
-                   Newcomer.admit(:open, {:passkey, credential, identity()})
+          assert {:error, {:cap_unverifiable, :mint_per_hour}} = open()
         end)
 
       assert log =~ "mint_per_hour could not be read"

@@ -344,6 +344,90 @@ defmodule Arca.PairedClientsTest do
     end
   end
 
+  describe "a passkey" do
+    # The person's account with its head cached here, and what a sign-in
+    # by one of its passkeys names.
+    defp passkey_sign_in! do
+      user_id = person!()
+      %{head: head} = Arca.Test.People.account!(user_id)
+      %{user_id: user_id, kid: Prima.Digest.sha256("passkey-#{user_id}"), head: head}
+    end
+
+    test "is recorded by its key at the cached head, holding no device key, and found again",
+         %{actor: actor} do
+      signed = passkey_sign_in!()
+
+      assert {:ok, row} = PairedClients.record_passkey(actor, signed)
+
+      assert %{
+               source_kind: "passkey",
+               standing: "active",
+               device_public_key: nil,
+               holder_kind: nil,
+               display_name: nil
+             } = row
+
+      assert {row.athanor_id, row.source_id, row.kid, row.head} ==
+               {actor.athanor_id, row.id, signed.kid, signed.head}
+
+      # A second sign-in by the same passkey finds the row that stands.
+      assert {:ok, ^row} = PairedClients.record_passkey(actor, signed)
+
+      # One revoked stands for nothing: the next sign-in records a new row.
+      {:ok, _revoked} = PairedClients.revoke(actor, row.id)
+      assert {:ok, again} = PairedClients.record_passkey(actor, signed)
+      refute again.id == row.id
+      assert again.standing == "active"
+    end
+
+    test "a head the cached head moved past records nothing", %{actor: actor} do
+      signed = passkey_sign_in!()
+      moved = %{signed | head: Prima.Digest.sha256("an older head")}
+
+      assert {:error, :stale_head} = PairedClients.record_passkey(actor, moved)
+      assert Arca.Repo.aggregate(PairedClient, :count) == 0
+    end
+
+    test "names its key and head, and the store refuses one without its key or with a device key",
+         %{actor: actor} do
+      signed = passkey_sign_in!()
+
+      assert {:error, {:invalid, %{kid: _}}} =
+               PairedClients.record(
+                 actor,
+                 attrs(%{user_id: signed.user_id, source_kind: "passkey"})
+               )
+
+      base = %{
+        id: Prima.UUID7.generate_id("pcl"),
+        athanor_id: actor.athanor_id,
+        user_id: signed.user_id,
+        source_kind: "passkey",
+        source_id: "src_passkey",
+        kid: signed.kid,
+        head: signed.head,
+        standing: "active",
+        inserted_at: DateTime.utc_now(),
+        updated_at: DateTime.utc_now()
+      }
+
+      # Each attempt in its own savepoint, so a refused one leaves the
+      # test's transaction usable on either adapter.
+      refused? = fn row ->
+        try do
+          Arca.Repo.transaction(fn -> Arca.Repo.insert_all(PairedClient, [row]) end)
+          false
+        rescue
+          _violation -> true
+        end
+      end
+
+      assert refused?.(%{base | kid: nil, head: nil})
+      assert refused?.(Map.put(base, :device_public_key, :crypto.strong_rand_bytes(32)))
+      refute refused?.(base)
+    end
+  end
+
   describe "list/2" do
     test "narrows by person and by standing, active by default", %{actor: actor} do
       mine = record!(actor)

@@ -332,12 +332,12 @@ defmodule Sanctum.Pairing do
 
   @doc """
   The context person's active paired clients in the athanor in focus,
-  oldest first, their passkeys' platform holders among them: each with its
-  id, the credential it stands on (`device_cert` or `passkey`), when it was
-  paired, when its current certificate expires (nil for none current, and
+  oldest first, the passkeys of their account that signed in here among
+  them (`Sanctum.Passkeys`): each with its id, the credential it stands on
+  (`device_cert` or `passkey`), when it was paired or first signed in
+  here, when its current certificate expires (nil for none current, and
   always for a passkey), whether it is the client `ctx` itself came
-  through, what holds its key, its name, whether its key may sync
-  (`synced`, a passkey WebAuthn registered backup eligible) and its storage.
+  through, what holds a device's key, its name and its storage.
   """
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, refusal()}
   def list(%Context{} = ctx) do
@@ -366,28 +366,14 @@ defmodule Sanctum.Pairing do
       current: row.id == ctx.client_id,
       holder_kind: row.holder_kind,
       display_name: row.display_name,
-      synced: synced?(row),
       storage: holder_storage(row)
     }
   end
 
-  # Whether the client's key may live on more than one machine: a
-  # passkey's platform holder whose credential WebAuthn registered backup
-  # eligible, so its revocation ends it on each of them. A device's key
-  # never leaves it.
-  defp synced?(%{source_kind: "passkey", source_id: passkey_id}) do
-    case Arca.Passkeys.get(Prima.Actor.system(), passkey_id) do
-      {:ok, %{backup_eligible: eligible}} -> eligible == true
-      _unread -> false
-    end
-  end
-
-  defp synced?(_device), do: false
-
   # What a protected device last reported of its disks within the last
   # minute (`Sanctum.DeviceUnlock.storage/2`), unknown when it reported
-  # nothing; a browser key reports nothing at all.
-  defp holder_storage(%{holder_kind: kind}) when kind in [nil, "platform"], do: nil
+  # nothing; a passkey reports nothing at all.
+  defp holder_storage(%{holder_kind: nil}), do: nil
   defp holder_storage(row), do: Sanctum.DeviceUnlock.storage(row.athanor_id, row.id)
 
   # ---------------------------------------------------------------------------

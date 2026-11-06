@@ -46,7 +46,6 @@ defmodule Arca.Schemas.PendingConfirmation do
     field :state, :string, default: "pending"
     field :proof, :string
     field :confirmed_client_id, :string
-    field :confirmed_passkey_id, :string
     field :reauth_nonce, :string
     field :email_code_hash, :string, redact: true
     field :email_code_failures, :integer, default: 0

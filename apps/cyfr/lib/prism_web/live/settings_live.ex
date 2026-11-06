@@ -406,8 +406,13 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  defp listed_devices(%{clients: clients}) when is_list(clients), do: clients
-  defp listed_devices(clients) when is_list(clients), do: clients
+  # The passkeys are listed by their key from `passkey.list`, beside the
+  # devices.
+  defp listed_devices(%{clients: clients}) when is_list(clients), do: listed_devices(clients)
+
+  defp listed_devices(clients) when is_list(clients),
+    do: Enum.reject(clients, &(&1[:source] == "passkey"))
+
   defp listed_devices(_other), do: []
 
   defp revoke_device(socket, id) do

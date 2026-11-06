@@ -102,9 +102,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "`Cyfr.Boundaries`' security row"},
       {~w(CompanyAuthorizations CompanyLoginAttempts
           DeviceCertificates DirectoryHeads IdentityLog
-          Invitations Passkeys PendingConfirmations PersonIdentities
+          Invitations PendingConfirmations PersonIdentities
           RequestRateWindows),
-       "the identity, device, passkey, confirmation, " <>
+       "the identity, device, confirmation, " <>
          "admission invitation, company sign-in and pre-authentication rate rows Sanctum " <>
          "reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},

@@ -20,11 +20,11 @@ defmodule Sanctum.Providers.Pairing do
       its key; any other caller, an ordinary device intent among them, is
       refused.
     * `revoke` answers the client's id and its standing, `revoked`.
-    * `list` answers the person's active paired clients, each with what
-      holds its key (`holder_kind`) and the name it shows (`display_name`)
-      where it reported them, whether its key may sync (`synced`, a passkey's
-      platform holder WebAuthn registered backup eligible; the passkey
-      revoked wherever it synced) and what it last reported of its disks within the
+    * `list` answers the person's active paired clients, each with the
+      credential it stands on (`source`: `device_cert`, or `passkey` for a
+      passkey that signed in here), what holds a device's key
+      (`holder_kind`) and the name it shows (`display_name`) where it
+      reported them, and what it last reported of its disks within the
       last minute (`storage`: `root` and `data`, each `encrypted`,
       `unencrypted` or `unknown`), information a person reads and never
       an input to a decision.
@@ -161,7 +161,6 @@ defmodule Sanctum.Providers.Pairing do
       current: client.current,
       holder_kind: client.holder_kind,
       display_name: client.display_name,
-      synced: client.synced,
       storage: storage(client.storage)
     }
   end

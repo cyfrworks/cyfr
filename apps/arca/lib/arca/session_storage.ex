@@ -59,8 +59,8 @@ defmodule Arca.SessionStorage do
   person's account is `{:error, :stale_head}`. A protected device's session
   is never created here: its unlock reserves it and its redemption
   activates it (`activate_client_session/3`). A passkey sign-in's names
-  `attrs[:client_id]`, the credential's platform holder
-  (`Arca.PairedClients.project_passkey!/1`), which must be that person's,
+  `attrs[:client_id]`, the passkey's client
+  (`Arca.PairedClients.record_passkey/2`), which must be that person's,
   active and a passkey's, read locked in the transaction
   (`{:error, :client_not_active}`), so a revocation that committed first
   mints nothing and one that follows ends the session with the client. `also:`
@@ -80,7 +80,7 @@ defmodule Arca.SessionStorage do
 
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.create_session", fn ->
       Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
-        with :ok <- platform_holder_stands(attrs),
+        with :ok <- passkey_client_stands(attrs),
              {:ok, session} <- insert_session(token_hash, attrs),
              :ok <- also_ran(also.(session)) do
           {:ok, :inserted}
@@ -138,8 +138,8 @@ defmodule Arca.SessionStorage do
     end
   end
 
-  # arca:unscoped-ok one person's platform holder, named by the session it is about to stand under.
-  defp platform_holder_stands(%{client_id: client_id, user_id: user_id})
+  # arca:unscoped-ok one person's passkey client, named by the session it is about to stand under.
+  defp passkey_client_stands(%{client_id: client_id, user_id: user_id})
        when is_binary(client_id) do
     from(p in Arca.Schemas.PairedClient,
       where:
@@ -155,7 +155,7 @@ defmodule Arca.SessionStorage do
     end
   end
 
-  defp platform_holder_stands(_attrs), do: :ok
+  defp passkey_client_stands(_attrs), do: :ok
 
   defp also_ran(:ok), do: :ok
   defp also_ran({:error, _reason} = refusal), do: refusal
@@ -207,22 +207,22 @@ defmodule Arca.SessionStorage do
   @doc """
   Update a session's expires_at. A protected device's session is not
   found here: only its device channel moves it (`slide_client_sessions/4`).
-  A passkey sign-in's, whose client is the credential's platform holder,
-  slides as any session does.
+  A passkey sign-in's, whose client is the passkey's, slides as any
+  session does.
   """
   @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found | :database_error}
   # arca:unscoped-ok sessions are addressed by token hash — the credential is
   # the scope, and the athanor is a column on the row it finds.
   def refresh_session(token_hash, new_expires_at) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.refresh_session", fn ->
-      platform =
+      passkeys =
         from(p in Arca.Schemas.PairedClient, where: p.source_kind == "passkey", select: p.id)
 
       query =
         from(s in Session,
           where:
             s.token_hash == ^token_hash and
-              (is_nil(s.client_id) or s.client_id in subquery(platform))
+              (is_nil(s.client_id) or s.client_id in subquery(passkeys))
         )
 
       case Arca.Repo.update_all(query, set: [expires_at: new_expires_at]) do
@@ -461,35 +461,6 @@ defmodule Arca.SessionStorage do
       :ok
     end)
   end
-
-  @doc """
-  Delete every session of the actor's person that the passkey `kid`
-  signed for (provider `passkey`), in one statement, and answer the token
-  hashes it deleted, for the caller to drop from every memo and announce
-  once this returns: `{:ok, hashes}`, empty when there were none;
-  `{:error, :no_person}` for an actor naming no person;
-  `{:error, :database_error}` when the store cannot answer, with nothing
-  deleted.
-  """
-  @spec delete_signed_by(Prima.Actor.t(), String.t()) ::
-          {:ok, [binary()]} | {:error, :no_person | :database_error}
-  # arca:unscoped-ok a passkey's sign-ins are its person's sessions in whatever athanor; the actor's person is the scope.
-  def delete_signed_by(%Prima.Actor{user_id: user_id}, kid)
-      when is_binary(user_id) and user_id != "" and is_binary(kid) do
-    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_signed_by", fn ->
-      {_count, hashes} =
-        Arca.Repo.delete_all(
-          from(s in Session,
-            where: s.user_id == ^user_id and s.provider == "passkey" and s.kid == ^kid,
-            select: s.token_hash
-          )
-        )
-
-      {:ok, hashes || []}
-    end)
-  end
-
-  def delete_signed_by(%Prima.Actor{}, _kid), do: {:error, :no_person}
 
   @doc """
   Delete every session of one user. Returns `{:ok, count}`.

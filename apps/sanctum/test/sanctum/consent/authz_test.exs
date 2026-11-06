@@ -1119,25 +1119,6 @@ defmodule Sanctum.Consent.AuthzTest do
       refute record(session_ctx, confirmed.confirmation_id).state == "consumed"
     end
 
-    test "confirmed by a passkey then revoked: the record is void, and asked for again",
-         %{session_ctx: session_ctx} do
-      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
-
-      %{passkey_id: passkey_id} =
-        record(session_ctx, confirmed.confirmation_id)
-        |> then(&%{passkey_id: &1.confirmed_passkey_id})
-
-      {:ok, %{voided_confirmation_ids: voided}} =
-        Arca.Passkeys.revoke(Prima.Actor.system(), passkey_id)
-
-      assert ref(confirmed.confirmation_id) in voided
-
-      assert {:error, {:confirmation_required, %{id: fresh}}} =
-               Authz.confirm(confirmed, :credential_entry, change())
-
-      refute fresh == confirmed.confirmation_id
-    end
-
     test "a key's context asks for its creator's confirmation, and repeats one they gave",
          %{session_ctx: session_ctx} do
       name = "authz-plain-#{System.unique_integer([:positive])}"

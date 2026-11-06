@@ -56,15 +56,13 @@ defmodule Arca.SchemaVocabularyTest do
       {"shares", "shares_audience_known", "audience", Arca.Schemas.Share.audiences()},
       {"consumer_receipts", "consumer_receipts_outcome_known", "outcome",
        Arca.ConsumerReceipts.outcomes()},
-      # A declared restore suspends an active client or passkey
+      # A declared restore suspends an active client
       # (`Arca.SecurityTransitions.restore/1`), for good.
       {"paired_clients", "paired_clients_standing_known", "standing",
        Arca.Schemas.PairedClient.standings()},
-      # What holds a client's key: a protected device's report, or the
-      # platform of a passkey's projected holder.
+      # What holds a protected device's key, as the device reports it.
       {"paired_clients", "paired_clients_holder_kind_known", "holder_kind",
        Arca.Schemas.PairedClient.holder_kinds()},
-      {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()},
       {"shared_threads", "shared_threads_kind_known", "kind", Arca.Schemas.SharedThread.kinds()},
       {"shared_threads", "shared_threads_status_known", "status",
        Arca.Schemas.SharedThread.statuses()},

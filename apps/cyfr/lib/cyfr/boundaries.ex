@@ -339,7 +339,7 @@ defmodule Cyfr.Boundaries do
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
     Arca.PersonIdentities Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates
-    Arca.Passkeys Arca.PendingConfirmations Arca.InstallationClaims
+    Arca.PendingConfirmations Arca.InstallationClaims
     Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
@@ -1199,8 +1199,8 @@ defmodule Cyfr.Boundaries do
           "the identities, athanors and sign-in permissions that decide standing, " <>
           "the invitations that admit a person and seat them, a person's company sign-in " <>
           "and the company sign-ins in flight, a " <>
-          "person's identity row, keys, attempts and carries, the directory's logs " <>
-          "and cached heads, passkeys, pending confirmations, the installation claim, " <>
+          "person's identity row, the directory's logs " <>
+          "and cached heads, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, shares and " <>
           "their use counts, the admission decisions and the request-log rows " <>
           "that project them, and the policy consultation log " <>

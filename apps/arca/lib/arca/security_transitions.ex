@@ -15,9 +15,9 @@ defmodule Arca.SecurityTransitions do
   they sit in and every shared thread they leave empty, deletes their sessions and revokes the
   keys they created and the keys of their athanor, the frame
   credentials (`Arca.FrameCredentials`), paired clients
-  (`Arca.PairedClients`) and device certificates
-  (`Arca.DeviceCertificates`) of the person and of their athanor, and the
-  person's passkeys (`Arca.Passkeys`); it withdraws every file offer they sent or that their
+  (`Arca.PairedClients`), the passkeys that signed in here among them, and
+  device certificates (`Arca.DeviceCertificates`) of the person and of
+  their athanor; it withdraws every file offer they sent or that their
   athanor holds, and declines every other offer addressed to
   them (`Arca.FileOffers`), whose snapshots are released once it commits,
   and revokes every share of their athanor (`Arca.Shares`).
@@ -36,8 +36,8 @@ defmodule Arca.SecurityTransitions do
 
   A declared restore (`restore/1`) consumes the marker `cyfr restore`
   writes (`mark_restore/1`): it raises every person's and athanor's
-  standing, retires every session, suspends every key, webhook, paired
-  client and passkey, revokes every device certificate and every open
+  standing, retires every session, suspends every key, webhook and paired
+  client, revokes every device certificate and every open
   invitation to become a person here (`Arca.Invitations`), blocks every
   profile and stored credential, revokes every share, drops every
   standing allow, once binding and pending confirmation, and settles
@@ -59,7 +59,7 @@ defmodule Arca.SecurityTransitions do
   (`Arca.SharedThreads`) and their people, then cached identity heads, then
   sessions, then API keys, then frame credentials, then paired clients,
   then device certificates, admission invitations
-  (`Arca.Invitations`), passkeys and pending confirmations, then file
+  (`Arca.Invitations`) and pending confirmations, then file
   offers by offer and file name (`Arca.FileOffers`), then shares by id
   and the profiles that depend on them, by athanor and id (`Arca.Shares`,
   `Arca.ConsentStorage`).
@@ -111,8 +111,8 @@ defmodule Arca.SecurityTransitions do
 
   `{:ok, change}` only after commit. `change` is the committed data the
   caller announces from: the session hashes each DELETE returned, the
-  key, frame credential, paired client, device certificate and passkey
-  ids each UPDATE returned, the confirmations it
+  key, frame credential, paired client and device certificate ids each
+  UPDATE returned, the confirmations it
   voided, the athanors archived or reopened with their new generations,
   the person of each archived athanor, the person's generation, and the shares
   it revoked (`revoked_share_ids`). Refusals:
@@ -130,7 +130,6 @@ defmodule Arca.SecurityTransitions do
     FrameCredentials,
     Invitations,
     PairedClients,
-    Passkeys,
     PendingConfirmations
   }
 
@@ -146,7 +145,6 @@ defmodule Arca.SecurityTransitions do
     FrameCredential,
     Invitation,
     PairedClient,
-    Passkey,
     PendingConfirmation,
     PersonIdentity,
     Profile,
@@ -191,7 +189,6 @@ defmodule Arca.SecurityTransitions do
           required(:revoked_frame_credential_ids) => [String.t()],
           required(:revoked_paired_client_ids) => [String.t()],
           required(:revoked_device_certificate_ids) => [String.t()],
-          required(:revoked_passkey_ids) => [String.t()],
           required(:voided_confirmation_ids) => [String.t()],
           required(:member_user_ids) => %{String.t() => [String.t()]},
           required(:ended_offer_ids) => [String.t()],
@@ -287,13 +284,11 @@ defmodule Arca.SecurityTransitions do
           %{certificate_ids: cert_ids, session_hashes: cert_hashes} =
             revoke_certificates(user_id, retire)
 
-          passkey_ids = Passkeys.revoke_all(from(p in Passkey, where: p.user_id == ^user_id))
-          # The confirmations are voided only after the passkeys are revoked:
-          # a confirm locks its client, then its passkey, then its record, and
-          # the denial takes them in that order too, so neither waits on the
-          # other across a lock the other holds.
+          # The confirmations are voided only after the clients are revoked:
+          # a confirm locks its client, then its record, and the denial takes
+          # them in that order too, so neither waits on the other across a
+          # lock the other holds.
           dependents = PairedClients.retire_dependents!(paired_ids)
-          by_passkeys = PendingConfirmations.void_confirmed_by!(:passkey, passkey_ids)
           own = void_confirmations(from(c in PendingConfirmation, where: c.user_id == ^user_id))
           ended_offers = Arca.FileOffers.end_for_person!(user_id, retire)
           {left, ended} = leave_shared_threads(user_id, identifier, threads, now)
@@ -319,9 +314,7 @@ defmodule Arca.SecurityTransitions do
                 revoked_frame_credential_ids: frame_ids,
                 revoked_paired_client_ids: paired_ids,
                 revoked_device_certificate_ids: merged_ids(dependents.certificate_ids, cert_ids),
-                revoked_passkey_ids: passkey_ids,
-                voided_confirmation_ids:
-                  merged_ids(dependents.confirmation_ids, merged_ids(by_passkeys, own)),
+                voided_confirmation_ids: merged_ids(dependents.confirmation_ids, own),
                 member_user_ids: Map.new(Map.keys(archived), &{&1, [user_id]}),
                 ended_offer_ids:
                   ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort(),
@@ -520,7 +513,6 @@ defmodule Arca.SecurityTransitions do
       from(c in DeviceCertificate,
         where: c.state != "revoked" and (c.user_id == ^user_id or c.athanor_id in ^athanor_ids)
       ),
-      from(p in Passkey, where: p.user_id == ^user_id and p.state != "revoked"),
       from(c in PendingConfirmation,
         where: c.user_id == ^user_id and c.state in ^@open_confirmation
       ),
@@ -681,13 +673,14 @@ defmodule Arca.SecurityTransitions do
   admits a successor (`Arca.ExecutionStanding`), a context read before
   it issues nothing, and an invitation issued before it admits no one
   (`Arca.Invitations`). It deletes every session; suspends every
-  unrevoked API key, every webhook, every active paired client and every
-  active passkey; revokes every frame credential, every device
-  certificate (`Arca.DeviceCertificates`) and every open admission
-  invitation (`Arca.Invitations.revoke_all!/0`); deletes every pending
-  confirmation (`Arca.PendingConfirmations.delete_all!/0`); moves every
-  active profile to `needs_consent`, every active vault entry to
-  `needs_reauth` and every active share to `revoked` (`Arca.StatusTransitions.restored/1`),
+  unrevoked API key, every webhook and every active paired client, the
+  passkeys that signed in here among them; revokes every frame
+  credential, every device certificate (`Arca.DeviceCertificates`) and
+  every open admission invitation (`Arca.Invitations.revoke_all!/0`);
+  deletes every pending confirmation
+  (`Arca.PendingConfirmations.delete_all!/0`); moves every active profile
+  to `needs_consent`, every active vault entry to `needs_reauth` and every
+  active share to `revoked` (`Arca.StatusTransitions.restored/1`),
   answering the shares in `revoked_share_ids`; deletes every standing
   allow (`tool_grants` rows of effect `allow`; denies stay);
   drops every unconsumed once binding by consuming it under the restore
@@ -701,7 +694,8 @@ defmodule Arca.SecurityTransitions do
   marker and moves nothing, and a crash before commit leaves the marker
   for the next boot. A suspended paired client stays suspended: its
   device comes back by a fresh hello, as a new client
-  (`Sanctum.DeviceUnlock`).
+  (`Sanctum.DeviceUnlock`), and a passkey by a fresh sign-in
+  (`Sanctum.SignIn`).
 
   Every statement's postcondition is read before commit; a survivor rolls
   the whole transition back as `:postcondition_failed`. A lost slot is
@@ -812,12 +806,6 @@ defmodule Arca.SecurityTransitions do
 
     admission_invitation_ids = Invitations.revoke_all!()
 
-    passkey_ids =
-      updated(from(p in Passkey, where: p.state == "active", select: p.id),
-        state: "suspended",
-        updated_at: now
-      )
-
     confirmation_refs = PendingConfirmations.delete_all!()
 
     {profile_from, profile_to} = StatusTransitions.restored(:profiles)
@@ -875,7 +863,6 @@ defmodule Arca.SecurityTransitions do
       suspended_paired_client_ids: client_ids,
       revoked_device_certificate_ids: certificate_ids,
       revoked_admission_invitation_ids: admission_invitation_ids,
-      suspended_passkey_ids: passkey_ids,
       deleted_confirmation_refs: confirmation_refs,
       needs_consent_profile_ids: profile_ids,
       dropped_grant_ids: Enum.sort(grant_ids || []),
@@ -977,7 +964,6 @@ defmodule Arca.SecurityTransitions do
       from(p in PairedClient, where: p.standing == "active"),
       from(c in DeviceCertificate, where: c.state != "revoked"),
       from(i in Invitation, where: is_nil(i.redeemed_at) and is_nil(i.revoked_at)),
-      from(p in Passkey, where: p.state == "active"),
       PendingConfirmation,
       from(p in Profile, where: p.status == ^profile_from),
       from(g in ToolGrant, where: g.effect == "allow"),
@@ -1104,7 +1090,6 @@ defmodule Arca.SecurityTransitions do
       revoked_frame_credential_ids: [],
       revoked_paired_client_ids: [],
       revoked_device_certificate_ids: [],
-      revoked_passkey_ids: [],
       voided_confirmation_ids: [],
       member_user_ids: %{},
       revoked_share_ids: [],

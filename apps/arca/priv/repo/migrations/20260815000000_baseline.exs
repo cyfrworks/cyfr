@@ -26,11 +26,10 @@ defmodule Arca.Repo.Migrations.Baseline do
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
-  A person's identity, passkeys, company sign-in and company
-  sign-in attempts, the directory's log and the handles and spent nonces
-  of the registry beside it, the cached heads of other people's logs and
-  the pre-authentication rate windows are not an athanor's either
-  (`people/0`), and neither is a
+  A person's identity, company sign-in and company sign-in attempts, the
+  directory's log and the handles and spent nonces of the registry beside
+  it, the cached heads of other people's logs and the pre-authentication
+  rate windows are not an athanor's either (`people/0`), and neither is a
   command line's pending sign-in (`identity/0`), which no one owns until
   the session its approval mints. A shared thread, its people and its
   messages are no athanor's (`shared_threads/0`): a place several people
@@ -343,9 +342,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # The client the session stands on: the protected device whose
       # unlock created it, its expiry the device channel's, slid only by
       # that channel and never past its certificate (`Sanctum.DeviceUnlock`),
-      # or the platform holder of the passkey a sign-in asserted, which
-      # slides as any session does (`Arca.PairedClients.project_passkey!/1`).
-      # Null for every other session.
+      # or the client of the passkey that signed in, which slides as any
+      # session does (`Arca.PairedClients.record_passkey/2`). Null for every
+      # other session.
       add :client_id, :string
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
@@ -487,18 +486,15 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     holder_kind_known = %{
       name: "paired_clients_holder_kind_known",
-      expr: "holder_kind IN ('chip', 'software', 'platform')"
+      expr: "holder_kind IN ('chip', 'software')"
     }
 
-    # A passkey's client is its platform holder, and only it is: it names
-    # the credential it projects, as its source and by reference, and
-    # holds no key.
-    platform_is_passkey = %{
-      name: "paired_clients_platform_is_passkey",
-      expr:
-        "(COALESCE(holder_kind, '') = 'platform') = (source_kind = 'passkey') AND " <>
-          "(source_kind = 'passkey') = (passkey_id IS NOT NULL) AND " <>
-          "(passkey_id IS NULL OR (passkey_id = source_id AND device_public_key IS NULL))"
+    # A passkey's client is a key of the person's account and nothing
+    # else: it names its kid, so the cached head's walk finds it, and
+    # holds no device key, so it never signs as a device.
+    passkey_is_key = %{
+      name: "paired_clients_passkey_is_key",
+      expr: "source_kind <> 'passkey' OR (kid IS NOT NULL AND device_public_key IS NULL)"
     }
 
     # One row per client a person holds in an athanor: the credential it
@@ -512,18 +508,16 @@ defmodule Arca.Repo.Migrations.Baseline do
     # hello, as a new row. A protected device enrolled with a local unlock reports what holds its
     # key (`holder_kind`: a TPM `chip` or a passphrase-wrapped `software`
     # file) and the name it shows (`display_name`): information a person
-    # reads, never an input to a decision. A passkey is projected here as
-    # its platform holder (`holder_kind` `platform`, `source_kind`
-    # `passkey`, the credential's id as `source_id`, no key), one row per
-    # credential in its person's own athanor, standing as the credential
-    # stands (`Arca.PairedClients.project_passkey!/1`). Its `passkey_id`
-    # references the credential, so it goes with it: a credential goes with
-    # its person, and no client is left naming a person who is gone.
+    # reads, never an input to a decision. A passkey of the person's account
+    # is recorded here when it first signs in (`source_kind` `passkey`, its
+    # own id as `source_id`, its `kid` and the head it signed in under, no
+    # key), one standing row per passkey in its person's own athanor
+    # (`Arca.PairedClients.record_passkey/2`).
     create table(:paired_clients, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
-      add :source_kind, :string, null: false, check: if(sqlite?, do: platform_is_passkey)
+      add :source_kind, :string, null: false, check: if(sqlite?, do: passkey_is_key)
       add :source_id, :string, null: false
       add :device_public_key, :binary
 
@@ -534,7 +528,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :holder_kind, :string, check: if(sqlite?, do: holder_kind_known)
       add :display_name, :string
-      add :passkey_id, references(:passkeys, type: :string, on_delete: :delete_all)
       # The account key the client is (`kid`) and the head it was admitted
       # under (`head`), both set or both null.
       add :kid, :string
@@ -547,25 +540,22 @@ defmodule Arca.Repo.Migrations.Baseline do
       create constraint(:paired_clients, standing_known.name, check: standing_known.expr)
       create constraint(:paired_clients, holder_kind_known.name, check: holder_kind_known.expr)
 
-      create constraint(:paired_clients, platform_is_passkey.name,
-               check: platform_is_passkey.expr
-             )
+      create constraint(:paired_clients, passkey_is_key.name, check: passkey_is_key.expr)
     end
 
     # A credential is one client in its athanor.
     create unique_index(:paired_clients, [:athanor_id, :source_kind, :source_id])
     create index(:paired_clients, [:user_id, :standing])
     create index(:paired_clients, [:athanor_id, :standing])
-    create index(:paired_clients, [:passkey_id], where: "passkey_id IS NOT NULL")
     create index(:paired_clients, [:kid], where: "kid IS NOT NULL")
   end
 
   # ==========================================================================
-  # People: identity, the directory, passkeys, rate windows
+  # People: identity, the directory, rate windows
   # ==========================================================================
 
-  # None of these rows is an athanor's: a person's identity and passkeys
-  # outlive their athanor, a directory orders identifiers, and the
+  # None of these rows is an athanor's: a person's identity outlives
+  # their athanor, a directory orders identifiers, and the
   # pre-authentication rate windows are the node's. Arca stores bytes and
   # hashes here and verifies no signature.
   defp people do
@@ -693,52 +683,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    passkey_state =
-      known("passkeys_state_known", "state", ~w(pending active suspended revoked))
-
-    # A person's WebAuthn credentials at this relying home, pinned to its RP
-    # ID. A pending registration waits, with its exact registration digest,
-    # for activation; a remote person's credential names the
-    # `recovery_epoch` it was registered under, and a recovery that replaces
-    # the live key revokes the credential, while an ordinary rotation keeps
-    # it. A declared restore suspends an active credential, which then
-    # asserts nothing until the person re-enables it.
-    create table(:passkeys, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :credential_id, :text, null: false
-      add :rp_id, :string, null: false
-      add :relying_home, :text, null: false
-      add :public_key, :binary
-      add :sign_count, :bigint, null: false, default: 0
-      add :identity_recovery_epoch, :string
-      add :state, :string, null: false, check: if(sqlite?, do: passkey_state)
-      add :registration_digest, :string, null: false
-      add :possession_verified, :boolean, null: false, default: false
-      # WebAuthn's backup-eligible flag at registration: the credential may
-      # sync to the person's other machines, so its revocation ends it on
-      # each of them.
-      add :backup_eligible, :boolean, null: false, default: false
-      add :expires_at, :utc_datetime_usec
-      add :admin_confirmation_id, :string
-      add :activated_at, :utc_datetime_usec
-      add :revoked_at, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :passkeys, [passkey_state])
-    create index(:passkeys, [:user_id, :state])
-
-    create index(:passkeys, [:identity_recovery_epoch],
-             where: "identity_recovery_epoch IS NOT NULL"
-           )
-
-    create unique_index(:passkeys, [:rp_id, :credential_id],
-             where: "state != 'revoked'",
-             name: :passkeys_live_credential_index
-           )
-
     # A person's company sign-in (`Arca.CompanyAuthorizations`): the
     # company configuration it was given under (the OpenID Connect issuer
     # and client id, or the WorkOS organization and connection), the
@@ -863,7 +807,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # holds (`Prima.Confirmation.ref/1`): the record's fields, its digest
     # and secret-free preview, the credential that opened it and alone may
     # consume it, a name for the client that asked, how it was proven and
-    # by which client or passkey, and a state each transition moves once.
+    # by which client, and a state each transition moves once.
     # A record a key confirmed names that key (`kid`) and the account head
     # it was verified under (`head`).
     create table(:pending_confirmations, primary_key: false) do
@@ -890,7 +834,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :proof, :string, check: if(sqlite?, do: Enum.at(confirmation_checks, 1))
       add :confirmed_client_id, :string
-      add :confirmed_passkey_id, :string
       add :reauth_nonce, :string
       add :email_code_hash, :string
       add :email_code_failures, :integer, null: false, default: 0
@@ -907,10 +850,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create index(:pending_confirmations, [:confirmed_client_id],
              where: "confirmed_client_id IS NOT NULL"
-           )
-
-    create index(:pending_confirmations, [:confirmed_passkey_id],
-             where: "confirmed_passkey_id IS NOT NULL"
            )
 
     create index(:pending_confirmations, [:kid], where: "kid IS NOT NULL")

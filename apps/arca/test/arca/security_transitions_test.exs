@@ -254,7 +254,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   def paired_standing(id), do: Arca.Repo.get(Arca.Schemas.PairedClient, id).standing
 
-  # A device certificate, a passkey and a pending confirmation, each inserted directly for the reason a frame
+  # A device certificate and a pending confirmation, each inserted directly for the reason a frame
   # is: writing them is fenced by the member's slot.
   def certificate!(athanor_id, user_id, paired_client_id) do
     now = DateTime.utc_now()
@@ -288,33 +288,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   def certificate_state(id), do: Arca.Repo.get(Arca.Schemas.DeviceCertificate, id).state
 
-  def passkey!(user_id) do
-    now = DateTime.utc_now()
-    id = Prima.UUID7.generate_id("psk")
-
-    {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.Passkey, [
-        %{
-          id: id,
-          user_id: user_id,
-          credential_id: "cred-#{uniq()}",
-          rp_id: "home.example",
-          relying_home: "https://home.example",
-          public_key: "cose",
-          sign_count: 0,
-          state: "active",
-          registration_digest: Prima.Digest.sha256("reg-#{uniq()}"),
-          possession_verified: true,
-          inserted_at: now,
-          updated_at: now
-        }
-      ])
-
-    id
-  end
-
-  def passkey_state(id), do: Arca.Repo.get(Arca.Schemas.Passkey, id).state
-
   def confirmation!(athanor_id, user_id, confirmed_by \\ []) do
     now = DateTime.utc_now()
     ref = Prima.Confirmation.ref("cnf_#{uniq()}")
@@ -336,9 +309,8 @@ defmodule Arca.SecurityTransitions.Fixtures do
           opener: "session:security-transitions-test",
           asker: ~s({"kind":"session"}),
           state: if(confirmed_by == [], do: "pending", else: "confirmed"),
-          proof: if(confirmed_by == [], do: nil, else: "passkey"),
+          proof: if(confirmed_by == [], do: nil, else: "device"),
           confirmed_client_id: confirmed_by[:client],
-          confirmed_passkey_id: confirmed_by[:passkey],
           email_code_failures: 0,
           opened_at: now,
           expires_at: DateTime.add(now, 300, :second),
@@ -1043,7 +1015,7 @@ defmodule Arca.SecurityTransitionsTest do
     end
   end
 
-  describe "device certificates, passkeys and confirmations" do
+  describe "device certificates and confirmations" do
     test "a denial retires them everywhere the person stood, and in what it archives" do
       {user, own} = owner!()
       {peer, theirs} = owner!()
@@ -1054,7 +1026,6 @@ defmodule Arca.SecurityTransitionsTest do
       guest_cert = certificate!(own.id, peer.id, guest_client)
       peer_client = paired!(theirs.id, peer.id)
       peer_cert = certificate!(theirs.id, peer.id, peer_client)
-      passkey = passkey!(user.id)
       own_confirmation = confirmation!(theirs.id, user.id)
       by_guest = confirmation!(own.id, peer.id, client: guest_client)
       peer_confirmation = confirmation!(theirs.id, peer.id, client: peer_client)
@@ -1062,11 +1033,9 @@ defmodule Arca.SecurityTransitionsTest do
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
       assert change.revoked_device_certificate_ids == Enum.sort([cert, guest_cert])
-      assert change.revoked_passkey_ids == [passkey]
       assert change.voided_confirmation_ids == Enum.sort([own_confirmation, by_guest])
 
       for id <- [cert, guest_cert], do: assert(certificate_state(id) == "revoked")
-      assert passkey_state(passkey) == "revoked"
       assert confirmation_state(own_confirmation) == "voided"
       assert confirmation_state(by_guest) == "voided"
 
@@ -1075,7 +1044,6 @@ defmodule Arca.SecurityTransitionsTest do
 
       # An allow resurrects none of them.
       assert {:ok, _} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
-      assert passkey_state(passkey) == "revoked"
       assert certificate_state(cert) == "revoked"
     end
 

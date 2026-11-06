@@ -7,8 +7,8 @@ defmodule Arca.PendingConfirmations do
   (`Arca.Schemas.PendingConfirmation`), athanor-scoped: each the stored
   form of one `Prima.Confirmation` record, with its digest, its
   secret-free preview, the credential that opened it, a name for the
-  client that asked, how it was proven and by which paired client or
-  passkey, and its state.
+  client that asked, how it was proven and by which paired client or key
+  of the person's account, and its state.
 
   ## The ref and the secret
 
@@ -50,21 +50,20 @@ defmodule Arca.PendingConfirmations do
       on PostgreSQL may each find room: the bound is soft under concurrent
       opens, and the next open restores it.
     * `confirm/3` records the proof (`passkey`, `oidc_reauth`,
-      `email_code`, `device` or `home`) and the paired client or passkey
-      that gave it, only
-      while that client or passkey still stands, so a revocation that
+      `email_code`, `device` or `home`) and the paired client that gave
+      it, only while that client still stands, so a revocation that
       commits first leaves nothing to confirm with. It locks the client,
-      then the passkey, then the record: the standing order
-      (`Arca.SecurityTransitions`), so a confirm and a revocation of its
-      confirmer never wait on each other.
+      then the record: the standing order (`Arca.SecurityTransitions`), so
+      a confirm and a revocation of its confirmer never wait on each
+      other.
     * `consume/3` consumes a confirmed, unexpired, unvoided record whose
       person, operation, argument digest, preview and opener are exactly
       the caller's. It runs in its own transaction or nested in a caller's, so
       an action whose effect opens a row consumes in the transaction that
       opens it. `check/3` asks the same question and writes nothing.
     * `void_confirmed_by!/2` voids the open records a revoked paired
-      client or passkey confirmed, inside the transaction of the standing
-      transition or passkey revocation that revokes it.
+      client confirmed, inside the transaction of the standing transition
+      or the revocation that revokes it.
 
   A record a key confirmed carries that key's `kid` and the account head
   it was verified under (`head`), which must be the cached head of the
@@ -82,7 +81,7 @@ defmodule Arca.PendingConfirmations do
   import Ecto.Query
 
   alias Arca.QueryHelpers
-  alias Arca.Schemas.{DeviceCertificate, PairedClient, Passkey, PendingConfirmation}
+  alias Arca.Schemas.{DeviceCertificate, PairedClient, PendingConfirmation}
   alias Prima.Confirmation
   alias Prima.Confirmation.Preview
 
@@ -168,14 +167,14 @@ defmodule Arca.PendingConfirmations do
   device's signature over the record's digest, which names the client) or
   `"home"` (a remote person's own home certifying their confirmation there,
   `Prima.ConfirmationAssertion`, which names nothing here), and
-  `:passkey_id` or `:client_id` name the passkey or paired client that
-  gave it, which must still stand. A key's proof (`passkey` or `device`)
-  may name the account key that signed, `:kid`, and the account head it
-  was verified under, `:head`, both or neither: the head must be the
-  cached head of the person's account (`:stale_head` otherwise). A
-  passkey's proof names its key and head, or the passkey here. Succeeds
-  once, before the record's expiry. Refusals: `:not_pending`, `:expired`,
-  `:not_found`, `:revoked` (the passkey or client no longer stands),
+  `:client_id` names the paired client that gave it, which must still
+  stand. A key's proof (`passkey` or `device`) may name the account key
+  that signed, `:kid`, and the account head it was verified under,
+  `:head`, both or neither: the head must be the cached head of the
+  person's account (`:stale_head` otherwise). A passkey's proof names its
+  key and head. Succeeds once, before the record's expiry. Refusals:
+  `:not_pending`, `:expired`, `:not_found`, `:revoked` (the client no
+  longer stands),
   `:stale_head`, `{:invalid, errors}`, `:not_owner`, `:no_athanor`,
   `:database_error`.
   """
@@ -398,15 +397,11 @@ defmodule Arca.PendingConfirmations do
   end
 
   @doc false
-  @spec void_confirmed_by!(:passkey | :paired_client, [String.t()]) :: [String.t()]
-  # Void the open records confirmed by the passkeys or paired clients
-  # `ids` names, in the caller's transaction: a revoked credential leaves
+  @spec void_confirmed_by!(:paired_client, [String.t()]) :: [String.t()]
+  # Void the open records confirmed by the paired clients `ids` names, in the caller's transaction: a revoked credential leaves
   # nothing it confirmed standing. Answers the refs it voided.
   # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
   def void_confirmed_by!(_kind, []), do: []
-
-  def void_confirmed_by!(:passkey, ids),
-    do: void_all(from(c in PendingConfirmation, where: c.confirmed_passkey_id in ^ids))
 
   def void_confirmed_by!(:paired_client, ids),
     do: void_all(from(c in PendingConfirmation, where: c.confirmed_client_id in ^ids))
@@ -526,8 +521,8 @@ defmodule Arca.PendingConfirmations do
     end
   end
 
-  # The confirmer's lock comes before the record's: paired client, then
-  # passkey, then the record, the order every standing transition takes.
+  # The confirmer's lock comes before the record's: the paired client,
+  # then the record, the order every standing transition takes.
   # The record's person and athanor never change, so reading them unlocked
   # to find the confirmer is sound; its state is read again under lock.
   defp confirm_in(actor, ref, proof) do
@@ -547,7 +542,6 @@ defmodule Arca.PendingConfirmations do
           set: [
             state: "confirmed",
             proof: proof.proof,
-            confirmed_passkey_id: proof.passkey_id,
             confirmed_client_id: proof.client_id,
             kid: proof.kid,
             head: proof.head,
@@ -583,34 +577,24 @@ defmodule Arca.PendingConfirmations do
     with {:ok, _identifier} <- Arca.DirectoryHeads.fence!(person.user_id, head), do: :ok
   end
 
-  # The paired client, then the passkey, that gave the proof still stands,
-  # read under lock: a revocation that committed first leaves nothing to
-  # confirm with, and one that follows voids this record.
-  defp confirmer_stands(person, %{passkey_id: passkey_id, client_id: client_id}) do
-    client_ok =
-      is_nil(client_id) or
-        from(p in PairedClient,
-          where:
-            p.athanor_id == ^person.athanor_id and p.id == ^client_id and
-              p.user_id == ^person.user_id and p.standing == "active",
-          select: p.id
-        )
-        |> QueryHelpers.for_update()
-        |> Arca.Repo.one()
-        |> is_binary()
+  # The paired client that gave the proof still stands, read under lock: a
+  # revocation that committed first leaves nothing to confirm with, and one
+  # that follows voids this record.
+  defp confirmer_stands(_person, %{client_id: nil}), do: :ok
 
-    passkey_ok =
-      client_ok and
-        (is_nil(passkey_id) or
-           from(p in Passkey,
-             where: p.id == ^passkey_id and p.user_id == ^person.user_id and p.state == "active",
-             select: p.id
-           )
-           |> QueryHelpers.for_update()
-           |> Arca.Repo.one()
-           |> is_binary())
-
-    if passkey_ok, do: :ok, else: {:error, :revoked}
+  defp confirmer_stands(person, %{client_id: client_id}) do
+    from(p in PairedClient,
+      where:
+        p.athanor_id == ^person.athanor_id and p.id == ^client_id and
+          p.user_id == ^person.user_id and p.standing == "active",
+      select: p.id
+    )
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> {:error, :revoked}
+      _id -> :ok
+    end
   end
 
   defp consume_in(actor, ref, expected) do
@@ -655,7 +639,7 @@ defmodule Arca.PendingConfirmations do
     with :ok <-
            confirmer_stands(
              %{athanor_id: record.athanor_id, user_id: record.user_id},
-             %{passkey_id: nil, client_id: record.confirmed_client_id}
+             %{client_id: record.confirmed_client_id}
            ),
          do: device_certified("device", record.athanor_id, record.confirmed_client_id, now)
   end
@@ -733,7 +717,6 @@ defmodule Arca.PendingConfirmations do
 
   defp proof(%{proof: kind} = proof)
        when kind in ~w(passkey oidc_reauth email_code device home) do
-    passkey_id = Map.get(proof, :passkey_id)
     client_id = Map.get(proof, :client_id)
     kid = Map.get(proof, :kid)
     head = Map.get(proof, :head)
@@ -742,11 +725,8 @@ defmodule Arca.PendingConfirmations do
       not key_binding?(kind, kid, head) ->
         {:error, {:invalid, %{kid: ["a key's proof names its key and head, both or neither"]}}}
 
-      kind == "passkey" and is_nil(kid) and not (is_binary(passkey_id) and passkey_id != "") ->
-        {:error, {:invalid, %{kid: ["a passkey's proof names its key, or the passkey here"]}}}
-
-      kind != "passkey" and not is_nil(passkey_id) ->
-        {:error, {:invalid, %{passkey_id: ["only a passkey proof names one"]}}}
+      kind == "passkey" and is_nil(kid) ->
+        {:error, {:invalid, %{kid: ["a passkey's proof names its key and head"]}}}
 
       kind == "device" and not (is_binary(client_id) and client_id != "") ->
         {:error, {:invalid, %{client_id: ["names the device that signed"]}}}
@@ -758,7 +738,7 @@ defmodule Arca.PendingConfirmations do
         {:error, {:invalid, %{client_id: ["is malformed"]}}}
 
       true ->
-        {:ok, %{proof: kind, passkey_id: passkey_id, client_id: client_id, kid: kid, head: head}}
+        {:ok, %{proof: kind, client_id: client_id, kid: kid, head: head}}
     end
   end
 

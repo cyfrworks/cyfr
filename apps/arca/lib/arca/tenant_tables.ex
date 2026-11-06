@@ -138,9 +138,6 @@ defmodule Arca.TenantTables do
   # directory serves beside it: an account's name and the requests it
   # spent, which no athanor holds.
   #
-  # `passkeys` are a person's own credentials at this home, revoked with
-  # the person (`Arca.SecurityTransitions`), never with an athanor.
-  #
   # `company_authorizations` and `company_login_attempts` are a person's
   # company sign-in and the sign-ins they have in flight: the person's,
   # deleted with their `users` row, never with an athanor.
@@ -166,7 +163,6 @@ defmodule Arca.TenantTables do
     "directory_heads",
     "directory_handles",
     "directory_nonces",
-    "passkeys",
     "company_authorizations",
     "company_login_attempts",
     "request_rate_windows",

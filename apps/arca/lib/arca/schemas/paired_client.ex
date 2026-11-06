@@ -17,7 +17,7 @@ defmodule Arca.Schemas.PairedClient do
 
   @standings ~w(active suspended revoked)
   @source_kinds ~w(session api_key device_cert passkey)
-  @holder_kinds ~w(chip software platform)
+  @holder_kinds ~w(chip software)
 
   @doc """
   The standings a paired client may hold: `suspended` while a declared
@@ -29,17 +29,16 @@ defmodule Arca.Schemas.PairedClient do
   @doc """
   The credentials a paired client may stand on: a session, an API key, a
   device certificate, whose client carries the device's public key, or a
-  passkey, whose client is that credential's platform holder and carries
-  no key (`Arca.PairedClients.project_passkey!/1`).
+  passkey of the person's account that signed in here, whose client is
+  known by its key and carries none (`Arca.PairedClients.record_passkey/2`).
   """
   @spec source_kinds() :: [String.t()]
   def source_kinds, do: @source_kinds
 
   @doc """
-  What holds a client's key: a TPM `chip` or a passphrase-wrapped
-  `software` file, as a protected device reports it, or the `platform`
-  that keeps a passkey, which this home records for the credential it
-  projects. Information a person reads, never an input to a decision.
+  What holds a protected device's key, as the device reports it: a TPM
+  `chip` or a passphrase-wrapped `software` file. Information a person
+  reads, never an input to a decision.
   """
   @spec holder_kinds() :: [String.t()]
   def holder_kinds, do: @holder_kinds
@@ -53,7 +52,6 @@ defmodule Arca.Schemas.PairedClient do
     field :standing, :string, default: "active"
     field :holder_kind, :string
     field :display_name, :string
-    field :passkey_id, :string
     field :kid, :string
     field :head, :string
     timestamps(type: :utc_datetime_usec)

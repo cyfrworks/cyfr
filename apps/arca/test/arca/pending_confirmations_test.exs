@@ -5,11 +5,11 @@ defmodule Arca.PendingConfirmationsTest do
   @moduledoc """
   Pending confirmations, athanor-scoped and keyed by their public ref: a
   new record for every open, never one that stands; confirmed once, by a
-  passkey or client that still stands, named by its ref; consumed once,
+  key of the person's account or a client that still stands, named by its
+  ref; consumed once,
   only confirmed, unexpired, unvoided, for exactly the change it recorded,
   by the credential that opened it and under the secret whose ref it is;
-  cancelled once; voided when the client or passkey that confirmed it is
-  revoked; the secret stored nowhere; and the stored row rebuilds the
+  cancelled once; voided when the client that confirmed it is revoked; the secret stored nowhere; and the stored row rebuilds the
   `Prima.Confirmation` whose digest the proof covered.
   """
 
@@ -348,7 +348,7 @@ defmodule Arca.PendingConfirmationsTest do
                PendingConfirmations.confirm(actor, rec.id, %{proof: "oidc_reauth"})
     end
 
-    test "refuses a proof the vocabulary lacks, and a passkey proof names its key or its passkey",
+    test "refuses a proof the vocabulary lacks, and a passkey proof names its key",
          %{actor: actor} do
       rec = record(actor)
       {:ok, _} = open(actor, rec)
@@ -359,11 +359,7 @@ defmodule Arca.PendingConfirmationsTest do
       assert {:error, {:invalid, %{kid: _}}} =
                PendingConfirmations.confirm(actor, rec.id, %{proof: "passkey"})
 
-      assert {:error, :revoked} =
-               PendingConfirmations.confirm(actor, rec.id, %{
-                 proof: "passkey",
-                 passkey_id: "psk_x"
-               })
+      assert {:ok, %{state: "pending"}} = PendingConfirmations.get(actor, rec.id)
     end
 
     test "a key's proof names its key and the cached head of the person's account, both or neither",
@@ -380,17 +376,12 @@ defmodule Arca.PendingConfirmationsTest do
                })
 
       assert {:error, {:invalid, %{kid: _}}} =
-               PendingConfirmations.confirm(actor, rec.id, %{
-                 proof: "passkey",
-                 passkey_id: "psk_x",
-                 kid: kid
-               })
+               PendingConfirmations.confirm(actor, rec.id, %{proof: "passkey", kid: kid})
 
       # The record's person has no account here: no head is theirs to name.
       assert {:error, :stale_head} =
                PendingConfirmations.confirm(actor, rec.id, %{
                  proof: "passkey",
-                 passkey_id: "psk_x",
                  kid: kid,
                  head: digest("head")
                })
@@ -398,7 +389,7 @@ defmodule Arca.PendingConfirmationsTest do
       assert {:ok, %{state: "pending"}} = PendingConfirmations.get(actor, rec.id)
     end
 
-    test "a passkey of the person's account confirms by its key at the cached head, with no passkey here",
+    test "a passkey of the person's account confirms by its key at the cached head",
          %{actor: actor} do
       now = DateTime.utc_now()
       user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
@@ -429,7 +420,7 @@ defmodule Arca.PendingConfirmationsTest do
                  head: head
                })
 
-      assert is_nil(row.confirmed_passkey_id)
+      assert is_nil(row.confirmed_client_id)
     end
 
     test "refuses after expiry, and a revoked client confirms nothing", %{actor: actor} do

@@ -305,6 +305,17 @@ defmodule PrismWeb.SettingsLiveTest do
       kid = Prima.Digest.sha256("phone-#{System.unique_integer()}")
       "sha256:" <> hex = kid
 
+      # The passkey's client and a session on it, as its sign-in here
+      # records them.
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(person.user_id)
+
+      {:ok, client} =
+        Arca.PairedClients.record_passkey(Prima.Actor.in_athanor(athanor.id), %{
+          user_id: person.user_id,
+          kid: kid,
+          head: head
+        })
+
       :ok =
         Arca.SessionStorage.create_session(
           :crypto.strong_rand_bytes(32),
@@ -313,6 +324,7 @@ defmodule PrismWeb.SettingsLiveTest do
             provider: "passkey",
             kid: kid,
             head: head,
+            client_id: client.id,
             expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
           },
           lock: %{user_id: person.user_id, athanor_id: nil, source: nil},
@@ -322,7 +334,10 @@ defmodule PrismWeb.SettingsLiveTest do
       {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
       passkey = ~s([data-test="passkey"][data-kid="#{kid}"])
 
+      # Listed once, as a passkey and not again among the devices.
       assert view |> element(passkey) |> render() =~ String.slice(hex, 0, 16)
+      refute has_element?(view, ~s([data-test="device"][data-id="#{client.id}"]))
+
       view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render_click()
       refute has_element?(view, passkey)
     end

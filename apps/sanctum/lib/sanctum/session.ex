@@ -349,11 +349,11 @@ defmodule Sanctum.Session do
   # A session that names a client stands on it too, read again at every
   # load: the client still active. Its revocation, its certificate's and
   # every other retirement end the session's row in their own transition
-  # (`Arca.DeviceCertificates`, `Arca.PairedClients`, `Arca.Passkeys`); a
-  # load reads that row and recomputes no retirement. Whether the session
-  # slides with use (`slides`) follows the client's verified source, never
-  # what it reports of its holder: a passkey sign-in's slides as any
-  # session does, and a protected device's only on its channel.
+  # (`Arca.DeviceCertificates`, `Arca.PairedClients`); a load reads that
+  # row and recomputes no retirement. Whether the session slides with use
+  # (`slides`) follows the client's verified source, never what it reports
+  # of its holder: a passkey sign-in's slides as any session does, and a
+  # protected device's only on its channel.
   defp stored(token_hash) do
     case Arca.SessionStorage.get_session(token_hash) do
       {:ok, %{client_id: nil} = row} -> {:ok, Map.put(row, :slides, true)}
@@ -457,7 +457,7 @@ defmodule Sanctum.Session do
   Never a protected device's session, which only its device channel moves
   (`Sanctum.DeviceUnlock.slide/2`); `refresh/1` does not find one either.
   A passkey sign-in's slides as any session does: its client is the
-  credential's platform holder, decided by the client's source.
+  passkey's, decided by the client's source.
 
   This is the activity-based ("sliding window") refresh used on the hot path —
   calling `refresh/1` on every authenticated request would write the session
