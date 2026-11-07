@@ -12,7 +12,9 @@ defmodule Prima.Device do
   A device that is not yet a client of this home opens its first
   connection with `hello`; the home answers `sign_in_request`, the device
   `sign_in_answer` after its local unlock, and the home `admitted`. From
-  then on the device connects under the certificate it was given.
+  then on the device connects under the certificate it was given. A hello
+  or an answer the home refuses is answered `refused`, and the connection
+  closes.
 
   From the glass to the home:
 
@@ -46,6 +48,11 @@ defmodule Prima.Device do
     * `admitted` — the device's paired `client_id`, its first
       `certificate`, and `standing`, the client's standing as the
       `standing` message carries it.
+    * `refused` — `error`, the refusal a `hello` or a `sign_in_answer`
+      met, as an `answer`'s `error` carries one: exactly `class`, the
+      refusal's class, and `message`, its sentence (`Prima.Refusal`). The
+      home sends it right before it closes the connection on that
+      refusal, and at no other time.
     * `challenge` — the `challenge` (`Prima.DeviceCert.Challenge`), for
       `connect` or `renew`.
     * `standing` — the client's standing: `client_id`, `athanor` and
@@ -101,6 +108,7 @@ defmodule Prima.Device do
     intent: {:glass, [id: :id, operation: :operation, args: :args], [confirmation_id: :id]},
     sign_in_request: {:home, [request: :request], []},
     admitted: {:home, [client_id: :id, certificate: :certificate, standing: :standing], []},
+    refused: {:home, [error: :refusal], []},
     challenge: {:home, [challenge: :challenge], []},
     standing: {:home, @standing, []},
     certificate: {:home, [certificate: :certificate], []},
@@ -124,6 +132,7 @@ defmodule Prima.Device do
           | :intent
           | :sign_in_request
           | :admitted
+          | :refused
           | :challenge
           | :standing
           | :certificate
@@ -300,6 +309,12 @@ defmodule Prima.Device do
 
   defp get(:standing, _value), do: :error
 
+  defp get(:refusal, %{"class" => class, "message" => message} = refusal)
+       when map_size(refusal) == 2,
+       do: ok_if(text?(class) and text?(message), refusal)
+
+  defp get(:refusal, _value), do: :error
+
   defp get(:certificate, value), do: DeviceCert.decode(value)
   defp get(:challenge, value), do: Challenge.decode(value)
   defp get(:proof, value), do: Proof.decode(value)
@@ -329,6 +344,8 @@ defmodule Prima.Device do
     is_list(values) and length(values) <= @max_names and Enum.all?(values, valid?) and
       length(Enum.uniq(values)) == length(values)
   end
+
+  defp text?(value), do: is_binary(value) and value != ""
 
   defp ok_if(true, value), do: {:ok, value}
   defp ok_if(false, _value), do: :error

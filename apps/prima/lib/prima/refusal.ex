@@ -944,6 +944,21 @@ defmodule Prima.Refusal do
       {:unauthenticated,
        "Your first passkey needs a recent sign-in here: sign in again, then register it."}
 
+  # The door's refusal of a person or an account at a sign-in
+  # (`Sanctum.Door`): one sentence whichever entry refused, so a stranger
+  # learns nothing of the list. A door that could not be read is an
+  # outage, never a refusal.
+  defp row({:door, :unavailable}), do: row(:unavailable)
+
+  defp row({:door, reason}) when reason in [:denied, :not_allowed],
+    do: {:forbidden, "not allowed on this server — ask the operator"}
+
+  # An answer to a sign-in request this CYFR refused: spent, expired, for
+  # another browser or channel, or not signed by a key the account lists.
+  # The precise reason is the log's, never the answer's.
+  defp row(:answer_refused),
+    do: {:unauthenticated, "That sign-in answer was not accepted. Sign in again."}
+
   # The setup token past its person's first sign-in method: it opens
   # nothing, whoever presents it.
   defp row(:setup_closed),

@@ -193,6 +193,16 @@ defmodule Prima.DeviceTest do
            }
   end
 
+  test "a refusal tells its class and the refusal table's own sentence, nothing more" do
+    %{"message" => message} =
+      Enum.find(vectors()["messages"], &(&1["message"]["type"] == "refused"))
+
+    assert {:ok, {:refused, %{error: %{"class" => "unauthenticated", "message" => sentence}}}} =
+             Device.decode(message, :home)
+
+    assert sentence == Prima.Refusal.message(:invitation_invalid)
+  end
+
   test "every refusal is refused with its reason, and its field when it names one" do
     intent = Enum.find(vectors()["messages"], &(&1["message"]["type"] == "intent"))["message"]
 
