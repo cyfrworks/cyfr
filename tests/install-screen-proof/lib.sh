@@ -581,15 +581,21 @@ ACCOUNT_SERVICE=http://localhost:4000
 # account_settings: before cyfr up, .env makes the box its own account
 # service and names it as the directory and the registry, and lets the
 # server's calls reach its loopback, so the server never starts naming
-# cyfr.run.
+# cyfr.run. It also drops CYFR_GITHUB_CLIENT_ID and CYFR_GOOGLE_CLIENT_ID:
+# the proof installs the published release, whose .env.example ships
+# them, and swaps in the candidate without cyfr update, which removes the
+# settings a release retired; the candidate's server refuses to boot on a
+# name it does not read, so they are removed here by hand.
 account_settings() {
   printf '%s\n' "CYFR_DIRECTORY_SERVE=writer" "CYFR_DIRECTORY_URL=$ACCOUNT_SERVICE" "CYFR_REGISTRY_URL=${ACCOUNT_SERVICE#http://}" \
     "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1" |
-    guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=/d" .env &&
+    guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=/d" .env &&
     { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not made the box's own account service"
   guest_ssh "grep -E '^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-account.txt" 2>&1
   check ".env makes the box its own account service, its directory and registry at $ACCOUNT_SERVICE" \
     sh -c 'grep -qx CYFR_DIRECTORY_SERVE=writer "$1" && grep -qx "CYFR_DIRECTORY_URL=$2" "$1"' sh "$GUEST_DIR/env-account.txt" "$ACCOUNT_SERVICE"
+  check ".env names neither setting the release shipped and the candidate retired" \
+    guest_ssh '! grep -qE "^(CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=" ~/cyfr/.env'
 }
 
 # account_service WHEN: the box's account service answers one
