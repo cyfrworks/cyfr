@@ -6,6 +6,7 @@ package shell
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -551,6 +552,54 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 		t.Fatalf("hellos %v", hellos)
 	}
 	_ = websocket.StatusNormalClosure
+}
+
+// A change of CYFR's address leaves the box a certificate for its old
+// address. The box does not present it, which the CYFR would answer with a
+// challenge for that address, but drops it and says hello again with no
+// capability, so the door admits it as it admits a terminal: refused, the
+// certificate stays dropped; admitted, the box holds one for the address
+// CYFR has now.
+func TestChannel_ACertificateForAnotherAddressIsDroppedForAHello(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	b.post("/lock", nil)
+	held := b.client()
+	var cert map[string]any
+	if err := json.Unmarshal(held.Certificate, &cert); err != nil {
+		t.Fatal(err)
+	}
+	cert["audience"] = "https://cyfr-old.example"
+	raw, _ := json.Marshal(cert)
+	if err := ClientFile(filepath.Join(b.dir, "client.json")).Save(ClientRecord{ClientID: held.ClientID, Certificate: raw}); err != nil {
+		t.Fatal(err)
+	}
+	home.mu.Lock()
+	home.clients[held.ClientID].cert = cert
+	identifier := home.clients[held.ClientID].identifier
+	home.members = map[string]bool{}
+	home.mu.Unlock()
+
+	// The screen starts again after the change of address.
+	b = newBox(t, home, b.dir)
+	b.post("/unlock", url.Values{"secret": {p}})
+	if c := b.client(); b.shell.Unlocked() || c.ClientID != held.ClientID || len(c.Certificate) != 0 {
+		t.Fatalf("a box the door refuses: unlocked %v, client %+v", b.shell.Unlocked(), c)
+	}
+
+	home.mu.Lock()
+	home.members[identifier] = true
+	home.mu.Unlock()
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	hellos := home.hellosSeen()
+	if len(hellos) != 3 || hellos[1]["admission"] != nil || hellos[2]["admission"] != nil {
+		t.Fatalf("hellos %v", hellos)
+	}
+	var now map[string]any
+	if err := json.Unmarshal(b.client().Certificate, &now); err != nil || now["audience"] != home.address() {
+		t.Fatalf("the box holds %v (%v)", now, err)
+	}
 }
 
 // A connection the network silently drops, the home still standing, locks

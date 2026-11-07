@@ -362,6 +362,7 @@ func (s *Shell) saveAttempt(a account.Attempt) error {
 
 // issued is what this CYFR's certificate says of this device's client.
 type issued struct {
+	Audience   string `json:"audience"`
 	Kid        string `json:"kid"`
 	Identifier string `json:"identifier"`
 	Athanor    string `json:"athanor"`
@@ -376,13 +377,15 @@ func readIssued(cert json.RawMessage) issued {
 	return i
 }
 
-// certified is whether the certificate held here is for this key and
-// account: one held for a key this machine no longer keeps is not used,
-// and the device says hello again.
+// certified is whether the certificate held here is for this CYFR's
+// address, this key and this account: one issued under the address CYFR
+// had before a change of address, or for a key this machine no longer
+// keeps, is not used, and the device says hello again.
 func (s *Shell) certified() bool {
 	i := readIssued(s.here.Certificate)
-	return len(s.here.Certificate) > 0 && i.Kid == account.Kid(s.rec.PublicKey) &&
-		i.Identifier == s.rec.Identifier && i.ClientID == s.here.ClientID
+	return len(s.here.Certificate) > 0 && i.Audience == s.cfg.Address &&
+		i.Kid == account.Kid(s.rec.PublicKey) && i.Identifier == s.rec.Identifier &&
+		i.ClientID == s.here.ClientID
 }
 
 func (s *Shell) binding() Binding {
@@ -1039,8 +1042,9 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 
 // connect opens the channel under key and holds both: the device is
 // unlocked from here until a lock. A device this CYFR has not certified
-// says hello first; one whose standing ended here keeps no certificate, so
-// its next unlock says hello again.
+// says hello first, dropping a certificate it holds that it will not
+// present; one whose standing ended here keeps no certificate, so its
+// next unlock says hello again.
 func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	d := Dialer{Address: s.cfg.Address, Client: s.cfg.Client}
 	var ch *Channel
@@ -1048,6 +1052,9 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	if s.certified() {
 		ch, err = d.Open(ctx, Device{Binding: s.binding(), Certificate: s.here.Certificate}, key, s.report, s.renewed)
 	} else {
+		if len(s.here.Certificate) > 0 {
+			s.forget()
+		}
 		h := Hello{Key: s.rec.PublicKey, Identifier: s.rec.Identifier, HolderKind: string(s.rec.Kind),
 			DisplayName: s.cfg.DisplayName, Admission: s.admission()}
 		ch, err = d.Hello(ctx, h, key, s.admitted, s.report, s.renewed)
