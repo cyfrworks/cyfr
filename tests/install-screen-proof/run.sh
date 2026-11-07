@@ -13,22 +13,22 @@
 # for a six-digit PIN and seals the key in the chip; with --no-tpm it
 # refuses six digits and takes the six-word passphrase it shows.
 #
-# Against a server with the device purposes the run goes on, typing on the
-# guest's keyboard through QMP and reading what the box holds over SSH: the
-# recovery code, I saved it, Prism; the lock after five minutes without
-# input, a wrong PIN, the unlock; Prism's Lock; a change Prism confirms on
-# this device (another device's addition, its approve address), cancelled
-# first, then a wrong PIN, then the PIN again, and the addition opened; the
-# shell killed; its connection to CYFR severed past 60 s while a Prism page
-# stays open; and Chrome's profile, copied while unlocked, put back before
-# a reboot. After each lock, kill, cut and reboot the session cookie
-# Chrome held (read from its profile, never kept in the evidence) is sent
-# to sign in. Then a second, empty guest with a restore token, a
-# replacement box, restores from the first box's recovery code on its own
-# screen and makes a key of its own. Against a server without the device
-# purposes everything past enrollment is PENDING, never passed. After
-# `cyfr down` and another reboot of the first box CYFR stays down, the
-# screen says why (screen-waiting.png), and Ctrl+Alt+F2 reaches a terminal:
+# The setup page makes the person's account, the box its first device:
+# typed on the guest's keyboard through QMP, a name and the PIN (or
+# passphrase) twice make the box's key and show the account's recovery
+# code before anything reaches the box's account service; "I saved it"
+# makes the account there, lists the box's key in it, claims the name and
+# opens Prism with the box's hello under the setup token. Then, reading
+# what the box holds over SSH: the lock after five minutes without input,
+# a wrong PIN, the unlock; Prism's Lock; an API key made in Prism, which
+# asks a fresh confirmation, confirmed on this device after a Cancel and
+# a wrong PIN; the shell killed; its connection to CYFR severed past 60 s
+# while a Prism page stays open; and Chrome's profile, copied while
+# unlocked, put back before a reboot. After each lock, kill, cut and
+# reboot the session cookie Chrome held (read from its profile, never
+# kept in the evidence) is sent to sign in. After
+# `cyfr down` and another reboot CYFR stays down, the screen says why
+# (screen-waiting.png), and Ctrl+Alt+F2 reaches a terminal:
 #
 #   tests/install-screen-proof/run.sh [--out DIR] [--no-tpm]
 #
@@ -37,16 +37,16 @@
 # release's in docker-compose.yml, stand-ins for a signed candidate, which
 # results.txt says (lib.sh, candidate_build and candidate_server_use);
 # candidate.txt records the tree's commit and both artifacts. Nothing reaches cyfr.run: each guest drops every packet to its
-# addresses, and the cyfr.run stand-in (tests/registry-stand-in/standin.py)
-# answers as its registry and directory (lib.sh, cyfr_run_guard and
-# standin_start).
+# addresses, and the box serves its own account service, the directory and
+# registry it names (lib.sh, cyfr_run_guard, account_settings and
+# account_service).
 #
 # Evidence goes under DIR (default a fresh
 # /tmp/cyfr-evidence.install-screen.XXXXXX, printed, which scripts/janitor.sh
-# removes a week later, its rule 5), each guest's in its own directory,
-# clean/ and replacement/. The run's scratch directory,
-# <run prefix>install-screen.XXXXXX under ${TMPDIR:-/tmp}, holds the guest's
-# SSH key and password and the first box's recovery code: the teardown
+# removes a week later, its rule 5), the guest's in clean/. The run's
+# scratch directory, <run prefix>install-screen.XXXXXX under
+# ${TMPDIR:-/tmp}, holds the guest's SSH key and password and the box's
+# recovery code: the teardown
 # removes it, and scripts/janitor.sh's rule 1 removes a killed run's. The
 # base image is the host's cache and the proof image is shared, each made
 # by tests/install-screen-proof/prepare.sh, and this tree's server image
@@ -219,11 +219,11 @@ guest_reboot() {
   done
 }
 
-# box_install [RESTORE_TOKEN]: on the guest under way, the install script
-# typed into tty1's terminal, cyfr init with its screen, this tree's server
-# in the release's place and the cyfr.run stand-in in .env (with the
-# restore token, for a replacement box), cyfr up, then a reboot: the screen
-# starts, locked to its own pages, and the stand-in answers.
+# box_install: on the guest under way, the install script typed into
+# tty1's terminal, cyfr init with its screen, this tree's server in the
+# release's place and the box made its own account service in .env, cyfr
+# up, then a reboot: the screen starts, locked to its own pages, and the
+# account service answers.
 box_install() {
   local code running
   REBOOTS=0
@@ -263,9 +263,9 @@ box_install() {
   check "Chrome's package left no .deb behind" guest_ssh '! ls /tmp/*.deb'
   pane_step_end init
 
-  step "this tree's server in the release's place, and the cyfr.run stand-in named in .env"
+  step "this tree's server in the release's place, and the box its own account service in .env"
   candidate_server_load
-  standin_settings "${1:-}"
+  account_settings
 
   step "cyfr up in the terminal that started before the group"
   pane_step up 'cd ~/cyfr && cyfr up' 900
@@ -283,7 +283,7 @@ box_install() {
   guest_reboot
   screen_back
   cyfr_run_guarded boot
-  standin_start boot
+  account_service boot
   if [ "$GUEST_TPM" = swtpm ]; then
     check "the guest has a TPM, its resource manager the tss group's" guest_ssh 'test -c /dev/tpmrm0 && [ "$(stat -c %G /dev/tpmrm0)" = tss ]'
     check "cyfr screen on joined the screen's account to tss" guest_ssh 'id -nG proof | tr " " "\n" | grep -qx tss'
@@ -293,24 +293,46 @@ box_install() {
   check "Chrome's managed policy saves no password and installs no extension" guest_ssh 'grep -q "\"PasswordManagerEnabled\": false" /etc/opt/chrome/policies/managed/cyfr-screen.json && grep -q "\"ExtensionInstallBlocklist\": \[\"\*\"\]" /etc/opt/chrome/policies/managed/cyfr-screen.json'
 }
 
-# The setup past enrollment, against a server with the device purposes:
-# the recovery code shown and its name at the stand-in, "I saved it" and
-# Prism, then each way the screen locks and what a lock leaves of the
-# session, a change confirmed on the screen, and Chrome's profile copied.
+# The account made on the screen: its recovery code shown before anything
+# reached the box's account service, then "I saved it", which makes the
+# account there with the box's key its first and the name its own, and
+# opens Prism; then each way the screen locks and what a lock leaves of
+# the session, a change confirmed on the screen, and Chrome's profile
+# copied. The account service is read
+# as the screen reads it, from the guest.
 screen_signed_in() {
-  check "the recovery code is shown with its QR" grep -q '<svg' "$GUEST_DIR/shell-enrolled.html"
-  sed -n 's/.*<p class="code">\(CYFR-[^<]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-enrolled.html" | head -n 1 | tr -d '\n' >"$WORK/recovery-code"
+  local id
+  check "the recovery code is shown with its QR" grep -q '<svg' "$GUEST_DIR/shell-recovery.html"
+  sed -n 's/.*<p class="code">\(CYFR-[^<]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-recovery.html" | head -n 1 | tr -d '\n' >"$WORK/recovery-code"
   check "the code is CYFR- and fourteen groups of eight letters and digits" grep -qE '^CYFR-[A-Z0-9]{8}([- ]?[A-Z0-9]{8}){13}$' "$WORK/recovery-code"
-  guest_ssh 'cat ~/standin/state.json' >"$GUEST_DIR/standin-state-enrolled.json" 2>&1
-  check "the name went to the cyfr.run stand-in, which holds alice" \
-    python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if "alice" in d["names"] and d["logs"] else 1)' "$GUEST_DIR/standin-state-enrolled.json"
+  guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-shown.json" 2>&1
+  guest_ssh 'cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder-shown.json" 2>&1
+  check "nothing reached the account service while the code is shown: no one holds alice, and the box's key names no account" \
+    python3 -I -c '
+import json, sys
+handle, holder = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+sys.exit(0 if handle["errors"][0]["code"] == "HANDLE_NOT_FOUND" and not holder.get("identifier") else 1)' \
+    "$GUEST_DIR/handle-shown.json" "$GUEST_DIR/holder-shown.json"
   check "screenshot screen-recovery.png" guest_screenshot screen-recovery.png
   printf '\n' | guest_keys || fail "QMP did not press I saved it"
   sleep 15
   check "screenshot screen-prism.png" guest_screenshot screen-prism.png
   shell_page saved
   check "the recovery code is gone from the screen once saved" sh -c '! grep -q "Your recovery code" "$1"' sh "$GUEST_DIR/shell-saved.html"
-  check "the key record keeps no setup request once saved" guest_ssh '! grep -q "\"request_id\": *\"req_" ~/cyfr/.cyfr/screen/holder.json'
+  guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/v1/handles/alice" >"$GUEST_DIR/handle-saved.json" 2>&1
+  guest_ssh 'cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder-saved.json" 2>&1
+  id=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("identifier", ""))' "$GUEST_DIR/handle-saved.json" 2>/dev/null)
+  guest_ssh "curl -s --max-time 5 '$ACCOUNT_SERVICE/directory/v1/$id?after=-1'" >"$GUEST_DIR/log-saved.json" 2>&1
+  check "the account service holds the account named alice, its log listing the box's key, and the box's record names it" \
+    python3 -I -c '
+import base64, hashlib, json, sys
+handle, holder, log = (json.load(open(f)) for f in sys.argv[1:4])
+pub = base64.urlsafe_b64decode(holder["public_key"] + "=" * (-len(holder["public_key"]) % 4))
+kid = "sha256:" + hashlib.sha256(pub).hexdigest()
+added = [e["key"]["kid"] for e in log["entries"] if e["kind"] == "add_key"]
+sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifier"] and kid in added else 1)' \
+    "$GUEST_DIR/handle-saved.json" "$GUEST_DIR/holder-saved.json" "$GUEST_DIR/log-saved.json"
+  check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/cyfr/.cyfr/screen/client.json'
   check "Chrome holds the session cookie Prism opened with" screen_cookie prism
   check "the home serves that cookie on a page that needs a session" cookie_is in prism
   check "Chrome's profile is copied while Prism is open" guest_ssh "cp -a $SCREEN_PROFILE ~/chrome-copy"
@@ -340,8 +362,8 @@ screen_signed_in() {
   check "screenshot screen-locked-prism.png" guest_screenshot screen-locked-prism.png
   check "after Prism's Lock the home sends that unlock's cookie to sign in" cookie_is out unlocked
   screen_unlock
-  check "Chrome holds the next unlock's session cookie" screen_cookie confirming
-  check "the home serves it" cookie_is in confirming
+  check "Chrome holds the next unlock's session cookie" screen_cookie relocked
+  check "the home serves it" cookie_is in relocked
 
   screen_confirms
   screen_killed
@@ -349,37 +371,30 @@ screen_signed_in() {
   screen_copied_profile
 }
 
-# A sensitive change confirmed on this screen: the addition of another
-# device of the person's, the address a new device's QR code opens
-# (<home>/devices/add#key=<digest>, tests/fixtures/device_unlock.json
-# exchange.pairing.approve_url), for a key made here for it. Its pairing
-# fills the key's code in Devices, Pair a device asks for it, and it
-# needs a fresh confirmation: Prism's Confirm on this device opens the
-# shell's own page, which draws the change CYFR holds, with the key's
-# digest or its code; its Cancel signs nothing, a wrong PIN confirms nothing, and the
-# PIN again confirms it, after which the pairing opens. The home's record
-# of the confirmation (its database, read as root) says which client gave
-# it.
+# A sensitive change confirmed on this screen: an API key made in Prism,
+# which asks a fresh confirmation. Prism's Confirm on this device opens the
+# shell's own page, which draws the change CYFR holds (key.create); its
+# Cancel signs nothing, a wrong PIN confirms nothing, and the PIN again
+# confirms it, after which the key is made. The home's record of the
+# confirmation (its database, read as root) says which client gave it.
 screen_confirms() {
-  local address digest ref client
-  step "a sensitive change confirmed on this screen: another device added through Prism"
-  # The box is reached from this machine (local access), at the address
-  # its screen's Chrome holds Prism under.
-  address="http://localhost:4000"
-  digest=$(python3 -I -c 'import base64, hashlib, os; print(base64.urlsafe_b64encode(hashlib.sha256(os.urandom(32)).digest()).decode().rstrip("="))')
-  screen_open "$address/devices/add#key=$digest" || fail "the screen's Chrome did not take the approve address"
+  local ref client
+  step "a sensitive change confirmed on this screen: an API key made in Prism"
+  # The person's way there: Prism's sidebar link, from the page in front.
+  screen_find 'api keys' && printf '\n' | guest_keys || fail "QMP did not press API Keys"
   sleep 8
-  check "screenshot screen-add.png" guest_screenshot screen-add.png
-  # The page fills the key's code in Devices; nothing begins until the
-  # person asks.
-  screen_find 'pair a device' last && printf '\n' | guest_keys || fail "QMP did not press Pair a device"
+  check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
+  # Create Key opens the form; Tab reaches its name, and Enter there
+  # submits it, which asks the fresh confirmation.
+  screen_find 'create key' && printf '\n' | guest_keys || fail "QMP did not press Create Key"
+  sleep 3
+  printf '\tproof-key\n' | guest_keys || fail "QMP did not type the key's name"
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   shell_page_until confirm-drawn 'Confirm on this screen' 20
-  check "Confirm on this device opened the screen's own page, which draws the addition CYFR holds, for the key's digest" \
-    sh -c 'grep -q "Confirm on this screen" "$1" && grep -q pairing.begin "$1" && grep -qF -e "$2" -e "$3" "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html" \
-    "$digest" "$(printf '%s' "$digest" | sed 's/..../& /g; s/ $//')"
+  check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
+    sh -c 'grep -q "Confirm on this screen" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
   check "screenshot screen-confirm-drawn.png" guest_screenshot screen-confirm-drawn.png
   ref=$(sed -n 's/.*name="ref" value="\([^"]*\)".*/\1/p' "$GUEST_DIR/shell-confirm-drawn.html" | head -n 1)
   [ -n "$ref" ] || return 0
@@ -400,7 +415,7 @@ screen_confirms() {
   sleep 2
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   shell_page_until confirm-again 'Confirm on this screen' 20
-  check "Confirm on this device draws it again" grep -q pairing.begin "$GUEST_DIR/shell-confirm-again.html"
+  check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
   sleep 6
   shell_page confirm-wrong
@@ -414,10 +429,10 @@ screen_confirms() {
   check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this screen' "$GUEST_DIR/shell-confirmed.html"
   check "screenshot screen-confirmed.png" guest_screenshot screen-confirmed.png
   sleep 6
-  check "screenshot screen-added.png" guest_screenshot screen-added.png
+  check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
   confirmation_state confirmed "$ref"
-  client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/cyfr/.cyfr/screen/holder.json")
-  check "the home records it confirmed by this screen's own client ($client) and consumed by the addition" \
+  client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/cyfr/.cyfr/screen/client.json")
+  check "the home records it confirmed by this screen's own client ($client) and consumed by the key's making" \
     json_is "$GUEST_DIR/confirmation-confirmed.json" "{\"state\": \"consumed\", \"confirmed_client_id\": \"$client\"}"
 }
 
@@ -443,7 +458,7 @@ screen_killed() {
   step "the shell killed: the launcher starts it again, locked, and its session ends"
   old=$(guest_ssh 'pgrep -f "cyfr [s]creen shell"')
   guest_ssh 'pkill -KILL -f "cyfr [s]creen shell"' || fail "the shell was not killed"
-  took=$(cookie_out_within confirming 75)
+  took=$(cookie_out_within relocked 75)
   check "the killed shell's session ended within 60 s (in ${took:-more than 75} s)" sh -c '[ -n "$1" ] && [ "$1" -le 60 ]' sh "$took"
   shell_page_until killed 'CYFR is locked' 30
   new=$(guest_ssh 'pgrep -f "cyfr [s]creen shell"')
@@ -557,21 +572,16 @@ clean_install() {
   printf 'alice\t%s\t%s\n' "$SECRET" "$SECRET" | guest_keys || fail "QMP did not type"
   sleep 15
   guest_ssh 'stat -c %a ~/cyfr/.cyfr/screen/holder.json && cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder.txt" 2>&1
-  check "the key record is the account's alone, mode 600" sh -c '[ "$(head -n 1 "$1")" = 600 ]' sh "$GUEST_DIR/holder.txt"
+  check "the key record is the box's alone, mode 600" sh -c '[ "$(head -n 1 "$1")" = 600 ]' sh "$GUEST_DIR/holder.txt"
   check "the key is held by the $KIND holder" grep -qE "\"kind\": *\"$KIND\"" "$GUEST_DIR/holder.txt"
   check "the key record holds neither the PIN nor the passphrase" sh -c '! grep -qF -- "$1" "$2"' sh "$SECRET" "$GUEST_DIR/holder.txt"
-  guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"public_key\"])' ~/cyfr/.cyfr/screen/holder.json" >"$WORK/first-key" 2>/dev/null
-  check "screenshot screen-enrolled.png" guest_screenshot screen-enrolled.png
-  shell_page enrolled
-  if grep -q 'Your recovery code' "$GUEST_DIR/shell-enrolled.html"; then
+  check "screenshot screen-account.png" guest_screenshot screen-account.png
+  shell_page recovery
+  if grep -q 'Your recovery code' "$GUEST_DIR/shell-recovery.html"; then
     screen_signed_in
-  elif grep -q 'Finish setting up' "$GUEST_DIR/shell-enrolled.html"; then
-    # A server without the device purposes (S1a) answers no enrollment.
-    record PENDING "enrollment, the recovery code, Prism, lock, unlock, confirmation and the replacement box need a candidate server with the device purposes; what this one answered is on screen-enrolled.png"
   else
-    check "the enrolled screen shows the recovery code (it shows shell-enrolled.html)" false
+    check "the setup page shows the account's recovery code (it shows shell-recovery.html)" false
   fi
-  guest_ssh 'cat ~/standin/state.json' >"$WORK/standin-state.json" 2>/dev/null && cp "$WORK/standin-state.json" "$GUEST_DIR/standin-state.json"
 
   step "cyfr down, then a reboot: CYFR stays down and the screen says why"
   guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"
@@ -596,60 +606,6 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   part_verdict clean
 }
 
-# A replacement box: a second, empty guest whose .env holds a restore
-# token, with the first box's directory at the stand-in. Its screen offers
-# the restore, takes the first box's recovery code and a new PIN (or the
-# passphrase it shows), makes a key of its own under its own chip, and
-# opens Prism as the person restored.
-replacement_restore() {
-  local token key entries
-  if ! [ -s "$WORK/recovery-code" ] || ! [ -s "$WORK/standin-state.json" ]; then
-    printf 'replacement: pending, the restore onto a replacement box needs the first box to reach its recovery code\n' | tee -a "$OUT/results.txt"
-    return 0
-  fi
-  guest_boot replacement 8192 40G
-  tty1_login
-  token=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
-  box_install "$token"
-  check "screenshot screen-restore.png" guest_screenshot screen-restore.png
-  shell_page restore
-  check "with a restore token the screen offers the restore" grep -q 'Restore onto this box' "$GUEST_DIR/shell-restore.html"
-
-  step "the restore on the screen, typed: the first box's recovery code and a new PIN (or passphrase) twice"
-  if [ "$GUEST_TPM" = none ]; then
-    SECRET=$(sed -n 's/.*<p class="code">\([a-z ]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-restore.html" | head -n 1)
-    KIND=software
-  else
-    SECRET=$(printf '%06d' $((RANDOM % 1000000)))
-    KIND=chip
-  fi
-  { cat "$WORK/recovery-code"; printf '\t%s\t%s\n' "$SECRET" "$SECRET"; } | guest_keys || fail "QMP did not type"
-  # The restore, the directory's recovery and the enrollment end when the
-  # page changes.
-  shell_page_until restored '<h1>(CYFR|Your|Finish)' 150
-  if grep -q 'Your recovery code' "$GUEST_DIR/shell-restored.html"; then
-    printf '\n' | guest_keys || fail "QMP did not press I saved it"
-  fi
-  sleep 15
-  check "screenshot screen-restored.png" guest_screenshot screen-restored.png
-  check "the restore finished: the screen no longer offers it" sh -c '! grep -q "Restore onto this box" "$1"' sh "$GUEST_DIR/shell-restored.html"
-  guest_ssh 'stat -c %a ~/cyfr/.cyfr/screen/holder.json && cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder.txt" 2>&1
-  check "the key is held by the $KIND holder" grep -qE "\"kind\": *\"$KIND\"" "$GUEST_DIR/holder.txt"
-  key=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"public_key\"])' ~/cyfr/.cyfr/screen/holder.json" 2>/dev/null)
-  check "the replacement box made a key of its own, not the first box's" \
-    sh -c 'key="^[A-Za-z0-9+/_-]{43}=?$"; printf "%s\n" "$1" | grep -qE "$key" && grep -qE "$key" "$2" && [ "$1" != "$(cat "$2")" ]' sh "$key" "$WORK/first-key"
-  check "Chrome holds the restored person's session cookie" screen_cookie restored
-  check "the home serves it" cookie_is in restored
-  guest_ssh 'cat ~/standin/state.json' >"$GUEST_DIR/standin-state.json" 2>&1
-  entries='import json, sys; print(sum(len(log["entries"]) for log in json.load(open(sys.argv[1]))["logs"].values()))'
-  check "the identity's log at the stand-in grew by the restore's recovery" \
-    sh -c '[ "$(python3 -I -c "$1" "$2")" -gt "$(python3 -I -c "$1" "$3")" ]' sh "$entries" "$GUEST_DIR/standin-state.json" "$WORK/standin-state.json"
-  cyfr_run_guarded end final
-  guest_journal
-  proof_guest_stop "$GUEST" "$GUEST_DIR"
-  part_verdict replacement
-}
-
 status=0
 proof_image_use
 proof_kvm_preflight
@@ -658,7 +614,6 @@ proof_seed
 candidate_build
 candidate_server_use
 clean_install || status=$?
-replacement_restore || status=$?
 echo
 echo "install proof: $(tr '\n' ';' <"$OUT/results.txt" 2>/dev/null) evidence in $OUT"
 exit "$status"

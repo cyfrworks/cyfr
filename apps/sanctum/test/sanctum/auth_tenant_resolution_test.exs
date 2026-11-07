@@ -62,24 +62,6 @@ defmodule Sanctum.AuthTenantResolutionTest do
       {:ok, result} = Tenancy.resolve_status(ctx, force: true)
       assert result.athanor_id == nil
     end
-
-    test "OIDC.authenticate/1 names the identity and nothing more: the athanor comes after the door" do
-      Application.put_env(:sanctum, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
-      Application.put_env(:sanctum, :oidc_issuer, "https://auth.example.com")
-      on_exit(fn -> Application.delete_env(:sanctum, :oidc_issuer) end)
-
-      auth = %{
-        __struct__: Ueberauth.Auth,
-        provider: :oidcc,
-        uid: "12345",
-        info: %{email: "verified@example.com"},
-        extra: %{raw_info: %{userinfo: %{"email_verified" => true}}}
-      }
-
-      assert {:ok, %Context{} = ctx} = Sanctum.Auth.OIDC.authenticate(auth)
-      assert ctx.user_id == "oidcc|https://auth.example.com|12345"
-      assert ctx.athanor_id == nil
-    end
   end
 
   describe "the platform administrator's mark is the first person's, and resolution only reads it" do
@@ -130,11 +112,11 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
   defp oauth_shaped_context do
     Context.build(
-      user_id: Sanctum.Auth.Identity.builtin_key(:github, "12345"),
+      user_id: "github|https://github.com|12345",
       email: "tester@example.com",
       provider: "github",
       namespace: "testns",
-      # Athanor-less, as device flow and the OIDC provider build it — resolved from the person.
+      # Athanor-less, as a sign-in builds it — resolved from the person.
       athanor_id: nil,
       permissions: [:*]
     )

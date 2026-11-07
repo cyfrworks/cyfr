@@ -3,57 +3,63 @@
 
 defmodule Arca.DirectoryHeads do
   @moduledoc """
-  This home's verified cache of other people's identity heads
-  (`Arca.Schemas.DirectoryHead`), one row per identifier.
+  This home's verified cache of account heads (`Arca.Schemas.DirectoryHead`),
+  one row per identifier (`ARCHITECTURE.md` §9.1).
 
   A row keeps the genesis the chain was verified from and the directory it
   names: both are immutable once cached, so a later refresh can never move
   an identifier to another directory or another genesis
-  (`:binding_changed`). The head, its `key_epoch`, its `recovery_epoch`
-  and the verified state move by compare-and-set on the head the caller
-  last read (`advance/4`), and `verified_at` is written on the database's
-  clock, which is also the clock `fresh/3` compares against.
+  (`:binding_changed`). The head and the verified state it leaves
+  (`Prima.Identity.State`'s JSON: the listed keys and the recovery set)
+  move by compare-and-set on the head the caller last read (`advance/5`),
+  and `verified_at` is written on the database's clock, which is also the
+  clock `fresh/3` compares against. Arca verifies no signature: the
+  caller verified the chain before it asks.
 
-  ## A changed epoch
+  ## The walk
 
-  When an advance changes an epoch, everything this home bound to the old
-  one retires in the same transaction, before the new head is visible.
-  A changed `key_epoch` (any rotation or recovery) retires the sessions of
-  the identifier's people that carry it (`Arca.SessionStorage`), the
-  identity-subject device certificates issued under it
-  (`Arca.DeviceCertificates`) and their open confirmations that depend on
-  it (`Arca.PendingConfirmations`). A changed `recovery_epoch` (a recovery
-  that replaced the live key) retires their passkeys registered under it
-  (`Arca.Passkeys`) and the doors linked here
-  (`Arca.Schemas.ExternalIdentity` rows other than the `cyfr` door's,
-  which names the identifier itself and is verified against the current
-  head at every sign-in): a passkey
-  or a door linked at this home never depended on the live key an
-  ordinary rotation replaces, so it outlives that rotation, and a recover
-  that only adds a recovery holder. The answer names what retired, for
-  the caller to announce after commit.
+  An advance is handed the walk of the entries after the cached head, in
+  log order, as their retiring steps (`t:step/0`): `{:remove_key, kid}`
+  retires the bindings to that key, and `:recover` every binding of the
+  account and every session of its people, bound to a key or not (a
+  company login's included; API keys and webhooks are no sessions and
+  stand); an `add_key` or `add_recovery` retires nothing and is not a
+  step. A binding is a row an account's key signed for, naming that key's
+  `kid` and the head it was verified under: a session
+  (`Arca.SessionStorage`), a device certificate
+  (`Arca.DeviceCertificates`), a pending confirmation a key confirmed
+  (`Arca.PendingConfirmations`) and a paired client that is a key
+  (`Arca.PairedClients`, whose revocation takes its certificates,
+  confirmations and sessions with it). Every step runs in the advance's
+  transaction before the head moves, so a key removed and added again
+  between two reads is retired and then admitted afresh, never kept. The
+  identifier's people's rows (`Arca.PersonIdentities`) take the new head
+  as the head last read. The answer names what retired, for the caller to
+  announce after commit.
 
-  ## One order with every epoch-bound write
+  ## Gone
 
-  An advance locks the identifier's people first, in the standing lock
-  order (`Arca.SecurityTransitions`), then the cached head, then what it
-  retires. Every write that binds an epoch — a session, a pending
-  confirmation or an identity-subject certificate its `key_epoch`, a
-  passkey its `recovery_epoch` — holds the same person's lock and reads
-  the cached epoch under it (`bindable!/2`, `certifiable!/3`,
-  `recovery_bindable!/2`), refusing one that is no longer current
-  (`:stale_key_epoch`). So a credential bound to an epoch either commits
-  before the advance and is retired by it, or waits for it and is
-  refused.
+  `gone/2` marks an account the directory answered gone: every binding of
+  it and every session of its people retire, as a recovery's would, and
+  `gone_at` is set for good. A gone
+  head never advances, is never touched and binds nothing; freshness reads
+  the mark (`Sanctum.IdentityFreshness`).
+
+  ## The issuance fence
+
+  An advance and a gone mark lock the identifier's people first, in the
+  standing lock order (`Arca.SecurityTransitions`), then the cached head,
+  then what they retire. Every write that binds an account's key holds the
+  same person's lock and names the head it was verified under, which must
+  be the cached head under that lock (`fence!/2`, `:stale_head`
+  otherwise). So a binding verified against an old head either commits
+  before the advance and is retired by it, or waits for it and is refused.
 
   ## A head no one holds
 
-  A sign-in carry's challenge caches its person's head before any
-  signature is checked (`Sanctum.Auth.CyfrDoor`), so a carry no one
-  completes would leave its head behind. `sweep/3` removes a head whose
-  identifier no person's identity row and no pending invitation names,
-  once it was last verified longer ago than the caller's bound. A head a
-  person holds stays whatever its age.
+  `sweep/3` removes a head whose identifier no person's identity row and
+  no pending invitation names, once it was last verified longer ago than
+  the caller's bound. A head a person holds stays whatever its age.
 
   ## Who writes
 
@@ -64,24 +70,25 @@ defmodule Arca.DirectoryHeads do
 
   import Ecto.Query
 
-  alias Arca.{DeviceCertificates, Passkeys, PendingConfirmations, SessionStorage}
-  alias Arca.Schemas.{DirectoryHead, ExternalIdentity, PersonIdentity, SharedThreadMember, User}
+  alias Arca.{DeviceCertificates, PairedClients, PendingConfirmations, SessionStorage}
+  alias Arca.Schemas.{DirectoryHead, PersonIdentity, SharedThreadMember, User}
 
-  # Publishing a head decides which remote credentials this home accepts,
-  # so each write first proves this member still owns its slot on the
-  # database's clock (`Arca.Repo.owned/2`): a stale owner
-  # publishes nothing.
+  # Publishing a head decides which keys this home accepts, so each write
+  # first proves this member still owns its slot on the database's clock
+  # (`Arca.Repo.owned/2`): a stale owner publishes nothing.
 
   @typedoc "A cached head, as a plain map."
   @type row :: map()
 
-  @typedoc "What an advance retired."
+  @typedoc "One retiring step of a walk, in log order."
+  @type step :: {:remove_key, String.t()} | :recover
+
+  @typedoc "What a walk or a gone mark retired."
   @type retired :: %{
           session_hashes: [binary()],
-          passkey_ids: [String.t()],
-          confirmation_ids: [String.t()],
           certificate_ids: [String.t()],
-          door_ids: [String.t()]
+          confirmation_ids: [String.t()],
+          client_ids: [String.t()]
         }
 
   @doc "The cached head of `identifier`."
@@ -102,7 +109,8 @@ defmodule Arca.DirectoryHeads do
   @doc """
   The cached head of `identifier` and whether it was verified within
   `max_age_seconds` of the database's clock now:
-  `{:ok, %{head: row, fresh: boolean}}`.
+  `{:ok, %{head: row, fresh: boolean}}`. A gone head is answered with its
+  `gone_at`, never fresh.
   """
   @spec fresh(Prima.Actor.t(), String.t(), pos_integer()) ::
           {:ok, %{head: row(), fresh: boolean()}}
@@ -118,7 +126,7 @@ defmodule Arca.DirectoryHeads do
 
         head ->
           age_ms = DateTime.diff(now, head.verified_at, :millisecond)
-          {:ok, %{head: head, fresh: age_ms <= max_age_seconds * 1000}}
+          {:ok, %{head: head, fresh: is_nil(head.gone_at) and age_ms <= max_age_seconds * 1000}}
       end
     end)
     |> Arca.Data.project()
@@ -128,25 +136,16 @@ defmodule Arca.DirectoryHeads do
 
   @doc """
   Cache a first verified head: `attrs` names the `:identifier`, the
-  `:genesis` bytes, the `:directory_url` it names, the `:head_hash`, the
-  `:key_epoch`, the `:recovery_epoch` and the verified `:state` (JSON
-  text). An identifier already cached is `{:error, :exists}`, answered
-  with nothing written: a later head moves through `advance/4`.
+  `:genesis` bytes, the `:directory_url` it names, the `:head_hash` and
+  the verified `:state` (JSON text). An identifier already cached is
+  `{:error, :exists}`, answered with nothing written: a later head moves
+  through `advance/5`.
   """
   @spec put(Prima.Actor.t(), map()) :: {:ok, row()} | {:error, term()}
   def put(%Prima.Actor{scope: :platform, system: true}, attrs) when is_map(attrs) do
     attrs = Map.new(attrs)
 
-    with :ok <-
-           valid(attrs, [
-             :identifier,
-             :genesis,
-             :directory_url,
-             :head_hash,
-             :key_epoch,
-             :recovery_epoch,
-             :state
-           ]) do
+    with :ok <- valid(attrs, [:identifier, :genesis, :directory_url, :head_hash, :state]) do
       Arca.Repo.owned("Arca.DirectoryHeads.put", fn ->
         now = Arca.ServerMetaStorage.now!()
 
@@ -155,10 +154,9 @@ defmodule Arca.DirectoryHeads do
           genesis: attrs.genesis,
           directory_url: attrs.directory_url,
           head_hash: attrs.head_hash,
-          key_epoch: attrs.key_epoch,
-          recovery_epoch: attrs.recovery_epoch,
           state: attrs.state,
           verified_at: now,
+          gone_at: nil,
           revision: 1,
           inserted_at: now,
           updated_at: now
@@ -176,45 +174,46 @@ defmodule Arca.DirectoryHeads do
 
   @doc """
   Move `identifier`'s cached head from `expected_head` to a newly verified
-  one: `attrs` names the `:genesis` and `:directory_url` the chain was
-  verified from (which must be the cached ones), the `:head_hash`, the
-  `:key_epoch`, the `:recovery_epoch` and the `:state`. `verified_at` is
-  the database's clock.
+  one, walking `steps` (the retiring steps of the entries between them,
+  in log order) in the same transaction: `attrs` names the `:genesis` and
+  `:directory_url` the chain was verified from (which must be the cached
+  ones), the `:head_hash` and the `:state`. `verified_at` is the
+  database's clock.
 
-  When the `key_epoch` or the `recovery_epoch` changes, what was bound to
-  the old one retires in the same transaction (the module doc). Answers
-  `{:ok, %{head: row, retired: retired}}`, or `{:error, :stale}` when the
-  cached head is no longer `expected_head`, `{:error, :binding_changed}`
-  for another genesis or directory, `{:error, :not_found}` for an
-  identifier never cached.
+  Answers `{:ok, %{head: row, retired: retired}}`, or `{:error, :stale}`
+  when the cached head is no longer `expected_head`, `{:error,
+  :binding_changed}` for another genesis or directory, `{:error, :gone}`
+  for an account marked gone, `{:error, :not_found}` for an identifier
+  never cached.
   """
-  @spec advance(Prima.Actor.t(), String.t(), String.t(), map()) ::
+  @spec advance(Prima.Actor.t(), String.t(), String.t(), map(), [step()]) ::
           {:ok, %{head: row(), retired: retired()}} | {:error, term()}
-  def advance(%Prima.Actor{scope: :platform, system: true}, identifier, expected_head, attrs)
-      when is_binary(identifier) and is_binary(expected_head) and is_map(attrs) do
+  def advance(
+        %Prima.Actor{scope: :platform, system: true},
+        identifier,
+        expected_head,
+        attrs,
+        steps
+      )
+      when is_binary(identifier) and is_binary(expected_head) and is_map(attrs) and
+             is_list(steps) do
     attrs = Map.new(attrs)
 
-    with :ok <-
-           valid(attrs, [
-             :genesis,
-             :directory_url,
-             :head_hash,
-             :key_epoch,
-             :recovery_epoch,
-             :state
-           ]) do
+    with :ok <- valid(attrs, [:genesis, :directory_url, :head_hash, :state]),
+         :ok <- valid_steps(steps) do
       Arca.Repo.owned("Arca.DirectoryHeads.advance", fn ->
-        advance_in(identifier, expected_head, attrs)
+        advance_in(identifier, expected_head, attrs, steps)
       end)
     end
   end
 
-  def advance(%Prima.Actor{}, _identifier, _expected_head, _attrs), do: {:error, :cross_tenant}
+  def advance(%Prima.Actor{}, _identifier, _expected_head, _attrs, _steps),
+    do: {:error, :cross_tenant}
 
   @doc """
   Record that `identifier`'s cached head was verified again unchanged:
   `verified_at` moves to the database's clock while the head is still
-  `head_hash`. `{:error, :stale}` otherwise.
+  `head_hash` and the account is not gone. `{:error, :stale}` otherwise.
   """
   @spec touch(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, row()} | {:error, :stale | :cross_tenant | :database_error}
@@ -223,7 +222,9 @@ defmodule Arca.DirectoryHeads do
     Arca.Repo.owned("Arca.DirectoryHeads.touch", fn ->
       now = Arca.ServerMetaStorage.now!()
 
-      from(h in DirectoryHead, where: h.identifier == ^identifier and h.head_hash == ^head_hash)
+      from(h in DirectoryHead,
+        where: h.identifier == ^identifier and h.head_hash == ^head_hash and is_nil(h.gone_at)
+      )
       |> Arca.Repo.update_all(set: [verified_at: now, updated_at: now])
       |> case do
         {1, _} -> {:ok, Arca.Repo.get!(DirectoryHead, identifier)}
@@ -235,17 +236,33 @@ defmodule Arca.DirectoryHeads do
   def touch(%Prima.Actor{}, _identifier, _head_hash), do: {:error, :cross_tenant}
 
   @doc """
+  Mark `identifier`'s account gone, as its directory answered: every
+  binding of it retires in the same transaction, and `gone_at` is set on
+  the database's clock, once. Answers `{:ok, %{head: row, retired:
+  retired}}`; marking a gone account again retires what still stands and
+  keeps its first `gone_at`. `{:error, :not_found}` for an identifier
+  never cached: there is nothing here to mark, and an account never read
+  binds nothing.
+  """
+  @spec gone(Prima.Actor.t(), String.t()) ::
+          {:ok, %{head: row(), retired: retired()}} | {:error, term()}
+  def gone(%Prima.Actor{scope: :platform, system: true}, identifier)
+      when is_binary(identifier) do
+    Arca.Repo.owned("Arca.DirectoryHeads.gone", fn -> gone_in(identifier) end)
+  end
+
+  def gone(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+
+  @doc """
   Remove at most `limit` cached heads no one here holds, least recently
   verified first: a head whose identifier no person's identity row names
   (`Arca.PersonIdentities`, whatever its provenance) and no pending
-  invitation names (an invited shared-thread seat's `person_identifier`), last
-  verified more than `older_than_ms` before the database's clock now.
+  invitation names (an invited shared-thread seat's `person_identifier`),
+  last verified more than `older_than_ms` before the database's clock now.
   Answers how many went.
 
-  A person's own carry begins only once they hold an identity row here,
-  so a head an open carry action relies on is a person's and stays. A
-  head verified again while the sweep runs is judged on the row the
-  delete reaches, so one a challenge has just refreshed stays too.
+  A head verified again while the sweep runs is judged on the row the
+  delete reaches, so one a refresh has just verified stays.
   """
   @spec sweep(Prima.Actor.t(), pos_integer(), pos_integer()) ::
           {:ok, non_neg_integer()} | {:error, :cross_tenant | :database_error}
@@ -257,6 +274,44 @@ defmodule Arca.DirectoryHeads do
   end
 
   def sweep(%Prima.Actor{}, _older_than_ms, _limit), do: {:error, :cross_tenant}
+
+  @doc false
+  @spec fence!(String.t(), term()) :: {:ok, String.t()} | {:error, :stale_head}
+  # Whether a write binding a key of the person `user_id` may name `head`,
+  # decided in the caller's transaction with the person's row locked
+  # first: `head` must be the cached head of the person's account, which
+  # must not be gone. Answers the account's identifier. A person with no
+  # account, or an account this home never read, has no head a write may
+  # name: `:stale_head`, as for any other head.
+  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
+  def fence!(user_id, head) when is_binary(user_id) do
+    lock_person!(user_id)
+
+    cached =
+      Arca.Repo.one(
+        from(p in PersonIdentity,
+          join: h in DirectoryHead,
+          on: h.identifier == p.identifier,
+          where: p.user_id == ^user_id and is_nil(h.gone_at),
+          select: {h.identifier, h.head_hash}
+        )
+      )
+
+    case cached do
+      {identifier, ^head} when is_binary(head) -> {:ok, identifier}
+      _other -> {:error, :stale_head}
+    end
+  end
+
+  @doc false
+  @spec lock_person!(String.t()) :: String.t() | nil
+  # The person's row, locked: the first lock of every standing order.
+  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
+  def lock_person!(user_id) when is_binary(user_id) do
+    from(u in User, where: u.id == ^user_id, select: u.id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
 
   # ---- internals -------------------------------------------------------------
 
@@ -296,12 +351,14 @@ defmodule Arca.DirectoryHeads do
     count
   end
 
-  defp advance_in(identifier, expected_head, attrs) do
-    lock_people!(identifier)
+  defp advance_in(identifier, expected_head, attrs, steps) do
+    user_ids = lock_people!(identifier)
 
     with %DirectoryHead{} = cached <- locked(identifier) || {:error, :not_found},
          :ok <- same_binding(cached, attrs),
+         :ok <- if(is_nil(cached.gone_at), do: :ok, else: {:error, :gone}),
          :ok <- if(cached.head_hash == expected_head, do: :ok, else: {:error, :stale}) do
+      retired = Enum.reduce(steps, nothing_retired(), &walked(&1, identifier, user_ids, &2))
       now = Arca.ServerMetaStorage.now!()
 
       {1, _} =
@@ -309,27 +366,65 @@ defmodule Arca.DirectoryHeads do
           where: h.identifier == ^identifier and h.head_hash == ^expected_head
         )
         |> Arca.Repo.update_all(
-          set: [
-            head_hash: attrs.head_hash,
-            key_epoch: attrs.key_epoch,
-            recovery_epoch: attrs.recovery_epoch,
-            state: attrs.state,
-            verified_at: now,
-            updated_at: now
-          ],
+          set: [head_hash: attrs.head_hash, state: attrs.state, verified_at: now, updated_at: now],
           inc: [revision: 1]
         )
 
-      retired =
-        retire!(
-          identifier,
-          {cached.key_epoch, attrs.key_epoch},
-          {cached.recovery_epoch, attrs.recovery_epoch}
-        )
+      Arca.Repo.update_all(
+        from(p in PersonIdentity, where: p.identifier == ^identifier),
+        set: [head_hash: attrs.head_hash, updated_at: now],
+        inc: [revision: 1]
+      )
 
       {:ok, %{head: Arca.Repo.get!(DirectoryHead, identifier), retired: retired}}
     end
   end
+
+  defp gone_in(identifier) do
+    user_ids = lock_people!(identifier)
+
+    with %DirectoryHead{} = cached <- locked(identifier) || {:error, :not_found} do
+      retired = walked(:recover, identifier, user_ids, nothing_retired())
+      now = Arca.ServerMetaStorage.now!()
+
+      if is_nil(cached.gone_at) do
+        Arca.Repo.update_all(from(h in DirectoryHead, where: h.identifier == ^identifier),
+          set: [gone_at: now, updated_at: now],
+          inc: [revision: 1]
+        )
+      end
+
+      {:ok, %{head: Arca.Repo.get!(DirectoryHead, identifier), retired: retired}}
+    end
+  end
+
+  # One step of the walk, over the account's people: a removed key's
+  # bindings, or every binding a recovery replaced and every session of
+  # the people, bound to a key or not. The paired clients go first, with
+  # what stands on them, then the bindings named directly.
+  defp walked(step, identifier, user_ids, acc) do
+    clients = PairedClients.revoke_bound!(user_ids, kid_of(step))
+    certificates = DeviceCertificates.revoke_bound!(identifier, kid_of(step))
+    confirmations = PendingConfirmations.void_bound!(user_ids, kid_of(step))
+    sessions = SessionStorage.delete_bound!(user_ids, kid_of(step))
+
+    %{
+      session_hashes:
+        Enum.uniq(
+          acc.session_hashes ++
+            clients.session_hashes ++ certificates.session_hashes ++ sessions
+        ),
+      certificate_ids:
+        Enum.uniq(acc.certificate_ids ++ clients.certificate_ids ++ certificates.certificate_ids),
+      confirmation_ids:
+        Enum.uniq(acc.confirmation_ids ++ clients.confirmation_ids ++ confirmations),
+      client_ids: Enum.uniq(acc.client_ids ++ clients.client_ids)
+    }
+  end
+
+  # The key a step retires the bindings of; `:all` for every binding.
+  defp kid_of({:remove_key, kid}), do: kid
+  defp kid_of(:recover), do: :all
 
   defp locked(identifier) do
     from(h in DirectoryHead, where: h.identifier == ^identifier)
@@ -345,82 +440,8 @@ defmodule Arca.DirectoryHeads do
 
   defp same_binding(_cached, _attrs), do: {:error, :binding_changed}
 
-  # What this home bound to an epoch the advance replaced, for the
-  # identifier's people, in the standing order: sessions and certificates
-  # bound to the old `key_epoch`, passkeys registered under the old
-  # `recovery_epoch` (with the confirmations they proved), the open
-  # confirmations bound to the old `key_epoch`, and, under a new
-  # `recovery_epoch`, the doors linked here. Every door the advance finds
-  # was linked under the old one: a link is consumed with a confirmation
-  # bound to the cached `key_epoch` under the person's lock, and a remote
-  # person's confirmation reads the head fresh first. Only a recovery that
-  # replaced the live key moves the `recovery_epoch`.
-  defp retire!(_identifier, {key, key}, {recovery, recovery}), do: nothing_retired()
-
-  defp retire!(identifier, {old_key, new_key}, {old_recovery, new_recovery}) do
-    user_ids = people_of(identifier)
-    key_moved? = old_key != new_key
-
-    epoch_hashes =
-      if key_moved?, do: SessionStorage.delete_key_epoch!(user_ids, old_key), else: []
-
-    %{certificate_ids: certificate_ids, session_hashes: device_hashes} =
-      if key_moved?,
-        do: DeviceCertificates.revoke_key_epoch!(identifier, old_key),
-        else: %{certificate_ids: [], session_hashes: []}
-
-    session_hashes = Enum.uniq(epoch_hashes ++ device_hashes)
-
-    passkey_ids =
-      if old_recovery != new_recovery,
-        do: Passkeys.revoke_recovery_epoch!(user_ids, old_recovery),
-        else: []
-
-    confirmation_ids =
-      if key_moved?, do: PendingConfirmations.void_key_epoch!(user_ids, old_key), else: []
-
-    door_ids = if old_recovery != new_recovery, do: unlink_doors!(user_ids), else: []
-
-    %{
-      session_hashes: session_hashes,
-      certificate_ids: certificate_ids,
-      passkey_ids: passkey_ids,
-      confirmation_ids: confirmation_ids,
-      door_ids: door_ids
-    }
-  end
-
-  # The doors the people linked at this home, removed: every identity that
-  # names them but the `cyfr` door's, whose key is the identifier at its
-  # directory and which admits only against the current head. A sign-in
-  # through a removed door issues nothing (`Arca.SecurityTransitions.Issuance`
-  # reads the door under the person's lock this advance holds).
-  defp unlink_doors!([]), do: []
-
-  defp unlink_doors!(user_ids) do
-    doors =
-      from(i in ExternalIdentity,
-        where: i.user_id in ^user_ids and i.provider != "cyfr",
-        order_by: [asc: i.id],
-        select: i.id
-      )
-
-    ids = Arca.Repo.all(doors)
-    Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.id in ^ids))
-    ids
-  end
-
-  defp people_of(identifier) do
-    Arca.Repo.all(
-      from(p in PersonIdentity,
-        where: p.identifier == ^identifier,
-        order_by: [asc: p.user_id],
-        select: p.user_id
-      )
-    )
-  end
-
   # The identifier's people, locked in id order before anything else.
+  # Answers their ids.
   defp lock_people!(identifier) do
     people = from(p in PersonIdentity, where: p.identifier == ^identifier, select: p.user_id)
 
@@ -429,148 +450,18 @@ defmodule Arca.DirectoryHeads do
     |> Arca.Repo.all()
   end
 
-  @doc false
-  @spec bindable!(String.t(), String.t() | nil) ::
-          :ok | {:error, :identity_key_epoch_required | :unexpected_key_epoch | :stale_key_epoch}
-  # Whether a credential of the person `user_id` may bind `epoch`, decided
-  # in the caller's transaction with the person's row locked first: a
-  # remote person's credential binds the cached head's current
-  # `key_epoch` (`:identity_key_epoch_required` without one,
-  # `:stale_key_epoch` for any other), and a local person's binds none
-  # (`:unexpected_key_epoch`).
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def bindable!(user_id, epoch) when is_binary(user_id) do
-    lock_person!(user_id)
-
-    identity =
-      Arca.Repo.one(
-        from(p in PersonIdentity,
-          where: p.user_id == ^user_id and p.provenance == "remote",
-          select: p.identifier
-        )
-      )
-
-    cond do
-      is_nil(identity) and is_nil(epoch) -> :ok
-      is_nil(identity) -> {:error, :unexpected_key_epoch}
-      not Prima.Identity.Encoding.digest?(epoch) -> {:error, :identity_key_epoch_required}
-      current_epoch!(identity) == epoch -> :ok
-      true -> {:error, :stale_key_epoch}
-    end
-  end
-
-  @doc false
-  @spec recovery_bindable!(String.t(), String.t() | nil) ::
-          :ok | {:error, :identity_key_epoch_required | :unexpected_key_epoch | :stale_key_epoch}
-  # Whether a passkey of the person `user_id` may bind the recovery epoch
-  # `epoch`, decided in the caller's transaction with the person's row
-  # locked first: a remote person's passkey binds the cached head's
-  # current `recovery_epoch` (`:identity_key_epoch_required` without one,
-  # `:stale_key_epoch` for any other), and a local person's binds none
-  # (`:unexpected_key_epoch`), as `bindable!/2` holds a `key_epoch`.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def recovery_bindable!(user_id, epoch) when is_binary(user_id) do
-    lock_person!(user_id)
-
-    identity =
-      Arca.Repo.one(
-        from(p in PersonIdentity,
-          where: p.user_id == ^user_id and p.provenance == "remote",
-          select: p.identifier
-        )
-      )
-
-    cond do
-      is_nil(identity) and is_nil(epoch) -> :ok
-      is_nil(identity) -> {:error, :unexpected_key_epoch}
-      not Prima.Identity.Encoding.digest?(epoch) -> {:error, :identity_key_epoch_required}
-      current_recovery_epoch!(identity) == epoch -> :ok
-      true -> {:error, :stale_key_epoch}
-    end
-  end
-
-  @doc false
-  @spec certifiable!(String.t(), String.t(), String.t()) :: :ok | {:error, :stale_key_epoch}
-  # Whether an identity-subject certificate of the person `user_id` may
-  # bind `identifier`'s `epoch`, decided in the caller's transaction with
-  # the person's row and then the cached head's row locked, the order an
-  # advance takes: the cached head's current `key_epoch`, or, for an
-  # identifier this home caches no head of, the person's own local
-  # identity (whose epoch no directory head retires). Anything else is
-  # `:stale_key_epoch`.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def certifiable!(user_id, identifier, epoch)
-      when is_binary(user_id) and is_binary(identifier) and is_binary(epoch) do
-    lock_person!(user_id)
-
-    head_epoch =
-      from(h in DirectoryHead, where: h.identifier == ^identifier, select: h.key_epoch)
-      |> Arca.QueryHelpers.for_update()
-      |> Arca.Repo.one()
-
-    # A person's own local identity has no cached head: its current
-    # `key_epoch` is the hash of its latest log entry, since every entry
-    # introduces a live key, which the identity row holds as its head.
-    # The row is read under its own lock, so a rotation moving its head
-    # cannot pass between this read and the certificate's insert.
-    own_epoch = fn ->
-      from(p in PersonIdentity,
-        where: p.user_id == ^user_id and p.identifier == ^identifier and p.provenance == "local",
-        select: p.head_hash
-      )
-      |> Arca.QueryHelpers.for_update()
-      |> Arca.Repo.one()
-    end
-
-    cond do
-      head_epoch == epoch -> :ok
-      is_nil(head_epoch) and own_epoch.() == epoch -> :ok
-      true -> {:error, :stale_key_epoch}
-    end
-  end
-
-  @doc false
-  @spec current_epoch!(String.t()) :: String.t() | nil
-  # The `key_epoch` of `identifier`'s cached head, or nil for one this home
-  # has not cached, read in the caller's transaction after it took the
-  # person's lock.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def current_epoch!(identifier) when is_binary(identifier) do
-    Arca.Repo.one(
-      from(h in DirectoryHead, where: h.identifier == ^identifier, select: h.key_epoch)
-    )
-  end
-
-  @doc false
-  @spec current_recovery_epoch!(String.t()) :: String.t() | nil
-  # The `recovery_epoch` of `identifier`'s cached head, or nil for one this
-  # home has not cached, read in the caller's transaction after it took
-  # the person's lock.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def current_recovery_epoch!(identifier) when is_binary(identifier) do
-    Arca.Repo.one(
-      from(h in DirectoryHead, where: h.identifier == ^identifier, select: h.recovery_epoch)
-    )
-  end
-
-  @doc false
-  @spec lock_person!(String.t()) :: String.t() | nil
-  # The person's row, locked: the first lock of every standing order.
-  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def lock_person!(user_id) when is_binary(user_id) do
-    from(u in User, where: u.id == ^user_id, select: u.id)
-    |> Arca.QueryHelpers.for_update()
-    |> Arca.Repo.one()
-  end
-
   defp nothing_retired,
-    do: %{
-      session_hashes: [],
-      passkey_ids: [],
-      confirmation_ids: [],
-      certificate_ids: [],
-      door_ids: []
-    }
+    do: %{session_hashes: [], certificate_ids: [], confirmation_ids: [], client_ids: []}
+
+  defp valid_steps(steps) do
+    if Enum.all?(steps, &step?/1),
+      do: :ok,
+      else: {:error, {:invalid, %{steps: ["are {:remove_key, kid} or :recover"]}}}
+  end
+
+  defp step?({:remove_key, kid}), do: Prima.Identity.Encoding.digest?(kid)
+  defp step?(:recover), do: true
+  defp step?(_step), do: false
 
   defp valid(attrs, fields) do
     errors =
@@ -588,7 +479,5 @@ defmodule Arca.DirectoryHeads do
 
   defp valid?(:directory_url, value), do: Prima.Identity.Encoding.directory_url?(value)
   defp valid?(:head_hash, value), do: Prima.Identity.Encoding.digest?(value)
-  defp valid?(:key_epoch, value), do: Prima.Identity.Encoding.digest?(value)
-  defp valid?(:recovery_epoch, value), do: Prima.Identity.Encoding.digest?(value)
   defp valid?(:state, value), do: is_binary(value) and value != ""
 end

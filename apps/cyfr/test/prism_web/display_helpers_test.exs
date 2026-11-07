@@ -31,12 +31,12 @@ defmodule PrismWeb.DisplayHelpersTest do
       assert principal_label(nil) == "-"
     end
 
-    test "an unknown person id is shortened, never shown raw in full", tags do
+    test "an unknown person id is never shown: nobody in particular is someone", tags do
       Cyfr.Test.Sandbox.setup!(tags)
-      id = "github|https://github.com|" <> String.duplicate("9", 40)
-      label = principal_label(id)
-      assert String.ends_with?(label, "…")
-      assert byte_size(label) < byte_size(id)
+      assert principal_label("usr_" <> String.duplicate("9", 26)) == "someone"
+
+      assert principal_label("github|https://github.com|" <> String.duplicate("9", 40)) ==
+               "someone"
     end
   end
 

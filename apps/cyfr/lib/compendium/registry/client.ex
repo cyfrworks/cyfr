@@ -10,10 +10,11 @@ defmodule Compendium.Registry.Client do
   This module talks the wire protocol; the other two own local state.
 
   Handles search, discover, component metadata, namespace, tokens and
-  members endpoints (`/v1/*`), and every operation a person signs
-  (`signed/3`, `Prima.RegistryRequest`): no identity provider's token is
-  ever sent. Push and pull use OCI protocol through the gateway
-  (`registry.cyfr.run/v2/`) via `Compendium.OCI.Client`.
+  members endpoints (`/v1/*`), and sends every operation a key of the
+  person's account signed (`signed/2`, `Prima.RegistryRequest`): no
+  identity provider's token is ever sent. Push and pull use OCI protocol
+  through the gateway (`registry.cyfr.run/v2/`) via
+  `Compendium.OCI.Client`.
 
   Works against both the apex cyfr.run and a self-hosted cyfr.run — the
   REST host is sourced from `:cyfr, :registry_url` and is build-agnostic.
@@ -146,58 +147,42 @@ defmodule Compendium.Registry.Client do
   @token_answers ["tokens.mint", "publisher.verify"]
 
   @typedoc """
-  Why a signed operation did not complete: the signer's refusals
-  (`Sanctum.Person.sign_registry_request/3`), the registry's
+  Why a signed operation did not complete: the registry's refusals
   (`Prima.RegistryRequest.refusals/0`, `policy_required` carrying the
-  version the registry requires), `:registry_unavailable` for no usable
+  version the registry requires; `unknown_identity` among them for an
+  account the registry's directory no longer serves), `:no_registry` when
+  this deployment names none, `:registry_unavailable` for no usable
   answer, and `:malformed_answer` for an answer that cannot be read.
   """
   @type signed_refusal ::
           Prima.RegistryRequest.refusal()
           | {:policy_required, String.t() | nil}
           | :no_registry
-          | :not_enrolled
-          | :remote
-          | :not_found
-          | :unavailable
           | :registry_unavailable
           | :malformed_answer
-          | {:invalid_argument, String.t()}
 
   @doc """
-  Sign `operation` with `body` as the person `user_id`
-  (`Sanctum.Person.sign_registry_request/3`) and send it to the route
-  the registry takes it at. Answers the registry's decoded answer, or a
-  refusal (`t:signed_refusal/0`). A request the registry refuses as
-  `stale_key_epoch`, the person's keys having rotated between the signing
-  and the registry's read, is signed again under the new head and sent
-  once more. Nothing is written here: what the answer means is the
-  caller's.
+  Send `bytes`, a registry request for `operation` that a key of the
+  person's account signed (`Prima.RegistryRequest`; this CYFR holds no
+  key of anyone's, `Sanctum.SignIn` takes the signature), to the route the
+  registry takes it at. Answers the registry's decoded answer, or a
+  refusal (`t:signed_refusal/0`). Nothing is written here: what the
+  answer means is the caller's.
 
   The request runs in the calling process, so it stops with it; a
   registry that cannot be reached, or answers 5xx, is
-  `:registry_unavailable` and a `POST` is never replayed after the
+  `:registry_unavailable`, and a `POST` is never replayed after the
   registry may have acted on it (`Compendium.Registry.Transport`).
   """
-  @spec signed(String.t(), String.t(), map()) :: {:ok, map()} | {:error, signed_refusal()}
-  def signed(user_id, operation, body)
-      when is_binary(user_id) and is_map_key(@routes, operation) and is_map(body) do
+  @spec signed(String.t(), binary()) :: {:ok, map()} | {:error, signed_refusal()}
+  def signed(operation, bytes) when is_map_key(@routes, operation) and is_binary(bytes) do
     result =
-      case send_signed(user_id, operation, body) do
-        {:error, :stale_key_epoch} -> send_signed(user_id, operation, body)
-        result -> result
-      end
-
-    log_signed(operation, result)
-    result
-  end
-
-  defp send_signed(user_id, operation, body) do
-    with {:ok, bytes} <- Sanctum.Person.sign_registry_request(user_id, operation, body) do
       :post
       |> Transport.request(url(Map.fetch!(@routes, operation)), json_headers(), bytes)
       |> signed_answer()
-    end
+
+    log_signed(operation, result)
+    result
   end
 
   defp signed_answer({:ok, status, _headers, body}) when status in 200..299 do

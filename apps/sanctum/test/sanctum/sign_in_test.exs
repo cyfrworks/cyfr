@@ -3,232 +3,690 @@
 
 defmodule Sanctum.SignInTest do
   @moduledoc """
-  What a sign-in records, and linking a sign-in method. A linked method
-  unlocks the person who linked it (`Sanctum.SignIn.unlock/1`): the door
-  is asked about that person, their contact email is refreshed only from
-  a claim the provider proved, and no person is ever made — an identity
-  no person holds is `:no_person` and leaves no door request. A method is
-  linked to a standing person under a fresh proof, and their last one
-  goes only while they keep a way in. Each admitted sign-in turns the
-  shared-thread invitations the person's identifier holds into their
-  seats, except where a declared restore still holds the thread: that
-  invitation waits for the first sign-in after the hold lifts.
+  Sign-in, confirmation and registry signatures by a request this CYFR
+  mints (`Sanctum.SignIn`), against a scripted directory serving the
+  account's log. A request is held for its challenge, bound to the
+  browser or channel that asked, and spent on the first answer: a
+  replayed answer, an answer from another browser and an answer past the
+  request's expiry each sign no one in. A passkey's answer signs in the
+  person its identifier names, or admits a new one under the setup token,
+  an invitation or the door, and the session is bound to the key that
+  signed and the head it was verified under. A `confirm` answer confirms
+  only the person's own record; a `registry` answer is the signed
+  request; a device answers over its channel.
   """
 
+  # The directory seam, the setup token, the public URL and the directory
+  # setting are process-wide.
   use ExUnit.Case, async: false
-
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{PersonIdentity, RestorePerson, SharedThreadMember}
+  alias Arca.Schemas.{Session, User}
+  alias Prima.SignIn.DeviceAnswer
   alias Sanctum.SignIn
-  alias Sanctum.Tenancy.{Athanors, Users}
-  alias Sanctum.Test.People
+  alias Sanctum.Tenancy.Users
+  alias Sanctum.Test.{DirectoryServer, RegistryStub}
 
-  setup tags do
+  @token String.duplicate("5e", 32)
+  @origin "https://cyfr.example"
+  @browser {:browser, "csrf-of-this-browser"}
+
+  setup_all do
+    %{tls: DirectoryServer.tls()}
+  end
+
+  setup %{tls: tls} = tags do
     Arca.Test.Sandbox.setup!(tags)
-    :ok
+    Prima.Test.RateLimiter.reset!()
+    DirectoryServer.listen!()
+    DirectoryServer.seam!(tls)
+    dir = DirectoryServer.start!(tls)
+
+    Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
+    Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
+    Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
+    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+
+    # The installation holds no person inside this test's transaction: the
+    # first person is setup's question.
+    Arca.Repo.delete_all(User)
+
+    account = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+    %{dir: dir, account: account}
   end
 
-  defp info(n, overrides \\ %{}) do
-    Map.merge(
-      %{
-        id: "github|https://github.com|#{n}",
-        provider: :github,
-        email: "user#{n}@example.com",
-        verified: true,
-        name: "User #{n}"
-      },
-      overrides
+  defp passkey!(account, dir), do: DirectoryServer.add_passkey!(dir.dir, account)
+
+  defp minted(purpose, binding, opts \\ []) do
+    {:ok, %{request: request, url: url}} = SignIn.request(purpose, binding, opts)
+    {request, url}
+  end
+
+  defp answer(request, account, opts \\ []),
+    do: DirectoryServer.passkey_answer(request, account, hd(account.passkeys), opts)
+
+  # The account's first person, made by setup through a sign-in.
+  defp first!(account) do
+    {request, _url} = minted(:sign_in, @browser, admission: {:setup, @token})
+    {:ok, %{user: user}} = SignIn.answer(answer(request, account), @browser)
+    user
+  end
+
+  # The person's own context, as their session establishes it.
+  defp person_context(user, athanor_id, session) do
+    Sanctum.Context.build(
+      user_id: user.id,
+      athanor_id: athanor_id,
+      provider: "passkey",
+      auth_method: :oidc,
+      authenticated: true,
+      session_token_hash: session.token_hash,
+      permissions: Sanctum.Context.person_permissions()
     )
   end
 
-  # A person whose keys another CYFR holds, linked to their CYFR identity.
-  defp remote!(n) do
-    identifier = "per_" <> Prima.Digest.sha256_hex("sign-in-#{n}")
-    key = Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier)
-    now = DateTime.utc_now()
+  defp sessions(user_id),
+    do: Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id))
 
-    {:ok, user} =
-      Arca.Test.People.mint(
-        Prima.Actor.system(),
-        %{
-          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-          admission: "remote",
-          first_seen_at: now,
-          last_seen_at: now,
-          created_at: now,
-          updated_at: now
-        },
-        %{
-          key: key,
-          provider: "cyfr",
-          issuer: "https://dir.example",
-          subject: identifier,
-          first_seen_at: now,
-          last_seen_at: now
-        }
-      )
+  describe "the request" do
+    test "is this CYFR's, returns to its sign-in page, and sends a browser to the account pages",
+         %{dir: dir} do
+      {request, url} = minted(:sign_in, @browser)
 
-    {:ok, _} =
-      Arca.PersonIdentities.create(Prima.Actor.system(), %{
-        user_id: user.id,
-        provenance: "remote",
-        identifier: identifier,
-        directory_url: "https://dir.example"
-      })
+      assert request.purpose == :sign_in
+      assert request.audience == @origin
+      assert request.return == @origin <> "/login"
+      assert byte_size(request.challenge) == 32
+      assert url == dir.url <> "/account/sign#" <> Prima.SignIn.fragment(request)
 
-    %{user: user, key: key, identifier: identifier}
-  end
+      {new, new_url} = minted(:sign_in, @browser, page: {:new, "mira"})
 
-  # A shared thread `owner` made, holding an invitation for `identifier`
-  # written before its person signed in here again.
-  defp invited_thread!(owner, identifier) do
-    {:ok, thread} = Sanctum.SharedThreads.create(owner.id, "Invited #{identifier}")
-
-    {:ok, _invitation} =
-      Arca.SharedThreadMembers.invite(Prima.Actor.system(), thread.id, identifier, owner.id)
-
-    thread
-  end
-
-  # What the thread holds for the person: their seat, their identifier's
-  # invitation, or neither.
-  defp held(thread, user_id, identifier) do
-    Arca.Repo.all(
-      from(m in SharedThreadMember,
-        where:
-          m.thread_id == ^thread.id and
-            (m.user_id == ^user_id or m.person_identifier == ^identifier),
-        select: m.status
-      )
-    )
-  end
-
-  describe "unlock/1" do
-    test "answers the person who linked the method, and makes no one for an unlinked one" do
-      n = System.unique_integer([:positive])
-      {:ok, person} = People.linked(info(n))
-      people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
-
-      assert {:ok, %{id: id}} = SignIn.unlock(info(n))
-      assert id == person.id
-
-      assert {:error, :no_person} = SignIn.unlock(info(n + 1))
-      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
-      assert Sanctum.Door.Store.list() == []
+      assert new_url ==
+               dir.url <> "/account/new#name=mira&request=" <> Prima.SignIn.fragment(new)
     end
 
-    test "records the sign-in: last seen and the name, and an email only when the provider proved it" do
-      n = System.unique_integer([:positive])
-      {:ok, person} = People.linked(info(n, %{email: "first#{n}@example.com"}))
+    test "with no directory to send a browser to, none is minted" do
+      Prima.Test.Env.put_app_env(:sanctum, :directory_url, nil)
+      assert {:error, :no_directory} = SignIn.request(:sign_in, @browser)
+    end
 
-      {1, _} =
-        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^person.id),
-          set: [last_seen_at: ~U[2026-01-01 00:00:00.000000Z]]
-        )
+    test "a channel's request names the account it speaks for, and has no page", %{
+      account: account
+    } do
+      assert {:error, {:invalid_argument, _}} = SignIn.request(:sign_in, {:channel, "pcl_1"})
 
-      assert {:ok, unproved} =
-               SignIn.unlock(
-                 info(n, %{email: "said#{n}@example.com", verified: :unknown, name: "Said"})
+      assert {:ok, %{url: nil}} =
+               SignIn.request(:sign_in, {:channel, "pcl_1"}, identifier: account.identifier)
+    end
+  end
+
+  describe "a sign-in" do
+    test "setup's admits the first person, bound to the key and head, and then opens nothing", %{
+      account: account
+    } do
+      user = first!(account)
+
+      assert user.admission == "setup"
+      assert user.platform_admin_at
+      assert {:ok, identifier} = Users.identifier(user.id)
+      assert identifier == account.identifier
+
+      [session] = sessions(user.id)
+      assert session.kid == Prima.Identity.Key.kid(hd(account.passkeys).pub)
+      assert session.head == DirectoryServer.head(account)
+
+      # The door admits the first account by the allow setup wrote.
+      assert {:ok, true} = Sanctum.Door.Store.allowed("identifier", account.identifier)
+    end
+
+    test "a person this CYFR holds signs in again by any passkey their log lists", %{
+      dir: dir,
+      account: account
+    } do
+      user = first!(account)
+      account = passkey!(account, dir)
+      second = List.last(account.passkeys)
+
+      {request, _url} = minted(:sign_in, @browser)
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: same}, session_token: token}} =
+               SignIn.answer(
+                 DirectoryServer.passkey_answer(request, account, second),
+                 @browser
                )
 
-      assert unproved.email == "first#{n}@example.com"
-      assert unproved.display_name == "Said"
-      assert DateTime.compare(unproved.last_seen_at, ~U[2026-01-01 00:00:00.000000Z]) == :gt
-
-      proved = "said#{n}@example.com"
-
-      assert {:ok, %{email: ^proved, email_verified: true}} =
-               SignIn.unlock(info(n, %{email: "Said#{n}@Example.com", verified: true}))
-
-      assert {:ok, %{email: ^proved}} =
-               SignIn.unlock(info(n, %{email: "other#{n}@example.com", verified: false}))
+      assert same == user.id
+      assert is_binary(token)
     end
 
-    test "asks the door about the person: a denied one, or one no longer active, is refused" do
-      n = System.unique_integer([:positive])
-      {:ok, person} = People.linked(info(n))
-      {:ok, deny} = Sanctum.Door.Store.deny("person", person.id, "ops")
+    test "a new account is admitted by the door's * alone, and refused without it", %{
+      dir: dir,
+      account: account
+    } do
+      first = first!(account)
+      stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
 
-      assert {:error, {:door, :denied}} = SignIn.unlock(info(n))
-      :ok = Sanctum.Door.Store.remove(deny.id)
-      assert {:ok, _} = SignIn.unlock(info(n))
+      {request, _url} = minted(:sign_in, @browser)
 
-      {:ok, _} = Users.deny(person)
-      assert {:error, {:door, :denied}} = SignIn.unlock(info(n))
+      assert {:error, {:door, :not_allowed}} =
+               SignIn.answer(answer(request, stranger), @browser)
+
+      {:ok, _entry} = Sanctum.Door.Store.allow("wildcard", "*", first.id)
+      {request, _url} = minted(:sign_in, @browser)
+
+      assert {:ok, %{user: %{admission: "open"}}} =
+               SignIn.answer(answer(request, stranger), @browser)
     end
 
-    test "a remote person is admitted by * or their identifier, and an unadmitted one leaves one request" do
-      n = System.unique_integer([:positive])
-      %{user: user, key: key, identifier: identifier} = remote!(n)
+    test "the setup token admits no second account", %{dir: dir, account: account} do
+      _first = first!(account)
+      stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
 
-      assert {:error, {:door, :not_allowed}} = SignIn.unlock(%{id: key, provider: "cyfr"})
-      assert [%{kind: "identifier", value: ^identifier} = request] = Sanctum.Door.Store.requests()
+      {request, _url} = minted(:sign_in, @browser, admission: {:setup, @token})
 
-      {:ok, _} = Sanctum.Door.Store.resolve(request.id, :allow, "ops")
-      assert {:ok, %{id: id}} = SignIn.unlock(%{id: key, provider: "cyfr"})
-      assert id == user.id
-    end
-
-    test "a returning person's invitation into a shared thread becomes their seat at their next sign-in" do
-      n = System.unique_integer([:positive])
-      {:ok, owner} = People.linked(info(n))
-      %{user: user, key: key, identifier: identifier} = remote!(n)
-      {:ok, _} = Sanctum.Door.Store.allow("identifier", identifier, "ops")
-      thread = invited_thread!(owner, identifier)
-      assert held(thread, user.id, identifier) == ["invited"]
-
-      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
-
-      assert held(thread, user.id, identifier) == ["active"]
-      assert {:ok, %{status: "active"}} = Sanctum.SharedThreads.get(user.id, thread.id)
-    end
-
-    test "an invitation a declared restore holds stays one at sign-in, and becomes the seat at the first sign-in after the hold lifts" do
-      n = System.unique_integer([:positive])
-      {:ok, owner} = People.linked(info(n))
-      %{user: user, key: key, identifier: identifier} = remote!(n)
-      {:ok, _} = Sanctum.Door.Store.allow("identifier", identifier, "ops")
-      thread = invited_thread!(owner, identifier)
-
-      # The thread's owner still recovers from a declared restore, so the
-      # thread admits no one new.
-      Arca.Repo.insert!(%RestorePerson{
-        restore_id: Prima.UUID7.generate_id("rst"),
-        user_id: owner.id,
-        open: true
-      })
-
-      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
-      assert held(thread, user.id, identifier) == ["invited"]
-      assert {:error, {:not_found, "Thread", _}} = Sanctum.SharedThreads.get(user.id, thread.id)
-
-      # The owner's recovery closes; the next sign-in seats the person.
-      assert {:ok, [_restore_id]} =
-               Arca.Repo.locking_transaction(fn ->
-                 Arca.SecurityTransitions.close_restore!(owner.id)
-               end)
-
-      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
-      assert held(thread, user.id, identifier) == ["active"]
-      assert {:ok, %{status: "active"}} = Sanctum.SharedThreads.get(user.id, thread.id)
+      assert {:error, :setup_closed} = SignIn.answer(answer(request, stranger), @browser)
     end
   end
 
-  test "record_namespace/2 lands the claim on the users row and refuses a slug another identity holds" do
-    {:ok, %{id: uid}} = People.linked(info(6))
-    %{id: pid} = People.athanor!(uid)
+  # Create your account on the setup and invitation pages sends the browser
+  # to the new page offered a name; the answer records it as the person's
+  # name only once the registry names the answering account by it.
+  describe "a name offered at the new page" do
+    test "is recorded once the registry names the account that answered by it", %{
+      account: account,
+      dir: dir
+    } do
+      RegistryStub.handles!(%{"mira" => account.identifier}, dir.url)
+
+      {request, url} =
+        minted(:sign_in, @browser, admission: {:setup, @token}, page: {:new, "mira"})
+
+      assert url =~ "/account/new#name=mira&request="
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: id, namespace: "mira"}}} =
+               SignIn.answer(answer(request, account), @browser)
+
+      assert {:ok, %{namespace: "mira"}} = Users.get(id)
+      assert_received {:registry_request, %{path: "/v1/handles/mira"}}
+    end
+
+    test "records nothing when the registry names another account, none, or does not answer; the sign-in stands",
+         %{account: account, dir: dir} do
+      first = first!(account)
+      {:ok, _entry} = Sanctum.Door.Store.allow("wildcard", "*", first.id)
+      stranger = DirectoryServer.account!(dir.dir, dir.url)
+      RegistryStub.handles!(%{"taken" => stranger.identifier, "lost" => :close}, dir.url)
+
+      for name <- ["taken", "unheld", "lost"] do
+        newcomer = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+        {request, _url} = minted(:sign_in, @browser, page: {:new, name})
+
+        assert {:ok, %{purpose: :sign_in, user: user, session_token: token}} =
+                 SignIn.answer(answer(request, newcomer), @browser),
+               name
+
+        assert is_binary(token)
+        assert {:ok, %{namespace: nil}} = Users.get(user.id), name
+      end
+    end
+
+    test "a sign-in that offered none asks the registry nothing", %{account: account, dir: dir} do
+      RegistryStub.handles!(%{}, dir.url)
+      {request, url} = minted(:sign_in, @browser, admission: {:setup, @token}, page: {:new, nil})
+      assert url =~ "/account/new#name=&request="
+
+      assert {:ok, %{user: %{namespace: nil}}} =
+               SignIn.answer(answer(request, account), @browser)
+
+      refute_received {:registry_request, _}
+    end
+  end
+
+  describe "an answer" do
+    test "replayed, it meets a spent request", %{account: account} do
+      _first = first!(account)
+      {request, _url} = minted(:sign_in, @browser)
+      answered = answer(request, account)
+
+      assert {:ok, _signed_in} = SignIn.answer(answered, @browser)
+      assert {:error, :answer_refused} = SignIn.answer(answered, @browser)
+    end
+
+    test "from another browser signs no one in, and spends the request", %{account: account} do
+      user = first!(account)
+      {request, _url} = minted(:sign_in, @browser)
+      answered = answer(request, account)
+      before = length(sessions(user.id))
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answered, {:browser, "csrf-of-another-browser"})
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answered, {:session, :crypto.strong_rand_bytes(32)})
+
+      assert {:error, :answer_refused} = SignIn.answer(answered, @browser)
+      assert length(sessions(user.id)) == before
+    end
+
+    test "past its request's expiry signs no one in", %{account: account} do
+      user = first!(account)
+      {request, _url} = minted(:sign_in, @browser)
+      before = length(sessions(user.id))
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), @browser, now: request.expires_at)
+
+      assert length(sessions(user.id)) == before
+    end
+
+    test "to a request this CYFR minted for another audience signs no one in", %{
+      account: account
+    } do
+      user = first!(account)
+      {request, _url} = minted(:sign_in, @browser)
+      before = length(sessions(user.id))
+
+      # The same request held, while this CYFR now answers at another origin:
+      # the request's audience is no longer this CYFR's.
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://another.example")
+
+      assert {:error, :answer_refused} = SignIn.answer(answer(request, account), @browser)
+      assert length(sessions(user.id)) == before
+    end
+
+    test "as the fragment the account pages return, in its one spelling", %{account: account} do
+      _first = first!(account)
+      {request, _url} = minted(:sign_in, @browser)
+      fragment = request |> answer(account) |> Prima.SignIn.fragment()
+
+      assert {:error, :answer_refused} = SignIn.answer(fragment <> "=", @browser)
+      assert {:ok, %{purpose: :sign_in}} = SignIn.answer(fragment, @browser)
+    end
+
+    test "by a passkey at another origin, without user verification, or of another account, is refused",
+         %{dir: dir, account: account} do
+      _first = first!(account)
+      stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+
+      for opts <- [
+            [origin: "https://elsewhere.example"],
+            [host: "elsewhere.example"],
+            [flags: 0x01],
+            [identifier: stranger.identifier]
+          ] do
+        {request, _url} = minted(:sign_in, @browser)
+
+        assert {:error, :answer_refused} =
+                 SignIn.answer(answer(request, account, opts), @browser),
+               inspect(opts)
+      end
+    end
+
+    test "of an account gone at its directory is refused gone", %{dir: dir, account: account} do
+      _first = first!(account)
+      DirectoryServer.tombstone(dir.dir, account.identifier)
+
+      Arca.Repo.update_all(Arca.Schemas.DirectoryHead,
+        set: [verified_at: ~U[2000-01-01 00:00:00Z]]
+      )
+
+      {request, _url} = minted(:sign_in, @browser)
+      assert {:error, :identity_gone} = SignIn.answer(answer(request, account), @browser)
+    end
+  end
+
+  describe "a confirmation" do
+    setup %{account: account} do
+      user = first!(account)
+      {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
+      [session] = sessions(user.id)
+
+      ctx = person_context(user, athanor_id, session)
+
+      {:ok, record} =
+        Prima.Confirmation.new(
+          id: Prima.Confirmation.ref("cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32))),
+          home: @origin,
+          rp_id: "cyfr.example",
+          athanor: athanor_id,
+          person: user.id,
+          operation: "vault.create",
+          args_digest: Prima.Digest.sha256("args"),
+          action: "credential_entry",
+          preview: %{home: @origin, athanor: "Home", operation: "vault.create"},
+          challenge: :crypto.strong_rand_bytes(32),
+          expires_at: System.system_time(:millisecond) + 300_000
+        )
+
+      {:ok, row} =
+        Arca.PendingConfirmations.open(Sanctum.Context.actor(ctx), %{
+          record: record,
+          opener: "session:test",
+          asker: %{"kind" => "session"}
+        })
+
+      %{ctx: ctx, row: row, binding: {:session, session.token_hash}}
+    end
+
+    test "names the record's digest, and a passkey of the person confirms it by its key and head",
+         %{ctx: ctx, row: row, binding: binding, account: account} do
+      {request, _url} = minted(:confirm, binding, ctx: ctx, ref: row.ref, back: "/a/x/vault")
+      assert request.subject == row.digest
+
+      assert {:ok, %{purpose: :confirm, ref: ref, back: "/a/x/vault"}} =
+               SignIn.answer(answer(request, account), binding)
+
+      assert ref == row.ref
+
+      assert {:ok, %{state: "confirmed", proof: "passkey", kid: kid, head: head}} =
+               Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), row.ref)
+
+      assert kid == Prima.Identity.Key.kid(hd(account.passkeys).pub)
+      assert head == DirectoryServer.head(account)
+    end
+
+    test "is refused for another person's answer, and the record stays pending", %{
+      ctx: ctx,
+      row: row,
+      binding: binding,
+      dir: dir
+    } do
+      stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+      {request, _url} = minted(:confirm, binding, ctx: ctx, ref: row.ref)
+
+      assert {:error, :answer_refused} = SignIn.answer(answer(request, stranger), binding)
+
+      assert {:ok, %{state: "pending"}} =
+               Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), row.ref)
+    end
+
+    test "a device of the person confirms over its own channel", %{
+      ctx: ctx,
+      row: row,
+      account: account
+    } do
+      {pub, priv} = hd(account.devices)
+      binding = {:channel, "pcl_device"}
+
+      {request, nil} =
+        minted(:confirm, binding, ctx: ctx, ref: row.ref, identifier: account.identifier)
+
+      answer = DeviceAnswer.sign(request, Prima.Identity.Key.kid(pub), priv)
+
+      # The proof names its client, which this test never paired: the store
+      # holds a device's proof to its standing client.
+      assert {:error, :revoked} = SignIn.answer(answer, binding)
+    end
+
+    test "a request names only the context's own pending record", %{binding: binding, ctx: ctx} do
+      assert {:error, {:not_found, "confirmation", "cnf_absent"}} =
+               SignIn.request(:confirm, binding, ctx: ctx, ref: "cnf_absent")
+
+      assert {:error, :unauthenticated} =
+               SignIn.request(:confirm, binding, ctx: %{ctx | athanor_id: nil}, ref: "cnf_absent")
+    end
+  end
+
+  describe "a registry signature" do
+    setup %{account: account} do
+      Prima.Test.Env.put_app_env(:sanctum, :registry_url, "registry.example")
+      user = first!(account)
+      {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
+      [session] = sessions(user.id)
+
+      %{
+        user: user,
+        ctx: person_context(user, athanor_id, session),
+        binding: {:session, session.token_hash},
+        channel: {:channel, "pcl_terminal"}
+      }
+    end
+
+    @accept %{"policy_version" => "2026-09"}
+
+    # A `:registry` request for the policy acceptance, minted for `ctx`.
+    defp registry(binding, ctx, opts \\ []) do
+      minted(:registry, binding, [ctx: ctx, operation: "policy.accept", body: @accept] ++ opts)
+    end
+
+    # The registry request a terminal signs with the device key `device`,
+    # as its signed JSON, read back.
+    defp signed_by({pub, priv}, registry) do
+      {:ok, bytes} =
+        Prima.RegistryRequest.sign(%{registry | signer: Prima.Identity.Key.kid(pub)}, priv)
+
+      {:ok, signed} = bytes |> Jason.decode!() |> Prima.RegistryRequest.decode()
+      {signed, bytes}
+    end
+
+    # The registry's own check of `bytes`, under the account's log at its
+    # directory.
+    defp registry_verifies(bytes, account) do
+      {:ok, state} = Prima.Identity.verify_chain(account.log)
+
+      Prima.RegistryRequest.verify(
+        bytes,
+        state,
+        %{host: "registry.example", directory: account.url},
+        System.system_time(:millisecond)
+      )
+    end
+
+    test "is composed for the caller's account and expires with the request that carries it",
+         %{ctx: ctx, binding: binding, account: account, dir: dir} do
+      {request, url} = registry(binding, ctx, back: "/a/x/registry")
+
+      assert url == dir.url <> "/account/sign#" <> Prima.SignIn.fragment(request)
+
+      assert %Prima.RegistryRequest{
+               registry: "registry.example",
+               operation: "policy.accept",
+               identifier: identifier,
+               signer: nil,
+               sig: nil,
+               body: @accept,
+               nonce: nonce,
+               expires_at: expires_at
+             } = request.registry_request
+
+      assert identifier == account.identifier
+      assert byte_size(nonce) == 16
+      assert expires_at <= request.expires_at
+      assert request.expires_at - expires_at < 1_000
+    end
+
+    test "a passkey of the caller's account signs it, and the registry takes the bytes", %{
+      ctx: ctx,
+      user: user,
+      binding: binding,
+      account: account
+    } do
+      {request, _url} = registry(binding, ctx, back: "/a/x/registry")
+
+      assert {:ok,
+              %{
+                purpose: :registry,
+                user_id: user_id,
+                signed: signed,
+                back: "/a/x/registry",
+                registry_request: registry_request
+              }} = SignIn.answer(answer(request, account), binding)
+
+      assert user_id == user.id
+      assert registry_request == request.registry_request
+      assert {:ok, %{"signer" => signer, "sig" => %{}}} = Jason.decode(signed)
+      assert signer == Prima.Identity.Key.kid(hd(account.passkeys).pub)
+      assert {:ok, %Prima.RegistryRequest{body: @accept}} = registry_verifies(signed, account)
+    end
+
+    test "a terminal answers with the request it signed, found by its nonce, taken once", %{
+      ctx: ctx,
+      channel: channel,
+      account: account
+    } do
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, bytes} = signed_by(hd(account.devices), request.registry_request)
+
+      assert {:ok, %{purpose: :registry, signed: ^bytes, registry_request: held}} =
+               SignIn.answer(signed, channel, operation: "policy.accept", body: @accept)
+
+      assert held == request.registry_request
+      assert {:ok, _request} = registry_verifies(bytes, account)
+
+      # Replayed, it meets a spent request.
+      assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+    end
+
+    test "a terminal's request that is not the one held, or under another channel, or late, is refused and spends it",
+         %{ctx: ctx, channel: channel, account: account, dir: dir} do
+      stranger = DirectoryServer.account!(dir.dir, dir.url)
+
+      for change <- [
+            &%{&1 | identifier: stranger.identifier},
+            &%{&1 | body: %{"policy_version" => "2026-10"}},
+            &%{&1 | operation: "tokens.mint", body: %{"label" => "laptop"}},
+            &%{&1 | expires_at: &1.expires_at + 1}
+          ] do
+        {request, nil} = registry(channel, ctx, identifier: account.identifier)
+        {signed, _bytes} = signed_by(hd(account.devices), change.(request.registry_request))
+        assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+
+        # The nonce found the request, which is spent.
+        {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+        assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+      end
+
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+      assert {:error, :answer_refused} = SignIn.answer(signed, {:channel, "pcl_another"})
+      assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(signed, channel, now: request.expires_at)
+    end
+
+    test "an answer for another operation or body than the caller names does nothing", %{
+      ctx: ctx,
+      binding: binding,
+      channel: channel,
+      account: account
+    } do
+      {request, _url} = registry(binding, ctx)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), binding,
+                 operation: "policy.accept",
+                 body: %{"policy_version" => "2026-10"}
+               )
+
+      {request, nil} = registry(channel, ctx, identifier: account.identifier)
+      {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(signed, channel, operation: "tokens.mint", body: @accept)
+
+      # A sign-in's answer is no registry signature.
+      {request, _url} = minted(:sign_in, @browser)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), @browser,
+                 operation: "policy.accept",
+                 body: @accept
+               )
+    end
+
+    test "a passkey of another account, under another session, or past the expiry signs nothing",
+         %{ctx: ctx, binding: binding, account: account, dir: dir} do
+      stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+
+      {request, _url} = registry(binding, ctx)
+      assert {:error, :answer_refused} = SignIn.answer(answer(request, stranger), binding)
+
+      {request, _url} = registry(binding, ctx)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), {:session, :crypto.strong_rand_bytes(32)})
+
+      assert {:error, :answer_refused} = SignIn.answer(answer(request, account), binding)
+
+      {request, _url} = registry(binding, ctx)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(answer(request, account), binding, now: request.expires_at)
+
+      # A device's answer to the request's digest is no registry signature.
+      {request, nil} = registry({:channel, "pcl_device"}, ctx, identifier: account.identifier)
+      {pub, priv} = hd(account.devices)
+
+      assert {:error, :answer_refused} =
+               SignIn.answer(
+                 %DeviceAnswer{
+                   challenge: request.challenge,
+                   kid: Prima.Identity.Key.kid(pub),
+                   sig: :crypto.sign(:eddsa, :none, <<0::256>>, [priv, :ed25519])
+                 },
+                 {:channel, "pcl_device"}
+               )
+    end
+
+    test "names a registry, an operation the protocol knows and a body it takes", %{
+      ctx: ctx,
+      binding: binding
+    } do
+      assert {:error, {:invalid_argument, _}} =
+               SignIn.request(:registry, binding,
+                 ctx: ctx,
+                 operation: "handle.rename",
+                 body: %{}
+               )
+
+      assert {:error, {:invalid_argument, _}} =
+               SignIn.request(:registry, binding,
+                 ctx: ctx,
+                 operation: "publisher.claim",
+                 body: %{"slug" => "no-dot"}
+               )
+
+      Prima.Test.Env.put_app_env(:sanctum, :registry_url, "none")
+
+      assert {:error, :no_registry} =
+               SignIn.request(:registry, binding,
+                 ctx: ctx,
+                 operation: "policy.accept",
+                 body: @accept
+               )
+    end
+
+    test "binds a device to its channel and a browser to its session; nothing else asks", %{
+      ctx: ctx,
+      account: account
+    } do
+      device = %{ctx | auth_method: :device, client_id: "pcl_1", session_token_hash: nil}
+      assert {:ok, {:channel, "pcl_1"}, [identifier: identifier]} = SignIn.binding(device)
+      assert identifier == account.identifier
+
+      assert {:ok, {:session, hash}, []} = SignIn.binding(ctx)
+      assert hash == ctx.session_token_hash
+
+      assert {:error, :unauthenticated} =
+               SignIn.binding(%{ctx | session_token_hash: nil, auth_method: :api_key})
+
+      assert {:error, :unauthenticated} =
+               SignIn.binding(%{device | user_id: "usr_" <> String.duplicate("0", 26)})
+    end
+  end
+
+  test "record_namespace/2 lands the claim on the users row and refuses a slug another identity holds",
+       %{dir: dir, account: account} do
+    %{id: uid} = first!(account)
 
     assert {:ok, user} = SignIn.record_namespace(uid, "user6ns")
     assert user.namespace == "user6ns"
-    assert {:ok, %{id: id}} = Users.get_by_namespace("user6ns")
-    assert id == uid
-    # the athanor was theirs since admission; the claim does not re-address it
-    assert {:ok, %{id: ^pid}} = Athanors.get_by_owner(uid)
+    assert {:ok, %{id: ^uid}} = Users.get_by_namespace("user6ns")
     assert Sanctum.Namespace.lookup(uid) == "user6ns"
 
     # Idempotent; a different slug from the registry keeps the recorded one.
@@ -236,502 +694,15 @@ defmodule Sanctum.SignInTest do
     assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(uid, "user6other")
 
     # Another person cannot take it, and a malformed slug is refused.
-    {:ok, %{id: jid}} = People.linked(info(7))
+    {:ok, _entry} = Sanctum.Door.Store.allow("wildcard", "*", uid)
+    other = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+    {request, _url} = minted(:sign_in, @browser)
+    {:ok, %{user: %{id: jid}}} = SignIn.answer(answer(request, other), @browser)
 
     assert {:error, :namespace_owned_by_another_identity} =
              SignIn.record_namespace(jid, "user6ns")
 
     assert {:error, :invalid_slug} = SignIn.record_namespace(jid, "Not A Slug")
-
     assert {:error, :not_found} = SignIn.record_namespace("usr_ghost", "ghost")
-  end
-
-  describe "linking a door" do
-    # `*` admits the remote people these cases make, as their CYFR
-    # sign-in was admitted.
-    setup do
-      Arca.Cache.init()
-      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
-      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
-      :ok
-    end
-
-    # A person seated in their own athanor, and a context their own
-    # session establishes there.
-    defp seated!(overrides \\ %{}) do
-      n = System.unique_integer([:positive])
-      {:ok, user} = People.linked(info(n, overrides))
-      athanor = People.athanor!(user)
-      %{user: user, athanor: athanor, ctx: session_ctx(user, athanor)}
-    end
-
-    defp session_ctx(user, athanor) do
-      built =
-        Sanctum.Context.build(
-          user_id: user.id,
-          email: user.email,
-          provider: "github",
-          athanor_id: athanor.id,
-          permissions: [:*],
-          auth_method: :oidc,
-          authenticated: true
-        )
-
-      {:ok, session} = Sanctum.TestContext.create_session(built)
-
-      {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
-
-      ctx
-    end
-
-    defp oidc(n, overrides \\ %{}) do
-      Map.merge(
-        %{
-          key: "oidcc|https://idp.test|link-#{n}",
-          provider: "oidcc",
-          email: "link-#{n}@idp.test",
-          verified: true
-        },
-        overrides
-      )
-    end
-
-    defp ticket!(person, identity) do
-      {:ok, ticket} = SignIn.link_ticket(person.ctx, identity)
-      ticket
-    end
-
-    # The link asked under the person's session, its record confirmed
-    # through the confirmations' own store with `proof` (a proof no passkey
-    # gave: `client_id` names the paired client it was given on, if any),
-    # and the link repeated naming the record.
-    defp linked_on(person, ticket, proof) do
-      assert {:error, {:confirmation_required, %{id: id, operation: "person.link_door"}}} =
-               SignIn.link_door(person.ctx, "oidcc", ticket)
-
-      assert {:ok, %{state: "confirmed"}} =
-               Arca.PendingConfirmations.confirm(
-                 Sanctum.Context.actor(person.ctx),
-                 Prima.Confirmation.ref(id),
-                 proof
-               )
-
-      SignIn.link_door(%{person.ctx | confirmation_id: id}, "oidcc", ticket)
-    end
-
-    # A device paired to the person in their athanor through the ceremony:
-    # its key made first, the invitation opened for its digest under the
-    # person's proof, completed with that key. Answers its client id.
-    defp paired_client!(person) do
-      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-      digest = Prima.Device.key_digest(device_key)
-
-      {:ok, invitation} =
-        person.ctx
-        |> Sanctum.TestContext.confirmed(
-          :device_pairing,
-          Sanctum.Pairing.invitation_change(digest)
-        )
-        |> Sanctum.Pairing.begin(%{"key_digest" => digest})
-
-      source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
-      glass = Sanctum.Context.build(%{authenticated: false, client_ip: source})
-      submission = %{holder: @holder, device_key: device_key}
-
-      {:ok, %{challenge: challenge}} =
-        Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
-
-      proof = Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
-
-      {:ok, %{client_id: client_id}} =
-        Sanctum.Pairing.complete(
-          glass,
-          invitation.invitation_secret,
-          Map.put(submission, :proof, proof)
-        )
-
-      client_id
-    end
-
-    # The person's first-method latch: set once a passkey or a paired
-    # device ever existed for them.
-    defp first_method_at(user_id) do
-      Arca.Repo.one(
-        from(p in PersonIdentity, where: p.user_id == ^user_id, select: p.first_method_at)
-      )
-    end
-
-    test "a ticket is minted for a standing session and a linkable method" do
-      person = seated!()
-      n = System.unique_integer([:positive])
-
-      assert {:ok, ticket} = SignIn.link_ticket(person.ctx, oidc(n))
-      assert byte_size(ticket) == 43
-
-      assert {:error, :not_linkable} =
-               SignIn.link_ticket(person.ctx, oidc(n, %{key: "email|x|y", provider: "email"}))
-
-      assert {:error, :not_linkable} =
-               SignIn.link_ticket(
-                 person.ctx,
-                 oidc(n, %{key: "github|https://github.com|#{n}", provider: "oidcc"})
-               )
-
-      assert {:error, :unauthenticated} =
-               SignIn.link_ticket(%{person.ctx | session_token_hash: nil}, oidc(n))
-
-      assert {:error, :unauthenticated} =
-               SignIn.link_ticket(%{person.ctx | plane: :guest}, oidc(n))
-
-      # The door judges people, never a method: linking asks it nothing and
-      # leaves no request.
-      assert Sanctum.Door.Store.requests() == []
-    end
-
-    test "under a fresh proof the door is linked once, and the ticket is spent" do
-      person = seated!()
-      n = System.unique_integer([:positive])
-      ticket = ticket!(person, oidc(n))
-
-      assert {:ok, %{linked: true, door: door}} =
-               Sanctum.TestContext.confirming(
-                 person.ctx,
-                 &SignIn.link_door(&1, "oidcc", ticket)
-               )
-
-      assert door == %{
-               key: oidc(n).key,
-               provider: "oidcc",
-               issuer: "https://idp.test",
-               subject: "link-#{n}"
-             }
-
-      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
-      assert user_id == person.user.id
-
-      # The ticket is spent, and the person's email is the one they had.
-      assert {:error, {:invalid_argument, _}} = SignIn.link_door(person.ctx, "oidcc", ticket)
-      assert {:ok, %{email: email}} = Users.get(person.user.id)
-      assert email == person.user.email
-    end
-
-    test "a session alone is asked to confirm, and the ticket stays for the repeat" do
-      person = seated!()
-      n = System.unique_integer([:positive])
-      ticket = ticket!(person, oidc(n))
-
-      assert {:error, {:confirmation_required, %{operation: "person.link_door"}}} =
-               SignIn.link_door(person.ctx, "oidcc", ticket)
-
-      assert {:error, {:confirmation_required, _}} =
-               SignIn.link_door(person.ctx, "oidcc", ticket)
-
-      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
-    end
-
-    test "once a passkey exists, a re-authentication no passkey or device gave links no door" do
-      person = seated!()
-      _auth = Sanctum.TestContext.passkey!(person.user.id)
-      assert %DateTime{} = first_method_at(person.user.id)
-      n = System.unique_integer([:positive])
-
-      assert linked_on(person, ticket!(person, oidc(n)), %{proof: "oidc_reauth"}) ==
-               {:error, Sanctum.Pairing.addition_refusal()}
-
-      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
-    end
-
-    test "once a device is paired, a confirmation given on that device links the door" do
-      person = seated!()
-      client_id = paired_client!(person)
-      assert %DateTime{} = first_method_at(person.user.id)
-      n = System.unique_integer([:positive])
-
-      assert {:ok, %{linked: true}} =
-               linked_on(person, ticket!(person, oidc(n)), %{
-                 proof: "email_code",
-                 client_id: client_id
-               })
-
-      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
-      assert user_id == person.user.id
-    end
-
-    test "before any passkey or device, a re-authentication links the door" do
-      person = seated!()
-      assert first_method_at(person.user.id) == nil
-      n = System.unique_integer([:positive])
-
-      assert {:ok, %{linked: true}} =
-               linked_on(person, ticket!(person, oidc(n)), %{proof: "oidc_reauth"})
-
-      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
-      assert user_id == person.user.id
-    end
-
-    test "a ticket answers only its person, their session and its provider" do
-      person = seated!()
-      n = System.unique_integer([:positive])
-      ticket = ticket!(person, oidc(n))
-      other = seated!()
-      same_person_other_session = session_ctx(person.user, person.athanor)
-      made_up = Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(32))
-
-      for {ctx, provider, presented} <- [
-            {other.ctx, "oidcc", ticket},
-            {same_person_other_session, "oidcc", ticket},
-            {person.ctx, "github", ticket},
-            {person.ctx, "oidcc", made_up}
-          ] do
-        assert {:error, {:invalid_argument, message}} =
-                 SignIn.link_door(ctx, provider, presented)
-
-        assert message =~ "not yours, has expired or was already used"
-      end
-
-      # A door is linked by its ticket, never by a matching email.
-      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
-      assert {:error, {:invalid_argument, _}} = SignIn.link_door(person.ctx, "email", ticket)
-      assert {:error, {:invalid_argument, _}} = SignIn.link_door(person.ctx, "passkey", ticket)
-
-      assert {:error, :not_linkable} =
-               SignIn.link_ticket(
-                 person.ctx,
-                 oidc(n, %{key: "passkey|https://idp.test|#{n}", provider: "passkey"})
-               )
-    end
-
-    test "another person's identity is a conflict" do
-      person = seated!()
-      other = seated!()
-      {:ok, [taken]} = Arca.Users.identities(Prima.Actor.system(), other.user.id)
-
-      ticket =
-        ticket!(person, %{key: taken.key, provider: "github", email: nil, verified: :unknown})
-
-      assert {:error, {:conflict, _}} = SignIn.link_door(person.ctx, "github", ticket)
-    end
-
-    test "a remote person links a door only under a fresh proof here, and its sessions carry the fresh head's key_epoch" do
-      tls = Sanctum.Test.DirectoryServer.tls()
-      Sanctum.Test.DirectoryServer.listen!()
-      Sanctum.Test.DirectoryServer.seam!(tls)
-      directory = Sanctum.Test.DirectoryServer.start!(tls)
-      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
-
-      # No email, as the `cyfr` door admits a person: no one-time code can
-      # reach them, so before a passkey here they hold no fresh method at
-      # this home (`Sanctum.Passkeys.fresh_method?/1`) and their first one
-      # waits for the administrator.
-      person = seated!(%{email: nil, verified: :unknown})
-      :ok = Sanctum.Test.DirectoryServer.remote_person!(person.user.id, identity)
-      refute Sanctum.Passkeys.fresh_method?(person.ctx)
-      # A session minted now records the head read fresh from the directory.
-      person = %{person | ctx: session_ctx(person.user, person.athanor)}
-      n = System.unique_integer([:positive])
-      ticket = ticket!(person, oidc(n))
-
-      # A session alone attaches no door: the proof is asked here.
-      assert {:error, {:confirmation_required, _}} =
-               SignIn.link_door(person.ctx, "oidcc", ticket)
-
-      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
-
-      # A passkey registered here, which the administrator authorized for
-      # them, proves it.
-      authorized_passkey!(person, identity)
-
-      assert {:ok, %{linked: true}} =
-               Sanctum.TestContext.confirming(person.ctx, &SignIn.link_door(&1, "oidcc", ticket))
-
-      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
-      assert user_id == person.user.id
-
-      # The person stays remote, whichever door they come through, and a
-      # session minted through the linked door binds the head's key_epoch.
-      assert {:ok, %{provenance: "remote"}} =
-               Arca.PersonIdentities.get(Prima.Actor.system(), user_id)
-
-      linked = session_ctx(person.user, person.athanor)
-
-      assert {:ok, %{identity_key_epoch: epoch}} =
-               Arca.SessionStorage.get_session(linked.session_token_hash)
-
-      assert epoch == Sanctum.Test.DirectoryServer.key_epoch(identity)
-
-      # Retired at the next fresh head once a rotation moves the key epoch.
-      Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
-      {:ok, _} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
-      assert {:error, :not_found} = Arca.SessionStorage.get_session(linked.session_token_hash)
-    end
-
-    test "a door a remote person linked here signs them in no more once a recovery replaced their live key, and is no fresh method" do
-      tls = Sanctum.Test.DirectoryServer.tls()
-      Sanctum.Test.DirectoryServer.listen!()
-      Sanctum.Test.DirectoryServer.seam!(tls)
-      directory = Sanctum.Test.DirectoryServer.start!(tls)
-      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
-
-      person = seated!(%{email: nil, verified: :unknown})
-      :ok = Sanctum.Test.DirectoryServer.remote_person!(person.user.id, identity)
-      person = %{person | ctx: session_ctx(person.user, person.athanor)}
-      # A door that names no email, so no one-time code is a fresh method
-      # of theirs here either.
-      door = oidc(System.unique_integer([:positive]), %{email: nil, verified: :unknown})
-      ticket = ticket!(person, door)
-      authorized_passkey!(person, identity)
-
-      assert {:ok, %{linked: true}} =
-               Sanctum.TestContext.confirming(person.ctx, &SignIn.link_door(&1, "oidcc", ticket))
-
-      # Linked, the door signs the person in.
-      assert {:ok, %{id: user_id}, _session} = door_sign_in(door)
-      assert user_id == person.user.id
-
-      # The person recovers at their directory with new keys. This home has
-      # not read the new head yet, so the door still names them here until
-      # the sign-in's own fresh read finds the recovery, which retires the
-      # door before any session is issued through it.
-      Sanctum.Test.DirectoryServer.recover!(directory.dir, identity)
-      assert {:ok, %{id: ^user_id}} = Users.get_by_identity(door.key)
-
-      assert {:error, :unauthenticated} = door_sign_in(door)
-      assert {:error, :not_found} = Users.get_by_identity(door.key)
-
-      # With the passkey the recovery retired, the door was their fresh
-      # method here; it is not one any more.
-      refute Sanctum.Passkeys.fresh_method?(person.ctx)
-
-      # The method names no one here now: signing in through it again makes
-      # no one, and is refused as no person's.
-      assert {:error, :no_person} = door_sign_in(door)
-      assert {:error, :not_found} = Users.get_by_identity(door.key)
-    end
-
-    # A sign-in through a linked method as the browser callback runs it
-    # (`PrismWeb.AuthController`): the method's context names the identity
-    # and the door itself, the person is unlocked, the context is renamed
-    # to the person and resolved, and the session is issued.
-    defp door_sign_in(identity) do
-      ctx =
-        Sanctum.Context.build(
-          user_id: identity.key,
-          door: identity.key,
-          email: identity.email,
-          provider: identity.provider,
-          athanor_id: nil,
-          permissions: Sanctum.Context.person_permissions()
-        )
-
-      user_info = %{
-        id: identity.key,
-        provider: identity.provider,
-        email: identity.email,
-        verified: identity.verified,
-        name: nil
-      }
-
-      with {:ok, user} <- SignIn.unlock(user_info),
-           {:ok, ctx} <- Sanctum.Tenancy.resolve_status(%{ctx | user_id: user.id}, force: true),
-           {:ok, session} <- Sanctum.Session.create(ctx) do
-        {:ok, user, session}
-      end
-    end
-
-    # The person's software passkey registered here and activated as the
-    # administrator's authorization activates it, bound to their recovery
-    # epoch: the remote person's one way to a fresh proof here.
-    defp authorized_passkey!(person, identity) do
-      auth = Sanctum.TestContext.Authenticator.for_person(person.user.id)
-      {:ok, options} = Sanctum.Passkeys.register(person.ctx, %{})
-      credential = Sanctum.TestContext.Authenticator.registration(auth, options)
-
-      assert {:ok, %{status: "awaiting_administrator", passkey_id: id} = pending} =
-               Sanctum.Passkeys.register(person.ctx, %{credential: credential})
-
-      epoch = Sanctum.Test.DirectoryServer.key_epoch(identity)
-
-      {:ok, _} =
-        Arca.Passkeys.activate(Prima.Actor.system(), id,
-          registration_digest: pending.registration_digest,
-          identity_key_epoch: epoch,
-          identity_recovery_epoch: Sanctum.Test.DirectoryServer.recovery_epoch(identity)
-        )
-
-      auth
-    end
-
-    test "unlinking takes the person's own door under proof, never their last while no passkey" do
-      person = seated!()
-      {:ok, [github]} = Arca.Users.identities(Prima.Actor.system(), person.user.id)
-
-      assert {:error, {:conflict, message}} = SignIn.unlink_door(person.ctx, github.key)
-      assert message =~ "hold no passkey"
-      assert message =~ "link another sign-in method"
-
-      other = seated!()
-      {:ok, [theirs]} = Arca.Users.identities(Prima.Actor.system(), other.user.id)
-
-      assert {:error, {:not_found, "sign-in method", _}} =
-               SignIn.unlink_door(person.ctx, theirs.key)
-
-      # With a second door linked, the first goes under its own proof.
-      n = System.unique_integer([:positive])
-      ticket = ticket!(person, oidc(n))
-
-      {:ok, _} =
-        Sanctum.TestContext.confirming(person.ctx, &SignIn.link_door(&1, "oidcc", ticket))
-
-      assert {:error, {:confirmation_required, %{operation: "person.unlink_door"}}} =
-               SignIn.unlink_door(person.ctx, github.key)
-
-      assert {:ok, %{unlinked: %{key: key}}} =
-               Sanctum.TestContext.confirming(person.ctx, &SignIn.unlink_door(&1, github.key))
-
-      assert key == github.key
-      assert {:error, :not_found} = Users.get_by_identity(github.key)
-
-      # The person holds a passkey here now, so the last door may go too.
-      assert {:ok, %{unlinked: _}} =
-               Sanctum.TestContext.confirming(
-                 person.ctx,
-                 &SignIn.unlink_door(&1, oidc(n).key)
-               )
-
-      assert {:ok, []} = Arca.Users.identities(Prima.Actor.system(), person.user.id)
-    end
-
-    test "the last door goes only while the door admits the person without it" do
-      person = seated!()
-      {:ok, [github]} = Arca.Users.identities(Prima.Actor.system(), person.user.id)
-      # A passkey here, so only the door's admission is in question.
-      auth = Sanctum.TestContext.passkey!(person.user.id)
-
-      # A deny naming the person, written while their session stands: the
-      # door would admit them through no way at all, so the last method is
-      # kept, before any proof is asked.
-      {:ok, deny} = Sanctum.Door.Store.deny("person", person.user.id, "ops")
-      assert {:error, {:conflict, message}} = SignIn.unlink_door(person.ctx, github.key)
-      assert message =~ "ask the operator"
-      assert message =~ "link another sign-in method"
-      assert {:ok, _person} = Users.get_by_identity(github.key)
-
-      # A local person is admitted unless denied: with the deny gone, the
-      # method goes, and the passkey signs them in.
-      :ok = Sanctum.Door.Store.remove(deny.id)
-
-      assert {:ok, %{unlinked: %{key: key}}} =
-               Sanctum.TestContext.confirming(person.ctx, &SignIn.unlink_door(&1, github.key))
-
-      assert key == github.key
-      held = Sanctum.Passkeys.sign_in_challenge()
-
-      assert {:ok, %{session_token: _}} =
-               Sanctum.Passkeys.sign_in(
-                 held,
-                 Sanctum.TestContext.Authenticator.assertion(auth, held.challenge)
-               )
-    end
   end
 end

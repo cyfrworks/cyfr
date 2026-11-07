@@ -12,8 +12,9 @@ follows; the six-word passphrase cyfr login draws and shows once ("Write
 it down:")
 is kept in PASSPHRASE_FILE (mode 0600) and typed back each time a
 passphrase is asked; a passphrase already in PASSPHRASE_FILE is typed
-when an unlock asks for it; Enter is pressed once the recovery code is
-shown. Nothing else is typed. What the terminal showed is TRANSCRIPT,
+when an unlock asks for it; the account service's terms, when making an
+account asks them accepted, are accepted ("yes"); Enter is pressed once
+the recovery code is shown. Nothing else is typed. What the terminal showed is TRANSCRIPT,
 without carriage returns. Exits with the command's status, or 124 when it
 runs past five minutes, killing it.
 """
@@ -34,6 +35,7 @@ ASKED = re.compile(rb"passphrase(?: again)?: $")
 PIN_ASKED = re.compile(rb"(PIN: |The same PIN again: )$")
 PIN = b"258046"
 ENTER = b"Press Enter once you saved it. "
+ACCEPT = b"Accept them? (yes/no) "
 
 
 def main():
@@ -82,6 +84,9 @@ def main():
             answered = len(shown)
         elif pending.endswith(ENTER):
             os.write(fd, b"\n")
+            answered = len(shown)
+        elif pending.endswith(ACCEPT):
+            os.write(fd, b"yes\n")
             answered = len(shown)
         if not ready:
             done, code = os.waitpid(pid, os.WNOHANG)

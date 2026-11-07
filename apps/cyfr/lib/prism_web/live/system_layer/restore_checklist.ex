@@ -6,26 +6,21 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
   The restore checklist, which only the system layer draws, for a person
   whose home was restored from a backup: what the declared restore
   (`ARCHITECTURE.md` §6.9) suspended or asks for again, as
-  `Sanctum.Recovery.checklist/1` lists it.
+  `Sanctum.Pairing.restore_checklist/1` lists it.
 
-    * Passkeys and paired devices to re-enable. While the person's
-      recovery is open, re-enabling one needs a door's fresh sign-in or an
-      emailed code, never a passkey or device of theirs, and re-enabling
-      one ends the recovery.
-    * API keys and webhooks to re-enable, the same way.
+    * API keys and webhooks to re-enable, each under a fresh
+      confirmation.
     * Profiles to consent to again, each naming its component and label,
       with a link to the athanor's Components page, which opens the
       default profile's grant.
     * Vault entries to rotate at their destination and enter again: those
       of the person's athanor.
 
-  Each re-enable is the operation `key.reenable`, `webhook.reenable`,
-  `pairing.reenable` or `passkey.reenable` (`request/4`). The layer
-  dispatches it as its own sensitive change, under the confirmation
-  prompt the operation's `confirmation_required` signal opens. A key,
-  webhook or device is re-enabled from a page focused on its own
-  athanor, since each is scoped to it. A passkey is the person's own and
-  is re-enabled from any page.
+  Each re-enable is the operation `key.reenable` or `webhook.reenable`
+  (`request/4`). The layer dispatches it as its own sensitive change,
+  under the confirmation prompt the operation's `confirmation_required`
+  signal opens. A key or webhook is re-enabled from a page focused on its
+  own athanor, since each is scoped to it.
 
   The checklist holds nothing secret: names, labels, a key's display
   prefix and ids.
@@ -37,23 +32,21 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
   # the item, and the checklist's list of such items.
   @operations %{
     "key.reenable" => {"key/reenable", "key_id", :api_keys},
-    "webhook.reenable" => {"webhook/reenable", "webhook_id", :webhooks},
-    "pairing.reenable" => {"pairing/reenable", "client_id", :paired_clients},
-    "passkey.reenable" => {"passkey/reenable", "passkey_id", :passkeys}
+    "webhook.reenable" => {"webhook/reenable", "webhook_id", :webhooks}
   }
 
-  @lists [:api_keys, :webhooks, :paired_clients, :passkeys, :profiles, :vault_entries]
+  @lists [:api_keys, :webhooks, :profiles, :vault_entries]
 
-  @doc "The four re-enable operations the checklist offers."
+  @doc "The two re-enable operations the checklist offers."
   @spec operations() :: [String.t()]
   def operations, do: @operations |> Map.keys() |> Enum.sort()
 
   @doc """
   The call that re-enables the item `id` under `operation`, from a page
   focused on `athanor_id`: `{:ok, tool, args}` when `checklist` lists the
-  item and this page reaches it (a passkey from any page, a key, webhook
-  or device from its own athanor), else `:error`. A click for an item no
-  longer listed, or held in another athanor, dispatches nothing.
+  item and this page reaches it (from its own athanor), else `:error`. A
+  click for an item no longer listed, or held in another athanor,
+  dispatches nothing.
   """
   @spec request(map() | nil, String.t(), String.t(), String.t() | nil) ::
           {:ok, String.t(), map()} | :error
@@ -71,8 +64,6 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
 
   @doc "What the layer says once `operation` re-enabled its item."
   @spec reenabled(String.t()) :: String.t()
-  def reenabled("passkey.reenable"), do: "The passkey is re-enabled, and confirms as before."
-  def reenabled("pairing.reenable"), do: "The device is re-enabled, and confirms as before."
   def reenabled("key.reenable"), do: "The API key is re-enabled."
   def reenabled("webhook.reenable"), do: "The webhook is re-enabled."
 
@@ -90,10 +81,8 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
     |> Enum.uniq()
   end
 
-  # A passkey is the person's own; any other item is reached only from
-  # its own athanor.
+  # An item is reached only from its own athanor.
   defp here?(%{athanor_id: athanor_id}, focus), do: is_binary(focus) and athanor_id == focus
-  defp here?(_passkey, _focus), do: true
 
   attr :id, :string, required: true
   attr :checklist, :map, required: true
@@ -110,10 +99,6 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
 
     assigns =
       assign(assigns,
-        recovering: not is_nil(checklist.restore_id),
-        methods:
-          Enum.map(checklist.passkeys, &{"passkey.reenable", &1}) ++
-            Enum.map(checklist.paired_clients, &{"pairing.reenable", &1}),
         credentials:
           Enum.map(checklist.api_keys, &{"key.reenable", &1}) ++
             Enum.map(checklist.webhooks, &{"webhook.reenable", &1})
@@ -123,7 +108,6 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
     <section
       id={@id}
       data-test="restore-checklist"
-      data-recovering={to_string(@recovering)}
       aria-labelledby={"#{@id}-title"}
       class="fixed bottom-4 right-4 z-40 max-h-[70vh] w-full max-w-md overflow-y-auto rounded-lg border border-amber-500 bg-gray-900 p-4 text-sm text-gray-100 shadow-xl"
     >
@@ -140,11 +124,8 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
         </summary>
 
         <div class="mt-3 space-y-3">
-          <p :if={@recovering} data-test="restore-checklist-recovering">
-            Every session ended, and what the backup carried is suspended until you re-enable it. Re-enabling a passkey or a device needs a fresh sign-in through a linked method or an emailed code, never the passkey or device itself; once one is re-enabled, your recovery is over and it confirms as before.
-          </p>
-          <p :if={not @recovering} data-test="restore-checklist-recovered">
-            Your recovery is over. What the restore suspended or asks for again is still listed below.
+          <p>
+            Every session ended, and what the backup carried is suspended until you re-enable it.
           </p>
           <p class="text-gray-300">
             A run open at the backup ended uncertain and is never resumed; start it again.
@@ -159,21 +140,6 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
           >
             <span class="font-semibold">Not done:</span> {@error}
           </p>
-
-          <section :if={@methods != []} aria-labelledby={"#{@id}-methods"} class="space-y-1">
-            <h3 id={"#{@id}-methods"} class="font-medium">Passkeys and devices to re-enable</h3>
-            <ul class="divide-y divide-gray-800">
-              <.reenable
-                :for={{operation, item} <- @methods}
-                operation={operation}
-                item={item}
-                athanor_id={@athanor_id}
-                places={@places}
-                myself={@myself}
-                button_class={@button_class}
-              />
-            </ul>
-          </section>
 
           <section :if={@credentials != []} aria-labelledby={"#{@id}-credentials"} class="space-y-1">
             <h3 id={"#{@id}-credentials"} class="font-medium">API keys and webhooks to re-enable</h3>
@@ -313,18 +279,8 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
     """
   end
 
-  defp name("passkey.reenable", _item), do: "A passkey"
-  defp name("pairing.reenable", _item), do: "A paired device"
   defp name("key.reenable", item), do: present(item.name) || "An API key"
   defp name("webhook.reenable", item), do: present(item.name) || "A webhook"
-
-  defp detail("passkey.reenable", %{rp_id: rp_id}, _places) when is_binary(rp_id),
-    do: "A passkey for #{rp_id}"
-
-  defp detail("passkey.reenable", _item, _places), do: "A passkey"
-
-  defp detail("pairing.reenable", item, places),
-    do: "A paired device" <> in_place(places, item.athanor_id)
 
   defp detail("key.reenable", item, places) do
     prefix = if present(item.prefix), do: ", beginning #{item.prefix}", else: ""

@@ -4,14 +4,8 @@
 # ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS builder
 
-# autoconf, automake and libtool generate the configure script of the
-# libsodium the libsodium package builds (Sanctum's ristretto255): its
-# Hex tarball carries configure.ac, not the generated script.
 RUN apt-get update && apt-get install -y \
     build-essential \
-    autoconf \
-    automake \
-    libtool \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

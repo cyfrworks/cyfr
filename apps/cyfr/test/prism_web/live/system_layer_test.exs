@@ -173,6 +173,13 @@ defmodule PrismWeb.SystemLayerTest do
   alias Sanctum.Context
   alias Sanctum.TestContext.Authenticator
 
+  # The deployment's directory, whose account pages a passkey's proof
+  # hops to.
+  setup do
+    Sanctum.Test.Newcomers.directory!()
+    :ok
+  end
+
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
@@ -240,30 +247,24 @@ defmodule PrismWeb.SystemLayerTest do
     secret
   end
 
-  # A passkey's proof given on this client: the ceremony the layer asks
-  # for, answered by the person's authenticator over the record's digest.
+  # A passkey's proof given from this client: the layer opens the account
+  # pages in a new tab with the record's `confirm` request, the person's
+  # passkey of their account answers it there, and the answer returns to
+  # `/login` in that tab, which takes it under this browser's session.
   defp prove_here!(view, ref, authenticator) do
     view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
 
-    # The ceremony names the layer that asks for it: every hook on a page
+    # The hop names the layer that asks for it: every hook on a page
     # hears every push.
-    assert_push_event(view, "webauthn:get", %{
-      layer: "system-layer",
-      purpose: "confirmation",
-      id: ^ref,
-      public_key: %{"challenge" => challenge}
-    })
+    assert_push_event(view, "system_layer:hop", %{layer: "system-layer", url: url})
+    [_page, fragment] = String.split(url, "#", parts: 2)
+    {:ok, request} = fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+    ctx = view_context(view)
+    account = Sanctum.TestContext.account!(ctx.user_id)
+    answer = Authenticator.answer(authenticator, request, account.identifier)
 
-    {:ok, digest} = Prima.Identity.Encoding.unb64(challenge, 32)
-    credential = Authenticator.assertion(authenticator, digest)
-
-    view
-    |> layer()
-    |> render_hook("webauthn_result", %{
-      "purpose" => "confirmation",
-      "id" => ref,
-      "credential" => credential
-    })
+    assert {:ok, %{purpose: :confirm, ref: ^ref}} =
+             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
   end
 
   # Another session of the same person, in the same athanor.
@@ -4891,7 +4892,7 @@ defmodule PrismWeb.SystemLayerTest do
       end_views()
     end
 
-    test "an assertion that does not prove the record is refused, and the prompt still waits",
+    test "an answer that does not prove the record confirms nothing, and the prompt still waits",
          %{view: view, ctx: ctx} do
       other = other_session!(ctx)
 
@@ -4906,18 +4907,26 @@ defmodule PrismWeb.SystemLayerTest do
       ref = Prima.Confirmation.ref(id)
       wait_until(fn -> open_prompt(view) == Prompt.confirmation_id(ref) end, 2_000, "opened")
 
-      # An assertion this person's passkey never made is refused, and the
-      # prompt says so.
-      view
-      |> layer()
-      |> render_hook("webauthn_result", %{
-        "purpose" => "confirmation",
-        "id" => ref,
-        "credential" => %{"id" => "nobody", "response" => %{}}
-      })
+      # The layer opens the account pages with the record's request; an
+      # answer by a passkey the person's account does not list, returned
+      # under this browser's session, confirms nothing.
+      view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
+      assert_push_event(view, "system_layer:hop", %{layer: "system-layer", url: url})
+      [_page, fragment] = String.split(url, "#", parts: 2)
 
-      assert render(view) =~ ~s(role="alert")
+      {:ok, request} =
+        fragment |> Prima.SignIn.parse_fragment() |> elem(1) |> Prima.SignIn.decode()
+
+      held = view_context(view)
+      account = Sanctum.TestContext.account!(held.user_id)
+      stranger = Authenticator.new("stranger-#{System.unique_integer([:positive])}")
+      answer = Authenticator.answer(stranger, request, account.identifier)
+
+      assert {:error, :answer_refused} =
+               Sanctum.SignIn.answer(answer, {:session, held.session_token_hash})
+
       assert render(view) =~ ~s(data-status="pending")
+      assert {:ok, %{state: "pending"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
       end_views()
     end
   end
@@ -5114,8 +5123,7 @@ defmodule PrismWeb.SystemLayerTest do
             },
             asker: %{"kind" => "session", "name" => "github"},
             expires_at: DateTime.add(DateTime.utc_now(), 300),
-            webauthn: %{"challenge" => "AAAA"},
-            methods: ["passkey", "oidc", "email"]
+            methods: ["passkey"]
           },
           false
         )
@@ -5126,8 +5134,6 @@ defmodule PrismWeb.SystemLayerTest do
       assert html =~ ~s(data-standing="none")
       assert has_element?(view, ~s([data-test="confirmation-preview"]), "vault.create")
       refute has_element?(view, ~s([data-test="confirm-passkey"]))
-      refute has_element?(view, ~s([data-test="confirm-reauth"]))
-      refute has_element?(view, ~s([data-test="confirm-email"]))
     end
   end
 
@@ -5554,24 +5560,6 @@ defmodule PrismWeb.SystemLayerTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "Settings' prompt for another recovery code, dismissed, lets it go", %{conn: conn} do
-      {view, _html} = mount_athanor(conn, "/settings")
-
-      view |> element(~s([data-test="identity-add-code"])) |> render_click()
-      render(view)
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="holder"]))
-
-      view |> element(~s(#system-layer [data-test="prompt-dismiss"])) |> render_click()
-
-      wait_until(
-        fn -> not has_element?(view, ~s(#system-layer [data-test="recovery"])) end,
-        2_000,
-        "the prompt let go"
-      )
-
-      assert has_element?(view, ~s([data-test="identity-add-code"]))
-    end
-
     test "a webhook waits on its origin grant, granted with webhooks, before its own confirmation",
          %{conn: conn, local: local} do
       wasm = Cyfr.Test.Guests.wasm(:reagent)
@@ -5698,19 +5686,9 @@ defmodule PrismWeb.SystemLayerTest do
              subject: %{entry_id: "vlt_k", name: "probe", threads: []}
            }, "Offer this key to everyone on this CYFR or to one of your threads"},
         pairing:
-          {%{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
-           "Pair a phone or another browser with this CYFR"},
-        confirmation: {confirmation, "A client of yours asked for a change"},
-        kit:
-          {%{
-             id: "k-kit",
-             kind: :kit,
-             action: :recovery_material,
-             subject: %{attempt_id: "att_k"}
-           }, "Show your recovery code again"},
-        holder:
-          {%{id: "k-holder", kind: :holder, action: :recovery_material, subject: %{}},
-           "A recovery code you hold approves the new one"}
+          {%{id: "k-pairing", kind: :pairing, action: :pairing_revocation, subject: %{}},
+           "Revoke a device you paired"},
+        confirmation: {confirmation, "A client of yours asked for a change"}
       }
     end
 

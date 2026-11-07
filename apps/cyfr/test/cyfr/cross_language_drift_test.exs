@@ -382,25 +382,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(types max_depth reasons shapes canonical spellings times values results)},
       {"apps/prima/test/prima/manifest/results_test.exs", ~w(values results)}
     ],
-    "carry.json" => [
-      {"apps/cyfr/assets/test/carrier/carry.test.mjs",
-       ~w(fragments.parse fragments.valid max_fragment_bytes payload returns)},
-      {"apps/prima/test/prima/carry_test.exs",
-       ~w(envelopes fragments identity keys max_fragment_bytes max_payload_bytes operations outcomes payload payload_digest protocol returns verify)}
-    ],
     "component_refs.json" => [
       {"apps/codex/internal/ref/ref_fixture_test.go", ~w(cases version_ordering)},
       {"apps/cyfr/assets/test/sdk/wire.test.mjs", ~w(tincture_urls)},
       {"apps/prima/test/prima/tincture_wire_test.exs", ~w(tincture_urls)}
-    ],
-    "confirmation_assertion.json" => [
-      {"apps/codex/cmd/pair_test.go", ~w(exchange)},
-      {"apps/codex/internal/shell/certify_test.go", ~w(exchange)},
-      {"apps/cyfr/assets/test/home_confirm/home_confirm.test.mjs",
-       ~w(exchange.deciding exchange.home)},
-      {"apps/prima/test/prima/confirmation_assertion_test.exs",
-       ~w(assertions identity keys lifetime_ms protocol record refusals verify)},
-      {"apps/sanctum/test/sanctum/pairing_test.exs", ~w(exchange)}
     ],
     "confirmation.json" => [
       {"apps/codex/cmd/consent_error_test.go", ~w(ref signal)},
@@ -421,20 +406,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "device.json" => [
       {"apps/cyfr/test/emissary/web/device_channel_test.exs", ~w(messages refusals)},
       {"apps/prima/test/prima/device_test.exs",
-       ~w(continuous_fields key_digest messages protocol refusals types)}
+       ~w(continuous_fields keys messages protocol refusals types)}
     ],
     "device_cert.json" => [
       {"apps/prima/test/prima/device_cert_test.exs",
-       ~w(certificate_protocol certificates challenge_refusals challenges homes issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals reserved_client_ids verify)}
-    ],
-    "device_pin.json" => [
-      {"apps/codex/internal/holder/pin_vectors_test.go", ~w(suite rfc9497 elements)},
-      {"apps/codex/internal/shell/pin_home_test.go", ~w(exchange)},
-      {"apps/codex/internal/shell/proof_test.go", ~w(purpose_fields keys proofs verify)},
-      {"apps/prima/test/prima/device_pin_test.exs",
-       ~w(suite evaluator purpose_fields keys proofs verify delay accounting exchange)},
-      {"apps/sanctum/test/sanctum/device_pin_test.exs",
-       ~w(suite rfc9497 elements replacement exchange)}
+       ~w(certificate_protocol certificates challenge_refusals challenges issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals verify)}
     ],
     "device_unlock.json" => [
       {"apps/codex/internal/shell/home_test.go", ~w(exchange)},
@@ -489,7 +465,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # SHA-256), outside this roster's reach.
     "identity.json" => [
       {"apps/prima/test/prima/identity_test.exs",
-       ~w(chains directory entries identifiers keys kinds kits locate max_entry_bytes prefix protocol requests)}
+       ~w(chains directory entries identifiers keys kinds kits max_entry_bytes max_keys max_recovery prefix protocol user_ids webauthn)}
     ],
     "keeper_protocol.json" => [
       {"apps/cyfr/test/opus/programs/definition_test.exs", ~w(reserved_env_prefixes)},
@@ -554,10 +530,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"seed/components/catalysts/local/claude-code/0.1.0/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)}
     ],
-    "person_assertion.json" => [
-      {"apps/prima/test/prima/person_assertion_test.exs",
-       ~w(assertions identity keys protocol refusals transport verify)}
-    ],
     "access_modes.json" => [
       {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
       {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
@@ -567,8 +539,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/release-boot/boot.sh", ~w(boot)}
     ],
     "recovery_code.json" => [
-      {"apps/cyfr/assets/test/system_layer/recovery.test.mjs", ~w(refused valid)},
-      {"apps/cyfr/assets/test/system_layer/recovery_code.test.mjs", ~w(refused spellings valid)},
       {"apps/prima/test/prima/recovery_code_test.exs", ~w(protocol refused spellings valid)}
     ],
     # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
@@ -593,13 +563,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/cyfr/platform_settings_roster_test.exs", ~w(name)},
       {"tests/compose-proof/run.sh", ~w()}
     ],
-    "restore_kit.json" => [
-      {"apps/cyfr/assets/test/system_layer/recovery.test.mjs",
-       ~w(challenge_bytes kit other_kit protocol refused valid)},
-      {"apps/cyfr/test/sanctum/restore_kit_proof_test.exs", ~w(kit refused valid)},
-      {"apps/prima/test/prima/identity_restore_kit_test.exs",
-       ~w(challenge_bytes kit other_kit protocol refused valid)}
-    ],
     "runner_control.json" => [
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
        ~w(max_line_bytes valid invalid)},
@@ -611,6 +574,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(attempt initial_credit exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
+    ],
+    "sign_in.json" => [
+      {"apps/prima/test/prima/sign_in_test.exs",
+       ~w(answer_refusals answers challenge_bytes directory fragments home identity keys lifetime_ms max_fragment_bytes protocol purposes registry_output request_refusals requests verify)}
     ],
     "tincture_wire.json" => [
       {"apps/cyfr/assets/test/canvas/hook.test.mjs", ~w(shell shell_invalid canvas.handshake)},
@@ -714,17 +681,17 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # Planted: a reader of another file, a section it does not read, and a
     # file that is gone are each reported.
     planted = %{
-      "carry.json" => [
-        {"apps/prima/test/prima/layout_test.exs", ~w(fragments)},
-        {"apps/prima/test/prima/carry_test.exs", ~w(no_such_section)},
-        {"apps/prima/test/prima/planted_test.exs", ~w(fragments)}
+      "recovery_code.json" => [
+        {"apps/prima/test/prima/layout_test.exs", ~w(spellings)},
+        {"apps/prima/test/prima/recovery_code_test.exs", ~w(no_such_section)},
+        {"apps/prima/test/prima/planted_test.exs", ~w(spellings)}
       ]
     }
 
     assert unread(planted) == [
-             "apps/prima/test/prima/layout_test.exs does not read carry.json",
-             "apps/prima/test/prima/layout_test.exs does not read carry.json's fragments",
-             "apps/prima/test/prima/carry_test.exs does not read carry.json's no_such_section",
+             "apps/prima/test/prima/layout_test.exs does not read recovery_code.json",
+             "apps/prima/test/prima/layout_test.exs does not read recovery_code.json's spellings",
+             "apps/prima/test/prima/recovery_code_test.exs does not read recovery_code.json's no_such_section",
              "apps/prima/test/prima/planted_test.exs is gone"
            ]
   end

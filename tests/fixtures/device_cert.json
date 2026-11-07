@@ -1,94 +1,63 @@
 {
-  "certificate_protocol": "cyfr-device-cert/v1",
+  "certificate_protocol": "cyfr-device-cert/v2",
   "certificates": {
     "forged": {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWLhT8v7U94mcA4MtxX8dpPa86Xl7MhYfdmMECQQOuh8S_qOBpAbPbxHLspK8t0fypBGtT9lYzQQA28xJKmLCw",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "RubwdBC7PvmPxXhihm4sGRx-Q9ZDGcA6RwbL3tI4kliqBH3eE7SIY0HHqlccm5pMX69LDxVyfPRQD4F0679uBg"
       },
-      "signer": "stranger"
+      "signer": "other_installation"
     },
-    "identity": {
-      "certificate": {
-        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "audience": "https://hub.example",
-        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
-        "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "mOtGus9euSg8y_OsSXDhS2a_8O-DA6XBowDlE5amiUfmsjLCZrq-0cAA3fs6otKhH-vOb5Q4c4e-5KW566agBQ",
-        "subject": {
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "kind": "identity"
-        }
-      },
-      "signer": "alice_live_1"
-    },
-    "local": {
+    "head_substituted": {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:327e63186bf2c5f70168b53abb842ba5aa4789117eec2c05cfaebfe91d332921",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
       },
-      "signer": "alice_live_1"
+      "signer": null
     },
-    "local_elsewhere": {
+    "issued": {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "audience": "https://hub.example",
+        "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "9KZcxhNth_hhze1YSVmBZOy_Ak8WUR6zeMnDGSOtPBt0WfZmVwM5lzEGmCElPyn4-cchbV2gFvyXgZfpJxG4DQ",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
       },
-      "signer": "alice_live_1"
+      "signer": "installation"
     },
     "tampered": {
       "certificate": {
-        "athanor": "ath_01a09fee-0000-7000-8000-00000000beef",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8799",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "70wC5n4ICJ1W6iI-sJ4NLdhmbE1NMWQ9Xo7toV1DY7ElqSlrY5TKV3YxnKDHIz72Yh1A_Uv53iPhxQ_NhVbyCw"
       },
       "signer": null
     }
@@ -106,6 +75,7 @@
         "purpose": "connect"
       },
       "error": "invalid_field",
+      "field": "nonce",
       "name": "a nonce of 16 bytes"
     },
     {
@@ -120,7 +90,8 @@
         "purpose": "sign"
       },
       "error": "invalid_field",
-      "name": "a purpose outside connect, renew and pair"
+      "field": "purpose",
+      "name": "a purpose outside connect and renew"
     },
     {
       "challenge": {
@@ -198,26 +169,6 @@
       "protocol": "cyfr-device-proof/v1",
       "purpose": "connect"
     },
-    "pair": {
-      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
-      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-      "expires_at": 1790000060000,
-      "home": "https://alice.example",
-      "nonce": "VOIni5mC-dwrWf68woY_bs_k5sZ-R5r2g9r-lY6ztjY",
-      "protocol": "cyfr-device-proof/v1",
-      "purpose": "pair"
-    },
-    "pair_other_client": {
-      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8094",
-      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-      "expires_at": 1790000060000,
-      "home": "https://alice.example",
-      "nonce": "VOIni5mC-dwrWf68woY_bs_k5sZ-R5r2g9r-lY6ztjY",
-      "protocol": "cyfr-device-proof/v1",
-      "purpose": "pair"
-    },
     "renew": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
@@ -229,21 +180,9 @@
       "purpose": "renew"
     }
   },
-  "comment": "The vectors pinning Prima.DeviceCert and its challenge and proof: every side re-signs each certificate whose signer is named and reproduces its sig, checks each certificate under the named key's public key with the given home, clock (Unix milliseconds), clock tolerance and current key_epoch, and reaches the named result or refusal; refuses each malformed certificate and challenge; and holds each proof to the challenge held for the connection at the given time, a mismatch naming the first field that differs in the order purpose, home, athanor, client_id, device_key, nonce, expires_at. Expiry is strict: at or after expires_at a certificate is refused whatever the tolerance, which applies to not_before only. A local subject names one home as issuer and audience and needs no identifier or key_epoch. A challenge lives lifetime_ms from issue. A pair challenge binds the prospective client id the pairing invitation reserved; a proof of one purpose is refused for every other.",
-  "homes": {
-    "alice": "https://alice.example",
-    "hub": "https://hub.example"
-  },
+  "comment": "The vectors pinning Prima.DeviceCert (cyfr-device-cert/v2) and its challenge and proof (cyfr-device-proof/v1): every side re-signs each certificate whose signer is named with that installation key and reproduces its sig, checks each certificate under the named key's public key with the given home (the CYFR's origin), head (the one its paired-client row names), clock (Unix milliseconds) and clock tolerance, and reaches the named result or refusal in the order signature, audience, head, not-before, expiry; refuses each malformed certificate and challenge; and holds each proof to the challenge held for the connection at the given time, a mismatch naming the first field that differs in the order purpose, home, athanor, client_id, device_key, nonce, expires_at. A refusal that names a field carries it as field, as each side's typed result does. A certificate's kid is sha256:<hex> over the device key the account's log lists. Expiry is strict: at or after expires_at a certificate is refused whatever the tolerance, which applies to not_before only. A challenge lives lifetime_ms from issue. A proof of one purpose is refused for every other.",
   "issued_at": 1790000000000,
   "keys": {
-    "alice_live_1": {
-      "public": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-      "seed": "4vIF-wGusnX6R8S7SdjJjBxW6dBj3EU4QcOQUbcbIe4"
-    },
-    "alice_live_2": {
-      "public": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
-      "seed": "3Qr8Wgo0gayyfmVRyc1AnQvPy6Sm-IO3J5IJr4PLBUk"
-    },
     "device_1": {
       "public": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
       "seed": "hPjHx49w0ykVOYcQZ0iVPlNO6POWt7R3sjJ1djlv06k"
@@ -251,6 +190,14 @@
     "device_2": {
       "public": "ERYi_2ivPb6jqhJmiHCFlZd0rCVlgdb42fGAfUdEr1A",
       "seed": "jiHD0hBTUGG5liI3JSLyZr2fisbC1VWd3gvdAis810o"
+    },
+    "installation": {
+      "public": "_lD1Df0miiIvxtV0eyS0zjDagKP_F8iyaN3VgjzB5ko",
+      "seed": "iwIlKBH9qMv5Snol8gRQ9JPtZM4lQiHeJGZurLSEkrU"
+    },
+    "other_installation": {
+      "public": "Oqx0K8g3VQAjJlewPXN3YZcoALYmWb_l8AHchpIIq34",
+      "seed": "81FUOFlteVoFGfROubxp3a0MDh8sc37WkOsgvnZA4Rk"
     },
     "stranger": {
       "public": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
@@ -288,53 +235,6 @@
       "name": "a renewal proof offered for a connect",
       "now": 1790000001000,
       "proof": "renew"
-    },
-    {
-      "held": "pair",
-      "name": "a pairing proof for the held pairing challenge",
-      "now": 1790000001000,
-      "proof": "pair",
-      "result": "ok"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "connect",
-      "name": "a pairing proof offered for a connect",
-      "now": 1790000001000,
-      "proof": "pair"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "renew",
-      "name": "a pairing proof offered for a renewal",
-      "now": 1790000001000,
-      "proof": "pair"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "pair",
-      "name": "a connect proof offered for a pairing",
-      "now": 1790000001000,
-      "proof": "connect"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "purpose",
-      "held": "pair",
-      "name": "a renewal proof offered for a pairing",
-      "now": 1790000001000,
-      "proof": "renew"
-    },
-    {
-      "error": "challenge_mismatch",
-      "field": "client_id",
-      "held": "pair_other_client",
-      "name": "a pairing proof for another reserved client id",
-      "now": 1790000001000,
-      "proof": "pair"
     },
     {
       "error": "challenge_mismatch",
@@ -422,17 +322,6 @@
       "purpose": "connect",
       "sig": "g3lBIhGJx_7PvDD00JFehPPYrvu9bv7z5mryErWr-qkf7nlkf4WX0n7zcGqeED5KB3sa1J3QbYe1as3TMCfFCg"
     },
-    "pair": {
-      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
-      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-      "expires_at": 1790000060000,
-      "home": "https://alice.example",
-      "nonce": "VOIni5mC-dwrWf68woY_bs_k5sZ-R5r2g9r-lY6ztjY",
-      "protocol": "cyfr-device-proof/v1",
-      "purpose": "pair",
-      "sig": "EEu7WFzfeFGgUXVItQCdhudV6jFXvQf90grfWPE4DzeNiVw5D7tuzs_m8hv4eRf6_gbgEXW1phSLyCGofQdnCw"
-    },
     "renew": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
@@ -447,8 +336,7 @@
   },
   "purposes": [
     "connect",
-    "renew",
-    "pair"
+    "renew"
   ],
   "refusals": [
     {
@@ -456,19 +344,17 @@
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
+        "protocol": "cyfr-device-cert/v2",
         "scope": "all",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "sig": "xZivUUaWBhr0oiqi27t6RoEutsRrKTaUsK89zFeqccF7Oe9UpdSzELigNZ-h2DOyfwpddWQgLHoRgxbikx5hBw"
       },
       "error": "unknown_field",
+      "field": "scope",
       "name": "an unknown field"
     },
     {
@@ -476,17 +362,37 @@
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "QQQYiMKtnitS-dur48jNgCe4fHNDlJnKsSfilrSzOTPnMdf65uWo8DTzEssOoDPWuthYD0QQ9F-vcgKv-f2NBw",
         "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
+          "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+          "key_epoch": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+          "kind": "identity"
         }
       },
+      "error": "unknown_field",
+      "field": "subject",
+      "name": "the first version's subject"
+    },
+    {
+      "certificate": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://alice.example",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "expires_at": 1790003600000,
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "not_before": 1790000000000,
+        "protocol": "cyfr-device-cert/v2"
+      },
       "error": "missing_field",
+      "field": "sig",
       "name": "no signature"
     },
     {
@@ -494,222 +400,177 @@
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
         "protocol": "cyfr-device-cert/v2",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "sig": "kOMQ4R4C4181FwP0gYABazDs4R3aSDMqA_sVisdev7nigzEzHnPtphRvxiQBAHjdvKn8iXg3V8LGVPzNR4mUAA"
+      },
+      "error": "missing_field",
+      "field": "head",
+      "name": "no head"
+    },
+    {
+      "certificate": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://alice.example",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "expires_at": 1790003600000,
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "not_before": 1790000000000,
+        "protocol": "cyfr-device-cert/v1",
+        "sig": "ZG5uqBIh9MBHxzZ8dPqbSiuIzU0sllHYoQCQO1VipHs7AVWUvlJK_s0SWdvOVO0fGXPXSTK_n6fCbLf5bCm3Cg"
       },
       "error": "wrong_protocol",
-      "name": "another protocol version"
+      "name": "the first version"
     },
     {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "email": "a@example.com",
-          "kind": "email"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "_hmGUSCs0MedJ1Tx9FDnoY6ua5rfHuZUKCWValCrkoOsZeEJLD2cYCtWdSGVL59cKhsNVDmR5VDN9AjrB6kDAw"
       },
       "error": "invalid_field",
-      "name": "a subject of an unknown kind"
+      "field": "kid",
+      "name": "a kid that is not a digest"
     },
     {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "usr_01a09fee-0000-7000-8000-000000000001",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "iAIuiTleL4zmLsBPtBAhmMbFcBdFPT4S5qfLgy5RlvZfuqK6THmMFJfLOdbSFW1bsfRlIVu__GsxpDFI0tYdAQ"
       },
       "error": "invalid_field",
-      "name": "a local subject carrying an identifier"
+      "field": "identifier",
+      "name": "a local person id for the identifier"
     },
     {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
+        "head": "head-1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "system"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "ryNNvc72XHeo799hilEHEhqman2jwebmmPID-tax3XwiuT4WHXS8Gff5-tjvsAVZRAL0bKwzMizaSAAIiNSYCw"
       },
       "error": "invalid_field",
-      "name": "a local subject that is not a person"
+      "field": "head",
+      "name": "a head that is not a digest"
     },
     {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
-        "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "kind": "identity"
-        }
-      },
-      "error": "invalid_field",
-      "name": "an identity subject without its key_epoch"
-    },
-    {
-      "certificate": {
-        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "audience": "https://alice.example",
-        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790000000000,
-        "issuer": "https://alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "tnGqWWHX2T19n4i1f1nn7gJVYXPP7aeIahyOvuLv2TJVpM7R8n71Jj0_tLOWx5Lg407FV67PyxwUSfkr-ygRCg"
       },
       "error": "invalid_field",
+      "field": "expires_at",
       "name": "an expiry not after not-before"
     },
     {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "audience": "https://alice.example",
+        "audience": "https://Alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://Alice.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "p5paXai5yvd6B0jUtExA557rkWpQM593XXqGVaoAohFcUGvR2s10ae9zGWQIhs1NOU5pgqPuexbOAVXChbJkAQ"
       },
       "error": "invalid_field",
-      "name": "a home spelled in capitals"
+      "field": "audience",
+      "name": "an audience spelled in capitals"
+    },
+    {
+      "certificate": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://alice.example/",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "expires_at": 1790003600000,
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "not_before": 1790000000000,
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "dS6PtFaYCG9rT--fvDu07GtBH2tm9Os07OO5NgzFwZFiW3GEavNz5kyP6FhYo4V8BNNXrB2ca7PVlAYwIaBzDg"
+      },
+      "error": "invalid_field",
+      "field": "audience",
+      "name": "an audience with a trailing slash"
+    },
+    {
+      "certificate": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://alice.example:443",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "expires_at": 1790003600000,
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
+        "not_before": 1790000000000,
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "sOSGmdmFc4Yo6Np5sWNuyF__7RAV3LjoG5ZIV1QLqM8Z5auJHejnWoeAkdHY_EhOv5IKK3b5tPUIBgPSFrCgBg"
+      },
+      "error": "invalid_field",
+      "field": "audience",
+      "name": "an audience naming its default port"
     },
     {
       "certificate": {
         "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
         "audience": "https://alice.example",
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "expires_at": 1790003600000,
-        "issuer": "https://alice.example/",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
+        "protocol": "cyfr-device-cert/v2",
+        "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
       },
       "error": "invalid_field",
-      "name": "a home with a trailing slash"
-    },
-    {
-      "certificate": {
-        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "audience": "https://alice.example",
-        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "expires_at": 1790003600000,
-        "issuer": "https://alice.example:443",
-        "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
-      },
-      "error": "invalid_field",
-      "name": "a home naming its default port"
-    },
-    {
-      "certificate": {
-        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "audience": "https://alice.example",
-        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "13g0NYxXsKji8elmiXpiEPQWJV1ZdogCElwdh4ncJg",
-        "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
-        "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
-      },
-      "error": "invalid_field",
-      "name": "a device key of the wrong length"
-    },
-    {
-      "certificate": {
-        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
-        "audience": "https://hub.example",
-        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
-        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-        "expires_at": 1790003600000,
-        "issuer": "https://alice.example",
-        "not_before": 1790000000000,
-        "protocol": "cyfr-device-cert/v1",
-        "sig": "9KZcxhNth_hhze1YSVmBZOy_Ak8WUR6zeMnDGSOtPBt0WfZmVwM5lzEGmCElPyn4-cchbV2gFvyXgZfpJxG4DQ",
-        "subject": {
-          "kind": "local",
-          "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
-        }
-      },
-      "error": "local_subject_elsewhere",
-      "name": "a local subject whose audience is another home"
+      "field": "sig",
+      "name": "a signature of 63 bytes"
     }
-  ],
-  "reserved_client_ids": [
-    "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
-    "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8094"
   ],
   "verify": [
     {
-      "certificate": "local",
-      "key": "alice_live_1",
-      "name": "a local certificate at its home, no identifier or epoch needed",
+      "certificate": "issued",
+      "key": "installation",
+      "name": "a certificate at the CYFR that issued it, under its row's head",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1790000001000,
         "skew": 60000
@@ -717,80 +578,36 @@
       "result": "ok"
     },
     {
-      "certificate": "local",
+      "certificate": "issued",
       "error": "wrong_audience",
-      "key": "alice_live_1",
-      "name": "a local subject presented to another home",
+      "key": "installation",
+      "name": "a certificate presented to another CYFR",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://hub.example",
         "now": 1790000001000,
         "skew": 60000
       }
     },
     {
-      "certificate": "local_elsewhere",
-      "error": "local_subject_elsewhere",
-      "key": "alice_live_1",
-      "name": "a local subject issued for another home",
+      "certificate": "issued",
+      "error": "stale_head",
+      "key": "installation",
+      "name": "a certificate whose row names another head",
       "opts": {
-        "home": "https://hub.example",
-        "now": 1790000001000,
-        "skew": 60000
-      }
-    },
-    {
-      "certificate": "identity",
-      "key": "alice_live_1",
-      "name": "an identity subject at its audience under its epoch",
-      "opts": {
-        "home": "https://hub.example",
-        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "now": 1790000001000,
-        "skew": 60000
-      },
-      "result": "ok"
-    },
-    {
-      "certificate": "identity",
-      "error": "stale_key_epoch",
-      "key": "alice_live_1",
-      "name": "an identity subject from another key_epoch",
-      "opts": {
-        "home": "https://hub.example",
-        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
-        "now": 1790000001000,
-        "skew": 60000
-      }
-    },
-    {
-      "certificate": "identity",
-      "error": "key_epoch_required",
-      "key": "alice_live_1",
-      "name": "an identity subject checked with no current epoch",
-      "opts": {
-        "home": "https://hub.example",
-        "now": 1790000001000,
-        "skew": 60000
-      }
-    },
-    {
-      "certificate": "identity",
-      "error": "wrong_audience",
-      "key": "alice_live_1",
-      "name": "an identity subject at a home it was not issued for",
-      "opts": {
+        "head": "sha256:327e63186bf2c5f70168b53abb842ba5aa4789117eec2c05cfaebfe91d332921",
         "home": "https://alice.example",
-        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "now": 1790000001000,
         "skew": 60000
       }
     },
     {
-      "certificate": "local",
+      "certificate": "head_substituted",
       "error": "bad_signature",
-      "key": "alice_live_2",
-      "name": "a local certificate once the stored live key changed",
+      "key": "installation",
+      "name": "a certificate whose head was substituted after signing",
       "opts": {
+        "head": "sha256:327e63186bf2c5f70168b53abb842ba5aa4789117eec2c05cfaebfe91d332921",
         "home": "https://alice.example",
         "now": 1790000001000,
         "skew": 60000
@@ -799,9 +616,22 @@
     {
       "certificate": "forged",
       "error": "bad_signature",
-      "key": "alice_live_1",
-      "name": "a certificate signed by another key",
+      "key": "installation",
+      "name": "a certificate signed by another installation key",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "home": "https://alice.example",
+        "now": 1790000001000,
+        "skew": 60000
+      }
+    },
+    {
+      "certificate": "issued",
+      "error": "bad_signature",
+      "key": "other_installation",
+      "name": "a certificate checked under another installation key",
+      "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1790000001000,
         "skew": 60000
@@ -810,19 +640,21 @@
     {
       "certificate": "tampered",
       "error": "bad_signature",
-      "key": "alice_live_1",
+      "key": "installation",
       "name": "a certificate altered after signing",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1790000001000,
         "skew": 60000
       }
     },
     {
-      "certificate": "local",
-      "key": "alice_live_1",
+      "certificate": "issued",
+      "key": "installation",
       "name": "the last millisecond before expiry",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1790003599999,
         "skew": 60000
@@ -830,43 +662,47 @@
       "result": "ok"
     },
     {
-      "certificate": "local",
+      "certificate": "issued",
       "error": "expired",
-      "key": "alice_live_1",
+      "key": "installation",
       "name": "at expiry",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1790003600000,
         "skew": 60000
       }
     },
     {
-      "certificate": "local",
+      "certificate": "issued",
       "error": "expired",
-      "key": "alice_live_1",
+      "key": "installation",
       "name": "expired within the clock tolerance",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1790003630000,
         "skew": 60000
       }
     },
     {
-      "certificate": "local",
+      "certificate": "issued",
       "error": "expired",
-      "key": "alice_live_1",
+      "key": "installation",
       "name": "expired beyond the clock tolerance",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1790003720000,
         "skew": 60000
       }
     },
     {
-      "certificate": "local",
-      "key": "alice_live_1",
+      "certificate": "issued",
+      "key": "installation",
       "name": "before not-before, within the clock tolerance",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1789999970000,
         "skew": 60000
@@ -874,11 +710,12 @@
       "result": "ok"
     },
     {
-      "certificate": "local",
+      "certificate": "issued",
       "error": "not_yet_valid",
-      "key": "alice_live_1",
+      "key": "installation",
       "name": "before not-before, beyond the clock tolerance",
       "opts": {
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
         "home": "https://alice.example",
         "now": 1789999880000,
         "skew": 60000

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/cyfr/codex/internal/account"
 )
 
 func fixture(t *testing.T, name string, v any) {
@@ -60,11 +62,11 @@ func TestProve_ReproducesTheExistingPurposesProofs(t *testing.T) {
 	if b64(pub) != v.Keys["device_1"].Public {
 		t.Fatal("device_1's public key")
 	}
-	for _, purpose := range []string{"connect", "renew", "pair"} {
+	for _, purpose := range []string{"connect", "renew"} {
 		var held map[string]any
 		_ = json.Unmarshal(v.Challenges[purpose], &held)
 		b := Binding{Home: held["home"].(string), Athanor: held["athanor"].(string), ClientID: held["client_id"].(string), DeviceKey: pub}
-		c, err := Challenge(v.Challenges[purpose], purpose, b, nil)
+		c, err := Challenge(v.Challenges[purpose], purpose, b)
 		if err != nil {
 			t.Fatalf("%s: %v", purpose, err)
 		}
@@ -105,34 +107,9 @@ func TestChallenge_RefusesWhatThisDeviceDidNotAskFor(t *testing.T) {
 		_ = json.Unmarshal(v.Challenges["connect"], &m)
 		change(m)
 		raw, _ := json.Marshal(m)
-		if _, err := Challenge(raw, "connect", b, nil); !errors.Is(err, ErrRefusedChallenge) {
+		if _, err := Challenge(raw, "connect", b); !errors.Is(err, ErrRefusedChallenge) {
 			t.Errorf("%s: %v, want a refusal", name, err)
 		}
-	}
-}
-
-// The canonical encoding reproduces Prima.Confirmation's digest of the
-// confirmation vector's record, which a confirm challenge carries.
-func TestDigest_ReproducesTheConfirmationRecordsDigest(t *testing.T) {
-	var v struct {
-		Digest string         `json:"digest"`
-		Record map[string]any `json:"record"`
-	}
-	fixture(t, "confirmation.json", &v)
-	got, err := Digest(v.Record)
-	if err != nil || got != v.Digest {
-		t.Fatalf("digest %q (%v), want %q", got, err, v.Digest)
-	}
-}
-
-func TestCanonical_SortsByUTF16AndEscapesAsECMAScript(t *testing.T) {
-	got, err := Canonical(map[string]any{"\U0001F600": 1, "￿": 2, "a": "<&> \x01\"\\", "n": json.Number("-0"), "z": []any{true, nil}})
-	want := `{"a":"<&>` + " " + `\u0001\"\\","n":0,"z":[true,null],"` + "\U0001F600" + `":1,"` + "￿" + `":2}`
-	if err != nil || string(got) != want {
-		t.Fatalf("%s (%v)\nwant %s", got, err, want)
-	}
-	if _, err := Canonical(map[string]any{"x": json.Number("1.5")}); err == nil {
-		t.Fatal("a fractional number encodes")
 	}
 }
 
@@ -164,17 +141,15 @@ func bindingOf(m map[string]any, pub []byte) Binding {
 	return Binding{Home: s("home"), Athanor: s("athanor"), ClientID: s("client_id"), DeviceKey: pub}
 }
 
-// expectOf is what a device asked for, as a proof names it: the
-// enrollment's admission and request, the session a lock ends, the
-// confirmation's ref and digest.
-func expectOf(m map[string]any) Expect {
-	e := Expect{}
-	for _, k := range []string{"admission", "request_id", "ref", "digest", "session_id"} {
-		if v, ok := m[k].(string); ok {
-			e[k] = v
-		}
+// checked is a held challenge as this device checks it before signing: a
+// lock's session, which the device itself chose, is the proof's.
+func checked(held map[string]any, purpose string, proof map[string]any, pub []byte) (map[string]any, error) {
+	raw, _ := json.Marshal(held)
+	c, err := Challenge(raw, purpose, bindingOf(proof, pub))
+	if err == nil && purpose == "lock" && c["session_id"] != proof["session_id"] {
+		return nil, ErrRefusedChallenge
 	}
-	return e
+	return c, err
 }
 
 func without(m map[string]any, key string) map[string]any {
@@ -204,23 +179,25 @@ func TestUnlockVectors_FieldListsAreTheFixtures(t *testing.T) {
 			t.Errorf("%s: %v, want %v", purpose, got, append(want, p.Fields...))
 		}
 	}
-	for _, purpose := range []string{"enroll", "unlock", "confirm", "lock"} {
+	for _, purpose := range []string{"unlock", "lock"} {
 		if _, ok := v.PurposeFields[purpose]; !ok {
 			t.Errorf("the fixture names no %s", purpose)
 		}
 	}
 }
 
-// The four worked examples are reproduced byte for byte: enroll, unlock
-// and confirm from their held challenges, lock from what the device knows.
-func TestUnlockVectors_ReproducesTheFourProofs(t *testing.T) {
+// The worked examples are reproduced byte for byte: unlock from its held
+// challenge, lock from what the device knows.
+func TestUnlockVectors_ReproducesTheProofs(t *testing.T) {
 	var v unlockVectors
 	fixture(t, "device_unlock.json", &v)
 	key, pub := keyOf(t, v.Keys["device_1"].Seed)
-	for _, purpose := range []string{"enroll", "unlock", "confirm"} {
+	if len(v.Proofs) != 2 {
+		t.Fatalf("the fixture's proofs are %d, not unlock's and lock's", len(v.Proofs))
+	}
+	for _, purpose := range []string{"unlock"} {
 		want := v.Proofs[purpose]
-		raw, _ := json.Marshal(without(want, "sig"))
-		c, err := Challenge(raw, purpose, bindingOf(want, pub), expectOf(want))
+		c, err := checked(without(want, "sig"), purpose, want, pub)
 		if err != nil {
 			t.Fatalf("%s: %v", purpose, err)
 		}
@@ -251,15 +228,13 @@ func TestUnlockVectors_TheSignerNeverMakesARefusedProof(t *testing.T) {
 }
 
 // signerNeverMakesARefusedProof holds v's verify cases to the signer, as
-// TestUnlockVectors_TheSignerNeverMakesARefusedProof says; device_pin.json
-// has its own (pin_test.go).
+// TestUnlockVectors_TheSignerNeverMakesARefusedProof says.
 func signerNeverMakesARefusedProof(t *testing.T, v unlockVectors) {
 	t.Helper()
 	key, pub := keyOf(t, v.Keys["device_1"].Seed)
 	for _, c := range v.Verify {
 		purpose, _ := c.Proof["purpose"].(string)
-		heldRaw, _ := json.Marshal(c.Held)
-		held, err := Challenge(heldRaw, purpose, bindingOf(c.Proof, pub), expectOf(c.Proof))
+		held, err := checked(c.Held, purpose, c.Proof, pub)
 		if purpose == "lock" && err == nil {
 			// A lock is built, not answered: the device signs its own.
 			proof, _ := LockProof(bindingOf(c.Proof, pub), stringOf(c.Proof, "session_id"), key)
@@ -281,8 +256,8 @@ func signerNeverMakesARefusedProof(t *testing.T, v unlockVectors) {
 				t.Errorf("%s: the signer signs a challenge whose %s is not what it asked for", c.Name, f)
 			}
 			proof, _ := Prove(held, key)
-			mine, _ := Canonical(proof)
-			theirs, _ := Canonical(c.Proof)
+			mine, _ := account.JCS(proof)
+			theirs, _ := account.JCS(c.Proof)
 			if bytes.Equal(mine, theirs) {
 				t.Errorf("%s: the signer makes the refused proof", c.Name)
 			}
@@ -302,8 +277,8 @@ func differing(a, b map[string]any) string {
 		keys[k] = true
 	}
 	for _, k := range slices.Sorted(maps.Keys(keys)) {
-		ra, _ := Canonical(a[k])
-		rb, _ := Canonical(b[k])
+		ra, _ := account.JCS(a[k])
+		rb, _ := account.JCS(b[k])
 		if _, inA := a[k]; !inA || !bytes.Equal(ra, rb) {
 			return k
 		}
@@ -315,42 +290,14 @@ func differing(a, b map[string]any) string {
 }
 
 // knows is whether a device itself knows field of a purpose's challenge:
-// its binding and what it asked for, a lock's session included. The
-// nonce, the expiry, an unlock's reserved session and a record's digest
-// are the home's to choose.
+// its binding, a lock's session included. The nonce, the expiry and an
+// unlock's reserved session are the home's to choose.
 func knows(purpose, field string) bool {
 	switch field {
-	case "protocol", "purpose", "home", "athanor", "client_id", "device_key", "admission", "request_id", "ref":
+	case "protocol", "purpose", "home", "athanor", "client_id", "device_key":
 		return true
 	case "session_id":
 		return purpose == "lock"
 	}
 	return false
-}
-
-// pin_reset's field list is tests/fixtures/device_pin.json's, the reset
-// proof is reproduced byte for byte from its held challenge, and no verify
-// case the home refuses is one this signer makes.
-func TestPINVectors_TheResetProof(t *testing.T) {
-	var v unlockVectors
-	fixture(t, "device_pin.json", &v)
-	p, ok := v.PurposeFields["pin_reset"]
-	want := append(append(slices.Clone(bindingFields), freshFields...), p.Fields...)
-	if got, known := fieldsOf("pin_reset"); !ok || !p.Fresh || !known || !slices.Equal(got, want) {
-		t.Fatalf("pin_reset fields %v, want the fixture's %v", got, want)
-	}
-	key, pub := keyOf(t, v.Keys["device_1"].Seed)
-	reset := v.Proofs["pin_reset"]
-	raw, _ := json.Marshal(without(reset, "sig"))
-	c, err := Challenge(raw, "pin_reset", bindingOf(reset, pub), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proof, _ := Prove(c, key); proof["sig"] != reset["sig"] {
-		t.Fatalf("pin_reset sig %v, want %v", proof["sig"], reset["sig"])
-	}
-	if len(v.Verify) == 0 {
-		t.Fatal("the fixture holds no pin_reset verify cases")
-	}
-	signerNeverMakesARefusedProof(t, v)
 }

@@ -284,6 +284,11 @@ defmodule CyfrWeb.Plugs.Authenticate do
         # "expired" nor a denial.
         {:error, :identity_stale}
 
+      {:error, :identity_gone} ->
+        # The person's account is gone at its directory: a denial for
+        # good, in its own sentence, never an expired session.
+        {:error, :identity_gone}
+
       {:error, :company_login_required} ->
         {:error, :company_login_required}
 
@@ -304,7 +309,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
           {:ok, fresh}
 
         {:error, reason}
-        when reason in [:unavailable, :identity_stale, :company_login_required] ->
+        when reason in [:unavailable, :identity_stale, :identity_gone, :company_login_required] ->
           {:error, reason}
 
         # The memo named an athanor the session no longer reaches: this
@@ -364,4 +369,8 @@ defmodule CyfrWeb.Plugs.Authenticate do
 
   defp error_response(conn, :company_login_required, errors),
     do: errors.halt(conn, 403, :company_login_required, nil)
+
+  # An account gone: the refusal's class (`forbidden`) and sentence.
+  defp error_response(conn, :identity_gone, errors),
+    do: errors.halt(conn, 403, :identity_gone, nil)
 end

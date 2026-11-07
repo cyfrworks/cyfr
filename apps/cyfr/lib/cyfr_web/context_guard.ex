@@ -77,6 +77,7 @@ defmodule CyfrWeb.ContextGuard do
   @unavailable "Your session could not be checked just now. Try again shortly."
   @focus_lost "That athanor is no longer open to you."
   @identity_stale Prima.Refusal.message(:identity_stale)
+  @identity_gone Prima.Refusal.message(:identity_gone)
 
   @typedoc "Why a retained context was refused."
   @type refusal :: Caller.revalidation_refusal()
@@ -141,6 +142,13 @@ defmodule CyfrWeb.ContextGuard do
     socket
     |> LiveView.put_flash(:error, @identity_stale)
     |> LiveView.redirect(to: mount_refusal(:identity_stale))
+  end
+
+  # An account gone signs its person out for good, told why.
+  defp refuse_mount(socket, :identity_gone) do
+    socket
+    |> LiveView.put_flash(:error, @identity_gone)
+    |> LiveView.redirect(to: mount_refusal(:identity_gone))
   end
 
   defp refuse_mount(socket, refusal), do: LiveView.redirect(socket, to: mount_refusal(refusal))
@@ -242,6 +250,12 @@ defmodule CyfrWeb.ContextGuard do
     socket
     |> LiveView.put_flash(:error, @focus_lost)
     |> LiveView.redirect(to: refusal_path(:not_member))
+  end
+
+  defp refuse(socket, :identity_gone) do
+    socket
+    |> LiveView.put_flash(:error, @identity_gone)
+    |> LiveView.redirect(to: refusal_path(:identity_gone))
   end
 
   defp refuse(socket, reason), do: LiveView.redirect(socket, to: refusal_path(reason))

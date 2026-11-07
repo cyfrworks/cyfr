@@ -441,8 +441,6 @@ defmodule Arca.UnscopedQuerySeamTest do
   @athanor_less %{
     "Arca.Schemas.Athanor" => "the tenant itself — it cannot carry a reference to itself",
     "Arca.Schemas.User" => "a person, addressed by their own id; people are not tenant-owned",
-    "Arca.Schemas.ExternalIdentity" =>
-      "how an IdP names a person — keyed by the identity key and the person's id, no tenant",
     "Arca.Schemas.RegistryToken" => "keyed by user_id — the identity plane, not a tenant's",
     "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
     "Arca.Schemas.CellLease" =>
@@ -461,31 +459,18 @@ defmodule Arca.UnscopedQuerySeamTest do
         "reachable only through its tenant-owned parent and cascade-deleted with it; the " <>
         "unique index is (webhook_id, idempotency_key), so keys cannot collide across athanors",
     "Arca.Schemas.PersonIdentity" =>
-      "a person's identity and keys, keyed by their user_id and identifier; a person's " <>
+      "a person's identity, keyed by their user_id and identifier; a person's " <>
         "identity is not an athanor's to delete",
-    "Arca.Schemas.RestorePerson" =>
-      "a person's recovery from a declared restore, keyed by the restore and their " <>
-        "user_id and gone with their users row; a recovery is the person's, never an athanor's",
-    "Arca.Schemas.IdentityAttempt" =>
-      "a person's enrollment, restore or rotation attempt, keyed by its request id; a " <>
-        "restore runs before any person or athanor exists",
     "Arca.Schemas.IdentityLogEntry" =>
       "the directory's log, keyed by the person identifier it orders; a directory holds " <>
         "no athanor",
     "Arca.Schemas.DirectoryHead" =>
-      "this home's cache of another person's head, keyed by their identifier",
-    "Arca.Schemas.CarryAction" =>
-      "a person's sign-in carry and a relying home's login receipt, keyed by the person " <>
-        "and the action; a carry moves a person between homes, never inside an athanor",
-    "Arca.Schemas.Passkey" =>
-      "a person's credential at this home, keyed by the person and its RP ID; revoked " <>
-        "with the person, never with an athanor",
-    "Arca.Schemas.DeviceCertification" =>
-      "a person's certification of a device at another home, keyed by the person, that " <>
-        "home and its client; the athanor it names is the other home's, not one of this " <>
-        "home's",
-    "Arca.Schemas.InstallationClaim" =>
-      "the node's one claim by a restore, before any person or athanor exists",
+      "this home's cache of an account's head, keyed by its identifier",
+    "Arca.Schemas.DirectoryHandle" =>
+      "a personal handle of the registry beside this node's directory, keyed by the handle " <>
+        "and the account's identifier; a directory holds no athanor",
+    "Arca.Schemas.DirectoryNonce" =>
+      "a nonce a signed registry request spent, keyed by the account's identifier",
     "Arca.Schemas.RequestRateWindow" =>
       "a pre-authentication limit, keyed by bucket and hashed key; no session, and so no " <>
         "athanor, stands behind the requests it bounds",

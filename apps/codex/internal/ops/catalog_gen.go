@@ -20,6 +20,7 @@ const (
 	Component          = "component"
 	Confirmation       = "confirmation"
 	Decision           = "decision"
+	Directory          = "directory"
 	Door               = "door"
 	Execution          = "execution"
 	Feed               = "feed"
@@ -33,8 +34,6 @@ const (
 	Oauth              = "oauth"
 	Pairing            = "pairing"
 	Passkey            = "passkey"
-	Person             = "person"
-	Pin                = "pin"
 	PolicyLog          = "policy_log"
 	Profile            = "profile"
 	Record             = "record"
@@ -58,268 +57,246 @@ const (
 
 // Actions, as tool then action.
 const (
-	ApprovalList             = "list"
-	ApprovalResolve          = "resolve"
-	AquaCreate               = "create"
-	AquaDelete               = "delete"
-	AquaGet                  = "get"
-	AquaList                 = "list"
-	AquaReset                = "reset"
-	AquaSkillCreate          = "skill_create"
-	AquaSkillDelete          = "skill_delete"
-	AquaSkillGet             = "skill_get"
-	AquaSkillList            = "skill_list"
-	AquaSkillReset           = "skill_reset"
-	AquaSkillUpdate          = "skill_update"
-	AquaStatus               = "status"
-	AquaUpdate               = "update"
-	AthanorGet               = "get"
-	AthanorProvision         = "provision"
-	AthanorSettings          = "settings"
-	BuildCompile             = "compile"
-	BuildStatus              = "status"
-	BuildToolchains          = "toolchains"
-	BuildValidate            = "validate"
-	CanvasActivate           = "activate"
-	CanvasCatalog            = "catalog"
-	CanvasRestore            = "restore"
-	CanvasVersions           = "versions"
-	CanvasWrite              = "write"
-	ComponentCategories      = "categories"
-	ComponentCreate          = "create"
-	ComponentDelete          = "delete"
-	ComponentDeprecate       = "deprecate"
-	ComponentDiscover        = "discover"
-	ComponentFork            = "fork"
-	ComponentGetBlob         = "get_blob"
-	ComponentInspect         = "inspect"
-	ComponentList            = "list"
-	ComponentPull            = "pull"
-	ComponentPush            = "push"
-	ComponentReadResource    = "read_resource"
-	ComponentRegister        = "register"
-	ComponentReset           = "reset"
-	ComponentSearch          = "search"
-	ComponentSetupPlan       = "setup_plan"
-	ComponentStatus          = "status"
-	ComponentYank            = "yank"
-	ConfirmationCancel       = "cancel"
-	ConfirmationConfirm      = "confirm"
-	ConfirmationPending      = "pending"
-	ConfirmationReauth       = "reauth"
-	DecisionCorrelate        = "correlate"
-	DecisionGet              = "get"
-	DecisionGetGlobal        = "get_global"
-	DecisionList             = "list"
-	DecisionListGlobal       = "list_global"
-	DoorAllow                = "allow"
-	DoorDeny                 = "deny"
-	DoorList                 = "list"
-	DoorRemove               = "remove"
-	DoorRequests             = "requests"
-	DoorResolve              = "resolve"
-	ExecutionCancel          = "cancel"
-	ExecutionForceRelease    = "force_release"
-	ExecutionList            = "list"
-	ExecutionLogs            = "logs"
-	ExecutionReadResource    = "read_resource"
-	ExecutionRun             = "run"
-	ExecutionRunStream       = "run_stream"
-	ExecutionStatus          = "status"
-	ExecutionUsage           = "usage"
-	FeedBind                 = "bind"
-	FeedList                 = "list"
-	FeedPress                = "press"
-	FeedRemove               = "remove"
-	FileAccept               = "accept"
-	FileDecline              = "decline"
-	FileDelete               = "delete"
-	FileList                 = "list"
-	FileOffer                = "offer"
-	FileOffers               = "offers"
-	FileRead                 = "read"
-	FileWithdraw             = "withdraw"
-	FileWrite                = "write"
-	InvitationCreate         = "create"
-	InvitationList           = "list"
-	InvitationRevoke         = "revoke"
-	KeyCreate                = "create"
-	KeyGet                   = "get"
-	KeyList                  = "list"
-	KeyReenable              = "reenable"
-	KeyRevoke                = "revoke"
-	KeyRotate                = "rotate"
-	LayoutEdit               = "edit"
-	LayoutGet                = "get"
-	McpLogCorrelate          = "correlate"
-	McpLogGet                = "get"
-	McpLogList               = "list"
-	McpLogStats              = "stats"
-	McpServersCreate         = "create"
-	McpServersDelete         = "delete"
-	McpServersDisable        = "disable"
-	McpServersEnable         = "enable"
-	McpServersGet            = "get"
-	McpServersList           = "list"
-	McpServersRefresh        = "refresh"
-	McpServersResetHome      = "reset_home"
-	McpServersRestart        = "restart"
-	McpServersSignIn         = "sign_in"
-	McpServersTest           = "test"
-	McpServersUpdate         = "update"
-	NotesEndorse             = "endorse"
-	NotesForget              = "forget"
-	NotesKeep                = "keep"
-	NotesList                = "list"
-	NotesPin                 = "pin"
-	NotesRead                = "read"
-	NotesSearch              = "search"
-	OauthDeleteClient        = "delete_client"
-	OauthList                = "list"
-	OauthSetClient           = "set_client"
-	PairingBegin             = "begin"
-	PairingComplete          = "complete"
-	PairingList              = "list"
-	PairingReenable          = "reenable"
-	PairingRenew             = "renew"
-	PairingRevoke            = "revoke"
-	PasskeyList              = "list"
-	PasskeyRecoverAdmin      = "recover_admin"
-	PasskeyReenable          = "reenable"
-	PasskeyRegister          = "register"
-	PasskeyRevoke            = "revoke"
-	PersonAssert             = "assert"
-	PersonAssertConfirmation = "assert_confirmation"
-	PersonCarryBegin         = "carry_begin"
-	PersonCarryCancel        = "carry_cancel"
-	PersonCarryComplete      = "carry_complete"
-	PersonCarryList          = "carry_list"
-	PersonCertify            = "certify"
-	PersonCloseRecovery      = "close_recovery"
-	PersonLinkDoor           = "link_door"
-	PersonRecoveryCode       = "recovery_code"
-	PersonRecoveryCodeAdd    = "recovery_code_add"
-	PersonRecoveryCodeSaved  = "recovery_code_saved"
-	PersonRenewCertificate   = "renew_certificate"
-	PersonRotate             = "rotate"
-	PersonStatus             = "status"
-	PersonUnlinkDoor         = "unlink_door"
-	PinEnroll                = "enroll"
-	PolicyLogCorrelate       = "correlate"
-	PolicyLogGet             = "get"
-	PolicyLogList            = "list"
-	ProfileCommit            = "commit"
-	ProfileGrant             = "grant"
-	ProfileGrants            = "grants"
-	ProfileList              = "list"
-	ProfilePlan              = "plan"
-	ProfilePreview           = "preview"
-	ProfilePublish           = "publish"
-	ProfileRevoke            = "revoke"
-	RecordGet                = "get"
-	RecordList               = "list"
-	RecordPayload            = "payload"
-	RegistryAppeal           = "appeal"
-	RegistryClaimPublisher   = "claim_publisher"
-	RegistryGetNamespace     = "get_namespace"
-	RegistryLegalAccept      = "legal_accept"
-	RegistryLegalPage        = "legal_page"
-	RegistryLegalVersion     = "legal_version"
-	RegistryListMyReports    = "list_my_reports"
-	RegistryMembersAdd       = "members_add"
-	RegistryMembersList      = "members_list"
-	RegistryMembersRemove    = "members_remove"
-	RegistryMembersUpdate    = "members_update"
-	RegistryRegister         = "register"
-	RegistryReport           = "report"
-	RegistrySync             = "sync"
-	RegistryTokensIssue      = "tokens_issue"
-	RegistryTokensList       = "tokens_list"
-	RegistryTokensRevoke     = "tokens_revoke"
-	RegistryVerifyPublisher  = "verify_publisher"
-	RegistryWhoami           = "whoami"
-	ResourceRead             = "read"
-	RetentionCleanup         = "cleanup"
-	RetentionGet             = "get"
-	RetentionSet             = "set"
-	ScheduleCreate           = "create"
-	ScheduleDelete           = "delete"
-	ScheduleGet              = "get"
-	ScheduleList             = "list"
-	SchedulePause            = "pause"
-	ScheduleReResolve        = "re_resolve"
-	ScheduleResume           = "resume"
-	ScheduleUpdate           = "update"
-	SessionLock              = "lock"
-	SessionLogout            = "logout"
-	SessionReadResource      = "read_resource"
-	SessionUnlock            = "unlock"
-	SessionWhoami            = "whoami"
-	SettingsList             = "list"
-	SettingsReset            = "reset"
-	SettingsSet              = "set"
-	ShareCreate              = "create"
-	ShareList                = "list"
-	ShareOffered             = "offered"
-	ShareRevoke              = "revoke"
-	ShareSetAudience         = "set_audience"
-	ShareSetCaps             = "set_caps"
-	ShareUsage               = "usage"
-	SharedThreadAdd          = "add"
-	SharedThreadArchive      = "archive"
-	SharedThreadAttach       = "attach"
-	SharedThreadCreate       = "create"
-	SharedThreadGet          = "get"
-	SharedThreadLeave        = "leave"
-	SharedThreadList         = "list"
-	SharedThreadMessages     = "messages"
-	SharedThreadPair         = "pair"
-	SharedThreadPeople       = "people"
-	SharedThreadPost         = "post"
-	SharedThreadRemove       = "remove"
-	SharedThreadRename       = "rename"
-	SharedThreadUnarchive    = "unarchive"
-	SharedThreadWithdraw     = "withdraw"
-	SystemNotify             = "notify"
-	SystemStatus             = "status"
-	ThreadAloud              = "aloud"
-	ThreadApprove            = "approve"
-	ThreadArchive            = "archive"
-	ThreadAttach             = "attach"
-	ThreadCreate             = "create"
-	ThreadDecline            = "decline"
-	ThreadDelete             = "delete"
-	ThreadDiscard            = "discard"
-	ThreadEvents             = "events"
-	ThreadGet                = "get"
-	ThreadList               = "list"
-	ThreadRestartForConsent  = "restart_for_consent"
-	ThreadRevokeGrant        = "revoke_grant"
-	ThreadSend               = "send"
-	ThreadStop               = "stop"
-	TinctureInvokeProtected  = "invoke_protected"
-	TinctureInvokePublic     = "invoke_public"
-	TinctureVisibilityGet    = "get"
-	ToolsList                = "list"
-	TurnRecover              = "recover"
-	TurnSuspend              = "suspend"
-	VaultAuthorize           = "authorize"
-	VaultCreate              = "create"
-	VaultDelete              = "delete"
-	VaultList                = "list"
-	VaultRebind              = "rebind"
-	VaultRename              = "rename"
-	VaultRevoke              = "revoke"
-	VaultRotate              = "rotate"
-	VaultSetDefault          = "set_default"
-	VaultStatus              = "status"
-	WebhookCreate            = "create"
-	WebhookGet               = "get"
-	WebhookList              = "list"
-	WebhookReenable          = "reenable"
-	WebhookRevoke            = "revoke"
-	WebhookRotate            = "rotate"
-	WebhookUpdate            = "update"
+	ApprovalList            = "list"
+	ApprovalResolve         = "resolve"
+	AquaCreate              = "create"
+	AquaDelete              = "delete"
+	AquaGet                 = "get"
+	AquaList                = "list"
+	AquaReset               = "reset"
+	AquaSkillCreate         = "skill_create"
+	AquaSkillDelete         = "skill_delete"
+	AquaSkillGet            = "skill_get"
+	AquaSkillList           = "skill_list"
+	AquaSkillReset          = "skill_reset"
+	AquaSkillUpdate         = "skill_update"
+	AquaStatus              = "status"
+	AquaUpdate              = "update"
+	AthanorGet              = "get"
+	AthanorProvision        = "provision"
+	AthanorSettings         = "settings"
+	BuildCompile            = "compile"
+	BuildStatus             = "status"
+	BuildToolchains         = "toolchains"
+	BuildValidate           = "validate"
+	CanvasActivate          = "activate"
+	CanvasCatalog           = "catalog"
+	CanvasRestore           = "restore"
+	CanvasVersions          = "versions"
+	CanvasWrite             = "write"
+	ComponentCategories     = "categories"
+	ComponentCreate         = "create"
+	ComponentDelete         = "delete"
+	ComponentDeprecate      = "deprecate"
+	ComponentDiscover       = "discover"
+	ComponentFork           = "fork"
+	ComponentGetBlob        = "get_blob"
+	ComponentInspect        = "inspect"
+	ComponentList           = "list"
+	ComponentPull           = "pull"
+	ComponentPush           = "push"
+	ComponentReadResource   = "read_resource"
+	ComponentRegister       = "register"
+	ComponentReset          = "reset"
+	ComponentSearch         = "search"
+	ComponentSetupPlan      = "setup_plan"
+	ComponentStatus         = "status"
+	ComponentYank           = "yank"
+	ConfirmationCancel      = "cancel"
+	ConfirmationConfirm     = "confirm"
+	ConfirmationPending     = "pending"
+	ConfirmationRequest     = "request"
+	DecisionCorrelate       = "correlate"
+	DecisionGet             = "get"
+	DecisionGetGlobal       = "get_global"
+	DecisionList            = "list"
+	DecisionListGlobal      = "list_global"
+	DirectoryTombstone      = "tombstone"
+	DoorAllow               = "allow"
+	DoorDeny                = "deny"
+	DoorList                = "list"
+	DoorRemove              = "remove"
+	DoorRequests            = "requests"
+	DoorResolve             = "resolve"
+	ExecutionCancel         = "cancel"
+	ExecutionForceRelease   = "force_release"
+	ExecutionList           = "list"
+	ExecutionLogs           = "logs"
+	ExecutionReadResource   = "read_resource"
+	ExecutionRun            = "run"
+	ExecutionRunStream      = "run_stream"
+	ExecutionStatus         = "status"
+	ExecutionUsage          = "usage"
+	FeedBind                = "bind"
+	FeedList                = "list"
+	FeedPress               = "press"
+	FeedRemove              = "remove"
+	FileAccept              = "accept"
+	FileDecline             = "decline"
+	FileDelete              = "delete"
+	FileList                = "list"
+	FileOffer               = "offer"
+	FileOffers              = "offers"
+	FileRead                = "read"
+	FileWithdraw            = "withdraw"
+	FileWrite               = "write"
+	InvitationCreate        = "create"
+	InvitationList          = "list"
+	InvitationRevoke        = "revoke"
+	KeyCreate               = "create"
+	KeyGet                  = "get"
+	KeyList                 = "list"
+	KeyReenable             = "reenable"
+	KeyRevoke               = "revoke"
+	KeyRotate               = "rotate"
+	LayoutEdit              = "edit"
+	LayoutGet               = "get"
+	McpLogCorrelate         = "correlate"
+	McpLogGet               = "get"
+	McpLogList              = "list"
+	McpLogStats             = "stats"
+	McpServersCreate        = "create"
+	McpServersDelete        = "delete"
+	McpServersDisable       = "disable"
+	McpServersEnable        = "enable"
+	McpServersGet           = "get"
+	McpServersList          = "list"
+	McpServersRefresh       = "refresh"
+	McpServersResetHome     = "reset_home"
+	McpServersRestart       = "restart"
+	McpServersSignIn        = "sign_in"
+	McpServersTest          = "test"
+	McpServersUpdate        = "update"
+	NotesEndorse            = "endorse"
+	NotesForget             = "forget"
+	NotesKeep               = "keep"
+	NotesList               = "list"
+	NotesPin                = "pin"
+	NotesRead               = "read"
+	NotesSearch             = "search"
+	OauthDeleteClient       = "delete_client"
+	OauthList               = "list"
+	OauthSetClient          = "set_client"
+	PairingList             = "list"
+	PairingRenew            = "renew"
+	PairingRevoke           = "revoke"
+	PasskeyList             = "list"
+	PasskeyRevoke           = "revoke"
+	PolicyLogCorrelate      = "correlate"
+	PolicyLogGet            = "get"
+	PolicyLogList           = "list"
+	ProfileCommit           = "commit"
+	ProfileGrant            = "grant"
+	ProfileGrants           = "grants"
+	ProfileList             = "list"
+	ProfilePlan             = "plan"
+	ProfilePreview          = "preview"
+	ProfilePublish          = "publish"
+	ProfileRevoke           = "revoke"
+	RecordGet               = "get"
+	RecordList              = "list"
+	RecordPayload           = "payload"
+	RegistryAppeal          = "appeal"
+	RegistryClaimPublisher  = "claim_publisher"
+	RegistryGetNamespace    = "get_namespace"
+	RegistryLegalAccept     = "legal_accept"
+	RegistryLegalPage       = "legal_page"
+	RegistryLegalVersion    = "legal_version"
+	RegistryListMyReports   = "list_my_reports"
+	RegistryMembersAdd      = "members_add"
+	RegistryMembersList     = "members_list"
+	RegistryMembersRemove   = "members_remove"
+	RegistryMembersUpdate   = "members_update"
+	RegistryReport          = "report"
+	RegistrySync            = "sync"
+	RegistryTokensIssue     = "tokens_issue"
+	RegistryTokensList      = "tokens_list"
+	RegistryTokensRevoke    = "tokens_revoke"
+	RegistryVerifyPublisher = "verify_publisher"
+	RegistryWhoami          = "whoami"
+	ResourceRead            = "read"
+	RetentionCleanup        = "cleanup"
+	RetentionGet            = "get"
+	RetentionSet            = "set"
+	ScheduleCreate          = "create"
+	ScheduleDelete          = "delete"
+	ScheduleGet             = "get"
+	ScheduleList            = "list"
+	SchedulePause           = "pause"
+	ScheduleReResolve       = "re_resolve"
+	ScheduleResume          = "resume"
+	ScheduleUpdate          = "update"
+	SessionLock             = "lock"
+	SessionLogout           = "logout"
+	SessionName             = "name"
+	SessionReadResource     = "read_resource"
+	SessionUnlock           = "unlock"
+	SessionWhoami           = "whoami"
+	SettingsList            = "list"
+	SettingsReset           = "reset"
+	SettingsSet             = "set"
+	ShareCreate             = "create"
+	ShareList               = "list"
+	ShareOffered            = "offered"
+	ShareRevoke             = "revoke"
+	ShareSetAudience        = "set_audience"
+	ShareSetCaps            = "set_caps"
+	ShareUsage              = "usage"
+	SharedThreadAdd         = "add"
+	SharedThreadArchive     = "archive"
+	SharedThreadAttach      = "attach"
+	SharedThreadCreate      = "create"
+	SharedThreadGet         = "get"
+	SharedThreadLeave       = "leave"
+	SharedThreadList        = "list"
+	SharedThreadMessages    = "messages"
+	SharedThreadPair        = "pair"
+	SharedThreadPeople      = "people"
+	SharedThreadPost        = "post"
+	SharedThreadRemove      = "remove"
+	SharedThreadRename      = "rename"
+	SharedThreadUnarchive   = "unarchive"
+	SharedThreadWithdraw    = "withdraw"
+	SystemNotify            = "notify"
+	SystemStatus            = "status"
+	ThreadAloud             = "aloud"
+	ThreadApprove           = "approve"
+	ThreadArchive           = "archive"
+	ThreadAttach            = "attach"
+	ThreadCreate            = "create"
+	ThreadDecline           = "decline"
+	ThreadDelete            = "delete"
+	ThreadDiscard           = "discard"
+	ThreadEvents            = "events"
+	ThreadGet               = "get"
+	ThreadList              = "list"
+	ThreadRestartForConsent = "restart_for_consent"
+	ThreadRevokeGrant       = "revoke_grant"
+	ThreadSend              = "send"
+	ThreadStop              = "stop"
+	TinctureInvokeProtected = "invoke_protected"
+	TinctureInvokePublic    = "invoke_public"
+	TinctureVisibilityGet   = "get"
+	ToolsList               = "list"
+	TurnRecover             = "recover"
+	TurnSuspend             = "suspend"
+	VaultAuthorize          = "authorize"
+	VaultCreate             = "create"
+	VaultDelete             = "delete"
+	VaultList               = "list"
+	VaultRebind             = "rebind"
+	VaultRename             = "rename"
+	VaultRevoke             = "revoke"
+	VaultRotate             = "rotate"
+	VaultSetDefault         = "set_default"
+	VaultStatus             = "status"
+	WebhookCreate           = "create"
+	WebhookGet              = "get"
+	WebhookList             = "list"
+	WebhookReenable         = "reenable"
+	WebhookRevoke           = "revoke"
+	WebhookRotate           = "rotate"
+	WebhookUpdate           = "update"
 )
 
 // Actions lists every action the catalog serves, per tool.
@@ -330,8 +307,9 @@ var Actions = map[string][]string{
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"canvas":              {"activate", "catalog", "restore", "versions", "write"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
-	"confirmation":        {"cancel", "confirm", "pending", "reauth"},
+	"confirmation":        {"cancel", "confirm", "pending", "request"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
+	"directory":           {"tombstone"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
@@ -343,18 +321,16 @@ var Actions = map[string][]string{
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
-	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
-	"person":              {"assert", "assert_confirmation", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "rotate", "status", "unlink_door"},
-	"pin":                 {"enroll"},
+	"pairing":             {"list", "renew", "revoke"},
+	"passkey":             {"list", "revoke"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "register", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"lock", "logout", "read_resource", "unlock", "whoami"},
+	"session":             {"lock", "logout", "name", "read_resource", "unlock", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
@@ -370,12 +346,6 @@ var Actions = map[string][]string{
 
 // CredentialKinds lists every credential kind a manifest need may name.
 var CredentialKinds = []string{"api_key", "oauth", "bundle", "login"}
-
-// SignInProviders lists every sign-in provider.
-var SignInProviders = []string{"github", "google", "oidcc"}
-
-// DeviceFlowProviders lists the sign-in providers a device flow starts with.
-var DeviceFlowProviders = []string{"github", "google"}
 
 // ApprovalListArgs carries arguments for approval.list.
 type ApprovalListArgs struct {
@@ -1217,14 +1187,8 @@ func (args ConfirmationCancelArgs) MarshalJSON() ([]byte, error) {
 type ConfirmationConfirmArgs struct {
 	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
 	Ref string `json:"ref"`
-	// confirm: a WebAuthn assertion over the confirmation's digest, from a passkey registered here
-	Assertion Field[any] `json:"assertion,omitzero"`
-	// confirm: the one-time code sent to your verified email for it
-	Code Field[string] `json:"code,omitzero"`
-	// confirm: a protected device's proof over the confirm challenge pending answered it
-	DeviceProof Field[any] `json:"device_proof,omitzero"`
-	// confirm: your own CYFR's certified assertion that you confirmed this change there
-	HomeAssertion Field[any] `json:"home_assertion,omitzero"`
+	// confirm: the answer to the confirmation's request, from a passkey at the account pages or from your device
+	Answer any `json:"answer"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -1251,21 +1215,19 @@ func (args ConfirmationPendingArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ConfirmationPending, fields: fields(args)})
 }
 
-// ConfirmationReauthArgs carries arguments for confirmation.reauth.
-type ConfirmationReauthArgs struct {
+// ConfirmationRequestArgs carries arguments for confirmation.request.
+type ConfirmationRequestArgs struct {
 	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
 	Ref string `json:"ref"`
-	// reauth: a fresh OpenID Connect sign-in, or a one-time code to your verified email
-	Method string `json:"method"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
-func (args ConfirmationReauthArgs) MarshalJSON() ([]byte, error) {
-	type fields ConfirmationReauthArgs
+func (args ConfirmationRequestArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationRequestArgs
 	return json.Marshal(struct {
 		Action string `json:"action"`
 		fields
-	}{Action: ConfirmationReauth, fields: fields(args)})
+	}{Action: ConfirmationRequest, fields: fields(args)})
 }
 
 // DecisionCorrelateArgs carries arguments for decision.correlate.
@@ -1361,6 +1323,21 @@ func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: DecisionListGlobal, fields: fields(args)})
+}
+
+// DirectoryTombstoneArgs carries arguments for directory.tombstone.
+type DirectoryTombstoneArgs struct {
+	// The account's identifier (per_…)
+	Identifier string `json:"identifier"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DirectoryTombstoneArgs) MarshalJSON() ([]byte, error) {
+	type fields DirectoryTombstoneArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DirectoryTombstone, fields: fields(args)})
 }
 
 // DoorAllowArgs carries arguments for door.allow.
@@ -2588,71 +2565,6 @@ func (args OauthSetClientArgs) MarshalJSON() ([]byte, error) {
 	}{Action: OauthSetClient, fields: fields(args)})
 }
 
-// PairingBeginArgs carries arguments for pairing.begin.
-type PairingBeginArgs struct {
-	// begin: the code the new device shows, the digest of the key it generated; only that key completes the pairing
-	KeyDigest string `json:"key_digest"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PairingBeginArgs) MarshalJSON() ([]byte, error) {
-	type fields PairingBeginArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PairingBegin, fields: fields(args)})
-}
-
-// PairingCompleteArgs carries arguments for pairing.complete.
-type PairingCompleteArgs struct {
-	// complete: the invitation's secret, from the pairing code's fragment
-	InvitationSecret string `json:"invitation_secret"`
-	// The device's public key, unpadded base64url (complete, renew)
-	DeviceKey string `json:"device_key"`
-	// complete: the digest of the device key, the code the device showed
-	KeyDigest string `json:"key_digest"`
-	// complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign
-	Proof Field[PairingCompleteArgsProof] `json:"proof,omitzero"`
-	// complete: for a person whose identity is at another CYFR, the device certificate their own CYFR issued for this client, device key, CYFR and athanor; absent for a person whose keys are here
-	Certificate Field[any] `json:"certificate,omitzero"`
-	// complete: what holds the device's key under its local unlock, chip or software, given with display_name
-	HolderKind Field[string] `json:"holder_kind,omitzero"`
-	// complete: the name the device shows, at most 64 bytes, given with holder_kind
-	DisplayName Field[string] `json:"display_name,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PairingCompleteArgs) MarshalJSON() ([]byte, error) {
-	type fields PairingCompleteArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PairingComplete, fields: fields(args)})
-}
-
-type PairingCompleteArgsProof struct {
-	Protocol  string `json:"protocol"`
-	Purpose   string `json:"purpose"`
-	Home      string `json:"home"`
-	Athanor   string `json:"athanor"`
-	ClientId  string `json:"client_id"`
-	DeviceKey string `json:"device_key"`
-	Nonce     string `json:"nonce"`
-	ExpiresAt int    `json:"expires_at"`
-	Sig       string `json:"sig"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *PairingCompleteArgsProof) UnmarshalJSON(data []byte) error {
-	type fields PairingCompleteArgsProof
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = PairingCompleteArgsProof(value)
-	return nil
-}
-
 // PairingListArgs carries arguments for pairing.list.
 type PairingListArgs struct {
 }
@@ -2666,26 +2578,11 @@ func (args PairingListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PairingList, fields: fields(args)})
 }
 
-// PairingReenableArgs carries arguments for pairing.reenable.
-type PairingReenableArgs struct {
-	// The paired client (pcl_…) (renew, revoke, reenable)
-	ClientId string `json:"client_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PairingReenableArgs) MarshalJSON() ([]byte, error) {
-	type fields PairingReenableArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PairingReenable, fields: fields(args)})
-}
-
 // PairingRenewArgs carries arguments for pairing.renew.
 type PairingRenewArgs struct {
-	// The paired client (pcl_…) (renew, revoke, reenable)
+	// The paired client (pcl_…) (renew, revoke)
 	ClientId string `json:"client_id"`
-	// The device's public key, unpadded base64url (complete, renew)
+	// renew: the device's public key, unpadded base64url
 	DeviceKey string `json:"device_key"`
 	// renew: the device key's signature over the renew challenge
 	Proof PairingRenewArgsProof `json:"proof"`
@@ -2725,7 +2622,7 @@ func (args *PairingRenewArgsProof) UnmarshalJSON(data []byte) error {
 
 // PairingRevokeArgs carries arguments for pairing.revoke.
 type PairingRevokeArgs struct {
-	// The paired client (pcl_…) (renew, revoke, reenable)
+	// The paired client (pcl_…) (renew, revoke)
 	ClientId string `json:"client_id"`
 }
 
@@ -2751,59 +2648,10 @@ func (args PasskeyListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PasskeyList, fields: fields(args)})
 }
 
-// PasskeyRecoverAdminArgs carries arguments for passkey.recover_admin.
-type PasskeyRecoverAdminArgs struct {
-	// recover_admin: the person whose pending registration is authorized
-	UserId string `json:"user_id"`
-	// The passkey, or the pending registration (revoke, reenable, recover_admin)
-	PasskeyId string `json:"passkey_id"`
-	// recover_admin: the digest (sha256:<hex>) of the exact pending registration authorized
-	RegistrationDigest string `json:"registration_digest"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyRecoverAdminArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyRecoverAdminArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyRecoverAdmin, fields: fields(args)})
-}
-
-// PasskeyReenableArgs carries arguments for passkey.reenable.
-type PasskeyReenableArgs struct {
-	// The passkey, or the pending registration (revoke, reenable, recover_admin)
-	PasskeyId string `json:"passkey_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyReenableArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyReenableArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyReenable, fields: fields(args)})
-}
-
-// PasskeyRegisterArgs carries arguments for passkey.register.
-type PasskeyRegisterArgs struct {
-	// register: the WebAuthn registration the browser's ceremony answered; absent, the answer is the options to begin one with
-	Credential Field[any] `json:"credential,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyRegisterArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyRegisterArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyRegister, fields: fields(args)})
-}
-
 // PasskeyRevokeArgs carries arguments for passkey.revoke.
 type PasskeyRevokeArgs struct {
-	// The passkey, or the pending registration (revoke, reenable, recover_admin)
-	PasskeyId string `json:"passkey_id"`
+	// revoke: the passkey, by the kid of its key in your account
+	Kid string `json:"kid"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2813,305 +2661,6 @@ func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PasskeyRevoke, fields: fields(args)})
-}
-
-// PersonAssertArgs carries arguments for person.assert.
-type PersonAssertArgs struct {
-	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
-	Audience string `json:"audience"`
-	// assert: the challenge that CYFR issued for this sign-in
-	Challenge string `json:"challenge"`
-	// The pending sign-in carry, by its action id
-	ActionId string `json:"action_id"`
-	// assert: the key_epoch (sha256:<hex>) of the identity head the assertion is signed under
-	KeyEpoch string `json:"key_epoch"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonAssertArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonAssertArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonAssert, fields: fields(args)})
-}
-
-// PersonAssertConfirmationArgs carries arguments for person.assert_confirmation.
-type PersonAssertConfirmationArgs struct {
-	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
-	Audience string `json:"audience"`
-	// The athanor at the other CYFR: the one a certified device joins, or the one a confirmed change is in
-	Athanor string `json:"athanor"`
-	// assert_confirmation: the other CYFR's pending confirmation, by its ref
-	Ref string `json:"ref"`
-	// assert_confirmation: that confirmation's stored digest (sha256:<hex>)
-	Digest string `json:"digest"`
-	// assert_confirmation: when that confirmation expires, in Unix ms
-	ExpiresAt int `json:"expires_at"`
-	// assert_confirmation: the change as the other CYFR stored it
-	Preview any `json:"preview"`
-	// assert_confirmation: the digest of that preview the other CYFR names (sha256:<hex>)
-	PreviewDigest string `json:"preview_digest"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonAssertConfirmationArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonAssertConfirmationArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonAssertConfirmation, fields: fields(args)})
-}
-
-// PersonCarryBeginArgs carries arguments for person.carry_begin.
-type PersonCarryBeginArgs struct {
-	// carry_begin: the CYFR to sign in at, as its origin
-	Destination string `json:"destination"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryBeginArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryBeginArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryBegin, fields: fields(args)})
-}
-
-// PersonCarryCancelArgs carries arguments for person.carry_cancel.
-type PersonCarryCancelArgs struct {
-	// The pending sign-in carry, by its action id
-	ActionId string `json:"action_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryCancelArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryCancelArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryCancel, fields: fields(args)})
-}
-
-// PersonCarryCompleteArgs carries arguments for person.carry_complete.
-type PersonCarryCompleteArgs struct {
-	// The pending sign-in carry, by its action id
-	ActionId string `json:"action_id"`
-	// carry_complete: the navigation outcome the destination returned
-	Outcome string `json:"outcome"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryCompleteArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryCompleteArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryComplete, fields: fields(args)})
-}
-
-// PersonCarryListArgs carries arguments for person.carry_list.
-type PersonCarryListArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCarryListArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCarryListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCarryList, fields: fields(args)})
-}
-
-// PersonCertifyArgs carries arguments for person.certify.
-type PersonCertifyArgs struct {
-	// certify: the device's public key, unpadded base64url
-	DeviceKey string `json:"device_key"`
-	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
-	Audience string `json:"audience"`
-	// The athanor at the other CYFR: the one a certified device joins, or the one a confirmed change is in
-	Athanor string `json:"athanor"`
-	// certify: the paired-client id that CYFR reserved for the device (pcl_…)
-	ClientId string `json:"client_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCertifyArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCertifyArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCertify, fields: fields(args)})
-}
-
-// PersonCloseRecoveryArgs carries arguments for person.close_recovery.
-type PersonCloseRecoveryArgs struct {
-	// close_recovery: the person whose recovery from the restore ends; what it suspended stays suspended
-	UserId string `json:"user_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonCloseRecoveryArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonCloseRecoveryArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonCloseRecovery, fields: fields(args)})
-}
-
-// PersonLinkDoorArgs carries arguments for person.link_door.
-type PersonLinkDoorArgs struct {
-	// link_door: the sign-in method to link, as its provider name
-	Provider string `json:"provider"`
-	// link_door: the single-use ticket a completed sign-in with that sign-in method answered, proving control of its subject
-	Ticket string `json:"ticket"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonLinkDoorArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonLinkDoorArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonLinkDoor, fields: fields(args)})
-}
-
-// PersonRecoveryCodeArgs carries arguments for person.recovery_code.
-type PersonRecoveryCodeArgs struct {
-	// The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)
-	AttemptId string `json:"attempt_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRecoveryCodeArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRecoveryCodeArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRecoveryCode, fields: fields(args)})
-}
-
-// PersonRecoveryCodeAddArgs carries arguments for person.recovery_code_add.
-type PersonRecoveryCodeAddArgs struct {
-	// recovery_code_add: a recovery code you hold, which signs the change
-	RecoveryCode string `json:"recovery_code"`
-	// recovery_code_add: the new code's secret
-	Holder PersonRecoveryCodeAddArgsHolder `json:"holder"`
-	// The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)
-	RequestId string `json:"request_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRecoveryCodeAddArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRecoveryCodeAddArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRecoveryCodeAdd, fields: fields(args)})
-}
-
-type PersonRecoveryCodeAddArgsHolder struct {
-	// The new code's secret, drawn by the trusted form (32 bytes, unpadded base64url)
-	RecoverySecret string `json:"recovery_secret"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *PersonRecoveryCodeAddArgsHolder) UnmarshalJSON(data []byte) error {
-	type fields PersonRecoveryCodeAddArgsHolder
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = PersonRecoveryCodeAddArgsHolder(value)
-	return nil
-}
-
-// PersonRecoveryCodeSavedArgs carries arguments for person.recovery_code_saved.
-type PersonRecoveryCodeSavedArgs struct {
-	// The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)
-	AttemptId string `json:"attempt_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRecoveryCodeSavedArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRecoveryCodeSavedArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRecoveryCodeSaved, fields: fields(args)})
-}
-
-// PersonRenewCertificateArgs carries arguments for person.renew_certificate.
-type PersonRenewCertificateArgs struct {
-	// renew_certificate: a certificate this CYFR issued for the device, which only locates its certification
-	Certificate any `json:"certificate"`
-	// renew_certificate: the device key's signature over the renew challenge; absent, the answer is the challenge to sign
-	Proof Field[any] `json:"proof,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRenewCertificateArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRenewCertificateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRenewCertificate, fields: fields(args)})
-}
-
-// PersonRotateArgs carries arguments for person.rotate.
-type PersonRotateArgs struct {
-	// The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)
-	RequestId string `json:"request_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonRotateArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonRotateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonRotate, fields: fields(args)})
-}
-
-// PersonStatusArgs carries arguments for person.status.
-type PersonStatusArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonStatusArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonStatusArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonStatus, fields: fields(args)})
-}
-
-// PersonUnlinkDoorArgs carries arguments for person.unlink_door.
-type PersonUnlinkDoorArgs struct {
-	// unlink_door: the linked sign-in method's identity key (provider|issuer|subject)
-	Door string `json:"door"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonUnlinkDoorArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonUnlinkDoorArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonUnlinkDoor, fields: fields(args)})
-}
-
-// PinEnrollArgs carries arguments for pin.enroll.
-type PinEnrollArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PinEnrollArgs) MarshalJSON() ([]byte, error) {
-	type fields PinEnrollArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PinEnroll, fields: fields(args)})
 }
 
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.
@@ -3917,6 +3466,8 @@ type RegistryAppealArgs struct {
 	ActionRef string `json:"action_ref"`
 	// Appeal argument, ≤4000 bytes (for appeal action)
 	Argument string `json:"argument"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3932,6 +3483,8 @@ func (args RegistryAppealArgs) MarshalJSON() ([]byte, error) {
 type RegistryClaimPublisherArgs struct {
 	// Namespace slug (publisher or personal)
 	Slug string `json:"slug"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3962,6 +3515,8 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 type RegistryLegalAcceptArgs struct {
 	// Policy version string (for legal_accept; obtained via legal_version)
 	PolicyVersion string `json:"policy_version"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4088,21 +3643,6 @@ func (args RegistryMembersUpdateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: RegistryMembersUpdate, fields: fields(args)})
 }
 
-// RegistryRegisterArgs carries arguments for registry.register.
-type RegistryRegisterArgs struct {
-	// register: another name to take, in place of the one chosen at creation (after cyfr.run refused it as taken or reserved)
-	Name Field[string] `json:"name,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryRegisterArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryRegisterArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryRegister, fields: fields(args)})
-}
-
 // RegistryReportArgs carries arguments for registry.report.
 type RegistryReportArgs struct {
 	// Abuse category (for report action)
@@ -4126,6 +3666,8 @@ func (args RegistryReportArgs) MarshalJSON() ([]byte, error) {
 
 // RegistrySyncArgs carries arguments for registry.sync.
 type RegistrySyncArgs struct {
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4190,6 +3732,8 @@ func (args RegistryTokensRevokeArgs) MarshalJSON() ([]byte, error) {
 type RegistryVerifyPublisherArgs struct {
 	// Namespace slug (publisher or personal)
 	Slug string `json:"slug"`
+	// The answer to the request this action answered without one, given with the same arguments: your passkey's from the account pages, or the registry request your device signed
+	Answer Field[any] `json:"answer,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4508,6 +4052,21 @@ func (args SessionLogoutArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionLogout, fields: fields(args)})
+}
+
+// SessionNameArgs carries arguments for session.name.
+type SessionNameArgs struct {
+	// name: the name your account holds at cyfr.run, with or without its @
+	Name string `json:"name"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionNameArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionNameArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionName, fields: fields(args)})
 }
 
 // SessionReadResourceArgs carries arguments for session.read_resource.

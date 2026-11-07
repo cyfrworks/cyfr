@@ -6,8 +6,8 @@ defmodule Emissary.Router do
   Emissary's routes, with the pipelines they pass through: MCP, the
   vault's OAuth grant callback, tincture serving, a canvas's page and
   the tincture data routes (a canvas's among them), health, the
-  execution-events stream, inbound webhooks, the identity directory, a
-  certified device's renewal and the restore ingress.
+  execution-events stream, inbound webhooks, the identity directory and
+  the restore ingress.
 
   The composition router invokes `routes/0` where the adapter's routes
   stand, so its `__routes__/0` stays the total table. The quoted calls
@@ -166,46 +166,6 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.WebhookIdempotency
       end
 
-      # The restore ingress: JSON, no CSRF token, since the installation
-      # capability is an authorization header no cross-site form can set and
-      # no CORS answer admits; the cookie session is fetched only to hand the
-      # restored person their session. Metered per address, before Sanctum
-      # checks the capability. Restore is an entry path and the kit its own
-      # ingress, not gate operations, so the routes record their own
-      # refusals.
-      pipeline :restore do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "restore"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-        plug CyfrWeb.Plugs.FrameRequest
-        plug :fetch_session
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :restore,
-          max_requests: 10,
-          window_ms: 60_000
-      end
-
-      # A protected device's enrollment (`Emissary.Web.DeviceEnrollmentController`):
-      # JSON, no CSRF token, since the setup token, an invitation's code and
-      # the restore token travel in headers no cross-site form can set and no CORS answer
-      # admits; the cookie session is fetched only to read a restore's own
-      # session, whose first-method window enrolls the restored person's
-      # first device. An entry path, so the routes record their own
-      # refusals, metered per address before Sanctum reads anything.
-      pipeline :device_enrollment do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "device"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-        plug CyfrWeb.Plugs.FrameRequest
-        plug :fetch_session
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :device_enrollment,
-          max_requests: 30,
-          window_ms: 60_000
-      end
-
       # A protected command line's session (`Emissary.Web.DeviceSessionController`):
       # JSON, no session fetched and no CSRF token, since no cookie is read
       # or set; the one-time ticket the device's channel was answered is the
@@ -222,20 +182,6 @@ defmodule Emissary.Router do
           window_ms: 60_000
       end
 
-      # A locked remote device's PIN evaluation and its reset
-      # (`Emissary.Web.DevicePinController`): JSON, no session fetched and no
-      # CSRF token, since no cookie is read or set; the evaluator identifier
-      # and the reset proof are the whole credential. An entry path, which
-      # `Sanctum.DevicePin` meters per address before it reads anything,
-      # beside the per-device wait each charge sets, and answers in the
-      # wire's own refusal.
-      pipeline :device_pin do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "device"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-        plug CyfrWeb.Plugs.FrameRequest
-      end
-
       # The identity directory's routes (`Sanctum.Directory`), which decide
       # every request and record their own refusals: a directory request is
       # admitted by the identifier's own chain, never by a person of this
@@ -244,24 +190,6 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.CallIdentity, tool: "directory"
         plug :accepts, ["json"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
-      end
-
-      # A certified device's renewal at its person's home
-      # (`Sanctum.RemoteCertification`), asked by the device itself, a
-      # command line, never a browser: JSON, no session fetched and no CSRF
-      # token, since the device key's proof over this home's challenge is
-      # the only credential, and no CORS answer, so no page of another
-      # origin reads it. Metered per address here, before the operation
-      # counts it against the verification bounds.
-      pipeline :certificate_renewal do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "person"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :certificate_renewal,
-          max_requests: 60,
-          window_ms: 60_000
       end
 
       # MCP endpoint. POST is the only verb this revision defines: a request's own
@@ -386,49 +314,52 @@ defmodule Emissary.Router do
       # identifier's chain. A write's body is bounded to 16 KiB before it is
       # decoded (`CyfrWeb.Plugs.RawBodyReader`), and every request to the
       # directory's per-source and per-installation windows before any
-      # signature is checked. The literal `genesis` is declared above the
-      # `:identifier` routes.
+      # signature is checked. The literal `register` is declared above the
+      # `:identifier` routes. These routes, the handle registry's and the
+      # account pages' log no dispatch, whose parameters would name an
+      # account or carry what was submitted, and the request log line names
+      # their route pattern alone (`CyfrWeb.Plugs.ScrubTinctureCredentials`).
       scope "/directory/v1", Emissary.Web do
         pipe_through :directory
 
-        post "/genesis", DirectoryController, :register, metadata: %{auth: :public_directory}
-        get "/:identifier", DirectoryController, :resolve, metadata: %{auth: :public_directory}
+        post "/register", DirectoryController, :register,
+          metadata: %{auth: :public_directory},
+          log: false
 
-        post "/:identifier/entries", DirectoryController, :append,
-          metadata: %{auth: :directory_signed}
+        get "/:identifier", DirectoryController, :resolve,
+          metadata: %{auth: :public_directory},
+          log: false
 
-        post "/:identifier/recover", DirectoryController, :recover,
-          metadata: %{auth: :directory_signed}
+        get "/:identifier/from/:hash", DirectoryController, :from,
+          metadata: %{auth: :public_directory},
+          log: false
+
+        post "/:identifier/append", DirectoryController, :append,
+          metadata: %{auth: :directory_signed},
+          log: false
       end
 
-      # A certified device's renewal (`person.renew_certificate`), from the
-      # device itself.
-      scope "/certify/v1", Emissary.Web do
-        pipe_through :certificate_renewal
+      # The handle registry a CYFR serving a directory serves beside it
+      # (`Sanctum.Directory.Handles`): a handle's answer and a personal
+      # handle's signed claim, and no other registry route. Bounded and
+      # metered as the directory is.
+      scope "/v1", Emissary.Web do
+        pipe_through :directory
 
-        post "/renew", CertificateRenewalController, :renew_certificate,
-          metadata: %{auth: :device_key_proof}
+        get "/handles/:handle", HandleController, :resolve,
+          metadata: %{auth: :public_directory},
+          log: false
+
+        post "/namespaces/personal/claim", HandleController, :claim,
+          metadata: %{auth: :directory_signed},
+          log: false
       end
 
-      # Restore (`Sanctum.Recovery`): an identity brought back onto this
-      # empty node from its recovery code, under the installation capability
-      # (`CYFR_RESTORE_TOKEN`) in the authorization header; and, on a home
-      # restored from a backup, the proof a recovering person's recovery code
-      # signs (the `/kit` routes keep their path) and the re-enables it admits. Its body is
-      # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
-      # A protected device's enrollment at setup, under an invitation, by the
-      # open admission or after a restore, and the resume of one whose answer
-      # was lost.
-      scope "/device/enrollment", Emissary.Web do
-        pipe_through :device_enrollment
-
-        post "/challenge", DeviceEnrollmentController, :challenge,
-          metadata: %{auth: :device_enrollment}
-
-        post "/complete", DeviceEnrollmentController, :complete,
-          metadata: %{auth: :device_enrollment}
-
-        post "/resume", DeviceEnrollmentController, :resume, metadata: %{auth: :device_enrollment}
+      # The account pages the directory's writer serves beside it
+      # (`Emissary.Web.AccountController`): the static bundle and its
+      # `config.json`, with their own headers, no session and no cookie.
+      scope "/account", Emissary.Web do
+        get "/:name", AccountController, :show, metadata: %{auth: :public_directory}, log: false
       end
 
       # A protected command line spends its unlock's ticket for its session.
@@ -437,37 +368,6 @@ defmodule Emissary.Router do
 
         post "/session", DeviceSessionController, :create,
           metadata: %{auth: :device_unlock_ticket}
-      end
-
-      # A locked remote device's PIN evaluation, by its evaluator
-      # identifier alone, and the reset its unwrapped key proves.
-      scope "/device/pin", Emissary.Web do
-        pipe_through :device_pin
-
-        post "/evaluate", DevicePinController, :evaluate, metadata: %{auth: :device_pin}
-        post "/reset", DevicePinController, :reset, metadata: %{auth: :device_pin}
-      end
-
-      scope "/restore", Emissary.Web do
-        pipe_through :restore
-
-        post "/", RestoreController, :restore, metadata: %{auth: :installation_capability}
-
-        post "/challenge", RestoreController, :challenge,
-          metadata: %{auth: :installation_capability}
-
-        post "/reproof", RestoreController, :reproof, metadata: %{auth: :installation_capability}
-
-        # After a declared restore: a person with no door left proves their
-        # kit over a challenge this home holds, and re-enables their
-        # suspended methods and credentials under the credential it answers.
-        post "/kit/challenge", RestoreController, :kit_challenge,
-          metadata: %{auth: :restore_kit_proof}
-
-        post "/kit", RestoreController, :kit, metadata: %{auth: :restore_kit_proof}
-
-        post "/kit/reenable", RestoreController, :kit_reenable,
-          metadata: %{auth: :restore_kit_proof}
       end
     end
   end

@@ -428,8 +428,6 @@ one annotation. It is short:
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
-| `person` | `renew_certificate` | A device paired at another CYFR renews the certificate this CYFR issued it, holding no session here: it proves the device key the certification names over a single-use challenge this CYFR issued, and only a certification still standing under the person's current keys is extended |
 | `session` | `logout`, `whoami`, `read_resource` | `logout` ends only the caller's own session and `whoami` answers an anonymous caller its empty identity; `read_resource` tells a caller only its own identity and permissions. A protected device enrolls and spends its unlock's ticket through its own HTTP entries, never through these ([devices-guide.md](devices-guide.md)) |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace`, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
@@ -455,11 +453,10 @@ params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
-has not yet claimed a namespace: `registry.register` and the registry's
-policy reads and acceptance (`registry.legal_version`,
-`registry.legal_page`, `registry.legal_accept`), so a person just admitted
-can register their name before anything else. Those are not public — they
-need the session — but they do not need a claimed identity.
+has not yet claimed a namespace: the registry's policy reads and
+acceptance (`registry.legal_version`, `registry.legal_page`,
+`registry.legal_accept`). Those are not public — they need the session —
+but they do not need a claimed identity.
 
 Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 

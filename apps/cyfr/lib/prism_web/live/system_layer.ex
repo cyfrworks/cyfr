@@ -51,8 +51,8 @@ defmodule PrismWeb.SystemLayer do
   client is told to confirm it from a signed-in browser. That is a
   display rule and decides nothing: a confirmation that arrives anyway is
   dispatched like any other, and the operation answers it. No client
-  holds a rank. Where the rule hides the control of a credential entry or
-  of pairing a device, the prompt offers "Request confirmation" instead,
+  holds a rank. Where the rule hides the control of a credential entry,
+  the prompt offers "Request confirmation" instead,
   which submits the same request: it answers the `confirmation_required`
   signal, and the change waits for a proof given on another client.
 
@@ -104,8 +104,7 @@ defmodule PrismWeb.SystemLayer do
       (`credential_sharing`); the prompt reports `:confirmed` once the
       share is made, and shows a refusal's sentence and stays open
       otherwise;
-    * pairing — `pairing.list` when it opens, `pairing.begin`, whose
-      answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
+    * pairing — `pairing.list` when it opens, and `pairing.revoke`;
     * the fallback notice's kept version — `canvas.restore` of the canvas,
       under today's grant: a grant that waits for the person raises the
       grant prompt, and once that is confirmed the restore is asked again;
@@ -115,42 +114,26 @@ defmodule PrismWeb.SystemLayer do
       boundary, so confirming leaves for the sign-in page;
     * an unlock — no operation unlocks the vault, so an unlock prompt has
       no confirm control and can only be dismissed;
-    * recovery material (`PrismWeb.SystemLayer.Recovery`) — a recovery
-      code again through `person.recovery_code`, another code through
-      `person.recovery_code_add`, and "I saved it" through
-      `person.recovery_code_saved`. An added code's secret is the browser's, drawn there
-      and submitted (`recovery_submit`) and submitted again once confirmed,
-      never assigned; a recovery code goes to the browser in a push and is
-      erased there when the prompt ends;
-    * a re-enable from the restore checklist — `key.reenable`,
-      `webhook.reenable`, `pairing.reenable` or `passkey.reenable` of the
-      item the person chose (below).
-
-  A page registers a passkey through the layer's `webauthn:create`
-  ceremony (`create_passkey/4`): the browser answers the layer, which
-  hands the credential to the page (`{:system_layer_passkey, {:ok,
-  credential} | :error}`) to register through `passkey.register`.
+    * a re-enable from the restore checklist — `key.reenable` or
+      `webhook.reenable` of the item the person chose (below).
 
   ## After a declared restore
 
   A layer that listens, on the page of a person who can confirm, reads
-  the person's restore checklist (`Sanctum.Recovery.checklist/1`) once
-  per page and draws it while it lists anything
-  (`PrismWeb.SystemLayer.RestoreChecklist`): the passkeys, paired
-  devices, API keys and webhooks the restore suspended, the profiles to
-  consent to again and the entries to rotate. A layer that does not
-  listen draws none, since it hears no record's confirmation. A
-  re-enable (`restore_reenable`) names one of the four operations and an
-  item the checklist lists for the page's athanor, and is dispatched as
+  the person's restore checklist (`Sanctum.Pairing.restore_checklist/1`)
+  once per page and draws it while it lists anything
+  (`PrismWeb.SystemLayer.RestoreChecklist`): the API keys and webhooks
+  the restore suspended, the profiles to consent to again and the
+  entries to rotate. A layer that does not listen draws none, since it
+  hears no record's confirmation. A re-enable (`restore_reenable`) names
+  one of the two operations and an item the checklist lists for the
+  page's athanor, and is dispatched as
   the layer's own sensitive change: its `confirmation_required` opens
   that record's confirmation prompt, marked as this client's, which
   reports nothing to the page. Once the record reads confirmed the layer
   makes the change again with the secret it holds, closes the prompt and
   reads the checklist again. A refusal is shown as its sentence, in the
-  prompt or, for the first dispatch, in the checklist. While the
-  person's recovery is open the record offers a door's fresh sign-in or
-  an emailed code, never a passkey: which proofs it offers is the
-  record's, as Sanctum decides them.
+  prompt or, for the first dispatch, in the checklist.
 
   ## Fresh confirmation
 
@@ -162,12 +145,13 @@ defmodule PrismWeb.SystemLayer do
   (`PrismWeb.Ops.call_tool/4`'s `confirmation_id:`). The prompt names the
   record by its public ref (`Prima.Confirmation.ref/1`), reads the
   record's preview and the client that asked through `confirmation.pending`,
-  and shows them before any proof. It offers a passkey (the `webauthn:get`
-  ceremony over the record's digest), a fresh sign-in at the person's
-  identity provider (`confirmation.reauth`, opened in a new tab so this
-  page stays), a code sent to their verified email where one can reach
-  them, and cancel (`confirmation.cancel`), each only where the record's
-  `methods` offer it.
+  and shows them before any proof. It offers a passkey of the person's
+  account where the record's `methods` offer one: this CYFR mints the
+  record's `confirm` request (`confirmation.request`), and the browser
+  opens the account pages with it in a new tab (`system_layer:hop`), so
+  this page stays with its waiting change; the answer returns to the
+  sign-in page in that tab, which confirms the record. It offers cancel
+  too (`confirmation.cancel`).
 
   The layer listens on `confirmation.changes` while it is mounted on a
   connected page with a person behind it, unless it was mounted with
@@ -226,7 +210,7 @@ defmodule PrismWeb.SystemLayer do
   alias Phoenix.LiveView.JS
   alias Prism.Fallback
   alias PrismWeb.Ops
-  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery, RestoreChecklist, Share}
+  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, RestoreChecklist, Share}
   alias Sanctum.Context
 
   @layer_id "system-layer"
@@ -266,26 +250,6 @@ defmodule PrismWeb.SystemLayer do
   def show(id \\ @layer_id, prompt) do
     send_update(__MODULE__, id: id, prompt: prompt)
     :ok
-  end
-
-  @doc """
-  Ask the browser of the page `socket` is to create a passkey with the
-  creation options `public_key` and the home's `registration` token, both
-  as `passkey.register` answered them, through the layer `layer`'s hook
-  (`webauthn:create`). The layer hands the page the answer as
-  `{:system_layer_passkey, {:ok, credential}}`, or `{:system_layer_passkey,
-  :error}` when the ceremony did not finish.
-  """
-  @spec create_passkey(Phoenix.LiveView.Socket.t(), map(), String.t(), String.t()) ::
-          Phoenix.LiveView.Socket.t()
-  def create_passkey(socket, public_key, registration, layer \\ @layer_id)
-      when is_map(public_key) and is_binary(registration) do
-    push_event(socket, "webauthn:create", %{
-      layer: layer,
-      purpose: "passkey",
-      public_key: public_key,
-      registration: registration
-    })
   end
 
   # ---------------------------------------------------------------------------
@@ -753,7 +717,6 @@ defmodule PrismWeb.SystemLayer do
        panels: %{},
        held: %{},
        pairing: nil,
-       recovery: nil,
        restoring: %{},
        notice: nil,
        notice_error: nil,
@@ -1161,9 +1124,6 @@ defmodule PrismWeb.SystemLayer do
         %{
           status: :pending,
           form: nil,
-          reauth_url: nil,
-          home_url: nil,
-          code_sent: false,
           entry: nil
         },
         panel
@@ -1229,13 +1189,6 @@ defmodule PrismWeb.SystemLayer do
     case Map.get(socket.assigns.panels, ref) do
       nil -> socket
       panel -> put_panel(socket, ref, %{panel | status: status})
-    end
-  end
-
-  defp update_panel(socket, ref, changes) do
-    case Map.get(socket.assigns.panels, ref) do
-      nil -> socket
-      panel -> put_panel(socket, ref, Map.merge(panel, changes))
     end
   end
 
@@ -1343,37 +1296,16 @@ defmodule PrismWeb.SystemLayer do
   defp step(%{assigns: %{queue: [next | rest]}} = socket),
     do:
       socket
-      |> forget_recovery()
       |> assign(current: next, queue: rest, error: nil)
       |> mark_shown()
 
-  defp step(socket) do
-    socket
-    |> forget_recovery()
-    |> assign(current: nil, queue: [], error: nil, pairing: nil, recovery: nil)
-  end
+  defp step(socket), do: assign(socket, current: nil, queue: [], error: nil, pairing: nil)
 
-  # A recovery prompt that ends, however it ends, has the browser forget
-  # its material and empty the prompt.
-  defp forget_recovery(%{assigns: %{recovery: %{prompt_id: prompt_id}}} = socket),
-    do: socket |> push_layer("recovery:clear", %{prompt: prompt_id}) |> assign(:recovery, nil)
-
-  defp forget_recovery(socket), do: socket
-
-  # The pairing prompt, as it is shown, has its list still to read; a
-  # recovery prompt starts at its form.
+  # The pairing prompt, as it is shown, has its list still to read.
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
-    do:
-      assign(socket,
-        pairing: %{prompt_id: id, clients: :unread, invitation: nil},
-        recovery: nil
-      )
+    do: assign(socket, pairing: %{prompt_id: id, clients: :unread})
 
-  defp mark_shown(%{assigns: %{current: %{kind: kind, id: id}}} = socket)
-       when kind in [:kit, :holder],
-       do: assign(socket, pairing: nil, recovery: Recovery.start(id))
-
-  defp mark_shown(socket), do: assign(socket, pairing: nil, recovery: nil)
+  defp mark_shown(socket), do: assign(socket, pairing: nil)
 
   # What a shown prompt reads: for the pairing prompt, the person's paired
   # clients.
@@ -1470,32 +1402,6 @@ defmodule PrismWeb.SystemLayer do
 
   def handle_event("notice_choose", _params, socket), do: {:noreply, socket}
 
-  # The code the new device shows, typed or pasted with or without the
-  # spaces between its groups: the digest of the key it generated, the one
-  # key the invitation is opened for.
-  def handle_event("pairing_begin", %{"prompt_id" => id} = params, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, [:pairing]) do
-        {:ok, prompt} ->
-          case Prima.Device.from_key_code(params["key_code"]) do
-            {:ok, key_digest} ->
-              {:noreply, pairing_begin(socket, prompt, key_digest)}
-
-            :error ->
-              {:noreply,
-               assign(
-                 socket,
-                 :error,
-                 "Type the code the new device shows: open this CYFR's /pair page on it first"
-               )}
-          end
-
-        :none ->
-          {:noreply, socket}
-      end
-    end)
-  end
-
   # The sheet's audience and caps, held to `share.create`'s arguments
   # before anything is dispatched; the operation decides the rest.
   def handle_event("share_create", %{"prompt_id" => id} = params, socket) do
@@ -1523,107 +1429,14 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # The material is read out of the event and handed to the dispatch;
-  # nothing here assigns, renders or logs it (`recovery_secret` is on the
-  # redaction roster, `Prima.Sanitizer`).
-  def handle_event("recovery_submit", %{"prompt_id" => id} = params, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, Prompt.recovery_kinds()) do
-        {:ok, prompt} -> {:noreply, recovery_submit(socket, prompt, params)}
-        :none -> {:noreply, socket}
-      end
-    end)
-  end
-
-  def handle_event("recovery_ack", %{"id" => id}, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, Prompt.recovery_kinds()) do
-        {:ok, prompt} -> {:noreply, recovery_ack(socket, prompt)}
-        :none -> {:noreply, socket}
-      end
-    end)
-  end
-
-  # A page's passkey ceremony (`create_passkey/4`): the answer is the
-  # page's to register.
-  def handle_event(
-        "webauthn_result",
-        %{"purpose" => "passkey", "credential" => credential},
-        socket
-      )
-      when is_map(credential) do
-    send(self(), {:system_layer_passkey, {:ok, credential}})
-    {:noreply, socket}
-  end
-
-  def handle_event("webauthn_error", %{"purpose" => "passkey"}, socket) do
-    send(self(), {:system_layer_passkey, :error})
-    {:noreply, socket}
-  end
-
+  # A passkey of the person's account confirms at the account pages, in a
+  # new tab, with the record's request this CYFR mints.
   def handle_event("prove_passkey", %{"ref" => ref}, socket) do
-    case open_panel(socket, ref) do
-      {:ok, %{entry: %{webauthn: %{} = options}}} ->
-        {:noreply,
-         socket
-         |> assign(:error, nil)
-         |> push_layer("webauthn:get", %{purpose: "confirmation", id: ref, public_key: options})}
-
-      _none ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event(
-        "webauthn_result",
-        %{"purpose" => "confirmation", "id" => ref, "credential" => credential},
-        socket
-      )
-      when is_map(credential) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      prove(socket, ref, %{"ref" => ref, "assertion" => credential})
-    end)
-  end
-
-  def handle_event("webauthn_error", %{"purpose" => "confirmation", "id" => ref}, socket) do
-    case open_panel(socket, ref) do
-      {:ok, _panel} ->
-        {:noreply, assign(socket, :error, "The passkey did not answer. Nothing was confirmed.")}
-
-      :none ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("reauth", %{"ref" => ref, "method" => method}, socket)
-      when method in ["oidc", "email"] do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open_panel(socket, ref) do
-        {:ok, _panel} -> {:noreply, reauth(socket, ref, method)}
+        {:ok, _panel} -> {:noreply, hop(socket, ref)}
         :none -> {:noreply, socket}
       end
-    end)
-  end
-
-  # A remote person confirms at their own home: the address they type, an
-  # origin and never this home, is where the record's `at_home` is carried,
-  # in the fragment of its `/carry` page, which no server sees.
-  def handle_event("confirm_at_home", %{"ref" => ref, "home" => home}, socket)
-      when is_binary(home) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open_panel(socket, ref) do
-        {:ok, %{entry: %{at_home: %{} = at_home}}} ->
-          {:noreply, at_home_url(socket, ref, String.trim(home), at_home)}
-
-        _none ->
-          {:noreply, socket}
-      end
-    end)
-  end
-
-  def handle_event("prove_code", %{"ref" => ref, "code" => code}, socket) when is_binary(code) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      prove(socket, ref, %{"ref" => ref, "code" => String.trim(code)})
     end)
   end
 
@@ -1637,7 +1450,7 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # A re-enable from the restore checklist: the operation is one of the
-  # four and the item one the checklist lists here (`RestoreChecklist`).
+  # two and the item one the checklist lists here (`RestoreChecklist`).
   def handle_event("restore_reenable", %{"operation" => operation, "id" => id}, socket)
       when is_binary(operation) and is_binary(id) do
     CyfrWeb.ContextGuard.guard(socket, &{:noreply, restore_reenable(&1, operation, id)})
@@ -2174,23 +1987,15 @@ defmodule PrismWeb.SystemLayer do
       %{repeat: :resubmit} ->
         push_resubmit(socket, "#{socket.assigns.id}-credential")
 
-      %{repeat: :recovery_resubmit, prompt_id: prompt_id} ->
-        push_layer(socket, "recovery:resubmit", %{prompt: prompt_id})
-
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
-            case repeat do
-              {:pairing_begin, key_digest} -> pairing_begin(socket, prompt, key_digest)
-              {:pairing_revoke, client_id} -> pairing_revoke(socket, prompt, client_id)
-            end
+            {:pairing_revoke, client_id} = repeat
+            pairing_revoke(socket, prompt, client_id)
 
           %{id: ^prompt_id, kind: :share} = prompt ->
             {:share_create, args} = repeat
             share_create(socket, prompt, args)
-
-          %{id: ^prompt_id, kind: :kit} = prompt ->
-            recovery_submit(socket, prompt, %{})
 
           %{id: ^prompt_id, kind: :confirmation} = prompt ->
             {:restore_reenable, operation, id} = repeat
@@ -2272,54 +2077,18 @@ defmodule PrismWeb.SystemLayer do
   # Proofs
   # ---------------------------------------------------------------------------
 
-  defp prove(socket, ref, args) do
-    case open_panel(socket, ref) do
-      {:ok, panel} ->
-        case Ops.call_tool(socket, "confirmation/confirm", args) do
-          {:ok, _confirmed} ->
-            status = if panel.own, do: panel.status, else: :confirmed
-            {:noreply, socket |> set_status(ref, status) |> assign(:error, nil)}
+  # The record's `confirm` request, and the account pages opened with it
+  # in a new tab.
+  defp hop(socket, ref) do
+    case Ops.call_tool(socket, "confirmation/request", %{"ref" => ref}) do
+      {:ok, %{url: url}} when is_binary(url) ->
+        socket |> assign(:error, nil) |> push_layer("system_layer:hop", %{url: url})
 
-          {:error, reason} ->
-            {:noreply, assign(socket, :error, Ops.error_message(reason))}
-        end
-
-      :none ->
-        {:noreply, socket}
-    end
-  end
-
-  defp reauth(socket, ref, method) do
-    case Ops.call_tool(socket, "confirmation/reauth", %{"ref" => ref, "method" => method}) do
-      {:ok, %{url: url}} when method == "oidc" and is_binary(url) ->
-        socket |> update_panel(ref, %{reauth_url: url}) |> assign(:error, nil)
-
-      {:ok, _sent} ->
-        socket |> update_panel(ref, %{code_sent: true}) |> assign(:error, nil)
+      {:ok, _no_page} ->
+        socket
 
       {:error, reason} ->
         assign(socket, :error, Ops.error_message(reason))
-    end
-  end
-
-  defp at_home_url(socket, ref, home, at_home) do
-    home = String.trim_trailing(home, "/")
-
-    cond do
-      not Prima.Identity.Encoding.home?(home) ->
-        assign(socket, :error, "Type your CYFR's address, like https://cyfr.example.")
-
-      home == at_home[:audience] ->
-        assign(socket, :error, "Your keys are held at another CYFR: type its address.")
-
-      true ->
-        fragment = at_home |> Jason.encode!() |> Jason.decode!() |> Prima.Identity.Encoding.jcs!()
-
-        socket
-        |> update_panel(ref, %{
-          home_url: home <> "/carry#confirm=" <> Prima.Identity.Encoding.b64(fragment)
-        })
-        |> assign(:error, nil)
     end
   end
 
@@ -2353,41 +2122,6 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp pairing_begin(socket, prompt, key_digest) do
-    case layer_call(
-           socket,
-           prompt,
-           {:pairing_begin, key_digest},
-           "pairing/begin",
-           %{"key_digest" => key_digest}
-         ) do
-      {:asked, socket} ->
-        socket
-
-      {:done, {:ok, %{invitation_url: url, expires_at: expires_at}}, socket} ->
-        # An address too long for a QR code still gives the link.
-        svg =
-          case PrismWeb.QR.svg(url, label: "Pairing code", class: "h-56 w-56") do
-            {:ok, svg} -> svg
-            {:error, :too_long} -> nil
-          end
-
-        invitation = %{
-          url: url,
-          svg: svg,
-          expires_at: expires_at,
-          code: Prima.Device.key_code(key_digest)
-        }
-
-        socket
-        |> assign(:pairing, %{pairing_of(socket, prompt) | invitation: invitation})
-        |> assign(:error, nil)
-
-      {:done, {:error, reason}, socket} ->
-        refuse(socket, prompt, reason, Ops.error_message(reason))
-    end
-  end
-
   defp pairing_revoke(socket, prompt, client_id) do
     case layer_call(socket, prompt, {:pairing_revoke, client_id}, "pairing/revoke", %{
            "client_id" => client_id
@@ -2411,62 +2145,9 @@ defmodule PrismWeb.SystemLayer do
         pairing
 
       _other ->
-        %{prompt_id: prompt.id, clients: {:ok, []}, invitation: nil}
+        %{prompt_id: prompt.id, clients: {:ok, []}}
     end
   end
-
-  # ---------------------------------------------------------------------------
-  # Recovery material
-  # ---------------------------------------------------------------------------
-
-  # The material the browser submitted, dispatched as the prompt's change;
-  # once confirmed, the browser submits it again (`:recovery_resubmit`) or,
-  # for a code shown again, the layer asks again (`{:recovery_code, attempt_id}`).
-  defp recovery_submit(socket, prompt, params) do
-    case Recovery.request(prompt, params) do
-      {:ok, tool, args, repeat} ->
-        case layer_call(socket, prompt, repeat, tool, args) do
-          {:asked, socket} -> socket
-          {:done, result, socket} -> recovered(socket, prompt, result)
-        end
-
-      {:error, sentence} ->
-        assign(socket, :error, sentence)
-    end
-  end
-
-  # A recovery code answered goes to the browser alone, which draws it;
-  # the layer keeps the attempt it belongs to, which "I saved it" names,
-  # and nothing of the code.
-  defp recovered(socket, prompt, {:ok, %{attempt_id: attempt_id} = answer}) do
-    case Recovery.code(answer) do
-      nil ->
-        settle(socket, prompt, :confirmed)
-
-      %{code: code} ->
-        socket
-        |> push_layer("recovery:code", %{prompt: prompt.id, code: code})
-        |> assign(:recovery, %{Recovery.start(prompt.id) | phase: :kit, attempt_id: attempt_id})
-        |> assign(:error, nil)
-    end
-  end
-
-  defp recovered(socket, prompt, {:ok, _answer}), do: settle(socket, prompt, :confirmed)
-
-  defp recovered(socket, prompt, {:error, reason}),
-    do: refuse(socket, prompt, reason, Ops.error_message(reason))
-
-  # The person saved the recovery code: its secret is erased at the home,
-  # and the browser forgets the code as the prompt ends.
-  defp recovery_ack(%{assigns: %{recovery: %{phase: :kit, attempt_id: id}}} = socket, prompt)
-       when is_binary(id) do
-    case Ops.call_tool(socket, "person/recovery_code_saved", %{"attempt_id" => id}) do
-      {:ok, _saved} -> settle(socket, prompt, :confirmed)
-      {:error, reason} -> assign(socket, :error, Ops.error_message(reason))
-    end
-  end
-
-  defp recovery_ack(socket, _prompt), do: socket
 
   # ---------------------------------------------------------------------------
   # The restore checklist
@@ -2488,7 +2169,7 @@ defmodule PrismWeb.SystemLayer do
   defp read_checklist(socket), do: socket
 
   defp load_checklist(%{assigns: %{context: %Context{} = context}} = socket) do
-    case Sanctum.Recovery.checklist(context) do
+    case Sanctum.Pairing.restore_checklist(context) do
       {:ok, nil} ->
         assign(socket, restore_checklist: nil, restore_places: %{})
 
@@ -2722,7 +2403,6 @@ defmodule PrismWeb.SystemLayer do
             myself={@myself}
             id={@id}
             pairing={@pairing}
-            recovery={@recovery}
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
@@ -2849,7 +2529,6 @@ defmodule PrismWeb.SystemLayer do
   attr :myself, :any, required: true
   attr :id, :string, required: true
   attr :pairing, :map, default: nil
-  attr :recovery, :map, default: nil
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
@@ -3019,42 +2698,14 @@ defmodule PrismWeb.SystemLayer do
     ~H"""
     <Pairing.devices
       prompt_id={@prompt.id}
-      key_code={@prompt.subject[:key_code]}
       pairing={@pairing}
-      may={@may}
       myself={@myself}
       button_class={button_class(false)}
-      primary_class={button_class(true)}
-    />
-    """
-  end
-
-  defp body(%{prompt: %{kind: kind}} = assigns) when kind in [:kit, :holder] do
-    ~H"""
-    <Recovery.body
-      prompt={@prompt}
-      recovery={@recovery}
-      may={@may}
-      myself={@myself}
-      id={@id}
-      primary_class={button_class(true)}
     />
     """
   end
 
   defp body(assigns), do: ~H""
-
-  # An addition once a passkey or paired device exists takes a proof one
-  # of them gives (`Sanctum.Pairing`): the record offers only those, and
-  # says where to give one when this client offers none.
-  defp restricted([]),
-    do:
-      "Adding a device, a passkey or a sign-in is confirmed with your passkey, on a device " <>
-        "of yours, or at your own CYFR: confirm it there."
-
-  defp restricted(_methods),
-    do:
-      "Adding a device, a passkey or a sign-in is confirmed with your passkey, on a device of yours, or at your own CYFR."
 
   attr :panel, :map, required: true
   attr :may, :boolean, required: true
@@ -3126,23 +2777,6 @@ defmodule PrismWeb.SystemLayer do
         {status(@panel)}
       </p>
 
-      <p
-        :if={@open and @entry != nil and @entry[:enroll] == true}
-        class="text-sm text-gray-300"
-        data-test="confirmation-enroll"
-      >
-        Add a passkey or a device first: until you hold one, your sign-in confirms only that.
-        Then confirm this with it. <a href="/settings" class="underline">Settings</a>
-      </p>
-
-      <p
-        :if={@open and @entry != nil and @entry[:restricted] == true}
-        class="text-sm text-gray-300"
-        data-test="confirmation-restricted"
-      >
-        {restricted(@methods)}
-      </p>
-
       <div :if={@may and @open and @entry != nil} class="flex flex-wrap gap-2">
         <a
           :if={@shell}
@@ -3165,99 +2799,7 @@ defmodule PrismWeb.SystemLayer do
         >
           Confirm with a passkey
         </button>
-        <button
-          :if={"oidc" in @methods and is_nil(@panel.reauth_url)}
-          type="button"
-          phx-click="reauth"
-          phx-target={@myself}
-          phx-value-ref={@panel.ref}
-          phx-value-method="oidc"
-          data-test="confirm-reauth"
-          class={button_class(false)}
-        >
-          Sign in again
-        </button>
-        <a
-          :if={@panel.reauth_url}
-          href={@panel.reauth_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-test="confirm-reauth-open"
-          class={button_class(false)}
-        >
-          Open the sign-in in a new tab
-        </a>
-        <a
-          :if={@panel.home_url}
-          href={@panel.home_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-test="confirm-at-home-open"
-          class={button_class(true)}
-        >
-          Open your CYFR to confirm
-        </a>
-        <button
-          :if={"email" in @methods and not @panel.code_sent}
-          type="button"
-          phx-click="reauth"
-          phx-target={@myself}
-          phx-value-ref={@panel.ref}
-          phx-value-method="email"
-          data-test="confirm-email"
-          class={button_class(false)}
-        >
-          Email me a code
-        </button>
       </div>
-
-      <form
-        :if={@may and @open and "home" in @methods and is_nil(@panel.home_url)}
-        id={"#{@id}-home"}
-        phx-submit="confirm_at_home"
-        phx-target={@myself}
-        class="flex gap-2"
-        data-test="confirm-at-home"
-      >
-        <input type="hidden" name="ref" value={@panel.ref} />
-        <label for={"#{@id}-home-input"} class="sr-only">Your CYFR's address</label>
-        <input
-          id={"#{@id}-home-input"}
-          name="home"
-          type="text"
-          inputmode="url"
-          autocomplete="url"
-          placeholder="Your CYFR, like https://cyfr.example"
-          data-test="confirm-at-home-address"
-          class="flex-1 rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm"
-        />
-        <button type="submit" data-test="confirm-at-home-submit" class={button_class(true)}>
-          Confirm at your CYFR
-        </button>
-      </form>
-
-      <form
-        :if={@may and @open and @panel.code_sent}
-        id={"#{@id}-code"}
-        phx-submit="prove_code"
-        phx-target={@myself}
-        class="flex gap-2"
-      >
-        <input type="hidden" name="ref" value={@panel.ref} />
-        <label for={"#{@id}-code-input"} class="sr-only">The code sent to your email</label>
-        <input
-          id={"#{@id}-code-input"}
-          name="code"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          placeholder="Code from your email"
-          data-test="confirm-code"
-          class="flex-1 rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
-        />
-        <button type="submit" data-test="confirm-code-submit" class={button_class(true)}>
-          Confirm
-        </button>
-      </form>
 
       <button
         :if={@panel.status in [:pending, :waiting]}
@@ -3357,9 +2899,6 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :pairing}), do: "Your devices"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
-  defp title(%{kind: kind} = prompt) when kind in [:kit, :holder],
-    do: Recovery.title(prompt)
-
   defp description(%{kind: :grant}),
     do:
       "Approve what this app may use and reach, as listed below. Nothing is granted until you do."
@@ -3385,10 +2924,7 @@ defmodule PrismWeb.SystemLayer do
         "their own apps, and confirming it here is a fresh confirmation."
 
   defp description(%{kind: :pairing}),
-    do:
-      "Pair a phone or another browser with this CYFR, or revoke a device you paired. " <>
-        "Pairing and revoking each need a fresh confirmation. Command lines you signed in " <>
-        "are listed too, and revoking one needs none."
+    do: "Revoke a device you paired. Revoking needs a fresh confirmation."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:
@@ -3399,9 +2935,6 @@ defmodule PrismWeb.SystemLayer do
     do:
       "A client of yours asked for a change that needs a fresh confirmation. Check what it " <>
         "would change and who asked before you confirm."
-
-  defp description(%{kind: kind} = prompt) when kind in [:kit, :holder],
-    do: Recovery.description(prompt)
 
   defp confirm_label(%{kind: :grant}), do: "Grant"
   defp confirm_label(%{kind: :sign_in}), do: "Sign in"

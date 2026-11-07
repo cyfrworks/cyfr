@@ -18,7 +18,6 @@ defmodule Cyfr.DeclaredOperationsTest do
   end
 
   @seed String.duplicate("A", 43)
-  @digest "sha256:" <> String.duplicate("ab", 32)
 
   defp operation(tool, action) do
     {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
@@ -32,53 +31,29 @@ defmodule Cyfr.DeclaredOperationsTest do
 
   describe "the declared operations" do
     test "are on the table as they are admitted: interactive, external, never replayed" do
-      for tool <- ~w(person pairing passkey confirmation) do
+      for tool <- ~w(pairing passkey confirmation) do
         {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
 
         for op <- meta.operations do
           assert op.planes == [:external], "#{tool}.#{op.action}"
           assert op.recovery == nil, "#{tool}.#{op.action}"
-
-          # A glass completing its pairing, and a device renewing at its
-          # person's home, hold no session: their proof is their credential.
-          if {tool, op.action} in [{"pairing", "complete"}, {"person", "renew_certificate"}] do
-            assert {op.auth, op.consent, op.kind} == {:anonymous, nil, :write}
-          else
-            assert op.consent == :interactive, "#{tool}.#{op.action}"
-            assert op.auth == :required, "#{tool}.#{op.action}"
-          end
+          assert op.consent == :interactive, "#{tool}.#{op.action}"
+          assert op.auth == :required, "#{tool}.#{op.action}"
         end
       end
 
       for {tool, action} <- [
             {"pairing", "list"},
             {"passkey", "list"},
-            {"confirmation", "pending"},
-            {"person", "recovery_code"},
-            {"person", "carry_list"},
-            {"person", "status"}
+            {"confirmation", "pending"}
           ] do
         assert operation(tool, action).kind == :read, "#{tool}.#{action}"
       end
 
-      # A carry is cancelled and listed as it is completed: on the same
-      # plane and consent class, the list a read.
-      for action <- ~w(carry_cancel carry_complete recovery_code_saved recovery_code_add) do
-        assert operation("person", action).kind == :write, "person.#{action}"
-      end
+      refute Map.has_key?(Sanctum.Catalog.operations(), "person")
 
-      assert operation("passkey", "recover_admin").scope == :platform
       assert operation("pairing", "revoke").kind == :destructive
       assert operation("passkey", "revoke").kind == :destructive
-    end
-
-    test "a platform-scoped one refuses an ordinary member before its handler", %{ctx: ctx} do
-      assert {:error, %Prima.Refusal{class: :forbidden, reason: :platform_admin_required}} =
-               call(ctx, "passkey", "recover_admin", %{
-                 "user_id" => "usr_1",
-                 "passkey_id" => "psk_1",
-                 "registration_digest" => @digest
-               })
     end
 
     test "a recovery secret and a recovery code are fields the redaction vocabulary keeps out of every log" do
@@ -89,9 +64,8 @@ defmodule Cyfr.DeclaredOperationsTest do
       code =
         Prima.RecoveryCode.encode("per_" <> String.duplicate("c", 64), :binary.copy(<<7>>, 32))
 
-      # Every field `person.recovery_code_add` and a new person's enrollment
-      # take, and every answer's `code` (an enrollment's `recovery`,
-      # `person.recovery_code`).
+      # A recovery secret, a typed code and an answer's `code`, wherever
+      # they appear.
       sanitized =
         Prima.Sanitizer.sanitize(%{
           "recovery_secret" => @seed,

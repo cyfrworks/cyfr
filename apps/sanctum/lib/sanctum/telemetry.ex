@@ -28,13 +28,13 @@ defmodule Sanctum.Telemetry do
 
   ## Example Event Flow
 
-      # Successful GitHub auth
-      Sanctum.Telemetry.auth_event(:github, :success)
-      # => Emits [:cyfr, :sanctum, :auth] with %{provider: :github, outcome: :success}
+      # A passkey's sign-in
+      Sanctum.Telemetry.auth_event(:passkey, :success)
+      # => Emits [:cyfr, :sanctum, :auth] with %{provider: :passkey, outcome: :success}
 
-      # Failed auth with reason
-      Sanctum.Telemetry.auth_event(:github, :failure, %{reason: :email_not_verified})
-      # => Emits [:cyfr, :sanctum, :auth] with %{provider: :github, outcome: :failure, reason: :email_not_verified}
+      # A refused answer
+      Sanctum.Telemetry.auth_event(:unknown, :failure, %{reason: :answer_refused})
+      # => Emits [:cyfr, :sanctum, :auth] with %{provider: :unknown, outcome: :failure, reason: :answer_refused}
   """
 
   @auth_event [:cyfr, :sanctum, :auth]
@@ -78,19 +78,19 @@ defmodule Sanctum.Telemetry do
 
   ## Parameters
 
-  - `provider` - The sign-in provider (`:github`, `:google` or `:oidcc`;
-    `Prima.SignInProviders`), or `:unknown` for an authentication that
-    carried no provider result (`Sanctum.Auth.OIDC.authenticate/1`)
+  - `provider` - The key that signed the sign-in's answer, `:passkey` or
+    `:device`, or `:unknown` for an answer refused before its key was
+    known (`Sanctum.SignIn`)
   - `outcome` - Result of authentication (`:success` or `:failure`)
   - `metadata` - Additional metadata map (optional)
 
   ## Examples
 
-      # Successful auth
-      Sanctum.Telemetry.auth_event(:github, :success)
+      # A sign-in
+      Sanctum.Telemetry.auth_event(:passkey, :success)
 
-      # Failed auth with reason
-      Sanctum.Telemetry.auth_event(:github, :failure, %{reason: :invalid_credentials})
+      # A refused answer, with its reason
+      Sanctum.Telemetry.auth_event(:unknown, :failure, %{reason: :answer_refused})
   """
   @spec auth_event(atom(), :success | :failure, map()) :: :ok
   def auth_event(provider, outcome, metadata \\ %{}) when outcome in [:success, :failure] do

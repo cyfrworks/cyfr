@@ -709,7 +709,7 @@ defmodule Sanctum.Catalog do
   # read and answers then only the caller's records of such actions
   # (`Sanctum.Providers.Confirmation`), so a client that reconnects finds
   # a revocation waiting on it; with a `request` it names one of those. A
-  # proof, a re-authentication and a cancel are admitted only by a `ref`
+  # request for a key's proof, a proof and a cancel are admitted only by a `ref`
   # naming one, so no other request's record is proven or spent. A
   # reference that names no record of the caller's, or a record of an
   # action not declared so, is refused alike.

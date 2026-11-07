@@ -186,8 +186,6 @@ defmodule Prima.RefusalTest do
     {:invalid_component_type, :invalid_argument},
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
-    {:not_enrolled, :setup_required},
-    {:remote, :forbidden},
     {:no_registry, :setup_required},
     {:registry_unavailable, :unavailable},
     {:registry_token_missing, :unauthenticated},
@@ -211,9 +209,6 @@ defmodule Prima.RefusalTest do
     {:unknown_identity, :not_found},
     {:directory_unavailable, :unavailable},
     {:name_taken, :conflict},
-    {:name_reserved, :invalid_argument},
-    {:directory_refused, :forbidden},
-    {:no_attempt, :not_found},
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
@@ -316,7 +311,12 @@ defmodule Prima.RefusalTest do
     {:email_unavailable, :unavailable},
     {:reauth_required, :unauthenticated},
     {:identity_stale, :unavailable},
-    {:restore_reserved, :forbidden},
+    {:identity_gone, :forbidden},
+    {{:door, :denied}, :forbidden},
+    {{:door, :not_allowed}, :forbidden},
+    {{:door, :unavailable}, :unavailable},
+    {:answer_refused, :unauthenticated},
+    {:stale_head, :conflict},
     {:setup_closed, :forbidden},
     {:not_set_up, :setup_required},
     {:no_person, :not_found},
@@ -651,18 +651,21 @@ defmodule Prima.RefusalTest do
                "Accept the registry's current policy first."
     end
 
-    test "the registration's refusals read as the sentences a person is shown" do
-      assert Refusal.message(:directory_unavailable) == "cyfr.run did not answer. Try again."
+    test "a refusal about an account says account, never cyfr.run or directory" do
+      assert Refusal.message(:directory_unavailable) ==
+               "The registry could not read your account just now. Try again shortly."
+
+      assert Refusal.message(:wrong_directory) ==
+               "This account was made with another registry, so this one does not accept it."
+
       assert Refusal.message(:name_taken) == "Someone holds that name. Choose another."
 
-      assert Refusal.message(:name_reserved) ==
-               "cyfr.run keeps that name for itself. Choose another."
+      for reason <- [:not_enrolled, :name_reserved, :directory_refused, :no_attempt],
+          do: refute(Refusal.reason?(reason), "#{reason} has a row")
+    end
 
-      assert Refusal.message(:directory_refused) ==
-               "cyfr.run refused this identity. Ask whoever runs this CYFR."
-
-      assert Refusal.message(:no_attempt) ==
-               "There is no unfinished name and recovery code to finish here."
+    test "an account the registry does not know, a closed one among them, is named as an account" do
+      assert Refusal.message(:unknown_identity) == "This account is not registered."
     end
 
     test "a push with no usable token names the sync that mints one" do
@@ -796,13 +799,6 @@ defmodule Prima.RefusalTest do
           do: assert(Refusal.reason?(reason))
     end
 
-    test "an installation reserved for a restore says so, and denies no one" do
-      assert %Refusal{class: :forbidden, message: message} = Refusal.classify(:restore_reserved)
-      assert message =~ "waiting for its owner to restore"
-      refute message =~ "not admitted"
-      assert Refusal.reason?(:restore_reserved)
-    end
-
     test "a closed setup token and an unlinked sign-in method say what to do instead" do
       assert %Refusal{class: :forbidden, message: closed} = Refusal.classify(:setup_closed)
       assert closed =~ "is set up"
@@ -843,14 +839,28 @@ defmodule Prima.RefusalTest do
           do: assert(Refusal.reason?(reason))
     end
 
-    test "an identity that could not be confirmed fresh pauses: retryable, no sign-out" do
+    test "an account that could not be checked fresh pauses: retryable, no sign-out" do
       assert %Refusal{class: :unavailable, message: message} =
                Refusal.classify(:identity_stale)
 
-      assert message =~ "could not be confirmed fresh"
-      assert message =~ "try again shortly"
+      assert message == "Your account could not be checked just now; try again shortly."
+      refute message =~ "directory"
       refute message =~ "sign in"
       assert Refusal.reason?(:identity_stale)
+    end
+
+    test "a closed account is denied for good, and a head that moved asks for another try" do
+      assert %Refusal{class: :forbidden, message: gone} = Refusal.classify(:identity_gone)
+      assert gone == "This account has been closed. It can no longer sign in here."
+
+      assert %Refusal{class: :conflict, message: moved} = Refusal.classify(:stale_head)
+      assert moved =~ "Nothing was changed; try again."
+
+      for message <- [gone, moved], word <- ~w(directory home door) do
+        refute message =~ word
+      end
+
+      for reason <- [:identity_gone, :stale_head], do: assert(Refusal.reason?(reason))
     end
 
     test "a binary is internal and keeps its words" do

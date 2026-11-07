@@ -20,7 +20,7 @@
 #            running cell's one slot under this release, and none once the
 #            cell has stopped. Then a public home `cyfr access public
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
-#            (`Sanctum.Person.home()`), with nothing written for it but the
+#            (`Sanctum.origin()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
 #
 #   headless a headless cell (`CYFR_HEADLESS=on`) whose deployment file
@@ -30,16 +30,19 @@
 #            it picks: the boot says no one is set up and names `cyfr
 #            login --setup`, never the token; `cyfr login --setup --name
 #            proof`, the command line built from this tree, makes the
-#            first person, registers their identity and their name at the
-#            stand-in, prints their recovery code, which names that
-#            identity, and, once Enter is pressed, signs them in with a
-#            command-line session that `cyfr whoami` answers under; run
-#            again it signs the same person in again with a second
-#            session and no code, no other person made. A second cell,
-#            whose registry and directory are `.invalid` names, meets a
-#            cyfr.run that does not answer: the command exits 1 saying so,
-#            having made one person, the platform administrator, whose
-#            name and recovery code wait in an open attempt.
+#            account at the terminal, its terms accepted and its recovery
+#            code shown and saved before anything is sent, with this
+#            command line its first device: the stand-in holds its genesis
+#            and the device's add_key, its acceptance and the name; the
+#            command line's hello brings the setup token, the cell admits
+#            the account as its first person, the platform administrator,
+#            and the command line as their device, and a command-line
+#            session that `cyfr whoami` answers under ends with its shell;
+#            run again it unlocks the same device with no code, no other
+#            person made. A second cell, whose registry and directory are
+#            `.invalid` names, meets an account service that does not
+#            answer: the command exits 1 saying so, and nothing is made at
+#            the cell or anywhere.
 #
 #   refuses  the same environment with the wildcard CORS allowlist, which a
 #            release with authentication configured must refuse at boot.
@@ -94,12 +97,14 @@
 #            in that container (the host's own `/usr` and this checkout's
 #            release, so the same binaries), and the host reads and fills
 #            the tmpfs through the container's root (`/proc/<pid>/root`).
-#            The cell boots holding its reserve file, a person pairs a
-#            device, and the filesystem is filled below the mark: the cell
-#            latches `depleted` and frees the file, a note write is
-#            refused, and the device's revocation is opened, read by its
-#            request, proven and committed through the gate, and is still
-#            there once the cell, still depleted, has restarted.
+#            The cell boots holding its reserve file, its first person is
+#            set up with a paired device (the release fixture's `person`),
+#            and the filesystem is filled below the mark: the cell latches
+#            `depleted` and frees the file, a note write is refused, and the
+#            device's revocation is opened, listed, confirmed by that
+#            device's answer to the CYFR's request and committed through
+#            the gate, and is still there once the cell, still depleted,
+#            has restarted.
 #
 # Nothing else boots a release: the suite starts the application under its
 # test configuration, which migrates nothing and reads no `.env`, so a boot
@@ -344,8 +349,10 @@ cleanup() {
     done
   fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
-  # The stand-in after the server that calls it.
+  # The stand-in after the server that calls it, and the reserve case's
+  # directory, which a SQLite cell in its container starts apart.
   stand_in_stop
+  [ -z "$RESERVE" ] || cell_directory_stop "$RESERVE"
   # The reserve case's filesystem goes with the container that holds it,
   # and the access case's namespace with its own.
   [ -z "$RESERVE_HOLDER" ] || docker rm -f "$RESERVE_HOLDER" >/dev/null 2>&1 || true
@@ -464,10 +471,10 @@ fi
 cell_new "$ADDRESS" "$ADDRESS_URL"
 cell_hostname "$ADDRESS" cyfr.example.com
 server_start "$ADDRESS"
-home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.Person.home())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
+home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.origin())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
 [ "$home" = "https://cyfr.example.com" ] ||
   fail "the home given cyfr.example.com answers as '$home', not https://cyfr.example.com"
-echo "Sanctum.Person.home() -> $home"
+echo "Sanctum.origin() -> $home"
 # The listener its TLS front forwards to, as a front forwards.
 proxied="$(curl -sS -m 10 -o "$ADDRESS/proxied.json" -w '%{http_code}' \
   -H 'host: cyfr.example.com' -H 'x-forwarded-proto: https' -H 'x-forwarded-for: 127.0.0.1' \
@@ -481,24 +488,23 @@ server_stop "$ADDRESS"
 # ---------------------------------------------------------------------------
 
 # What cell `$1`'s release holds of its people, as one JSON object: each
-# person's id, admission, recorded name and whether they are the platform
-# administrator; the number of sessions setup minted; each identity row
-# (its person, identifier and enrollment); and each identity attempt (its
-# person, kind, phase, wanted name, identifier and directory).
+# person's id, admission and whether they are the platform administrator;
+# the number of sessions; each paired client (its id, person, holder kind,
+# standing and kid); each device certificate (its client, kid and state);
+# and each identity row (its person and identifier).
 headless_state() {
   cell_cyfr "$1" rpc '
     people = Arca.Repo.all(Arca.Schemas.User)
     IO.puts("CYFR_HEADLESS=" <> JSON.encode!(%{
-      people: Enum.map(people, &%{id: &1.id, admission: &1.admission, name: &1.namespace,
+      people: Enum.map(people, &%{id: &1.id, admission: &1.admission,
         admin: Sanctum.Tenancy.platform_admin?(&1.id)}),
       sessions: length(Arca.Repo.all(Arca.Schemas.Session)),
       devices: Enum.map(Arca.Repo.all(Arca.Schemas.PairedClient),
-        &%{user_id: &1.user_id, holder_kind: &1.holder_kind, standing: &1.standing}),
+        &%{id: &1.id, user_id: &1.user_id, holder_kind: &1.holder_kind, standing: &1.standing, kid: &1.kid}),
+      certificates: Enum.map(Arca.Repo.all(Arca.Schemas.DeviceCertificate),
+        &%{client_id: &1.paired_client_id, kid: &1.kid, state: &1.state}),
       identities: Enum.map(Arca.Repo.all(Arca.Schemas.PersonIdentity),
-        &%{user_id: &1.user_id, identifier: &1.identifier, enrollment: &1.enrollment}),
-      attempts: Enum.map(Arca.Repo.all(Arca.Schemas.IdentityAttempt),
-        &%{user_id: &1.user_id, kind: &1.kind, phase: &1.phase, name: &1.name,
-          identifier: &1.identifier, directory: &1.directory_url})
+        &%{user_id: &1.user_id, identifier: &1.identifier})
     }))' |
     sed -n 's/^CYFR_HEADLESS=//p' | tail -1
 }
@@ -559,20 +565,21 @@ headless_failed() {
   fail "$2"
 }
 
-# What `cyfr login --setup` shows: the name registered and the recovery
-# code, before the person presses Enter; the unlock, once the session is
-# held in its shell; the lock, once that shell exits; and the end of a run
-# cyfr.run did not answer.
-SAY_NAME="Your name is @proof."
+# What `cyfr login --setup` shows: the account and its recovery code,
+# before the person presses Enter; the unlock, once the session is held in
+# its shell; the lock, once that shell exits; and the end of a run the
+# account service did not answer.
+SAY_NAME="Your account is @proof."
 SAY_CODE="Your recovery code:"
-SAY_SAVE="If CYFR is ever lost, this is the one thing that brings you back. Save it off this machine: scan it, or put it in your password manager."
+SAY_SAVE="If you ever lose your devices, this is the one thing that brings your account back. Save it off this machine: scan it, or put it in your password manager. Nothing is sent until you do."
 SAY_ENTER="Press Enter once you saved it."
 SAY_UNLOCKED="Unlocked. This shell holds your CYFR session: exit it, or run cyfr logout, to lock."
 SAY_LOCKED="Locked: this command line's CYFR session ended."
-SAY_SILENT="cyfr.run did not answer. Run cyfr login --setup again to finish."
+SAY_SILENT="The account service could not be reached"
+SAY_NOTHING="Nothing was made; run cyfr login --setup again."
 CODE_SHAPE='CYFR(-[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{8}){14}'
 
-step "headless: a CYFR with no person names cyfr login --setup, which on a terminal makes its first person with this command line as their device, registers their name at the cyfr.run stand-in, shows their recovery code and, once it is saved, unlocks into a shell whose session acts as them and ends with it; then unlocks again"
+step "headless: a CYFR with no person names cyfr login --setup, which on a terminal makes the account at the cyfr.run stand-in with this command line its first device, shows the recovery code and, once it is saved, says hello with the setup token, is admitted as the first person and unlocks into a shell whose session acts as them and ends with it; then unlocks again"
 # cyfr login keeps its key in this machine's TPM chip where it can open
 # one, and the chip's holder then sets the chip's wrong-PIN limits and
 # lockout for good: the case runs only where this user cannot open it, so
@@ -628,12 +635,14 @@ done
 [ "$(grep -oF "$(cat "$HEADLESS/passphrase")" "$HEADLESS/login.log" | wc -l)" -eq 1 ] ||
   headless_failed "$HEADLESS" "the terminal showed the passphrase other than once, where it was drawn"
 
-# CYFR holds one person, made by setup, the platform administrator, named
-# proof, with one setup session, their identity enrolled and their
-# attempt completed at the stand-in's directory; the stand-in holds their
-# genesis, their acceptance of its policy and the name, and answers the
-# name with their identifier and its directory; and the code printed is
-# the canonical recovery code (Prima.RecoveryCode) of that identifier.
+# CYFR holds one person, made by setup, the platform administrator, their
+# identity the account's identifier, this command line their one active
+# device with one active certificate for the key the account lists, and no
+# session once the shell has ended; the stand-in holds the account's
+# genesis, naming its directory, and the device's add_key, its acceptance
+# of the policy and the name, and answers the name with the identifier and
+# its directory; and the code printed is the canonical recovery code
+# (Prima.RecoveryCode) of that identifier.
 handle="$(curl -sS -m 10 "$STAND_IN_URL/v1/handles/proof")" || handle=""
 first="$(CODE="$CODE" python3 -I - "$(headless_state "$HEADLESS")" "$WORK/cyfr-run/state.json" "$handle" \
   "$STAND_IN_URL" "$STAND_IN_ADDRESS" 2>&1 <<'PY'
@@ -643,27 +652,34 @@ state = json.loads(sys.argv[1] or "null")
 stand_in = json.load(open(sys.argv[2]))
 handle = json.loads(sys.argv[3] or "null")
 url, address, code = sys.argv[4], sys.argv[5], os.environ["CODE"]
-if not state or len(state["people"]) != 1 or len(state["identities"]) != 1:
-    sys.exit("CYFR holds %s, not one person and their identity" % json.dumps(state))
+if not state or len(state["people"]) != 1 or len(state["identities"]) != 1 or len(state["devices"]) != 1:
+    sys.exit("CYFR holds %s, not one person, their identity and their device" % json.dumps(state))
 person, identifier = state["people"][0]["id"], state["identities"][0]["identifier"]
+client, kid = state["devices"][0]["id"], state["devices"][0]["kid"]
 want = {
-    "people": [{"id": person, "admission": "setup", "name": "proof", "admin": True}],
+    "people": [{"id": person, "admission": "setup", "admin": True}],
     "sessions": 0,
-    "devices": [{"user_id": person, "holder_kind": "software", "standing": "active"}],
-    "identities": [{"user_id": person, "identifier": identifier, "enrollment": "enrolled"}],
-    "attempts": [{"user_id": person, "kind": "enrollment", "phase": "completed", "name": "proof",
-                  "identifier": identifier, "directory": url}],
+    "devices": [{"id": client, "user_id": person, "holder_kind": "software", "standing": "active", "kid": kid}],
+    "certificates": [{"client_id": client, "kid": kid, "state": "active"}],
+    "identities": [{"user_id": person, "identifier": identifier}],
 }
 if state != want:
     sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
-if not re.fullmatch(r"per_[0-9a-f]{64}", identifier):
-    sys.exit("the person's identifier is %r" % identifier)
+if not re.fullmatch(r"per_[0-9a-f]{64}", identifier) or not re.fullmatch(r"sha256:[0-9a-f]{64}", kid or ""):
+    sys.exit("the person's identifier is %r and their device's kid %r" % (identifier, kid))
 held = {key: stand_in.get(key) for key in ("directory", "accepted", "names")}
 logs = stand_in.get("logs") or {}
 want_held = {"directory": url, "accepted": {identifier: "stand-in-1"}, "names": {"proof": identifier}}
-if held != want_held or list(logs) != [identifier] or logs[identifier].get("directory") != url:
-    sys.exit("the stand-in holds %s and the logs of %s, not %s and the genesis of %s at %s"
-             % (json.dumps(held), json.dumps(list(logs)), json.dumps(want_held), identifier, url))
+if held != want_held or list(logs) != [identifier]:
+    sys.exit("the stand-in holds %s and the logs of %s, not %s and the log of %s"
+             % (json.dumps(held), json.dumps(list(logs)), json.dumps(want_held), identifier))
+entries = [json.loads(entry) for entry in logs[identifier]["entries"]]
+genesis_hash = "sha256:" + hashlib.sha256(logs[identifier]["entries"][0].encode()).hexdigest()
+if [e.get("kind") for e in entries] != ["genesis", "add_key"] or genesis_hash != "sha256:" + identifier[4:] \
+        or entries[0].get("directory") != url or entries[1].get("key", {}).get("kid") != kid \
+        or entries[1]["key"].get("kind") != "device" or logs[identifier].get("kids") != [kid]:
+    sys.exit("the stand-in's log of %s is %s, not its genesis at %s and the add_key of the device %s"
+             % (identifier, json.dumps(entries), url, kid))
 want_handle = {"directory": url, "handle": "proof", "identifier": identifier, "protocol": "cyfr-handle/v1",
                "registry": address}
 if handle != want_handle:
@@ -674,14 +690,14 @@ if not re.fullmatch(r"CYFR(-[%s]{8}){14}" % alphabet, code):
 raw = int("".join(format(alphabet.index(c), "05b") for c in code[5:].replace("-", "")), 2).to_bytes(70, "big")
 digest, secret, check = raw[:32], raw[32:64], raw[64:]
 if "per_" + digest.hex() != identifier:
-    sys.exit("the recovery code printed names another identity than the person's")
+    sys.exit("the recovery code printed names another account than the person's")
 if hashlib.sha256(b"cyfr-recovery-code/v1\0" + digest + secret).digest()[:6] != check:
     sys.exit("the recovery code printed does not check")
-print(person, identifier)
+print(person, identifier, client, kid)
 PY
 )" || fail "after cyfr login --setup --name proof: $first"
-read -r person identifier <<<"$first"
-echo "cyfr login --setup --name proof: $person, made by setup, the platform administrator, its command line their device, named proof at the stand-in as $identifier, its recovery code shown and saved"
+read -r person identifier client kid <<<"$first"
+echo "cyfr login --setup --name proof: the account $identifier made at the stand-in as @proof, this command line its device $kid; $person admitted by setup, the platform administrator, the recovery code shown and saved"
 
 # In the shell the unlock started, cyfr whoami acted as them; once that
 # shell exited, the lock left no session at CYFR (sessions 0 above).
@@ -701,17 +717,16 @@ grep -qF "$SAY_UNLOCKED" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "t
 grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in the second shell did not name $person"
 ! grep -qF "$(cat "$HEADLESS/passphrase")" "$HEADLESS/login.log" ||
   headless_failed "$HEADLESS" "the second unlock's terminal showed the passphrase typed at it"
-again="$(python3 -I - "$(headless_state "$HEADLESS")" "$person" "$identifier" "$STAND_IN_URL" 2>&1 <<'PY'
+again="$(python3 -I - "$(headless_state "$HEADLESS")" "$person" "$identifier" "$client" "$kid" 2>&1 <<'PY'
 import json, sys
 state = json.loads(sys.argv[1] or "null")
-person, identifier, url = sys.argv[2:5]
+person, identifier, client, kid = sys.argv[2:6]
 want = {
-    "people": [{"id": person, "admission": "setup", "name": "proof", "admin": True}],
+    "people": [{"id": person, "admission": "setup", "admin": True}],
     "sessions": 0,
-    "devices": [{"user_id": person, "holder_kind": "software", "standing": "active"}],
-    "identities": [{"user_id": person, "identifier": identifier, "enrollment": "enrolled"}],
-    "attempts": [{"user_id": person, "kind": "enrollment", "phase": "completed", "name": "proof",
-                  "identifier": identifier, "directory": url}],
+    "devices": [{"id": client, "user_id": person, "holder_kind": "software", "standing": "active", "kid": kid}],
+    "certificates": [{"client_id": client, "kid": kid, "state": "active"}],
+    "identities": [{"user_id": person, "identifier": identifier}],
 }
 if state != want:
     sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
@@ -721,7 +736,7 @@ echo "cyfr login --setup again: $person unlocked a second time with the passphra
 server_stop "$HEADLESS"
 stand_in_stop
 
-step "headless: with cyfr.run silent, cyfr login --setup makes the first person, the platform administrator, with this command line as their device, keeps their name and recovery code waiting, starts no shell, and exits 1"
+step "headless: with the account service silent, cyfr login --setup says so, makes nothing at the cell or anywhere, starts no shell, and exits 1"
 SILENT="$WORK/silent"
 SILENT_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -739,39 +754,25 @@ server_start "$SILENT"
 cell_cli "$SILENT" context add silent "http://127.0.0.1:$PORT"
 headless_shell "$SILENT"
 headless_cli "$SILENT" "$SILENT/shell" --context silent login --setup --name proof
-[ "$CLI_STATUS" = 1 ] || headless_failed "$SILENT" "cyfr login --setup with cyfr.run silent exited $CLI_STATUS, not 1"
-grep -qF "$SAY_SILENT" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup with cyfr.run silent did not say '$SAY_SILENT'"
-! grep -qF "$SAY_CODE" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup showed a recovery code while cyfr.run was silent"
+[ "$CLI_STATUS" = 1 ] || headless_failed "$SILENT" "cyfr login --setup with the account service silent exited $CLI_STATUS, not 1"
+for line in "$SAY_SILENT" "$SAY_NOTHING"; do
+  grep -qF "$line" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup with the account service silent did not say '$line'"
+done
+! grep -qF "$SAY_CODE" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup showed a recovery code while the account service was silent"
 ! grep -qF "$SAY_UNLOCKED" "$SILENT/login.log" && [ ! -e "$SILENT/shell.log" ] ||
-  headless_failed "$SILENT" "cyfr login --setup started its shell while cyfr.run was silent"
+  headless_failed "$SILENT" "cyfr login --setup started its shell while the account service was silent"
 silent="$(python3 -I - "$(headless_state "$SILENT")" 2>&1 <<'PY'
-import json, re, sys
+import json, sys
 state = json.loads(sys.argv[1] or "null")
-if not state or len(state["people"]) != 1 or len(state["identities"]) != 1:
-    sys.exit("CYFR holds %s, not one person and their identity" % json.dumps(state))
-# The admission signs the genesis, so the attempt names its identifier from
-# the start; the identity row takes it only once the directory accepts.
-person = state["people"][0]["id"]
-identifier = (state.get("attempts") or [{}])[0].get("identifier")
-if not isinstance(identifier, str) or not re.fullmatch(r"per_[0-9a-f]{64}", identifier):
-    sys.exit("the waiting attempt names %s, not an identifier" % json.dumps(identifier))
-# The command line is the person's device, and no session acts for them
-# while their name waits: none opens before the recovery code is saved.
-want = {
-    "people": [{"id": person, "admission": "setup", "name": None, "admin": True}],
-    "sessions": 0,
-    "devices": [{"user_id": person, "holder_kind": "software", "standing": "active"}],
-    "identities": [{"user_id": person, "identifier": None, "enrollment": "pending"}],
-    "attempts": [{"user_id": person, "kind": "enrollment", "phase": "submitted", "name": "proof",
-                  "identifier": identifier, "directory": "https://directory.invalid"}],
-}
-held = {key: state[key] for key in want}
-if held != want:
-    sys.exit("CYFR holds %s, not %s" % (json.dumps(held), json.dumps(want)))
-print(person)
+# The account is made at the account service before anything reaches the
+# cell, so a silent one leaves the cell as it booted: no person, device,
+# certificate, identity or session.
+want = {"people": [], "sessions": 0, "devices": [], "certificates": [], "identities": []}
+if state != want:
+    sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
 PY
-)" || fail "after cyfr login --setup with cyfr.run silent: $silent"
-echo "cyfr login --setup with cyfr.run silent: exit 1, $silent made by setup, the platform administrator, its name and code waiting in a submitted attempt"
+)" || fail "after cyfr login --setup with the account service silent: $silent"
+echo "cyfr login --setup with the account service silent: exit 1, nothing made at the cell"
 server_stop "$SILENT"
 
 # ---------------------------------------------------------------------------
@@ -1198,80 +1199,36 @@ reserve_holder() {
 }
 
 # What the reserve case asks of the running cell, evaluated in it by
-# `bin/cyfr rpc` (`cell_fixture`): the software passkey and the pairing
-# ceremony are the suite's own (`Sanctum.TestContext`, loaded from the
-# checkout), every change goes through the gate, and each command answers
-# one `RESERVE=` line.
+# `bin/cyfr rpc` (`cell_fixture`): every change goes through the gate,
+# a fresh confirmation is given by the setup device the release fixture
+# paired with the person (its `device_confirm`, which alone reads that
+# device's seed from this cell and answers the CYFR's `confirm` request
+# with its key), and each command answers one `RESERVE=` line.
 RESERVE_FIXTURE="$WORK/reserve.exs"
 cat >"$RESERVE_FIXTURE" <<'ELIXIR'
 fn args ->
+  import Ecto.Query, only: [from: 2]
+
   answer = fn map -> "RESERVE=" <> Jason.encode!(map) end
   call = fn ctx, tool, args -> Sanctum.Gate.call_external(tool, ctx, args) end
 
-  # The session's person and their software passkey.
-  person = fn root, token ->
-    Code.require_file(Path.join(root, "apps/sanctum/test/support/test_context.ex"))
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
-    {ctx, Sanctum.TestContext.Authenticator.for_person(ctx.user_id)}
-  end
-
   case args do
-    ["pair", root, token] ->
-      {ctx, authenticator} = person.(root, token)
+    ["device", token] ->
+      # The device the person's setup admission paired with them.
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
 
-      # Their first passkey, as Settings registers one: setup made them
-      # with a protected device, which stands, so the registration waits on
-      # a fresh confirmation that device gives (the release fixture's
-      # `device_confirm`, which alone reads its seed from this cell), and
-      # is then repeated under it.
-      {:ok, options} = Sanctum.Passkeys.register(ctx, %{})
-      credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
-
-      {:error, {:confirmation_required, %{id: id}}} =
-        Sanctum.Passkeys.register(ctx, %{credential: credential})
-
-      {release_fixture, _binding} =
-        Code.eval_file(Path.join(root, "tests/release-boot/fixture.exs"))
-
-      "FIXTURE=" <> confirmed =
-        release_fixture.(["device_confirm", Prima.Confirmation.ref(id)])
-
-      %{"ok" => %{"state" => "confirmed"}} = Jason.decode!(confirmed)
-
-      {:ok, %{status: "active"}} =
-        Sanctum.Passkeys.register(%{ctx | confirmation_id: id}, %{credential: credential})
-
-      {public, private} = :crypto.generate_key(:eddsa, :ed25519)
-      digest = Prima.Device.key_digest(public)
-
-      {:ok, %{invitation_secret: secret}} =
-        Sanctum.TestContext.confirming(
-          ctx,
-          &call.(&1, "pairing", %{"action" => "begin", "key_digest" => digest})
+      [client_id] =
+        Arca.Repo.all(
+          from(c in Arca.Schemas.PairedClient,
+            where: c.user_id == ^ctx.user_id and c.source_kind == "device_cert" and c.standing == "active",
+            select: c.id
+          )
         )
-
-      glass = Sanctum.Context.build(%{authenticated: false, client_ip: "198.51.100.47"})
-
-      submission = %{
-        "action" => "complete",
-        "invitation_secret" => secret,
-        "device_key" => Prima.Identity.Encoding.b64(public),
-        "key_digest" => digest,
-        "holder_kind" => "software",
-        "display_name" => "Reserve case"
-      }
-
-      {:ok, %{challenge: challenge}} = call.(glass, "pairing", submission)
-      {:ok, challenge} = Prima.DeviceCert.Challenge.decode(challenge)
-      proof = Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
-
-      {:ok, %{client_id: client_id}} =
-        call.(glass, "pairing", Map.put(submission, "proof", proof))
 
       answer.(%{client_id: client_id})
 
     ["revoke", root, token, client_id] ->
-      {ctx, authenticator} = person.(root, token)
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
       revoke = %{"action" => "revoke", "client_id" => client_id}
 
       {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", revoke)
@@ -1281,14 +1238,11 @@ fn args ->
       {:ok, %{confirmations: [%{ref: ^ref}]}} =
         call.(ctx, "confirmation", %{"action" => "pending"})
 
-      {:ok, %{confirmations: [entry]}} =
-        call.(ctx, "confirmation", %{"action" => "pending", "request" => ref})
+      {release_fixture, _binding} =
+        Code.eval_file(Path.join(root, "tests/release-boot/fixture.exs"))
 
-      {:ok, digest} = Prima.Identity.Encoding.unb64(entry.webauthn["challenge"], 32)
-      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
-
-      {:ok, %{state: "confirmed"}} =
-        call.(ctx, "confirmation", %{"action" => "confirm", "ref" => ref, "assertion" => assertion})
+      "FIXTURE=" <> confirmed = release_fixture.(["device_confirm", ref])
+      %{"ok" => %{"state" => "confirmed"}} = Jason.decode!(confirmed)
 
       {:ok, %{standing: standing}} = call.(%{ctx | confirmation_id: id}, "pairing", revoke)
       answer.(%{standing: standing})
@@ -1329,13 +1283,15 @@ reserve_awaits() {
 # as every other cell; a SQLite cell in the container holding its data
 # directory, under the environment the host's would run with, its
 # database moved onto that directory's filesystem, where the reserve's
-# directory defaults to.
+# directory defaults to, and the cell's own directory on the host, which
+# the container shares the network of.
 reserve_start() {
   if [ "$ADAPTER" = postgres ]; then
     server_start "$RESERVE"
     return
   fi
   local mark closes
+  cell_directory_start "$RESERVE"
   mark="$( [ -f "$RESERVE/boot.log" ] && wc -l <"$RESERVE/boot.log" || echo 0)"
   cell_env "$RESERVE" CYFR_DATABASE_PATH="$RESERVE/data/cyfr.db" RELEASE_TMP="$RESERVE/tmp" \
     env >"$RESERVE/container.env"
@@ -1363,6 +1319,7 @@ reserve_stop() {
     [ "$SECONDS" -lt "$closes" ] || fail "the reserve case's cell outlived its stop"
     sleep 1
   done
+  cell_directory_stop "$RESERVE"
 }
 
 step "the storage reserve: a $ADAPTER cell on a size-limited filesystem"
@@ -1404,9 +1361,9 @@ reserve_person="$(server_fixture "$RESERVE" person operator@example.com release-
 [ -n "$reserve_person" ] || fail "the fixture signed nobody in"
 reserve_token="$(field "$reserve_person" token)"
 LOG_SECRETS+=("$reserve_token")
-client_id="$(field "$(reserve pair "$ROOT" "$reserve_token")" client_id)" ||
-  fail "the person paired no device"
-echo "the person paired $client_id"
+client_id="$(field "$(reserve device "$reserve_token")" client_id)" ||
+  fail "the person's setup paired no device"
+echo "the person's setup paired $client_id"
 
 step "the filesystem filled below the mark: the cell latches depleted and frees its reserve"
 free="$(free_bytes "$LIMITED")"
@@ -1427,7 +1384,7 @@ standing="$(field "$(reserve revoke "$ROOT" "$reserve_token" "$client_id")" stan
   fail "the device's revocation did not complete while depleted"
 [ "$standing" = revoked ] || fail "the revocation answered $standing"
 after="$(free_bytes "$LIMITED")"
-echo "pairing.revoke, confirmed by its request -> $standing; it spent $((before - after)) bytes of the reserve"
+echo "pairing.revoke, confirmed by the device's answer to its request -> $standing; it spent $((before - after)) bytes of the reserve"
 
 step "the depleted cell restarted: still depleted, the revocation still there"
 reserve_stop

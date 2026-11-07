@@ -4,10 +4,10 @@
 defmodule Arca.Schemas.Session do
   @moduledoc """
   Ecto schema for the `sessions` table (backs `Arca.SessionStorage`).
-  A remote person's session records the `identity_key_epoch` of the
-  identity head verified when it was minted. A protected device's unlock
-  records
-  its paired `client_id`: that session's expiry is the device channel's.
+  A session an account's key signed for records that key's `kid` and the
+  account head it was verified under. A protected device's unlock
+  records its paired `client_id`: that session's expiry is the device
+  channel's.
   """
 
   use Ecto.Schema
@@ -24,9 +24,10 @@ defmodule Arca.Schemas.Session do
     field :provider, :string
     field :expires_at, :utc_datetime_usec
     field :athanor_id, :string
-    # The `key_epoch` of the identity head the session was minted under:
-    # set for a remote person's session, nil for a local person's.
-    field :identity_key_epoch, :string
+    # The key that signed for the session and the account head it was
+    # verified under: both set, or both nil for a session no key signed.
+    field :kid, :string
+    field :head, :string
     # The protected device whose unlock created the session; nil for
     # every other session.
     field :client_id, :string

@@ -23,7 +23,10 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     "apps/cyfr/lib/cyfr_web/plugs/api_security_headers.ex" =>
       "an API response renders no document, and its policy refuses everything",
     "apps/cyfr/lib/emissary/web/controllers/oauth_callback_controller.ex" =>
-      "the OAuth callback's own result page, served on the site origin and framed by nothing"
+      "the OAuth callback's own result page, served on the site origin and framed by nothing",
+    "apps/cyfr/lib/emissary/web/controllers/account_controller.ex" =>
+      "the account pages' own policy: a passkey's static pages, their scripts and styles " <>
+        "from their own origin, reaching only it and the registry they name"
   }
 
   # A directive starts a policy or follows a `;`, and what follows its name

@@ -170,7 +170,6 @@ defmodule Sanctum.ProvisioningTest do
   # mint of their own (`Provisioning.mint_personal/1`).
   defp unhoused(n) do
     now = DateTime.utc_now()
-    subject = "prov-#{n}"
 
     {:ok, %{id: user_id}} =
       Arca.Test.People.mint(
@@ -184,14 +183,6 @@ defmodule Sanctum.ProvisioningTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|" <> subject,
-          provider: "github",
-          issuer: "https://github.com",
-          subject: subject,
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 

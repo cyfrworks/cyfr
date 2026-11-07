@@ -498,6 +498,13 @@ func TestFetchWritesNothingUntilWrite(t *testing.T) {
 	if got := r.Managed(); !slices.Equal(got, []string{"configuration-guide.md"}) {
 		t.Errorf("Managed() = %v", got)
 	}
+	// File answers the release's own bytes, never the project's.
+	if got, ok := r.File("docker-compose.yml"); !ok || len(got) == 0 || string(got) == "services: {mine: {}}\n" {
+		t.Errorf("File(docker-compose.yml) = %q, %v", got, ok)
+	}
+	if _, ok := r.File("absent.txt"); ok {
+		t.Error("File answers a file the release does not ship")
+	}
 	if err := r.Write(true); err != nil {
 		t.Fatalf("Write: %v", err)
 	}

@@ -1158,6 +1158,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 |---------|-------------|
 | `cyfr login` | Unlock this command line, a device of yours, and start your shell holding its session: the key is sealed by the machine's TPM under a six-digit PIN, or kept under a six-word passphrase it draws where no chip can protect a PIN; the first time it shows the approve address as a QR code and the key's code, which a device of yours approves after a fresh unlock, and takes the link that device shows, pasted, or its code, typed; `--setup [--name NAME]` makes any CYFR's first person at this terminal with this device and the setup token in the working directory's `.env` (a headless CYFR's only way), `--join [--invitation CODE] [--name NAME]` a new person by the open admission or an invitation, each showing the recovery code as a QR code and as text until Enter; the session lives only in that shell, kept alive by this command line's reports, and ends when the shell exits, the terminal closes or the connection is lost; a sensitive change asks the PIN or passphrase again over CYFR's own preview (see [devices-guide.md](devices-guide.md)); unattended work uses an API key (`--token` or `CYFR_TOKEN`) |
 | `cyfr logout` | Lock this command line: the shell `cyfr login` started ends, with its session and any browser session `cyfr open` opened through it |
+| `cyfr device approve <key>` | Add a new device's key, as cyfr login or a box's screen shows it, to your account, signed by this command line's key after its PIN or passphrase |
 | `cyfr open` | Open the context's address in your browser, this machine's loopback context as `http://localhost:<port>`; in the shell `cyfr login` started, open this command line's own page instead, whose Open CYFR signs the browser in through a one-time ticket, never the command line's session |
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
@@ -1216,7 +1217,6 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr call vault '{"action":"list",…}'` | Manage vault entries (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Vault page |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
 | `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Vault page |
-| `cyfr pair <code>` / `cyfr pair list` / `cyfr pair revoke [client-id]` | Pair a new device with the code its `/pair` page or its `cyfr login` shows (or the approve address), list paired devices, revoke one; pairing and revoking each need a fresh confirmation, given in Prism or on this command line when it is a paired device ([devices-guide.md](devices-guide.md)) |
 
 ### Administration
 

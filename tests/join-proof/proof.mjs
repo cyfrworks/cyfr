@@ -3,107 +3,185 @@
 //
 // The join proof, run in the official Playwright image by run.sh against
 // `cyfr` releases behind the harness's HTTPS front (README.md): the
-// person's home A, the hub H, the directories dir.test (A's) and
-// dir2.test (H's), and a fresh installation A2 the person restores onto.
-// Each step is one row per browser of the record; the proof fails when a
-// row does not hold, and stops at the first row a later one rests on.
+// directory dir.test, which serves the account pages, and h.test, the
+// CYFR people join. Chromium alone, since a passkey is made and used by
+// its virtual authenticator (../browser/account.mjs); the device that
+// joins by its hello is a test device (../browser/device.mjs) this process
+// drives. Each step is one row of the record; the proof fails when a row
+// does not hold, and stops at the first row a later one rests on.
 //
-// Chromium runs every step, and the cross-home confirmation's once more at a 720×720
-// touch viewport. Firefox and WebKit offer no virtual authenticator, so
-// they run the sign-in at H, the carry between the homes and a second
-// browser profile; each fresh confirmation those need is given in Chromium
-// at A with the passkey (common.mjs, steps.mjs).
+// H's part of a step (its setup token, the people it holds) is run.sh's,
+// asked for through OUT_DIR (`ask-N.json`, answered `answer-N.json`). The
+// ask that carries the setup token is deleted once read.
 //
 // Usage: node proof.mjs HOMES_FILE OUT_DIR
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchBrowser, startProxy } from "../browser/lib.mjs";
 import {
-  A, BROWSERS, ask, crossHome, crossSiteHeld, dumpPages, homes, outDir, record, redact, row, rows, secrets, setUpHome,
-  setUpHub, signIn,
-} from "./common.mjs";
-import { rest } from "./steps.mjs";
+  addDevice, confirmInTab, continueToCyfr, createAccount, landing, passkeys, readLog, usePasskey,
+} from "../browser/account.mjs";
+import { helloDevice, newDevice } from "../browser/device.mjs";
+import { ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, startProxy } from "../browser/lib.mjs";
 
-async function main(proxy) {
-  const chromium = await launchBrowser("chromium", proxy);
-  record.versions = { chromium: chromium.version() };
-  const home = await setUpHome(chromium, proxy);
-  if (!home.held) return;
-  const [hubHeld, hub] = await setUpHub(home.identifier);
-  if (!hubHeld) return;
+const [homesFile, outDir] = process.argv.slice(2);
+if (!homesFile || !outDir) {
+  console.error("usage: node proof.mjs HOMES_FILE OUT_DIR");
+  process.exit(64);
+}
+mkdirSync(outDir, { recursive: true });
 
-  // Chromium: the sign-in by the person's own passkey at A.
-  const first = await signIn(chromium, "chromium", proxy, { home: A, identifier: home.identifier, passkeysFrom: home.desk });
-  if (!first.held) return;
-  if (!(await resolution(home.identifier))) return;
+const { homes } = readHomes(homesFile);
+const homeNamed = (name) => homes.find((home) => home.name === name) || (() => { throw new Error(`no home ${name}`); })();
+const DIR = homeNamed("dir");
+const H = homeNamed("h");
+const layer = "#system-layer-dialog";
+const rows = [];
+const record = {};
+// Every recovery code, its secret, the setup token and each invitation's
+// code, so no record is shown to hold one.
+const secrets = [];
 
-  // Firefox and WebKit: signed in at A by the fixture's door, each
-  // confirmation given at A in Chromium with the passkey; then a second profile.
-  // They run one at a time, and the requests the proxy sees meanwhile are
-  // theirs but for the Chromium page at A, whose requests never cross
-  // homes: each browser's cross-home requests are its window's.
-  const windows = {};
-  for (const name of BROWSERS.filter((b) => b !== "chromium")) {
-    const from = proxy.seen.length;
-    const browser = await launchBrowser(name, proxy);
-    record.versions[name] = browser.version();
-    try {
-      for (const step of ["sign_in", "second_profile"]) {
-        const { cookie } = await ask({ op: "a_cookie" }, { secret: true });
-        secrets.push(cookie);
-        const run = await signIn(browser, name, proxy, { home: A, identifier: home.identifier, confirmer: home.confirmer, cookie, step });
-        await run.context.close();
-        if (!run.held) break;
-      }
-    } finally {
-      await browser.close();
-      windows[name] = [from, proxy.seen.length];
-    }
-  }
-
-  // Chromium's own second profile.
-  const second = await signIn(chromium, "chromium", proxy, { home: A, identifier: home.identifier, passkeysFrom: home.desk, step: "second_profile" });
-  await second.context.close();
-
-  await rest(chromium, proxy, { home, hub, hubPage: first.page, hubContext: first.context });
-  await chromium.close();
-
-  // Every request one home received from another home's page, in every
-  // browser and every step, was labelled cross-site.
-  const outside = (i) => Object.values(windows).every(([start, end]) => i < start || i >= end);
-  const seenBy = { chromium: proxy.seen.filter((_, i) => outside(i)) };
-  for (const [name, [start, end]] of Object.entries(windows)) seenBy[name] = proxy.seen.slice(start, end);
-  record.cross_site = {};
-  for (const [name, seen] of Object.entries(seenBy)) {
-    const cross = crossSiteHeld(seen);
-    const byRoute = {};
-    for (const r of crossHome(seen)) byRoute[`${r.from} → ${r.to}`] = (byRoute[`${r.from} → ${r.to}`] || 0) + 1;
-    record.cross_site[name] = { requests: cross.requests, wrong: cross.wrong, by_route: byRoute };
-    row("cross_site", name, cross.held,
-      "every cross-home request the browser made in the run carried sec-fetch-site: cross-site", record.cross_site[name]);
-  }
+function row(step, held, what, detail) {
+  rows.push({ step, held: !!held, what, detail });
+  console.log(`${held ? "held  " : "FAILED"} ${step}: ${what} — ${redact(JSON.stringify(detail)).slice(0, 2000)}`);
+  return !!held;
 }
 
-// H reads the person at the directory their genesis names, dir.test,
-// though H enrolls its own people at dir2.test; and neither home holds a
-// list of the person's homes, in a table or in the pages' storage.
-async function resolution(identifier) {
-  const atDir = (await ask({ op: "dir_seen", directory: "dir.test" })).paths;
-  const atDir2 = (await ask({ op: "dir_seen", directory: "dir2.test" })).paths;
-  const tables = { a: (await ask({ op: "tables", cell: "a" })).tables, h: (await ask({ op: "tables", cell: "h" })).tables };
-  const listLike = (names) => names.filter((name) => /connection|saved_home|navigation|visited|bookmark/.test(name));
-  record.resolution = {
-    read_at_dir: atDir.filter((path) => path.includes(identifier)).length,
-    read_at_dir2: atDir2.filter((path) => path.includes(identifier)).length,
-    list_tables: { a: listLike(tables.a), h: listLike(tables.h) },
+const redact = (text) => redactKnown(text, secrets);
+
+const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 300_000, refuseError: true, ...options });
+
+const atH = async (identifier) => (await ask({ op: "people" })).people.find((p) => p.identifier === identifier) || null;
+
+// An invitation the operator makes on H's Settings page: the link it shows
+// once, its code joined to the secrets.
+async function invite(page, segment) {
+  await page.goto(`${H.origin}/a/${encodeURIComponent(segment)}/settings`);
+  await page.waitForSelector(".phx-connected", { timeout: 60_000 });
+  await page.locator('[data-test="invitation-create"]').click();
+  const link = (await page.locator('[data-test="invitation-link"]').textContent({ timeout: 30_000 })).trim();
+  secrets.push(new URL(link).hash.slice(1));
+  return link;
+}
+
+// The invitation page at `link`, once it has read the code: what it says.
+async function openInvitation(page, link) {
+  await page.goto(link);
+  await page.waitForSelector('[data-test="invite-create"], [data-test="invite-refused"], [data-test="invite-error"]',
+    { timeout: 60_000 });
+  return {
+    refused: (await page.locator('[data-test="invite-refused"]').count()) > 0,
+    from: (await page.locator('[data-test="invite-from"]').textContent().catch(() => null))?.trim() ?? null,
+    text: await page.locator("body").innerText(),
   };
-  return row("resolution", "chromium",
-    record.resolution.read_at_dir > 0 && record.resolution.read_at_dir2 === 0 &&
-      record.resolution.list_tables.a.length === 0 && record.resolution.list_tables.h.length === 0,
-    "H resolves the person at dir.test, which their genesis names, though H's own directory is dir2.test; neither home keeps a list of the homes a person visits",
-    record.resolution);
 }
+
+// ---------------------------------------------------------------------------
+// The steps
+// ---------------------------------------------------------------------------
+
+async function main(browser, proxy) {
+  const opKeys = passkeys();
+  const personKeys = passkeys();
+  const deviceOwnerKeys = passkeys();
+  const op = await (await browser.newContext()).newPage();
+  const person = await (await browser.newContext()).newPage();
+
+  // operator
+  const opAccount = await createAccount(op, opKeys, { directory: DIR, name: "join-op", secrets });
+  const { token } = await ask({ op: "setup_token" }, { secret: true });
+  secrets.push(token);
+  await op.goto(`${H.origin}/setup#${token}`);
+  await op.locator('[data-test="setup-sign-in"]').click({ timeout: 60_000 });
+  const opAsked = await usePasskey(op, opKeys);
+  const opLanded = opAsked.returned ? await landing(op, H) : { landed: false };
+  const operator = await atH(opAccount.code?.identifier);
+  record.operator = { account: opAccount.section, asked: opAsked, landed: opLanded, at_h: operator };
+  if (!row("operator", opAccount.section === "done" && opLanded.landed && operator?.admission === "setup",
+    "H's operator makes their account at the pages and sets H up by signing in with it", record.operator)) return;
+
+  // invited: a newcomer with no account yet opens the operator's link,
+  // creates their account through H's request, and H admits them under
+  // the invitation.
+  const link = await invite(op, operator.segment);
+  const opened = await openInvitation(person, link);
+  await person.locator('[data-test="invite-create"]').click();
+  const made = await createAccount(person, personKeys, { name: "join-b", secrets });
+  const returned = made.section === "done-return" ? await continueToCyfr(person, personKeys, H) : { left: false };
+  const personLanded = returned.left ? await landing(person, H) : { landed: false };
+  const identifier = made.code?.identifier;
+  const joined = await atH(identifier);
+  const personLog = identifier ? await readLog(DIR, identifier) : null;
+  record.invited = {
+    opened: { refused: opened.refused, from: opened.from, shows_code: secrets.some((s) => opened.text.includes(s)) },
+    made: made.section, returned, landed: personLanded, at_h: joined, log: personLog,
+  };
+  if (!row("invited",
+    !opened.refused && !record.invited.opened.shows_code && made.section === "done-return" &&
+      returned.label === `Continue to ${H.origin}` && personLanded.landed && joined?.admission === "invitation" &&
+      joined.sessions.length === 1 && personLog?.kinds.join() === "genesis,add_key",
+    "an invitation link, opened by a newcomer, sends them to the account pages with H's request: they create their account there, " +
+      "the page signs H's request with the new passkey, and H admits the account under the invitation and signs them in",
+    record.invited)) return;
+
+  // spent
+  const again = await openInvitation(await (await browser.newContext()).newPage(), link);
+  record.spent = { refused: again.refused };
+  if (!row("spent", again.refused, "the invitation link a second time says it can no longer be used", record.spent)) return;
+
+  // confirm: an API key the person asks for at H waits on a fresh
+  // confirmation, given with their passkey at the sign page in a new tab.
+  await person.goto(`${H.origin}/a/${encodeURIComponent(joined.segment)}/api-keys`);
+  await person.waitForSelector(".phx-connected", { timeout: 60_000 });
+  await person.locator("button", { hasText: "Create Key" }).click();
+  await person.locator('#api-key-form input[name="name"]').fill("join-proof");
+  await person.locator('#api-key-form button[type="submit"]').click();
+  const own = `${layer} [data-test="confirmation"][data-own="true"] [data-test="confirm-passkey"]`;
+  await person.waitForSelector(own, { timeout: 30_000 });
+  const confirmed = await confirmInTab(person, personKeys, H, () => person.locator(own).click());
+  const shown = await person.waitForFunction(() => document.body.innerText.includes("It will not be shown again"), null,
+    { timeout: 30_000 }).then(() => true).catch(() => false);
+  record.confirm = { confirmed, key_shown: shown };
+  if (!row("confirm",
+    confirmed.what === `Confirm a change at ${H.origin}` && confirmed.landed && shown,
+    "an API key the person asks for at H waits on a fresh confirmation; the sign page asks to confirm a change at H, the passkey " +
+      "signs it, and the waiting page makes the key",
+    record.confirm)) return;
+
+  // device: an account whose only key is a device added at the pages; the
+  // device's hello at H brings an invitation's code, and H admits the
+  // account and the device on that one connection.
+  const deviceLink = await invite(op, operator.segment);
+  const owner = await (await browser.newContext()).newPage();
+  const ownerAccount = await createAccount(owner, deviceOwnerKeys, { directory: DIR, name: "join-d", secrets });
+  const ownerIdentifier = ownerAccount.code?.identifier;
+  const device = newDevice({ name: "join proof device" });
+  const added = await addDevice(owner, deviceOwnerKeys, { directory: DIR, device });
+  const ownerLog = ownerIdentifier ? await readLog(DIR, ownerIdentifier) : null;
+  const hello = await helloDevice(device, {
+    identifier: ownerIdentifier, admission: { invitation: new URL(deviceLink).hash.slice(1) },
+    proxyPort: proxy.address().port, base: H.origin,
+  });
+  const standing = hello.channel?.standing ?? null;
+  hello.channel?.close();
+  const deviceAtH = await atH(ownerIdentifier);
+  const client = deviceAtH?.clients.find((c) => c.kid === device.kid) ?? null;
+  const spentAgain = await openInvitation(await (await browser.newContext()).newPage(), deviceLink);
+  record.device = {
+    added: { section: added.section, shown: added.shown, error: added.error }, log: ownerLog,
+    hello: hello.channel ? { standing: !!standing, certificate_audience: device.certificate?.audience } : { code: hello.code, log: hello.log },
+    at_h: deviceAtH, client, link_spent: spentAgain.refused,
+  };
+  row("device",
+    added.section === "added" && ownerLog?.keys.some((k) => k.kid === device.kid && k.kind === "device") && !!hello.channel &&
+      !!standing && deviceAtH?.admission === "invitation" && client?.standing === "active" && spentAgain.refused,
+    "a device added to its account at /account/add says hello at H with an invitation's code: H admits the account under it, " +
+      "issues the device its certificate and stands its channel on the same connection, and the code is spent",
+    record.device);
+}
+
+// ---------------------------------------------------------------------------
 
 let proxy;
 try {
@@ -112,45 +190,36 @@ try {
   console.error(`FAIL: ${error.message.split("\n")[0]}`);
   process.exit(1);
 }
-
+const browser = await launchBrowser("chromium", proxy);
+const version = browser.version();
+console.log(`== chromium ${version}`);
 let failure = null;
 try {
-  await main(proxy);
+  await main(browser, proxy);
 } catch (error) {
   failure = redact(error.stack || String(error));
   console.error(`FAIL: ${failure}`);
-  await dumpPages().catch(() => null);
+  for (const context of browser.contexts()) {
+    for (const page of context.pages()) {
+      const text = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "unread");
+      console.error(`  at ${page.url().replace(/#.*/, "#…")}: ${JSON.stringify(redact(text).slice(0, 3000))}`);
+    }
+  }
 } finally {
+  await browser.close();
   proxy.close();
 }
 
-const STEPS = JSON.parse(process.env.JOIN_PROOF_STEPS || "null") || [
-  ["home", ["chromium"]], ["hub", ["chromium"]], ["sign_in", BROWSERS], ["resolution", ["chromium"]],
-  ["second_profile", BROWSERS],
-  ["crafted", ["chromium"]], ["copied_session", ["chromium"]], ["dropped_callback", ["chromium"]],
-  ["closed_hops", ["chromium"]], ["forged_completion", ["chromium"]], ["invited", ["chromium"]], ["h_passkey", ["chromium"]],
-  ["a_passkey_at_h", ["chromium"]], ["phone", ["chromium"]], ["renewal", ["chromium"]], ["thread", ["chromium"]],
-  ["removal", ["chromium"]], ["rotate", ["chromium"]], ["recertify", ["chromium"]], ["tabs", ["chromium"]],
-  ["lost_home", ["chromium"]], ["restore", ["chromium"]], ["retired", ["chromium"]], ["admin_again", ["chromium"]],
-  ["viewport", ["chromium"]], ["directory_down", ["chromium"]], ["cross_site", BROWSERS],
-];
-const outcome = (step, browser) => {
-  const found = rows.filter((r) => r.step === step && r.browser === browser);
-  if (!found.length) return "not reached";
-  return found.every((r) => r.held) ? "held" : "FAILED";
+const STEPS = ["operator", "invited", "spent", "confirm", "device"];
+const outcome = (step) => {
+  const found = rows.find((r) => r.step === step);
+  return found ? (found.held ? "held" : "FAILED") : "not reached";
 };
-const columns = ["chromium", "firefox", "webkit"].filter((b) => BROWSERS.includes(b));
-const cell = (step, browsers, browser) => (browsers.includes(browser) ? outcome(step, browser) : "Chromium only");
-writeFileSync(join(outDir, "join-proof.json"), redact(JSON.stringify({ versions: record.versions, rows, record, failure }, null, 2)));
-const table = [
-  `| step | ${columns.map((b) => `${b} ${(record.versions || {})[b] || ""}`.trim()).join(" | ")} |`,
-  `|---|${columns.map(() => "---").join("|")}|`,
-  ...STEPS.map(([step, browsers]) => `| ${step} | ${columns.map((b) => cell(step, browsers, b)).join(" | ")} |`),
-];
+writeFileSync(join(outDir, "join-proof.json"), redact(JSON.stringify({ chromium: version, rows, record, failure }, null, 2)));
+const table = [`| step | chromium ${version} |`, "|---|---|", ...STEPS.map((step) => `| ${step} | ${outcome(step)} |`)];
 writeFileSync(join(outDir, "join-proof.md"), table.join("\n") + "\n");
 console.log(table.join("\n"));
-const unheld = STEPS.some(([step, browsers]) => browsers.some((b) => columns.includes(b) && outcome(step, b) !== "held"));
-if (failure || unheld) {
+if (failure || STEPS.some((step) => outcome(step) !== "held")) {
   console.error("FAIL: a step of the join proof did not hold");
   process.exit(1);
 }

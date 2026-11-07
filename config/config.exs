@@ -79,6 +79,11 @@ config :sanctum,
 # `config/runtime.exs` writes the access settings'.
 config :sanctum, :proxy_trust, :none
 
+# How the home is reached (`Sanctum.access_mode/0`): a local home's, as
+# every boot that resolves no access mode is. `config/runtime.exs` writes
+# the access settings'.
+config :sanctum, :access_mode, :local
+
 # Whose HSTS a response carries (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`):
 # none, a local home's. `config/runtime.exs` writes the access settings': the
 # endpoint's on the proxy listener in a tailnet home, Caddy's in a public
@@ -205,6 +210,21 @@ config :esbuild,
           "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/js/sdk by `mix esbuild sdk`."
         ],
     cd: Path.expand("../apps/cyfr/assets", __DIR__)
+  ],
+  # The account pages: one script, its service worker, five pages and a
+  # stylesheet, served at /account/* by a directory and vendored built by
+  # cyfr.run. `mix esbuild account` rebuilds them; the built files are
+  # tracked, so a checkout carries what a directory serves.
+  account: [
+    args:
+      ~w(account=account/main.js sw=account/sw.js account/new.html account/sign.html account/add.html
+         account/recover.html account/devices.html account/account.css
+         --bundle --format=iife --target=es2020 --entry-names=[name]
+         --loader:.html=copy --loader:.css=copy --outdir=../priv/static/account) ++
+        [
+          "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/account by `mix esbuild account`."
+        ],
+    cd: Path.expand("../apps/cyfr/assets", __DIR__)
   ]
 
 # Prism tailwind configuration. A version bump adds the CLI's sha256 pins
@@ -219,10 +239,6 @@ config :tailwind,
     ),
     cd: Path.expand("../apps/cyfr/assets", __DIR__)
   ]
-
-# Ueberauth base configuration
-# Provider strategies are configured at runtime based on environment.
-config :ueberauth, Ueberauth, providers: []
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

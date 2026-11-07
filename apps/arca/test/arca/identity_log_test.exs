@@ -3,11 +3,11 @@
 
 defmodule Arca.IdentityLogTest do
   @moduledoc """
-  The directory's store: one log per identifier, serialized by expected
-  head for a rotation and by expected revision for a recovery, a request
-  id answered with its recorded outcome, refusal included, and quotas
-  decided under the store's one lock, the recovery reserve kept for
-  recoveries.
+  The directory's store: one log per identifier, an entry appended at the
+  head it names, an entry already the one after its prev answered as
+  existing, the operator's tombstone answered as gone, and quotas decided
+  under the store's one lock, the recovery reserve kept for entries a
+  recovery key signed.
   """
 
   # Every write takes the directory's one usage row; running alone keeps a
@@ -58,69 +58,44 @@ defmodule Arca.IdentityLogTest do
   defp server, do: Prima.Actor.system()
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
+  defp genesis_attrs(entry \\ "genesis-#{System.unique_integer()}") do
+    %{
+      identifier: "per_" <> Prima.Digest.sha256_hex(entry),
+      entry: entry,
+      entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry),
+      state: ~s({"seq":0})
+    }
+  end
+
   defp genesis! do
-    entry = "genesis-#{System.unique_integer()}"
-    identifier = "per_" <> Prima.Digest.sha256_hex(entry)
-    hash = "sha256:" <> Prima.Digest.sha256_hex(entry)
-
-    {:ok, row} =
-      IdentityLog.register(
-        server(),
-        %{identifier: identifier, entry: entry, entry_hash: hash},
-        @policy
-      )
-
-    {identifier, row}
+    attrs = genesis_attrs()
+    {:ok, row, :created} = IdentityLog.register(server(), attrs, @policy)
+    {attrs.identifier, row}
   end
 
-  defp rotate(identifier, prev, policy \\ @policy) do
-    IdentityLog.append(
-      server(),
-      identifier,
-      %{
-        entry: "rotate-#{System.unique_integer()}",
-        entry_hash: digest("rotate"),
-        prev_hash: prev
-      },
-      policy
-    )
+  defp entry(prev, opts \\ []) do
+    %{
+      entry: Keyword.get(opts, :entry, "entry-#{System.unique_integer()}"),
+      entry_hash: digest("entry"),
+      prev_hash: prev,
+      kind: Keyword.get(opts, :kind, "add_key"),
+      state: ~s({"seq":1}),
+      recovery: Keyword.get(opts, :recovery, false)
+    }
   end
 
-  defp recover(identifier, prev, attrs, policy \\ @policy) do
-    IdentityLog.recover(
-      server(),
-      identifier,
-      Map.merge(
-        %{
-          entry: "recover-#{System.unique_integer()}",
-          entry_hash: digest("recover"),
-          prev_hash: prev,
-          request_id: "req_#{System.unique_integer([:positive])}",
-          request_digest: digest("request"),
-          expected_revision: 0
-        },
-        attrs
-      ),
-      policy
-    )
-  end
+  defp append(identifier, attrs, policy \\ @policy),
+    do: IdentityLog.append(server(), identifier, attrs, policy)
 
   describe "register/3" do
-    test "writes the genesis at position 0, and the same genesis again is one registration" do
-      entry = "genesis-#{System.unique_integer()}"
-      identifier = "per_" <> Prima.Digest.sha256_hex(entry)
+    test "writes the genesis at position 0 with its state; the same genesis again exists" do
+      attrs = genesis_attrs()
 
-      attrs = %{
-        identifier: identifier,
-        entry: entry,
-        entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry)
-      }
-
-      assert {:ok, %{seq: 0, kind: "genesis"} = first} =
+      assert {:ok, %{seq: 0, kind: "genesis", state: ~s({"seq":0})} = first, :created} =
                IdentityLog.register(server(), attrs, @policy)
 
-      assert {:ok, ^first} = IdentityLog.register(server(), attrs, @policy)
-      assert {:ok, [^first]} = IdentityLog.entries(server(), identifier)
+      assert {:ok, ^first, :exists} = IdentityLog.register(server(), attrs, @policy)
+      assert {:ok, [^first]} = IdentityLog.entries(server(), attrs.identifier)
       assert {:ok, %{identities: 1}} = IdentityLog.usage(server())
 
       assert {:error, :conflict} =
@@ -131,37 +106,28 @@ defmodule Arca.IdentityLogTest do
       {identifier, row} = genesis!()
       full = %{@policy | max_identities: 1}
 
-      assert {:ok, ^row} =
-               IdentityLog.register(
-                 server(),
-                 %{identifier: identifier, entry: row.entry, entry_hash: row.entry_hash},
-                 full
-               )
-
-      entry = "genesis-#{System.unique_integer()}"
-
-      assert {:error, {:capacity, :identities}} =
+      assert {:ok, ^row, :exists} =
                IdentityLog.register(
                  server(),
                  %{
-                   identifier: "per_" <> Prima.Digest.sha256_hex(entry),
-                   entry: entry,
-                   entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry)
+                   identifier: identifier,
+                   entry: row.entry,
+                   entry_hash: row.entry_hash,
+                   state: "{}"
                  },
                  full
                )
+
+      assert {:error, {:capacity, :identities}} =
+               IdentityLog.register(server(), genesis_attrs(), full)
     end
 
-    test "refuses an entry past the size bound and a malformed policy" do
-      entry = String.duplicate("x", Prima.Identity.max_entry_bytes() + 1)
-
-      attrs = %{
-        identifier: "per_" <> Prima.Digest.sha256_hex(entry),
-        entry: entry,
-        entry_hash: digest("big")
-      }
-
+    test "refuses an entry past the size bound, a missing state and a malformed policy" do
+      attrs = genesis_attrs(String.duplicate("x", Prima.Identity.max_entry_bytes() + 1))
       assert {:error, :entry_too_large} = IdentityLog.register(server(), attrs, @policy)
+
+      assert {:error, {:invalid, %{state: _}}} =
+               IdentityLog.register(server(), %{genesis_attrs() | state: ""}, @policy)
 
       assert {:error, :invalid_policy} =
                IdentityLog.register(server(), attrs, %{
@@ -172,192 +138,113 @@ defmodule Arca.IdentityLogTest do
   end
 
   describe "append/4" do
-    test "extends the head it names; two appends on one head, one wins and one is stale" do
+    test "extends the head it names; a second entry on the same head is stale" do
       {identifier, genesis} = genesis!()
 
-      assert {:ok, %{seq: 1, prev_hash: prev}} = rotate(identifier, genesis.entry_hash)
+      assert {:ok, %{seq: 1, prev_hash: prev, kind: "add_key"}, :accepted} =
+               append(identifier, entry(genesis.entry_hash))
+
       assert prev == genesis.entry_hash
-      assert {:error, :stale} = rotate(identifier, genesis.entry_hash)
+      assert {:error, :stale} = append(identifier, entry(genesis.entry_hash))
       assert {:ok, entries} = IdentityLog.entries(server(), identifier)
       assert length(entries) == 2
     end
 
-    test "an unknown identifier is not found, and a rotation may not spend the recovery reserve" do
-      assert {:error, :not_found} = rotate("per_" <> String.duplicate("0", 64), digest("x"))
-
+    test "an entry already the one after its prev exists, at the head and after it moved" do
       {identifier, genesis} = genesis!()
-      {:ok, %{log_bytes: used}} = IdentityLog.usage(server())
-      tight = %{@policy | log_bytes: used + 20, recovery_reserve_bytes: 10}
+      first = entry(genesis.entry_hash)
+      {:ok, row, :accepted} = append(identifier, first)
+      assert {:ok, ^row, :exists} = append(identifier, first)
 
-      assert {:error, {:capacity, :log_bytes}} = rotate(identifier, genesis.entry_hash, tight)
-    end
-  end
-
-  describe "recover/4" do
-    test "applies against the current revision; the same request answers its recorded outcome" do
-      {identifier, genesis} = genesis!()
-      {:ok, rotated} = rotate(identifier, genesis.entry_hash)
-      request = %{request_id: "req_first", request_digest: digest("first"), expected_revision: 0}
-
-      # Online state moved (a rotation) and the recovery still applies at
-      # the head, against the revision it expected.
-      assert {:ok, %{kind: "recover", seq: 2} = accepted} =
-               recover(identifier, rotated.entry_hash, request)
-
-      # The same request again, whatever the head is now: its recorded outcome.
-      assert {:ok, ^accepted} = recover(identifier, accepted.entry_hash, request)
-      assert {:ok, ^accepted} = IdentityLog.outcome(server(), identifier, "req_first")
+      {:ok, _second, :accepted} = append(identifier, entry(row.entry_hash, kind: "remove_key"))
+      assert {:ok, ^row, :exists} = append(identifier, first)
+      assert {:error, :stale} = append(identifier, entry(genesis.entry_hash))
     end
 
-    test "a stale revision is refused and recorded; a retry answers the same refusal" do
-      {identifier, genesis} = genesis!()
-      {:ok, first} = recover(identifier, genesis.entry_hash, %{expected_revision: 0})
-
-      stale = %{request_id: "req_stale", request_digest: digest("stale"), expected_revision: 0}
-      assert {:error, :stale_policy} = recover(identifier, first.entry_hash, stale)
-
-      assert {:ok, %{outcome: "stale_policy", seq: nil, outcome_body: body}} =
-               IdentityLog.outcome(server(), identifier, "req_stale")
-
-      assert %{"revision" => 1, "expected_revision" => 0} = Jason.decode!(body)
-
-      # Retried after the log moved on, still the recorded refusal.
-      {:ok, _} = rotate(identifier, first.entry_hash)
-      assert {:error, :stale_policy} = recover(identifier, first.entry_hash, stale)
-      assert {:ok, entries} = IdentityLog.entries(server(), identifier)
-      assert Enum.map(entries, & &1.kind) == ["genesis", "recover", "rotate"]
-    end
-
-    test "the same request id with another digest is refused" do
-      {identifier, genesis} = genesis!()
-      {:ok, _} = recover(identifier, genesis.entry_hash, %{request_id: "req_reused"})
-
-      assert {:error, :request_id_reused} =
-               recover(identifier, genesis.entry_hash, %{
-                 request_id: "req_reused",
-                 request_digest: digest("changed")
-               })
-    end
-
-    test "a head that moved while the revision stands records nothing; the caller rebuilds" do
-      {identifier, genesis} = genesis!()
-      {:ok, rotated} = rotate(identifier, genesis.entry_hash)
-
-      assert {:error, :stale} =
-               recover(identifier, genesis.entry_hash, %{request_id: "req_rebuild"})
-
-      assert {:error, :not_found} = IdentityLog.outcome(server(), identifier, "req_rebuild")
-      assert {:ok, _} = recover(identifier, rotated.entry_hash, %{request_id: "req_rebuild"})
-    end
-
-    test "a recovery may spend the reserve a rotation may not" do
-      {identifier, genesis} = genesis!()
-      {:ok, %{log_bytes: used}} = IdentityLog.usage(server())
-      tight = %{@policy | log_bytes: used + 64, recovery_reserve_bytes: 60}
-
-      assert {:error, {:capacity, :log_bytes}} = rotate(identifier, genesis.entry_hash, tight)
-      assert {:ok, %{kind: "recover"}} = recover(identifier, genesis.entry_hash, %{}, tight)
-    end
-  end
-
-  describe "keys/2" do
-    test "answers the head with the genesis and every accepted recovery, in order" do
-      {identifier, genesis} = genesis!()
-      {:ok, r1} = rotate(identifier, genesis.entry_hash)
-      {:ok, first} = recover(identifier, r1.entry_hash, %{expected_revision: 0})
-      {:ok, r2} = rotate(identifier, first.entry_hash)
-      {:ok, r3} = rotate(identifier, r2.entry_hash)
-      {:ok, second} = recover(identifier, r3.entry_hash, %{expected_revision: 1})
-      {:ok, third} = recover(identifier, second.entry_hash, %{expected_revision: 2})
-      {:ok, last} = rotate(identifier, third.entry_hash)
-
-      # A refused recovery is recorded with no position, and is no key.
-      assert {:error, :stale_policy} =
-               recover(identifier, last.entry_hash, %{
-                 request_id: "req_late",
-                 expected_revision: 0
-               })
-
-      assert {:ok, %{head: ^last, keyed: keyed}} = IdentityLog.keys(server(), identifier)
-      assert keyed == [genesis, first, second, third]
-      assert Enum.map(keyed, & &1.seq) == [0, 2, 5, 6]
-    end
-
-    test "a log of only a genesis answers the genesis as its head and its one key" do
-      {identifier, genesis} = genesis!()
-      assert {:ok, %{head: ^genesis, keyed: [^genesis]}} = IdentityLog.keys(server(), identifier)
-    end
-
-    test "an unknown identifier is not found, and only the platform's actor reads" do
+    test "an unknown identifier is not found, and an unknown kind is refused" do
       assert {:error, :not_found} =
-               IdentityLog.keys(server(), "per_" <> String.duplicate("0", 64))
+               append("per_" <> String.duplicate("0", 64), entry(digest("x")))
 
-      {identifier, _genesis} = genesis!()
-
-      assert {:error, :cross_tenant} =
-               IdentityLog.keys(Prima.Actor.in_athanor("ath_test"), identifier)
-    end
-
-    test "reads no entry outside the key-bearing ones, and writes nothing" do
       {identifier, genesis} = genesis!()
 
-      Enum.reduce(1..5, genesis.entry_hash, fn _, prev ->
-        {:ok, row} = rotate(identifier, prev)
-        row.entry_hash
-      end)
+      assert {:error, {:invalid, %{kind: _}}} =
+               append(identifier, entry(genesis.entry_hash, kind: "genesis"))
 
-      handler = "identity-log-keys-#{System.unique_integer([:positive])}"
-      test = self()
+      assert {:error, {:invalid, %{kind: _}}} =
+               append(identifier, entry(genesis.entry_hash, kind: "rotate"))
+    end
 
-      :telemetry.attach(
-        handler,
-        [:arca, :repo, :query],
-        fn _event, _measurements, meta, _config ->
-          if self() == test, do: send(test, {:query, meta[:query], meta[:result]})
-        end,
-        nil
-      )
+    test "an entry a listed key signed may not spend the recovery reserve; one a recovery key signed may" do
+      {identifier, genesis} = genesis!()
+      {:ok, %{log_bytes: used}} = IdentityLog.usage(server())
+      size = byte_size(entry(genesis.entry_hash).entry)
+      tight = %{@policy | log_bytes: used + size + 5, recovery_reserve_bytes: size}
 
-      on_exit(fn -> :telemetry.detach(handler) end)
+      assert {:error, {:capacity, :log_bytes}} =
+               append(identifier, entry(genesis.entry_hash), tight)
 
-      assert {:ok, %{keyed: [^genesis], head: %{seq: 5}}} = IdentityLog.keys(server(), identifier)
-
-      queries = collect_queries()
-      assert length(queries) == 2
-      assert Enum.all?(queries, fn {sql, _} -> String.starts_with?(sql, "SELECT") end)
-
-      # The key read answers the one key-bearing row, not the five rotations.
-      assert Enum.any?(queries, fn {_sql, {:ok, %{num_rows: rows}}} -> rows == 1 end)
-      refute Enum.any?(queries, fn {_sql, {:ok, %{num_rows: rows}}} -> rows > 1 end)
+      assert {:ok, %{seq: 1}, :accepted} =
+               append(
+                 identifier,
+                 entry(genesis.entry_hash, recovery: true, kind: "recover"),
+                 tight
+               )
     end
   end
 
-  defp collect_queries do
-    receive do
-      {:query, sql, result} -> [{sql, result} | collect_queries()]
-    after
-      0 -> []
+  describe "tombstone/2" do
+    test "every later read and write of a tombstoned identifier is gone" do
+      {identifier, genesis} = genesis!()
+      {:ok, row, :accepted} = append(identifier, entry(genesis.entry_hash))
+
+      assert :ok = IdentityLog.tombstone(server(), identifier)
+      assert :ok = IdentityLog.tombstone(server(), identifier)
+
+      assert {:error, :gone} = IdentityLog.head(server(), identifier)
+      assert {:error, :gone} = IdentityLog.position(server(), identifier, row.entry_hash)
+      assert {:error, :gone} = append(identifier, entry(row.entry_hash))
+
+      assert {:error, :gone} =
+               IdentityLog.register(
+                 server(),
+                 %{
+                   identifier: identifier,
+                   entry: genesis.entry,
+                   entry_hash: genesis.entry_hash,
+                   state: "{}"
+                 },
+                 @policy
+               )
+
+      assert {:error, :not_found} =
+               IdentityLog.tombstone(server(), "per_" <> String.duplicate("1", 64))
     end
   end
 
-  test "reads page the log, and only the platform's actor reads or writes" do
+  test "reads page the log and place a hash in it, and only the platform's actor reads or writes" do
     {identifier, genesis} = genesis!()
-    {:ok, one} = rotate(identifier, genesis.entry_hash)
-    {:ok, two} = rotate(identifier, one.entry_hash)
+    {:ok, one, :accepted} = append(identifier, entry(genesis.entry_hash))
+    {:ok, two, :accepted} = append(identifier, entry(one.entry_hash))
 
     assert {:ok, [^genesis, ^one]} = IdentityLog.entries(server(), identifier, limit: 2)
     assert {:ok, [^two]} = IdentityLog.entries(server(), identifier, after: 1)
     assert {:ok, ^two} = IdentityLog.head(server(), identifier)
+    assert {:ok, 1} = IdentityLog.position(server(), identifier, one.entry_hash)
+    assert {:error, :not_found} = IdentityLog.position(server(), identifier, digest("none"))
+    assert {:error, :not_found} = IdentityLog.head(server(), "per_" <> String.duplicate("2", 64))
 
     member = Prima.Actor.in_athanor("ath_test")
     assert {:error, :cross_tenant} = IdentityLog.entries(member, identifier)
+    assert {:error, :cross_tenant} = IdentityLog.head(member, identifier)
+    assert {:error, :cross_tenant} = IdentityLog.position(member, identifier, one.entry_hash)
     assert {:error, :cross_tenant} = IdentityLog.append(member, identifier, %{}, @policy)
+    assert {:error, :cross_tenant} = IdentityLog.tombstone(member, identifier)
   end
 end
 
 defmodule Arca.IdentityLogRaceTest do
   @moduledoc """
-  Two rotations appended on one expected head at once, on real
+  Two entries appended on one expected head at once, on real
   connections outside the sandbox: each decides under the directory's
   usage row, locked first, so the one that waits reads the head the other
   committed and is refused `:stale`. On PostgreSQL the first is held just
@@ -419,10 +306,12 @@ defmodule Arca.IdentityLogRaceTest do
           %{
             identifier: identifier,
             entry: entry,
-            entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry)
+            entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry),
+            state: "{}"
           },
           @policy
         )
+        |> then(fn {:ok, genesis, :created} -> {:ok, genesis} end)
       end)
 
     {:ok, identifier: identifier, genesis: genesis}
@@ -564,9 +453,12 @@ defmodule Arca.IdentityLogRaceTest do
       server(),
       identifier,
       %{
-        entry: "rotate-#{System.unique_integer()}",
-        entry_hash: digest("rotate"),
-        prev_hash: prev
+        entry: "add-key-#{System.unique_integer()}",
+        entry_hash: digest("add_key"),
+        prev_hash: prev,
+        kind: "add_key",
+        state: "{}",
+        recovery: false
       },
       @policy
     )
@@ -608,7 +500,7 @@ defmodule Arca.IdentityLogRaceTest do
                "the second append decided while the first held the usage row"
 
         open_gate!(gate)
-        assert {:ok, %{seq: 1}} = Task.await(first, 25_000)
+        assert {:ok, %{seq: 1}, :accepted} = Task.await(first, 25_000)
         assert {:error, :stale} = Task.await(second, 25_000)
         :ordered
       else
@@ -622,13 +514,13 @@ defmodule Arca.IdentityLogRaceTest do
 
         Enum.sort_by(
           [Task.await(first, 25_000), Task.await(second, 25_000)],
-          &match?({:ok, _}, &1)
+          &match?({:ok, _, _}, &1)
         )
       end
 
     case results do
       :ordered -> :ok
-      [{:error, :stale}, {:ok, %{seq: 1}}] -> :ok
+      [{:error, :stale}, {:ok, %{seq: 1}, :accepted}] -> :ok
     end
 
     assert {:ok, [_genesis, %{seq: 1}]} =

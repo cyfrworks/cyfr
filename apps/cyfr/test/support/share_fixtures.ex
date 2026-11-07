@@ -50,9 +50,9 @@ defmodule Cyfr.Test.ShareFixtures do
     {:ok, user} =
       Arca.Users.update(Prima.Actor.system(), owner.user.id, %{display_name: display_name})
 
-    # The keys an admission mints, so the person may open a session and
-    # confirm what they do in their own athanor.
-    :ok = Sanctum.Person.mint_keys(user)
+    # The account an admission admits, so the person may open a session
+    # and confirm what they do in their own athanor.
+    _account = Sanctum.TestContext.account!(user.id)
 
     # The suite's signed-in person (`Sanctum.TestContext.local/0`), named
     # for this person in their own athanor.

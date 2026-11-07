@@ -739,7 +739,6 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
     Arca.RecordSink.flush()
     {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
     Arca.Repo.delete_all(from(a in "athanors", where: a.id == ^athanor_id))
-    Arca.Repo.delete_all(from(i in "external_identities", where: i.user_id == ^user_id))
     Arca.Repo.delete_all(from(u in "users", where: u.id == ^user_id))
     :ok
   end

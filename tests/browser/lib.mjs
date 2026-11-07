@@ -6,9 +6,8 @@
 // browsers launched to trust the run's authority, the attacker's receiver,
 // the signed-in shell, the harness's own pages and the checks made with
 // them, Chromium's virtual WebAuthn authenticator, the percentiles of a
-// measurement, the recovery code the system layer shows, the two screens
-// of an admission, and a proof's asks of its run.sh and the redaction of
-// what it writes.
+// measurement, and a proof's asks of its run.sh and the redaction of what
+// it writes. The account pages a proof drives are account.mjs's.
 //
 // Every cell of a run is a home (tests/browser/harness.sh `browser_home`):
 // a public home of a `.test` hostname of its own, reached at https://HOST,
@@ -41,7 +40,6 @@ import { createServer as createFront } from "node:https";
 import { createSecureContext } from "node:tls";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
 import { connect } from "node:net";
 
@@ -189,16 +187,19 @@ function relay(req, res, account, errors, options, peer, answered = () => {}) {
 //
 // `homes` and `unsigned` are `readHomes`'s; the proxy is returned once
 // every home answers on its hostname, and otherwise throws naming each cell
-// that does not. With `receiver` (`startReceiver`), every request for
+// that does not. `routed` are names that are no home, each with the
+// certificate the run's authority issued for it and the listener it goes
+// to, routed as a home is but asked no readiness check: a service a
+// proof starts beside its cells, such as a registry. With `receiver` (`startReceiver`), every request for
 // `attacker.test` over plain HTTP goes to it, and with `attacker` too
 // (`readHomes`), every one over HTTPS. `proxy.refusals` lists each TLS
 // handshake a browser broke off, with the name it asked for. `proxy.errors`
 // records socket errors, including whether a request or WebSocket was
 // active; a failed forwarded request also carries `error` in `proxy.seen`.
 export async function startProxy({
-  receiver = null, answer = () => null, bodies = false, homes = [], unsigned = [], attacker = null,
+  receiver = null, answer = () => null, bodies = false, homes = [], unsigned = [], attacker = null, routed = [],
 } = {}) {
-  const routes = new Map([...homes, ...unsigned].map((route) => [route.host, route]));
+  const routes = new Map([...homes, ...unsigned, ...routed].map((route) => [route.host, route]));
   if (attacker && receiver) routes.set(attacker.host, { ...attacker, receiver });
   const tunnels = new Set();
   const cuts = new Set();
@@ -575,47 +576,6 @@ export async function virtualAuthenticator(page, options = {}) {
   };
 }
 
-// A device-first person's first passkey (the release fixture's `person`:
-// setup made them with a protected device, which stands): made by the
-// virtual authenticator and registered from the Settings page `page` is
-// on through the system layer's ceremony. The registration waits on a
-// fresh confirmation, the page's own request: its panel's ref is read, the
-// registration is seen still waiting, and the setup device confirms that
-// ref through run.sh (`device_confirmed`, the fixture's `device_confirm`,
-// asked with `ask`); the system layer then repeats the registration. With
-// `refusals`, the device's proof is first made over another digest, over
-// another ref and by another key, each of which the home must refuse with
-// the passkey still waiting. `authenticator` is the page's virtual one when
-// the proof made it already. Answers what each step saw.
-export async function firstPasskey(page, { ask, layer = "#system-layer-dialog", refusals = false, authenticator = null }) {
-  authenticator = authenticator || (await virtualAuthenticator(page));
-  const active = '[data-test="passkey"][data-state="active"]';
-  const own = `${layer} [data-test="confirmation"][data-own="true"]`;
-  await page.locator('[data-test="passkey-register"]').click({ timeout: 30_000 });
-  const panel = await page.waitForSelector(own, { timeout: 30_000 });
-  const ref = await panel.getAttribute("data-ref");
-  const preview = (await page.locator(`${own} [data-test="confirmation-preview"]`).first().innerText().catch(() => "")).slice(0, 300);
-  const activeNow = () => page.locator(active).count();
-  await sleep(2_000);
-  const waiting = (await activeNow()) === 0;
-  const refused = {};
-  if (refusals) {
-    for (const tamper of ["digest", "ref", "key"]) {
-      const answer = await ask({ op: "device_confirm", ref, tamper });
-      refused[tamper] = { refused: !!answer.error && !answer.ok, error: answer.error || null, still_waiting: (await activeNow()) === 0 };
-    }
-  }
-  const device = await ask({ op: "device_confirm", ref });
-  const registered = await page.waitForSelector(active, { timeout: 30_000 }).then(() => true).catch(() => false);
-  const held = (await authenticator.credentials()).length;
-  return {
-    ref, preview, waiting, refused, registered, held,
-    device: { operation: device.operation, preview: device.preview, confirmed: !!device.ok, error: device.error || null },
-    ok: !!ref && waiting && registered && held === 1 && !!device.ok && device.operation === "passkey.register" &&
-      Object.values(refused).every((r) => r.refused && r.still_waiting),
-  };
-}
-
 // What makes the page a secure context whose WebCrypto works: its
 // protocol, `isSecureContext`, `crypto.subtle`, and a digest made with it.
 export function secureContext(page) {
@@ -635,7 +595,8 @@ export function secureContext(page) {
 
 // The harness's fragment fixture: a fragment of `size` bytes carried from
 // home `from` to home `to` and back by top-level navigations each page
-// makes itself, as a carry travels, and read where it arrived. `intact`
+// makes itself, as a sign-in's request and answer travel to the account
+// pages and back, and read where it arrived. `intact`
 // when what arrived is what was sent; `leaked` when any request the proxy
 // saw carried it, in its address or its referrer.
 export async function roundTripFragment(page, proxy, from, to, { size = 16 * 1024, timeoutMs = 30_000 } = {}) {
@@ -808,124 +769,6 @@ export function percentiles(values) {
 }
 
 export const BROWSERS = ["chromium", "firefox", "webkit"];
-
-// ---------------------------------------------------------------------------
-// The recovery code the system layer shows
-// ---------------------------------------------------------------------------
-
-// The system layer's own reader of a recovery code, imported the first time
-// a proof reads one: from the checkout beside this file, or, inside the
-// Playwright container, which runs a copy of tests/browser apart from the
-// checkout, from the console's assets it mounts at /assets (harness.sh
-// `playwright_run`).
-const READER = "js/system_layer/recovery_code.js";
-let reader = null;
-function recoveryCodeReader() {
-  if (!reader) {
-    const beside = new URL(`../../apps/cyfr/assets/${READER}`, import.meta.url);
-    reader = import(existsSync(beside) ? beside.href : pathToFileURL(`/assets/${READER}`).href);
-  }
-  return reader;
-}
-
-// The recovery code the system layer's prompt shows, read as the person
-// reads it, and decoded by that reader: `{code, identifier, secret}`, the
-// code as shown, the identifier it names and its 32-byte secret in
-// unpadded base64url. `secrets` is the proof's list of what it handled
-// and never writes (`redact`): the code joins it as soon as it is read,
-// before it is decoded, and its secret once decoded. A code that does not
-// read throws, naming its refusal and never the code.
-export async function readCode(page, secrets) {
-  const shown = '#system-layer-dialog [data-recovery-code]:not([hidden]) [data-test="recovery-code"]';
-  await page.waitForSelector(shown, { timeout: 60_000 });
-  return decodeShown((await page.locator(shown).textContent()).trim(), secrets, "the system layer");
-}
-
-// The code `code` that `where` shows, joined to `secrets` before it is
-// decoded and its secret once decoded: `{code, identifier, secret}`.
-async function decodeShown(code, secrets, where) {
-  secrets.push(code);
-  const { decodeRecoveryCode } = await recoveryCodeReader();
-  const read = await decodeRecoveryCode(code);
-  if (read.error) throw new Error(`the recovery code ${where} shows does not read: ${read.error}`);
-  secrets.push(read.secret);
-  return { code, identifier: read.identifier, secret: read.secret };
-}
-
-// Say the recovery code the system layer shows is saved ("I saved it"),
-// and wait for the layer to close.
-export async function saveCode(page) {
-  await page.locator('#system-layer-dialog [data-test="recovery-ack"]').click();
-  await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
-}
-
-// ---------------------------------------------------------------------------
-// The two screens of an admission
-// ---------------------------------------------------------------------------
-
-// Screen 2's states once its registration has answered (`data-state` of
-// `[data-test="admission-code"]`; `registering` while it runs).
-export const ADMISSION_SETTLED = ["code", "silent", "taken", "reserved", "refused", "no_registry"];
-
-// Screen 1 of an admission, at setup, an invitation or the open sign-in
-// (PrismWeb.AdmissionCard): `name` typed into its field, without the `@`
-// the page draws before it, and the check under it awaited until it says
-// `check` (`data-check`: free, taken, invalid or unavailable). Answers the
-// sentence the check shows.
-export async function typeName(page, name, { check = "free", timeoutMs = 60_000 } = {}) {
-  await page.locator('[data-test="admission-name-input"]').fill(name);
-  const sentence = `[data-test="admission-name-check"][data-check="${check}"]`;
-  await page.waitForSelector(sentence, { timeout: timeoutMs });
-  return (await page.locator(sentence).innerText()).trim();
-}
-
-// Screen 2's state once it is one of `states`.
-export async function admissionState(page, states = ADMISSION_SETTLED, { timeoutMs = 120_000 } = {}) {
-  const handle = await page.waitForFunction((wanted) => {
-    const state = document.querySelector('[data-test="admission-code"]')?.getAttribute("data-state");
-    return wanted.includes(state) ? state : null;
-  }, states, { timeout: timeoutMs });
-  return handle.jsonValue();
-}
-
-// The recovery code screen 2 shows once its registration has answered,
-// read as the person reads it once the hook has drawn it, and decoded as
-// `readCode` decodes the system layer's. A screen 2 that settles in
-// another state throws, naming the state and what the screen says.
-export async function readAdmissionCode(page, secrets, { timeoutMs = 120_000 } = {}) {
-  const state = await admissionState(page, ADMISSION_SETTLED, { timeoutMs });
-  if (state !== "code") {
-    const says = await page.locator('[data-test="admission-code"]').innerText().catch(() => "unread");
-    throw new Error(`screen 2 shows ${state}, not the recovery code: ${JSON.stringify(says)}`);
-  }
-  const shown = '[data-test="admission-code"][data-state="code"] [data-test="recovery-code"]';
-  await page.waitForFunction((selector) => (document.querySelector(selector)?.textContent ?? "").trim() !== "",
-    shown, { timeout: 30_000 });
-  return decodeShown((await page.locator(shown).textContent()).trim(), secrets, "screen 2");
-}
-
-// The two screens up to the recovery code: `name` typed on screen 1 and
-// found free (`typeName`), "Create a passkey" tapped, with `before` run
-// just before (a proof that copies passkeys between authenticators brings
-// their counts up there), and screen 2's code read (`readAdmissionCode`).
-// Answers the code and the clock reading at the tap.
-export async function admit(page, name, secrets, { before = null, timeoutMs = 120_000 } = {}) {
-  await typeName(page, name);
-  if (before) await before();
-  const created = Date.now();
-  await page.locator('[data-test="admission-create"]').click();
-  return { recovery: await readAdmissionCode(page, secrets, { timeoutMs }), created };
-}
-
-// "I saved it" on screen 2, and the landing it leads to: the page signs
-// the browser in and leaves the admission's page for CYFR, off `/` and
-// `/auth/`. Answers the address it landed at.
-export async function saveAdmissionCode(page, { timeoutMs = 60_000 } = {}) {
-  const from = new URL(page.url()).pathname;
-  await page.locator('[data-test="admission-saved"]').click();
-  await page.waitForURL((url) => ![from, "/"].includes(url.pathname) && !url.pathname.startsWith("/auth/"), { timeout: timeoutMs });
-  return page.url();
-}
 
 // ---------------------------------------------------------------------------
 // A proof's asks of its run.sh, and what it may write

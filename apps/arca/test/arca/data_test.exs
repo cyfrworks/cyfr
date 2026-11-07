@@ -251,14 +251,6 @@ defmodule Arca.DataTest do
             last_seen_at: DateTime.utc_now(),
             created_at: DateTime.utc_now(),
             updated_at: DateTime.utc_now()
-          },
-          %{
-            key: "github|https://github.com|data#{n}",
-            provider: "github",
-            issuer: "https://github.com",
-            subject: "data#{n}",
-            first_seen_at: DateTime.utc_now(),
-            last_seen_at: DateTime.utc_now()
           }
         )
 

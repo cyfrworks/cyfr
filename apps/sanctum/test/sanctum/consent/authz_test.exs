@@ -28,10 +28,6 @@ defmodule Sanctum.Consent.AuthzTest do
   """
   use ExUnit.Case, async: true
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query
 
   alias Sanctum.Consent.Authz
@@ -128,54 +124,11 @@ defmodule Sanctum.Consent.AuthzTest do
     %{key_ctx: key_ctx, key_name: name, key_digest: digest, key_capability: key_capability}
   end
 
-  # A device paired to that person through the ceremony, and the context
-  # its channel mints once it proves its key.
+  # A device of that person's account paired here, and the context its
+  # channel mints once it proves its key.
   defp paired_device(%{session_ctx: session_ctx}) do
     source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
-    glass = Context.build(%{authenticated: false, client_ip: source})
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    digest = Prima.Device.key_digest(device_key)
-
-    confirmed =
-      Sanctum.TestContext.confirmed(
-        session_ctx,
-        :device_pairing,
-        Sanctum.Pairing.invitation_change(digest)
-      )
-
-    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{"key_digest" => digest})
-
-    {:ok, %{challenge: challenge}} =
-      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
-        holder: @holder,
-        device_key: device_key
-      })
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
-        holder: @holder,
-        device_key: device_key,
-        proof: Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
-      })
-
-    {:ok, connect} =
-      Prima.DeviceCert.Challenge.new(
-        purpose: :connect,
-        home: certificate.audience,
-        athanor: certificate.athanor,
-        client_id: client_id,
-        device_key: device_key,
-        nonce: :crypto.strong_rand_bytes(32),
-        now: System.system_time(:millisecond)
-      )
-
-    {:ok, device_ctx} =
-      Sanctum.DeviceCerts.verify_connect(
-        %{client_id: client_id, certificate: certificate, source: source},
-        Prima.DeviceCert.Proof.sign(connect, private),
-        connect
-      )
-
+    %{ctx: device_ctx} = Sanctum.Test.Devices.paired!(session_ctx.user_id, source)
     %{device_ctx: device_ctx}
   end
 
@@ -224,7 +177,7 @@ defmodule Sanctum.Consent.AuthzTest do
     test "the refusals render through the vocabulary's owner" do
       assert Authz.message(:not_standing) =~ "no longer stands"
       assert Authz.message(:unavailable) =~ "try again"
-      assert Authz.message(:identity_stale) =~ "directory"
+      assert Authz.message(:identity_stale) == Prima.Refusal.message(:identity_stale)
     end
   end
 
@@ -1095,7 +1048,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
       # A context no stored credential backs is named by this home.
       assert Jason.decode!(record(theirs, own).asker) ==
-               %{"kind" => "unbound", "name" => Sanctum.Person.home()}
+               %{"kind" => "unbound", "name" => Sanctum.origin()}
     end
 
     test "another session of the same person never takes a record this one opened, even proven",
@@ -1166,16 +1119,28 @@ defmodule Sanctum.Consent.AuthzTest do
       refute record(session_ctx, confirmed.confirmation_id).state == "consumed"
     end
 
-    test "confirmed by a passkey then revoked: the record is void, and asked for again",
+    test "confirmed by a passkey whose key the account then removed: the record is void, and asked for again",
          %{session_ctx: session_ctx} do
       confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+      %{kid: kid, head: head} = record(session_ctx, confirmed.confirmation_id)
+      %{identifier: identifier} = Sanctum.TestContext.account!(session_ctx.user_id)
+      {:ok, cached} = Arca.DirectoryHeads.get(Prima.Actor.system(), identifier)
+      assert cached.head_hash == head
 
-      %{passkey_id: passkey_id} =
-        record(session_ctx, confirmed.confirmation_id)
-        |> then(&%{passkey_id: &1.confirmed_passkey_id})
-
-      {:ok, %{voided_confirmation_ids: voided}} =
-        Arca.Passkeys.revoke(Prima.Actor.system(), passkey_id)
+      # A refresh that read the key's removal walks it as the head moves.
+      {:ok, %{retired: %{confirmation_ids: voided}}} =
+        Arca.DirectoryHeads.advance(
+          Prima.Actor.system(),
+          identifier,
+          head,
+          %{
+            genesis: cached.genesis,
+            directory_url: cached.directory_url,
+            head_hash: Prima.Digest.sha256("the head after the removal"),
+            state: cached.state
+          },
+          [{:remove_key, kid}]
+        )
 
       assert ref(confirmed.confirmation_id) in voided
 
@@ -1359,7 +1324,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
   alias Arca.Schemas.{
     Athanor,
     DeviceCertificate,
-    ExternalIdentity,
     OauthProviderCredential,
     PairedClient,
     PendingConfirmation,
@@ -1369,7 +1333,7 @@ defmodule Sanctum.Consent.AuthzRaceTest do
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
   alias Prima.DeviceCert
-  alias Sanctum.{DeviceCerts, Person}
+  alias Sanctum.DeviceCerts
   alias Sanctum.Consent.Authz
 
   # SQLite's one writer holds the write lock from a transaction's start: the two never interleave.
@@ -1394,17 +1358,16 @@ defmodule Sanctum.Consent.AuthzRaceTest do
         Arca.Repo.delete_all(where(OauthProviderCredential, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
     end)
 
-    certificate = certificate!(user_id, athanor_id, client_id, device_key)
-
     ctx =
       unboxed(fn ->
         person!(user_id, athanor_id, n, now)
+        account = Sanctum.TestContext.account!(user_id)
+        certificate = certificate!(account, athanor_id, client_id, device_key)
         paired!(user_id, athanor_id, client_id, device_key, certificate, now)
 
         # What `Sanctum.DeviceCerts` hands establish once a request under
@@ -1419,7 +1382,8 @@ defmodule Sanctum.Consent.AuthzRaceTest do
               client: client,
               user: standing.user,
               athanor: standing.athanor,
-              platform_admin: standing.platform_admin
+              platform_admin: standing.platform_admin,
+              identifier: account.identifier
             },
             []
           )
@@ -1443,15 +1407,17 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           created_at: now,
           updated_at: now
         },
-        %{
-          key: "github|https://github.com|consume-race#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "consume-race#{n}",
-          first_seen_at: now,
-          last_seen_at: now
-        },
-        also: &Sanctum.Person.mint_keys/1
+        also: fn person ->
+          %{identifier: identifier} = Sanctum.TestContext.account!(person.id)
+
+          ExUnit.Callbacks.on_exit(fn ->
+            unboxed(fn ->
+              Arca.Repo.delete_all(where(Arca.Schemas.DirectoryHead, identifier: ^identifier))
+            end)
+          end)
+
+          :ok
+        end
       )
 
     {:ok, _} =
@@ -1466,17 +1432,17 @@ defmodule Sanctum.Consent.AuthzRaceTest do
 
   # The certificate the device stands under. Establishing a context checks
   # that the rows agree with it, not its signature: the verifier did that.
-  defp certificate!(user_id, athanor_id, client_id, device_key) do
+  defp certificate!(account, athanor_id, client_id, device_key) do
     now = System.os_time(:millisecond)
     {_public, signer} = :crypto.generate_key(:eddsa, :ed25519)
 
     {:ok, certificate} =
       DeviceCert.new(
-        device_key: device_key,
+        kid: Prima.Identity.Key.kid(device_key),
         client_id: client_id,
-        subject: %{kind: :local, user_id: user_id},
-        issuer: Person.home(),
-        audience: Person.home(),
+        identifier: account.identifier,
+        head: account.head,
+        audience: Sanctum.origin(),
         athanor: athanor_id,
         not_before: now,
         expires_at: now + 3_600_000
@@ -1496,6 +1462,8 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           source_kind: "device_cert",
           source_id: client_id,
           device_public_key: device_key,
+          kid: certificate.kid,
+          head: certificate.head,
           standing: "active",
           inserted_at: now,
           updated_at: now
@@ -1511,9 +1479,11 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           athanor_id: athanor_id,
           paired_client_id: client_id,
           user_id: user_id,
-          subject_kind: "local",
+          identifier: certificate.identifier,
+          kid: certificate.kid,
+          head: certificate.head,
           device_public_key: device_key,
-          issuing_home: certificate.issuer,
+          issuing_home: certificate.audience,
           audience_home: certificate.audience,
           not_before: usec(DateTime.from_unix!(certificate.not_before, :millisecond)),
           expires_at: usec(DateTime.from_unix!(certificate.expires_at, :millisecond)),
@@ -1529,17 +1499,10 @@ defmodule Sanctum.Consent.AuthzRaceTest do
   defp usec(%DateTime{microsecond: {us, _precision}} = at), do: %{at | microsecond: {us, 6}}
 
   # The device's context naming a record of its change, opened under it
-  # and proven: the person confirmed it with a code mailed to them.
+  # and proven: the person confirmed it with a passkey of their account.
   defp confirmed!(ctx) do
     {:error, {:confirmation_required, %{id: id}}} = Authz.check(ctx, :credential_entry, @change)
-
-    {:ok, %{state: "confirmed"}} =
-      Arca.PendingConfirmations.confirm(
-        Prima.Actor.in_athanor(ctx.athanor_id),
-        Prima.Confirmation.ref(id),
-        %{proof: "email_code"}
-      )
-
+    %{state: "confirmed"} = Sanctum.TestContext.prove!(ctx, id)
     %{ctx | confirmation_id: id}
   end
 

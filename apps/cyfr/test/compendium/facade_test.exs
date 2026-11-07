@@ -92,6 +92,7 @@ defmodule Compendium.FacadeTest do
     agent_type_of: 1,
     agents: 1,
     canvas_versions: 2,
+    complete_registry: 2,
     discover_components: 1,
     encode_activation_graph: 1,
     get_blob: 2,

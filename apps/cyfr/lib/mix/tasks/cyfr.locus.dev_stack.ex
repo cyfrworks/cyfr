@@ -40,8 +40,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   first writes into `.env`, made mode 0600 before it is written, each
   setting a mix boot needs that neither `.env` nor the environment sets:
-  `CYFR_GITHUB_CLIENT_ID` from `.env.example`, and `CYFR_SETUP_TOKEN`,
-  `CYFR_LOCUS_RUNTIME_ROOT` and `CYFR_LOCUS_BACKENDS_KEY` minted as
+  `CYFR_SETUP_TOKEN`, `CYFR_LOCUS_RUNTIME_ROOT` and `CYFR_LOCUS_BACKENDS_KEY` minted as
   `cyfr init` mints them, 32 random bytes as 64 lowercase hexadecimal
   digits. `CYFR_LOCUS_BUILDS_KEY`, which a boot refuses without its URL, is
   never written: unset, it is minted for the run. A value already set is
@@ -88,14 +87,13 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   @root "CYFR_LOCUS_RUNTIME_ROOT"
   @backends_key "CYFR_LOCUS_BACKENDS_KEY"
   @builds_key "CYFR_LOCUS_BUILDS_KEY"
-  @github "CYFR_GITHUB_CLIENT_ID"
   @setup "CYFR_SETUP_TOKEN"
   @host_api_url "CYFR_HOST_API_URL"
   @bind "CYFR_BIND_ADDRESS"
 
   # What a mix boot needs that the stack provisions when nothing sets it,
   # in the order the lines are written.
-  @provisioned [@github, @setup, @root, @backends_key]
+  @provisioned [@setup, @root, @backends_key]
   @keys [@root, @backends_key, @builds_key]
 
   @impl Mix.Task
@@ -422,7 +420,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   # A value held, checked by the reader the boot checks it with: the root
   # decoded as it stands (`config/runtime.exs`), the setup token trimmed and
-  # held to `Sanctum.setup_token?/1`, an island key through
+  # held to `Prima.Device.setup_token?/1`, an island key through
   # `Prima.EnvValue.hex_key/2`, which trims it. Whitespace alone is
   # refused: it is a value of none of them.
   defp held(name, text) do
@@ -437,7 +435,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
       name == @setup ->
         {:ok, token} = Prima.EnvValue.text(fn _ -> text end, name)
 
-        if Sanctum.setup_token?(token),
+        if Prima.Device.setup_token?(token),
           do: :ok,
           else:
             {:error,
@@ -473,21 +471,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
       true ->
         {:write, key} = minted(@builds_key)
         {:ok, key}
-    end
-  end
-
-  defp minted(@github) do
-    example = Path.join(File.cwd!(), ".env.example")
-
-    with true <- File.regular?(example),
-         id when is_binary(id) and id != "" <-
-           Map.get(Cyfr.EnvFiles.source!([example], side_effect: false), @github) do
-      {:write, id}
-    else
-      _ ->
-        {:error,
-         "#{@github} is set in neither .env nor the environment, and .env.example names " <>
-           "none to copy. Add the line #{@github}=<your GitHub OAuth app's client id> to .env."}
     end
   end
 

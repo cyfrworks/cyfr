@@ -100,11 +100,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Users VaultStorage WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
-      {~w(CarryActions CompanyAuthorizations CompanyLoginAttempts
-          DeviceCertificates DeviceCertifications DevicePinEvaluators DirectoryHeads IdentityAttempts IdentityLog
-          Invitations PairingInvitations Passkeys PendingConfirmations PersonIdentities
+      {~w(CompanyAuthorizations CompanyLoginAttempts
+          DeviceCertificates DirectoryHandles DirectoryHeads IdentityLog
+          Invitations PendingConfirmations PersonIdentities
           RequestRateWindows),
-       "the identity, device, device PIN, passkey, confirmation, carry, " <>
+       "the identity, device, confirmation, " <>
          "admission invitation, company sign-in and pre-authentication rate rows Sanctum " <>
          "reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
@@ -120,8 +120,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Cache.Epoch),
        "the cache's one epoch rule, which Sanctum's shape derivation and Compendium read " <>
          "beside Cache and Cache.Keys"},
-      {~w(InstallationClaims),
-       "the installation mode Sanctum installs and the first-person mint reads"},
+      {~w(InstallationClaims), "whether this CYFR is set up, which Sanctum's setup check reads"},
       {~w(StorageReserve),
        "the storage reserve's latch, which the host's monitor sets and Sanctum's gate reads"},
       {~w(ObjectRevisions),
@@ -136,9 +135,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "handler and the overlay port it installs"}
     ],
     Sanctum => [
-      {~w(ApiKey Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
-          Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
-          Cipher.Rotation ClientIp CompanyLogin Consent.Loader Consent.Proof
+      {~w(ApiKey Auth Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller
+          Cipher Cipher.Rotation ClientIp CompanyLogin Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement PolicyLog Provisioning Session SignIn Tenancy Tenancy.Athanors
@@ -150,9 +148,6 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "a protected device's enrollment, unlock ticket, lock and storage report, which the " <>
          "enrollment ingress, the device channel and the unlock page call, each rostered " <>
          "for its callers in `Cyfr.Boundaries`' surface rows"},
-      {~w(DevicePin),
-       "a locked remote device's PIN evaluation and reset, which the PIN ingress calls, " <>
-         "rostered for its callers in `Cyfr.Boundaries`' surface rows"},
       {~w(Handle Newcomer),
        "the setup page's first-person admission (`Newcomer`) and the identity card's " <>
          "live handle check (`Handle`), each rostered for its callers in `Cyfr.Boundaries`' " <>
@@ -169,13 +164,15 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Refusals),
        "the gate's refusal classification and renderer, which the layers above answer " <>
          "a refusal with"},
-      {~w(Carry Directory.Client IdentityFreshness Person),
-       "the person's keys, the directory client, identity freshness and the sign-in " <>
-         "carry, which the identity domain composes and the host's suites drive"},
-      {~w(Providers.Assertion Providers.Confirmation Providers.Pairing Providers.Passkey
-          Providers.Person),
-       "the person, pairing, passkey and confirmation operations, declared here and " <>
-         "driven by the host's suites through their handlers"},
+      {~w(Directory.Client IdentityFreshness),
+       "the directory client and identity freshness, which the identity domain composes " <>
+         "and the host's suites drive"},
+      {~w(Directory.Handles),
+       "the handle registry a CYFR serving a directory serves beside it, whose routes " <>
+         "Emissary's handle controller answers, rostered in `Cyfr.Boundaries`' surface rows"},
+      {~w(Providers.Confirmation Providers.Pairing Providers.Passkey),
+       "the pairing, passkey and confirmation operations, declared here and driven by " <>
+         "the host's suites through their handlers"},
       {~w(Consent.Accounts),
        "the assistant's read of which named accounts an app's own ingress binds and " <>
          "which entry a name resolves to, never a value, never a write"},

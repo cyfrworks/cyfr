@@ -96,7 +96,7 @@ defmodule PrismWeb.CompanyLoginControllerTest do
       {:sanctum, :company_login},
       {:sanctum, :oidc_issuer},
       {:sanctum, :oidc_reauth_client},
-      {:ueberauth, Ueberauth}
+      {:sanctum, :oidc_client}
     ]
 
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.fetch_env(app, key)} end)
@@ -113,12 +113,7 @@ defmodule PrismWeb.CompanyLoginControllerTest do
     Application.put_env(:sanctum, :oidc_issuer, @issuer)
     Application.put_env(:sanctum, :oidc_reauth_client, Issuer)
 
-    Application.put_env(:ueberauth, Ueberauth,
-      providers: [
-        oidcc:
-          {Ueberauth.Strategy.Oidcc, issuer: :cyfr_oidc, client_id: "cid", client_secret: "csec"}
-      ]
-    )
+    Application.put_env(:sanctum, :oidc_client, %{client_id: "cid", client_secret: "csec"})
 
     Application.put_env(:sanctum, :company_login, %{mode: :join, days: nil, issuer: :oidc})
     start_supervised!({ProviderConfiguration, @issuer})
@@ -211,7 +206,7 @@ defmodule PrismWeb.CompanyLoginControllerTest do
       assert %URI{scheme: "https", host: "idp.example.com", path: "/authorize"} = uri
       assert query["response_type"] == "code"
       assert query["client_id"] == "cid"
-      assert query["redirect_uri"] == Sanctum.Person.home() <> "/auth/company/callback"
+      assert query["redirect_uri"] == Sanctum.origin() <> "/auth/company/callback"
       assert query["redirect_uri"] == request.redirect_uri
       assert is_binary(query["state"]) and query["state"] == request.state
       assert is_binary(query["nonce"]) and query["nonce"] == request.nonce

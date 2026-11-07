@@ -17,9 +17,12 @@ import (
 )
 
 // identityVectors is the part of tests/fixtures/identity.json, the vector
-// file of Prima.Identity, that names people by their identifiers.
+// file of Prima.Identity, that names people by their identifiers: each
+// person's identifier beside the passkey user id its digest bytes make.
 type identityVectors struct {
-	Identifiers map[string]string `json:"identifiers"`
+	Identifiers map[string]struct {
+		Identifier string `json:"identifier"`
+	} `json:"identifiers"`
 }
 
 func vectorIdentifiers(t *testing.T) []string {
@@ -36,8 +39,11 @@ func vectorIdentifiers(t *testing.T) []string {
 		t.Fatal("the vector file names no identifier")
 	}
 	identifiers := make([]string, 0, len(v.Identifiers))
-	for _, identifier := range v.Identifiers {
-		identifiers = append(identifiers, identifier)
+	for name, person := range v.Identifiers {
+		if person.Identifier == "" {
+			t.Fatalf("the vector file names no identifier for %s", name)
+		}
+		identifiers = append(identifiers, person.Identifier)
 	}
 	return identifiers
 }

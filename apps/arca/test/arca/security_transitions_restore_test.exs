@@ -16,11 +16,11 @@ defmodule Arca.SecurityTransitionsRestoreTest do
   (`Arca.ExecutionAttempts.takeover/3` under the standing check). A crash
   before the commit, a lost slot or a postcondition that does not hold
   leaves the store and the marker as they were, and the next boot applies
-  the transition once. Each person's `restore_people` row closes on its
-  own; the shared threads, a pair among them and an invitation into one
-  stay as they were, frozen while one of their people recovers; the
-  kit's challenge is redeemed once, before its expiry, for its own
-  person, while that person's row is open.
+  the transition once. The shared threads, a pair among them and an
+  invitation into one stay as they were. Every device certificate is
+  revoked and every paired client suspended, for good: a device comes
+  back by a fresh hello. What the person re-enables is listed in their
+  checklist (`restore_checklist/2`).
   """
 
   use ExUnit.Case, async: false
@@ -58,14 +58,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
           last_seen_at: now(),
           created_at: now(),
           updated_at: now()
-        },
-        %{
-          key: "github|https://github.com|rs#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "rs#{n}",
-          first_seen_at: now(),
-          last_seen_at: now()
         }
       )
 
@@ -198,20 +190,49 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     id
   end
 
-  defp passkey!(user_id, state) do
-    id = Prima.UUID7.generate_id("psk")
+  # A certificate this home issued the paired client `client_id`, in
+  # `state`, unexpired.
+  defp certificate!(athanor_id, user_id, client_id, state) do
+    id = Prima.UUID7.generate_id("dcr")
 
-    insert!(Schemas.Passkey, %{
+    insert!(Schemas.DeviceCertificate, %{
       id: id,
+      athanor_id: athanor_id,
+      paired_client_id: client_id,
       user_id: user_id,
-      credential_id: "cred-#{uniq()}",
-      rp_id: "home.example",
-      relying_home: "https://home.example",
-      public_key: "cose",
-      sign_count: 0,
+      identifier: "per_" <> Prima.Digest.sha256_hex("cert-#{uniq()}"),
+      kid: Prima.Digest.sha256("kid-#{uniq()}"),
+      head: Prima.Digest.sha256("head-#{uniq()}"),
+      device_public_key: :crypto.strong_rand_bytes(32),
+      issuing_home: "https://home.example",
+      audience_home: "https://home.example",
+      not_before: now(),
+      expires_at: DateTime.add(now(), 3_600, :second),
+      certificate: "signed-certificate",
+      digest: Prima.Digest.sha256("cert-#{uniq()}"),
       state: state,
-      registration_digest: Prima.Digest.sha256("reg-#{uniq()}"),
-      possession_verified: true,
+      revoked_at: if(state == "revoked", do: now()),
+      inserted_at: now(),
+      updated_at: now()
+    })
+
+    id
+  end
+
+  # The client of a passkey of the person's account that signed in here,
+  # in `standing`: known by its key, holding no device key.
+  defp passkey!(athanor_id, user_id, standing) do
+    id = Prima.UUID7.generate_id("pcl")
+
+    insert!(Schemas.PairedClient, %{
+      id: id,
+      athanor_id: athanor_id,
+      user_id: user_id,
+      source_kind: "passkey",
+      source_id: id,
+      kid: Prima.Digest.sha256("passkey-#{uniq()}"),
+      head: Prima.Digest.sha256("head-#{uniq()}"),
+      standing: standing,
       inserted_at: now(),
       updated_at: now()
     })
@@ -237,7 +258,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       opener: "session:restore-test",
       asker: ~s({"kind":"session"}),
       state: "pending",
-      email_code_failures: 0,
       opened_at: now(),
       expires_at: DateTime.add(now(), 300, :second),
       inserted_at: now(),
@@ -499,7 +519,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     alice = person!()
     :ok = administrator!(alice.id)
     bob = person!()
-    # Carol signs in only through a door: no method for a restore to suspend.
     carol = person!()
     own = athanor!(alice.id)
     bob_own = athanor!(bob.id)
@@ -521,12 +540,13 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     {open_execution, open_attempt} = run!(own.id, alice.id, "running", "running")
     {paused_execution, paused_attempt} = run!(bob_own.id, bob.id, "paused", "paused")
     {done_execution, done_attempt} = run!(own.id, alice.id, "completed", "completed")
+    paired = paired!(own.id, alice.id, "active")
 
     %{
       alice: alice,
       bob: bob,
       carol: carol,
-      bob_passkey: passkey!(bob.id, "active"),
+      bob_passkey: passkey!(bob_own.id, bob.id, "active"),
       own: own,
       bob_own: bob_own,
       shared_thread: shared_thread,
@@ -536,11 +556,12 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       key: key!(own.id, alice.id),
       revoked_key: key!(own.id, alice.id, %{revoked: true}),
       webhook: webhook!(own.id, alice.id, profile),
-      paired: paired!(own.id, alice.id, "active"),
+      paired: paired,
       revoked_paired: paired!(own.id, alice.id, "revoked"),
-      passkey: passkey!(alice.id, "active"),
-      pending_passkey: passkey!(alice.id, "pending"),
-      revoked_passkey: passkey!(alice.id, "revoked"),
+      certificate: certificate!(own.id, alice.id, paired, "active"),
+      revoked_certificate: certificate!(own.id, alice.id, paired, "revoked"),
+      passkey: passkey!(own.id, alice.id, "active"),
+      revoked_passkey: passkey!(own.id, alice.id, "revoked"),
       confirmation: confirmation!(own.id, alice.id),
       invitation: admission_invitation!(alice),
       expired_invitation:
@@ -580,13 +601,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     }
   end
 
-  defp frozen_threads,
-    do:
-      SecurityTransitions.frozen_shared_threads()
-      |> distinct(true)
-      |> Arca.Repo.all()
-      |> Enum.sort()
-
   defp marked! do
     {:ok, restore_id} = SecurityTransitions.mark_restore(server())
     restore_id
@@ -594,12 +608,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
 
   defp marker,
     do: Arca.Repo.one(from(m in Schemas.ServerMeta, where: m.key == "restore_pending"))
-
-  defp rows(user_id),
-    do:
-      Arca.Repo.all(
-        from(r in Schemas.RestorePerson, where: r.user_id == ^user_id, order_by: r.restore_id)
-      )
 
   # The standing check a successor's takeover runs under, as the identity
   # domain asks it (`Sanctum.ExecutionStanding`): the athanor active at
@@ -648,7 +656,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert {:ok, :none} = SecurityTransitions.restore(slot: :none)
       assert Arca.Repo.exists?(where(Schemas.Session, token_hash: ^hd(fixture.sessions)))
       assert get(Schemas.ApiKey, fixture.key).suspended == false
-      assert rows(fixture.alice.id) == []
+      assert get(Schemas.DeviceCertificate, fixture.certificate).state == "active"
     end
   end
 
@@ -676,25 +684,34 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Athanor, fixture.own.id).security_generation == own_generation + 1
 
       # The administrator's mark stands: the restore raises her generation
-      # and suspends her methods, and takes no capability.
+      # and suspends her bindings here, and takes no capability.
       assert get(Schemas.User, fixture.alice.id).platform_admin_at == admin_at
 
       # Sessions are retired.
       for hash <- fixture.sessions,
           do: refute(Arca.Repo.exists?(where(Schemas.Session, token_hash: ^hash)))
 
-      # Keys, webhooks, devices and passkeys are suspended; revoked and
-      # pending rows keep their state.
+      # Keys, webhooks, devices and passkeys are suspended; revoked rows
+      # keep their state.
       assert %{suspended: true, revoked: false} = get(Schemas.ApiKey, fixture.key)
       assert %{suspended: false, revoked: true} = get(Schemas.ApiKey, fixture.revoked_key)
       assert get(Schemas.Webhook, fixture.webhook).suspended == true
       assert get(Schemas.PairedClient, fixture.paired).standing == "suspended"
       assert get(Schemas.PairedClient, fixture.revoked_paired).standing == "revoked"
-      assert get(Schemas.Passkey, fixture.passkey).state == "suspended"
-      assert get(Schemas.Passkey, fixture.pending_passkey).state == "pending"
-      assert get(Schemas.Passkey, fixture.revoked_passkey).state == "revoked"
+      assert get(Schemas.PairedClient, fixture.passkey).standing == "suspended"
+      assert get(Schemas.PairedClient, fixture.revoked_passkey).standing == "revoked"
       assert change.suspended_api_key_ids == [fixture.key]
-      assert change.suspended_passkey_ids == Enum.sort([fixture.passkey, fixture.bob_passkey])
+
+      assert change.suspended_paired_client_ids ==
+               Enum.sort([fixture.paired, fixture.passkey, fixture.bob_passkey])
+
+      # Every certificate this home issued is revoked: a device comes back
+      # by a fresh hello, never by its old certificate.
+      assert %{state: "revoked", revoked_at: %DateTime{}} =
+               get(Schemas.DeviceCertificate, fixture.certificate)
+
+      assert get(Schemas.DeviceCertificate, fixture.revoked_certificate).state == "revoked"
+      assert change.revoked_device_certificate_ids == [fixture.certificate]
 
       # Pending confirmations are deleted.
       refute get(Schemas.PendingConfirmation, fixture.confirmation)
@@ -766,19 +783,9 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Approval, fixture.approval).status == "expired"
       assert get(Schemas.Approval, fixture.decided_approval).status == "approved"
 
-      # One open row for each person whose passkey or device the restore
-      # suspended; a door-only person has nothing to recover and no row.
-      for person <- [fixture.alice, fixture.bob] do
-        assert [%{restore_id: ^restore_id, open: true, closed_at: nil}] = rows(person.id)
-      end
-
-      assert change.user_ids == Enum.sort([fixture.alice.id, fixture.bob.id])
-      assert rows(fixture.carol.id) == []
-
       # The shared thread, the pair and the invitation into the thread stay
       # the rows they were: no shared thread's standing moves with a
-      # restore. Each thread holds a person still recovering, so each is
-      # frozen until they have (`frozen_shared_threads/0`).
+      # restore, and none holds anyone out.
       assert Enum.map(threads, &get(Schemas.SharedThread, &1)) == threads_before
       assert [%{kind: "shared"}, %{kind: "pair"}] = threads_before
       assert Enum.all?(threads_before, &(&1.status == "active"))
@@ -787,59 +794,16 @@ defmodule Arca.SecurityTransitionsRestoreTest do
                get(Schemas.SharedThreadMember, fixture.shared_invite.id)
 
       assert get(Schemas.SharedThreadMember, fixture.shared_invite.id) == invite_before
-      assert frozen_threads() == Enum.sort(threads)
+
+      assert {:ok, %{status: "active"}} =
+               Arca.SharedThreadMembers.seat(
+                 server(),
+                 fixture.shared_thread.id,
+                 fixture.carol.id,
+                 fixture.alice.id
+               )
 
       assert is_nil(marker())
-    end
-
-    test "a second restore supersedes the first: its rows close, its kit goes, and whoever " <>
-           "still holds a suspended method recovers again" do
-      fixture = home!()
-      first = marked!()
-      assert {:ok, %{restore_id: ^first}} = SecurityTransitions.restore(slot: :none)
-
-      # Alice proved her kit under the first restore and left a challenge.
-      later = DateTime.add(Arca.ServerMetaStorage.now!(), 60_000, :millisecond)
-      challenge = Prima.Digest.sha256("first-challenge")
-      credential = Prima.Digest.sha256("first-credential")
-
-      :ok =
-        SecurityTransitions.put_kit_challenge(server(), fixture.alice.id, first, challenge, later)
-
-      :ok =
-        SecurityTransitions.put_kit_challenge(
-          server(),
-          fixture.alice.id,
-          first,
-          Prima.Digest.sha256("unused"),
-          later
-        )
-
-      :ok =
-        SecurityTransitions.redeem_kit_challenge(
-          server(),
-          fixture.alice.id,
-          first,
-          challenge,
-          credential,
-          later
-        )
-
-      second = marked!()
-
-      assert {:ok, %{restore_id: ^second, superseded_restore_ids: [^first]}} =
-               SecurityTransitions.restore(slot: :none)
-
-      # Her methods are still suspended: she recovers under the second.
-      assert [%{restore_id: ^first, open: false}, %{restore_id: ^second, open: true}] =
-               rows(fixture.alice.id)
-
-      assert {:error, :not_standing} =
-               SecurityTransitions.kit_credential(server(), fixture.alice.id, credential)
-
-      assert {:error, :not_standing} = SecurityTransitions.kit_holder(server(), credential)
-
-      refute Arca.Repo.exists?(from(m in Schemas.ServerMeta, where: like(m.key, "restore_kit%")))
     end
 
     test "is applied once: a boot after it finds no marker and moves nothing again" do
@@ -854,7 +818,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert {:ok, :none} = SecurityTransitions.restore(slot: :none)
       assert get(Schemas.ApiKey, fixture.key).suspended == false
       assert get(Schemas.User, fixture.alice.id).security_generation == generation
-      assert [%{restore_id: ^restore_id}] = rows(fixture.alice.id)
     end
 
     test "no open run resumes, even after its profile is re-consented and the home boots again" do
@@ -896,7 +859,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     test "a statement that fails rolls everything back, and the next boot applies it once" do
       fixture = home!()
       restore_id = marked!()
-      trigger = fail_on!("passkeys", "UPDATE")
+      trigger = fail_on!("paired_clients", "UPDATE")
 
       assert {:error, :database_error} = SecurityTransitions.restore(slot: :none)
 
@@ -906,14 +869,14 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Profile, fixture.profile).status == "active"
       assert get(Schemas.Execution, fixture.open_execution).status == "running"
       assert get(Schemas.Invitation, fixture.invitation).revoked_at == nil
-      assert rows(fixture.alice.id) == []
+      assert get(Schemas.DeviceCertificate, fixture.certificate).state == "active"
       assert %{value: ^restore_id} = marker()
 
       clear_failure!(trigger)
       assert {:ok, %{restore_id: ^restore_id}} = SecurityTransitions.restore(slot: :none)
       assert {:ok, :none} = SecurityTransitions.restore(slot: :none)
-      assert [%{restore_id: ^restore_id, open: true}] = rows(fixture.alice.id)
-      assert get(Schemas.Passkey, fixture.passkey).state == "suspended"
+      assert get(Schemas.PairedClient, fixture.passkey).standing == "suspended"
+      assert get(Schemas.DeviceCertificate, fixture.certificate).state == "revoked"
     end
 
     test "a row a statement leaves standing fails the postcondition and rolls back" do
@@ -923,8 +886,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
 
       try do
         assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
-        assert get(Schemas.Passkey, fixture.passkey).state == "active"
-        assert rows(fixture.alice.id) == []
+        assert get(Schemas.PairedClient, fixture.passkey).standing == "active"
         assert marker()
       after
         clear_failure!(trigger)
@@ -954,7 +916,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       try do
         assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
         assert get(Schemas.Invitation, fixture.invitation).revoked_at == nil
-        assert get(Schemas.Passkey, fixture.passkey).state == "active"
+        assert get(Schemas.PairedClient, fixture.passkey).standing == "active"
         assert marker()
       after
         clear_failure!(trigger)
@@ -973,247 +935,33 @@ defmodule Arca.SecurityTransitionsRestoreTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Each person's recovery
+  # The checklist
   # ---------------------------------------------------------------------------
 
-  describe "restore_people" do
+  describe "the checklist" do
     setup do
       fixture = home!()
-      restore_id = marked!()
+      marked!()
       {:ok, _change} = SecurityTransitions.restore(slot: :none)
-      %{fixture: fixture, restore_id: restore_id}
+      %{fixture: fixture}
     end
 
-    test "one person's close leaves another's open", %{fixture: f, restore_id: restore_id} do
-      assert {:ok, ^restore_id} = SecurityTransitions.restore_open(server(), f.alice.id)
-      assert {:ok, ^restore_id} = SecurityTransitions.restore_open(server(), f.bob.id)
-
-      {:ok, closed} =
-        Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(f.alice.id) end)
-
-      assert closed == [restore_id]
-      assert {:ok, nil} = SecurityTransitions.restore_open(server(), f.alice.id)
-      assert {:ok, ^restore_id} = SecurityTransitions.restore_open(server(), f.bob.id)
-      assert [%{open: false, closed_at: %DateTime{}}] = rows(f.alice.id)
-    end
-
-    test "only the system reads a person's row" do
-      assert {:error, :cross_tenant} =
-               SecurityTransitions.restore_open(Prima.Actor.in_athanor("ath_x"), "usr_x")
-    end
-
-    test "the checklist names what the person must re-enable, re-consent and rotate", %{
-      fixture: f,
-      restore_id: restore_id
-    } do
+    test "names what the person must re-enable, re-consent and rotate", %{fixture: f} do
       assert {:ok, list} = SecurityTransitions.restore_checklist(server(), f.alice.id)
-      assert list.restore_id == restore_id
-      assert list.restored
-
-      # A person who arrived after the restore was never restored.
-      newcomer = person!()
-
-      assert {:ok, %{restored: false, restore_id: nil}} =
-               SecurityTransitions.restore_checklist(server(), newcomer.id)
-
+      assert Enum.sort(Map.keys(list)) == [:api_keys, :profiles, :vault_entries, :webhooks]
       assert Enum.map(list.api_keys, & &1.id) == [f.key]
       assert Enum.map(list.webhooks, & &1.id) == [f.webhook]
-      assert Enum.map(list.paired_clients, & &1.id) == [f.paired]
-      assert Enum.map(list.passkeys, & &1.id) == [f.passkey]
       assert f.profile in Enum.map(list.profiles, & &1.id)
       assert f.vault in Enum.map(list.vault_entries, & &1.id)
 
       # Another person's checklist holds nothing of hers.
       assert {:ok, bob} = SecurityTransitions.restore_checklist(server(), f.bob.id)
-      assert bob.api_keys == [] and bob.paired_clients == []
-      assert Enum.map(bob.passkeys, & &1.id) == [f.bob_passkey]
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # The kit's challenge and credential
-  # ---------------------------------------------------------------------------
-
-  describe "the kit's challenge" do
-    setup do
-      fixture = home!()
-      restore_id = marked!()
-      {:ok, _change} = SecurityTransitions.restore(slot: :none)
-      %{fixture: fixture, restore_id: restore_id}
+      assert bob.api_keys == [] and bob.webhooks == []
     end
 
-    defp later(ms), do: DateTime.add(Arca.ServerMetaStorage.now!(), ms, :millisecond)
-
-    test "is redeemed once for a credential that stands while the row is open", %{
-      fixture: f,
-      restore_id: restore_id
-    } do
-      user = f.alice.id
-      challenge = Prima.Digest.sha256("challenge")
-      credential = Prima.Digest.sha256("credential")
-
-      assert :ok =
-               SecurityTransitions.put_kit_challenge(
-                 server(),
-                 user,
-                 restore_id,
-                 challenge,
-                 later(60_000)
-               )
-
-      assert :ok =
-               SecurityTransitions.redeem_kit_challenge(
-                 server(),
-                 user,
-                 restore_id,
-                 challenge,
-                 credential,
-                 later(60_000)
-               )
-
-      # A replay of the same challenge redeems nothing.
-      assert {:error, :challenge_refused} =
-               SecurityTransitions.redeem_kit_challenge(
-                 server(),
-                 user,
-                 restore_id,
-                 challenge,
-                 Prima.Digest.sha256("again"),
-                 later(60_000)
-               )
-
-      assert {:ok, ^restore_id} = SecurityTransitions.kit_credential(server(), user, credential)
-
-      assert {:error, :not_standing} =
-               SecurityTransitions.kit_credential(server(), user, Prima.Digest.sha256("other"))
-
-      # Another person's credential is not hers.
-      assert {:error, :not_standing} =
-               SecurityTransitions.kit_credential(server(), f.bob.id, credential)
-
-      # The row's close ends the credential.
-      {:ok, _} = Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(user) end)
-
-      assert {:error, :not_standing} =
-               SecurityTransitions.kit_credential(server(), user, credential)
-    end
-
-    test "a challenge anyone asks for displaces neither another challenge nor the credential",
-         %{fixture: f, restore_id: restore_id} do
-      user = f.alice.id
-      first = Prima.Digest.sha256("first")
-      second = Prima.Digest.sha256("second")
-      credential = Prima.Digest.sha256("credential")
-
-      for challenge <- [first, second] do
-        assert :ok =
-                 SecurityTransitions.put_kit_challenge(
-                   server(),
-                   user,
-                   restore_id,
-                   challenge,
-                   later(60_000)
-                 )
-      end
-
-      assert :ok =
-               SecurityTransitions.redeem_kit_challenge(
-                 server(),
-                 user,
-                 restore_id,
-                 first,
-                 credential,
-                 later(60_000)
-               )
-
-      assert :ok =
-               SecurityTransitions.put_kit_challenge(
-                 server(),
-                 user,
-                 restore_id,
-                 Prima.Digest.sha256("third"),
-                 later(60_000)
-               )
-
-      assert {:ok, ^restore_id} = SecurityTransitions.kit_credential(server(), user, credential)
-
-      assert :ok =
-               SecurityTransitions.redeem_kit_challenge(
-                 server(),
-                 user,
-                 restore_id,
-                 second,
-                 Prima.Digest.sha256("credential-2"),
-                 later(60_000)
-               )
-    end
-
-    test "an expired challenge, another person's or a closed row is refused", %{
-      fixture: f,
-      restore_id: restore_id
-    } do
-      challenge = Prima.Digest.sha256("c1")
-      cred = Prima.Digest.sha256("cred")
-
-      assert :ok =
-               SecurityTransitions.put_kit_challenge(
-                 server(),
-                 f.alice.id,
-                 restore_id,
-                 challenge,
-                 later(-1)
-               )
-
-      assert {:error, :challenge_refused} =
-               SecurityTransitions.redeem_kit_challenge(
-                 server(),
-                 f.alice.id,
-                 restore_id,
-                 challenge,
-                 cred,
-                 later(60_000)
-               )
-
-      assert :ok =
-               SecurityTransitions.put_kit_challenge(
-                 server(),
-                 f.alice.id,
-                 restore_id,
-                 challenge,
-                 later(60_000)
-               )
-
-      assert {:error, :challenge_refused} =
-               SecurityTransitions.redeem_kit_challenge(
-                 server(),
-                 f.bob.id,
-                 restore_id,
-                 challenge,
-                 cred,
-                 later(60_000)
-               )
-
-      {:ok, _} =
-        Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(f.alice.id) end)
-
-      assert {:error, :closed} =
-               SecurityTransitions.redeem_kit_challenge(
-                 server(),
-                 f.alice.id,
-                 restore_id,
-                 challenge,
-                 cred,
-                 later(60_000)
-               )
-
-      assert {:error, :closed} =
-               SecurityTransitions.put_kit_challenge(
-                 server(),
-                 f.alice.id,
-                 restore_id,
-                 challenge,
-                 later(60_000)
-               )
+    test "only the system reads a person's checklist" do
+      assert {:error, :cross_tenant} =
+               SecurityTransitions.restore_checklist(Prima.Actor.in_athanor("ath_x"), "usr_x")
     end
   end
 

@@ -637,7 +637,7 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the thirty-nine stores and the transitions, each a module" do
+    test "the security-row roster is exactly the thirty-four stores and the transitions, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -645,9 +645,9 @@ defmodule Cyfr.BoundariesTest do
                  Arca.ApiKeyStorage Arca.RegistryTokenStorage Arca.ProviderCredentialStorage
                  Arca.WebhookStorage Arca.FrameCredentials Arca.PairedClients Arca.Users
                  Arca.Athanors Arca.Doors
-                 Arca.PersonIdentities Arca.IdentityAttempts
-                 Arca.IdentityLog Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
-                 Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
+                 Arca.PersonIdentities
+                 Arca.IdentityLog Arca.DirectoryHeads Arca.DeviceCertificates
+                 Arca.PendingConfirmations
                  Arca.InstallationClaims Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
                  Arca.DecisionLog Arca.McpLog Arca.PolicyLog
                  Arca.Invitations Arca.CompanyAuthorizations
@@ -1819,7 +1819,7 @@ defmodule Cyfr.BoundariesTest do
 
            def layout(ctx, ref), do: Compendium.layout(ctx, ref)
            def sync(ctx), do: Compendium.Providers.Registry.handle(ctx, %{"action" => "sync"})
-           def accept(id, v), do: Client.signed(id, "policy.accept", %{"policy_version" => v})
+           def accept(bytes), do: Client.signed("policy.accept", bytes)
 
            def required({:error, %Compendium.OCI.Errors{} = err}),
              do: Compendium.OCI.Errors.required_version(err)

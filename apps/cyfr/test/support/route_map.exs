@@ -21,12 +21,6 @@
           "CyfrWeb.Plugs.MCPRateLimit",
           "CyfrWeb.Plugs.Authenticate"
         ],
-        "certificate_renewal" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
         "directory" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -51,33 +45,11 @@
           "CyfrWeb.Plugs.ApiSecurityHeaders"
         ],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "restore" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.FrameRequest",
-          ":fetch_session",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
         "device_session" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.FrameRequest",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
-        "device_pin" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.FrameRequest"
-        ],
-        "device_enrollment" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.FrameRequest",
-          ":fetch_session",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
         "tincture" => [
@@ -211,6 +183,15 @@
         },
         %{
           verb: "GET",
+          path: "/account/:name",
+          plug: "Emissary.Web.AccountController",
+          plug_opts: ":show",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: []
+        },
+        %{
+          verb: "GET",
           path: "/api/executions/:id/events",
           plug: "Emissary.Web.ExecutionEventsController",
           plug_opts: ":stream",
@@ -247,60 +228,6 @@
         },
         %{
           verb: "POST",
-          path: "/certify/v1/renew",
-          plug: "Emissary.Web.CertificateRenewalController",
-          plug_opts: ":renew_certificate",
-          auth: "device_key_proof",
-          live_view: nil,
-          pipe_through: ["certificate_renewal"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/enrollment/challenge",
-          plug: "Emissary.Web.DeviceEnrollmentController",
-          plug_opts: ":challenge",
-          auth: "device_enrollment",
-          live_view: nil,
-          pipe_through: ["device_enrollment"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/enrollment/complete",
-          plug: "Emissary.Web.DeviceEnrollmentController",
-          plug_opts: ":complete",
-          auth: "device_enrollment",
-          live_view: nil,
-          pipe_through: ["device_enrollment"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/enrollment/resume",
-          plug: "Emissary.Web.DeviceEnrollmentController",
-          plug_opts: ":resume",
-          auth: "device_enrollment",
-          live_view: nil,
-          pipe_through: ["device_enrollment"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/pin/evaluate",
-          plug: "Emissary.Web.DevicePinController",
-          plug_opts: ":evaluate",
-          auth: "device_pin",
-          live_view: nil,
-          pipe_through: ["device_pin"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/pin/reset",
-          plug: "Emissary.Web.DevicePinController",
-          plug_opts: ":reset",
-          auth: "device_pin",
-          live_view: nil,
-          pipe_through: ["device_pin"]
-        },
-        %{
-          verb: "POST",
           path: "/device/session",
           plug: "Emissary.Web.DeviceSessionController",
           plug_opts: ":create",
@@ -319,7 +246,7 @@
         },
         %{
           verb: "POST",
-          path: "/directory/v1/:identifier/entries",
+          path: "/directory/v1/:identifier/append",
           plug: "Emissary.Web.DirectoryController",
           plug_opts: ":append",
           auth: "directory_signed",
@@ -327,17 +254,17 @@
           pipe_through: ["directory"]
         },
         %{
-          verb: "POST",
-          path: "/directory/v1/:identifier/recover",
+          verb: "GET",
+          path: "/directory/v1/:identifier/from/:hash",
           plug: "Emissary.Web.DirectoryController",
-          plug_opts: ":recover",
-          auth: "directory_signed",
+          plug_opts: ":from",
+          auth: "public_directory",
           live_view: nil,
           pipe_through: ["directory"]
         },
         %{
           verb: "POST",
-          path: "/directory/v1/genesis",
+          path: "/directory/v1/register",
           plug: "Emissary.Web.DirectoryController",
           plug_opts: ":register",
           auth: "public_directory",
@@ -381,60 +308,6 @@
           pipe_through: ["mcp"]
         },
         %{
-          verb: "POST",
-          path: "/restore",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":restore",
-          auth: "installation_capability",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/challenge",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":challenge",
-          auth: "installation_capability",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/kit",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":kit",
-          auth: "restore_kit_proof",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/kit/challenge",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":kit_challenge",
-          auth: "restore_kit_proof",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/kit/reenable",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":kit_reenable",
-          auth: "restore_kit_proof",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
-          verb: "POST",
-          path: "/restore/reproof",
-          plug: "Emissary.Web.RestoreController",
-          plug_opts: ":reproof",
-          auth: "installation_capability",
-          live_view: nil,
-          pipe_through: ["restore"]
-        },
-        %{
           verb: "GET",
           path: "/t/:athanor/:publisher/:tincture_name",
           plug: "Emissary.Web.TinctureController",
@@ -451,6 +324,24 @@
           auth: "tincture_handler_auth",
           live_view: nil,
           pipe_through: ["tincture_asset"]
+        },
+        %{
+          verb: "GET",
+          path: "/v1/handles/:handle",
+          plug: "Emissary.Web.HandleController",
+          plug_opts: ":resolve",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: ["directory"]
+        },
+        %{
+          verb: "POST",
+          path: "/v1/namespaces/personal/claim",
+          plug: "Emissary.Web.HandleController",
+          plug_opts: ":claim",
+          auth: "directory_signed",
+          live_view: nil,
+          pipe_through: ["directory"]
         }
       ]
     },
@@ -487,7 +378,6 @@
           ":put_secure_browser_headers",
           "CyfrWeb.Plugs.BrowserCSP"
         ],
-        "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "device_unlock_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
@@ -703,24 +593,6 @@
           pipe_through: ["browser"]
         },
         %{
-          verb: "GET",
-          path: "/auth/:provider",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":request",
-          auth: "browser_oauth_start",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/:provider/callback",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":callback",
-          auth: "browser_oauth_callback",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
           verb: "POST",
           path: "/auth/company",
           plug: "PrismWeb.AuthController",
@@ -737,24 +609,6 @@
           auth: "browser_oauth_callback",
           live_view: nil,
           pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/auth/cyfr/callback",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":cyfr_callback",
-          auth: "browser_cyfr_callback",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/cyfr/start",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":cyfr_start",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
         },
         %{
           verb: "GET",
@@ -775,24 +629,6 @@
           pipe_through: ["sign_in_identity", "auth_browser", "device_unlock_throttle"]
         },
         %{
-          verb: "GET",
-          path: "/auth/device/complete/:ticket",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":device_complete",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "device_complete_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/auth/link/oidcc",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":link_start",
-          auth: "browser_session",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
-        },
-        %{
           verb: "POST",
           path: "/auth/logout",
           plug: "PrismWeb.AuthController",
@@ -803,39 +639,12 @@
         },
         %{
           verb: "GET",
-          path: "/auth/oidcc/reauth",
-          plug: "PrismWeb.ReauthController",
-          plug_opts: ":callback",
-          auth: "browser_oauth_callback",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/auth/oidcc/reauth",
-          plug: "PrismWeb.ReauthController",
-          plug_opts: ":decide",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "GET",
           path: "/auth/passkey/complete/:ticket",
           plug: "PrismWeb.PasskeyController",
           plug_opts: ":complete",
           auth: "browser_oauth_flow",
           live_view: nil,
           pipe_through: ["sign_in_identity", "auth_browser", "passkey_complete_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/carry",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.CarryLive",
-          pipe_through: ["browser"]
         },
         %{
           verb: "GET",
@@ -857,24 +666,6 @@
         },
         %{
           verb: "GET",
-          path: "/confirm",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.HomeConfirmLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/devices/add",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.DeviceAddLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
           path: "/invite",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":invite",
@@ -889,24 +680,6 @@
           plug_opts: ":login",
           auth: "browser_public_login",
           live_view: "PrismWeb.LoginLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/pair",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":pair",
-          auth: "browser_public_login",
-          live_view: "PrismWeb.PairLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/restore",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":restore",
-          auth: "browser_public_login",
-          live_view: "PrismWeb.RestoreLive",
           pipe_through: ["browser"]
         },
         %{

@@ -30,15 +30,14 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
   @server ~w(CYFR_PORT CYFR_PROXY_PORT CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT
              CYFR_LOCUS_BACKENDS_URL CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_BUILDS_URL)
-  @provisioned ~w(CYFR_GITHUB_CLIENT_ID CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT
-                  CYFR_LOCUS_BACKENDS_KEY CYFR_LOCUS_BUILDS_KEY)
+  @provisioned ~w(CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY
+                  CYFR_LOCUS_BUILDS_KEY)
   @stand_in_names ~w(CYFR_REGISTRY_URL CYFR_DIRECTORY_URL CYFR_OCI_REGISTRY_URL)
   @database_names ~w(CYFR_DATA_PATH CYFR_DATABASE_PATH CYFR_DATABASE_URL)
   @names ["RELEASE_ROOT", "CYFR_HOST_API_URL", "CYFR_BIND_ADDRESS", "CYFR_ACCESS"] ++
            @server ++ @provisioned ++ @stand_in_names ++ @database_names
   @stand_in "127.79.3.1:4732"
 
-  @client_id "Ov23example"
   @setup_token String.duplicate("5e", 32)
   @backends_key String.duplicate("b1", 32)
   @builds_key String.duplicate("c2", 32)
@@ -70,7 +69,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     Enum.each(@names, &System.delete_env/1)
     File.mkdir_p!(dir)
     File.cd!(dir)
-    File.write!(".env.example", "CYFR_PORT=4000\nCYFR_GITHUB_CLIENT_ID=#{@client_id}\n")
+    File.write!(".env.example", "CYFR_PORT=4000\n")
     File.write!("stack.json", Jason.encode!(declarations()))
     {:ok, dir: dir}
   end
@@ -136,7 +135,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
   defp complete,
     do: """
-    CYFR_GITHUB_CLIENT_ID=#{@client_id}
     CYFR_SETUP_TOKEN=#{@setup_token}
     CYFR_LOCUS_RUNTIME_ROOT=#{root()}
     CYFR_LOCUS_BACKENDS_KEY=#{@backends_key}
@@ -187,8 +185,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       settings!()
 
       assert [
-               "wrote CYFR_GITHUB_CLIENT_ID CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT " <>
-                 "CYFR_LOCUS_BACKENDS_KEY",
+               "wrote CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY",
                "setup http://localhost:4555/setup#" <> link_token
                | rest
              ] = answers()
@@ -196,7 +193,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       assert mode(".env") == 0o600
 
       assert [
-               "CYFR_GITHUB_CLIENT_ID=" <> @client_id,
                "CYFR_SETUP_TOKEN=" <> setup_token,
                "CYFR_LOCUS_RUNTIME_ROOT=" <> minted_root,
                "CYFR_LOCUS_BACKENDS_KEY=" <> backends,
@@ -215,7 +211,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       # The setup token as `cyfr init` mints it, which the boot accepts, in
       # the link printed once, as `cyfr init` prints it.
       assert link_token == setup_token
-      assert Sanctum.setup_token?(setup_token)
+      assert Prima.Device.setup_token?(setup_token)
 
       for key <- [setup_token, minted_root, backends, builds],
           do: assert(key =~ ~r/\A[0-9a-f]{64}\z/)
@@ -254,14 +250,13 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       settings!()
 
       assert hd(answers()) ==
-               "wrote CYFR_GITHUB_CLIENT_ID CYFR_LOCUS_BACKENDS_KEY"
+               "wrote CYFR_LOCUS_BACKENDS_KEY"
 
       assert mode(".env") == 0o600
 
       assert [
                "# mine",
                ^kept,
-               "CYFR_GITHUB_CLIENT_ID=" <> @client_id,
                "CYFR_LOCUS_BACKENDS_KEY=" <> _,
                ""
              ] = String.split(File.read!(".env"), "\n")

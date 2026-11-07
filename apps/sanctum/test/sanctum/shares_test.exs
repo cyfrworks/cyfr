@@ -247,12 +247,7 @@ defmodule Sanctum.SharesTest do
   defp require_company_login!(mode, days) do
     Prima.Test.Env.put_app_env(:sanctum, :oidc_issuer, @issuer)
 
-    Prima.Test.Env.put_app_env(:ueberauth, Ueberauth,
-      providers: [
-        oidcc:
-          {Ueberauth.Strategy.Oidcc, issuer: :cyfr_oidc, client_id: "cid", client_secret: "csec"}
-      ]
-    )
+    Prima.Test.Env.put_app_env(:sanctum, :oidc_client, %{client_id: "cid", client_secret: "csec"})
 
     Prima.Test.Env.put_app_env(:sanctum, :company_login, %{mode: mode, days: days, issuer: :oidc})
   end

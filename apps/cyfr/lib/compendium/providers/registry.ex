@@ -4,30 +4,32 @@
 defmodule Compendium.Providers.Registry do
   @moduledoc """
   Registry tool handlers for the Compendium MCP provider: a person's
-  registration at cyfr.run, namespaces, push tokens, members, abuse
-  reports, the registry's policies and appeals.
+  namespaces at cyfr.run, push tokens, members, abuse reports, the
+  registry's policies and appeals. A person's name is claimed where their
+  account is made, at the account pages.
 
-  `register` finishes what a person's admission began
-  (`Sanctum.Newcomer`): with a `name`, the enrollment's wanted name is
-  replaced first (`Sanctum.Recovery.rename/2`); then the identity is
-  registered at the directory (`Sanctum.Recovery.advance/2`), the
-  registry's current policy accepted and the name claimed, and the name
-  recorded on the person's row. An enrollment whose code the person saved
-  answers at once, with nothing sent. Each step is a retry of the one
-  before it: the directory step resends the same bytes, and the registry
-  answers a repeated claim by the same identifier the same way, so a
-  repeat after success answers the same. A refusal after the directory
-  accepted leaves the attempt `accepted` and no name recorded.
-
-  Every operation that speaks for the person at the registry (a name
-  claim, a token mint, a policy acceptance, an appeal, a publisher claim
-  and its verification) is one request their live key signs
-  (`Compendium.Registry.Client.signed/3`); no identity provider's token is
-  ever sent. The token-minting ones (`sync`,
-  `verify_publisher`) are confirmed fresh first
-  (`Sanctum.RegistryCredentials.confirm_issuance/4`) and store every
-  token they are answered. Namespace administration (tokens, members)
-  stays under the namespace's stored push token.
+  Every operation that speaks for the person at the registry (a token
+  mint, a policy acceptance, an appeal, a publisher claim and its
+  verification) is one request a key of their account signs, in two calls
+  of the same action with the same arguments, the shape
+  `confirmation.request` and `confirm` have. Without an `answer`, the
+  action composes the registry request for the caller's account and
+  answers `request`, the `Prima.SignIn` request of purpose `registry`
+  that carries it (`Sanctum.SignIn`), bound to what asked: a protected
+  device's channel, whose terminal signs the registry request itself, or
+  the person's browser session, with `url`, the account pages' sign page
+  where their passkey signs it. With the `answer` (the passkey's, as the
+  account pages return it, or the registry request the terminal signed),
+  the request held for it is taken, the answer checked against it and
+  against this call's operation and body, and the signed request sent
+  (`Compendium.Registry.Client.signed/2`); then `complete/2` does what
+  the operation's success does: a token mint records the personal
+  namespace the registry names and stores every push token, a
+  verification the founding member's token. A browser's answer returns to
+  the sign-in page, which completes it the same way
+  (`Compendium.complete_registry/2`). This CYFR holds no key of anyone's
+  and signs nothing. Namespace administration (tokens, members) stays
+  under the namespace's stored push token.
   """
 
   alias Sanctum.Context
@@ -40,7 +42,7 @@ defmodule Compendium.Providers.Registry do
   # holds a name: a key belongs to an athanor and is nobody's registry
   # identity, so their handlers refuse one. The rest declare
   # `consent: :interactive`, which refuses a key at the gate.
-  @person_acts ~w(register legal_accept)
+  @person_acts ~w(legal_accept)
 
   # Every action that sends a change to the registry — a POST that claims,
   # verifies, mints, adds, updates, accepts, reports or appeals — reaches
@@ -60,7 +62,7 @@ defmodule Compendium.Providers.Registry do
 
     Operation.tool(
       [
-        Operation.new("registry", "sync", "Sync registry tokens", [],
+        Operation.new("registry", "sync", "Sync registry tokens", [answer_arg()],
           kind: :external,
           sources: [:outside],
           standing: false,
@@ -70,29 +72,14 @@ defmodule Compendium.Providers.Registry do
         ),
         Operation.new(
           "registry",
-          "register",
-          "Register your name and identity at cyfr.run",
-          [
-            Arg.new("name", :string,
-              description:
-                "register: another name to take, in place of the one chosen at creation (after cyfr.run refused it as taken or reserved)"
-            )
-          ],
-          auth: :signed_in,
-          kind: :external,
-          sources: [:outside],
-          standing: false,
-          planes: [:external, :in_chain]
-        ),
-        Operation.new(
-          "registry",
           "claim_publisher",
           "Claim publisher registry",
           [
             Arg.new("slug", :string,
               required: true,
               description: "Namespace slug (publisher or personal)"
-            )
+            ),
+            answer_arg()
           ],
           kind: :external,
           sources: [:outside],
@@ -109,7 +96,8 @@ defmodule Compendium.Providers.Registry do
             Arg.new("slug", :string,
               required: true,
               description: "Namespace slug (publisher or personal)"
-            )
+            ),
+            answer_arg()
           ],
           kind: :external,
           sources: [:outside],
@@ -366,7 +354,8 @@ defmodule Compendium.Providers.Registry do
             Arg.new("policy_version", :string,
               required: true,
               description: "Policy version string (for legal_accept; obtained via legal_version)"
-            )
+            ),
+            answer_arg()
           ],
           auth: :signed_in,
           kind: :external,
@@ -392,7 +381,8 @@ defmodule Compendium.Providers.Registry do
             Arg.new("argument", :string,
               required: true,
               description: "Appeal argument, ≤4000 bytes (for appeal action)"
-            )
+            ),
+            answer_arg()
           ],
           kind: :external,
           sources: [:outside],
@@ -402,10 +392,21 @@ defmodule Compendium.Providers.Registry do
         )
       ],
       description:
-        "cyfr.run registry operations, each a request your identity signs: register your name and identity, sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+        "cyfr.run registry operations, each a request your identity signs: sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
       title: "Registry"
     )
   end
+
+  # The one argument every signed action takes beside its own: the answer
+  # to the request its first call answered.
+  defp answer_arg,
+    do:
+      Prima.Arg.new("answer", :json,
+        description:
+          "The answer to the request this action answered without one, given with the same " <>
+            "arguments: your passkey's from the account pages, or the registry request your " <>
+            "device signed"
+      )
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})
       when action in @person_acts do
@@ -423,30 +424,6 @@ defmodule Compendium.Providers.Registry do
     case Compendium.Registry.Identity.identity(ctx) do
       {:error, _unavailable} = refusal -> refusal
       identity -> {:ok, identity}
-    end
-  end
-
-  # The registration (the module doc). A name claim issues no credential:
-  # the registry binds the name to the identifier the request is signed
-  # under and answers it, the same again for a repeat by the same
-  # identifier, so a claim whose answer was lost is recorded by the next.
-  # The answer is read again once the claim is recorded: the name the
-  # person's row records is the attempt's from then on, even when a rename
-  # landed while the claim was in flight (`Sanctum.Recovery.advance/2`).
-  def handle(%Context{user_id: user_id} = ctx, %{"action" => "register"} = args)
-      when is_binary(user_id) do
-    with {:ok, _renamed} <- renamed(ctx, Map.get(args, "name")),
-         {:ok, attempt} <- Sanctum.Recovery.advance(ctx),
-         :ok <- registered(ctx, attempt),
-         {:ok, attempt} <- Sanctum.Recovery.advance(ctx) do
-      {:ok,
-       %{
-         "attempt_id" => attempt.attempt_id,
-         "identifier" => attempt.identifier,
-         "name" => attempt.name
-       }}
-    else
-      {:error, reason} -> refuse(registration_refusal(reason))
     end
   end
 
@@ -541,34 +518,34 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(%Context{user_id: user_id}, %{
-        "action" => "legal_accept",
-        "policy_version" => version
-      })
+  def handle(
+        %Context{user_id: user_id} = ctx,
+        %{
+          "action" => "legal_accept",
+          "policy_version" => version
+        } = args
+      )
       when is_binary(user_id) do
-    with :ok <- ensure_present(version, "policy_version"),
-         {:ok, answer} <- Client.signed(user_id, "policy.accept", %{"policy_version" => version}) do
-      {:ok, answer}
-    else
+    case ensure_present(version, "policy_version") do
+      :ok -> signed(ctx, "policy.accept", %{"policy_version" => version}, args)
       {:error, reason} -> refuse(reason)
     end
   end
 
-  def handle(%Context{user_id: user_id}, %{"action" => "appeal"} = args)
+  def handle(%Context{user_id: user_id} = ctx, %{"action" => "appeal"} = args)
       when is_binary(user_id) do
     body = Map.take(args, ~w(action_type action_ref argument))
 
     with :ok <- ensure_present(body["action_type"], "action_type"),
          :ok <- ensure_present(body["action_ref"], "action_ref"),
-         :ok <- ensure_present(body["argument"], "argument"),
-         {:ok, answer} <- Client.signed(user_id, "appeal.file", body) do
-      {:ok, answer}
+         :ok <- ensure_present(body["argument"], "argument") do
+      signed(ctx, "appeal.file", body, args)
     else
       {:error, reason} -> refuse(reason)
     end
   end
 
-  def handle(_ctx, %{"action" => action}) when action in ~w(register legal_accept appeal),
+  def handle(_ctx, %{"action" => action}) when action in ~w(legal_accept appeal),
     do: {:error, {:invalid_argument, "authentication required"}}
 
   # ============================================================================
@@ -580,100 +557,126 @@ defmodule Compendium.Providers.Registry do
   # classify.
   defp refuse(reason), do: {:error, Shared.refusal(reason)}
 
+  # A request a key of the person's account signs (the module doc): the
+  # request to sign, or with its answer the operation completed.
+  defp signed(ctx, operation, body, %{"answer" => answer}) when not is_nil(answer) do
+    with {:ok, binding, _opts} <- Sanctum.SignIn.binding(ctx),
+         {:ok, answer} <- answer(answer),
+         {:ok, outcome} <-
+           Sanctum.SignIn.answer(answer, binding, operation: operation, body: body) do
+      complete(ctx, outcome)
+    else
+      {:error, reason} -> refuse(refusal(reason))
+    end
+  end
+
+  defp signed(ctx, operation, body, _args) do
+    with {:ok, binding, opts} <- Sanctum.SignIn.binding(ctx),
+         {:ok, %{request: request, url: url}} <-
+           Sanctum.SignIn.request(
+             :registry,
+             binding,
+             [ctx: ctx, operation: operation, body: body] ++ opts
+           ) do
+      {:ok, Prima.MapUtil.put_present(%{request: Prima.SignIn.encode(request)}, :url, url)}
+    else
+      {:error, reason} -> refuse(refusal(reason))
+    end
+  end
+
+  # A passkey's answer as the fragment the account pages returned, or the
+  # registry request a terminal signed, as its JSON.
+  defp answer(fragment) when is_binary(fragment), do: {:ok, fragment}
+
+  defp answer(%{} = map) do
+    case Prima.RegistryRequest.decode(map) do
+      {:ok, signed} -> {:ok, signed}
+      {:error, _malformed} -> {:error, :answer_refused}
+    end
+  end
+
+  defp answer(_answer), do: {:error, :answer_refused}
+
+  @doc """
+  Complete a registry request a key of the person's account signed, as
+  `Sanctum.SignIn.answer/3` answered it for `ctx`'s own person: the
+  signed bytes sent (`Compendium.Registry.Client.signed/2`), and what the
+  operation's success does, done. A token mint (`sync`) records the
+  personal namespace the registry names (`Sanctum.SignIn.record_namespace/2`)
+  and stores every push token it answers, and answers the namespaces and
+  roles it minted for, never a token; a publisher's verification stores
+  the founding member's token when one was minted, and answers whether it
+  was; every other operation answers the registry's answer. Each answer
+  that writes is read whole against its shape first, and the caller's
+  standing again (`Sanctum.Caller.revalidate_session/1`), so nothing is
+  written for a malformed answer or a session, key or device revoked
+  while the registry answered.
+  """
+  @spec complete(Context.t(), map()) :: {:ok, term()} | {:error, term()}
+  def complete(%Context{user_id: user_id} = ctx, %{
+        purpose: :registry,
+        user_id: user_id,
+        signed: bytes,
+        registry_request: %Prima.RegistryRequest{operation: operation, body: body}
+      })
+      when is_binary(user_id) do
+    with {:ok, answer} <- Client.signed(operation, bytes),
+         {:ok, result} <- succeeded(ctx, operation, body, answer) do
+      {:ok, result}
+    else
+      {:error, reason} -> refuse(reason)
+    end
+  end
+
+  def complete(%Context{}, _outcome), do: refuse(:unauthenticated)
+
+  defp succeeded(ctx, "tokens.mint", _body, answer) do
+    with {:ok, %{personal: personal, memberships: memberships}} <- minted(answer),
+         {:ok, fresh} <- still_standing(ctx),
+         :ok <- record_personal(fresh.user_id, personal),
+         :ok <- store_tokens(fresh, List.wrap(personal) ++ memberships) do
+      {:ok,
+       %{
+         personal_namespace: personal && elem(personal, 0),
+         memberships: for({slug, _token, role} <- memberships, do: %{slug: slug, role: role})
+       }}
+    end
+  end
+
+  # A repeat of a verification the registry already recorded answers it
+  # verified with no token and mints nothing; `sync` then mints the token.
+  defp succeeded(ctx, "publisher.verify", %{"slug" => slug}, answer) do
+    with {:ok, token} <- verified(answer, slug),
+         {:ok, fresh} <- still_standing(ctx),
+         :ok <- store_tokens(fresh, List.wrap(token && {slug, token, "admin"})) do
+      {:ok, %{slug: slug, token_stored: token != nil}}
+    end
+  end
+
+  defp succeeded(_ctx, _operation, _body, answer), do: {:ok, answer}
+
+  # The signed operations' own refusals in the one refusal shape every
+  # surface renders (`Prima.Refusal`), each with the sentence its person
+  # reads; every other reason passes as it is.
+  defp refusal(:answer_refused),
+    do: %Prima.Refusal{
+      class: :unauthenticated,
+      reason: :answer_refused,
+      message: "That answer does not sign this request here: ask for it again"
+    }
+
+  defp refusal(:unauthenticated),
+    do: %Prima.Refusal{
+      class: :unauthenticated,
+      reason: :unauthenticated,
+      message: "Only a person signed in here, or on a device of theirs, can sign this"
+    }
+
+  defp refusal(reason), do: reason
+
   defp put_if_int(kw, key, n) when is_integer(n) and n >= 0, do: Keyword.put(kw, key, n)
 
   defp put_if_int(kw, _key, _), do: kw
-
-  defp renamed(_ctx, nil), do: {:ok, nil}
-  defp renamed(ctx, name), do: Sanctum.Recovery.rename(ctx, name)
-
-  # An enrollment whose code was saved recorded its name before: nothing
-  # is sent. Otherwise the registry's current policy is accepted and the
-  # attempt's name claimed, then recorded.
-  defp registered(_ctx, %{phase: "completed"}), do: :ok
-
-  defp registered(%Context{user_id: user_id} = ctx, %{name: name}) when is_binary(name) do
-    with {:ok, version} <- policy_version(),
-         {:ok, _accepted} <-
-           Client.signed(user_id, "policy.accept", %{"policy_version" => version}),
-         {:ok, answer} <- Client.signed(user_id, "handle.claim", %{"handle" => name}),
-         :ok <- claimed(answer, name),
-         {:ok, _fresh} <- record_claim(ctx, answer),
-         do: :ok
-  end
-
-  defp registered(_ctx, _unnamed),
-    do: {:error, {:invalid_argument, "Choose your name, then register it."}}
-
-  # The policy version the registry names now: a registry that does not
-  # answer it, or answers it unreadably, is one that did not answer.
-  defp policy_version do
-    case Client.get_legal_version() do
-      {:ok, %{"policy_version" => version}} when is_binary(version) and version != "" ->
-        {:ok, version}
-
-      {:ok, _unreadable} ->
-        {:error, :registry_unavailable}
-
-      {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} ->
-        {:error, :no_registry}
-
-      {:error, _unanswered} ->
-        {:error, :registry_unavailable}
-    end
-  end
-
-  # The registration's refusals, in the words a person reads: the
-  # registry's refusals of the name, and an answer that cannot be read as
-  # a registry that did not answer.
-  defp registration_refusal(:handle_taken), do: :name_taken
-
-  defp registration_refusal(reason) when reason in [:handle_reserved, :namespace_reserved],
-    do: :name_reserved
-
-  defp registration_refusal(:malformed_answer), do: :registry_unavailable
-  defp registration_refusal(reason), do: reason
-
-  # The claim is the person's namespace from here on, so it lands on their
-  # users row, and only while the caller still stands and the answer names
-  # their identifier (`Sanctum.SignIn.record_claim/2`): a store that cannot
-  # answer, or a remote person whose identity could not be confirmed fresh,
-  # is a "try again" and the session stands, and any other standing refusal
-  # is a caller no longer signed in. A namespace this server cannot record
-  # is a refusal; the handle stays claimed at the registry, and a repeated
-  # claim records it.
-  defp record_claim(ctx, answer) do
-    case Sanctum.SignIn.record_claim(ctx, answer) do
-      {:ok, fresh} ->
-        {:ok, fresh}
-
-      {:error, reason}
-      when reason in [
-             :unauthenticated,
-             :unavailable,
-             :identity_stale,
-             :malformed_answer,
-             :not_owner
-           ] ->
-        {:error, reason}
-
-      {:error, :namespace_owned_by_another_identity} ->
-        {:error,
-         {:conflict,
-          "cyfr.run gave you that name, but another person on this CYFR holds it. Ask " <>
-            "whoever runs this CYFR."}}
-
-      {:error, reason} ->
-        require Logger
-
-        Logger.error(
-          "[Compendium.Providers.Registry] register: a name claimed at cyfr.run for " <>
-            "#{ctx.user_id} was not recorded locally: #{inspect(reason)}"
-        )
-
-        {:error, {:unavailable, "Storage"}}
-    end
-  end
 
   # ============================================================================
   # Abuse-report helpers
@@ -748,62 +751,29 @@ defmodule Compendium.Providers.Registry do
   # Gated identity mutations (dispatched from the @identity_mutations head)
   # ============================================================================
 
-  defp handle_gated(%Context{user_id: user_id}, %{"action" => "claim_publisher", "slug" => slug})
-       when is_binary(user_id) do
-    case Client.signed(user_id, "publisher.claim", %{"slug" => slug}) do
-      {:ok, answer} -> {:ok, answer}
-      {:error, reason} -> refuse(reason)
-    end
-  end
+  defp handle_gated(
+         %Context{user_id: user_id} = ctx,
+         %{"action" => "claim_publisher", "slug" => slug} = args
+       )
+       when is_binary(user_id),
+       do: signed(ctx, "publisher.claim", %{"slug" => slug}, args)
 
-  # The verification mints the founding member's push token, so it is
-  # confirmed fresh before the registry is asked, and the token it answers
-  # is stored. A repeat of a verification the registry already recorded
-  # answers it verified with no token and mints nothing; `sync` then mints
-  # the token.
-  defp handle_gated(%Context{user_id: user_id} = ctx, %{
-         "action" => "verify_publisher",
-         "slug" => slug
-       })
+  # The verification mints the founding member's push token, and the sync
+  # every push token of the person's namespaces, each under the label the
+  # protocol takes: the signature of a key of the person's account is the
+  # proof each needs, and nothing is minted without it.
+  defp handle_gated(
+         %Context{user_id: user_id} = ctx,
+         %{"action" => "verify_publisher", "slug" => slug} = args
+       )
        when is_binary(user_id) do
     body = %{"slug" => slug, "label" => CredentialStore.wire_label()}
-
-    with {:ok, _host} <- Sanctum.registry_host(),
-         :ok <- confirm(ctx, "registry.verify_publisher", body),
-         {:ok, answer} <- Client.signed(user_id, "publisher.verify", body),
-         {:ok, token} <- verified(answer, slug),
-         {:ok, fresh} <- still_standing(ctx),
-         :ok <- store_tokens(fresh, List.wrap(token && {slug, token, "admin"})) do
-      {:ok, %{slug: slug, token_stored: token != nil}}
-    else
-      {:error, reason} -> refuse(reason)
-    end
+    signed(ctx, "publisher.verify", body, args)
   end
 
-  # Every push token the person's namespaces publish with, minted again
-  # (`tokens.mint`) under a fresh confirmation and stored, and the personal
-  # namespace the registry names recorded. The answer is read whole before
-  # anything is written, and names each namespace and never a token.
-  defp handle_gated(%Context{user_id: user_id} = ctx, %{"action" => "sync"})
-       when is_binary(user_id) do
-    label = CredentialStore.wire_label()
-
-    with {:ok, _host} <- Sanctum.registry_host(),
-         :ok <- confirm(ctx, "registry.sync", %{"label" => label}),
-         {:ok, answer} <- Client.signed(user_id, "tokens.mint", %{"label" => label}),
-         {:ok, %{personal: personal, memberships: memberships}} <- minted(answer),
-         {:ok, fresh} <- still_standing(ctx),
-         :ok <- record_personal(user_id, personal),
-         :ok <- store_tokens(fresh, List.wrap(personal) ++ memberships) do
-      {:ok,
-       %{
-         personal_namespace: personal && elem(personal, 0),
-         memberships: for({slug, _token, role} <- memberships, do: %{slug: slug, role: role})
-       }}
-    else
-      {:error, reason} -> refuse(reason)
-    end
-  end
+  defp handle_gated(%Context{user_id: user_id} = ctx, %{"action" => "sync"} = args)
+       when is_binary(user_id),
+       do: signed(ctx, "tokens.mint", %{"label" => CredentialStore.wire_label()}, args)
 
   # A push token outlives the session that asks for it: the issuing is
   # confirmed fresh (`Sanctum.RegistryCredentials.confirm_issuance/4`)
@@ -883,15 +853,6 @@ defmodule Compendium.Providers.Registry do
 
   defp handle_gated(_ctx, _args), do: {:error, {:invalid_argument, "authentication required"}}
 
-  defp confirm(ctx, operation, arguments) do
-    Sanctum.RegistryCredentials.confirm_issuance(
-      ctx,
-      operation,
-      Compendium.RegistryHost.canonical_host(),
-      arguments
-    )
-  end
-
   # The registry answered after a round trip: the caller's standing is
   # read again before anything is written under it, so a session, key or
   # device revoked meanwhile stores nothing.
@@ -943,14 +904,6 @@ defmodule Compendium.Providers.Registry do
     end)
   end
 
-  # `handle.claim`: the handle asked for and an identifier, which
-  # `Sanctum.SignIn.record_claim/2` holds to the caller's own.
-  defp claimed(%{"handle" => handle, "identifier" => identifier}, handle)
-       when is_binary(identifier),
-       do: :ok
-
-  defp claimed(_answer, _handle), do: {:error, :malformed_answer}
-
   # `publisher.verify`: the namespace asked for, and the founding member's
   # token only when one was minted.
   defp verified(%{"slug" => slug} = answer, slug) do
@@ -970,19 +923,24 @@ defmodule Compendium.Providers.Registry do
 
   defp record_personal(user_id, {slug, _token, _role}) do
     case Sanctum.SignIn.record_namespace(user_id, slug) do
-      {:ok, _user} -> :ok
-      {:error, :namespace_owned_by_another_identity} -> record_claim_conflict()
-      {:error, :not_owner} -> {:error, :not_owner}
-      {:error, :invalid_slug} -> {:error, :malformed_answer}
-      {:error, _unanswered} -> {:error, {:unavailable, "Storage"}}
-    end
-  end
+      {:ok, _user} ->
+        :ok
 
-  defp record_claim_conflict do
-    {:error,
-     {:conflict,
-      "Your handle at cyfr.run names a namespace another person on this server already " <>
-        "holds — ask the operator."}}
+      {:error, :namespace_owned_by_another_identity} ->
+        {:error,
+         {:conflict,
+          "The registry names you a namespace another person on this CYFR already holds. " <>
+            "Ask whoever runs this CYFR."}}
+
+      {:error, :not_owner} ->
+        {:error, :not_owner}
+
+      {:error, :invalid_slug} ->
+        {:error, :malformed_answer}
+
+      {:error, _unanswered} ->
+        {:error, {:unavailable, "Storage"}}
+    end
   end
 
   # Each `{slug, token, role}` stored for the caller, each a holder's write

@@ -419,45 +419,12 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
   end
 
-  describe "the carry sweep" do
-    test "runs after the session sweep, and any person's expired carry is expired with its payload cleared",
+  describe "the account head sweep" do
+    test "runs after the session sweep, and keeps sweeping while a batch of heads fills",
          %{key: key} do
-      expired = carry!()
-      open = carry!()
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(a in Arca.Schemas.CarryAction, where: a.id == ^expired.id),
-          set: [expires_at: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
-        )
-
-      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
-      assert ["sessions", "carry"] = Enum.filter(summary.steps, &(&1 in ["sessions", "carry"]))
-
-      # Neither person opened another carry, which would end only their own:
-      # the cycle reached the expired one anyway.
-      swept = Arca.Repo.get!(Arca.Schemas.CarryAction, expired.id)
-      assert swept.phase == "expired"
-      assert is_nil(swept.payload)
-      assert %DateTime{} = swept.retain_until
-
-      stands = Arca.Repo.get!(Arca.Schemas.CarryAction, open.id)
-      assert stands.phase == "pending"
-      assert is_binary(stands.payload)
-    end
-
-    test "the scheduler keeps sweeping while a batch of heads fills", %{key: key} do
       # One more head cached for no one here than one batch of the sweep
-      # takes, each verified longer ago than a carry lives, and one
-      # expired carry beside them.
+      # takes, each verified longer ago than a sign-in request lives.
       heads = orphan_heads!(501)
-      expired = carry!()
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(a in Arca.Schemas.CarryAction, where: a.id == ^expired.id),
-          set: [expires_at: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
-        )
 
       previous = Logger.level()
       Logger.configure(level: :info)
@@ -466,28 +433,33 @@ defmodule Cyfr.RetentionSchedulerTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
-          assert "carry" in summary.steps
+
+          assert ["sessions", "heads"] =
+                   Enum.filter(summary.steps, &(&1 in ["sessions", "heads"]))
         end)
 
       Logger.configure(level: previous)
 
-      # A first batch filled with heads alone, so a second one ran.
+      # A first batch filled, so a second one ran: every one of this test's
+      # heads is gone. The count the sweep logs also takes any head another
+      # test left cached for no one, so it is read as at least this test's.
       assert Arca.Repo.aggregate(
                from(h in Arca.Schemas.DirectoryHead, where: h.identifier in ^heads),
                :count
              ) == 0
 
-      assert log =~
-               "Expired 1 and removed 0 sign-in carry action(s), " <>
-                 "and removed 501 cached identity head(s) no one here holds"
+      assert [_line, removed] =
+               Regex.run(~r/Removed (\d+) cached account head\(s\) no one here holds/, log)
+
+      assert String.to_integer(removed) >= 501
     end
   end
 
   # `n` heads cached for identifiers no person or invitation here names,
-  # each last verified twice a carry's lifetime ago.
+  # each last verified twice a sign-in request's lifetime ago.
   defp orphan_heads!(n) do
     now = Arca.ServerMetaStorage.now!()
-    verified_at = DateTime.add(now, -2 * Arca.CarryActions.lifetime_ms(), :millisecond)
+    verified_at = DateTime.add(now, -2 * Prima.SignIn.lifetime_ms(), :millisecond)
     batch = System.unique_integer([:positive])
 
     rows =
@@ -499,8 +471,6 @@ defmodule Cyfr.RetentionSchedulerTest do
           genesis: "genesis-bytes",
           directory_url: "https://dir.example",
           head_hash: epoch,
-          key_epoch: epoch,
-          recovery_epoch: epoch,
           state: "{}",
           verified_at: verified_at,
           revision: 1,
@@ -511,35 +481,6 @@ defmodule Cyfr.RetentionSchedulerTest do
 
     {^n, _} = Arca.Repo.insert_all(Arca.Schemas.DirectoryHead, rows)
     Enum.map(rows, & &1.identifier)
-  end
-
-  # A person of their own, and a pending carry of theirs to a hub.
-  defp carry! do
-    n = System.unique_integer([:positive])
-
-    {:ok, user} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|carry-sweep-#{n}",
-        provider: "github",
-        email: "carry-sweep#{n}@example.com",
-        verified: true
-      })
-
-    payload = ~s({"genesis":{}})
-
-    {:ok, action} =
-      Arca.CarryActions.open(%Prima.Actor{user_id: user.id}, %{
-        user_id: user.id,
-        action_id: "car_sweep#{n}",
-        source_home: "https://a.example",
-        destination_home: "https://hub.example",
-        return_url: "https://a.example/carry",
-        payload: payload,
-        payload_digest: Prima.Digest.sha256(payload),
-        key_epoch: Prima.Digest.sha256("a head")
-      })
-
-    action
   end
 
   defp athanor!(name) do

@@ -3,21 +3,23 @@
 
 defmodule Emissary.Web.DirectoryController do
   @moduledoc """
-  The identity directory's HTTP endpoints (`ARCHITECTURE.md` §9.1) over
-  `Sanctum.Directory`, which decides every request; this adapter reads the
-  request and writes the answer. No session is read: a log is public
-  history, a genesis is its own identifier, and every signed write is
-  verified against the identifier's chain.
+  The directory's HTTP endpoints, `cyfr-directory/v2` (`ARCHITECTURE.md`
+  §9.1), over `Sanctum.Directory`, which decides every request; this
+  adapter reads the request and writes the answer. No session is read: a
+  log is public history, a genesis is its own identifier, and every
+  signed write is verified against the head's state.
+  `tests/fixtures/directory_wire.json` holds its conformance.
 
   ## Routes
 
-    * `POST /directory/v1/genesis` — the genesis entry; answers the
-      identifier it hashes to, the same for a repeat.
+    * `POST /directory/v1/register` — the genesis entry; answers the
+      identifier it hashes to, `created`, or `exists` for a repeat.
     * `GET /directory/v1/:identifier?after=N` — one page of the log after
       position `N` (-1, the default, from the genesis).
-    * `POST /directory/v1/:identifier/entries` — a signed rotate entry.
-    * `POST /directory/v1/:identifier/recover` — a signed recover request,
-      which must name the path's identifier.
+    * `GET /directory/v1/:identifier/from/:hash` — one page of the log
+      after the entry hashing to `hash`.
+    * `POST /directory/v1/:identifier/append` — one signed entry, naming
+      the head it extends.
 
   A POST's body is the JSON object itself, at most 16 KiB: a larger one is
   refused `413` before it is decoded (`CyfrWeb.Plugs.RawBodyReader`), in
@@ -25,10 +27,11 @@ defmodule Emissary.Web.DirectoryController do
 
   ## Answers
 
-  `200` with `{"identifier", "seq", "entry_hash"}` for an accepted write,
-  and `"entry"` too for a recovery; `{"identifier", "from", "entries",
-  "next", "head", "length"}` for a page, whose entries are the stored
-  canonical entries.
+  `200` with `{"identifier", "seq", "entry_hash", "result"}` for a write,
+  `result` `created`, `accepted` or `exists`, and `"head"` too, the
+  current head, for `exists`; `{"identifier", "from", "entries", "next",
+  "head", "length"}` for a page, whose entries are the stored canonical
+  entries.
 
   ## Refusals
 
@@ -43,23 +46,21 @@ defmodule Emissary.Web.DirectoryController do
   | 404 | `not_found` | no such identifier or request |
   | 405 | `read_only` | a mirror; `allow: GET` |
   | 409 | `stale_head` | `head`, the current head |
-  | 409 | `stale_policy` | `recorded`, the refusal recorded for the request |
-  | 409 | `request_id_reused` | the id answered another request |
+  | 409 | `duplicate_key` | the entry lists a key the log already lists |
   | 409 | `conflict` | another genesis under the identifier |
+  | 410 | `gone` | the identifier is tombstoned |
   | 422 | `invalid` | `reason`, and `field` when one is named |
   | 422 | `unverified` | `reason`, why the chain refuses the entry |
-  | 422 | `wrong_identifier` | the request names another identifier |
   | 422 | `wrong_directory` | the genesis names another directory than this node's origin |
   | 429 | `rate_limited` | `retry_after` seconds, and the header |
   | 500 | `corrupt` | the stored log does not verify |
-  | 503 | `capacity` | `exhausted`: `identities` or `log_bytes` with `retry-after: 60`, or `rotations` (the identifier's 100 a day) with the seconds left in its window |
-  | 503 | `busy` | a recovery the head moved under more often than an identifier's rotation caps allow in a day (`Sanctum.Directory`); `retry-after: 1` |
+  | 503 | `capacity` | `exhausted`: `identities` or `log_bytes` with `retry-after: 60`, or `writes` (the identifier's 100 verified writes a day by a listed key) with the seconds left in its window |
   | 503 | `unavailable` | the store or settings did not answer; `retry-after: 1` |
   """
 
   use Emissary.Web, :controller
 
-  @doc "`POST /directory/v1/genesis`."
+  @doc "`POST /directory/v1/register`."
   def register(conn, _params),
     do: answer(conn, Sanctum.Directory.register(%{genesis: body(conn), source: source(conn)}))
 
@@ -81,7 +82,19 @@ defmodule Emissary.Web.DirectoryController do
     end
   end
 
-  @doc "`POST /directory/v1/:identifier/entries`."
+  @doc "`GET /directory/v1/:identifier/from/:hash`."
+  def from(conn, _params) do
+    answer(
+      conn,
+      Sanctum.Directory.from(%{
+        identifier: identifier(conn),
+        hash: conn.path_params["hash"],
+        source: source(conn)
+      })
+    )
+  end
+
+  @doc "`POST /directory/v1/:identifier/append`."
   def append(conn, _params) do
     answer(
       conn,
@@ -89,18 +102,9 @@ defmodule Emissary.Web.DirectoryController do
     )
   end
 
-  @doc "`POST /directory/v1/:identifier/recover`."
-  def recover(conn, _params) do
-    answer(
-      conn,
-      Sanctum.Directory.recover(identifier(conn), %{request: body(conn), source: source(conn)})
-    )
-  end
-
   # ---- the request ---------------------------------------------------------------
 
-  # The path's identifier, never a body field of the same name: a recover
-  # request carries its own `identifier`, which the decision compares.
+  # The path's identifier: a v2 entry carries none of its own.
   defp identifier(conn), do: conn.path_params["identifier"]
 
   # A body the parsers passed over (a type they do not read) is no body.
@@ -141,11 +145,16 @@ defmodule Emissary.Web.DirectoryController do
     }
   end
 
-  defp wire(%{identifier: identifier, seq: seq, entry_hash: hash} = accepted) do
-    base = %{"identifier" => identifier, "seq" => seq, "entry_hash" => hash}
+  defp wire(%{identifier: identifier, seq: seq, entry_hash: hash, result: result} = written) do
+    base = %{
+      "identifier" => identifier,
+      "seq" => seq,
+      "entry_hash" => hash,
+      "result" => Atom.to_string(result)
+    }
 
-    case accepted do
-      %{entry: entry} -> Map.put(base, "entry", Jason.Fragment.new(entry))
+    case written do
+      %{head: head} -> Map.put(base, "head", head)
       _written -> base
     end
   end
@@ -175,11 +184,9 @@ defmodule Emissary.Web.DirectoryController do
   defp refusal({:stale_head, head}),
     do: {409, :conflict, %{"error" => "stale_head", "head" => head}, []}
 
-  defp refusal({:stale_policy, recorded}),
-    do: {409, :conflict, %{"error" => "stale_policy", "recorded" => recorded}, []}
-
-  defp refusal(:request_id_reused), do: {409, :conflict, %{"error" => "request_id_reused"}, []}
+  defp refusal(:duplicate_key), do: {409, :conflict, %{"error" => "duplicate_key"}, []}
   defp refusal(:conflict), do: {409, :conflict, %{"error" => "conflict"}, []}
+  defp refusal(:gone), do: {410, :not_found, %{"error" => "gone"}, []}
 
   defp refusal({:invalid, {tag, field}}),
     do:
@@ -192,9 +199,6 @@ defmodule Emissary.Web.DirectoryController do
   defp refusal({:unverified, reason}),
     do:
       {422, :unauthenticated, %{"error" => "unverified", "reason" => Atom.to_string(reason)}, []}
-
-  defp refusal(:wrong_identifier),
-    do: {422, :invalid_argument, %{"error" => "wrong_identifier"}, []}
 
   defp refusal(:wrong_directory),
     do: {422, :invalid_argument, %{"error" => "wrong_directory"}, []}
@@ -211,12 +215,10 @@ defmodule Emissary.Web.DirectoryController do
       {503, :unavailable, %{"error" => "capacity", "exhausted" => Atom.to_string(which)},
        [{"retry-after", "60"}]}
 
-  defp refusal({:capacity, :rotations, seconds}),
+  defp refusal({:capacity, :writes, seconds}),
     do:
-      {503, :unavailable, %{"error" => "capacity", "exhausted" => "rotations"},
+      {503, :unavailable, %{"error" => "capacity", "exhausted" => "writes"},
        [{"retry-after", Integer.to_string(seconds)}]}
-
-  defp refusal(:busy), do: {503, :unavailable, %{"error" => "busy"}, [{"retry-after", "1"}]}
 
   defp refusal(:unavailable),
     do: {503, :unavailable, %{"error" => "unavailable"}, [{"retry-after", "1"}]}

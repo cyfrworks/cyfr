@@ -7,43 +7,50 @@
 # nothing and answers one line, `FIXTURE=` and a JSON object.
 #
 #   person EMAIL SUB [NAME]
-#       The person the GitHub identity SUB is linked to, made the first
-#       time, then signed in with it as the device flow signs one in, from
-#       the unlock on (`Sanctum.SignIn.unlock/1`: the door asked about the
-#       person, the verified EMAIL and the name NAME, default "Release
-#       proof", recorded on their row, the athanor read, the session):
-#       everything but the identity provider, which the proofs cannot
-#       reach. An installation's first person is made by the setup
-#       admission (`Sanctum.Newcomer.admit/2`, with a protected device's
-#       enrollment `{:device, enrollment, identity}` under a setup token
-#       the fixture puts for the call and takes away after, the identity
-#       drawn as a device draws it, named `release-proof`), and so is its
-#       platform administrator: a device-first person, as a box's screen or
-#       `cyfr login --setup` makes one. The device's key is an Ed25519 seed
-#       drawn here; its public key is the one enrolled, and the device, its
-#       certificate and the first-method mark the enrollment set all stand.
-#       The seed is written to `setup-device.json` in the server's working
-#       directory (a release cell's own; an image's temporary directory
-#       where its working directory is not the server's to write), with
-#       mode 0600, beside the device's client, athanor, home and
-#       certificate, and is never answered, taken as an argument or logged:
-#       `device_confirm` alone reads it. A record already there is that
-#       device: a first person made again where it is kept (an
-#       installation started over in the same directory) is enrolled with
-#       its seed, client and athanor, and the record is written back with
-#       the new certificate; one that does not read, or names another
-#       home, refuses the person. Their enrollment is then finished through Arca with no
-#       network: accepted as the directory's answer is recorded, its
-#       recovery code saved and its name recorded on their row, so every
-#       proof gets a finished person, and their first passkey is one the
-#       setup device confirms. Every later person is made with the rows an open
-#       admission writes (`Arca.Users.mint/4` under `open`, its caps
-#       counted before the person's row, their keys, their athanor), once
-#       the door's `*` admits newcomers, which the proof opens as an administrator does (`door.allow`); a sign-in
-#       method is never an admission, so the identity is linked to the
-#       person made. Answers the person, the athanor the session is
-#       focused on, the route segment of that athanor and the session
-#       token.
+#       The person of the account SUB names, made the first time, then
+#       signed in as an answer to a sign-in request signs one in: the door
+#       asked about the person, the verified EMAIL and the name NAME,
+#       default "Release proof", recorded on their row, their athanor's
+#       fill started, and a session bound to the account's device key and
+#       the head this CYFR caches. The account is built here, as the
+#       account pages or `cyfr login --setup` make one: a genesis signed by
+#       a recovery key SUB derives, at this deployment's directory
+#       (`Sanctum.directory_url/0`), and one device key added, published
+#       there as they publish one (the genesis registered and the key
+#       appended, `Sanctum.Directory.Client`), and its head cached as a
+#       first read leaves it, so the account refreshes from its directory
+#       as any other does once the freshness bound has passed. Nothing is
+#       written to cyfr.run, which holds real people's accounts: where the
+#       deployment reads it, the account is cached alone, and its person
+#       pauses past the bound on a public home. The same SUB is the same
+#       account, so a person made once is signed in again, under the
+#       device key their admission listed, the one this CYFR's cached head
+#       of the account lists. An
+#       installation's first person is made by the setup admission
+#       (`Sanctum.Newcomer.admit/3` under a setup token the fixture puts
+#       for the call and takes away after), and so is its platform
+#       administrator, their device paired in the same admission as its
+#       hello pairs one (`Sanctum.DeviceUnlock.pair/4`): a device-first
+#       person, as a box's screen or `cyfr login --setup` makes one, named
+#       `release-proof`. The device's key is an Ed25519 seed drawn here and
+#       listed in the account's log. The seed is written to
+#       `setup-device.json` in the server's working directory (a release
+#       cell's own; an image's temporary directory where its working
+#       directory is not the server's to write), with mode 0600, beside the
+#       device's client, athanor, home and certificate, and is never
+#       answered, taken as an argument or logged: `device_confirm` alone
+#       reads it. A record already there is that device: a first person
+#       made again where it is kept (an installation started over in the
+#       same directory) is admitted with its seed and client, and the
+#       record is written back with the new athanor and certificate; one
+#       that does not read, or names another home, refuses the person.
+#       Every later person is admitted by the open admission
+#       (`Sanctum.Newcomer.admit/3` under `:open`, its caps counted before
+#       the person's row), once the door's `*` admits newcomers, which the
+#       proof opens as an administrator does (`door.allow`); their account's
+#       device key SUB derives too. Answers the person, the athanor the
+#       session is focused on, the route segment of that athanor and the
+#       session token.
 #
 #   device_confirm REF [digest|ref|key]
 #       The setup device confirming the pending confirmation REF, as its
@@ -54,14 +61,16 @@
 #       one, `pairing.renew` through the gate, the replacement written
 #       back), the record read through the gate as a device intent
 #       (`confirmation.pending` with the `request`, which answers its
-#       stored preview and the `confirm` challenge) and the proof over that
-#       challenge given through the gate (`confirmation.confirm` with
-#       `device_proof`). With `digest`, `ref` or `key` the proof is made
-#       wrong on purpose: over another digest, over another ref, or by
-#       another key; the home must refuse it. Answers the record's
-#       operation, preview and digest as the home stored them, and `ok`
-#       with the confirmation's result or `error` with the refusal; no
-#       record of that ref answers `error`.
+#       stored preview), this CYFR's `confirm` request for it
+#       (`confirmation.request`, whose subject is the record's digest), and
+#       the device's answer to it, Ed25519 over the request's digest, given
+#       through the gate (`confirmation.confirm` with the `answer`). With
+#       `digest`, `ref` or `key` the answer is made wrong on purpose: over
+#       another digest, under another ref, or by another key; the home must
+#       refuse it. Answers the record's operation and preview as the home
+#       stored them and the digest its request names, and `ok` with the
+#       confirmation's result or `error` with the refusal; no record of
+#       that ref answers `error`.
 #
 #   tincture USER_ID DIR NAME public|private
 #       The files under DIR committed into the person's athanor as the
@@ -126,7 +135,7 @@ fn args ->
       Sanctum.Context.build(
         user_id: user.id,
         email: user.email,
-        provider: "github",
+        provider: "device",
         athanor_id: nil,
         permissions: Sanctum.Context.person_permissions()
       )
@@ -167,16 +176,15 @@ fn args ->
     :ok = File.close(file)
   end
 
-  # The device a record already kept names, to be made again: its seed,
-  # client and athanor, for this home alone; nil where no record is kept.
+  # The device a record already kept names, to be made again: its seed
+  # and client, for this home alone; nil where no record is kept.
   kept_device = fn ->
     if File.exists?(device_path) do
       with {:ok, text} <- File.read(device_path),
-           {:ok, %{"seed" => seed, "client_id" => client_id, "athanor_id" => athanor_id} = kept} <-
-             Jason.decode(text),
+           {:ok, %{"seed" => seed, "client_id" => client_id} = kept} <- Jason.decode(text),
            {:ok, <<_::binary-size(32)>> = seed} <- Base.url_decode64(seed, padding: false),
-           true <- kept["home"] == Sanctum.Person.home() do
-        %{seed: seed, client_id: client_id, athanor_id: athanor_id}
+           true <- kept["home"] == Sanctum.origin() do
+        %{seed: seed, client_id: client_id}
       else
         _another ->
           raise "#{device_path} names no device of this home's setup; remove it to make a new one"
@@ -184,58 +192,128 @@ fn args ->
     end
   end
 
-  keep_device = fn enrollment, seed, create? ->
-    actor = Prima.Actor.in_athanor(enrollment.athanor_id)
-    {:ok, row} = Arca.DeviceCertificates.current(actor, enrollment.client_id)
+  keep_device = fn user_id, client_id, seed, create? ->
+    {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
+    {:ok, row} = Arca.DeviceCertificates.current(actor, client_id)
 
     write_device.(
       %{
         seed: Base.url_encode64(seed, padding: false),
-        client_id: enrollment.client_id,
-        athanor_id: enrollment.athanor_id,
-        home: Sanctum.Person.home(),
+        client_id: client_id,
+        athanor_id: athanor_id,
+        home: Sanctum.origin(),
         certificate: Jason.decode!(row.certificate)
       },
       create?
     )
   end
 
-  # The setup admission (`Sanctum.Newcomer.admit/2`) under a setup token
-  # put for this call alone, with a protected device's enrollment, as
-  # `Sanctum.DeviceUnlock` hands it to the admission once its proof
-  # verified, and the identity a device draws: the installation's
-  # configured token, if it has one, is put back however the admission
-  # ends.
-  setup = fn name ->
+  # The account SUB names, with the device key `device_pub` listed: a
+  # genesis signed by the recovery key SUB derives, at this deployment's
+  # directory, and the key added by it. The genesis is SUB's alone, so its
+  # identifier is; the head is the device's.
+  account = fn sub, device_pub ->
+    alias Prima.Identity
+    alias Prima.Identity.{Entry, Key}
+
+    directory =
+      Sanctum.directory_url() ||
+        raise "this deployment names no directory (CYFR_DIRECTORY_URL): an account needs one"
+
+    {recovery_pub, recovery} =
+      :crypto.generate_key(:eddsa, :ed25519, :crypto.hash(:sha256, ["release-proof|", sub]))
+
+    signer = Identity.recovery_signer(recovery_pub)
+    at = 1_700_000_000_000
+
+    {:ok, genesis} =
+      Entry.new(
+        kind: :genesis,
+        seq: 0,
+        at: at,
+        signer: signer,
+        directory: directory,
+        recovery: [recovery_pub]
+      )
+
+    genesis = Identity.sign(genesis, recovery)
+    {:ok, key} = Key.new(alg: :ed25519, kind: :device, pub: device_pub)
+
+    {:ok, added} =
+      Entry.new(
+        kind: :add_key,
+        prev: Identity.hash(genesis),
+        seq: 1,
+        at: at,
+        signer: signer,
+        key: key
+      )
+
+    added = Identity.sign(added, recovery)
+    {:ok, state} = Identity.verify_chain([genesis, added])
+
+    %{
+      identifier: state.identifier,
+      directory_url: directory,
+      head_hash: state.head,
+      key: key,
+      genesis: Identity.canonical(genesis),
+      added: Identity.canonical(added),
+      state: state |> Identity.State.encode() |> Jason.encode!()
+    }
+  end
+
+  # The account published at its directory, as the account pages publish
+  # one: the genesis registered, then the key appended after it. Each
+  # answers `:exists` for an entry already there, so an account published
+  # once is found as written. Never at cyfr.run (the `person` command).
+  published = fn account ->
+    alias Sanctum.Directory.Client
+
+    unless URI.parse(account.directory_url).host == "cyfr.run" do
+      {:ok, _registered} = Client.register(account.genesis)
+      {:ok, _appended} = Client.append(account.identifier, account.directory_url, account.added)
+    end
+
+    account
+  end
+
+  # The account's head cached here as a first read leaves it, before it is
+  # admitted.
+  cached = fn account ->
+    {:ok, _head} =
+      Arca.DirectoryHeads.put(
+        Prima.Actor.system(),
+        Map.take(account, [:identifier, :genesis, :directory_url, :head_hash, :state])
+      )
+
+    Map.take(account, [:identifier, :directory_url, :head_hash])
+  end
+
+  # The setup admission (`Sanctum.Newcomer.admit/3`) under a setup token
+  # put for this call alone, the setup device paired in it as its hello
+  # pairs one: the installation's configured token, if it has one, is put
+  # back however the admission ends.
+  setup = fn sub, name ->
     token = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
     configured = Application.fetch_env(:sanctum, :setup_token)
     Application.put_env(:sanctum, :setup_token, token)
 
-    identity = %{
-      name: "release-proof",
-      recovery_secret: :crypto.strong_rand_bytes(32),
-      request_id: "req_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-    }
-
     kept = kept_device.()
     seed = if kept, do: kept.seed, else: :crypto.strong_rand_bytes(32)
-    {device_key, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
-
-    enrollment = %{
-      athanor_id: if(kept, do: kept.athanor_id, else: Prima.UUID7.generate_id("ath")),
-      client_id: if(kept, do: kept.client_id, else: Prima.UUID7.generate_id("pcl")),
-      device_key: device_key,
-      request_id: identity.request_id,
-      holder_kind: "software",
-      display_name: name,
-      user_id: nil
-    }
+    {device_pub, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
+    client_id = if kept, do: kept.client_id, else: Prima.UUID7.generate_id("pcl")
+    account = published.(account.(sub, device_pub))
+    device = %{client_id: client_id, holder_kind: "software", display_name: name}
 
     try do
-      with {:ok, admitted} <-
-             Sanctum.Newcomer.admit({:setup, token}, {:device, enrollment, identity}) do
-        :ok = keep_device.(enrollment, seed, is_nil(kept))
-        {:ok, admitted}
+      with {:ok, %{person: person} = admitted} <-
+             Sanctum.Newcomer.admit({:setup, token}, cached.(account),
+               also: &Sanctum.DeviceUnlock.pair(&1, device, account.key, account.head_hash)
+             ) do
+        :ok = keep_device.(person.id, client_id, seed, is_nil(kept))
+        {:ok, Map.put(admitted, :account, account)}
       end
     after
       case configured do
@@ -245,76 +323,42 @@ fn args ->
     end
   end
 
-  # The enrollment the setup admission opened, finished with no network:
-  # accepted as the directory's answer is recorded, its recovery code
-  # saved and its name recorded on the person's row.
-  finished = fn user_id, %{attempt_id: attempt_id, name: name} ->
-    system = Prima.Actor.system()
-    {:ok, _} = Arca.IdentityAttempts.advance(system, attempt_id, "staged", "submitted")
-
-    {:ok, _} =
-      Arca.IdentityAttempts.advance(system, attempt_id, "submitted", "accepted", %{
-        outcome: "accepted"
-      })
-
-    {:ok, %{phase: "completed"}} = Arca.IdentityAttempts.acknowledge_kit(system, attempt_id)
-    {:ok, _} = Arca.Users.set_namespace(system, user_id, name)
-    :ok
-  end
-
-  # The person the identity `key` is linked to, made the first time (the
-  # `person` command above). The setup admission makes the installation's
-  # first person and refuses every later one (`:setup_closed`), which an
-  # open admission's rows then make, past a door whose `*` admits.
-  admitted = fn key ->
+  # The person of the account SUB names, made the first time (the `person`
+  # command above), and the account's identifier, head and device key. The
+  # setup admission makes the installation's first person
+  # (`Arca.InstallationClaims.setup/1` says whether this is it), and the
+  # open admission every later one, past a door whose `*` admits. A person
+  # made before is the account as this CYFR caches it, and the one device
+  # key it lists: the setup device's, or the key SUB derives.
+  admitted = fn sub ->
     system = Prima.Actor.system()
 
-    {:ok, %{provider: provider, issuer: issuer, subject: subject}} =
-      Sanctum.Auth.Identity.parse(key)
+    {device_pub, _} =
+      :crypto.generate_key(:eddsa, :ed25519, :crypto.hash(:sha256, ["release-device|", sub]))
 
-    link = %{key: key, provider: provider, issuer: issuer, subject: subject}
+    known = account.(sub, device_pub)
 
-    case Sanctum.Tenancy.Users.get_by_identity(key) do
-      {:ok, _person} ->
-        :ok
+    case Sanctum.Tenancy.Users.get_by_identifier(known.identifier) do
+      {:ok, person} ->
+        {:ok, head} = Arca.DirectoryHeads.get(system, known.identifier)
+        {:ok, state} = head.state |> Jason.decode!() |> Prima.Identity.State.decode()
+        [key] = Enum.filter(state.keys, &(&1.kind == :device))
+        {person, %{identifier: known.identifier, head_hash: head.head_hash, key: key}}
 
       {:error, :not_found} ->
-        case setup.("release-proof") do
-          {:ok, %{person: person, readmitted: false, recovery: recovery}} ->
-            :ok = finished.(person.id, recovery)
-            {:ok, %{linked: true}} = Arca.Users.link_identity(system, person.id, link)
-            :ok
+        case Arca.InstallationClaims.setup(system) do
+          {:ok, :first} ->
+            {:ok, %{person: person, account: account}} = setup.(sub, "release-proof")
+            {:ok, _} = Arca.Users.set_namespace(system, person.id, "release-proof")
+            {person, account}
 
-          {:error, :setup_closed} ->
+          {:ok, :closed} ->
             unless Sanctum.Door.Store.wildcard() == {:ok, true},
               do: raise("the door's * admits no newcomer: allow * before a second person")
 
-            now = DateTime.utc_now()
+            {:ok, %{person: person}} = Sanctum.Newcomer.admit(:open, cached.(published.(known)))
 
-            person = %{
-              id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-              prefs: Jason.encode!(%{}),
-              first_seen_at: now,
-              last_seen_at: now,
-              created_at: now,
-              updated_at: now
-            }
-
-            {:ok, _person} =
-              Arca.Users.mint(
-                system,
-                person,
-                Map.merge(link, %{first_seen_at: now, last_seen_at: now}),
-                admission: "open",
-                verify: &Sanctum.Provisioning.personal_admissible/0,
-                also: fn person ->
-                  with :ok <- Sanctum.Person.mint_keys(person),
-                       {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person),
-                       do: :ok
-                end
-              )
-
-            :ok
+            {person, known}
         end
     end
   end
@@ -379,6 +423,7 @@ fn args ->
 
     device = device_path |> File.read!() |> Jason.decode!()
     {:ok, seed} = Base.url_decode64(device["seed"], padding: false)
+    {device_key, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
     {:ok, certificate} = DeviceCert.decode(device["certificate"])
     client_id = device["client_id"]
 
@@ -396,7 +441,7 @@ fn args ->
           home: certificate.audience,
           athanor: certificate.athanor,
           client_id: client_id,
-          device_key: certificate.device_key,
+          device_key: device_key,
           nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
           now: System.system_time(:millisecond)
         )
@@ -419,7 +464,7 @@ fn args ->
 
     case proven.(:connect, certificate) do
       {{:ok, client}, _proof} ->
-        {carried.(client), certificate, seed}
+        {carried.(client), certificate, {device_key, seed}}
 
       {{:error, :expired}, _proof} ->
         {{:ok, client}, proof} = proven.(:renew, certificate)
@@ -432,7 +477,7 @@ fn args ->
             %{
               "action" => "renew",
               "client_id" => client_id,
-              "device_key" => Prima.Identity.Encoding.b64(certificate.device_key),
+              "device_key" => Prima.Identity.Encoding.b64(device_key),
               "proof" => Proof.encode(proof)
             },
             call_id: ctx.call_id,
@@ -444,7 +489,7 @@ fn args ->
 
         case proven.(:connect, renewed) do
           {{:ok, client}, _proof} ->
-            {carried.(client), renewed, seed}
+            {carried.(client), renewed, {device_key, seed}}
 
           {refused, _proof} ->
             raise "the renewed setup device did not connect: #{inspect(refused)}"
@@ -464,52 +509,60 @@ fn args ->
 
   case args do
     ["device_confirm", ref | tamper] when tamper in [[], ["digest"], ["ref"], ["key"]] ->
-      alias Prima.DeviceCert.{Challenge, Proof}
-      {ctx, _certificate, seed} = device_channel.()
+      alias Prima.SignIn.DeviceAnswer
+      {ctx, _certificate, {device_key, seed}} = device_channel.()
+      kid = Prima.Identity.Key.kid(device_key)
 
-      case device_intent.(ctx, "confirmation", %{"action" => "pending", "request" => ref}) do
-        {:ok, %{confirmations: [%{ref: ^ref} = record]}} ->
-          {:ok, challenge} = Challenge.decode(record.challenge)
-          stored = challenge.digest
+      with {:ok, %{confirmations: [%{ref: ^ref} = record]}} <-
+             device_intent.(ctx, "confirmation", %{"action" => "pending", "request" => ref}),
+           {:ok, %{request: encoded}} <-
+             device_intent.(ctx, "confirmation", %{"action" => "request", "ref" => ref}) do
+        {:ok, request} = Prima.SignIn.decode(encoded)
+        sign = fn digest, key -> :crypto.sign(:eddsa, :none, digest, [key, :ed25519]) end
 
-          {challenge, key} =
-            case tamper do
-              [] ->
-                {challenge, seed}
+        {answer_ref, signed} =
+          case tamper do
+            [] ->
+              {ref, DeviceAnswer.sign(request, kid, seed)}
 
-              ["digest"] ->
-                {%{challenge | digest: "sha256:" <> String.duplicate("0", 64)}, seed}
+            ["digest"] ->
+              {ref,
+               %DeviceAnswer{
+                 challenge: request.challenge,
+                 kid: kid,
+                 sig: sign.(:crypto.hash(:sha256, "another digest"), seed)
+               }}
 
-              ["ref"] ->
-                {%{
-                   challenge
-                   | ref:
-                       "cnr_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-                 }, seed}
+            ["ref"] ->
+              {"cnr_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false),
+               DeviceAnswer.sign(request, kid, seed)}
 
-              ["key"] ->
-                {challenge, :crypto.strong_rand_bytes(32)}
+            ["key"] ->
+              {ref,
+               %DeviceAnswer{
+                 challenge: request.challenge,
+                 kid: kid,
+                 sig: sign.(Prima.SignIn.digest(request), :crypto.strong_rand_bytes(32))
+               }}
+          end
+
+        confirmed =
+          device_intent.(ctx, "confirmation", %{
+            "action" => "confirm",
+            "ref" => answer_ref,
+            "answer" => DeviceAnswer.encode(signed)
+          })
+
+        answer.(
+          Map.merge(
+            %{operation: record.operation, preview: record.preview, digest: request.subject},
+            case confirmed do
+              {:ok, result} -> %{ok: result}
+              {:error, reason} -> %{error: inspect(reason)}
             end
-
-          proof = Proof.encode(Proof.sign(challenge, key))
-
-          confirmed =
-            device_intent.(ctx, "confirmation", %{
-              "action" => "confirm",
-              "ref" => ref,
-              "device_proof" => proof
-            })
-
-          answer.(
-            Map.merge(
-              %{operation: record.operation, preview: record.preview, digest: stored},
-              case confirmed do
-                {:ok, result} -> %{ok: result}
-                {:error, reason} -> %{error: inspect(reason)}
-              end
-            )
           )
-
+        )
+      else
         {:ok, %{confirmations: records}} ->
           answer.(%{error: "no one open record of #{ref}: #{length(records)}"})
 
@@ -518,23 +571,25 @@ fn args ->
       end
 
     ["person", email, sub | name] when length(name) <= 1 ->
-      identity = Sanctum.Auth.Identity.builtin_key(:github, sub)
+      {person, account} = admitted.(sub)
+      system = Prima.Actor.system()
 
-      method = %{
-        id: identity,
-        provider: :github,
-        email: email,
-        verified: true,
-        name: List.first(name, "Release proof")
-      }
+      {:ok, _} =
+        Arca.Users.update(system, person.id, %{
+          email: email,
+          email_verified: true,
+          display_name: List.first(name, "Release proof")
+        })
 
-      :ok = admitted.(identity)
-      {:ok, user} = Sanctum.SignIn.unlock(method)
-      ctx = person_ctx.(user.id)
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, :allowed} = Sanctum.Door.sign_in(person)
+      :ok = Sanctum.Provisioning.after_sign_in(person.id)
+      ctx = person_ctx.(person.id)
+
+      {:ok, session} =
+        Sanctum.Session.create(ctx, kid: account.key.kid, head: account.head_hash)
 
       answer.(%{
-        user_id: user.id,
+        user_id: person.id,
         athanor_id: ctx.athanor_id,
         segment: segment.(ctx.athanor_id),
         token: session.token

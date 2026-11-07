@@ -41,16 +41,11 @@ defmodule Sanctum.CompanyLoginTest do
   # application's environment: one case at a time.
   use ExUnit.Case, async: false
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.{CompanyAuthorization, CompanyLoginAttempt}
   alias Arca.Test.QueryCounter
-  alias Prima.DeviceCert.Proof
-  alias Sanctum.{Caller, CompanyLogin, Context, Pairing}
+  alias Sanctum.{Caller, CompanyLogin, Context}
   alias Sanctum.Tenancy.Users
 
   @issuer "https://idp.example.com"
@@ -159,13 +154,7 @@ defmodule Sanctum.CompanyLoginTest do
   # The `oidcc` provider's registration: the client id a binding is made
   # under.
   defp client!(client_id) do
-    put_env!(:ueberauth, Ueberauth,
-      providers: [
-        oidcc:
-          {Ueberauth.Strategy.Oidcc,
-           issuer: :cyfr_oidc, client_id: client_id, client_secret: "csec"}
-      ]
-    )
+    put_env!(:sanctum, :oidc_client, %{client_id: client_id, client_secret: "csec"})
   end
 
   # The establish memo on, and what it kept dropped after the case.
@@ -223,35 +212,17 @@ defmodule Sanctum.CompanyLoginTest do
     %{issuer: session_ctx, name: name, raw: raw, ctx: key_ctx}
   end
 
-  # A device paired through the ceremony under the person's session, and
-  # what `Sanctum.DeviceCerts` hands `Caller.establish_device/2` once it
+  # A device of the person's account paired here, and what
+  # `Sanctum.DeviceCerts` hands `Caller.establish_device/2` once it
   # verified it: the certificate and the rows it read.
   defp device!(session_ctx) do
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     Prima.Test.RateLimiter.reset!()
 
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    digest = Prima.Device.key_digest(device_key)
+    %{client_id: client_id, certificate: certificate} =
+      Sanctum.Test.Devices.paired!(session_ctx.user_id, @source)
 
-    {:ok, invitation} =
-      session_ctx
-      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{"key_digest" => digest})
-
-    glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{holder: @holder, device_key: device_key}
-
-    {:ok, %{challenge: challenge}} =
-      Pairing.complete(glass, invitation.invitation_secret, submission)
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Pairing.complete(
-        glass,
-        invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
-      )
-
-    user_id = certificate.subject.user_id
+    user_id = session_ctx.user_id
 
     {:ok, client} =
       Sanctum.DeviceCerts.paired_client(certificate.athanor, user_id, client_id)
@@ -261,6 +232,7 @@ defmodule Sanctum.CompanyLoginTest do
     %{
       certificate: certificate,
       client: client,
+      identifier: certificate.identifier,
       user: standing.user,
       athanor: standing.athanor,
       platform_admin: standing.platform_admin
@@ -1015,13 +987,15 @@ defmodule Sanctum.CompanyLoginTest do
       %{directory: DirectoryServer.start!(tls)}
     end
 
-    # The seated person made this CYFR's remote person of an identity the
-    # directory serves, their head cached as verified now, and a session
-    # of theirs minted bound to that head's key_epoch.
+    # The seated person made this CYFR's member by an account the
+    # directory serves, their head cached as verified now, and a session of
+    # theirs, on a public CYFR, which pauses a head it cannot refresh past
+    # its bound.
     defp remote_session!(%{user: user, athanor: athanor, directory: directory}) do
-      identity = DirectoryServer.identity!(directory.dir, directory.url)
-      :ok = DirectoryServer.remote_person!(user.id, identity)
-      %{identifier: identity.identifier, token: session!(user, athanor)}
+      put_env!(:sanctum, :access_mode, :public)
+      account = DirectoryServer.account!(directory.dir, directory.url)
+      :ok = DirectoryServer.account_person!(user.id, account)
+      %{identifier: account.identifier, token: session!(user, athanor)}
     end
 
     # The cached head's verification moved a day back, far past the bound;

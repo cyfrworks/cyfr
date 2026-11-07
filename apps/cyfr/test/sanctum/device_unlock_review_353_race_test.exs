@@ -15,8 +15,9 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
     DeviceCertificate,
     Session,
     PersonIdentity,
-    IdentityAttempt,
-    Athanor
+    Athanor,
+    DirectoryHead,
+    ServerAllowlistEntry
   }
 
   @token String.duplicate("52", 32)
@@ -30,51 +31,23 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     Sanctum.Test.Newcomers.directory!()
     assert 0 == unboxed(fn -> Arca.Repo.aggregate(User, :count) end)
-    identity = Sanctum.Test.Newcomers.identity()
-    pair = key()
+    device = unboxed(fn -> enrolled!(@token) end)
+    user_id = device.user.id
+    identifier = device.account.identifier
 
     on_exit(fn ->
       unboxed(fn ->
-        case Arca.Repo.one(
-               from(p in PairedClient,
-                 where: p.source_id == ^identity.request_id,
-                 select: p.user_id
-               )
-             ) do
-          nil ->
-            :ok
-
-          user_id ->
-            for schema <- [
-                  Session,
-                  DeviceCertificate,
-                  PairedClient,
-                  IdentityAttempt,
-                  PersonIdentity
-                ] do
-              Arca.Repo.delete_all(from(r in schema, where: r.user_id == ^user_id))
-            end
-
-            Arca.Repo.delete_all(from(a in Athanor, where: a.owner_user_id == ^user_id))
-            Arca.Repo.delete_all(from(u in User, where: u.id == ^user_id))
+        for schema <- [Session, DeviceCertificate, PairedClient, PersonIdentity] do
+          Arca.Repo.delete_all(from(r in schema, where: r.user_id == ^user_id))
         end
+
+        Arca.Repo.delete_all(from(h in DirectoryHead, where: h.identifier == ^identifier))
+        Arca.Repo.delete_all(from(e in ServerAllowlistEntry, where: e.value == ^identifier))
+
+        Arca.Repo.delete_all(from(a in Athanor, where: a.owner_user_id == ^user_id))
+        Arca.Repo.delete_all(from(u in User, where: u.id == ^user_id))
       end)
     end)
-
-    device =
-      unboxed(fn ->
-        {:ok, %{challenge: challenge}} =
-          DeviceUnlock.enrollment_challenge({:setup, @token}, reported(pair, identity.request_id))
-
-        {:ok, answer} =
-          DeviceUnlock.enroll({:setup, @token}, %{
-            "proof" => signed(challenge, elem(pair, 1)),
-            "name" => identity.name,
-            "recovery_secret" => b64(identity.recovery_secret)
-          })
-
-        Map.merge(answer, %{key: pair, identity: identity})
-      end)
 
     ctx = unboxed(fn -> connected!(device) end)
     answer = unboxed(fn -> unlocked!(ctx, device.key) end)

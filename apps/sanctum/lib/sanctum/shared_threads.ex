@@ -27,10 +27,7 @@ defmodule Sanctum.SharedThreads do
   administrator holds no seat by their capability and reads a thread
   only where they sit.
 
-  A thread one of whose people still recovers from a declared restore
-  admits no one new by any path, an addition, an invitation's activation
-  or an invitation's redemption, until each has recovered; removal and
-  leave stay admitted. That, the caps `max_shared_threads_per_person`,
+  The caps `max_shared_threads_per_person`,
   `max_people_per_thread` and `max_pairs_per_person` (each absent for no
   limit), the acting person's own seat for every change of a thread, and
   a pair's two people still sitting together are decided by the store, in
@@ -626,8 +623,8 @@ defmodule Sanctum.SharedThreads do
   @doc """
   Turn every invitation held for the person's identifier into their seat,
   at each admitted sign-in: an invitation to a thread they sit in already
-  is dropped, and one a thread's archive or a declared restore's hold
-  keeps stays for a later sign-in. Answers how many seats it made.
+  is dropped, and one a thread's archive keeps stays for a later
+  sign-in. Answers how many seats it made.
   """
   @spec activate_invited(map()) ::
           {:ok, non_neg_integer()} | {:error, :database_error | :not_owner}
@@ -752,8 +749,12 @@ defmodule Sanctum.SharedThreads do
 
   defp title(_title), do: {:error, {:invalid_argument, "A thread needs a title"}}
 
+  # A person named by their account's identifier (`per_…`) or by their id
+  # here (`usr_…`): the two are distinct types and never compared.
   defp find_person(id) do
-    if Sanctum.Auth.Identity.key?(id), do: Users.get_by_identity(id), else: Users.get(id)
+    if Prima.Identity.Encoding.identifier?(id),
+      do: Users.get_by_identifier(id),
+      else: Users.get(id)
   end
 
   defp changed({:ok, thread}, user_id, thread_id) do
@@ -841,7 +842,7 @@ defmodule Sanctum.SharedThreads do
   defp refused(:not_member, thread_id) when is_binary(thread_id), do: missing(thread_id)
 
   defp refused(reason, _thread_id)
-       when reason in [:archived, :pair, :not_together, :recovering_from_restore],
+       when reason in [:archived, :pair, :not_together],
        do: {:error, {:shared_thread, reason}}
 
   defp refused({:limit_reached, _key, _cap} = reason, _thread_id), do: {:error, reason}

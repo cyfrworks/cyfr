@@ -75,7 +75,7 @@ If a recovery or another rotation replaced the keys first, the attempt ends with
 
 A restore brings your identity back onto an empty installation from one recovery code. It is not an operation, since no person exists there yet, and it needs the installation's own capability besides the code:
 
-1. The operator sets `CYFR_RESTORE_TOKEN` on the fresh installation (`openssl rand -hex 32`) and gives you the token. While it is set, the installation's first person is reserved for the restore: setup makes no one first, and the restored person is the installation's administrator.
+1. The operator prepares the fresh installation and gives you its address.
 2. Open `https://<installation>/restore`, and type the token and your recovery code. The browser sends them to that installation alone, the token in a request header; nothing goes into an address or the browser's storage, and the form is emptied once the restore completes or you clear it.
 3. The installation checks the token first, then reads your identity at the directory it names (`CYFR_DIRECTORY_URL`, so it must be the directory your identity was registered at), and checks that the code is one of your identity's recovery codes now, before it claims anything. A wrong token, a code with a typo (the page says so) or a code that is no longer valid spends nothing.
 4. It stages new keys and asks the directory to recover your identity onto them. Each step is durable: if the installation stops partway, sending the same code under the same token again resumes from the step it reached, and the page does that itself while the restore is underway.

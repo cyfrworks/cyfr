@@ -25,7 +25,7 @@ defmodule PrismWeb.CompanyLoginLiveTest do
   @issuer "https://idp.example.com"
 
   setup do
-    keys = [{:sanctum, :company_login}, {:sanctum, :oidc_issuer}, {:ueberauth, Ueberauth}]
+    keys = [{:sanctum, :company_login}, {:sanctum, :oidc_issuer}, {:sanctum, :oidc_client}]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.fetch_env(app, key)} end)
 
     on_exit(fn ->
@@ -46,13 +46,7 @@ defmodule PrismWeb.CompanyLoginLiveTest do
   # The `oidcc` client the company's issuer knows this CYFR by: changing
   # its id is a configuration change, under which no binding stands.
   defp client!(client_id) do
-    Application.put_env(:ueberauth, Ueberauth,
-      providers: [
-        oidcc:
-          {Ueberauth.Strategy.Oidcc,
-           issuer: :cyfr_oidc, client_id: client_id, client_secret: "csec"}
-      ]
-    )
+    Application.put_env(:sanctum, :oidc_client, %{client_id: client_id, client_secret: "csec"})
   end
 
   # The person's company sign-in, given under the configuration this CYFR

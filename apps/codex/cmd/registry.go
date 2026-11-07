@@ -2,18 +2,25 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Registry namespace and push-token management commands.
-// Each command delegates to the MCP registry tool. The server signs each
-// request with the person's identity key and resolves the push tokens it
-// stores for them. A person's name, their personal namespace, is taken at
-// cyfr.run when CYFR makes them; `cyfr registry sync` provisions push
-// tokens, which sign-in never does.
+// Each command delegates to the MCP registry tool, which resolves the push
+// tokens CYFR stores for the person. A request the registry needs signed
+// by the person is signed here, by this command line's own key after its
+// unlock (signedRegistry); CYFR holds no key of the person's. A person's
+// name, their personal namespace, is taken at the registry when their
+// account is made; `cyfr registry sync` provisions push tokens, which
+// sign-in never does.
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"github.com/cyfr/codex/internal/ops"
+	"os"
 
+	"github.com/cyfr/codex/internal/account"
+	"github.com/cyfr/codex/internal/holder"
+	"github.com/cyfr/codex/internal/mcp"
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -90,9 +97,10 @@ var registrySyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Mint and store your push tokens at cyfr.run",
 	Long: `Mints push tokens for your personal namespace and every publisher
-namespace you are a member of, with a request your identity signs, and stores
-them on the server for ` + "`cyfr push`" + `. It waits for a fresh confirmation,
-given on a device of yours, before minting.
+namespace you are a member of, and stores them on the server for ` + "`cyfr push`" + `.
+The registry takes the mint as a request your account signs: this command
+shows it and asks this command line's PIN or passphrase to sign it, every
+time.
 
 Prints your personal namespace and your memberships. No token is ever printed.
 Run it again after a token is revoked or a membership is added.`,
@@ -100,7 +108,9 @@ Run it again after a token is revoked or a membership is added.`,
 	Example: "  cyfr registry sync",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistrySyncArgs{})
+		result, err := signedRegistry(cmd.Context(), client, func(answer ops.Field[any]) (map[string]any, error) {
+			return client.CallTool(cmd.Context(), ops.Registry, ops.RegistrySyncArgs{Answer: answer})
+		})
 		if err != nil {
 			return handleToolError(err, "Registry sync failed")
 		}
@@ -154,9 +164,10 @@ var registryPublisherCmd = &cobra.Command{
 var registryPublisherClaimCmd = &cobra.Command{
 	Use:   "claim <domain>",
 	Short: "Start a publisher-namespace claim (issues a DNS TXT challenge)",
-	Long: `Sent as a request your identity signs, so it needs your name at
-cyfr.run, taken when CYFR made you. cyfr.run returns a TXT challenge to
-install at _cyfr-verify.<domain>; run
+	Long: `Sent as a request your account signs, with this command line's PIN or
+passphrase, so it needs your name at the registry, taken when your account
+was made. The registry returns a TXT challenge to install at
+_cyfr-verify.<domain>; run
 ` + "`cyfr registry publisher verify <domain>`" + ` once the record is live.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry publisher claim acme.com",
@@ -164,7 +175,9 @@ install at _cyfr-verify.<domain>; run
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryClaimPublisherArgs{Slug: slug})
+		result, err := signedRegistry(cmd.Context(), client, func(answer ops.Field[any]) (map[string]any, error) {
+			return client.CallTool(cmd.Context(), ops.Registry, ops.RegistryClaimPublisherArgs{Slug: slug, Answer: answer})
+		})
 		if err != nil {
 			return handleToolError(err, "Publisher claim failed")
 		}
@@ -182,7 +195,7 @@ var registryPublisherVerifyCmd = &cobra.Command{
 	Use:   "verify <domain>",
 	Short: "Verify a publisher claim via DNS and store its first push token",
 	Long: `Polls the DNS TXT record installed for a prior ` + "`claim`" + `, with a
-request your identity signs, after a fresh confirmation given on a device of yours. On
+request your account signs, with this command line's PIN or passphrase. On
 success the caller becomes the sole admin of the publisher namespace and
 cyfr.run mints the founding member's push token, which the server stores so
 ` + "`cyfr push`" + ` can use it immediately; ` + "`token_stored`" + ` says whether
@@ -194,7 +207,9 @@ it was. A repeat of a verification already recorded mints nothing — run
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryVerifyPublisherArgs{Slug: slug})
+		result, err := signedRegistry(cmd.Context(), client, func(answer ops.Field[any]) (map[string]any, error) {
+			return client.CallTool(cmd.Context(), ops.Registry, ops.RegistryVerifyPublisherArgs{Slug: slug, Answer: answer})
+		})
 		if err != nil {
 			return handleToolError(err, "Publisher verify failed")
 		}
@@ -426,4 +441,112 @@ the last admin returns 409 ` + "`sole_admin`" + `.`,
 		fmt.Printf("Removed %s from %s\n", target, slug)
 		return nil
 	},
+}
+
+// signedRegistry makes a registry action the person signs, in its two
+// calls: made without an answer it answers {request}, the CYFR's request
+// of purpose registry, whose registry request this command line signs
+// with its own key after its unlock (registrySigner); call is then made
+// again with the same arguments and that signed request as its answer. An
+// action that answers anything else answers it as it is.
+func signedRegistry(ctx context.Context, client *mcp.Client, call func(answer ops.Field[any]) (map[string]any, error)) (map[string]any, error) {
+	result, err := call(ops.Field[any]{})
+	if err != nil {
+		return nil, err
+	}
+	asked, ok := result["request"]
+	if !ok || len(result) != 1 {
+		return result, nil
+	}
+	answer, err := registrySigner(ctx, client.BaseURL, asked)
+	if err != nil {
+		return nil, err
+	}
+	return call(ops.Value(answer))
+}
+
+// registrySigner signs the registry request asked carries with this
+// command line's key, asking its PIN or passphrase at the terminal after
+// showing what is signed; a test stands in for it.
+var registrySigner = func(ctx context.Context, address string, asked any) (any, error) {
+	if !askTerminal() {
+		return nil, errors.New("The registry asks for your signature, which this command line gives at a terminal with its PIN or passphrase.")
+	}
+	path, err := deviceKey()
+	if err != nil {
+		return nil, err
+	}
+	rec, err := holder.Load(path)
+	if err != nil || rec.Identifier == "" {
+		return nil, errors.New("The registry asks for your signature, and this command line holds no key of your account: run cyfr login first.")
+	}
+	c := newConsole(os.Stdout)
+	return signRegistryRequest(ctx, c, rec, deviceHome(address), asked)
+}
+
+// registryWords is a registry request in words, as the account pages say
+// it, naming every field of the body it signs and never the operation's
+// name; ReadToSign holds the request to exactly these operations and
+// bodies.
+func registryWords(req map[string]any) string {
+	body, _ := req["body"].(map[string]any)
+	f := func(k string) string { v, _ := body[k].(string); return v }
+	at, _ := req["registry"].(string)
+	switch req["operation"] {
+	case "handle.claim":
+		return fmt.Sprintf("Claim the name @%s at %s", f("handle"), at)
+	case "policy.accept":
+		return fmt.Sprintf("Accept the terms (version %s) at %s", f("policy_version"), at)
+	case "tokens.mint":
+		return fmt.Sprintf("Create a publishing token named “%s” at %s", f("label"), at)
+	case "appeal.file":
+		return fmt.Sprintf("Appeal the %s %s at %s, saying: “%s”", f("action_type"), f("action_ref"), at, f("argument"))
+	case "publisher.claim":
+		return fmt.Sprintf("Claim the publisher name %s at %s", f("slug"), at)
+	case "publisher.verify":
+		return fmt.Sprintf("Confirm the publisher name %s at %s, with a publishing token named “%s”", f("slug"), at, f("label"))
+	}
+	return "Sign a request of the registry at " + at
+}
+
+// signRegistryRequest signs the registry request a CYFR's request of
+// purpose registry carries, for the account rec's key is listed in: only a
+// request this CYFR (home) minted for that account, shown before the
+// secret is asked; its signer set to this key's kid, its sig this key's
+// Ed25519 signature over its JCS bytes without sig. It answers the signed
+// request as a JSON object.
+func signRegistryRequest(ctx context.Context, c *console, rec *holder.Record, home string, asked any) (any, error) {
+	r, err := account.ReadRequest(asked)
+	if err != nil || r.Purpose != "registry" || !sameAddress(r.Audience, home) || r.RegistryRequest["identifier"] != rec.Identifier {
+		return nil, errors.New("CYFR asked this command line to sign something other than a registry request for your account here, so nothing was signed.")
+	}
+	req := r.RegistryRequest
+	fmt.Fprintf(c.out, "%s, signed by your account.\n", registryWords(req))
+	question := "Sign it with this command line's passphrase: "
+	if rec.Kind == holder.KindChip {
+		question = "Sign it with this command line's PIN: "
+	}
+	secret, err := c.secret(ctx, question)
+	if err != nil {
+		return nil, err
+	}
+	key, err := rec.Open(secret)
+	clear(secret)
+	if errors.Is(err, holder.ErrWrongSecret) || errors.Is(err, holder.ErrSecretShape) {
+		return nil, errors.New("That is not this command line's PIN or passphrase. Nothing was signed.")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("This command line's key did not open (%v). Nothing was signed.", err)
+	}
+	defer key.Erase()
+	signer := map[string]any{}
+	for k, v := range req {
+		signer[k] = v
+	}
+	signer["signer"] = account.Kid(rec.PublicKey)
+	signed, err := account.SignRegistryRequestBy(signer, key.Sign)
+	if err != nil {
+		return nil, fmt.Errorf("The registry request could not be signed (%v).", err)
+	}
+	return account.Decode(signed)
 }

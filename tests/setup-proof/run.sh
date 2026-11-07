@@ -12,19 +12,22 @@
 #   local    Welcome, whose one button, Set up CYFR, starts it with no
 #            question: .env written, reached from this device, and CYFR
 #            started, the browser moved to the setup link
-#            http://localhost:<CYFR_PORT>/setup#<token>, a name typed on
-#            its first screen, which says cyfr.run did not answer, a
-#            passkey from a virtual authenticator making the first person,
-#            and the second screen saying "cyfr.run did not answer. Try
-#            again." with no recovery code and no way into CYFR, since
-#            CYFR's directory and registry are `.invalid` names
-#            (compose.yml); the same link in another browser then closed,
-#            and the command exited 0, its address gone.
+#            http://localhost:<CYFR_PORT>/setup#<token>, whose page offers
+#            to sign in with an account or to create one; Create your
+#            account sends the browser to the new page of CYFR's
+#            directory with CYFR's sign-in request in the fragment and no
+#            token. The directory's name is `.invalid` (compose.yml), so
+#            no account is made and nobody is admitted: the same link in
+#            another browser offers the same, and the command exited 0,
+#            its address gone. An account made at the pages and admitted
+#            under a setup token is the identity proof's
+#            (tests/identity-proof/), and one made at the terminal and
+#            admitted by its hello the pairing proof's
+#            (tests/pairing-proof/).
 #   again    `cyfr setup` again in that project: exit 0 with the next
-#            step of the CYFR whose first person the pages made, `cyfr
-#            open` (its log holds the set-up line after the boot's
-#            not-set-up line), nothing written and nothing served at the
-#            port asked for.
+#            step of a CYFR nobody is set up at yet, its setup link or
+#            `cyfr login --setup`, nothing written and nothing served at
+#            the port asked for.
 #
 # Usage: tests/setup-proof/run.sh
 # Env: SETUP_PROOF_IMAGE (default cyfr:setup-proof), built from this tree
@@ -192,7 +195,7 @@ token="$(env_value "$LOCAL" CYFR_SETUP_TOKEN)"
 if compose_in "$LOCAL" logs --no-color cyfr 2>&1 | grep -qF "$token"; then
   fail "the cyfr service's log records the setup token"
 fi
-ok "CYFR runs at http://localhost:$LOCAL_PORT, its first person made, and cyfr setup exited 0"
+ok "CYFR runs at http://localhost:$LOCAL_PORT, nobody admitted yet, and cyfr setup exited 0"
 
 step "again: cyfr setup where .env exists says the next step"
 port="$(free_port)"
@@ -200,15 +203,15 @@ cp "$WORK/$LOCAL/.env" "$WORK/$LOCAL.env.before"
 setup_start "$LOCAL" --port "$port"
 setup_wait 30
 [ "$SETUP_STATUS" = 0 ] || fail "cyfr setup over an existing .env exited $SETUP_STATUS: $(cat "$WORK/$LOCAL.setup.log")"
-first="$(cat "$WORK/$LOCAL.setup.log")"
-[ "$first" = "CYFR is set up and has its first person. cyfr open opens it." ] ||
-  fail "cyfr setup over an existing .env said: $first"
+first="$(head -n 1 "$WORK/$LOCAL.setup.log")"
+[ "$first" = "Open http://localhost:$LOCAL_PORT/setup#$token to set up its first person, or run cyfr login --setup here." ] ||
+  fail "cyfr setup over an existing .env said: ${first//$token/[token]}"
 cmp -s "$WORK/$LOCAL/.env" "$WORK/$LOCAL.env.before" || fail "cyfr setup over an existing .env changed .env"
 [ ! -e "$WORK/$LOCAL/.cyfr/setup.url" ] || fail "cyfr setup over an existing .env wrote an address"
 if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/"; then
   fail "something answers at 127.0.0.1:$port after cyfr setup said the next step"
 fi
-ok "said the next step ($first), exit 0, nothing written or served"
+ok "said the next step (${first//$token/[token]}), exit 0, nothing written or served"
 
 echo
 echo "setup proof: passed; the record is $OUT/setup-proof.json"

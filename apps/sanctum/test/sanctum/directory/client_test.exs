@@ -3,26 +3,27 @@
 
 defmodule Sanctum.Directory.ClientTest do
   @moduledoc """
-  The home's client for any directory, against scripted directories that
-  speak HTTPS under a test authority on loopback, named by a test resolver.
+  The home's client for any directory, `cyfr-directory/v2`, against
+  scripted directories that speak HTTPS under a test authority on
+  loopback, named by a test resolver.
 
-  The directory is the one the genesis names, and a genesis that does not
-  hash to the identifier makes no request; the transport is HTTPS, pinned
-  under the operator's private-address policy, never redirected, never
-  unverified; a resolution verifies every linked page and the whole chain
-  before it caches anything, and moves the cache only along the chain.
+  A genesis is registered at the directory it names; an entry, of any kind
+  but a genesis, is appended; a log is read from its genesis or after an
+  entry's hash, every page linked to the one before it. The transport is
+  HTTPS, pinned under the operator's private-address policy, never
+  redirected, never unverified. Each answer of the directory is decoded,
+  `exists` naming the head and `gone` distinct from `not_found`, and a
+  write's answer is held to what was sent.
   """
 
-  # The private-egress configuration, the resolver's observer, this
-  # member's rate counters and the head cache are process-wide.
+  # The private-egress configuration, the resolver's observer and this
+  # member's rate counters are process-wide.
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
 
-  alias Arca.Schemas.DirectoryHead
   alias Prima.Identity
-  alias Prima.Identity.{Entry, RecoverRequest}
+  alias Prima.Identity.Entry
   alias Sanctum.Directory.Client
   alias Sanctum.Test.DirectoryServer
   alias Sanctum.Test.DirectoryServer.{Resolver, Server}
@@ -40,36 +41,14 @@ defmodule Sanctum.Directory.ClientTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     Prima.Test.RateLimiter.reset!()
-    targets = Application.fetch_env(:sanctum, :private_egress_targets)
-
-    # The test directories are on loopback, which the operator lists by
-    # name, as a deployment names a directory on its own network.
-    Application.put_env(:sanctum, :private_egress_targets, [
-      "dir-a.test",
-      "dir-b.test",
-      "metadata.test"
-    ])
-
-    :persistent_term.put({Resolver, :observer}, self())
-
-    on_exit(fn ->
-      case targets do
-        {:ok, value} -> Application.put_env(:sanctum, :private_egress_targets, value)
-        :error -> Application.delete_env(:sanctum, :private_egress_targets)
-      end
-
-      :persistent_term.erase({Resolver, :observer})
-      Prima.Test.RateLimiter.reset!()
-    end)
-
-    # The logs the scripted directories serve, by identifier.
-    {:ok, logs} = Agent.start_link(fn -> %{} end)
-    %{logs: logs}
+    DirectoryServer.listen!()
+    on_exit(&Prima.Test.RateLimiter.reset!/0)
+    :ok
   end
 
   # ---- fixtures ----------------------------------------------------------------
 
-  defp keypair, do: :crypto.generate_key(:eddsa, :ed25519)
+  defp opts(%{tls: tls}), do: DirectoryServer.opts(tls)
 
   defp directory(%{tls: tls}, host, handler) do
     server = Server.start(tls[:server_config], handler, self())
@@ -78,245 +57,94 @@ defmodule Sanctum.Directory.ClientTest do
     %{url: url, origin: url, server: server}
   end
 
-  defp opts(%{tls: tls}), do: [resolver: Resolver, cacerts: tls[:client_config][:cacerts]]
-
-  defp person(url) do
-    {live, _} = keypair()
-    {op_pub, op_priv} = keypair()
-    {rec_pub, rec_priv} = keypair()
-
-    {:ok, genesis} =
-      Entry.genesis(
-        live_key: live,
-        operational_key: op_pub,
-        recovery_keys: [rec_pub],
-        directory: url
-      )
-
-    genesis = Identity.sign(genesis, op_priv)
-
-    %{
-      genesis: genesis,
-      identifier: Identity.identifier(genesis),
-      operational: op_priv,
-      recovery: rec_priv,
-      url: url,
-      log: [Entry.encode(genesis)],
-      head: Identity.hash(genesis)
-    }
+  # A scripted directory serving accounts, and one account there.
+  defp serving(ctx) do
+    dir = DirectoryServer.start!(ctx.tls)
+    %{dir: dir, account: DirectoryServer.account!(dir.dir, dir.url)}
   end
 
-  defp rotation(person, prev \\ nil) do
-    {live, _} = keypair()
-    {:ok, entry} = Entry.rotate(prev || person.head, live)
-    Identity.sign(entry, person.operational)
+  # An account no directory serves: its log composed for `url`.
+  defp composed(url) do
+    {:ok, agent} = Agent.start_link(fn -> %{logs: %{}, next: %{}, gone: MapSet.new()} end)
+    DirectoryServer.account!(agent, url)
   end
 
-  # A rotation as a home appends it: its canonical bytes, as
-  # `Sanctum.Person.sign_rotate/2` stages them.
-  defp rotation_bytes(person), do: person |> rotation() |> Identity.canonical()
-
-  defp rotated(person, count) do
-    Enum.reduce(1..count, person, fn _, person ->
-      entry = rotation(person)
-      %{person | log: person.log ++ [Entry.encode(entry)], head: Identity.hash(entry)}
-    end)
-  end
-
-  defp request(person, request_id \\ "req_1") do
-    {live, _} = keypair()
-    {op, _} = keypair()
-
-    {:ok, request} =
-      RecoverRequest.new(
-        identifier: person.identifier,
-        directory: person.url,
-        live_key: live,
-        operational_key: op,
-        expected_revision: 0,
-        request_id: request_id
-      )
-
-    Identity.sign(request, person.recovery)
-  end
-
-  defp genesis(person), do: Entry.encode(person.genesis)
+  defp genesis(account), do: hd(account.log)
+  defp last(account), do: List.last(account.log)
 
   defp json(status, body, headers \\ []),
     do: {status, [{"content-type", "application/json"} | headers], Jason.encode!(body)}
 
-  # Publish what a scripted directory serves for `person`: their log, and
-  # how it is tampered with (`:truncate` stops one entry short of the head
-  # and length it names, `:reorder` swaps two entries, `:unlinked` names a
-  # `next` past its page's last entry).
-  defp publish(%{logs: logs}, person, tamper \\ nil) do
-    Agent.update(logs, &Map.put(&1, person.identifier, {person.log, tamper}))
-    person
-  end
-
-  # A directory serving the published logs in pages of 100, as the
-  # directory does.
-  defp serving(%{logs: logs}) do
-    fn %{method: "GET", target: target} ->
-      %URI{path: path, query: query} = URI.parse(target)
-      identifier = path |> String.split("/") |> List.last()
-      after_seq = String.to_integer(URI.decode_query(query || "")["after"])
-
-      case Agent.get(logs, &Map.get(&1, identifier)) do
-        nil ->
-          json(404, %{"error" => "not_found"})
-
-        {log, tamper} ->
-          served = tampered(log, tamper)
-          page = served |> Enum.drop(after_seq + 1) |> Enum.take(100)
-          last = after_seq + length(page)
-          next = if last < length(served) - 1, do: last, else: nil
-          next = if tamper == :unlinked and next, do: next + 1, else: next
-          {:ok, head} = log |> List.last() |> Entry.decode()
-
-          json(200, %{
-            "identifier" => identifier,
-            "from" => after_seq + 1,
-            "entries" => page,
-            "next" => next,
-            "head" => Identity.hash(head),
-            "length" => length(log)
-          })
-      end
-    end
-  end
-
-  defp tampered(log, :truncate), do: Enum.drop(log, -1)
-  defp tampered([genesis, first, second | rest], :reorder), do: [genesis, second, first | rest]
-  defp tampered(log, _tamper), do: log
-
-  defp requests do
-    receive do
-      {:request, request} -> [request | requests()]
-    after
-      0 -> []
-    end
-  end
-
-  defp cached_row(identifier), do: Arca.Repo.get(DirectoryHead, identifier)
+  defp requests, do: DirectoryServer.requests()
 
   # ---- before any request ------------------------------------------------------
 
-  describe "the directory is the one the genesis names" do
-    test "a genesis that does not hash to the identifier makes no request", ctx do
+  describe "before any request" do
+    test "register takes a signed genesis and append any other signed entry", ctx do
       dir = directory(ctx, "dir-a.test", fn _ -> flunk("no request is made") end)
-      alice = person(dir.url)
-      bob = person(dir.url)
+      alice = composed(dir.url)
 
-      assert {:error, :identifier_mismatch} =
-               Client.resolve(bob.identifier, genesis(alice), opts(ctx))
+      assert {:error, :invalid_entry} = Client.register(last(alice), opts(ctx))
 
-      assert {:error, :identifier_mismatch} =
-               Client.register(bob.identifier, genesis(alice), opts(ctx))
+      assert {:error, :invalid_entry} =
+               Client.append(alice.identifier, dir.url, genesis(alice), opts(ctx))
 
-      assert {:error, :identifier_mismatch} =
-               Client.append(bob.identifier, genesis(alice), rotation_bytes(alice), opts(ctx))
+      unsigned = %{last(alice) | sig: nil}
 
-      assert {:error, :identifier_mismatch} =
-               Client.recover(bob.identifier, genesis(alice), request(alice), opts(ctx))
+      assert {:error, :invalid_entry} =
+               Client.append(alice.identifier, dir.url, Entry.encode(unsigned), opts(ctx))
+
+      assert {:error, :invalid_entry} =
+               Client.append(alice.identifier, dir.url, "not json", opts(ctx))
 
       refute_received {:resolved, _}
       assert requests() == []
     end
 
-    test "an oversize or malformed genesis makes no request", ctx do
-      alice = person("https://dir-a.test")
-
-      assert {:error, :too_large} =
-               Client.resolve(alice.identifier, String.duplicate(" ", 16_385), opts(ctx))
-
-      assert {:error, :invalid_json} = Client.resolve(alice.identifier, "not json", opts(ctx))
-      refute_received {:resolved, _}
-    end
-
-    test "an append of anything but a signed rotation's bytes makes no request", ctx do
+    test "a malformed identifier, directory or hash makes no request", ctx do
       dir = directory(ctx, "dir-a.test", fn _ -> flunk("no request is made") end)
-      alice = person(dir.url)
-      {live, _} = keypair()
-      {:ok, unsigned} = Entry.rotate(alice.head, live)
+      alice = composed(dir.url)
+      head = DirectoryServer.head(alice)
 
-      for {entry, refused} <- [
-            {"not json", :invalid_entry},
-            {Identity.canonical(unsigned), :invalid_entry},
-            {Identity.canonical(alice.genesis), :not_rotate}
-          ] do
-        assert Client.append(alice.identifier, genesis(alice), entry, opts(ctx)) ==
-                 {:error, refused}
-      end
+      assert {:error, :invalid_locator} = Client.log("usr_x", dir.url, opts(ctx))
+      assert {:error, :invalid_locator} = Client.log(alice.identifier, "dir-a.test", opts(ctx))
 
-      refute_received {:resolved, _}
+      assert {:error, :invalid_locator} =
+               Client.entries_after(alice.identifier, dir.url, "sha256:nope", 0, opts(ctx))
+
+      assert {:error, :invalid_locator} =
+               Client.entries_after(alice.identifier, dir.url, head, -1, opts(ctx))
+
+      assert {:error, :invalid_locator} =
+               Client.append(alice.identifier, dir.url <> "?x=1", last(alice), opts(ctx))
+
       assert requests() == []
-    end
-
-    test "a directory spoken to over plain HTTP is refused before any lookup", ctx do
-      alice = person("http://dir-a.test")
-
-      assert {:error, :insecure_directory} =
-               Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      refute_received {:resolved, _}
     end
 
     test "the options are the resolver and the trusted certificates, and nothing else", ctx do
-      alice = person("https://dir-a.test")
+      alice = composed("https://dir-a.test")
 
-      assert_raise ArgumentError, fn ->
-        Client.resolve(alice.identifier, genesis(alice), [verify: :verify_none] ++ opts(ctx))
+      assert_raise ArgumentError, ~r/takes only :resolver and :cacerts/, fn ->
+        Client.log(alice.identifier, alice.url, [timeout: 1] ++ opts(ctx))
       end
 
-      assert_raise ArgumentError, fn ->
-        Client.resolve(alice.identifier, genesis(alice), private_policy: :allow_all)
+      assert_raise ArgumentError, ~r/:resolver is a module/, fn ->
+        Client.log(alice.identifier, alice.url, resolver: "Resolver")
       end
-
-      refute_received {:resolved, _}
-    end
-
-    test "a recovery for another identifier or directory is refused before any request", ctx do
-      dir = directory(ctx, "dir-a.test", fn _ -> flunk("no request is made") end)
-      alice = person(dir.url)
-      bob = person(dir.url)
-
-      assert {:error, :wrong_identifier} =
-               Client.recover(bob.identifier, genesis(bob), request(alice), opts(ctx))
-
-      moved = request(%{alice | url: "https://dir-b.test"})
-
-      assert {:error, :directory_changed} =
-               Client.recover(alice.identifier, genesis(alice), moved, opts(ctx))
-
-      assert requests() == []
     end
   end
-
-  # ---- the transport -----------------------------------------------------------
 
   describe "the loopback rule" do
     @loopback ~w(http://127.0.0.1 http://127.79.0.1:4702 http://localhost:4000)
     @refused ~w(http://10.0.0.5 http://dir.example http://127.0.0.1.example)
 
-    test "a directory over plain HTTP is one to pin only on this machine's loopback" do
-      for url <- @loopback, do: assert(Sanctum.enrollment_directory?(url), url)
-      for url <- @refused, do: refute(Sanctum.enrollment_directory?(url), url)
-      assert Sanctum.enrollment_directory?("https://dir.example")
-    end
-
     test "plain HTTP to any other host is insecure_directory, before any lookup or request",
          ctx do
       for url <- @refused do
-        alice = person(url)
+        alice = composed(url)
 
-        assert {:error, :insecure_directory} =
-                 Client.resolve(alice.identifier, genesis(alice), opts(ctx)),
-               url
-
-        assert {:error, :insecure_directory} =
-                 Client.register(alice.identifier, genesis(alice), opts(ctx)),
-               url
+        assert {:error, :insecure_directory} = Client.log(alice.identifier, url, opts(ctx)), url
+        assert {:error, :insecure_directory} = Client.register(genesis(alice), opts(ctx)), url
       end
 
       refute_received {:resolved, _}
@@ -328,14 +156,12 @@ defmodule Sanctum.Directory.ClientTest do
     # the scheme alone.
     test "plain HTTP to loopback passes the transport check and meets the egress guard", ctx do
       for url <- @loopback do
-        alice = person(url)
+        alice = composed(url)
 
         log =
           capture_log(fn ->
             assert {:error, :egress_refused} =
-                     Client.resolve(alice.identifier, genesis(alice),
-                       cacerts: ctx.tls[:client_config][:cacerts]
-                     ),
+                     Client.log(alice.identifier, url, cacerts: ctx.tls[:client_config][:cacerts]),
                    url
           end)
 
@@ -347,12 +173,11 @@ defmodule Sanctum.Directory.ClientTest do
   describe "the transport" do
     test "a loopback address the operator did not list is refused before connecting", ctx do
       dir = directory(ctx, "loopback.test", fn _ -> flunk("no connection is made") end)
-      alice = person(dir.url)
+      alice = composed(dir.url)
 
       log =
         capture_log(fn ->
-          assert {:error, :egress_refused} =
-                   Client.resolve(alice.identifier, genesis(alice), opts(ctx))
+          assert {:error, :egress_refused} = Client.log(alice.identifier, dir.url, opts(ctx))
         end)
 
       assert log =~ "private IP 127.0.0.1 blocked"
@@ -361,12 +186,11 @@ defmodule Sanctum.Directory.ClientTest do
     end
 
     test "a metadata address is refused even when the operator lists its name", ctx do
-      alice = person("https://metadata.test")
+      alice = composed("https://metadata.test")
 
       log =
         capture_log(fn ->
-          assert {:error, :egress_refused} =
-                   Client.resolve(alice.identifier, genesis(alice), opts(ctx))
+          assert {:error, :egress_refused} = Client.log(alice.identifier, alice.url, opts(ctx))
         end)
 
       assert log =~ "metadata IP 169.254.169.254 blocked"
@@ -381,66 +205,64 @@ defmodule Sanctum.Directory.ClientTest do
           {302, [{"location", elsewhere.url <> "/directory/v1/x"}], ""}
         end)
 
-      alice = person(dir.url)
+      alice = composed(dir.url)
 
-      assert {:error, :redirected} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
+      assert {:error, :redirected} = Client.log(alice.identifier, dir.url, opts(ctx))
       assert [%{target: "/directory/v1/" <> _}] = requests()
       refute_received {:resolved, "dir-b.test"}
-      assert cached_row(alice.identifier) == nil
     end
 
     test "a certificate the home does not trust is refused: verification is not optional",
          ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url))
+      %{dir: dir, account: alice} = serving(ctx)
 
       log =
         capture_log(fn ->
           assert {:error, :unreachable} =
-                   Client.resolve(alice.identifier, genesis(alice), resolver: Resolver)
+                   Client.log(alice.identifier, dir.url, resolver: Resolver)
         end)
 
       assert log =~ "unknown_ca"
       assert requests() == []
-      assert cached_row(alice.identifier) == nil
     end
 
-    test "sends the canonical genesis with no credential, and names itself", ctx do
-      dir =
-        directory(ctx, "dir-a.test", fn %{body: body} ->
-          {:ok, entry} = body |> Jason.decode!() |> Entry.decode()
+    test "sends the canonical entry with no credential, and names itself", ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+      bob = composed(dir.url)
 
-          json(200, %{
-            "identifier" => Identity.identifier(entry),
-            "seq" => 0,
-            "entry_hash" => Identity.hash(entry)
-          })
-        end)
+      assert {:ok, %{result: :created, seq: 0, entry_hash: hash}} =
+               Client.register(genesis(bob), opts(ctx))
 
-      alice = person(dir.url)
+      assert hash == Identity.hash(genesis(bob))
 
-      assert {:ok, %{identifier: id, seq: 0, entry_hash: hash}} =
-               Client.register(alice.identifier, genesis(alice), opts(ctx))
-
-      assert id == alice.identifier and hash == alice.head
-
-      assert [%{method: "POST", target: "/directory/v1/genesis", headers: headers, body: body}] =
+      assert [%{method: "POST", target: "/directory/v1/register", headers: headers, body: body}] =
                requests()
 
-      assert body == Identity.canonical(alice.genesis)
+      assert body == Identity.canonical(genesis(bob))
       refute Enum.any?(headers, fn {name, _} -> Prima.Network.credential_header?(name) end)
       assert {"user-agent", "CYFR/" <> _} = List.keyfind(headers, "user-agent", 0)
+
+      next =
+        DirectoryServer.extend!(alice,
+          kind: :remove_key,
+          kid: DirectoryServer.kid(hd(alice.devices))
+        )
+
+      assert {:ok, %{result: :accepted, seq: 2}} =
+               Client.append(alice.identifier, dir.url, Identity.canonical(last(next)), opts(ctx))
+
+      assert [%{method: "POST", target: target, body: body}] = requests()
+      assert target == "/directory/v1/#{alice.identifier}/append"
+      assert body == Identity.canonical(last(next))
     end
 
     test "this member sheds its own requests to one directory past 300 a minute", ctx do
       dir = directory(ctx, "dir-a.test", fn _ -> flunk("a shed request is never sent") end)
-      alice = person(dir.url)
+      alice = composed(dir.url)
 
       for _ <- 1..300, do: :ok = Prima.RateLimiter.check({Client, dir.origin}, 300, 60_000)
 
-      assert {:error, {:rate_limited, seconds}} =
-               Client.register(alice.identifier, genesis(alice), opts(ctx))
-
+      assert {:error, {:rate_limited, seconds}} = Client.register(genesis(alice), opts(ctx))
       assert seconds in 1..60
       assert requests() == []
     end
@@ -448,309 +270,284 @@ defmodule Sanctum.Directory.ClientTest do
     @tag timeout: 60_000
     test "a directory that never answers is abandoned at the request's bound", ctx do
       dir = directory(ctx, "dir-a.test", fn _ -> :hang end)
-      alice = person(dir.url)
+      alice = composed(dir.url)
       started = System.monotonic_time(:millisecond)
 
-      assert {:error, :timeout} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
+      assert {:error, :timeout} = Client.log(alice.identifier, dir.url, opts(ctx))
 
       elapsed = System.monotonic_time(:millisecond) - started
       assert elapsed >= @request_ms * 9 / 10 and elapsed < @request_ms + 5_000
-      assert cached_row(alice.identifier) == nil
-    end
-  end
-
-  # ---- resolution --------------------------------------------------------------
-
-  describe "resolve/3" do
-    test "a caller passing no options reaches a directory only through the suite's seam", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url))
-
-      # With no seam, the system's resolver knows no test directory.
-      assert {:error, :unreachable} = Client.resolve(alice.identifier, genesis(alice))
-
-      DirectoryServer.seam!(ctx.tls)
-
-      assert {:ok, %{state: %{identifier: identifier}}} =
-               Client.resolve(alice.identifier, genesis(alice))
-
-      assert identifier == alice.identifier
-    end
-
-    test "reads every linked page, verifies the whole chain and caches its head", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = ctx |> publish(person(dir.url) |> rotated(149))
-
-      assert {:ok, %{state: state, head: row, retired: retired}} =
-               Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      assert state.length == 150
-      assert state.head == alice.head
-      assert state.identifier == alice.identifier
-      assert row.head_hash == alice.head and row.key_epoch == state.key_epoch
-      assert row.directory_url == dir.url
-      assert row.genesis == Identity.canonical(alice.genesis)
-      assert Enum.all?(Map.values(retired), &(&1 == []))
-
-      assert Enum.map(requests(), & &1.target) == [
-               "/directory/v1/#{alice.identifier}?after=-1",
-               "/directory/v1/#{alice.identifier}?after=99"
-             ]
-
-      assert {:ok, %{state: ^state}} = Client.cached(alice.identifier)
-    end
-
-    test "the same head again is touched; a longer log advances the cache", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url) |> rotated(2))
-
-      assert {:ok, %{head: first}} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-      assert {:ok, %{head: again}} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-      assert again.head_hash == first.head_hash and again.revision == first.revision
-      assert DateTime.compare(again.verified_at, first.verified_at) in [:gt, :eq]
-
-      alice = publish(ctx, rotated(alice, 1))
-
-      assert {:ok, %{state: state, head: moved, retired: retired}} =
-               Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      assert moved.head_hash == alice.head and state.head == alice.head
-      assert moved.key_epoch != first.key_epoch
-      # An ordinary rotation leaves the recovery epoch: the genesis's.
-      assert moved.recovery_epoch == first.recovery_epoch
-      assert moved.recovery_epoch == Identity.hash(alice.genesis)
-      assert moved.revision == first.revision + 1
-
-      assert %{session_hashes: [], passkey_ids: [], certificate_ids: [], confirmation_ids: []} =
-               retired
-    end
-
-    test "a log that does not contain the cached head is refused, and the cache stays", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url) |> rotated(1))
-      assert {:ok, %{head: cached}} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      # Another rotation after the genesis: a history that forks from the
-      # one this home verified.
-      [genesis_map, _first] = alice.log
-      fork = rotation(alice, Identity.hash(alice.genesis))
-
-      publish(ctx, %{alice | log: [genesis_map, Entry.encode(fork)], head: Identity.hash(fork)})
-
-      log =
-        capture_log(fn ->
-          assert {:error, :not_descendant} =
-                   Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-        end)
-
-      assert log =~ "does not contain the head this home verified"
-      assert cached_row(alice.identifier).head_hash == cached.head_hash
-    end
-
-    test "a truncated log caches no head", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url) |> rotated(120), :truncate)
-
-      assert {:error, :truncated} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-      assert cached_row(alice.identifier) == nil
-    end
-
-    test "a reordered log caches no head", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url) |> rotated(3), :reorder)
-
-      assert {:error, {:unverified, :broken_link}} =
-               Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      assert cached_row(alice.identifier) == nil
-    end
-
-    test "a page whose next does not link to its own last entry caches no head", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url) |> rotated(120), :unlinked)
-
-      assert {:error, :invalid_page} =
-               Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      assert cached_row(alice.identifier) == nil
-    end
-
-    test "two people on different directories resolve independently, each at their own", ctx do
-      a = directory(ctx, "dir-a.test", serving(ctx))
-      b = directory(ctx, "dir-b.test", serving(ctx))
-      alice = publish(ctx, person(a.url) |> rotated(1))
-      bob = publish(ctx, person(b.url) |> rotated(2))
-
-      assert {:ok, %{head: %{directory_url: a_url}}} =
-               Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      assert_received {:resolved, "dir-a.test"}
-      refute_received {:resolved, "dir-b.test"}
-
-      assert {:ok, %{head: %{directory_url: b_url}}} =
-               Client.resolve(bob.identifier, genesis(bob), opts(ctx))
-
-      assert_received {:resolved, "dir-b.test"}
-      refute_received {:resolved, "dir-a.test"}
-      assert {a_url, b_url} == {a.url, b.url}
-
-      assert [
-               %{headers: alice_headers, target: "/directory/v1/" <> alice_path},
-               %{headers: bob_headers, target: "/directory/v1/" <> bob_path}
-             ] = requests()
-
-      assert String.starts_with?(alice_path, alice.identifier)
-      assert String.starts_with?(bob_path, bob.identifier)
-      assert {"host", "dir-a.test:" <> _} = List.keyfind(alice_headers, "host", 0)
-      assert {"host", "dir-b.test:" <> _} = List.keyfind(bob_headers, "host", 0)
-    end
-  end
-
-  describe "genesis/3" do
-    test "reads the log's first entry and holds it to the identifier and the directory", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = ctx |> publish(person(dir.url) |> rotated(2))
-
-      assert {:ok, bytes} = Client.genesis(alice.identifier, dir.url, opts(ctx))
-      assert bytes == Identity.canonical(alice.genesis)
-      assert {:ok, _} = Client.resolve(alice.identifier, bytes, opts(ctx))
-
-      assert [%{target: "/directory/v1/" <> rest} | _] = requests()
-      assert rest == alice.identifier <> "?after=-1"
-    end
-
-    test "a genesis naming another directory than the one given is refused", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      elsewhere = person("https://dir-b.test")
-      Agent.update(ctx.logs, &Map.put(&1, elsewhere.identifier, {elsewhere.log, nil}))
-
-      assert {:error, :directory_mismatch} =
-               Client.genesis(elsewhere.identifier, dir.url, opts(ctx))
-    end
-
-    test "a log whose first entry does not hash to the identifier is refused", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = person(dir.url)
-      bob = person(dir.url)
-      Agent.update(ctx.logs, &Map.put(&1, alice.identifier, {bob.log, nil}))
-
-      assert {:error, :identifier_mismatch} =
-               Client.genesis(alice.identifier, dir.url, opts(ctx))
-    end
-
-    test "an unknown identifier is not found, and a malformed locator makes no request", ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = person(dir.url)
-
-      assert {:error, :not_found} = Client.genesis(alice.identifier, dir.url, opts(ctx))
-
-      _ = requests()
-      assert {:error, :invalid_locator} = Client.genesis("per_nope", dir.url, opts(ctx))
-      assert {:error, :invalid_locator} = Client.genesis(alice.identifier, "ftp://x", opts(ctx))
-
-      assert {:error, :insecure_directory} =
-               Client.genesis(alice.identifier, "http://dir-a.test", opts(ctx))
-
-      assert requests() == []
-    end
-  end
-
-  describe "cached/1" do
-    test "decodes the verified state it stored, and refuses one that does not match its row",
-         ctx do
-      dir = directory(ctx, "dir-a.test", serving(ctx))
-      alice = publish(ctx, person(dir.url) |> rotated(1))
-      assert {:ok, %{state: state}} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-
-      assert {:ok, %{state: ^state, head: %{head_hash: head} = row}} =
-               Client.cached(alice.identifier)
-
-      assert head == state.head
-
-      # The cache carries the recovery epoch beside the key epoch, and a
-      # row read back as a state names both.
-      assert row.recovery_epoch == state.recovery_epoch
-      assert row.key_epoch == state.key_epoch
-      assert {:ok, ^state} = Client.state(row)
-
-      # A row whose recovery epoch is not its state's does not decode.
-      assert {:error, :corrupt} =
-               Client.state(%{row | recovery_epoch: "sha256:" <> String.duplicate("1", 64)})
-
-      tampered =
-        Jason.encode!(%{
-          Prima.Identity.State.encode(state)
-          | "head" => "sha256:" <> String.duplicate("0", 64)
-        })
-
-      Arca.Repo.update_all(from(h in DirectoryHead, where: h.identifier == ^alice.identifier),
-        set: [state: tampered]
-      )
-
-      assert {:error, :corrupt} = Client.cached(alice.identifier)
-      assert {:error, :not_found} = Client.cached(person(dir.url).identifier)
     end
   end
 
   # ---- the writes --------------------------------------------------------------
 
+  describe "the writes" do
+    test "a repeat answers exists, naming the head; a moved log is stale_head with its head",
+         ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+      head = DirectoryServer.head(alice)
+
+      assert {:ok, %{result: :exists, seq: 0, head: ^head}} =
+               Client.register(genesis(alice), opts(ctx))
+
+      assert {:ok, %{result: :exists, seq: 1, head: ^head}} =
+               Client.append(alice.identifier, dir.url, last(alice), opts(ctx))
+
+      moved = DirectoryServer.add_device!(dir.dir, alice)
+
+      late =
+        DirectoryServer.extend!(alice,
+          kind: :remove_key,
+          kid: DirectoryServer.kid(hd(alice.devices))
+        )
+
+      moved_head = DirectoryServer.head(moved)
+
+      assert {:error, {:stale_head, ^moved_head}} =
+               Client.append(alice.identifier, dir.url, last(late), opts(ctx))
+    end
+
+    test "a key listed twice is duplicate_key; a forged entry is unverified with its reason",
+         ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+      {pub, _} = hd(alice.devices)
+      {:ok, key} = Prima.Identity.Key.new(alg: :ed25519, kind: :device, pub: pub)
+      again = DirectoryServer.extend!(alice, kind: :add_key, key: key)
+
+      assert {:error, :duplicate_key} =
+               Client.append(alice.identifier, dir.url, last(again), opts(ctx))
+
+      # A new key's entry naming the recovery key as its signer, signed by a stranger.
+      {new_pub, _} = :crypto.generate_key(:eddsa, :ed25519)
+      {:ok, new_key} = Prima.Identity.Key.new(alg: :ed25519, kind: :device, pub: new_pub)
+      {_pub, stranger} = :crypto.generate_key(:eddsa, :ed25519)
+      added = DirectoryServer.extend!(alice, kind: :add_key, key: new_key)
+      forged = Identity.sign(%{last(added) | sig: nil}, stranger)
+
+      assert {:error, {:refused, :unverified, "wrong_signer"}} =
+               Client.append(alice.identifier, dir.url, forged, opts(ctx))
+    end
+
+    test "a tombstoned account is gone to every read and write", ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+      DirectoryServer.tombstone(dir.dir, alice.identifier)
+      head = DirectoryServer.head(alice)
+
+      assert {:error, :gone} = Client.log(alice.identifier, dir.url, opts(ctx))
+      assert {:error, :gone} = Client.entries_after(alice.identifier, dir.url, head, 1, opts(ctx))
+      assert {:error, :gone} = Client.register(genesis(alice), opts(ctx))
+      assert {:error, :gone} = Client.append(alice.identifier, dir.url, last(alice), opts(ctx))
+    end
+  end
+
+  # ---- the reads ---------------------------------------------------------------
+
+  describe "the reads" do
+    test "log/3 reads every linked page from the genesis, with the head and length", ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+
+      alice =
+        Enum.reduce(1..120, alice, fn _, alice -> DirectoryServer.add_device!(dir.dir, alice) end)
+
+      assert {:ok, %{entries: entries, head: head, length: 122}} =
+               Client.log(alice.identifier, dir.url, opts(ctx))
+
+      assert entries == Enum.map(alice.log, &Entry.encode/1)
+      assert head == DirectoryServer.head(alice)
+      assert {:ok, _state} = Identity.verify_chain(entries)
+
+      assert [%{target: first}, %{target: second}] = requests()
+      assert first =~ "?after=-1"
+      assert second =~ "?after=99"
+    end
+
+    test "entries_after/5 reads after an entry's hash, none at the head, and not_found for a hash the log does not hold",
+         ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+      at = DirectoryServer.head(alice)
+      alice = DirectoryServer.add_device!(dir.dir, alice)
+      alice = DirectoryServer.remove_key!(dir.dir, alice, DirectoryServer.kid(hd(alice.devices)))
+
+      assert {:ok, %{entries: [added, removed], head: head, length: 4}} =
+               Client.entries_after(alice.identifier, dir.url, at, 1, opts(ctx))
+
+      assert [added, removed] == alice.log |> Enum.drop(2) |> Enum.map(&Entry.encode/1)
+      assert head == DirectoryServer.head(alice)
+
+      assert [%{target: target}] = requests()
+      assert target == "/directory/v1/#{alice.identifier}/from/#{at}"
+
+      assert {:ok, %{entries: [], head: ^head, length: 4}} =
+               Client.entries_after(alice.identifier, dir.url, head, 3, opts(ctx))
+
+      unknown = Prima.Digest.sha256("not in the log")
+
+      assert {:error, :not_found} =
+               Client.entries_after(alice.identifier, dir.url, unknown, 3, opts(ctx))
+    end
+
+    test "a page that does not start where it was asked, or whose next does not link, is refused",
+         ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+      head = DirectoryServer.head(alice)
+
+      # The position the caller holds for the hash is not where the page starts.
+      assert {:error, :invalid_page} =
+               Client.entries_after(alice.identifier, dir.url, head, 0, opts(ctx))
+
+      unlinked =
+        directory(ctx, "dir-b.test", fn _ ->
+          json(200, %{
+            "identifier" => alice.identifier,
+            "from" => 0,
+            "entries" => [Entry.encode(genesis(alice))],
+            "next" => 3,
+            "head" => head,
+            "length" => 2
+          })
+        end)
+
+      assert {:error, :invalid_page} = Client.log(alice.identifier, unlinked.url, opts(ctx))
+    end
+
+    test "a caller passing no options reaches a directory only through the suite's seam", ctx do
+      %{dir: dir, account: alice} = serving(ctx)
+
+      # With no seam, the system's resolver knows no test directory.
+      assert {:error, :unreachable} = Client.log(alice.identifier, dir.url)
+
+      DirectoryServer.seam!(ctx.tls)
+      assert {:ok, %{length: 2}} = Client.log(alice.identifier, dir.url)
+    end
+  end
+
+  # ---- a log this node serves -------------------------------------------------
+
+  # This node serves the account service at the origin of a scripted
+  # directory, which would answer, and tell the test, any request sent to
+  # it: so a read that sends none shows it was made where the log is kept.
+  describe "a log this node serves" do
+    setup ctx do
+      dir = DirectoryServer.start!(ctx.tls)
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, dir.url)
+      Sanctum.Test.Settings.put("directory_serve", "writer")
+
+      # The account as this node's own directory holds it, and the
+      # scripted one at the same origin serving the same log.
+      alice = DirectoryServer.account!(dir.dir, dir.url)
+      [genesis, added] = alice.log
+      source = "203.0.113.7"
+
+      assert {:ok, %{result: :created}} =
+               Sanctum.Directory.register(%{genesis: Entry.encode(genesis), source: source})
+
+      assert {:ok, %{result: :accepted}} =
+               Sanctum.Directory.append(alice.identifier, %{
+                 entry: Entry.encode(added),
+                 source: source
+               })
+
+      %{dir: dir, alice: alice}
+    end
+
+    test "is read where it is kept, its log and a suffix, and no request is sent", ctx do
+      %{dir: dir, alice: alice} = ctx
+
+      assert {:ok, %{entries: entries, head: head, length: 2}} =
+               Client.log(alice.identifier, dir.url, opts(ctx))
+
+      assert entries == Enum.map(alice.log, &Entry.encode/1)
+      assert head == DirectoryServer.head(alice)
+
+      # This node's origin is compared in the one spelling a genesis names
+      # its directory in, however it is configured.
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, String.upcase(dir.url, :ascii))
+      assert {:ok, %{length: 2}} = Client.log(alice.identifier, dir.url, opts(ctx))
+
+      at = Identity.hash(genesis(alice))
+
+      assert {:ok, %{entries: [added], head: ^head, length: 2}} =
+               Client.entries_after(alice.identifier, dir.url, at, 0, opts(ctx))
+
+      assert added == Entry.encode(last(alice))
+
+      assert {:ok, %{entries: [], head: ^head}} =
+               Client.entries_after(alice.identifier, dir.url, head, 1, opts(ctx))
+
+      unknown = Prima.Digest.sha256("not in the log")
+
+      assert {:error, :not_found} =
+               Client.entries_after(alice.identifier, dir.url, unknown, 1, opts(ctx))
+
+      assert requests() == []
+      refute_received {:resolved, _}
+    end
+
+    test "a tombstoned account is gone, as the wire would answer it", ctx do
+      %{dir: dir, alice: alice} = ctx
+      assert :ok = Sanctum.Directory.tombstone(alice.identifier)
+
+      assert {:error, :gone} = Client.log(alice.identifier, dir.url, opts(ctx))
+
+      assert {:error, :gone} =
+               Client.entries_after(
+                 alice.identifier,
+                 dir.url,
+                 DirectoryServer.head(alice),
+                 1,
+                 opts(ctx)
+               )
+
+      assert requests() == []
+      refute_received {:resolved, _}
+    end
+
+    test "a node that does not serve the account service reads its own origin over the wire",
+         ctx do
+      %{dir: dir, alice: alice} = ctx
+
+      for mode <- ["mirror", "off"] do
+        Sanctum.Test.Settings.put("directory_serve", mode)
+        assert {:ok, %{length: 2}} = Client.log(alice.identifier, dir.url, opts(ctx)), mode
+        assert [%{target: "/directory/v1/" <> _}] = requests(), mode
+      end
+    end
+
+    test "another directory is read over the wire", ctx do
+      %{dir: other, account: bob} = serving(ctx)
+      assert {:ok, %{length: 2}} = Client.log(bob.identifier, other.url, opts(ctx))
+      assert [%{target: target}] = requests()
+      assert target =~ "/directory/v1/#{bob.identifier}"
+    end
+  end
+
+  # ---- the directory's answers -------------------------------------------------
+
   describe "the directory's answers" do
     test "each refusal is decoded, with its bound when it is retryable", ctx do
       stale = "sha256:" <> String.duplicate("a", 64)
-      recorded = %{"outcome" => "stale_policy", "expected_revision" => 0, "revision" => 1}
 
-      answers = %{
-        "/directory/v1/genesis" =>
-          json(503, %{"error" => "capacity", "exhausted" => "identities"}, [{"retry-after", "60"}])
-      }
-
-      dir =
-        directory(ctx, "dir-a.test", fn %{target: target} ->
-          case {target, answers[target]} do
-            {_, answer} when answer != nil ->
-              answer
-
-            {"/directory/v1/" <> rest, nil} ->
-              cond do
-                String.ends_with?(rest, "/entries") ->
-                  json(409, %{"error" => "stale_head", "head" => stale})
-
-                String.ends_with?(rest, "/recover") ->
-                  json(409, %{"error" => "stale_policy", "recorded" => recorded})
-
-                true ->
-                  json(404, %{"error" => "not_found"})
-              end
-          end
-        end)
-
-      alice = person(dir.url)
-
-      assert {:error, {:capacity, 60}} =
-               Client.register(alice.identifier, genesis(alice), opts(ctx))
-
-      assert {:error, {:stale_head, ^stale}} =
-               Client.append(alice.identifier, genesis(alice), rotation_bytes(alice), opts(ctx))
-
-      assert {:error, {:stale_policy, ^recorded}} =
-               Client.recover(alice.identifier, genesis(alice), request(alice), opts(ctx))
-    end
-
-    test "rate limits, mirrors, refusals and an unserved directory are decoded", ctx do
       answers = [
+        json(409, %{"error" => "stale_head", "head" => stale}),
+        json(409, %{"error" => "stale_head", "head" => "not a hash"}),
+        json(409, %{"error" => "duplicate_key"}),
+        json(409, %{"error" => "conflict"}),
+        json(410, %{"error" => "gone"}),
         json(429, %{"error" => "rate_limited", "retry_after" => 7}, [{"retry-after", "7"}]),
         json(405, %{"error" => "read_only"}, [{"allow", "GET"}]),
-        json(422, %{"error" => "unverified", "reason" => "wrong_signer"}),
-        json(422, %{"error" => "wrong_identifier"}),
+        json(422, %{"error" => "unverified", "reason" => "broken_link"}),
+        json(422, %{"error" => "invalid", "reason" => "invalid_field", "field" => "key"}),
         json(422, %{"error" => "invalid", "reason" => "Not A Word!"}),
+        json(422, %{"error" => "wrong_directory"}),
         json(404, %{"error" => "not_served"}),
-        json(503, %{"error" => "busy"}, [{"retry-after", "1"}]),
-        json(503, %{"error" => "capacity", "exhausted" => "rotations"}, [
-          {"retry-after", "86000"}
-        ]),
-        json(503, %{"error" => "capacity", "exhausted" => "rotations"}, [
-          {"retry-after", "999999"}
-        ]),
+        json(404, %{"error" => "not_found"}),
+        json(500, %{"error" => "corrupt"}),
+        json(503, %{"error" => "unavailable"}, [{"retry-after", "1"}]),
+        json(503, %{"error" => "capacity", "exhausted" => "identities"}, [{"retry-after", "60"}]),
+        # A day's writes: the wait is the window's, and never past a day.
+        json(503, %{"error" => "capacity", "exhausted" => "writes"}, [{"retry-after", "86000"}]),
+        json(503, %{"error" => "capacity", "exhausted" => "writes"}, [{"retry-after", "999999"}]),
         {413, [], ~s({"errors":{"detail":"Request Entity Too Large"}})}
       ]
 
@@ -761,68 +558,78 @@ defmodule Sanctum.Directory.ClientTest do
           Agent.get_and_update(script, fn [answer | rest] -> {answer, rest} end)
         end)
 
-      alice = person(dir.url)
+      alice = composed(dir.url)
+      append = fn -> Client.append(alice.identifier, dir.url, last(alice), opts(ctx)) end
 
-      append = fn ->
-        Client.append(alice.identifier, genesis(alice), rotation_bytes(alice), opts(ctx))
-      end
-
+      assert {:error, {:stale_head, ^stale}} = append.()
+      assert {:error, :invalid_response} = append.()
+      assert {:error, :duplicate_key} = append.()
+      assert {:error, :conflict} = append.()
+      assert {:error, :gone} = append.()
       assert {:error, {:rate_limited, 7}} = append.()
       assert {:error, :read_only} = append.()
-      assert {:error, {:refused, :unverified, "wrong_signer"}} = append.()
-      assert {:error, {:refused, :wrong_identifier, nil}} = append.()
+      assert {:error, {:refused, :unverified, "broken_link"}} = append.()
+      assert {:error, {:refused, :invalid, "invalid_field"}} = append.()
       assert {:error, {:refused, :invalid, nil}} = append.()
+      assert {:error, {:refused, :wrong_directory, nil}} = append.()
       assert {:error, :not_served} = append.()
-      assert {:error, {:busy, 1}} = append.()
-      # A day's rotations: the wait is the window's, and never past a day.
+      assert {:error, :not_found} = append.()
+      assert {:error, :corrupt} = append.()
+      assert {:error, {:unavailable, 1}} = append.()
+      assert {:error, {:capacity, 60}} = append.()
       assert {:error, {:capacity, 86_000}} = append.()
       assert {:error, {:capacity, 86_400}} = append.()
       assert {:error, :body_too_large} = append.()
     end
 
-    test "a genesis refused for naming another directory than the one serving is wrong_directory",
-         ctx do
-      dir = directory(ctx, "dir-a.test", fn _ -> json(422, %{"error" => "wrong_directory"}) end)
-      alice = person(dir.url)
+    test "a write's answer is held to the entry sent and the result its call takes", ctx do
+      alice = composed("https://dir-a.test")
+      hash = Identity.hash(last(alice))
 
-      assert {:error, {:refused, :wrong_directory, nil}} =
-               Client.register(alice.identifier, genesis(alice), opts(ctx))
-    end
+      answers = [
+        json(200, %{
+          "identifier" => alice.identifier,
+          "seq" => 1,
+          "entry_hash" => hash,
+          "result" => "accepted"
+        }),
+        json(200, %{
+          "identifier" => alice.identifier,
+          "seq" => 1,
+          "entry_hash" => Prima.Digest.sha256("x"),
+          "result" => "accepted"
+        }),
+        json(200, %{
+          "identifier" => alice.identifier,
+          "seq" => 1,
+          "entry_hash" => hash,
+          "result" => "created"
+        }),
+        json(200, %{
+          "identifier" => alice.identifier,
+          "seq" => 1,
+          "entry_hash" => hash,
+          "result" => "exists"
+        }),
+        json(200, %{"identifier" => alice.identifier, "seq" => 1, "entry_hash" => hash})
+      ]
 
-    test "an accepted answer is held to what was sent", ctx do
-      {:ok, mode} = Agent.start_link(fn -> :honest end)
+      {:ok, script} = Agent.start_link(fn -> answers end)
 
       dir =
-        directory(ctx, "dir-a.test", fn %{body: body, target: target} ->
-          {:ok, request} = body |> Jason.decode!() |> RecoverRequest.decode()
-          [_, _, _, identifier | _] = String.split(target, "/")
-          prev = "sha256:" <> String.duplicate("b", 64)
-
-          request =
-            if Agent.get(mode, & &1) == :swapped,
-              do: %{request | request_id: "req_other"},
-              else: request
-
-          {:ok, entry} = Entry.recover(prev, request)
-
-          json(200, %{
-            "identifier" => identifier,
-            "seq" => 1,
-            "entry_hash" => Identity.hash(entry),
-            "entry" => Entry.encode(entry)
-          })
+        directory(ctx, "dir-a.test", fn _ ->
+          Agent.get_and_update(script, fn [answer | rest] -> {answer, rest} end)
         end)
 
-      alice = person(dir.url)
-      sent = request(alice)
+      append = fn -> Client.append(alice.identifier, dir.url, last(alice), opts(ctx)) end
 
-      assert {:ok, %{seq: 1, entry: %Entry{kind: :recover, request: ^sent}}} =
-               Client.recover(alice.identifier, genesis(alice), sent, opts(ctx))
-
-      Agent.update(mode, fn _ -> :swapped end)
-
-      assert {:error, :invalid_response} =
-               Client.recover(alice.identifier, genesis(alice), sent, opts(ctx))
+      assert {:ok, %{result: :accepted, seq: 1, entry_hash: ^hash} = written} = append.()
+      refute Map.has_key?(written, :head)
+      # Another entry's hash, a result an append never answers, exists naming no head, no result.
+      assert {:error, :invalid_response} = append.()
+      assert {:error, :invalid_response} = append.()
+      assert {:error, :invalid_response} = append.()
+      assert {:error, :invalid_response} = append.()
     end
   end
 end

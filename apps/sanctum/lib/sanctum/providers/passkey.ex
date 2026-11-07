@@ -3,36 +3,21 @@
 
 defmodule Sanctum.Providers.Passkey do
   @moduledoc """
-  The `passkey` tool: a person's passkeys at this relying home —
-  register one, list them, revoke one, re-enable one a declared restore
-  suspended, and the platform administrator's authorization of one exact
-  pending registration for a person who holds no fresh method here.
-  Registering, revoking and that authorization are sensitive changes
-  (`passkey_registration`), and the administrator's needs the
-  administrator's own fresh confirmation. Re-enabling is one too
-  (`restore_reenable`), confirmed while the person recovers by a door this
-  home re-authenticates or an emailed code, never by a passkey or a paired
-  device.
+  The `passkey` tool: the passkeys of a person's account that signed in
+  at this CYFR (`Sanctum.Passkeys`). This CYFR registers no passkey: a
+  passkey is added to the account, and removed from it, at the account
+  pages.
 
-  Every action is on the external plane, through an interactive surface
-  (`consent: :interactive`); `recover_admin` is also `scope: :platform`,
-  so no ordinary member can invoke it.
+    * `list` answers the person's passkeys that signed in here and stand,
+      each its `kid`, its paired client (`client_id`) and when it first
+      signed in here (`signed_in_at`).
+    * `revoke` signs one passkey out of this CYFR, by its `kid`: its
+      client is revoked with every session it signed for, and it answers
+      how many sessions ended. It takes authority away and asks no
+      confirmation.
 
-  The work is `Sanctum.Passkeys`'s; here each action is read off the wire
-  and answered on it:
-
-    * `register` answers the creation options and the registration token
-      when it carries no credential; with one, the registered passkey
-      (`status: "active"`), a pending one awaiting the platform
-      administrator (`status: "awaiting_administrator"`, its id and
-      registration digest), or the `confirmation_required` signal.
-    * `list` answers the person's active, suspended and pending passkeys
-      here.
-    * `revoke` answers the revoked passkey.
-    * `reenable` answers the passkey, active again, and `recovery_closed`,
-      whether re-enabling it ended the person's recovery from the restore.
-      A recovery kit re-enables through the kit ingress, not here.
-    * `recover_admin` answers the activated passkey and `recovery_closed`.
+  Every action is the person's own, on the external plane, through an
+  interactive surface (`consent: :interactive`).
   """
 
   alias Prima.{Arg, Operation}
@@ -44,83 +29,31 @@ defmodule Sanctum.Providers.Passkey do
   def definition do
     Operation.tool(
       [
-        Operation.new(
-          "passkey",
-          "register",
-          "Register a passkey",
-          [
-            Arg.new("credential", :json,
-              description:
-                "register: the WebAuthn registration the browser's ceremony answered; absent, the answer is the options to begin one with"
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new("passkey", "list", "List passkeys", [],
+        Operation.new("passkey", "list", "List the passkeys that signed in here", [],
           kind: :read,
           planes: [:external],
           consent: :interactive
         ),
-        Operation.new("passkey", "revoke", "Revoke a passkey", [passkey_id()],
-          reduces_authority: true,
-          kind: :destructive,
-          planes: [:external],
-          consent: :interactive
-        ),
         Operation.new(
           "passkey",
-          "reenable",
-          "Re-enable a passkey suspended by a restore",
-          [passkey_id()],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "passkey",
-          "recover_admin",
-          "Authorize a person's pending passkey",
+          "revoke",
+          "Sign a passkey out of this CYFR",
           [
-            Arg.new("user_id", :string,
+            Arg.new("kid", :string,
               required: true,
-              description: "recover_admin: the person whose pending registration is authorized"
-            ),
-            passkey_id(),
-            Arg.new("registration_digest", :string,
-              required: true,
-              description:
-                "recover_admin: the digest (sha256:<hex>) of the exact pending registration authorized"
+              description: "revoke: the passkey, by the kid of its key in your account"
             )
           ],
-          scope: :platform,
-          kind: :write,
+          reduces_authority: true,
+          kind: :destructive,
           planes: [:external],
           consent: :interactive
         )
       ],
       description:
-        "Your passkeys at this server: register, list and revoke them, and re-enable one a restore from a backup suspended. A platform admin authorizes the exact pending passkey of a person who has no fresh way to confirm here.",
+        "The passkeys of your account that signed in at this CYFR: list them, or sign one out here.",
       title: "Passkeys"
     )
-  end
-
-  defp passkey_id,
-    do:
-      Arg.new("passkey_id", :string,
-        required: true,
-        description: "The passkey, or the pending registration (revoke, reenable, recover_admin)"
-      )
-
-  def handle(%Context{} = ctx, %{"action" => "register"} = args) do
-    credential = args["credential"]
-
-    if is_nil(credential) or is_map(credential) do
-      ctx |> Passkeys.register(%{credential: credential}) |> answered()
-    else
-      {:error, {:invalid_argument, "credential is the browser's WebAuthn registration, as JSON"}}
-    end
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
@@ -130,73 +63,28 @@ defmodule Sanctum.Providers.Passkey do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "revoke", "passkey_id" => id}) when is_binary(id) do
-    case Passkeys.revoke(ctx, id) do
-      {:ok, passkey} -> {:ok, %{passkey: passkey}}
+  def handle(%Context{} = ctx, %{"action" => "revoke", "kid" => kid}) when is_binary(kid) do
+    case Passkeys.revoke(ctx, kid) do
+      {:ok, revoked} -> {:ok, revoked}
       {:error, reason} -> {:error, refusal(reason)}
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "reenable", "passkey_id" => id})
-      when is_binary(id) do
-    ctx |> Passkeys.reenable(id, :confirmation) |> answered()
-  end
-
-  def handle(
-        %Context{} = ctx,
-        %{
-          "action" => "recover_admin",
-          "user_id" => user_id,
-          "passkey_id" => passkey_id,
-          "registration_digest" => digest
-        }
-      )
-      when is_binary(user_id) and is_binary(passkey_id) and is_binary(digest) do
-    ctx
-    |> Passkeys.recover_admin(%{
-      user_id: user_id,
-      passkey_id: passkey_id,
-      registration_digest: digest
-    })
-    |> answered()
-  end
-
-  def handle(_ctx, %{"action" => action}) when action in ~w(revoke reenable),
-    do: {:error, {:invalid_argument, "Missing required argument: passkey_id"}}
-
-  def handle(_ctx, %{"action" => "recover_admin"}),
-    do:
-      {:error,
-       {:invalid_argument, "Missing required arguments: user_id, passkey_id, registration_digest"}}
+  def handle(_ctx, %{"action" => "revoke"}),
+    do: {:error, {:invalid_argument, "Missing required argument: kid"}}
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "passkey.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
 
-  defp answered({:ok, answer}), do: {:ok, answer}
-  defp answered({:error, reason}), do: {:error, refusal(reason)}
-
   # The passkeys' own refusals in the one refusal shape every surface
-  # renders (`Prima.Refusal`), each with the sentence its person reads; the
-  # vocabulary's and the stores' own reasons, the consent signal among
-  # them, pass as they are.
-  defp refusal(:registration_refused),
-    do:
-      refused(
-        :invalid_argument,
-        :registration_refused,
-        "The passkey's registration does not verify here, or its ceremony expired; begin again"
-      )
-
+  # renders (`Prima.Refusal`); the vocabulary's own reasons pass as they
+  # are.
   defp refusal(:unauthenticated),
-    do:
-      refused(
-        :unauthenticated,
-        :unauthenticated,
-        "Only a person signed in here, or on a device of theirs, registers a passkey"
-      )
+    do: %Prima.Refusal{
+      class: :unauthenticated,
+      reason: :unauthenticated,
+      message: "Only a person signed in here sees their passkeys"
+    }
 
   defp refusal(reason), do: reason
-
-  defp refused(class, reason, message),
-    do: %Prima.Refusal{class: class, reason: reason, message: message}
 end

@@ -490,53 +490,13 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert structured["identifier"] == identifier
     end
 
-    test "the ingress and the console log neither a code nor the installation token" do
-      previous = Logger.level()
-      token = String.duplicate("8d", 32)
-      restore_token = Application.fetch_env(:sanctum, :restore_token)
-      Logger.configure(level: :debug)
-      Application.put_env(:sanctum, :restore_token, token)
-
-      on_exit(fn ->
-        Logger.configure(level: previous)
-
-        case restore_token do
-          {:ok, value} -> Application.put_env(:sanctum, :restore_token, value)
-          :error -> Application.delete_env(:sanctum, :restore_token)
-        end
-      end)
+    test "the console logs neither a recovery code nor a recovery secret" do
+      Prima.Test.Env.configure_logger(level: :debug)
 
       secret = seed()
       code = recovery_code("per_" <> String.duplicate("e", 64))
 
-      # A code with its last symbol changed reads, and its check fails: the
-      # ingress refuses it before the directory it pins is read.
-      Prima.Test.Env.put_app_env(:sanctum, :directory_url, "https://directory.invalid")
-      {kept, last} = String.split_at(code, -1)
-      typo = kept <> if(last == "0", do: "1", else: "0")
-
-      log =
-        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
-          conn =
-            Phoenix.ConnTest.build_conn()
-            |> Plug.Conn.put_req_header("content-type", "application/json")
-            |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
-            |> Phoenix.ConnTest.dispatch(
-              CyfrWeb.Endpoint,
-              :post,
-              "/restore",
-              Jason.encode!(%{"recovery_code" => typo})
-            )
-
-          assert conn.status == 422
-        end)
-
-      assert log =~ "/restore"
-      refute log =~ typo
-      refute log =~ kept
-      refute log =~ token
-
-      # A console event carrying the field is logged filtered too.
+      # A console event carrying the fields is logged filtered.
       console =
         ExUnit.CaptureLog.capture_log([level: :debug], fn ->
           {:ok, view, _html} = live(Phoenix.ConnTest.build_conn(), "/login")

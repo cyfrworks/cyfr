@@ -3,9 +3,10 @@
 //
 // The handle proof, run in the official Playwright image by run.sh against
 // `cyfr` releases behind the harness's HTTPS front and cyfr.run's registry
-// (README.md): the person's CYFR A (a.test), the CYFR B (b.test) they
-// sign in at, and the registry and directory at registry.test.
-// Chromium drives every step with its virtual WebAuthn authenticator.
+// (README.md): the CYFR A (a.test) the person sets up, the CYFR B
+// (b.test) they sign in at, and the registry, directory and account pages
+// at registry.test. Chromium drives every step with its virtual WebAuthn
+// authenticator (../browser/account.mjs).
 //
 // After each step the proof reads every object the step claims, whole,
 // and holds it to its model (models.mjs), built from what the run
@@ -15,25 +16,27 @@
 // `check`). At the end every object is read again and held to what was
 // read before. The README's field table is the one these models print.
 //
-// Usage: node proof.mjs HOMES_FILE OUT_DIR
+// Usage: node proof.mjs HOMES_FILE OUT_DIR REGISTRY_PORT
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createAccount, landing, passkeys, setUp, signIn, usePasskey } from "../browser/account.mjs";
 import {
-  admit, ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, startProxy, waitFor,
+  ask as askRunSh, homeOf, launchBrowser, readHomes, redact as redactKnown, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
-  HANDLE, LONG_AGO, OCI, PER, bytesFrom, check, classification, coseTerm, objectModels, otherId, sha256hex,
+  ADMIN_HANDLE, HANDLE, LONG_AGO, OCI, PER, REGISTRY, b64url, check, classification, objectModels, otherId, passkeyKid,
 } from "./models.mjs";
 
-const [homesFile, outDir] = process.argv.slice(2);
+const [homesFile, outDir, registryPort] = process.argv.slice(2);
 const { homes } = readHomes(homesFile);
-const originOf = (name) => homes.find((home) => home.name === name).origin;
-const A = originOf("a");
-const B = originOf("b");
-const layer = "#system-layer-dialog";
-// The name B's administrator types on B's first setup screen.
-const ADMIN = "proof-b";
+const AHome = homeOf(homes, "a.test");
+const BHome = homeOf(homes, "b.test");
+// The registry, as the browsers reach it: its account pages hold every
+// passkey of the run, bound to registry.test.
+const REG = { host: REGISTRY, origin: `https://${REGISTRY}` };
+const A = AHome.origin;
+const B = BHome.origin;
 
 const secrets = [];
 const redact = (text) => redactKnown(text, secrets);
@@ -41,10 +44,10 @@ const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 300_000
 const clock = () => Date.now();
 
 // What the run captured, which the models are built from (the record's
-// `seen`): origins, clock windows, read times, first reads, credentials'
-// public parts, cookies' digests, refusal sentences.
+// `seen`): origins, clock windows, read times, first reads, the passkeys'
+// kids, cookies' digests, refusal sentences.
 const S = {
-  origins: { a: A, b: B }, w: {}, at: {}, rows: {}, credentials: {}, cookies: {}, opens: {}, refusals: {}, genesis: {},
+  origins: { a: A, b: B }, w: {}, at: {}, rows: {}, credentials: {}, cookies: {}, refusals: {},
 };
 const rows = [];
 const record = { objects: {}, checks: {} };
@@ -110,10 +113,10 @@ async function claim(key, what, read, io = {}) {
 const filtered = (read, column) => Object.assign(read, { filter: column || null });
 const cyfrRows = (cell, tableName, column = "", value = "") => filtered(async () =>
   (await ask({ op: "rows", cell, table: tableName, column, value })).rows, column);
-const cyfrIo = (cell, tableName) => ({
-  identity: { store: `${cell}.${tableName}`, key: (row) => row.id },
+const cyfrIo = (cell, tableName, keyField = "id") => ({
+  identity: { store: `${cell}.${tableName}`, key: (row) => row[keyField] },
   write: async (i, field, value, rowNow) => {
-    const answer = await ask({ op: "set", cell, table: tableName, id: rowNow.id, field, value });
+    const answer = await ask({ op: "set", cell, table: tableName, id: rowNow[keyField], field, value });
     if (answer.set !== 1) throw new Error(`${cell}.${tableName}.${field}: the write changed ${JSON.stringify(answer)}`);
     return answer;
   },
@@ -165,59 +168,8 @@ const answerIo = (handle, owner) => ({
 });
 
 // ---------------------------------------------------------------------------
-// Browsers and the virtual authenticator (as tests/join-proof/common.mjs)
+// The browsers
 // ---------------------------------------------------------------------------
-
-const authenticators = new Map();
-const highest = new Map();
-const heldCredentials = async (handle) => (await handle.cdp.send("WebAuthn.getCredentials", { authenticatorId: handle.id })).credentials;
-const highestOf = (credential) => Math.max(credential.signCount, highest.get(credential.credentialId) ?? 0);
-
-async function authenticatorWith(page, credentials = []) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("WebAuthn.enable", { enableUI: false });
-  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true,
-      isUserVerified: true, automaticPresenceSimulation: true,
-    },
-  });
-  const handle = { cdp, id: authenticatorId };
-  authenticators.set(page, handle);
-  for (const credential of credentials) {
-    await cdp.send("WebAuthn.addCredential", { authenticatorId, credential: { ...credential, signCount: highestOf(credential) } });
-  }
-}
-
-async function counted() {
-  for (const [page, handle] of authenticators) {
-    try {
-      for (const credential of await heldCredentials(handle)) highest.set(credential.credentialId, highestOf(credential));
-    } catch {
-      authenticators.delete(page);
-    }
-  }
-}
-
-async function ready(page) {
-  await counted();
-  const handle = authenticators.get(page);
-  if (!handle) return;
-  for (const credential of await heldCredentials(handle)) {
-    const count = highestOf(credential);
-    if (count === credential.signCount) continue;
-    await handle.cdp.send("WebAuthn.removeCredential", { authenticatorId: handle.id, credentialId: credential.credentialId });
-    await handle.cdp.send("WebAuthn.addCredential", { authenticatorId: handle.id, credential: { ...credential, signCount: count } });
-  }
-}
-
-// The credential the page's authenticator holds for `host`, with the
-// highest count any copy reached.
-async function credentialFor(page, host) {
-  await counted();
-  const [credential] = (await heldCredentials(authenticators.get(page))).filter((c) => c.rpId === host);
-  return { ...credential, signCount: highestOf(credential) };
-}
 
 async function freshContext(browser) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -227,18 +179,11 @@ async function freshContext(browser) {
 
 const connected = (page) => page.waitForSelector(".phx-connected", { timeout: 60_000 });
 
-async function confirmHere(page) {
-  const own = `${layer} [data-test="confirmation"][data-own="true"]`;
-  await page.waitForSelector(`${own} [data-test="confirm-passkey"]`, { timeout: 60_000 });
-  const preview = await page.locator(`${own} [data-test="confirmation-preview"]`).first().innerText().catch(() => "");
-  await ready(page);
-  await page.locator(`${own} [data-test="confirm-passkey"]`).click();
-  await page.waitForFunction((selector) => !document.querySelector(selector), `${own} [data-test="confirm-passkey"]`, { timeout: 30_000 }).catch(() => null);
-  await counted();
-  return preview;
-}
-
-const flash = (page) => page.locator("#flash-info, #flash-error, [role=alert]").allInnerTexts();
+// A page done with its CYFR for now, parked on a blank document: an open
+// page's socket asks its CYFR about its session, which past the freshness
+// bound reads the account's log again and moves the cached head, so no
+// page stays open at a CYFR while that CYFR's rows are tampered with.
+const park = (page) => page.goto("about:blank");
 
 async function dumpPages() {
   for (const context of contexts) {
@@ -247,13 +192,6 @@ async function dumpPages() {
       console.error(`  at ${page.url().replace(/#.*/, "#…")}: ${JSON.stringify(redact(text).slice(0, 1500))}`);
     }
   }
-}
-
-// The public half of the sealed key `column` of `rowNow`, opened in `cell`
-// as the person's `role` key, kept in `S` as `prefix.role`.
-async function opens(cell, prefix, rowNow, column, role) {
-  const answer = await ask({ op: "opens", cell, user_id: rowNow?.user_id, role, sealed: rowNow?.[column] }, { refuseError: false });
-  S.opens[`${prefix}.${role}`] = answer.opens ? answer.public : null;
 }
 
 // The digest of the session token the context's cookie for `origin`
@@ -266,56 +204,44 @@ async function cookieDigest(context, origin, cell) {
   return ask({ op: "session_digest", cell, cookie }, { secret: true });
 }
 
-// A CYFR's first person, through its two setup screens at its setup link,
-// the token in its fragment: `name` typed on the first and found free at
-// the registry, a passkey made, and on the second, once the identity is
-// registered at registry.test and the name claimed, the recovery code
-// read (lib.mjs `admit`). Answers the code and the clock reading at the
-// tap that made the passkey.
-async function setUp(page, origin, cell, name) {
+// The CYFR `home` set up by the account `keys` hold, through its setup
+// link (account.mjs `setUp`), its token asked of run.sh.
+async function setUpWith(page, keys, home, cell) {
   const { token } = await ask({ op: "setup_token", cell }, { secret: true });
   secrets.push(token);
-  await page.goto(`${origin}/setup#${token}`);
-  await connected(page);
-  const { recovery, created } = await admit(page, name, secrets, { before: () => ready(page) });
-  await counted();
-  return { recovery, created };
+  return setUp(page, keys, home, token);
 }
 
-// "I saved it" on the second screen, and the segment of the person's own
-// athanor from where it lands, signed in (`/chat?a=@me`, or a page under
-// `/a/<segment>`).
-async function continueToCyfr(page, origin) {
-  await page.locator('[data-test="admission-saved"]').click();
-  await page.waitForURL((url) => url.origin === origin && (url.pathname === "/chat" || url.pathname.startsWith("/a/")), { timeout: 60_000 });
-  await connected(page);
-  const url = new URL(page.url());
-  return url.searchParams.get("a") ?? decodeURIComponent(url.pathname.split("/")[2]);
+// The key the person's authenticator made at registry.test: its kid, as the
+// log lists it, and its credential id, as the add_key names it.
+async function heldKey(keys) {
+  const credential = (await keys.list()).find((c) => c.rpId === REGISTRY);
+  return credential ? { kid: passkeyKid(credential.privateKey), credentialIdB64url: b64url(credential.credentialId) } : {};
 }
 
-// "Sign in from your CYFR" at B with A's address, to A's /carry, signing
-// in at A with the passkey when the browser holds no session there, then
-// Begin, back to B's sign-in page.
-async function carryFrom(person) {
-  await person.goto(`${B}/login`);
-  await connected(person);
-  const entry = person.locator("#cyfr-from-entry");
-  if (!(await entry.isVisible())) await person.locator("#cyfr-from-open").click({ timeout: 5_000 }).catch(() => null);
-  await entry.waitFor({ timeout: 30_000 });
-  await entry.fill(A);
-  await person.locator('#cyfr-from button[type="submit"]').click();
-  await person.waitForURL((url) => url.origin === A && ["/carry", "/login"].includes(url.pathname), { timeout: 60_000 });
-  await connected(person);
-  if (new URL(person.url()).pathname === "/login") {
-    await ready(person);
-    await person.locator("#passkey-sign-in [data-webauthn-start]").click();
-    await person.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
-    await connected(person);
-    await counted();
+// "Sync push tokens" on A's Registry page: a registry request the passkey
+// signs at the sign page in the tab the system layer opens; the tab comes
+// back to A, which completes the request and says what it did. Answers
+// what the sign page asked and the tab's flash.
+async function sync(desk, keys, registryPage) {
+  await desk.goto(registryPage);
+  await connected(desk);
+  const [tab] = await Promise.all([
+    desk.context().waitForEvent("page", { timeout: 60_000 }),
+    desk.locator("button", { hasText: "Sync push tokens" }).click(),
+  ]);
+  try {
+    const asked = await usePasskey(tab, keys);
+    const back = asked.returned ? await landing(tab, AHome) : { landed: false };
+    const flash = back.landed
+      ? await tab.waitForSelector("#flash-info, #flash-error", { timeout: 60_000 })
+        .then((el) => el.innerText()).then((t) => t.replace(/\s+/g, " ").replace(/\s*×$/, "").trim()).catch(() => "")
+      : "";
+    return { what: asked.what, landed: back.landed, error: back.error ?? asked.error ?? null, flash };
+  } finally {
+    await keys.sync();
+    await tab.close().catch(() => {});
   }
-  await person.waitForFunction((b) => document.getElementById("carry-destination")?.value === b, B, { timeout: 30_000 });
-  await person.locator('#carry-begin button[type="submit"]').click();
-  await person.waitForURL((url) => url.origin === B && url.pathname === "/login", { timeout: 60_000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -326,79 +252,52 @@ async function main(chromium) {
   record.versions = { chromium: chromium.version() };
   S.policyVersion = (await ask({ op: "legal_version" })).policy_version;
   S.ttlHours = Number((await ask({ op: "setting", cell: "b", key: "session_ttl_hours" })).value);
-  S.clients = await ask({ op: "user_agents" });
 
-  // 1. Setup at A: @proof typed on the first screen and free at the
-  // registry, a passkey, and on the second the identity registered at
-  // registry.test and @proof claimed before the recovery code is shown;
-  // then "I saved it", which completes the attempt and lands in CYFR.
+  // 1. @proof made at registry.test's account pages, then A set up with it.
   const deskContext = await freshContext(chromium);
   const desk = await deskContext.newPage();
-  await authenticatorWith(desk);
+  const keys = passkeys();
   let from = clock();
-  const { recovery, created } = await setUp(desk, A, "a", HANDLE);
-  windowed("enroll", created, "the enrollment, to the recovery code shown");
-  windowed("setup", from, "setup at A");
-  const aCredential = await credentialFor(desk, "a.test");
-  S.credentials.a = { credentialId: aCredential.credentialId, signCount: aCredential.signCount, cose: coseTerm(aCredential.privateKey) };
-  await claim("setup:a.passkeys", "A's one passkey, the one the browser's authenticator holds", cyfrRows("a", "passkeys"), cyfrIo("a", "passkeys"));
-  const id = recovery.identifier;
+  const made = await createAccount(desk, keys, { directory: REG, name: HANDLE, secrets });
+  windowed("make", from, "the account made at registry.test's pages");
+  const id = made.code?.identifier ?? "";
   S.identifier = id;
-  // The directory the enrollment is at is the attempt's and the identity's
-  // `directory_url`, which their models hold.
-  record.setup = { identifier: id };
-  if (!row("setup", PER.test(id),
-    "A is set up through /setup's two screens: @proof typed and free at the registry, a passkey made, the identity registered at registry.test and @proof claimed, the recovery code shown", record.setup)) return;
-
-  // Before the recovery code is saved: the directory holds A's genesis,
-  // the attempt is accepted, and the registry holds @proof, A's acceptance
-  // of its policy and the nonces of the two requests A signed.
-  await claim("setup:registry.directory.identity_log_entries", "the directory's entry of A's identifier: A's genesis, whose hash is the identifier", registryRows("directory.identity_log_entries", "identifier", id), {
-    ...registryIo("directory.identity_log_entries", "id"),
-    prepare: async (entries) => {
-      const entry = bytesFrom(entries[0]?.entry);
-      S.genesis.a = entry && sha256hex(entry) === id.slice(4) ? entry.toString("base64") : "";
-    },
-  });
-  await claim("setup:pre:a.identity_attempts", "A's enrollment attempt, accepted, its recovery code not yet saved", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
-  await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by A's identifier", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
-  await claim("setup:registry.identity_heads[a]", "the registry's read of A's log at registry.test", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
-  await claim("setup:registry.policy_acceptances[a]", "A's identifier's acceptance of the registry's policy", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
-  await claim("setup:registry.request_nonces[a]", "the nonces of A's two signed requests, the acceptance and the claim", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
-  await claim("setup:handle_answer[proof]", "the registry's answer for @proof: A's identifier and directory", handleAnswer(HANDLE), answerIo(HANDLE, id));
+  S.credentials.a = await heldKey(keys);
+  record.setup = { made: made.section, error: made.error, identifier: id };
+  if (!row("setup", made.section === "done" && PER.test(id),
+    "@proof is made at registry.test's account pages: the policy accepted, the recovery code shown and saved, then the passkey", record.setup)) return;
+  await claim("setup:registry.directory.entries[a]", "the directory's log of @proof's account: its genesis and its passkey's add_key", registryRows("directory.entries", "identifier", id), registryIo("directory.entries", "entry_hash"));
+  await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by the account's identifier", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
+  await claim("setup:registry.identity_heads[a]", "the registry's read of the account's log, which the claim was verified against", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
+  await claim("setup:registry.policy_acceptances[a]", "the account's acceptance of the registry's policy", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
+  await claim("setup:registry.request_nonces[a]", "the nonces of the account's two signed requests, the acceptance and the claim", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+  await claim("setup:handle_answer[proof]", "the registry's answer for @proof: the account's identifier and directory", handleAnswer(HANDLE), answerIo(HANDLE, id));
 
   from = clock();
-  const segment = await continueToCyfr(desk, A);
-  windowed("ack", from, "saving the recovery code, to CYFR");
-  await desk.goto(`${A}/a/${encodeURIComponent(segment)}/settings`);
-  await connected(desk);
-  const card = await desk.locator('[data-test="identity"]').getAttribute("data-state", { timeout: 30_000 }).catch(() => null);
-  const named = (await desk.locator('[data-test="identity-name"]').innerText({ timeout: 30_000 }).catch(() => "")).trim();
-  row("setup", card === "named" && named === `Your name is @${HANDLE}.`,
-    "once the recovery code is saved, CYFR lands signed in and Settings says Your name is @proof.", { card, named });
-
-  await claim("setup:a.identity_attempts", "the attempt after the recovery code is saved: the transition from the attempt read before it", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
+  const atA = await setUpWith(desk, keys, AHome, "a");
+  windowed("setup", from, "setup at A");
+  await park(desk);
+  record.setup.at_a = atA;
+  if (!row("setup", atA.landed && atA.what === `Sign in to ${A}`,
+    "A is set up by signing in with the account at its setup link: the sign page names A, and A lands signed in", atA)) return;
+  await claim("setup:a.users", "A's one person, admitted by setup", cyfrRows("a", "users"), cyfrIo("a", "users"));
   await claim("setup:a.athanors", "A's one athanor, its person's", cyfrRows("a", "athanors"), cyfrIo("a", "athanors"));
-  await claim("setup:a.users", "A's one person, admitted by setup, holding @proof", cyfrRows("a", "users"), cyfrIo("a", "users"));
-  await claim("setup:a.person_identities", "A's identity: the identifier the recovery code names, enrolled at registry.test, keys that open to the genesis's", cyfrRows("a", "person_identities"), {
-    ...cyfrIo("a", "person_identities"),
-    prepare: async ([identity]) => {
-      await opens("a", "identity", identity, "live_key_sealed", "live");
-      await opens("a", "identity", identity, "operational_key_sealed", "operational");
-    },
-  });
+  await claim("setup:a.person_identities", "A's person is the account's identifier, read at registry.test", cyfrRows("a", "person_identities"), cyfrIo("a", "person_identities"));
+  await claim("setup:a.directory_heads", "A's cached head of the account's log", cyfrRows("a", "directory_heads"), cyfrIo("a", "directory_heads", "identifier"));
+  await claim("setup:a.paired_clients", "A's one paired client: the passkey that signed in, by its kid", cyfrRows("a", "paired_clients"), cyfrIo("a", "paired_clients"));
 
-  // 2. B's administrator, set up through /setup, allows @proof.
+  // 2. B's administrator, with an account of their own, sets B up and
+  // allows @proof in Settings.
   const adminContext = await freshContext(chromium);
   const admin = await adminContext.newPage();
-  await authenticatorWith(admin);
+  const adminKeys = passkeys();
   from = clock();
-  await setUp(admin, B, "b", ADMIN);
-  const bSegment = await continueToCyfr(admin, B);
-  windowed("admin", from, "setup at B");
-  const bCredential = await credentialFor(admin, "b.test");
-  S.credentials.b = { credentialId: bCredential.credentialId, signCount: bCredential.signCount, cose: coseTerm(bCredential.privateKey) };
+  const adminMade = await createAccount(admin, adminKeys, { directory: REG, name: ADMIN_HANDLE, secrets });
+  const atB = adminMade.section === "done" ? await setUpWith(admin, adminKeys, BHome, "b") : { landed: false };
+  windowed("admin", from, "B's administrator's account and setup at B");
+  S.credentials.b = await heldKey(adminKeys);
   S.cookies.admin = await cookieDigest(adminContext, B, "b");
+  const bSegment = `@${(await ask({ op: "rows", cell: "b", table: "athanors" })).rows[0]?.slug ?? "me"}`;
   await admin.goto(`${B}/a/${encodeURIComponent(bSegment)}/settings`);
   await connected(admin);
   const entry = admin.locator('#door-entry-form input[name="value"]');
@@ -407,78 +306,58 @@ async function main(chromium) {
   await waitFor(async () => (await allow.getAttribute("phx-value-door")) === `@${HANDLE}`, { timeoutMs: 30_000, what: "the door form taking @proof" });
   from = clock();
   await allow.click();
-  await admin.waitForSelector('[data-test="door-entry-label"]', { timeout: 60_000 });
+  const labelled = await admin.waitForSelector('[data-test="door-entry-label"]', { timeout: 60_000 }).then(() => true).catch(() => false);
   windowed("allow", from, "the allow");
-  row("allow", true, "B's administrator, set up through /setup, allows @proof in Settings", { flash: await flash(admin) });
-  await claim("allow:b.passkeys", "B's one passkey, the administrator's", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys"));
-  await claim("allow:b.athanors", "B's one athanor, the administrator's", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  await park(admin);
+  row("allow", atB.landed && labelled, "B's administrator sets B up with their own account and allows @proof in Settings", { setup: atB, labelled });
   await claim("allow:b.users", "B's one person, its administrator", cyfrRows("b", "users"), cyfrIo("b", "users"));
-  await claim("allow:b.server_allowlist", "B's allowlist: one entry, A's identifier, labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
+  await claim("allow:b.athanors", "B's one athanor, the administrator's", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  await claim("allow:b.person_identities", "B's administrator is their account's identifier", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
+  await claim("allow:b.server_allowlist", "B's allowlist: setup's allow of the administrator, and @proof's identifier labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
 
-  // 3. At B, "Sign in from your CYFR" with A's address, and the carry admits
-  // the person as A's identifier.
+  // 3. At B, a browser that never visited it, holding the person's passkey
+  // as a synced passkey reaches another device, signs in with the account:
+  // no address is typed, and B admits A's identifier under its allow.
   const personContext = await freshContext(chromium);
   const person = await personContext.newPage();
-  await authenticatorWith(person, [await credentialFor(desk, "a.test")]);
+  const personKeys = passkeys((await keys.list()).filter((c) => c.rpId === REGISTRY));
   from = clock();
-  await carryFrom(person);
-  await person.waitForSelector('[data-test="code"]', { timeout: 60_000 });
-  const code = (await person.locator('[data-test="code"]').textContent()).trim();
-  await person.locator('[data-test="cyfr-continue"]').click();
-  await person.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
-  await connected(person);
-  const confirmation = await confirmHere(person);
-  // Admitted with an athanor of their own at B, made in the admission, the
-  // person lands on its chat.
-  await person.waitForURL((url) => url.origin === B && url.pathname === "/chat", { timeout: 90_000 });
-  await connected(person);
+  const signedIn = await signIn(person, personKeys, BHome);
   windowed("signin", from, "the sign-in at B");
-  const landedText = await person.locator("body").innerText();
-  const landed = person.url().replace(/#.*/, "");
   S.cookies.remote = await cookieDigest(personContext, B, "b");
-  await claim("sign_in:b.person_identities", "B's identities: its administrator's, and A's identifier as a remote person under A's genesis", cyfrRows("b", "person_identities"), {
-    ...cyfrIo("b", "person_identities"),
-    prepare: async (identities) => {
-      const own = identities.find((r) => r.provenance === "local");
-      await opens("b", "b.identity", own, "live_key_sealed", "live");
-      await opens("b", "b.identity", own, "operational_key_sealed", "operational");
-    },
-  });
-  // The athanors first: the person's row and session name their own.
+  await park(person);
+  record.sign_in = signedIn;
+  row("sign_in", signedIn.landed && signedIn.what === `Sign in to ${B}`,
+    "at B's sign-in page the person signs in with their passkey, typing no address: the sign page names B, and B admits the account under its allow", signedIn);
+  await claim("sign_in:b.person_identities", "B's identities: its administrator's, and A's identifier, admitted", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
   await claim("sign_in:b.athanors", "B's athanors: its administrator's, and the person's own, made in the admission", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
-  await claim("sign_in:b.users", "B's people: its administrator, and the person admitted remote", cyfrRows("b", "users"), cyfrIo("b", "users"));
-  const remoteId = S.rows["sign_in:b.person_identities"]?.find((r) => r.identifier === id)?.user_id ?? "";
-  await claim("sign_in:b.sessions[proof]", "the person's session at B: the browser's cookie's token, bound to the genesis's key epoch", cyfrRows("b", "sessions", "user_id", remoteId), cyfrIo("b", "sessions"));
-  await claim("sign_in:b.sessions", "B's sessions: the administrator's, its cookie's token, and the person's", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
-  const ownRoute = `@${(S.rows["sign_in:b.athanors"] ?? []).find((r) => r.owner_user_id === remoteId)?.slug ?? ""}`;
-  record.sign_in = {
-    code, code_named_at_a: confirmation.includes(code), landed, own_route: ownRoute,
-    shows_chat: landedText.includes("No threads yet."),
-  };
-  row("sign_in", record.sign_in.code_named_at_a && landed === `${B}/chat?a=${encodeURIComponent(ownRoute)}` && record.sign_in.shows_chat,
-    "at B, A's address leads to A, A's confirmation names B's code, and B admits the person, who lands in their own athanor's chat there", record.sign_in);
+  await claim("sign_in:b.users", "B's people: its administrator, and the person admitted under the allow", cyfrRows("b", "users"), cyfrIo("b", "users"));
+  await claim("sign_in:b.directory_heads", "B's cached heads: the administrator's account's and the person's", cyfrRows("b", "directory_heads"), cyfrIo("b", "directory_heads", "identifier"));
+  await claim("sign_in:b.paired_clients", "B's paired clients: each passkey that signed in there, by its kid", cyfrRows("b", "paired_clients"), cyfrIo("b", "paired_clients"));
+  await claim("sign_in:b.sessions", "B's sessions: each its browser cookie's token, bound to its passkey's kid and head", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
 
-  // 4. registry.sync at A under the passkey stores a push token; the
-  // registry bans the identifier; the token is refused there, and A's
-  // next sync answers banned.
-  const registryPage = `${A}/a/${encodeURIComponent(segment)}/registry`;
-  await desk.goto(registryPage);
-  await connected(desk);
+  // 4. registry.sync at A, signed by the passkey, stores a push token; the
+  // registry bans the identifier; the token is refused there, and A's next
+  // sync answers banned.
+  const aSegment = `@${S.rows["setup:a.athanors"]?.[0]?.slug ?? "me"}`;
+  const registryPage = `${A}/a/${encodeURIComponent(aSegment)}/registry`;
   from = clock();
-  await desk.locator("button", { hasText: "Sync push tokens" }).click();
-  await confirmHere(desk);
-  await desk.waitForFunction(() => document.body.innerText.includes("Your push tokens are synced."), null, { timeout: 60_000 });
+  const synced = await sync(desk, keys, registryPage);
   windowed("sync", from, "the sync");
-  row("sync", true, "Sync push tokens at A, confirmed with the passkey, answers synced", { flash: await flash(desk) });
+  await park(desk);
+  record.sync = synced;
+  row("sync", synced.landed && /^Create a publishing token named “.+” at registry\.test$/.test(synced.what ?? "") &&
+    synced.flash.includes("Your push tokens are synced."),
+  "Sync push tokens at A: the sign page shows the registry request in words, the passkey signs it, and A completes it", synced);
 
-  const aUserId = S.rows["setup:a.passkeys"]?.[0]?.user_id;
+  const aUserId = S.rows["setup:a.users"]?.[0]?.id;
   const credential = async () => (await ask({ op: "credential", user_id: aUserId, registry: OCI, slug: HANDLE })).credential;
   const opened = await credential().catch(() => null);
   const tokenRow = (await registryRows("push_tokens", "namespace_slug", HANDLE)())[0];
   S.credentialOpened = !!opened && `\\x${opened.token?.sha256}` === tokenRow?.token_hash;
   S.credentialDigest = opened?.token?.sha256;
   S.credentialLabel = opened?.label;
-  await claim("sync:registry.push_tokens[proof]", "the registry holds one live token for @proof, made by A's identifier, whose digest is the token A sealed", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id"));
+  await claim("sync:registry.push_tokens[proof]", "the registry holds one live token for @proof, made by the account, whose digest is the token A sealed", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id"));
   await claim("sync:a.registry_tokens", "A stores one push token, for @proof at the registry's OCI host", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens"));
   const sealedRow = S.rows["sync:a.registry_tokens"]?.[0] ?? {};
   const memberTamper = { type: "push_token~", token: "tampered", namespace: `${HANDLE}~`, role: "personal~", issued_at: LONG_AGO, label: `${opened?.label}~` };
@@ -493,15 +372,15 @@ async function main(chromium) {
     },
     state: async () => ask({ op: "state", cell: "a", table: "registry_tokens" }),
   });
-  await claim("sync:registry.request_nonces[a]", "the nonces: the earlier three held, and the sync's", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
-  await claim("sync:registry.identity_heads[a]", "the registry's read of A's log, refreshed by the sync's request", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
+  await claim("sync:registry.request_nonces[a]", "the nonces: the earlier two held, and the sync's", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+  await claim("sync:registry.identity_heads[a]", "the registry's read of the account's log, refreshed by the sync's request", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
 
   from = clock();
   const ban = await ask({ op: "ban", handle: HANDLE });
   windowed("ban", from, "the ban");
   S.adminId = (await ask({ op: "admin_id" })).id;
   row("ban", ban.status === 303, "the registry's operator bans @proof's owner", { status: ban.status });
-  await claim("ban:registry.banned_identities", "the ban names A's identifier, by the run's operator", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id"));
+  await claim("ban:registry.banned_identities", "the ban names the account's identifier, by the run's operator", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id"));
   await claim("ban:registry.push_tokens[proof]", "the ban revoked the token in its transaction", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id"));
   const revokedAt = S.rows["ban:registry.push_tokens[proof]"]?.[0]?.revoked_at;
   const tokenUse = async () => {
@@ -528,50 +407,40 @@ async function main(chromium) {
     state: async () => ask({ op: "registry_state", table: "push_tokens" }),
   });
 
-  await desk.goto(registryPage);
-  await connected(desk);
   from = clock();
-  await desk.locator("button", { hasText: "Sync push tokens" }).click();
-  const outcome = await Promise.race([
-    desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"] [data-test="confirm-passkey"]`, { timeout: 60_000 }).then(() => "confirm"),
-    desk.waitForFunction(() => document.body.innerText.includes("Sync failed"), null, { timeout: 60_000 }).then(() => "answered"),
-  ]);
-  if (outcome === "confirm") await confirmHere(desk);
-  await desk.waitForFunction(() => document.body.innerText.includes("Sync failed"), null, { timeout: 60_000 });
+  const refused = await sync(desk, keys, registryPage);
   windowed("sync2", from, "the sync after the ban");
-  // The flash's message alone, without its close control.
-  const failedText = ((await desk.locator("#flash-error span").allInnerTexts()).map((t) => t.trim()).find((t) => t.includes("Sync failed"))) ?? "";
+  await park(desk);
   S.refusals.banned = await ask({ op: "refusal", cell: "a", reason: "banned" });
   const unavailable = (await ask({ op: "refusal", cell: "a", reason: "registry_unavailable" })).sentence;
-  record.banned_sync = { shown: failedText, asked_confirmation: outcome === "confirm" };
+  record.banned_sync = refused;
   await claim("ban:a.sync_refused", "A's next sync shows banned's sentence, which no other sync refusal shares",
-    async () => ({ shown: failedText, shared_with: S.refusals.banned.shared_with }), {
+    async () => ({ shown: refused.flash, shared_with: S.refusals.banned.shared_with }), {
       controls: [
-        { field: ".shown", says: "registry_unavailable's sentence", corrupt: (o) => ({ ...o, shown: `Sync failed: ${unavailable}` }) },
+        { field: ".shown", says: "registry_unavailable's sentence", corrupt: (o) => ({ ...o, shown: `That did not go through: ${unavailable}` }) },
         { field: ".shared_with", says: "a refusal sharing the sentence", corrupt: (o) => ({ ...o, shared_with: ["registry_unavailable"] }) },
       ],
     });
   await claim("ban:registry.request_nonces[a]", "the refused sync recorded no nonce", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
 
   // Every object read again, held to what was read before.
-  S.credentials.aLast = { signCount: (await credentialFor(desk, "a.test")).signCount };
   const again = [
-    ["a.passkeys", cyfrRows("a", "passkeys"), cyfrIo("a", "passkeys")],
     ["a.users", cyfrRows("a", "users"), cyfrIo("a", "users")],
     ["a.person_identities", cyfrRows("a", "person_identities"), cyfrIo("a", "person_identities")],
     ["a.athanors", cyfrRows("a", "athanors"), cyfrIo("a", "athanors")],
-    ["a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
+    ["a.directory_heads", cyfrRows("a", "directory_heads"), cyfrIo("a", "directory_heads", "identifier")],
+    ["a.paired_clients", cyfrRows("a", "paired_clients"), cyfrIo("a", "paired_clients")],
     ["a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
-    ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries", "identifier", id), registryIo("directory.identity_log_entries", "id")],
+    ["registry.directory.entries[a]", registryRows("directory.entries", "identifier", id), registryIo("directory.entries", "entry_hash")],
     ["registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
     ["registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
     ["registry.policy_acceptances[a]", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id")],
     ["registry.request_nonces[a]", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce")],
     ["registry.push_tokens[proof]", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id")],
     ["registry.banned_identities", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id")],
-    ["b.passkeys", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys")],
     ["b.users", cyfrRows("b", "users"), cyfrIo("b", "users")],
     ["b.person_identities", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities")],
+    ["b.paired_clients", cyfrRows("b", "paired_clients"), cyfrIo("b", "paired_clients")],
     ["b.sessions", cyfrRows("b", "sessions"), cyfrIo("b", "sessions")],
     ["b.athanors", cyfrRows("b", "athanors"), cyfrIo("b", "athanors")],
     ["b.server_allowlist", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist")],
@@ -588,7 +457,16 @@ async function main(chromium) {
 
 let proxy;
 try {
-  proxy = await startProxy({ homes });
+  // The browsers reach the registry's account pages through the same
+  // front as every home, at its listener, whose certificate the run's
+  // authority issued (run.sh `browser_certificate`).
+  proxy = await startProxy({
+    homes,
+    routed: [{
+      name: "registry", host: REGISTRY, port: Number(registryPort),
+      cert: `/authority/${REGISTRY}.pem`, key: `/authority/${REGISTRY}.key`,
+    }],
+  });
 } catch (error) {
   console.error(`FAIL: ${error.message.split("\n")[0]}`);
   process.exit(1);

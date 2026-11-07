@@ -5,12 +5,11 @@ defmodule Prima.DeviceCertTest do
   @moduledoc """
   Device certificates and the connect and renewal proof as data
   (`tests/fixtures/device_cert.json`): each certificate re-signs to its
-  bytes; each is checked at a home, clock and epoch to its result, expiry
-  strict and the tolerance on not-before alone; a local subject never
-  passes at another home and needs no identifier; each malformed shape is
-  refused; and each proof is held to the challenge held for its
-  connection, so none is reused across purpose, client, home, athanor or
-  device key.
+  bytes under the installation key; each is checked at a CYFR, under its
+  row's head and a clock, to its result, expiry strict and the tolerance on
+  not-before alone; each malformed shape is refused; and each proof is held
+  to the challenge held for its connection, so none is reused across
+  purpose, client, home, athanor or device key.
   """
 
   use ExUnit.Case, async: true
@@ -39,20 +38,24 @@ defmodule Prima.DeviceCertTest do
     )
   end
 
-  defp tag({:error, reason}), do: tag(reason)
-  defp tag({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
-  defp tag(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp tag({:error, reason}) when is_atom(reason), do: Atom.to_string(reason)
+
+  # A refusal as Prima answers it, its field included.
+  defp refusal(%{"error" => error, "field" => field}),
+    do: {:error, {String.to_existing_atom(error), field}}
+
+  defp refusal(%{"error" => error}), do: {:error, String.to_existing_atom(error)}
 
   test "the protocols, lifetime and purposes are the fixture's" do
     v = vectors()
     assert v["certificate_protocol"] == DeviceCert.protocol()
     assert v["proof_protocol"] == Challenge.protocol()
     assert v["lifetime_ms"] == Challenge.lifetime_ms()
-    # The pairing purposes are this file's; the protected device's are
-    # device_unlock.json's (Prima.DeviceUnlockTest) and device_pin.json's
-    # (Prima.DevicePinTest), and together they are every purpose there is.
+    # The connection purposes are this file's; the protected device's are
+    # device_unlock.json's (Prima.DeviceUnlockTest), and together they are
+    # every purpose there is.
     device_purposes =
-      for file <- ~w(device_unlock.json device_pin.json),
+      for file <- ~w(device_unlock.json),
           name <-
             "../../../../tests/fixtures/#{file}"
             |> Path.expand(__DIR__)
@@ -65,7 +68,7 @@ defmodule Prima.DeviceCertTest do
     assert v["purposes"] ++ Enum.sort(device_purposes) ==
              Enum.map(Challenge.purposes(), &Atom.to_string/1)
              |> then(fn all ->
-               Enum.take(all, 3) ++ Enum.sort(Enum.drop(all, 3))
+               Enum.take(all, 2) ++ Enum.sort(Enum.drop(all, 2))
              end)
 
     assert DeviceCert.protocol() != Challenge.protocol()
@@ -82,27 +85,20 @@ defmodule Prima.DeviceCertTest do
     for {name, %{"certificate" => cert, "signer" => signer}} <- vectors()["certificates"] do
       if signer, do: assert(cert["sig"] == raw_signature(cert, private(signer)), name)
 
-      case DeviceCert.decode(cert) do
-        {:ok, decoded} ->
-          assert DeviceCert.encode(decoded) == cert, name
+      assert {:ok, decoded} = DeviceCert.decode(cert)
+      assert DeviceCert.encode(decoded) == cert, name
 
-          if signer,
-            do: assert(DeviceCert.sign(%{decoded | sig: nil}, private(signer)) == decoded)
-
-        {:error, :local_subject_elsewhere} ->
-          assert name == "local_elsewhere"
-      end
+      if signer,
+        do: assert(DeviceCert.sign(%{decoded | sig: nil}, private(signer)) == decoded)
     end
   end
 
-  test "every certificate is checked at its home, clock and epoch to its result" do
+  test "every certificate is checked at its CYFR, under its row's head and a clock, to its result" do
     v = vectors()
 
     for %{"name" => name, "certificate" => cert, "key" => key, "opts" => opts} = vector <-
           v["verify"] do
-      opts =
-        [home: opts["home"], now: opts["now"], skew: opts["skew"]] ++
-          if(opts["key_epoch"], do: [key_epoch: opts["key_epoch"]], else: [])
+      opts = [home: opts["home"], head: opts["head"], now: opts["now"], skew: opts["skew"]]
 
       result = DeviceCert.verify(v["certificates"][cert]["certificate"], public(key), opts)
 
@@ -115,13 +111,13 @@ defmodule Prima.DeviceCertTest do
 
   test "expiry is strict and the tolerance never extends a certificate" do
     v = vectors()
-    cert = v["certificates"]["local"]["certificate"]
-    home = v["homes"]["alice"]
+    cert = v["certificates"]["issued"]["certificate"]
     expires_at = cert["expires_at"]
 
     for skew <- [0, 60_000, 3_600_000] do
-      assert DeviceCert.verify(cert, public("alice_live_1"),
-               home: home,
+      assert DeviceCert.verify(cert, public("installation"),
+               home: cert["audience"],
+               head: cert["head"],
                now: expires_at,
                skew: skew
              ) ==
@@ -129,54 +125,49 @@ defmodule Prima.DeviceCertTest do
     end
   end
 
-  test "a local certificate carries no identifier or epoch; an identity one carries both" do
+  test "a certificate names the device key's kid as the account's log lists it" do
     v = vectors()
-    {:ok, local} = DeviceCert.decode(v["certificates"]["local"]["certificate"])
-    assert local.subject == %{kind: :local, user_id: local.subject.user_id}
-    assert local.issuer == local.audience
-
-    {:ok, identity} = DeviceCert.decode(v["certificates"]["identity"]["certificate"])
-
-    assert %{kind: :identity, identifier: "per_" <> _, key_epoch: "sha256:" <> _} =
-             identity.subject
-
-    assert identity.issuer != identity.audience
+    {:ok, cert} = DeviceCert.decode(v["certificates"]["issued"]["certificate"])
+    assert cert.kid == Prima.Identity.kid(public("device_1"))
+    assert "per_" <> _ = cert.identifier
+    assert "sha256:" <> _ = cert.head
   end
 
   test "every malformed certificate is refused" do
-    for %{"name" => name, "certificate" => cert, "error" => error} <- vectors()["refusals"] do
-      assert tag(DeviceCert.decode(cert)) == error, name
+    for %{"name" => name, "certificate" => cert} = vector <- vectors()["refusals"] do
+      assert DeviceCert.decode(cert) == refusal(vector), name
     end
   end
 
-  test "new/1 builds the fixture's local certificate" do
+  test "new/1 builds the fixture's certificate" do
     v = vectors()
-    cert = v["certificates"]["local"]["certificate"]
+    cert = v["certificates"]["issued"]["certificate"]
 
     {:ok, built} =
       DeviceCert.new(
-        device_key: public("device_1"),
+        kid: Prima.Identity.kid(public("device_1")),
         client_id: cert["client_id"],
-        subject: %{kind: :local, user_id: cert["subject"]["user_id"]},
-        issuer: cert["issuer"],
-        audience: cert["audience"],
+        identifier: cert["identifier"],
+        head: cert["head"],
         athanor: cert["athanor"],
+        audience: cert["audience"],
         not_before: cert["not_before"],
         expires_at: cert["expires_at"]
       )
 
-    assert DeviceCert.encode(DeviceCert.sign(built, private("alice_live_1"))) == cert
+    assert DeviceCert.encode(DeviceCert.sign(built, private("installation"))) == cert
 
-    assert DeviceCert.new(
-             device_key: public("device_1"),
-             client_id: cert["client_id"],
-             subject: %{kind: :local, user_id: cert["subject"]["user_id"]},
-             issuer: cert["issuer"],
-             audience: v["homes"]["hub"],
-             athanor: cert["athanor"],
-             not_before: cert["not_before"],
-             expires_at: cert["expires_at"]
-           ) == {:error, :local_subject_elsewhere}
+    assert {:error, {:invalid_field, "head"}} =
+             DeviceCert.new(
+               kid: cert["kid"],
+               client_id: cert["client_id"],
+               identifier: cert["identifier"],
+               head: "head-1",
+               athanor: cert["athanor"],
+               audience: cert["audience"],
+               not_before: cert["not_before"],
+               expires_at: cert["expires_at"]
+             )
   end
 
   describe "challenges and proofs" do
@@ -212,7 +203,6 @@ defmodule Prima.DeviceCertTest do
       for {name, device} <- [
             {"connect", "device_1"},
             {"renew", "device_1"},
-            {"pair", "device_1"},
             {"by_another_key", "device_2"}
           ] do
         proof = v["proofs"][name]
@@ -246,38 +236,11 @@ defmodule Prima.DeviceCertTest do
       end
     end
 
-    test "a pairing proof and a connect or renewal proof never stand in for each other" do
-      v = vectors()
-      proof = fn name -> v["proofs"][name] end
-      held = fn name -> elem(Challenge.decode(v["challenges"][name]), 1) end
-      now = v["issued_at"] + 1000
-
-      assert held.("pair").purpose == :pair
-      assert held.("pair").client_id in v["reserved_client_ids"]
-      assert Proof.verify(proof.("pair"), held.("pair"), now) == :ok
-
-      for {presented, expected} <- [
-            {"pair", "connect"},
-            {"pair", "renew"},
-            {"connect", "pair"},
-            {"renew", "pair"}
-          ] do
-        assert Proof.verify(proof.(presented), held.(expected), now) ==
-                 {:error, {:challenge_mismatch, :purpose}},
-               "#{presented} for #{expected}"
-      end
-
-      assert held.("pair_other_client").client_id != held.("pair").client_id
-
-      assert Proof.verify(proof.("pair"), held.("pair_other_client"), now) ==
-               {:error, {:challenge_mismatch, :client_id}}
-    end
-
     test "every malformed challenge is refused, and a proof needs its signature" do
       v = vectors()
 
-      for %{"name" => name, "challenge" => map, "error" => error} <- v["challenge_refusals"] do
-        assert tag(Challenge.decode(map)) == error, name
+      for %{"name" => name, "challenge" => map} = vector <- v["challenge_refusals"] do
+        assert Challenge.decode(map) == refusal(vector), name
       end
 
       assert Proof.decode(Map.delete(v["proofs"]["connect"], "sig")) ==
@@ -286,7 +249,7 @@ defmodule Prima.DeviceCertTest do
 
     test "a certificate's signature never verifies as a proof's, nor a proof's as a certificate's" do
       v = vectors()
-      cert = v["certificates"]["local"]["certificate"]
+      cert = v["certificates"]["issued"]["certificate"]
       proof = v["proofs"]["connect"]
 
       refute Encoding.verify(
@@ -296,7 +259,7 @@ defmodule Prima.DeviceCertTest do
 
       refute Encoding.verify(
                Map.put(cert, "protocol", Challenge.protocol()),
-               public("alice_live_1")
+               public("installation")
              )
     end
   end

@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The share proof (README.md): a `cyfr` release started as the
-# browser harness starts a home (tests/browser/harness.sh), home.test behind
-# the harness's HTTPS front, its platform administrator signed in. In
-# Chromium (proof.mjs) the administrator makes two keys on the Vault page
+# The share proof (README.md): `cyfr` releases started as the browser
+# harness starts homes (tests/browser/harness.sh), home.test and the
+# directory dir.test behind the harness's HTTPS front, home.test reaching
+# the directory through the identity proof's front
+# (tests/identity-proof/front.sh and cells.sh). In Chromium (proof.mjs)
+# the administrator makes their account at the directory's pages and sets
+# home.test up by signing in with it, then makes two keys on the Vault page
 # and shares each with everyone through the system layer's sharing sheet,
 # Ana signs in for the first time, her first sign-in binds the model key's
 # share and she is offered both, her claims meet the person cap, a
@@ -13,8 +16,10 @@
 # door, and the administrator cannot enter Ana's athanor.
 #
 # The proof asks the server for its part through the output directory
-# (`ask-N.json`), and this script answers each (`answer-N.json`): a
-# person's sign-in through the release fixture's door
+# (`ask-N.json`), and this script answers each (`answer-N.json`): the
+# setup token, the administrator's session read from their browser's
+# cookie (harness.sh `browser_session`), a person's sign-in through the
+# release fixture's door
 # (tests/release-boot/fixture.exs `person`), and the claims and reads of
 # the proof's own fixture (tests/share-proof/fixture.exs), which
 # answers bounded facts and never material, and seeds the shared thread
@@ -54,11 +59,16 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../release-boot/release.sh"
 # shellcheck source=../browser/harness.sh
 source "$ROOT/tests/browser/harness.sh"
+# shellcheck source=../identity-proof/front.sh
+source "$ROOT/tests/identity-proof/front.sh"
+# shellcheck source=../identity-proof/cells.sh
+source "$ROOT/tests/identity-proof/cells.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 
-# The scratch directory holds the run's authority key, the cell's keys
-# and its database, and each person's session token, so it goes even when
+# The scratch directory holds the run's authority key, the cells' keys
+# and their databases, the setup token and each person's session token, so
+# it goes even when
 # a stop fails. `server_stop` ends in `fail`, an `exit`, when a listener
 # outlives its stop, and an exit inside this trap would end it before the
 # removal, so the stop runs in a subshell, whose exit ends only that
@@ -69,6 +79,7 @@ cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
+  identity_front_stop
   rm -f "$OUT"/ask-* "$OUT"/answer-*
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
@@ -122,20 +133,30 @@ token_of_user() {
 
 release_build
 
-step "the run's authority and the home home.test"
+step "the run's authority, the home home.test and the directory dir.test"
 browser_authority
 CELL="$WORK/home"
+DIR="$WORK/dir"
 browser_home "$CELL" home.test
+browser_home "$DIR" dir.test
+openssl rand -hex 32 | tr -d '\n' >"$WORK/setup-token"
+identity_directory dir.test 127.77.0.1
+identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
+# The people the release fixture signs in (Ana, Bea) have accounts this
+# CYFR caches and the directory never saw, so the bound is the run's whole
+# length: their sessions stand on the head cached at their sign-in.
+identity_reaches_directory "$CELL" dir.test "CYFR_IDENTITY_FRESHNESS_SECONDS=3600"
+identity_env "$CELL" CYFR_REGISTRY_URL dir.test
+identity_env "$CELL" CYFR_SETUP_TOKEN "$(cat "$WORK/setup-token")"
 
-step "starting home.test on a fresh SQLite cell"
-server_start "$CELL"
+step "starting the directory, its front, and home.test on fresh SQLite cells"
+server_start "$DIR"
+identity_front_start "$DIR"
+identity_start "$CELL"
 
-step "the platform administrator, signed in"
-admin="$(server_fixture "$CELL" person operator@example.com share-proof-admin)"
-[ -n "$admin" ] || fail "the fixture signed the administrator in"
-admin_segment="$(field "$admin" segment)"
-admin_token="$(field "$admin" token)"
-admin_cookie="$(browser_cookie "$CELL" "$admin_token")"
+# The administrator, once they signed in in the browser (`admin_session`).
+admin=""
+admin_token=""
 
 # Each step the proof asks for (harness.sh `answer_asks`, which removes an
 # ask once answered, before its answer appears: a state ask carries the
@@ -147,7 +168,17 @@ answer_ask() {
   case "$op" in
     sign_in) ANSWER="$(sign_in "$(asked "$ask" email)" "share-proof-$(asked "$ask" name)")" ;;
     clock) ANSWER="$(share_fixture clock)" ;;
-    device_confirm) ANSWER="$(device_confirmed "$CELL" "$ask")" ;;
+    setup_token)
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$WORK/setup-token")"
+      ;;
+    admin_session)
+      (umask 077 && python3 -c "import json, sys; open(sys.argv[2], 'w').write(json.load(open(sys.argv[1]))['cookie'])" "$ask" "$WORK/admin-cookie")
+      admin="$(browser_session "$CELL" "$WORK/admin-cookie")"
+      rm -f "$WORK/admin-cookie"
+      admin_token="$(field "$admin" token)"
+      (umask 077 && printf '%s' "$admin_token" >"$WORK/token-$(field "$admin" user_id)")
+      ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id'], 'segment': p['segment']}))" "$admin")"
+      ;;
     admin)
       ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$admin")"
       ;;
@@ -192,8 +223,7 @@ answer_ask() {
 step "the share proof in Chromium at $VIEWPORT, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run share-proof proof.mjs /authority/homes.json "$admin_segment" "$admin_cookie" /out \
-  "$VIEWPORT" &
+playwright_run share-proof proof.mjs /authority/homes.json /out "$VIEWPORT" &
 PROOF_PID=$!
 proof_await answer_ask
 

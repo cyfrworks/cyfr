@@ -18,14 +18,13 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   # withdrawing its sign-in, revoking (a command line's session and a
   # shared key among them), withdrawing consent, leaving or removing
   # someone from a shared thread, withdrawing its invitation, denying
-  # someone at a door, unlinking a door and archiving a shared thread.
+  # someone at a door and archiving a shared thread.
   @roster ~w(
     door.deny
     invitation.revoke
     key.revoke
     pairing.revoke
     passkey.revoke
-    person.unlink_door
     profile.revoke
     session.lock
     session.logout

@@ -537,35 +537,28 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       end
     end
 
-    # The callback is the home's own address in every mode, so no request
-    # header chooses it (`Sanctum.Vault.OAuthRedirectUriTest` holds what
-    # Ueberauth then builds from it).
-    test "the OpenID Connect callback is the home's own address", %{tmp_dir: dir} do
+    # The OpenID Connect issuer is a company sign-in's: its client lands
+    # where that sign-in reads it, its issuer names the provider
+    # configuration worker, and no sign-in strategy is configured.
+    test "the OpenID Connect issuer is the company sign-in's, with no sign-in strategy" do
       oidc = %{
         "CYFR_OIDC_ISSUER" => "https://auth.example.com",
         "CYFR_OIDC_CLIENT_ID" => "cyfr",
         "CYFR_OIDC_CLIENT_SECRET" => "secret"
       }
 
-      tailnet = %{
-        "CYFR_ACCESS" => "tailnet",
-        "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
-        "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
-        "CYFR_PUBLIC_URL" => "https://cyfr.tail1a2b3c.ts.net",
-        "RELEASE_ROOT" => dir
-      }
+      with_env(Map.merge(oidc, %{"CYFR_PORT" => "4005"}), fn ->
+        config = read_prod_config!()
 
-      for {access, origin} <- [
-            {%{"CYFR_PORT" => "4005"}, "http://localhost:4005"},
-            {tailnet, "https://cyfr.tail1a2b3c.ts.net"}
-          ] do
-        with_env(Map.merge(oidc, access), fn ->
-          {Ueberauth.Strategy.Oidcc, options} =
-            read_prod_config!()[:ueberauth][Ueberauth][:providers][:oidcc]
+        assert config[:sanctum][:oidc_client] == %{client_id: "cyfr", client_secret: "secret"}
+        assert config[:sanctum][:oidc_issuer] == "https://auth.example.com"
 
-          assert options[:callback_url] == origin <> "/auth/oidcc/callback"
-        end)
-      end
+        assert config[:ueberauth_oidcc][:issuers] == [
+                 %{name: :cyfr_oidc, issuer: "https://auth.example.com"}
+               ]
+
+        refute Keyword.has_key?(config, :ueberauth)
+      end)
     end
   end
 

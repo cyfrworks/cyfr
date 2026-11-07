@@ -611,12 +611,12 @@ defmodule Cyfr.TransactionClosureScopeTest do
     test "no transaction closure makes a network call or publishes" do
       %{read: read, bound: bound, forms: forms, refused: refused} = scan(tree())
 
-      # The tree passes 53 closures or more, 10 or more of them bound to a
+      # The tree passes 48 closures or more, 3 or more of them bound to a
       # variable before they are passed. A count alone could be met with a
       # whole form unread, so each form is asserted read too, and the bound
       # ones are counted apart.
-      assert read >= 53, "the scan read #{read} closures — it is not reading the tree"
-      assert bound >= 10, "the scan read #{bound} bound closures — it is not reading bindings"
+      assert read >= 48, "the scan read #{read} closures — it is not reading the tree"
+      assert bound >= 3, "the scan read #{bound} bound closures — it is not reading bindings"
 
       for form <- @forms,
           do:

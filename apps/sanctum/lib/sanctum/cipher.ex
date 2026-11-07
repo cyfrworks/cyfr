@@ -118,6 +118,25 @@ defmodule Sanctum.Cipher do
   def primary_label, do: keyring().primary
 
   @doc """
+  This CYFR's installation key, `{public, private}`: the Ed25519 key it
+  signs its own device certificates with and verifies them by
+  (`Sanctum.DeviceCerts`), and nothing else. It is held in the keyring:
+  its 32-byte seed is derived from the primary key under the frame
+  `installation`, as every purpose's key is (`derive_key/3`), so every
+  member of a cell holds the same key, and nothing is stored. A keyring
+  whose primary changes signs and verifies under a new key from then on:
+  a certificate signed before no longer verifies, and its device renews
+  through its channel by the key its paired client stores.
+  """
+  @spec installation_key() :: {binary(), binary()}
+  def installation_key do
+    keyring = keyring()
+    label = keyring.primary
+    seed = derive_key(label, :installation, Map.fetch!(keyring.keys, label))
+    :crypto.generate_key(:eddsa, :ed25519, seed)
+  end
+
+  @doc """
   The resolved keyring (`:sanctum, :crypto_keyring`), pinned at boot.
   Raises when read before that resolution — a sealed row must never be
   touched with a guessed key, so an absent keyring is a crash and never a

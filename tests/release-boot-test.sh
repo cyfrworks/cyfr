@@ -7,7 +7,8 @@
 # (tests/release-boot/release.sh `release_build`, RELEASE_BOOT_SKIP_BUILD=1)
 # against a git tree of the test's own; the readiness window of
 # `server_start` against a listener that accepts and never answers, and
-# the redaction of the boot log it prints; a cell's deployment file from
+# the redaction of the boot log it prints; a cell's directory, which runs
+# while its server does; a cell's deployment file from
 # the command line (`cell_new`, `cell_hostname`, `cell_cli`), with a
 # stand-in `cyfr` that records how it was run, and the dotenv reading of
 # it (`cell_assignments`); the identity front's readiness
@@ -368,9 +369,11 @@ pass "a listener that never answers fails server_start in ${took}s, naming the c
 # --- a cell's deployment file, from the command line --------------------------
 
 # A checkout holding what cell_new reads of one: .env.example, a seed tree
-# and a wasm-tools installer that installs nothing.
-mkdir -p "$scratch/checkout/scripts" "$scratch/checkout/seed/aqua" "$scratch/bin"
+# and a wasm-tools installer that installs nothing; and the directory a
+# cell's server starts beside it.
+mkdir -p "$scratch/checkout/scripts" "$scratch/checkout/seed/aqua" "$scratch/bin" "$scratch/checkout/tests/registry-stand-in"
 cp "$root/.env.example" "$scratch/checkout/.env.example"
+cp "$root/tests/registry-stand-in/standin.py" "$scratch/checkout/tests/registry-stand-in/standin.py"
 printf '#!/bin/sh\nexit 0\n' >"$scratch/checkout/scripts/wasm-tools.sh"
 chmod +x "$scratch/checkout/scripts/wasm-tools.sh"
 # The stand-in `cyfr`: it records how each run was made (its arguments,
@@ -433,6 +436,13 @@ for pair in CYFR_ACCESS=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=s
   [ "$(assigned local "${pair%%=*}")" = 1 ] && [ "$(value local "${pair%%=*}")" = "${pair#*=}" ] ||
     fail "the local cell's deployment file does not assign $pair once: $(grep "^${pair%%=*}=" "$scratch/cells/local/.env" | tr '\n' ' ')"
 done
+# The cell's own directory, on loopback, a private egress target beside
+# the ones init wrote.
+[[ "$(value local CYFR_DIRECTORY_URL)" =~ ^http://127\.78\.0\.2:[0-9]+$ ]] &&
+  [ "$(value local CYFR_DIRECTORY_URL)" = "$(cat "$scratch/cells/local/directory/url")" ] ||
+  fail "the local cell names no directory of its own: $(value local CYFR_DIRECTORY_URL)"
+[ "$(value local CYFR_PRIVATE_EGRESS_TARGETS)" = "$(sed -n 's/^CYFR_PRIVATE_EGRESS_TARGETS=//p' "$root/.env.example"),127.78.0.2" ] ||
+  fail "the local cell's private egress targets are $(value local CYFR_PRIVATE_EGRESS_TARGETS)"
 # init's own lines stay where init wrote them; the test's settings
 # rewrite in place.
 [ "$(grep -n '^CYFR_PORT=' "$scratch/cells/local/.env" | cut -d: -f1)" = "$(grep -n '^CYFR_PORT=' "$root/.env.example" | cut -d: -f1)" ] ||
@@ -580,6 +590,15 @@ case "$1" in
     fi
     echo "chosen listener $(cell_port "$WORK/cell")"
     server_start "$WORK/cell"
+    if [ "$1" = release ]; then
+      # The cell's directory serves while its server runs, and stops with it.
+      directory="$(cell_value "$WORK/cell" CYFR_DIRECTORY_URL)"
+      pid="$(cat "$WORK/cell/directory/pid")"
+      curl -fsS -m 5 -o /dev/null "$directory/account/config.json" || fail "the cell's directory does not answer at $directory"
+      server_stop "$WORK/cell"
+      ! kill -0 "$pid" 2>/dev/null || fail "the cell's directory outlived its server"
+      ! curl -fsS -m 5 -o /dev/null "$directory/account/config.json" 2>/dev/null || fail "something still answers at $directory"
+    fi
     ;;
   address)
     ADDRESS="$WORK/cell"
@@ -595,14 +614,6 @@ case "$1" in
     [ "$(cell_value "$WORK/cell" CYFR_HOST_API_PORT)" -eq "$FORCE_PORT" ] || fail "the host API override changed"
     unique_ports "$WORK/cell"
     server_start "$WORK/cell"
-    ;;
-  thief-first-override|thief-last-override)
-    source "$DRIVE_CHECKOUT/tests/identity-proof/cells.sh"
-    browser_authority
-    source "$DRIVE_SCRATCH/identity-homes.sh"
-    identity_preserved "$A" "$THIEF" thief.test "$THIEF_PORT"
-    unique_ports "$DIR" "$A" "$B" "$C" "$C2" "$C3" "$THIEF"
-    for cell in "$DIR" "$A" "$B" "$C" "$C2" "$C3" "$THIEF"; do server_start "$cell"; done
     ;;
   browser|override)
     browser_authority
@@ -622,9 +633,6 @@ esac
 SH
 sed -n '/^cell_hostname "\$ADDRESS" /p' "$root/tests/release-boot/boot.sh" >"$scratch/address-call.sh"
 [ "$(wc -l <"$scratch/address-call.sh")" = 1 ] || fail "boot.sh names no single address-cell port call"
-awk '/^DIR="\$WORK\/dir"/ { copying = 1 } /^for cell in c c2 c3; do/ { copying = 0 } copying' \
-  "$root/tests/identity-proof/run.sh" >"$scratch/identity-homes.sh"
-grep -q '^cell_pick_port THIEF_PORT$' "$scratch/identity-homes.sh" || fail "identity's homes name no thief port pick"
 mkdir "$scratch/force-bin"
 cat >"$scratch/force-bin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -639,21 +647,18 @@ fi
 SH
 printf 'exec %q "$@"\n' "$(command -v python3)" >>"$scratch/force-bin/python3"
 chmod +x "$scratch/force-bin/python3"
-override_base=$(free_port_range 18)
+override_base=$(free_port_range 1)
 override_failures=0
-for scenario in host-api-override host-api-leading-zero-override cell-host-api-override thief-first-override thief-last-override; do
+for scenario in host-api-override host-api-leading-zero-override cell-host-api-override; do
   forced=$override_base
   release_port=10001
   release_host_api=10002
-  browser_port=$override_base
   case "$scenario" in
-    host-api-override) release_port=""; release_host_api=$forced; browser_port="" ;;
-    host-api-leading-zero-override) release_port=""; release_host_api="0$forced"; browser_port="" ;;
-    cell-host-api-override) browser_port="" ;;
-    thief-last-override) forced=$((override_base + 17)) ;;
+    host-api-override) release_port=""; release_host_api=$forced ;;
+    host-api-leading-zero-override) release_port=""; release_host_api="0$forced" ;;
   esac
   status=$(status_of env RELEASE_BOOT_PORT="$release_port" RELEASE_BOOT_HOST_API_PORT="$release_host_api" \
-    BROWSER_HOMES_PORT="$browser_port" FORCE_PORT="$forced" FORCE_PORT_STATE="$scratch/forced-$scenario" \
+    BROWSER_HOMES_PORT="" FORCE_PORT="$forced" FORCE_PORT_STATE="$scratch/forced-$scenario" \
     PATH="$scratch/force-bin:$PATH" DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$scenario")
   [ -f "$scratch/forced-$scenario" ] || fail "$scenario did not force an automatic port choice"
   if [ "$status" != 0 ]; then
@@ -828,6 +833,6 @@ pass "the headless case's helper runs cyfr login on a terminal of its own, as a 
 
 python3 -I "$root/tests/release-boot/credential-evidence-test.py" --root "$root" ||
   fail "the headless case's credential checks accept a leftover session or an echoed passphrase"
-pass "the headless case's credential checks refuse a session while the name waits and a passphrase echoed anywhere"
+pass "the headless case's credential checks refuse a session or a device after a setup that made nothing, and a passphrase echoed anywhere"
 
 echo "release-boot-test: all checks passed"

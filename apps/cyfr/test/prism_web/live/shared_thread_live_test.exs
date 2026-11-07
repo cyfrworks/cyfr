@@ -107,9 +107,12 @@ defmodule PrismWeb.SharedThreadLiveTest do
   test "the header lists the people and invitations, and any of them adds by name, removes, withdraws, renames and makes an invitation link",
        %{conn: conn, alice: alice, bob: bob, thread: thread} do
     carol = test_user()
-    %{identifier: carol_identifier} = RegistryStub.enroll!(carol.user_id)
+
+    %{account: %{identifier: carol_identifier}, dir: dir} =
+      Sanctum.Test.DirectoryServer.member!(carol.user_id)
+
     record_namespace!(carol)
-    RegistryStub.handles!(%{carol.namespace => carol_identifier})
+    RegistryStub.handles!(%{carol.namespace => carol_identifier}, dir.url)
     waiting = identifier()
     {:ok, :added} = SharedThreads.add(alice.user_id, thread.id, identifier: waiting)
 

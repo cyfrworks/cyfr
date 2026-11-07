@@ -149,8 +149,9 @@ env:
   MIX_OS_CONCURRENCY_LOCK: 0
 jobs:
   # The checks whose answer does not depend on the database adapter, once
-  # per run. scripts/commit-gate.sh reads one of them, "The built SDK is
-  # its source's", and runs its script.
+  # per run. scripts/commit-gate.sh reads two of them, "The built SDK is
+  # its source's" and "The built account pages are their source's", and
+  # runs their scripts.
   static:
     name: Static checks, generated files, fixtures and harness tests
     runs-on: ubuntu-latest
@@ -340,6 +341,20 @@ jobs:
             echo "::error::apps/cyfr/priv/static/sdk/ is not the build of apps/cyfr/assets/js/sdk: run mix esbuild sdk and commit the result"
             git status --porcelain -- apps/cyfr/priv/static/sdk/
             git diff --stat -- apps/cyfr/priv/static/sdk/
+            exit 1
+          fi
+      # The account pages are built from apps/cyfr/assets/account into
+      # priv/static/account/ and tracked, since a directory embeds them at
+      # compile time and cyfr.run vendors them built. A source edit without
+      # a rebuild fails here.
+      - name: The built account pages are their source's
+        run: |
+          set -euo pipefail
+          mix esbuild account
+          if [ -n "$(git status --porcelain -- apps/cyfr/priv/static/account/)" ]; then
+            echo "::error::apps/cyfr/priv/static/account/ is not the build of apps/cyfr/assets/account: run mix esbuild account and commit the result"
+            git status --porcelain -- apps/cyfr/priv/static/account/
+            git diff --stat -- apps/cyfr/priv/static/account/
             exit 1
           fi
       # Every checked-in test WASM fixture is its source's build: the WAT
@@ -1598,8 +1613,9 @@ jobs:
       # The setup proof (tests/setup-proof/run.sh) on the same image:
       # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
       # the browser harness, ask nothing, set up a CYFR reached from this
-      # device and move to its setup link, where a passkey makes the first
-      # person, and refuse a project whose .env exists.
+      # device and move to its setup link, whose page sends the browser to
+      # the account pages with CYFR's request, and say the next step for a
+      # project whose .env exists.
       # The setup proof's teardown on a run that fails while its browser
       # and its cyfr setup run: the browser's container stopped, both
       # awaited, the scratch gone.
@@ -1816,22 +1832,22 @@ jobs:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'multi-home-smoke' && '1' || '' }}
           PROOF_OUT: ${{ runner.temp }}/proofs/multi-home-smoke
         run: tests/multi-home-smoke/run.sh
-      # Enrollment, printed kits, a rotation, the restores and what each home
-      # sees, against a directory of its own (tests/identity-proof/README.md).
+      # An account made at a directory's pages, its sign-in at a CYFR, its
+      # codes, a removed key, a replaced account and a gone one, each followed
+      # by the CYFR within its bound (tests/identity-proof/README.md).
       - name: The identity proof (Chromium alone, with its virtual WebAuthn authenticator)
         if: contains(matrix.proofs, 'identity')
         env:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'identity' && '1' || '' }}
           PROOF_OUT: ${{ runner.temp }}/proofs/identity
         run: tests/identity-proof/run.sh
-      # A person joining a hub from their own home, on two directories: the
-      # sign-in, the carry and a second profile, the passkey steps and a
-      # paired device's, in Chromium (tests/join-proof/README.md).
-      - name: The join proof (Chromium)
+      # People joining a CYFR someone else runs: its operator's setup, an
+      # invitation redeemed by an account in the browser and by a device's
+      # hello, and a change confirmed by passkey (tests/join-proof/README.md).
+      - name: The join proof (Chromium alone, with its virtual WebAuthn authenticator)
         if: contains(matrix.proofs, 'join')
         env:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'join' && '1' || '' }}
-          JOIN_PROOF_BROWSERS: chromium
           PROOF_OUT: ${{ runner.temp }}/proofs/join
         run: tests/join-proof/run.sh
       # The steps that need no execution engine and no model; the others are

@@ -22,15 +22,14 @@ defmodule Arca.Repo.Migrations.Baseline do
   before any tenant was resolved is the host's record, not a tenant's).
   `invitations` is no athanor's: an invitation is to this CYFR, and the
   shared thread it may seat its newcomer in is no athanor's either.
-  `server_meta`, `registry_tokens`,
-  `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
-  and `settings_pins` are not athanor-scoped: the first three are the
-  server's own facts and the rest the cell's, and a cell has no athanor.
-  A person's identity, keys, identity attempts, carries, passkeys,
-  post-restore period, company sign-in and company sign-in attempts, the
-  directory's log, the cached heads of other
-  people's logs, the installation claim and the pre-authentication rate
-  windows are not an athanor's either (`people/0`), and neither is a
+  `server_meta`, `registry_tokens`, `cell_leases`, `job_claims`,
+  `platform_settings` and `settings_pins` are not athanor-scoped: the
+  first two are the server's own facts and the rest the cell's, and a
+  cell has no athanor.
+  A person's identity, company sign-in and company sign-in attempts, the
+  directory's log and the handles and spent nonces of the registry beside
+  it, the cached heads of other people's logs and the pre-authentication
+  rate windows are not an athanor's either (`people/0`), and neither is a
   command line's pending sign-in (`identity/0`), which no one owns until
   the session its approval mints. A shared thread, its people and its
   messages are no athanor's (`shared_threads/0`): a place several people
@@ -98,10 +97,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "security_generation > 0"
     }
 
-    # How a person was made here (`Arca.Users.mint/4`): the admission that
+    # How a person was made here (`Arca.Users.mint/3`): the admission that
     # wrote their row, and nothing else ever writes it.
     user_admission =
-      known("users_admission_known", "admission", ~w(setup invitation open remote restore))
+      known("users_admission_known", "admission", ~w(setup invitation open remote))
 
     # The door's entries: an allow names a person identifier or the
     # wildcard, a deny names a person of this server or a person identifier.
@@ -150,8 +149,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:athanors, [:status])
 
     # The people this server knows: one row per person, keyed by a minted
-    # `usr_…` id. How an identity provider names them is an
-    # `external_identities` row. Log tables keep writing user_id without a
+    # `usr_…` id; the account they were admitted by is their
+    # `person_identities` row. Log tables keep writing user_id without a
     # foreign key here — synthetic principals are not people. `email` is not
     # unique.
     create table(:users, primary_key: false) do
@@ -170,8 +169,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :last_seen_at, :utc_datetime_usec, null: false
       add :denied_at, :utc_datetime_usec
       # The platform administrator's mark: the installation's first person,
-      # written by their admission (setup, or a restore onto an empty
-      # installation) and by nothing else; a denial clears it.
+      # written by their admission (setup) and by nothing else; a denial
+      # clears it.
       add :platform_admin_at, :utc_datetime_usec
 
       add :security_generation, :bigint,
@@ -192,22 +191,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:users, [:email])
     create index(:users, [:status])
     create unique_index(:users, [:namespace], where: "namespace IS NOT NULL")
-
-    # How an identity provider names a person, keyed by the IdP composite
-    # `<provider>|<issuer>|<subject>`. One person may be named by several.
-    create table(:external_identities, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :key, :string, null: false
-      add :provider, :string, null: false
-      add :issuer, :string, null: false
-      add :subject, :string, null: false
-      add :first_seen_at, :utc_datetime_usec, null: false
-      add :last_seen_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:external_identities, [:key])
-    create index(:external_identities, [:user_id])
 
     # The door: who may sign in to this server. An allow names a person
     # identifier or the wildcard `*`; a deny names a person of this server
@@ -334,17 +317,18 @@ defmodule Arca.Repo.Migrations.Baseline do
       # The athanor the session works in. Nullable: a session exists from
       # sign-in on, before the person's own athanor is resolved.
       add :athanor_id, :string
-      # The `key_epoch` of the identity head verified when the session was
-      # minted: set for every session of a person whose identity is
-      # `remote`, whichever door admitted it, and null for a local person.
-      # A fresh head that changes it retires the session.
-      add :identity_key_epoch, :string
+      # The key that signed for the session (`kid`) and the account head it
+      # was verified under (`head`), both set or both null: a refresh that
+      # reads the key's removal, or a recovery, retires the session
+      # (`Arca.DirectoryHeads`).
+      add :kid, :string
+      add :head, :string
       # The client the session stands on: the protected device whose
       # unlock created it, its expiry the device channel's, slid only by
       # that channel and never past its certificate (`Sanctum.DeviceUnlock`),
-      # or the platform holder of the passkey a sign-in asserted, which
-      # slides as any session does (`Arca.PairedClients.project_passkey!/1`).
-      # Null for every other session.
+      # or the client of the passkey that signed in, which slides as any
+      # session does (`Arca.PairedClients.record_passkey/2`). Null for every
+      # other session.
       add :client_id, :string
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
@@ -354,7 +338,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:sessions, [:client_id], where: "client_id IS NOT NULL")
     create index(:sessions, [:user_id])
     create index(:sessions, [:expires_at])
-    create index(:sessions, [:identity_key_epoch], where: "identity_key_epoch IS NOT NULL")
+    create index(:sessions, [:kid], where: "kid IS NOT NULL")
 
     create table(:api_keys, primary_key: false) do
       add :id, :string, primary_key: true, null: false
@@ -486,18 +470,15 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     holder_kind_known = %{
       name: "paired_clients_holder_kind_known",
-      expr: "holder_kind IN ('chip', 'software', 'platform')"
+      expr: "holder_kind IN ('chip', 'software')"
     }
 
-    # A passkey's client is its platform holder, and only it is: it names
-    # the credential it projects, as its source and by reference, and
-    # holds no key.
-    platform_is_passkey = %{
-      name: "paired_clients_platform_is_passkey",
-      expr:
-        "(COALESCE(holder_kind, '') = 'platform') = (source_kind = 'passkey') AND " <>
-          "(source_kind = 'passkey') = (passkey_id IS NOT NULL) AND " <>
-          "(passkey_id IS NULL OR (passkey_id = source_id AND device_public_key IS NULL))"
+    # A passkey's client is a key of the person's account and nothing
+    # else: it names its kid, so the cached head's walk finds it, and
+    # holds no device key, so it never signs as a device.
+    passkey_is_key = %{
+      name: "paired_clients_passkey_is_key",
+      expr: "source_kind <> 'passkey' OR (kid IS NOT NULL AND device_public_key IS NULL)"
     }
 
     # One row per client a person holds in an athanor: the credential it
@@ -507,23 +488,20 @@ defmodule Arca.Repo.Migrations.Baseline do
     # which alone decides what the client may do. A revoked row is
     # terminal; a standing transition revokes a person's rows in its own
     # transaction (`Arca.SecurityTransitions`). A declared restore
-    # suspends every standing row until the person re-enables it. A
-    # protected device enrolled with a local unlock reports what holds its
+    # suspends every standing row for good: a device comes back by a fresh
+    # hello, as a new row. A protected device enrolled with a local unlock reports what holds its
     # key (`holder_kind`: a TPM `chip` or a passphrase-wrapped `software`
     # file) and the name it shows (`display_name`): information a person
-    # reads, never an input to a decision. A passkey is projected here as
-    # its platform holder (`holder_kind` `platform`, `source_kind`
-    # `passkey`, the credential's id as `source_id`, no key), one row per
-    # credential in its person's own athanor, standing as the credential
-    # stands (`Arca.PairedClients.project_passkey!/1`). Its `passkey_id`
-    # references the credential, so it goes with it: a credential goes with
-    # its person, and no client is left naming a person who is gone, which
-    # a declared restore's record of every holder's person would refuse.
+    # reads, never an input to a decision. A passkey of the person's account
+    # is recorded here when it first signs in (`source_kind` `passkey`, its
+    # own id as `source_id`, its `kid` and the head it signed in under, no
+    # key), one standing row per passkey in its person's own athanor
+    # (`Arca.PairedClients.record_passkey/2`).
     create table(:paired_clients, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
-      add :source_kind, :string, null: false, check: if(sqlite?, do: platform_is_passkey)
+      add :source_kind, :string, null: false, check: if(sqlite?, do: passkey_is_key)
       add :source_id, :string, null: false
       add :device_public_key, :binary
 
@@ -534,7 +512,10 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :holder_kind, :string, check: if(sqlite?, do: holder_kind_known)
       add :display_name, :string
-      add :passkey_id, references(:passkeys, type: :string, on_delete: :delete_all)
+      # The account key the client is (`kid`) and the head it was admitted
+      # under (`head`), both set or both null.
+      add :kid, :string
+      add :head, :string
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -543,163 +524,71 @@ defmodule Arca.Repo.Migrations.Baseline do
       create constraint(:paired_clients, standing_known.name, check: standing_known.expr)
       create constraint(:paired_clients, holder_kind_known.name, check: holder_kind_known.expr)
 
-      create constraint(:paired_clients, platform_is_passkey.name,
-               check: platform_is_passkey.expr
-             )
+      create constraint(:paired_clients, passkey_is_key.name, check: passkey_is_key.expr)
     end
 
     # A credential is one client in its athanor.
     create unique_index(:paired_clients, [:athanor_id, :source_kind, :source_id])
     create index(:paired_clients, [:user_id, :standing])
     create index(:paired_clients, [:athanor_id, :standing])
-    create index(:paired_clients, [:passkey_id], where: "passkey_id IS NOT NULL")
+    create index(:paired_clients, [:kid], where: "kid IS NOT NULL")
   end
 
   # ==========================================================================
-  # People: identity, keys, the directory, carries, passkeys, installation
+  # People: identity, the directory, rate windows
   # ==========================================================================
 
-  # None of these rows is an athanor's: a person's identity, keys,
-  # passkeys and post-restore period outlive their athanor, a directory
-  # orders identifiers, and the installation claim and the
-  # pre-authentication rate windows are the node's. Arca stores bytes and hashes here and
-  # verifies no signature.
+  # None of these rows is an athanor's: a person's identity outlives
+  # their athanor, a directory orders identifiers, and the
+  # pre-authentication rate windows are the node's. Arca stores bytes and
+  # hashes here and verifies no signature.
   defp people do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
-    identity_checks = [
-      known("person_identities_provenance_known", "provenance", ~w(local remote)),
-      known("person_identities_enrollment_known", "enrollment", ~w(none pending enrolled))
-    ]
-
-    # One row per person this home knows: the identifier once enrolled or
-    # admitted (`per_…`), whether their keys are held here (`local`) or at
-    # another home (`remote`), and, for a local person, the live and
-    # operational key pairs, the private halves sealed under the person's
-    # own frame (never an athanor's vault). `revision` is the row's
-    # compare-and-set token; `first_method_at` records that a fresh
-    # confirmation method ever existed, and nothing resets it.
+    # One row per person this home knows: the account they were admitted
+    # by, its identifier (`per_…`), the directory that orders it and the
+    # head this home last read, which the cached head's advance moves
+    # (`Arca.DirectoryHeads`). This home holds no key of theirs.
+    # `revision` is the row's compare-and-set token.
     create table(:person_identities, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :identifier, :string
-
-      add :provenance, :string,
-        null: false,
-        check: if(sqlite?, do: Enum.at(identity_checks, 0))
-
-      add :enrollment, :string,
-        null: false,
-        default: "none",
-        check: if(sqlite?, do: Enum.at(identity_checks, 1))
-
-      add :live_public_key, :binary
-      add :operational_public_key, :binary
-      add :live_key_sealed, :binary
-      add :operational_key_sealed, :binary
-      add :genesis_hash, :string
-      add :head_hash, :string
-      add :directory_url, :text
-      add :first_method_at, :utc_datetime_usec
+      add :identifier, :string, null: false
+      add :head_hash, :string, null: false
+      add :directory_url, :text, null: false
       add :revision, :bigint, null: false, default: 1
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :person_identities, identity_checks)
     create unique_index(:person_identities, [:user_id])
-    create unique_index(:person_identities, [:identifier], where: "identifier IS NOT NULL")
+    create unique_index(:person_identities, [:identifier])
 
-    attempt_checks = [
-      known("identity_attempts_kind_known", "kind", ~w(enrollment holder restore rotation)),
+    log_checks = [
       known(
-        "identity_attempts_phase_known",
-        "phase",
-        ~w(staged submitted accepted refused superseded keys_active minted completed)
+        "identity_log_entries_kind_known",
+        "kind",
+        ~w(genesis add_key remove_key recover add_recovery)
       )
     ]
 
-    # Enrollment, added-kit (`holder`), restore and rotation attempts, keyed
-    # by their request id, each advanced through its phases by conditional
-    # writes so a killed attempt resumes from the phase it reached. The
-    # submission is immutable: the genesis bytes, or the entry or recover
-    # request bytes, and their digest. Staged keys and a pending kit seed
-    # are sealed; a restore names the installation token digest it claimed;
-    # an enrollment holds the name its person wants registered.
-    create table(:identity_attempts, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 0))
-      add :request_id, :string, null: false
-      add :user_id, :string
-      add :identifier, :string
-      add :directory_url, :text
-      add :phase, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 1))
-      add :genesis, :binary
-      add :entry, :binary
-      add :entry_hash, :string
-      add :expected_head, :string
-      add :expected_revision, :integer
-      add :request_digest, :string, null: false
-      add :token_digest, :string
-      add :staged_live_public_key, :binary
-      add :staged_operational_public_key, :binary
-      add :staged_live_key_sealed, :binary
-      add :staged_operational_key_sealed, :binary
-      add :kit_seed_sealed, :binary
-      add :kit_acknowledged_at, :utc_datetime_usec
-      add :name, :text
-      add :outcome, :text
-      add :reproof_challenge_digest, :string
-      add :reproof_expires_at, :utc_datetime_usec
-      add :revision, :bigint, null: false, default: 1
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :identity_attempts, attempt_checks)
-    create unique_index(:identity_attempts, [:request_id])
-    create unique_index(:identity_attempts, [:token_digest], where: "token_digest IS NOT NULL")
-    create index(:identity_attempts, [:user_id])
-
-    # One attempt in progress per person and kind: two enrollments racing
-    # for one person leave one durable attempt.
-    create unique_index(:identity_attempts, [:user_id],
-             where:
-               "kind = 'enrollment' AND user_id IS NOT NULL AND " <>
-                 "phase IN ('staged', 'submitted', 'accepted')",
-             name: :identity_attempts_active_enrollment_index
-           )
-
-    create unique_index(:identity_attempts, [:user_id],
-             where:
-               "kind = 'rotation' AND user_id IS NOT NULL AND " <>
-                 "phase IN ('staged', 'submitted', 'accepted', 'keys_active')",
-             name: :identity_attempts_active_rotation_index
-           )
-
-    log_checks = [
-      known("identity_log_entries_kind_known", "kind", ~w(genesis rotate recover)),
-      known("identity_log_entries_outcome_known", "outcome", ~w(accepted stale_policy))
-    ]
-
     # The directory's store: one log per identifier, an entry per accepted
-    # write at its position (`seq`, 0 for the genesis), and a recovery
-    # request's recorded outcome under its request id, so a retry answers
-    # the same outcome. A refused request has no position. `bytes` is what
-    # the row counts against the directory's log-byte quota.
+    # write at its position (`seq`, 0 for the genesis) beside the verified
+    # state it leaves (`state`, `Prima.Identity.State`'s JSON), so the next
+    # entry is checked against its head alone. `bytes` is what the row
+    # counts against the directory's log-byte quota. The genesis row
+    # carries the operator's tombstone (`gone_at`).
     create table(:identity_log_entries, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :identifier, :string, null: false
-      add :seq, :integer
+      add :seq, :integer, null: false
       add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(log_checks, 0))
-      add :entry_hash, :string
+      add :entry_hash, :string, null: false
       add :prev_hash, :string
-      add :entry, :binary
-      add :request_id, :string
-      add :request_digest, :string
-      add :outcome, :string, null: false, check: if(sqlite?, do: Enum.at(log_checks, 1))
-      add :outcome_body, :text
+      add :entry, :binary, null: false
+      add :state, :text, null: false
       add :bytes, :integer, null: false
+      add :gone_at, :utc_datetime_usec
       add :inserted_at, :utc_datetime_usec, null: false
     end
 
@@ -707,7 +596,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:identity_log_entries, [:identifier])
 
     create unique_index(:identity_log_entries, [:identifier, :seq],
-             where: "seq IS NOT NULL",
              name: :identity_log_entries_position_index
            )
 
@@ -716,155 +604,49 @@ defmodule Arca.Repo.Migrations.Baseline do
              name: :identity_log_entries_prev_index
            )
 
-    create unique_index(:identity_log_entries, [:identifier, :request_id],
-             where: "request_id IS NOT NULL",
-             name: :identity_log_entries_request_index
+    create unique_index(:identity_log_entries, [:identifier, :entry_hash],
+             name: :identity_log_entries_hash_index
            )
 
-    # A home's verified cache of another person's head: the genesis it was
+    # The handle registry a CYFR serving a directory serves beside it
+    # (`Arca.DirectoryHandles`): one personal handle per account of that
+    # directory, and one per handle, for good; and the nonce of every
+    # signed request it accepted, spent once, with the request's expiry.
+    create table(:directory_handles, primary_key: false) do
+      add :handle, :string, primary_key: true, null: false
+      add :identifier, :string, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:directory_handles, [:identifier])
+
+    create table(:directory_nonces, primary_key: false) do
+      add :identifier, :string, null: false
+      add :nonce, :binary, null: false
+      add :expires_at, :utc_datetime_usec, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:directory_nonces, [:identifier, :nonce])
+
+    # A home's verified cache of an account's head: the genesis it was
     # verified from and the directory it names, both immutable, and the
-    # head, its `key_epoch`, its `recovery_epoch` and the verified state,
-    # with when it was verified on the database's clock.
+    # head and the verified state it leaves (`Prima.Identity.State`'s
+    # JSON: the listed keys and the recovery set), with when it was
+    # verified on the database's clock. `gone_at` marks an account the
+    # directory answered gone, terminally.
     create table(:directory_heads, primary_key: false) do
       add :identifier, :string, primary_key: true, null: false
       add :genesis, :binary, null: false
       add :directory_url, :text, null: false
       add :head_hash, :string, null: false
-      add :key_epoch, :string, null: false
-      add :recovery_epoch, :string, null: false
       add :state, :text, null: false
       add :verified_at, :utc_datetime_usec, null: false
+      add :gone_at, :utc_datetime_usec
       add :revision, :bigint, null: false, default: 1
 
       timestamps(type: :utc_datetime_usec)
     end
-
-    carry_checks = [
-      known("carry_actions_kind_known", "kind", ~w(source login_receipt)),
-      known(
-        "carry_actions_phase_known",
-        "phase",
-        ~w(pending delivered completed cancelled expired)
-      )
-    ]
-
-    # The sign-in carry: a `source` action at the person's signing home, one
-    # destination, its immutable payload and assertion; and at a relying
-    # home, the `login_receipt` of an accepted assertion, unique per home
-    # and challenge. A terminal action keeps its digests and outcome until
-    # `retain_until`, its payload cleared.
-    create table(:carry_actions, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(carry_checks, 0))
-      add :action_id, :string, null: false
-      add :user_id, :string, null: false
-      add :source_home, :text, null: false
-      add :destination_home, :text, null: false
-      add :return_url, :text
-      add :operation, :string, null: false, default: "join"
-      add :payload, :binary
-      add :payload_digest, :string
-      add :key_epoch, :string, null: false
-      add :challenge, :text
-      add :challenge_digest, :string
-      add :challenge_id, :string
-      add :assertion, :binary
-      add :assertion_digest, :string
-      add :browser_binding_digest, :string
-      add :phase, :string, null: false, check: if(sqlite?, do: Enum.at(carry_checks, 1))
-      add :outcome, :string
-      add :outcome_body, :text
-      add :revision, :bigint, null: false, default: 1
-      add :expires_at, :utc_datetime_usec, null: false
-      add :retain_until, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :carry_actions, carry_checks)
-    create index(:carry_actions, [:user_id, :phase])
-    create index(:carry_actions, [:phase, :expires_at])
-
-    create unique_index(:carry_actions, [:action_id],
-             where: "kind = 'source'",
-             name: :carry_actions_source_index
-           )
-
-    create unique_index(:carry_actions, [:destination_home, :challenge_id],
-             where: "kind = 'login_receipt'",
-             name: :carry_actions_receipt_index
-           )
-
-    passkey_state =
-      known("passkeys_state_known", "state", ~w(pending active suspended revoked))
-
-    # A person's WebAuthn credentials at this relying home, pinned to its RP
-    # ID. A pending registration waits, with its exact registration digest,
-    # for activation; a remote person's credential names the
-    # `recovery_epoch` it was registered under, and a recovery that replaces
-    # the live key revokes the credential, while an ordinary rotation keeps
-    # it. A declared restore suspends an active credential, which then
-    # asserts nothing until the person re-enables it.
-    create table(:passkeys, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :credential_id, :text, null: false
-      add :rp_id, :string, null: false
-      add :relying_home, :text, null: false
-      add :public_key, :binary
-      add :sign_count, :bigint, null: false, default: 0
-      add :identity_recovery_epoch, :string
-      add :state, :string, null: false, check: if(sqlite?, do: passkey_state)
-      add :registration_digest, :string, null: false
-      add :possession_verified, :boolean, null: false, default: false
-      # WebAuthn's backup-eligible flag at registration: the credential may
-      # sync to the person's other machines, so its revocation ends it on
-      # each of them.
-      add :backup_eligible, :boolean, null: false, default: false
-      add :expires_at, :utc_datetime_usec
-      add :admin_confirmation_id, :string
-      add :activated_at, :utc_datetime_usec
-      add :revoked_at, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :passkeys, [passkey_state])
-    create index(:passkeys, [:user_id, :state])
-
-    create index(:passkeys, [:identity_recovery_epoch],
-             where: "identity_recovery_epoch IS NOT NULL"
-           )
-
-    create unique_index(:passkeys, [:rp_id, :credential_id],
-             where: "state != 'revoked'",
-             name: :passkeys_live_credential_index
-           )
-
-    restore_open = %{
-      name: "restore_people_open_until_closed",
-      expr: "open = (closed_at IS NULL)"
-    }
-
-    # The period after a declared restore, one row per person: while a
-    # person's row is open, their confirmation comes from a door this home
-    # re-authenticates or from the recovery kit, never from a suspended
-    # method. The row closes when the person re-enables a method, so each
-    # person recovers on their own. The person owns it: it goes with their
-    # `users` row and never with an athanor.
-    create table(:restore_people, primary_key: false) do
-      add :restore_id, :string, primary_key: true, null: false
-
-      add :user_id, references(:users, type: :string, on_delete: :delete_all),
-        primary_key: true,
-        null: false
-
-      add :open, :boolean, null: false, default: true, check: if(sqlite?, do: restore_open)
-      add :closed_at, :utc_datetime_usec
-    end
-
-    checked(sqlite?, :restore_people, [restore_open])
-    create index(:restore_people, [:user_id, :open])
 
     # A person's company sign-in (`Arca.CompanyAuthorizations`): the
     # company configuration it was given under (the OpenID Connect issuer
@@ -905,33 +687,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:company_login_attempts, [:user_id])
     create index(:company_login_attempts, [:expires_at])
 
-    claim_state = known("installation_claims_state_known", "state", ~w(pending ended))
-
-    # The installation claims: a row per restore's claim of an empty node,
-    # bound to the token digest, request and identifier it claimed for,
-    # and ended with the attempt it bound. At most one is pending, and a
-    # token digest claims once, ever.
-    create table(:installation_claims, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :token_digest, :string, null: false
-      add :request_id, :string, null: false
-      add :identifier, :string, null: false
-      add :state, :string, null: false, check: if(sqlite?, do: claim_state)
-      add :outcome, :string
-      add :claimed_at, :utc_datetime_usec, null: false
-      add :ended_at, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :installation_claims, [claim_state])
-    create unique_index(:installation_claims, [:token_digest])
-
-    create unique_index(:installation_claims, [:state],
-             where: "state = 'pending'",
-             name: :installation_claims_one_pending_index
-           )
-
     # Pre-authentication request limits, one fixed window per bucket and
     # hashed key, counted on the database's clock and shared by every
     # member. The key is the hash of what the caller named (an address, an
@@ -952,34 +707,29 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
-  # Device certificates, pending confirmations and pairing invitations
+  # Device certificates and pending confirmations
   # ==========================================================================
 
   defp devices_and_confirmations do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
     certificate_checks = [
-      known("device_certificates_subject_known", "subject_kind", ~w(local identity)),
       known("device_certificates_state_known", "state", ~w(active revoked))
     ]
 
     # The certificates this home issued to a paired client, its signed
-    # bytes and digest beside the facts a revocation and a lookup need. An
-    # identity-subject certificate names the identifier and `key_epoch` it
-    # was issued under. Expiry is read on the database's clock; `revoked`
-    # is terminal.
+    # bytes and digest beside the facts a revocation and a lookup need:
+    # the account, the device key's `kid` and the account head it was
+    # issued under. Expiry is read on the database's clock; `revoked` is
+    # terminal.
     create table(:device_certificates, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :paired_client_id, :string, null: false
       add :user_id, :string, null: false
-
-      add :subject_kind, :string,
-        null: false,
-        check: if(sqlite?, do: Enum.at(certificate_checks, 0))
-
-      add :identifier, :string
-      add :key_epoch, :string
+      add :identifier, :string, null: false
+      add :kid, :string, null: false
+      add :head, :string, null: false
       add :device_public_key, :binary, null: false
       add :issuing_home, :text, null: false
       add :audience_home, :text, null: false
@@ -991,7 +741,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :state, :string,
         null: false,
         default: "active",
-        check: if(sqlite?, do: Enum.at(certificate_checks, 1))
+        check: if(sqlite?, do: Enum.at(certificate_checks, 0))
 
       add :revoked_at, :utc_datetime_usec
 
@@ -1002,44 +752,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:device_certificates, [:digest])
     create index(:device_certificates, [:athanor_id, :paired_client_id])
     create index(:device_certificates, [:user_id, :state])
-    create index(:device_certificates, [:key_epoch], where: "key_epoch IS NOT NULL")
-
-    certification_state =
-      known("device_certifications_state_known", "state", ~w(active revoked))
-
-    # What this home certified for one of its people's devices at another
-    # home: the client id that home reserved, the device key, that home and
-    # its athanor, the `key_epoch` the person confirmed it under and the
-    # latest certificate's expiry. One row per person, audience and client,
-    # replaced by each fresh certification; a renewal that proves the
-    # device key extends it only under the same `key_epoch`. The athanor is
-    # the other home's, so it is no tenant column here.
-    create table(:device_certifications, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :identifier, :string, null: false
-      add :key_epoch, :string, null: false
-      add :client_id, :string, null: false
-      add :device_public_key, :binary, null: false
-      add :audience_home, :text, null: false
-      add :audience_athanor, :string, null: false
-      add :expires_at, :utc_datetime_usec, null: false
-
-      add :state, :string,
-        null: false,
-        default: "active",
-        check: if(sqlite?, do: certification_state)
-
-      add :revision, :bigint, null: false, default: 1
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :device_certifications, [certification_state])
-
-    create unique_index(:device_certifications, [:user_id, :audience_home, :client_id],
-             name: :device_certifications_binding_index
-           )
+    create index(:device_certificates, [:identifier, :kid])
 
     confirmation_checks = [
       known(
@@ -1047,11 +760,11 @@ defmodule Arca.Repo.Migrations.Baseline do
         "state",
         ~w(pending confirmed consumed cancelled voided expired)
       ),
-      known(
-        "pending_confirmations_proof_known",
-        "proof",
-        ~w(passkey oidc_reauth email_code device home)
-      )
+      known("pending_confirmations_proof_known", "proof", ~w(passkey device)),
+      %{
+        name: "pending_confirmations_proof_keyed",
+        expr: "proof IS NULL OR (kid IS NOT NULL AND head IS NOT NULL)"
+      }
     ]
 
     # A pending confirmation of one sensitive change (`Prima.Confirmation`),
@@ -1059,8 +772,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     # holds (`Prima.Confirmation.ref/1`): the record's fields, its digest
     # and secret-free preview, the credential that opened it and alone may
     # consume it, a name for the client that asked, how it was proven and
-    # by which client or passkey, and a state each transition moves once.
-    # A remote person's record names the `key_epoch` it depends on.
+    # by which client, and a state each transition moves once. A record is
+    # proven only by a key of the person's account: once proven it names
+    # that key (`kid`) and the account head it was verified under (`head`).
     create table(:pending_confirmations, primary_key: false) do
       add :ref, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -1075,7 +789,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :digest, :string, null: false
       add :opener, :string, null: false
       add :asker, :text, null: false
-      add :identity_key_epoch, :string
+      add :kid, :string
+      add :head, :string, check: if(sqlite?, do: Enum.at(confirmation_checks, 2))
 
       add :state, :string,
         null: false,
@@ -1084,10 +799,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :proof, :string, check: if(sqlite?, do: Enum.at(confirmation_checks, 1))
       add :confirmed_client_id, :string
-      add :confirmed_passkey_id, :string
-      add :reauth_nonce, :string
-      add :email_code_hash, :string
-      add :email_code_failures, :integer, null: false, default: 0
       add :opened_at, :utc_datetime_usec, null: false
       add :expires_at, :utc_datetime_usec, null: false
       add :confirmed_at, :utc_datetime_usec
@@ -1103,94 +814,7 @@ defmodule Arca.Repo.Migrations.Baseline do
              where: "confirmed_client_id IS NOT NULL"
            )
 
-    create index(:pending_confirmations, [:confirmed_passkey_id],
-             where: "confirmed_passkey_id IS NOT NULL"
-           )
-
-    create index(:pending_confirmations, [:identity_key_epoch],
-             where: "identity_key_epoch IS NOT NULL"
-           )
-
-    invitation_checks = [
-      known("pairing_invitations_state_known", "state", ~w(pending consumed revoked)),
-      known(
-        "pairing_invitations_confirmer_kind_known",
-        "confirmer_kind",
-        ~w(passkey device home)
-      ),
-      %{
-        name: "pairing_invitations_confirmer_whole",
-        expr: "(confirmer_kind IS NULL) = (confirmer_id IS NULL)"
-      }
-    ]
-
-    # A pairing invitation: the hash of its bearer secret (never the
-    # secret), the person and athanor it was opened under, the client id
-    # it reserves for the device that redeems it, its audience and expiry.
-    # Consumed once with issuance; a closed invitation never reopens. It
-    # names the digest of the key the new device showed before it opened,
-    # the only key that may complete it, and the passkey or paired client
-    # whose confirmation opened it, which must still stand at completion;
-    # an invitation opened before the person held either names none.
-    create table(:pairing_invitations, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
-      add :secret_hash, :string, null: false
-      add :user_id, :string, null: false
-      add :prospective_client_id, :string, null: false
-      add :audience_home, :text, null: false
-      add :expires_at, :utc_datetime_usec, null: false
-
-      add :state, :string,
-        null: false,
-        default: "pending",
-        check: if(sqlite?, do: Enum.at(invitation_checks, 0))
-
-      add :consumed_at, :utc_datetime_usec
-      add :revoked_at, :utc_datetime_usec
-      add :key_digest, :string
-
-      add :confirmer_kind, :string, check: if(sqlite?, do: Enum.at(invitation_checks, 1))
-
-      add :confirmer_id, :string, check: if(sqlite?, do: Enum.at(invitation_checks, 2))
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :pairing_invitations, invitation_checks)
-    create unique_index(:pairing_invitations, [:secret_hash])
-    create unique_index(:pairing_invitations, [:prospective_client_id])
-    create index(:pairing_invitations, [:athanor_id, :user_id, :state])
-
-    # The evaluator a home keeps for a remote software device's six-digit
-    # PIN (`Arca.DevicePinEvaluators`): its key sealed at rest, located by
-    # the digest of the identifier the device holds, and the count of
-    # attempts it charged since the device last proved a success, with the
-    # revision every charge and reset advances, the instant the next
-    # evaluation is allowed and the nonce and expiry of the last charged
-    # evaluation's reset challenge, all in Unix milliseconds. A device has
-    # its confirmed evaluator and at most one replacement not yet reset
-    # (`confirmed_at` empty); a client's revocation deletes both.
-    create table(:device_pin_evaluators, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
-      add :user_id, :string, null: false
-      add :paired_client_id, :string, null: false
-      add :identifier_digest, :binary, null: false
-      add :sealed_key, :binary, null: false
-      add :attempts, :integer, null: false, default: 0
-      add :revision, :bigint, null: false, default: 0
-      add :next_allowed_at, :bigint
-      add :reset_nonce, :binary
-      add :reset_expires_at, :bigint
-      add :confirmed_at, :utc_datetime_usec
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    create unique_index(:device_pin_evaluators, [:identifier_digest])
-    create index(:device_pin_evaluators, [:paired_client_id])
-    create index(:device_pin_evaluators, [:athanor_id, :user_id])
+    create index(:pending_confirmations, [:kid], where: "kid IS NOT NULL")
   end
 
   # A closed vocabulary as a check. SQLite takes a check only inside CREATE

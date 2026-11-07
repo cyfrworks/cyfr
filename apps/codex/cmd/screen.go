@@ -50,7 +50,7 @@ var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 var screenCmd = &cobra.Command{
 	Use:   "screen",
 	Short: "Show CYFR on this machine's own screen, or stop showing it",
-	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip), shows your recovery code, then opens Prism; it locks after five minutes without use, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
+	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without use, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
 }
 
 var screenOnCmd = &cobra.Command{
@@ -298,6 +298,24 @@ const screenIdle = 5 * 60
 // way this device reaches a tailnet address.
 const screenProxy = "socks5://127.0.0.1:1055"
 
+// screenShellConfig is the box's own screen's shell in dir, for the CYFR
+// at address: the box's key and its client there, kept beside the
+// screen's files.
+func screenShellConfig(dir, address string, client *http.Client, host string, restart func()) shell.Config {
+	return shell.Config{
+		Address: address, Client: client, DisplayName: host,
+		Record:    filepath.Join(dir, screenDir, "holder.json"),
+		Clients:   shell.ClientFile(filepath.Join(dir, screenDir, "client.json")),
+		Directory: directoryURL(),
+		DataDir:   filepath.Join(dir, "data"),
+		Tokens:    screenTokens,
+		// .env keeps the setup token after setup: the box brings it only
+		// for an account it made on its setup page.
+		SetupFromPage: true,
+		Restart:       restart,
+	}
+}
+
 // runScreenShell is the screen's session inside labwc: the shell's pages on
 // loopback, the on-screen keyboard, swayidle and Chrome on those pages.
 // The idle watch and a suspend send this process SIGUSR1, which locks;
@@ -305,20 +323,6 @@ const screenProxy = "socks5://127.0.0.1:1055"
 // own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
 // the sessions at the home first, then starts Chrome again, so no page of
 // the unlocked session outlives it.
-// screenShellConfig is the box's own screen's shell in dir, for the home
-// at address. Its home is this machine, so no PIN the home counts is
-// offered or opened there: without a chip the screen keeps a passphrase.
-func screenShellConfig(dir, address string, client *http.Client, host string, restart func()) shell.Config {
-	return shell.Config{
-		Address: address, Client: client, DisplayName: host,
-		Record:   filepath.Join(dir, screenDir, "holder.json"),
-		DataDir:  filepath.Join(dir, "data"),
-		Tokens:   screenTokens,
-		Restart:  restart,
-		HomeHere: true,
-	}
-}
-
 func runScreenShell(ctx context.Context) error {
 	_ = holder.HardenProcess()
 	dir, err := os.Getwd()
@@ -463,14 +467,14 @@ func (c *screenChrome) restart() {
 	}
 }
 
-// screenTokens reads .env's setup and restore tokens as the server reads
-// them, each time a page needs one, so neither travels in an argument.
-func screenTokens() (string, string) {
+// screenTokens reads .env's setup token as the server reads it, each time
+// a page needs it, so it never travels in an argument.
+func screenTokens() string {
 	values, err := access.ReadEnvValues(".env")
 	if err != nil {
-		return "", ""
+		return ""
 	}
-	return strings.TrimSpace(values[setupTokenVar]), strings.TrimSpace(values["CYFR_RESTORE_TOKEN"])
+	return strings.TrimSpace(values[setupTokenVar])
 }
 
 // screenReachable is whether the home answers now, within two seconds.

@@ -45,8 +45,7 @@ defmodule Arca.InvitationsTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        nil
+        }
       )
 
     user.id
@@ -379,8 +378,7 @@ defmodule Arca.InvitationsOwnerTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        nil
+        }
       )
 
     hash = Prima.Digest.sha256_hex(:crypto.strong_rand_bytes(32))

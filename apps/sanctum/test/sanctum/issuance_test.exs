@@ -6,31 +6,26 @@ defmodule Sanctum.IssuanceTest do
   The policy a credential is issued under (`Sanctum.Issuance`), from a
   paired device's context: the device's binding names its paired client,
   and an issuance from it locks that client after the person and the
-  athanor, and stands only while the client, the certificate the
-  context stands under and, for a person whose keys are at another home,
-  the identity row they were resolved by still stand. A device context
-  without its own binding issues nothing, and a session or a key issues
-  under its own credential.
+  athanor, and stands only while the client and the certificate the
+  context stands under still stand. A device context without its own
+  binding issues nothing, and a session or a key issues under its own
+  credential.
 
-  Every device here is paired through the real ceremony
-  (`Sanctum.Pairing.begin/2` under a session, `complete/3` from a glass
-  holding nothing) and verified through `Sanctum.DeviceCerts`.
+  Every device here is paired as a hello pairs one
+  (`Sanctum.Test.Devices.paired!/1`) and verified through
+  `Sanctum.DeviceCerts`.
   """
 
   # The rate limiter's table is the node's and some cases change the
   # home's name: one case at a time.
   use ExUnit.Case, async: false
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{ApiKey, DeviceCertificate, PersonIdentity}
+  alias Arca.Schemas.{ApiKey, DeviceCertificate}
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
-  alias Sanctum.{Context, DeviceCerts, Issuance, Pairing, Person}
+  alias Sanctum.{Context, DeviceCerts, Issuance, Pairing}
   alias Sanctum.Tenancy.Users
 
   @source "198.51.100.9"
@@ -91,76 +86,6 @@ defmodule Sanctum.IssuanceTest do
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
 
-  # A pairing begun for the digest of the device key the glass made first,
-  # under a confirmation the person proved: only that key completes it.
-  defp begin!(session_ctx, device_key) do
-    digest = Prima.Device.key_digest(device_key)
-
-    session_ctx
-    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-    |> Pairing.begin(%{"key_digest" => digest})
-  end
-
-  # A `pairing.begin` confirmation of the person `user_id` in `actor`'s
-  # athanor, opened, proven by their passkey and consumed through the
-  # confirmations' own store: the record an invitation written straight
-  # into the invitations' store reads its confirmer from. Answers its ref.
-  defp consumed_pairing_confirmation!(actor, user_id) do
-    _authenticator = Sanctum.TestContext.passkey!(user_id)
-
-    passkey_id =
-      Arca.Repo.one!(
-        from(p in Arca.Schemas.Passkey,
-          where: p.user_id == ^user_id and p.state == "active",
-          select: p.id
-        )
-      )
-
-    secret = "cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    preview = %{home: Person.home(), athanor: "Elsewhere", operation: "pairing.begin"}
-    args_digest = Prima.Digest.sha256("pairing-#{System.unique_integer()}")
-    opener = "session:pairing-#{System.unique_integer([:positive])}"
-
-    {:ok, record} =
-      Prima.Confirmation.new(
-        id: Prima.Confirmation.ref(secret),
-        home: Person.home(),
-        rp_id: Sanctum.Passkeys.rp_id(),
-        athanor: actor.athanor_id,
-        person: user_id,
-        operation: "pairing.begin",
-        args_digest: args_digest,
-        action: "device_pairing",
-        preview: preview,
-        challenge: :crypto.strong_rand_bytes(32),
-        expires_at: System.system_time(:millisecond) + 300_000
-      )
-
-    {:ok, _} =
-      Arca.PendingConfirmations.open(actor, %{
-        record: record,
-        opener: opener,
-        asker: %{"kind" => "session"}
-      })
-
-    {:ok, _} =
-      Arca.PendingConfirmations.confirm(actor, record.id, %{
-        proof: "passkey",
-        passkey_id: passkey_id
-      })
-
-    {:ok, _} =
-      Arca.PendingConfirmations.consume(actor, secret, %{
-        user_id: user_id,
-        operation: "pairing.begin",
-        args_digest: args_digest,
-        preview: record.preview,
-        opener: opener
-      })
-
-    record.id
-  end
-
   # Revoking a device is a sensitive change, under the person's session and
   # a confirmation they proved, as `pairing/revoke` takes it.
   defp revoke!(session_ctx, client_id) do
@@ -173,23 +98,11 @@ defmodule Sanctum.IssuanceTest do
     |> Pairing.revoke(client_id)
   end
 
-  # A device paired through the ceremony: its key pair, its client and its
-  # first certificate.
+  # A device of the person's account paired here: its key pair, its client
+  # and its first certificate.
   defp pair!(session_ctx) do
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, invitation} = begin!(session_ctx, device_key)
-    glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{holder: @holder, device_key: device_key}
-
-    {:ok, %{challenge: challenge}} =
-      Pairing.complete(glass, invitation.invitation_secret, submission)
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Pairing.complete(
-        glass,
-        invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
-      )
+    %{client_id: client_id, certificate: certificate, key: {device_key, private}} =
+      Sanctum.Test.Devices.paired!(session_ctx.user_id, @source)
 
     %{client_id: client_id, certificate: certificate, device_key: device_key, private: private}
   end
@@ -219,7 +132,7 @@ defmodule Sanctum.IssuanceTest do
         home: certificate.audience,
         athanor: certificate.athanor,
         client_id: device.client_id,
-        device_key: certificate.device_key,
+        device_key: device.device_key,
         nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
         now: System.system_time(:millisecond)
       )
@@ -279,13 +192,17 @@ defmodule Sanctum.IssuanceTest do
       ctx = verified!(device)
       client_id = device.client_id
 
-      assert %{source_kind: :device, source_id: ^client_id, identity: nil} =
+      kid = device.certificate.kid
+
+      assert %{source_kind: :device, source_id: ^client_id, kid: ^kid} =
                ctx.credential_binding
+
+      assert ctx.credential_binding.head == device.certificate.head
 
       assert {:ok, expectation} = Issuance.expectation(ctx, [])
       deadline = DateTime.from_unix!(device.certificate.expires_at, :millisecond)
       assert expectation.source == {:device, client_id, deadline}
-      assert expectation.identity == nil
+      assert expectation.kid == kid
 
       assert Issuance.lock(expectation) == %{
                user_id: user.id,
@@ -322,19 +239,15 @@ defmodule Sanctum.IssuanceTest do
             a_session: [auth_method: :oidc] ++ base,
             another_client: [auth_method: :device, client_id: "pcl_another"] ++ base,
             no_client: [auth_method: :device] ++ base,
-            a_local_row:
+            no_key:
               [auth_method: :device, client_id: ctx.client_id] ++
-                Keyword.put(base, :credential_binding, %{
-                  binding
-                  | identity: %{user_id: ctx.user_id, provenance: "local", identifier: "per_x"}
-                }),
-            an_identity_on_a_session:
+                Keyword.put(base, :credential_binding, Map.delete(binding, :kid)),
+            a_key_on_a_sign_in:
               [auth_method: :oidc] ++
                 Keyword.put(base, :credential_binding, %{
                   binding
                   | source_kind: :identity,
-                    source_id: nil,
-                    identity: %{user_id: ctx.user_id, provenance: "remote", identifier: "per_x"}
+                    source_id: nil
                 })
           ] do
         refused =
@@ -553,12 +466,12 @@ defmodule Sanctum.IssuanceTest do
   # ---------------------------------------------------------------------------
 
   describe "a session's or a key's issuance" do
-    test "has its own credential as its source, and names no identity", %{
+    test "has its own credential as its source, and names no key", %{
       session_ctx: session_ctx
     } do
       assert {:ok, expectation} = Issuance.expectation(session_ctx, [])
       assert expectation.source == {:session, session_ctx.session_token_hash}
-      assert expectation.identity == nil
+      assert expectation.kid == nil
 
       assert Issuance.lock(expectation) |> Map.keys() |> Enum.sort() ==
                [:athanor_id, :source, :user_id]
@@ -571,7 +484,7 @@ defmodule Sanctum.IssuanceTest do
       assert {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(confirmed, attrs)
 
       {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: @source)
-      assert {:ok, %{source: {:api_key, id}, identity: nil}} = Issuance.expectation(key_ctx, [])
+      assert {:ok, %{source: {:api_key, id}, kid: nil}} = Issuance.expectation(key_ctx, [])
       assert id == key_ctx.api_key_id
 
       # A session's issuance refuses a retired session.
@@ -699,58 +612,6 @@ defmodule Sanctum.IssuanceTest do
              })
   end
 
-  test "a pairing invitation into another person's athanor is refused at redemption", %{
-    user: user
-  } do
-    {:ok, _admin} = Sanctum.TestContext.ensure_platform(user.id)
-    elsewhere = person!().athanor
-
-    # An invitation there for the person, which `Sanctum.Pairing.begin/2`
-    # never opens but a stored row can carry: written through the
-    # invitations' own store, under a policy that lets it open, for the
-    # device key the glass made first and on a consumed `pairing.begin`
-    # confirmation the person's passkey gave.
-    secret = :crypto.strong_rand_bytes(16)
-    secret_hash = Prima.Digest.sha256(secret)
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    elsewhere_actor = Prima.Actor.in_athanor(elsewhere.id)
-
-    {:ok, _invitation} =
-      Arca.PairingInvitations.open(
-        elsewhere_actor,
-        %{
-          user_id: user.id,
-          secret_hash: secret_hash,
-          key_digest: Prima.Device.key_digest(device_key),
-          confirmation_ref: consumed_pairing_confirmation!(elsewhere_actor, user.id),
-          audience_home: Person.home(),
-          lifetime_ms: 600_000
-        },
-        fn _rows -> :ok end
-      )
-
-    # The glass holding the secret asks for its challenge and answers it:
-    # the redemption locks the athanor, which is not the person's, and
-    # pairs nothing.
-    glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{holder: @holder, device_key: device_key}
-
-    {:ok, %{challenge: challenge}} = Pairing.complete(glass, secret, submission)
-
-    assert {:error, :not_standing} =
-             Pairing.complete(
-               glass,
-               secret,
-               Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
-             )
-
-    assert {:ok, %{state: "pending"}} = Arca.PairingInvitations.lookup(secret_hash)
-
-    refute Arca.Repo.exists?(
-             from(p in Arca.Schemas.PairedClient, where: p.athanor_id == ^elsewhere.id)
-           )
-  end
-
   # ---------------------------------------------------------------------------
   # A device's other credential writes, revoked inside their window
   # ---------------------------------------------------------------------------
@@ -778,12 +639,6 @@ defmodule Sanctum.IssuanceTest do
   # verified and confirmed, and the write's transaction has not begun.
   defp confirmed_point([:cyfr, :sanctum, :confirmation, :consumed], _metadata), do: true
   defp confirmed_point(_event, _metadata), do: false
-
-  # Once a pairing's confirmation was checked (`Sanctum.Consent.Authz.check/3`
-  # reads its record last), before the invitation's transaction, which
-  # consumes it.
-  defp checked_point([:arca, :repo, :query], %{source: "pending_confirmations"}), do: true
-  defp checked_point(_event, _metadata), do: false
 
   # `write`, run by a task held at `point`, where the person revokes the
   # device under their session before the task goes on.
@@ -819,14 +674,6 @@ defmodule Sanctum.IssuanceTest do
     during.()
     send(held, :release)
     Task.await(task, 25_000)
-  end
-
-  defp statements(acc \\ []) do
-    receive do
-      {:statement, source, query} -> statements([{source, query} | acc])
-    after
-      0 -> Enum.reverse(acc)
-    end
   end
 
   defp hook!(ctx, name) do
@@ -946,79 +793,6 @@ defmodule Sanctum.IssuanceTest do
                {stored.payload_rev, stored.sealed_payload}
     end
 
-    test "refuses a pairing invitation the device opens: none is opened", %{
-      session_ctx: session_ctx
-    } do
-      device = pair!(session_ctx)
-      ctx = verified!(device)
-      count = fn -> Arca.Repo.aggregate(Arca.Schemas.PairingInvitation, :count) end
-      opened = count.()
-      {new_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
-      digest = Prima.Device.key_digest(new_key)
-
-      confirmed =
-        Sanctum.TestContext.confirmed(ctx, :device_pairing, Pairing.invitation_change(digest))
-
-      assert {:error, :not_standing} =
-               revoked_in_window(session_ctx, device.client_id, &checked_point/2, fn ->
-                 Pairing.begin(confirmed, %{"key_digest" => digest})
-               end)
-
-      assert count.() == opened
-    end
-
-    test "an invitation the device opens holds its client and certificate in its transaction", %{
-      session_ctx: session_ctx
-    } do
-      device = pair!(session_ctx)
-      {new_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
-      digest = Prima.Device.key_digest(new_key)
-
-      confirmed =
-        device
-        |> verified!()
-        |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-
-      test = self()
-      handler = "issuance-begin-#{System.unique_integer([:positive])}"
-
-      :ok =
-        :telemetry.attach(
-          handler,
-          [:arca, :repo, :query],
-          fn _event, _measurements, meta, _config ->
-            if self() == test and is_binary(meta[:source]),
-              do: send(test, {:statement, meta[:source], meta[:query]})
-          end,
-          nil
-        )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      assert {:ok, %{client_id: "pcl_" <> _}} =
-               Pairing.begin(confirmed, %{"key_digest" => digest})
-
-      :telemetry.detach(handler)
-
-      statements = statements()
-      sources = Enum.map(statements, &elem(&1, 0))
-      opened = Enum.find_index(sources, &(&1 == "pairing_invitations"))
-      locked = Enum.find_index(sources, &(&1 == "device_certificates"))
-
-      # The client's certificate is read only by the invitation's own
-      # standing locks, after the athanor and before the invitation is written.
-      assert is_integer(locked) and is_integer(opened) and locked < opened, inspect(sources)
-      assert Enum.at(sources, locked - 1) == "paired_clients"
-      assert Enum.at(sources, locked - 2) == "athanors"
-
-      if Arca.Test.Adapter.postgres?() do
-        for at <- [locked - 1, locked] do
-          {source, query} = Enum.at(statements, at)
-          assert query =~ "FOR UPDATE", "#{source} is not locked: #{query}"
-        end
-      end
-    end
-
     test "refuses a key through the key tool with the refusal's own sentence, logging nothing", %{
       session_ctx: session_ctx
     } do
@@ -1093,214 +867,6 @@ defmodule Sanctum.IssuanceTest do
                Arca.VaultStorage.get_by_name(Context.actor(ctx), "glass-tool-entry")
     end
   end
-
-  # ---------------------------------------------------------------------------
-  # A person whose keys are at another home
-  # ---------------------------------------------------------------------------
-
-  describe "a device of a person whose keys are at another home" do
-    setup %{session_ctx: session_ctx, user: user, athanor: athanor} do
-      alias Sanctum.Test.DirectoryServer
-
-      tls = DirectoryServer.tls()
-      DirectoryServer.listen!()
-      DirectoryServer.seam!(tls)
-
-      on_exit(fn ->
-        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      end)
-
-      directory = DirectoryServer.start!(tls)
-      identity = DirectoryServer.identity!(directory.dir, directory.url)
-
-      # Paired at this home under their home's certificate: the invitation
-      # opened under the person's proof here, then they are remote.
-      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-      {:ok, invitation} = begin!(session_ctx, device_key)
-      :ok = DirectoryServer.remote_person!(user.id, identity)
-      certificate = remote_certificate(identity, invitation.client_id, device_key, athanor)
-      glass = Context.build(%{authenticated: false, client_ip: @source})
-      submission = %{holder: @holder, device_key: device_key, certificate: certificate}
-
-      {:ok, %{challenge: challenge}} =
-        Pairing.complete(glass, invitation.invitation_secret, submission)
-
-      {:ok, %{client_id: client_id}} =
-        Pairing.complete(
-          glass,
-          invitation.invitation_secret,
-          Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
-        )
-
-      device = %{
-        client_id: client_id,
-        certificate: certificate,
-        device_key: device_key,
-        private: private
-      }
-
-      %{directory: directory, identity: identity, device: device}
-    end
-
-    defp remote_certificate(identity, client_id, device_key, athanor) do
-      now = System.os_time(:millisecond)
-
-      {:ok, certificate} =
-        DeviceCert.new(
-          device_key: device_key,
-          client_id: client_id,
-          subject: %{
-            kind: :identity,
-            identifier: identity.identifier,
-            key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
-          },
-          issuer: "https://a.example",
-          audience: Person.home(),
-          athanor: athanor.id,
-          not_before: now,
-          expires_at: now + 3_600_000
-        )
-
-      DeviceCert.sign(certificate, elem(identity.live, 1))
-    end
-
-    test "carries the identity row it was resolved by, and mints while that row names them", %{
-      device: device,
-      identity: identity,
-      user: user
-    } do
-      ctx = verified!(device)
-      expected = %{user_id: user.id, provenance: "remote", identifier: identity.identifier}
-
-      assert ctx.credential_binding.identity == expected
-      assert {:ok, %{identity: ^expected}} = Issuance.expectation(ctx, [])
-
-      assert {:ok, attrs} = mint(ctx)
-      assert minted?(attrs)
-    end
-
-    test "refuses once the identity row no longer names the person", %{
-      device: device,
-      user: user
-    } do
-      ctx = verified!(device)
-      another = "per_" <> Prima.Digest.sha256_hex("another-#{System.unique_integer()}")
-
-      {1, _} =
-        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^user.id),
-          set: [identifier: another]
-        )
-
-      assert {{:error, :not_standing}, renamed} = mint(ctx)
-      refute minted?(renamed)
-
-      {1, _} = Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
-      assert {{:error, :not_standing}, gone} = mint(ctx)
-      refute minted?(gone)
-    end
-
-    test "a head that moved retired its certificate, and with it the issuance", %{
-      device: device,
-      directory: directory,
-      identity: identity
-    } do
-      ctx = verified!(device)
-      Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
-      {:ok, _} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
-
-      assert {{:error, :not_standing}, attrs} = mint(ctx)
-      refute minted?(attrs)
-    end
-
-    # Their home certifies the glass again, rather than this home renewing
-    # it (`devices-guide.md`): the glass connects here with the replacement,
-    # which this home verifies against their head and keeps no row for. The
-    # device stands, and nothing was revoked.
-    test "a replacement certificate from their home, verified here, mints", %{
-      device: device,
-      identity: identity,
-      athanor: athanor
-    } do
-      now = System.os_time(:millisecond)
-
-      {:ok, unsigned} =
-        DeviceCert.new(
-          device_key: device.device_key,
-          client_id: device.client_id,
-          subject: %{
-            kind: :identity,
-            identifier: identity.identifier,
-            key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
-          },
-          issuer: "https://a.example",
-          audience: Person.home(),
-          athanor: athanor.id,
-          not_before: now,
-          expires_at: now + 1_800_000
-        )
-
-      replacement = DeviceCert.sign(unsigned, elem(identity.live, 1))
-      ctx = verified!(%{device | certificate: replacement})
-
-      assert ctx.credential_deadline ==
-               DateTime.from_unix!(replacement.expires_at, :millisecond)
-
-      assert ctx.credential_binding.key_epoch == Sanctum.Test.DirectoryServer.key_epoch(identity)
-      assert {:ok, attrs} = mint(ctx)
-      assert minted?(attrs)
-    end
-
-    test "a head that moves inside the window refuses the issuance: nothing is minted", %{
-      device: device,
-      directory: directory,
-      identity: identity
-    } do
-      ctx = verified!(device)
-
-      # The request is held once its certificate was verified against the
-      # head (`remote_subject/3`) and as its paired client is read; the head
-      # moves there, through `Arca.DirectoryHeads.advance/4`. The client's
-      # standing is read once before the certificate is checked
-      # (`Sanctum.DeviceCerts`), so the read after the verification is the
-      # second.
-      reads = :counters.new(1, [])
-
-      client_read_after_verification = fn
-        [:arca, :repo, :query], %{source: "paired_clients"} ->
-          :counters.add(reads, 1, 1)
-          :counters.get(reads, 1) == 2
-
-        _event, _metadata ->
-          false
-      end
-
-      result =
-        in_window(
-          client_read_after_verification,
-          fn ->
-            {:ok, verified} = DeviceCerts.verify_request(device.certificate, ctx)
-            mint(verified)
-          end,
-          fn ->
-            Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
-            {:ok, _moved} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
-          end
-        )
-
-      assert {{:error, :not_standing}, attrs} = result
-      refute minted?(attrs)
-    end
-
-    test "a revoked client still refuses", %{device: device} do
-      ctx = verified!(device)
-
-      assert {:ok, %{standing: "revoked"}} =
-               Arca.PairedClients.revoke(Prima.Actor.in_athanor(ctx.athanor_id), device.client_id)
-
-      assert {{:error, :not_standing}, attrs} = mint(ctx)
-      refute minted?(attrs)
-    end
-  end
 end
 
 defmodule Sanctum.IssuanceRaceTest do
@@ -1325,14 +891,13 @@ defmodule Sanctum.IssuanceRaceTest do
     ApiKey,
     Athanor,
     DeviceCertificate,
-    ExternalIdentity,
     PairedClient,
     User
   }
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Prima.DeviceCert
-  alias Sanctum.{DeviceCerts, Issuance, Person}
+  alias Sanctum.{DeviceCerts, Issuance}
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 
@@ -1344,19 +909,19 @@ defmodule Sanctum.IssuanceRaceTest do
     athanor_id = Prima.UUID7.generate_id("ath")
     client_id = Prima.UUID7.generate_id("pcl")
     {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+    identifier = "per_" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
 
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(ApiKey, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
       end)
     end)
 
-    certificate = certificate!(user_id, athanor_id, client_id, device_key)
+    certificate = certificate!(identifier, athanor_id, client_id, device_key)
 
     ctx =
       unboxed(fn ->
@@ -1375,7 +940,8 @@ defmodule Sanctum.IssuanceRaceTest do
               client: client,
               user: standing.user,
               athanor: standing.athanor,
-              platform_admin: standing.platform_admin
+              platform_admin: standing.platform_admin,
+              identifier: identifier
             },
             []
           )
@@ -1398,14 +964,6 @@ defmodule Sanctum.IssuanceRaceTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|race#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "race#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
@@ -1421,17 +979,17 @@ defmodule Sanctum.IssuanceRaceTest do
 
   # The certificate the device stands under. Establishing a context checks
   # that the rows agree with it, not its signature: the verifier did that.
-  defp certificate!(user_id, athanor_id, client_id, device_key) do
+  defp certificate!(identifier, athanor_id, client_id, device_key) do
     now = System.os_time(:millisecond)
     {_public, signer} = :crypto.generate_key(:eddsa, :ed25519)
 
     {:ok, certificate} =
       DeviceCert.new(
-        device_key: device_key,
+        kid: Prima.Identity.Key.kid(device_key),
         client_id: client_id,
-        subject: %{kind: :local, user_id: user_id},
-        issuer: Person.home(),
-        audience: Person.home(),
+        identifier: identifier,
+        head: Prima.Digest.sha256("the head the certificate was issued under"),
+        audience: Sanctum.origin(),
         athanor: athanor_id,
         not_before: now,
         expires_at: now + 3_600_000
@@ -1451,6 +1009,8 @@ defmodule Sanctum.IssuanceRaceTest do
           source_kind: "device_cert",
           source_id: client_id,
           device_public_key: device_key,
+          kid: certificate.kid,
+          head: certificate.head,
           standing: "active",
           inserted_at: now,
           updated_at: now
@@ -1466,9 +1026,11 @@ defmodule Sanctum.IssuanceRaceTest do
           athanor_id: athanor_id,
           paired_client_id: client_id,
           user_id: user_id,
-          subject_kind: "local",
+          identifier: certificate.identifier,
+          kid: certificate.kid,
+          head: certificate.head,
           device_public_key: device_key,
-          issuing_home: certificate.issuer,
+          issuing_home: certificate.audience,
           audience_home: certificate.audience,
           not_before: usec(DateTime.from_unix!(certificate.not_before, :millisecond)),
           expires_at: usec(DateTime.from_unix!(certificate.expires_at, :millisecond)),

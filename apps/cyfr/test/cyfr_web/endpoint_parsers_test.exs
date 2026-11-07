@@ -129,7 +129,7 @@ defmodule CyfrWeb.EndpointParsersTest do
       paths = CyfrWeb.Router.__routes__() |> Enum.map(& &1.path) |> Enum.uniq()
 
       # The sweep covers the routes the failure cases name.
-      for path <- ["/hooks/:slug", "/directory/v1/genesis", "/restore", "/mcp"] do
+      for path <- ["/hooks/:slug", "/directory/v1/register", "/mcp"] do
         assert path in paths
       end
 
@@ -141,18 +141,15 @@ defmodule CyfrWeb.EndpointParsersTest do
   end
 
   describe "a multipart body" do
-    test "of 28 MB to a webhook, the directory or the restore ingress is refused unread, " <>
+    test "of 28 MB to a webhook or the directory is refused unread, " <>
            "however its path is spelled",
          %{upload: upload} do
       for url <- [
             "/hooks/wh_any",
             "http://www.example.com//hooks/wh_any",
-            "/directory/v1/genesis",
-            "/directory/v1/per_x/entries",
-            "http://www.example.com//directory//v1/genesis",
-            "/restore",
-            "/restore/challenge",
-            "http://www.example.com//restore"
+            "/directory/v1/register",
+            "/directory/v1/per_x/append",
+            "http://www.example.com//directory//v1/register"
           ] do
         assert_api_refusal(request(:post, url, upload, @multipart))
         assert bytes_read() == 0, "#{url} read the multipart body"
@@ -177,9 +174,9 @@ defmodule CyfrWeb.EndpointParsersTest do
         )
 
       for {url, cap} <- [
-            {"/directory/v1/genesis", directory_cap},
-            {"http://www.example.com//directory/v1/genesis", directory_cap},
-            {"/restore", directory_cap},
+            {"/directory/v1/register", directory_cap},
+            {"http://www.example.com//directory/v1/register", directory_cap},
+            {"/v1/namespaces/personal/claim", Prima.RegistryRequest.max_bytes()},
             {"/hooks/wh_any", webhook_cap}
           ] do
         body = ~s({"pad":") <> :binary.copy(<<?x>>, cap) <> ~s("})
@@ -217,7 +214,7 @@ defmodule CyfrWeb.EndpointParsersTest do
     test "a multipart request is answered 415 from its headers alone, and its connection " <>
            "ends without its body",
          %{port: port} do
-      for path <- ["/hooks/wh_any", "/directory/v1/genesis", "/restore"] do
+      for path <- ["/hooks/wh_any", "/directory/v1/register"] do
         {:ok, socket} =
           :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw], 5_000)
 
@@ -917,9 +914,7 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
             "/auth/logout",
             "/mcp",
             "/hooks/:slug",
-            "/directory/v1/genesis",
-            "/certify/v1/renew",
-            "/restore"
+            "/directory/v1/register"
           ] do
         assert path in paths, "#{path} takes no body"
       end

@@ -7,24 +7,32 @@ narrowed and revoked as they set it there, that a newcomer's first
 sign-in binds the administrator's share to everyone, that a person's
 denial writes nothing to a share, and that the administrator enters no
 athanor but their own.
-The home is one `cyfr` release on a SQLite cell, `home.test`, behind the
-harness's HTTPS front (`browser_home`). The platform administrator
-(`operator@example.com`), the installation's first person and so made by
-its setup, is signed in by the release fixture (`tests/release-boot/fixture.exs`
-`person`), and so are Ana and Bea when the proof asks for them, each
-through the same sign-in path, once the administrator has opened the door
-to newcomers on the Settings page (`door.allow` of `*`). `proof.mjs` drives the administrator and Ana
-in Chromium's full build, the administrator's confirmations proven with the
-passkey Chromium's virtual authenticator makes and registers first, as
-`tests/approval-proof/` proves its vault entries'. Setup made the
-administrator with a protected device, which stands and confirms that first
-registration (`device_confirm`, the release fixture's). It asks `run.sh` for the
-home's part of a step through its output directory (`ask-N.json`,
-answered `answer-N.json`): a sign-in, and the reads and claims of `fixture.exs`,
-which calls the real paths and answers bounded facts. The material a
-share unseals is discarded inside the fixture and never serialized, and
-the proof fails if either key, or a digest of one, reaches a page, an
-answer or the record.
+The home is a `cyfr` release on a SQLite cell, `home.test`, behind the
+harness's HTTPS front (`browser_home`), beside a second cell, the
+directory `dir.test` (`CYFR_DIRECTORY_SERVE=writer`), which serves the
+account pages; `home.test` reads accounts there through the identity
+proof's front (`tests/identity-proof/front.sh` and `cells.sh`). The
+platform administrator makes their account at the directory's pages, the
+passkey Chromium's virtual authenticator makes (`tests/browser/account.mjs`),
+and sets `home.test` up by signing in with it through its setup link,
+then finishes their name on the Settings page, since setup asks nothing;
+`run.sh` then reads the session their browser holds from its cookie
+(`browser_session` in `tests/browser/harness.sh`), so the fixture acts
+under it. Ana and Bea are signed in by the release fixture
+(`tests/release-boot/fixture.exs` `person`) when the proof asks for them,
+once the administrator has opened the door to newcomers on the Settings
+page (`door.allow` of `*`); their accounts are built in the cell and the
+directory never saw them, so `home.test`'s freshness bound is the run's
+length (`CYFR_IDENTITY_FRESHNESS_SECONDS=3600`). `proof.mjs` drives the
+administrator and Ana in Chromium's full build, each of the
+administrator's confirmations proven with their passkey at the account
+pages, in the tab the system layer opens. It asks `run.sh` for the home's
+part of a step through its output directory (`ask-N.json`, answered
+`answer-N.json`): the setup token, the administrator's session, a
+sign-in, and the reads and claims of `fixture.exs`, which calls the real
+paths and answers bounded facts. The material a share unseals is
+discarded inside the fixture and never serialized, and the proof fails if
+either key, or a digest of one, reaches a page, an answer or the record.
 
 The fixture seeds one thing (`thread`): a shared thread of the
 administrator's, Traders, holding Bea, which the narrowing names. The keys and their shares
@@ -198,7 +206,7 @@ Shared with you, each row's id, owner and use.
 
 | Step | What holds |
 |---|---|
-| `share_key` | the administrator's first passkey, registered from Settings, waits on the page's own confirmation, which the setup device that made them at setup confirms (`device_confirm`), and the page's repeat registers it; the administrator makes Company AI (provider `openai.com`, the provider of the shipped model catalyst `catalyst:local.openai`; destination `https` `api.openai.com`, `POST` and `GET`, `/v1/chat/completions` and `/v1/models`, no port) and Company Mail (provider `mail.example`, whose destination no shipped catalyst's need calls; destination `https` `api.mail.example`, `POST`, `/v1/send`) on the Vault page, attach-only, each key typed in its form alone and each `credential_entry` confirmation proven with the administrator's passkey; each is shared with everyone through the system layer's sharing sheet, which offers everyone alone, opens with both caps empty and says what they mean and what an uncapped share to everyone means to the administrator, Company AI with a person cap of 3 and Company Mail with none, each `credential_sharing` confirmation proven with the passkey; Shared by you reads "Company AI, shared with everyone, 0 today, at most 3 a person a day" and "Company Mail, shared with everyone, 0 today, no cap"; the store holds those two entries and two shares alone, each whole stored row the one its form requested, and no page shows a key |
+| `share_key` | the administrator's account, made at `dir.test`'s pages as `@share-admin`, sets `home.test` up through its setup link, and the administrator finishes their name on the Settings page, which then reads `@share-admin` (the registry `home.test` names, `dir.test`, answers the name with their identifier); the administrator makes Company AI (provider `openai.com`, the provider of the shipped model catalyst `catalyst:local.openai`; destination `https` `api.openai.com`, `POST` and `GET`, `/v1/chat/completions` and `/v1/models`, no port) and Company Mail (provider `mail.example`, whose destination no shipped catalyst's need calls; destination `https` `api.mail.example`, `POST`, `/v1/send`) on the Vault page, attach-only, each key typed in its form alone and each `credential_entry` confirmation proven with the administrator's passkey at the sign page, which says "Confirm a change at https://home.test"; each is shared with everyone through the system layer's sharing sheet, which offers everyone alone, opens with both caps empty and says what they mean and what an uncapped share to everyone means to the administrator, Company AI with a person cap of 3 and Company Mail with none, each `credential_sharing` confirmation proven with the passkey; Shared by you reads "Company AI, shared with everyone, 0 today, at most 3 a person a day" and "Company Mail, shared with everyone, 0 today, no cap"; the store holds those two entries and two shares alone, each whole stored row the one its form requested, and no page shows a key |
 | `first_sign_in` | the administrator opens the door to newcomers on the Settings page (`*`); Ana's first sign-in provisions her athanor, whose bootstrap commits her `catalyst:local.openai` default profile: the whole stored profile is her active owner profile labelled `default`, sourced from the catalyst, headed by the bootstrap's consent; the whole stored head is revision 1, versionless, `open_inert`, admitting the interactive and programmatic origins, granted by Ana via `bootstrap`, superseding nothing; its stored binding rows are exactly one, whole: Company AI's share on the catalyst's default slot, standing, at the digest Company AI's request implies; the real loader admits that root under her interactive context, on that head, with no run started; one `resolve/5` claim through the share under her context is admitted, and the whole state holds its use as two rows, Ana's 1 and the day's 1, on the database's today, and Company AI's last use; her consent's row binding of the share (`Sanctum.Consent.row_binding/3`) reads it offered, whole; her vault's Shared with you offers exactly both shares, each "Shared by Release proof", Company AI's with her use "1 request today", and shows no material |
 | `claim_cap` | two more claims through Company AI's share under Ana's context are admitted, each whole answer an admission; the next claim's whole answer is the refusal `connection_cap` with a reset at the database's next UTC midnight; her vault's Shared with you, each row compared whole, shows each share's provider, kind and destination, "Shared by Release proof" and her own use, Company AI's "Your use: 3 requests today", and nothing of a cap, which is the owner's (`share.offered` carries none, so no notice of a reached limit is shown); the whole state read after the step holds the share's use as two rows, Ana's 3 and the day's 3, each on the database's today, and no other use row |
 | `narrow_audience` | Bea signs in once and is seated with the administrator in Traders (`thread`); the administrator narrows Company AI's share from everyone to Traders on its Shared by you row, whose save sends the audience the row showed (`expected_audience`) and needs no prompt, and the row then reads "Company AI, shared with Traders, 3 today, at most 3 a person a day"; the whole stored share is the one requested, to Traders; the whole answer of Ana's next claim of it is `not_offered`, her consent's row binding of it reads `not_offered`, and her vault no longer offers it |

@@ -32,16 +32,13 @@ defmodule Sanctum.Issuance do
   # the context works in, the context's credential deadline (its
   # certificate's expiry, of which a renewal exchange's context has none)
   # is still ahead on the database's clock, and the certificate still
-  # stands. A certificate this home signed stands on its row: the client's
-  # certificate expiring at that deadline, neither revoked nor expired. A
-  # person whose keys are at another home holds no row here for a
-  # certificate their own home issued them again, so theirs stands on what
-  # it was verified against: the identity row they were resolved by still
-  # names them, remote, under the same identifier, and their cached head
-  # still names the `key_epoch` the binding carries. Any of those no
-  # longer holding is `{:error, :not_standing}`: a revocation, or a head
-  # that moved, landing after the device's request was verified and before
-  # the issuance reached the client wins over it.
+  # stands on its row: the client's certificate expiring at that deadline,
+  # for the key the binding names, neither revoked nor expired. The walk
+  # of a refresh that removes the key, or reads a recovery or a gone
+  # account, revokes that row under the person's lock, so either of those
+  # no longer holding is `{:error, :not_standing}`: a revocation landing
+  # after the device's request was verified and before the issuance
+  # reached the client wins over it.
 
   alias Sanctum.Context
 
@@ -87,8 +84,7 @@ defmodule Sanctum.Issuance do
           athanor_id: String.t() | nil,
           athanor_generation: pos_integer() | nil,
           source: Arca.SecurityTransitions.Issuance.source(),
-          identity: Context.device_identity() | nil,
-          key_epoch: String.t() | nil
+          kid: String.t() | nil
         }
 
   @doc false
@@ -124,8 +120,7 @@ defmodule Sanctum.Issuance do
          athanor_id: athanor_id,
          athanor_generation: snapshot.athanor_generation,
          source: nil,
-         identity: nil,
-         key_epoch: nil
+         kid: nil
        }}
     end
   end
@@ -145,8 +140,7 @@ defmodule Sanctum.Issuance do
          athanor_id: ctx.athanor_id,
          athanor_generation: binding.athanor_generation,
          source: source,
-         identity: identity(source, binding),
-         key_epoch: key_epoch(source, binding)
+         kid: kid(source, binding)
        }}
     end
   end
@@ -179,12 +173,8 @@ defmodule Sanctum.Issuance do
   defp source(%Context{auth_method: :device}, _binding), do: {:error, :missing_generation}
   defp source(_ctx, %{source_kind: :device}), do: {:error, :missing_generation}
 
-  # An admitted sign-in holds no credential yet; the door it came through,
-  # where the door named itself (`Sanctum.Context`'s `door`), is what it
-  # stands on, and must still be the person's when the session is issued.
-  defp source(_ctx, %{source_kind: :identity, source_id: key}) when is_binary(key),
-    do: {:ok, {:door, key}}
-
+  # An admitted sign-in holds no credential yet: it stands on the person
+  # and the athanor alone.
   defp source(_ctx, %{source_kind: :identity}), do: {:ok, nil}
 
   defp source(%Context{session_token_hash: hash}, %{source_kind: :session, source_id: id})
@@ -200,16 +190,10 @@ defmodule Sanctum.Issuance do
 
   defp source(_ctx, _binding), do: {:error, :missing_generation}
 
-  # The remote identity row a device's person was resolved by, which the
-  # issuance holds them to; nil for a local subject and for every other
-  # source.
-  defp identity({:device, _id, _deadline}, binding), do: Map.get(binding, :identity)
-  defp identity(_source, _binding), do: nil
-
-  # The `key_epoch` a remote subject's certificate was verified under,
-  # which their cached head must still name; nil for every other source.
-  defp key_epoch({:device, _id, _deadline}, binding), do: Map.get(binding, :key_epoch)
-  defp key_epoch(_source, _binding), do: nil
+  # The account key a device's client is, which its certificate's row
+  # must still name; nil for every other source.
+  defp kid({:device, _id, _deadline}, binding), do: Map.get(binding, :kid)
+  defp kid(_source, _binding), do: nil
 
   @doc false
   # The issuance a credential write that is not itself an issuance's (a
@@ -321,14 +305,6 @@ defmodule Sanctum.Issuance do
        else: {:error, :not_standing}
   end
 
-  # A door a recovery retired, or the person unlinked, since the sign-in
-  # came through it admits no one.
-  defp holder(%{kind: :door, row: %{key: key, user_id: user_id}}, _now, %{
-         source: {:door, key},
-         user_id: user_id
-       }),
-       do: :ok
-
   defp holder(_source, _now, %{source: {:device, _id, _deadline}}), do: {:error, :not_standing}
   defp holder(_source, _now, _expectation), do: {:error, :unauthenticated}
 
@@ -349,60 +325,28 @@ defmodule Sanctum.Issuance do
 
   defp client?(_client, _client_id, _expectation), do: false
 
-  # What the certificate the context stands under stands on. A local
-  # subject's is a row this home recorded. A remote subject's may be one
-  # their home issued again, which this home verifies against their head
-  # and never records: it stands while the identity row names them and the
-  # cached head is still at the `key_epoch` it was verified under.
-  defp certified?(rows, client_id, deadline, now, %{identity: nil} = expectation),
+  # The certificate row the context stands under: that client's and the
+  # person's, for the key the binding names, expiring at the context's
+  # deadline, unrevoked and unexpired on the database's clock.
+  defp certified?(rows, client_id, deadline, now, expectation),
     do: Enum.any?(rows.certificates, &certificate?(&1, client_id, deadline, now, expectation))
 
-  defp certified?(rows, _client_id, _deadline, _now, expectation),
-    do: identity?(rows.identity, expectation) and head?(rows.head, expectation)
-
-  # The certificate row the context stands under: that client's and the
-  # person's, a local subject's, expiring at the context's deadline,
-  # unrevoked and unexpired on the database's clock.
   defp certificate?(
          %{
            paired_client_id: client_id,
            user_id: user_id,
+           kid: kid,
            state: "active",
            expires_at: %DateTime{} = expires_at
-         } = certificate,
+         },
          client_id,
          deadline,
          now,
-         %{user_id: user_id}
-       ) do
-    DateTime.compare(expires_at, deadline) == :eq and DateTime.compare(expires_at, now) == :gt and
-      local?(certificate)
+         %{user_id: user_id, kid: kid}
+       )
+       when is_binary(kid) do
+    DateTime.compare(expires_at, deadline) == :eq and DateTime.compare(expires_at, now) == :gt
   end
 
   defp certificate?(_certificate, _client_id, _deadline, _now, _expectation), do: false
-
-  defp local?(%{subject_kind: "local", identifier: nil}), do: true
-  defp local?(_certificate), do: false
-
-  # A remote subject's identity row, as it reads now, still names the
-  # person, remote, under the identifier the certificate was verified by.
-  defp identity?(
-         %{user_id: user_id, provenance: "remote", identifier: identifier},
-         %{user_id: user_id, identity: %{user_id: user_id, identifier: identifier}}
-       )
-       when is_binary(identifier),
-       do: true
-
-  defp identity?(_row, _expectation), do: false
-
-  # Their cached head, as it reads now under the person's lock, still names
-  # the `key_epoch` the certificate was verified under.
-  defp head?(
-         %{identifier: identifier, key_epoch: key_epoch},
-         %{identity: %{identifier: identifier}, key_epoch: key_epoch}
-       )
-       when is_binary(key_epoch),
-       do: true
-
-  defp head?(_head, _expectation), do: false
 end

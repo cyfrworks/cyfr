@@ -32,9 +32,6 @@ defmodule Cyfr.StorageReserveTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Prima.DeviceCert
-  alias Prima.DeviceCert.{Challenge, Proof}
-  alias Prima.Identity.Encoding
   alias Sanctum.Context
 
   # A reserve small enough for any test filesystem.
@@ -333,6 +330,9 @@ defmodule Cyfr.StorageReserveTest do
 
   describe "while depleted" do
     setup %{tmp_dir: dir} do
+      # The deployment's directory, whose account pages a passkey's proof
+      # comes from.
+      Sanctum.Test.Newcomers.directory!()
       seated = seated!()
       authenticator = Sanctum.TestContext.passkey!(seated.user.id)
       device = pair!(seated.session_ctx)
@@ -372,11 +372,8 @@ defmodule Cyfr.StorageReserveTest do
       assert entry.operation == "pairing.revoke"
 
       # The proof, then the revocation repeated naming it.
-      {:ok, digest} = Encoding.unb64(entry.webauthn["challenge"], 32)
-      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
-
       assert {:ok, %{state: "confirmed"}} =
-               call(ctx, "confirmation", "confirm", %{"ref" => ref, "assertion" => assertion})
+               call(ctx, "confirmation", "confirm", proof(ctx, ref, authenticator))
 
       assert {:ok, %{client_id: client_id, standing: standing}} =
                call(%{ctx | confirmation_id: id}, "pairing", "revoke", %{
@@ -393,18 +390,15 @@ defmodule Cyfr.StorageReserveTest do
 
     test "an ordinary confirmation beside it is neither read, proven, cancelled nor spent",
          %{session_ctx: ctx, authenticator: authenticator, device: device, monitor: pid} do
-      key = device_key!()
-
       assert {:error, {:confirmation_required, %{id: ordinary_id}}} =
-               call(ctx, "pairing", "begin", %{"key_digest" => key.digest})
+               call(ctx, "vault", "create", entry())
 
       ordinary = Prima.Confirmation.ref(ordinary_id)
 
-      {:ok, %{confirmations: [listed]}} =
+      {:ok, %{confirmations: [_listed]}} =
         call(ctx, "confirmation", "pending", %{"request" => ordinary})
 
-      {:ok, digest} = Encoding.unb64(listed.webauthn["challenge"], 32)
-      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
+      answered = proof(ctx, ordinary, authenticator)
 
       Disk.set_free(@bytes - 1)
       assert Cyfr.StorageReserve.poll(pid) == :depleted
@@ -421,20 +415,14 @@ defmodule Cyfr.StorageReserveTest do
 
       assert reserve_refusal?(call(ctx, "confirmation", "pending", %{"request" => ordinary}))
 
-      assert reserve_refusal?(
-               call(ctx, "confirmation", "confirm", %{"ref" => ordinary, "assertion" => assertion})
-             )
+      assert reserve_refusal?(call(ctx, "confirmation", "confirm", answered))
 
-      assert reserve_refusal?(
-               call(ctx, "confirmation", "reauth", %{"ref" => ordinary, "method" => "email"})
-             )
+      assert reserve_refusal?(call(ctx, "confirmation", "request", %{"ref" => ordinary}))
 
       assert reserve_refusal?(call(ctx, "confirmation", "cancel", %{"ref" => ordinary}))
 
       assert reserve_refusal?(
-               call(%{ctx | confirmation_id: ordinary_id}, "pairing", "begin", %{
-                 "key_digest" => key.digest
-               })
+               call(%{ctx | confirmation_id: ordinary_id}, "vault", "create", entry())
              )
 
       # A ref that names no record is refused alike.
@@ -567,38 +555,33 @@ defmodule Cyfr.StorageReserveTest do
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
 
-  defp glass, do: Context.build(%{authenticated: false, client_ip: "198.51.100.45"})
+  # A device of the person's account paired here, as a hello pairs one.
+  defp pair!(session_ctx),
+    do: Sanctum.Test.Devices.paired!(session_ctx.user_id, "198.51.100.45")
 
-  defp device_key! do
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    %{public: device_key, private: private, digest: Prima.Device.key_digest(device_key)}
-  end
-
-  defp pair!(session_ctx) do
-    key = device_key!()
-
-    {:ok, %{invitation_secret: secret}} =
-      Sanctum.TestContext.confirming(
-        session_ctx,
-        &call(&1, "pairing", "begin", %{"key_digest" => key.digest})
-      )
-
-    submission = %{
-      "invitation_secret" => secret,
-      "device_key" => Encoding.b64(key.public),
-      "key_digest" => key.digest,
-      "holder_kind" => "software",
-      "display_name" => "Test device"
+  # An ordinary change: a vault entry, which a fresh confirmation guards
+  # and no depleted reserve admits.
+  defp entry,
+    do: %{
+      "name" => "reserve-key",
+      "kind" => "api_key",
+      "fields" => %{"KEY" => "sk-reserve"},
+      "destination" => %{"hosts" => ["api.example.com"]}
     }
 
-    {:ok, %{challenge: challenge}} = call(glass(), "pairing", "complete", submission)
-    {:ok, challenge} = Challenge.decode(challenge)
-    proof = Proof.encode(Proof.sign(challenge, key.private))
+  # The record `ref` names proven by the person's passkey: this CYFR's
+  # `confirm` request for it, under the session in `ctx`, and the answer
+  # the account pages return for it, as `confirmation.confirm` takes them.
+  defp proof(ctx, ref, authenticator) do
+    {:ok, %{request: encoded}} = call(ctx, "confirmation", "request", %{"ref" => ref})
+    {:ok, request} = Prima.SignIn.decode(encoded)
+    %{identifier: identifier} = Sanctum.TestContext.account!(ctx.user_id)
 
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      call(glass(), "pairing", "complete", Map.put(submission, "proof", proof))
+    answer =
+      authenticator
+      |> Sanctum.TestContext.Authenticator.answer(request, identifier)
+      |> Prima.SignIn.fragment()
 
-    {:ok, certificate} = DeviceCert.decode(certificate)
-    %{client_id: client_id, certificate: certificate, key: key}
+    %{"ref" => ref, "answer" => answer}
   end
 end

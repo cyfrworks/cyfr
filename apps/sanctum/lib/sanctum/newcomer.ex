@@ -3,253 +3,110 @@
 
 defmodule Sanctum.Newcomer do
   @moduledoc """
-  The one path that makes a person (`admit/2`): an admission at the CYFR
-  that holds them. A sign-in method never makes one; it unlocks a person
-  who exists (`Sanctum.SignIn.unlock/1`). No provider subject, email or
-  handle decides who a person is.
+  The one path that makes a person here (`admit/2`): an account this CYFR
+  admits by its identifier (`ARCHITECTURE.md` §9.1). The person is the
+  CYFR's own fact, a `users` row, the account's identity row (its
+  identifier, its directory and the head this CYFR read, never a key) and
+  an athanor; nothing is written at the directory. The caller verified a
+  signature by a key of the account against that head first: a browser's
+  answer to a sign-in request (`Sanctum.SignIn`) or a device's `hello`.
 
   | Admission | Checked | Makes |
   |---|---|---|
-  | `{:setup, token}` | the token equals the configured setup token (constant-time); in the mint's transaction, under the installation claims' order row, no person exists and no restore holds the installation | a local person, their keys, their athanor, the platform administrator's mark |
-  | `{:invitation, code}` | in the mint's transaction before the person's row, the code's invitation is unexpired, unredeemed and unrevoked, its issuer still an active person here at the standing they issued it under and, when it names a shared thread, still seated there with the thread active, or else still the platform administrator (`Sanctum.Invitations.redeemable/1`), then the mint rate and the athanor cap; redeemed by one conditional write after the person's row | a local person, their keys, their athanor, and the seat in the thread the invitation names, counted against the thread's people cap |
-  | `:open` | the door's `*` admits; the mint rate and the athanor cap, in the mint's transaction before the person's row | a local person, their keys, their athanor |
-  | `{:remote, remote}` | the door admits the identifier (`Sanctum.Door.sign_in_identifier/1`), or, with an invitation, no deny names it and the invitation is redeemable (`Sanctum.Invitations.redeemable_hash/1`); the head the CYFR sign-in verified is still fresh; in the mint's transaction before the person's row, the invitation again and the mint rate and the athanor cap | a remote person row with no keys, their athanor; pending identifier invitations activate; with an invitation, its redemption, its seat and the identifier's allow |
-  | `{:restore, restore}` | the restore's installation claim, in the mint's transaction (`Arca.InstallationClaims`) | the restored person, their athanor, the platform administrator's mark |
+  | `{:setup, token}` | the token equals the configured setup token (constant-time); in the mint's transaction, under the installation claims' order row, no person exists | the person, their athanor, the platform administrator's mark, and their identifier's allow |
+  | `{:invitation, hash}` | the invitation the code hash names (`Sanctum.Invitations.code_hash/1`) is redeemable, before the transaction and again inside it, no deny names the identifier, then the mint rate and the athanor cap | the person, their athanor, the invitation redeemed, the seat it names and their identifier's allow (`Sanctum.Invitations.redeem_hash/2`) |
+  | `:open` | the door admits the identifier (`Sanctum.Door.sign_in_identifier/1`: `*` or an allow naming it, and no deny), then the mint rate and the athanor cap in the mint's transaction | the person and their athanor |
 
   The installation's first person is its platform administrator: the mint
   that writes them writes the mark on their row (`users.platform_admin_at`),
-  under the order row and the member slot (`Arca.Users.mint/4`), and no
-  other path writes it; the mark is audited once it commits (`[:cyfr, :sanctum, :tenancy,
-  :platform_admin_bootstrap]`). Only setup and a restore make the first
-  person; any other admission onto an empty installation is refused
+  under the order row and the member slot (`Arca.Users.mint/3`), and no
+  other path writes it; the mark is audited once it commits (`[:cyfr,
+  :sanctum, :tenancy, :platform_admin_bootstrap]`). Only setup makes the
+  first person; any other admission onto an empty installation is refused
   `:not_set_up`.
+
+  ## The setup token
+
+  The setup token binds the installation to the first account and then
+  opens nothing: once any person exists here it is `:setup_closed`,
+  whoever presents it. Setup writes the first account's identifier as an
+  allow, as an invitation's redemption does, so the door admits them at
+  every later sign-in. A token that is not the configured one, a missing
+  one, or a CYFR with none configured, opens nothing either.
 
   ## The invitation
 
-  The invitation is the admitting act, as setup's token is, so the door
-  is not asked. Its code is checked before the passkey is verified, so a
-  code that admits no one starts nothing, and decided again in the mint's
-  transaction, where its redemption commits with the person or not at
-  all: a refused cap, a people cap the thread has reached, a redemption
-  another admission won first and a killed process each leave no person
-  and the code unredeemed. Every refusal of the invitation itself is
-  `:invitation_invalid`. Its athanor caps are the open admission's: the
-  invitation mints its person an athanor as an open admission does, and
-  an issuer cannot take the CYFR past the rate and the ceiling its
-  operator set. The seat's announcement follows the commit.
-
-  ## A remote person with an invitation
-
-  A remote person whose CYFR sign-in carried an invitation (`remote`'s
-  `invitation`, the code's hash, `Sanctum.Invitations.code_hash/1`) is
-  admitted by the invitation in place of the door's allow rule: no deny
-  may name their identifier, and the invitation must be redeemable, read
-  before the transaction and again inside it. The mint's transaction
-  then mints their athanor, redeems the invitation, seats them and
-  writes their identifier's allow (`Sanctum.Invitations.redeem_hash/2`),
-  so a deny committed after the first read rolls the whole admission
-  back, makes no person and leaves the invitation unspent.
-
-  ## A remote person's athanor
-
-  Everyone admitted here has their own athanor here, a remote person
-  too: their sessions, paired clients, device certificates, frame
-  credentials and confirmations are rows of it, as a local person's are.
-  So the remote admission is held to the open admission's rate and
-  ceiling (`Sanctum.Provisioning.personal_admissible/0`) in the mint's
-  transaction, mints the athanor there (`Sanctum.Provisioning.mint_personal/1`)
-  and asks its fill once the person commits.
-
-  ## The setup token's re-admission
-
-  While the person setup made holds no method at this home's address, no
-  passkey at its RP ID (`Sanctum.Passkeys.rp_id/0`) that is active or
-  that a restore suspended and no linked sign-in method,
-  `{:setup, token}` answers that person again (`readmitted: true`), with
-  the credential it brings: the passkey written for them, or the
-  protected device enrolled for them. A passkey made at an address the home has left
-  signs no one in here, so after an address change the setup link lets
-  the administrator register one at the new address; a pending one
-  there, awaiting their own authorization, leaves it open. A suspended
-  one closes it, since the restore's own path re-enables it. The guard
-  decides it under the order row and the person's lock, so two
-  re-admissions decide in one order. From the commit that gives the
-  person such a method, the token opens nothing (`:setup_closed`). A
-  token that is not the configured one, a missing one, or a CYFR with
-  none configured, opens nothing either.
-
-  ## The credential
-
-  A local admission brings its credential: its first proof, and the new
-  person's identity (`t:identity/0`, parsed from a surface's fields by
-  `identity/1`) — the name they take, a recovery secret the trusted form
-  or the device drew, and the enrollment's request id.
-
-    * `{:passkey, registration, identity}`, for setup, an invitation and
-      an open admission — the browser's answer to
-      `Sanctum.Passkeys.newcomer_options/1`, verified with no transaction
-      open (`Sanctum.Passkeys.verify_newcomer/1`) and written, active,
-      inside the admission's transaction (`Sanctum.Passkeys.write_newcomer/2`),
-      so a failed admission leaves neither a person nor a passkey. The
-      person's id is the one the registration was drawn for. A session
-      with provider `passkey` follows the commit.
-    * `{:device, enrollment, identity}`, for setup, an invitation and an
-      open admission — a protected device's enrollment its proof verified
-      (`Sanctum.DeviceUnlock`):
-      the athanor and client id reserved for it, its key, request id and
-      reported holder. The person's athanor takes the reserved id, and
-      the paired client, its first certificate and the first-method mark
-      are written inside the admission's transaction
-      (`Sanctum.DeviceUnlock.enrolled/2`), so a failed admission leaves
-      neither a person nor a device. No session follows: the device
-      unlocks for one.
-
-  A remote person and a restored person bring none (`:none`): the CYFR
-  sign-in and the restore mint their own sessions. A session that cannot
-  be minted after the commit leaves the person, whom setup answers again
-  while they hold no credential.
-
-  ## Enrollment at admission
-
-  The first proof is the one proof. A local admission enrolls its person
-  in its own transaction, last, after their keys, athanor and passkey
-  (`Sanctum.Recovery.open_at_admission/3`): the genesis over the keys just
-  minted and the secret's recovery key, naming the directory this
-  deployment pins (`Sanctum.directory_url/0`), the secret sealed, and the
-  enrollment attempt opened at `staged` with the name. A deployment that
-  pins no directory admits no local person, refused before the passkey is
-  verified. Registering at the directory and claiming the name follow the
-  commit (`registry.register`).
-
-  The admission answers `recovery`: the attempt's id, the identifier, the
-  name and the recovery code (`Prima.RecoveryCode`), composed from the
-  sealed secret until the person says it is saved. A re-admission answers
-  the attempt that stands, so the identity its credential brings is not
-  used.
+  The invitation is the admitting act, so the door's allow rule is not
+  asked, but a deny of the identifier still wins: the redemption writes
+  the identifier's allow only where no deny stands, and reads the deny
+  again before the commit, so a deny committed meanwhile rolls the whole
+  admission back, makes no person and leaves the invitation unspent.
+  Every refusal of the invitation itself is `:invitation_invalid`. Its
+  athanor caps are the open admission's. The seat's announcement follows
+  the commit.
 
   ## One transaction
 
-  The person's row, their keys (`Sanctum.Person.mint_keys/1`, a local
-  person's), their athanor (`Sanctum.Provisioning.mint_personal/1`), the
-  grant and the passkey commit together or not at all: a process killed mid-admission
-  and a member whose slot was lost leave no row. An open admission's caps
-  are counted in the same transaction before the person's row
+  The person's row, their identity row, their athanor
+  (`Sanctum.Provisioning.mint_personal/1`) and what the admission writes
+  commit together or not at all: a process killed mid-admission and a
+  member whose slot was lost leave no row. The caps are counted in the
+  same transaction before the person's row
   (`Sanctum.Provisioning.personal_admissible/0`), so one refused at a cap
-  writes none. The athanor's fill and the invitations' announcements
-  follow the commit; a restore's fill is asked for by `Sanctum.Recovery`,
-  once the head still names the restored keys.
+  writes none. An identifier another admission made a person of first is
+  `:conflict`. The athanor's fill, the identifier's pending shared-thread
+  invitations and the invitation's announcement follow the commit.
 
-  Refusals: `:setup_closed`, `:not_set_up`, `:restore_reserved`,
-  `:invitation_invalid`, `:no_directory`, `{:door, reason}`, `:identity_stale`,
-  `:registration_refused`, a cap's `{:limit_reached, key, cap}` or
-  `{:cap_unverifiable, key}`, the invited seat's own refusals
-  (`:recovering_from_restore` among them), `:not_owner`
-  (this member no longer holds its slot), `:unavailable`,
-  `{:invalid_argument, sentence}` for a credential the admission does not
-  take, one without an identity among them, and the restore's own
-  refusals.
+  Refusals: `:setup_closed`, `:not_set_up`, `:invitation_invalid`,
+  `{:door, reason}`, `:conflict`, a cap's `{:limit_reached, key, cap}` or
+  `{:cap_unverifiable, key}`, the invited seat's own refusals,
+  `:not_owner` (this member no longer holds its slot), `:unavailable`,
+  and `{:invalid_argument, sentence}` for an admission or account that
+  does not read.
   """
 
   require Logger
 
-  alias Sanctum.Context
+  alias Prima.Identity.Encoding
   alias Sanctum.Tenancy.Users
 
   @typedoc """
-  What the CYFR sign-in verified of a remote person, and the hash of the
-  invitation their sign-in carried, when it carried one.
+  The account a person is made for: its identifier, the directory its
+  genesis names and the head this CYFR verified the caller's signature
+  under.
   """
-  @type remote :: %{
+  @type account :: %{
           required(:identifier) => String.t(),
           required(:directory_url) => String.t(),
-          required(:genesis_hash) => String.t(),
-          required(:head_hash) => String.t(),
-          optional(:invitation) => String.t() | nil
+          required(:head_hash) => String.t()
         }
 
   @typedoc """
-  A restore's mint (`Sanctum.Recovery`): the installation claim it names,
-  and its closure, run in the mint's transaction in place of minting keys,
-  writing the restored identity row and advancing the restore attempt.
+  What admits a new person: the setup token, an invitation's code hash,
+  or the door's verdict on the identifier.
   """
-  @type restore :: %{
-          required(:claim) => Arca.InstallationClaims.claim_ref(),
-          required(:also) => (map() -> :ok | {:error, term()})
-        }
+  @type admission :: {:setup, String.t()} | {:invitation, String.t()} | :open
 
-  @type admission ::
-          {:setup, String.t()}
-          | {:invitation, String.t()}
-          | :open
-          | {:remote, remote()}
-          | {:restore, restore()}
-
-  @typedoc """
-  A new local person's identity: the name they take, the recovery secret
-  drawn for them (32 bytes) and the enrollment's request id.
-  """
-  @type identity :: %{name: String.t(), recovery_secret: <<_::256>>, request_id: String.t()}
-
-  @type credential ::
-          {:passkey, registration :: map(), identity()}
-          | {:device, Sanctum.DeviceUnlock.enrollment(), identity()}
-          | :none
-
-  @typedoc """
-  The person's enrollment as a local admission answers it: `code` while
-  its secret is sealed, absent once the person said it is saved.
-  """
-  @type recovery :: %{
-          required(:attempt_id) => String.t(),
-          required(:identifier) => String.t(),
-          required(:name) => String.t() | nil,
-          optional(:code) => String.t()
-        }
-
-  @typedoc """
-  The admitted person, whether setup answered them again, the session
-  token a local admission's credential minted, when it minted one, and a
-  local person's enrollment.
-  """
-  @type admitted :: %{
-          required(:person) => Users.user(),
-          required(:readmitted) => boolean(),
-          optional(:session_token) => String.t(),
-          optional(:recovery) => recovery()
-        }
-
-  @doc "Make a person by `admission`, with `credential` (the module doc)."
-  @spec admit(admission(), credential()) :: {:ok, admitted()} | {:error, term()}
-  def admit(admission, credential) do
-    with {:ok, credential} <- taken(admission, credential),
-         :ok <- admissible(admission),
-         {:ok, directory} <- directory(credential),
-         {:ok, person_id, verified} <- verified(credential),
-         {:ok, person} <- mint(admission, person_id, {credential, directory}, verified) do
-      readmitted = person.id != person_id
-      committed(admission, person, readmitted, credential)
-    end
-  end
+  @typedoc "The admitted person."
+  @type admitted :: %{required(:person) => Users.user()}
 
   @doc """
-  Parse a surface's `%{"name", "recovery_secret", "request_id"}` into the
-  identity a local admission's credential carries: the name by `name/1`,
-  the secret 32 bytes of unpadded base64url (`Sanctum.Recovery.secret/1`),
-  the request id by `Prima.Identity.Encoding.id?/1`. Refused
-  `{:invalid_argument, sentence}`.
+  Make a person for `account` under `admission` (the module doc).
+  `opts[:also]`, a function of the
+  person's row, runs last in the admission's transaction and answers `:ok`
+  or `{:error, reason}`, which rolls the whole admission back: a device's
+  hello admits its person, pairs the device and issues its first
+  certificate together (`Sanctum.DeviceUnlock`).
   """
-  @spec identity(term()) :: {:ok, identity()} | {:error, {:invalid_argument, String.t()}}
-  def identity(%{"name" => name, "recovery_secret" => secret, "request_id" => request_id}) do
-    with :ok <- name(name),
-         {:ok, secret} <- Sanctum.Recovery.secret(secret),
-         :ok <- request_id(request_id),
-         do: {:ok, %{name: name, recovery_secret: secret, request_id: request_id}}
+  @spec admit(admission(), account(), keyword()) ::
+          {:ok, admitted()} | {:error, term()}
+  def admit(admission, account, opts \\ []) when is_list(opts) do
+    with :ok <- taken(admission, account),
+         :ok <- admissible(admission, account),
+         {:ok, person} <- mint(admission, account, Keyword.get(opts, :also)) do
+      committed(admission, person)
+    end
   end
-
-  def identity(_fields),
-    do:
-      {:error,
-       {:invalid_argument, "A new person brings their name, a recovery_secret and a request_id"}}
 
   @doc """
   Whether `value` is a name a person may take: `Prima.ComponentRef`'s
@@ -267,167 +124,59 @@ defmodule Sanctum.Newcomer do
   end
 
   @doc """
-  Whether `token` opens setup now, and for whom: it is the configured
-  setup token, and a setup at this home's RP ID would be admitted
-  (`Arca.InstallationClaims.setup/2`), as the first person (`:first`) or
-  as the person setup made, let in again under the name their enrollment
-  holds (`{:readmit, name}`). The setup page asks before it starts a
-  passkey ceremony, so a link that is not valid, or a CYFR set up
-  already, creates no passkey; the admission decides again in its
-  transaction. One refusal for both, as the admission answers, so a
-  guesser learns nothing from it.
+  Whether `token` opens setup now: it is the configured setup token and
+  this CYFR holds no person yet (`Arca.InstallationClaims.setup/1`). The
+  setup page asks before it sends the browser to the account pages, so a
+  link that is not valid, or a CYFR set up already, starts nothing; the
+  admission decides again in its transaction. One refusal for both, as
+  the admission answers, so a guesser learns nothing from it.
   """
-  @spec setup_open(term()) ::
-          {:ok, :first | {:readmit, String.t()}}
-          | {:error, :setup_closed | :unavailable}
-  def setup_open(token) do
-    case setup_admits(token) do
-      {:ok, :first} -> {:ok, :first}
-      {:ok, {:readmit, person}} -> readmitted_name(person)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  `setup_open/1`'s decision with the person setup would let in again
-  (`{:readmit, person}`) rather than their name: what a protected device's
-  enrollment reserves its athanor by (`Sanctum.DeviceUnlock`). Advice,
-  decided again in the admission's transaction.
-  """
-  @spec setup_admits(term()) ::
-          {:ok, :first | {:readmit, map()}} | {:error, :setup_closed | :unavailable}
-  def setup_admits(token) when is_binary(token) do
-    with :ok <- admissible({:setup, token}) do
-      case Arca.InstallationClaims.setup(Prima.Actor.system(), here()) do
-        {:ok, :first} -> {:ok, :first}
-        {:ok, {:readmit, person}} -> {:ok, {:readmit, person}}
+  @spec setup_open(term()) :: :ok | {:error, :setup_closed | :unavailable}
+  def setup_open(token) when is_binary(token) do
+    with :ok <- admissible({:setup, token}, :none) do
+      case Arca.InstallationClaims.setup(Prima.Actor.system()) do
+        {:ok, :first} -> :ok
         {:ok, :closed} -> {:error, :setup_closed}
         {:error, _unanswered} -> {:error, :unavailable}
       end
     end
   end
 
-  def setup_admits(_token), do: {:error, :setup_closed}
+  def setup_open(_token), do: {:error, :setup_closed}
 
   @doc """
-  Whether an invitation's `code` or the open admission would admit a new
-  local person now, before a protected device's enrollment is challenged
-  (`Sanctum.DeviceUnlock`): a directory is pinned, and the invitation is
-  redeemable or the door's `*` admits. Advice, decided again in the
-  admission's transaction. Refusals: `:no_directory`,
-  `:invitation_invalid`, `{:door, reason}` and `:unavailable`.
-  """
-  @spec admits({:invitation, term()} | :open) :: :ok | {:error, term()}
-  def admits({:invitation, code} = admission) when is_binary(code), do: local_admits(admission)
-  def admits({:invitation, _code}), do: {:error, :invitation_invalid}
-  def admits(:open), do: local_admits(:open)
-
-  defp local_admits(admission) do
-    with {:ok, _url} <- directory(:local), do: admissible(admission)
-  end
-
-  @doc """
-  Whether `token` is the configured setup token, compared in constant
-  time, whether or not setup is still open: the installation capability a
-  lost enrollment answer is resumed under (`Sanctum.DeviceUnlock.resume/2`),
-  which then needs the proof of the committed key.
+  Whether `token` is spelled as a setup token is
+  (`Prima.Device.setup_token?/1`) and is the configured one, compared in
+  constant time, whether or not setup is still open.
   """
   @spec setup_token?(term()) :: boolean()
-  def setup_token?(token) when is_binary(token), do: admissible({:setup, token}) == :ok
-  def setup_token?(_token), do: false
-
-  # The home's current address a setup is decided at: its passkey RP ID
-  # and its home URL, the audience its devices' certificates name.
-  defp here, do: %{rp_id: Sanctum.Passkeys.rp_id(), home: Sanctum.Person.home()}
-
-  # The name the person's enrollment holds, which follows the name their
-  # row records once one is (`Sanctum.Recovery`). Every person setup made
-  # was enrolled in their admission's transaction.
-  defp readmitted_name(%{id: user_id}) do
-    case Arca.IdentityAttempts.enrollment(Prima.Actor.system(), user_id) do
-      {:ok, %{name: name}} when is_binary(name) -> {:ok, {:readmit, name}}
-      _damaged_or_unanswered -> {:error, :unavailable}
-    end
-  end
+  def setup_token?(token),
+    do: Prima.Device.setup_token?(token) and admissible({:setup, token}, :none) == :ok
 
   # ---- before the transaction ----------------------------------------------
 
-  # A missing token is refused as a wrong one is.
-  defp taken({:setup, token}, _credential) when not is_binary(token),
-    do: {:error, :setup_closed}
+  defp taken({:setup, token}, account) when is_binary(token), do: account(account)
+  defp taken({:setup, _token}, _account), do: {:error, :setup_closed}
+  defp taken({:invitation, hash}, account) when is_binary(hash), do: account(account)
+  defp taken({:invitation, _hash}, _account), do: {:error, :invitation_invalid}
+  defp taken(:open, account), do: account(account)
 
-  defp taken({:setup, _token}, {:device, %{client_id: client_id} = enrollment, identity})
-       when is_binary(client_id) do
-    with :ok <- identified(identity), do: {:ok, {:device, enrollment, identity}}
-  end
-
-  defp taken({:invitation, code}, _credential) when not is_binary(code),
-    do: {:error, :invitation_invalid}
-
-  defp taken({:invitation, _code}, {:device, %{client_id: client_id}, identity} = credential)
-       when is_binary(client_id) do
-    with :ok <- identified(identity), do: {:ok, credential}
-  end
-
-  defp taken(:open, {:device, %{client_id: client_id}, identity} = credential)
-       when is_binary(client_id) do
-    with :ok <- identified(identity), do: {:ok, credential}
-  end
-
-  defp taken(:open, {:passkey, registration, identity} = credential)
-       when is_map(registration) do
-    with :ok <- identified(identity), do: {:ok, credential}
-  end
-
-  defp taken({kind, _secret}, {:passkey, registration, identity} = credential)
-       when kind in [:setup, :invitation] and is_map(registration) do
-    with :ok <- identified(identity), do: {:ok, credential}
-  end
-
-  defp taken({:remote, %{identifier: id, directory_url: dir}}, :none)
-       when is_binary(id) and is_binary(dir),
-       do: {:ok, :none}
-
-  defp taken({:restore, %{claim: %{}, also: also}}, :none) when is_function(also, 1),
-    do: {:ok, :none}
-
-  defp taken(_admission, _credential),
+  defp taken(_admission, _account),
     do:
       {:error,
-       {:invalid_argument,
-        "This admission does not take that credential: setup, an invitation and an open " <>
-          "admission take a passkey or a protected device, each with the new person's " <>
-          "identity"}}
+       {:invalid_argument, "A new person comes in by setup, an invitation or the open door"}}
 
-  # The identity a local credential carries, as `identity/1` parses it.
-  defp identified(%{name: name, recovery_secret: <<_::256>>, request_id: request_id}) do
-    with :ok <- name(name), do: request_id(request_id)
+  defp account(%{identifier: identifier, directory_url: directory, head_hash: head}) do
+    if Encoding.identifier?(identifier) and Encoding.directory_url?(directory) and
+         Encoding.digest?(head),
+       do: :ok,
+       else: {:error, {:invalid_argument, "An account is its identifier, directory and head"}}
   end
 
-  defp identified(_identity),
-    do:
-      {:error,
-       {:invalid_argument, "A new person brings their name, a recovery_secret and a request_id"}}
+  defp account(_account),
+    do: {:error, {:invalid_argument, "An account is its identifier, directory and head"}}
 
-  defp request_id(value) do
-    if Prima.Identity.Encoding.id?(value),
-      do: :ok,
-      else: {:error, {:invalid_argument, "The request_id is not a valid request id"}}
-  end
-
-  # The directory a local person's genesis names: the one this deployment
-  # pins. With none pinned no local person is admitted, before the
-  # passkey is verified.
-  defp directory(:none), do: {:ok, nil}
-
-  defp directory(_local) do
-    case Sanctum.directory_url() do
-      url when is_binary(url) and url != "" -> {:ok, url}
-      _none -> {:error, :no_directory}
-    end
-  end
-
-  defp admissible({:setup, token}) do
+  defp admissible({:setup, token}, _account) do
     case Application.get_env(:sanctum, :setup_token) do
       configured when is_binary(configured) and byte_size(configured) == byte_size(token) ->
         if Plug.Crypto.secure_compare(configured, token), do: :ok, else: {:error, :setup_closed}
@@ -437,66 +186,27 @@ defmodule Sanctum.Newcomer do
     end
   end
 
-  # An invitation that admits no one starts nothing: its passkey is not
-  # verified. The mint's transaction decides it again.
-  defp admissible({:invitation, code}), do: Sanctum.Invitations.redeemable(code)
-
-  # An open admission needs the door's `*`. It names no identifier, so a
-  # refusal leaves no request.
-  defp admissible(:open) do
-    case Sanctum.Door.Store.wildcard() do
-      {:ok, true} -> :ok
-      {:ok, false} -> {:error, {:door, :not_allowed}}
-      {:error, :unavailable} -> {:error, :unavailable}
-    end
-  end
-
-  # The door, or the invitation in place of its allow rule, then the head
-  # the CYFR sign-in verified, still fresh: an identity whose directory
-  # cannot be read writes no row.
-  defp admissible({:remote, %{identifier: identifier} = remote}) do
-    with :ok <- remote_admitted(identifier, remote[:invitation]) do
-      case Sanctum.IdentityFreshness.fresh?(identifier) do
-        {:ok, _head} -> :ok
-        {:refused, :identity_stale} -> {:error, :identity_stale}
-        {:error, :unavailable} -> {:error, :unavailable}
-      end
-    end
-  end
-
-  defp admissible({:restore, _restore}), do: :ok
-
-  defp remote_admitted(identifier, nil) do
-    with {:ok, :allowed} <- Sanctum.Door.sign_in_identifier(identifier), do: :ok
-  end
-
-  # A deny outranks the invitation, as it outranks every allow.
-  defp remote_admitted(identifier, invitation) do
+  # A deny outranks the invitation, as it outranks every allow; the
+  # invitation that admits no one starts nothing.
+  defp admissible({:invitation, hash}, %{identifier: identifier}) do
     case Sanctum.Door.Store.denied(nil, identifier) do
-      {:ok, false} -> Sanctum.Invitations.redeemable_hash(invitation)
+      {:ok, false} -> Sanctum.Invitations.redeemable_hash(hash)
       {:ok, true} -> {:error, {:door, :denied}}
       {:error, :unavailable} -> {:error, :unavailable}
     end
   end
 
-  # The person's id: the one a passkey registration was drawn for, or a
-  # new one.
-  defp verified({:passkey, registration, _identity}) do
-    with {:ok, %{user_id: user_id, verified: verified}} <-
-           Sanctum.Passkeys.verify_newcomer(registration),
-         do: {:ok, user_id, verified}
+  defp admissible(:open, %{identifier: identifier}) do
+    with {:ok, :allowed} <- Sanctum.Door.sign_in_identifier(identifier), do: :ok
   end
-
-  defp verified(_credential),
-    do: {:ok, Prima.UUID7.generate_id(Prima.PersonId.prefix()), nil}
 
   # ---- the transaction ------------------------------------------------------
 
-  defp mint(admission, person_id, {credential, directory}, verified) do
+  defp mint(admission, account, also) do
     now = DateTime.utc_now()
 
     user_attrs = %{
-      id: person_id,
+      id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
       prefs: Jason.encode!(%{}),
       first_seen_at: now,
       last_seen_at: now,
@@ -504,182 +214,117 @@ defmodule Sanctum.Newcomer do
       updated_at: now
     }
 
-    write = fn person -> written(person, credential, verified) end
-    enroll = fn person -> enrolled(person, credential, directory) end
-    athanor = fn person -> athanor(person, reserved_athanor(credential)) end
-
     Arca.Users.mint(
       Prima.Actor.system(),
       user_attrs,
-      identity(admission, now),
-      [
-        admission: kind(admission),
-        rp_id: Sanctum.Passkeys.rp_id(),
-        home: Sanctum.Person.home(),
-        also: &also(admission, {athanor, write, enroll}, &1)
-      ] ++
-        verify(admission) ++ restore_claim(admission)
+      [admission: kind(admission), also: &also(admission, account, also, &1)] ++
+        verify(admission)
     )
     |> case do
       {:ok, person} -> {:ok, person}
-      {:error, {:readmit, %{id: user_id}}} -> readmit(user_id, write)
-      {:error, :database_error} -> {:error, :unavailable}
-      {:error, reason} -> refused(credential, reason)
-    end
-  end
-
-  # The person setup made, admitted again while they hold no method at this
-  # home's address: only the credential this admission brings is written,
-  # and the enrollment their first admission opened stands.
-  defp readmit(user_id, write) do
-    case Arca.Users.readmit(Prima.Actor.system(), user_id,
-           rp_id: Sanctum.Passkeys.rp_id(),
-           home: Sanctum.Person.home(),
-           also: write
-         ) do
-      {:ok, person} -> {:ok, person}
       {:error, :database_error} -> {:error, :unavailable}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  # A passkey registration names the person it was drawn for: a person of
-  # that id already made means the registration was presented before.
-  defp refused({:passkey, _registration, _identity}, :conflict),
-    do: {:error, :registration_refused}
-
-  defp refused(_credential, reason), do: {:error, reason}
-
   defp kind({:setup, _token}), do: "setup"
-  defp kind({:invitation, _code}), do: "invitation"
+  defp kind({:invitation, _hash}), do: "invitation"
   defp kind(:open), do: "open"
-  defp kind({:remote, _remote}), do: "remote"
-  defp kind({:restore, _restore}), do: "restore"
 
-  # Inside the mint's transaction, before the person's row: an open
-  # admission's caps, and an invitation's own check before them. The
-  # installation's first person is minted past them.
+  # Inside the mint's transaction, before the person's row: the caps, and
+  # an invitation's own check before them. The installation's first
+  # person is minted past them.
   defp verify(:open), do: [verify: &Sanctum.Provisioning.personal_admissible/0]
 
-  defp verify({:invitation, code}),
+  defp verify({:invitation, hash}),
     do: [
       verify: fn ->
-        with :ok <- Sanctum.Invitations.redeemable(code),
+        with :ok <- Sanctum.Invitations.redeemable_hash(hash),
              do: Sanctum.Provisioning.personal_admissible()
       end
     ]
-
-  defp verify({:remote, %{invitation: invitation}}) when is_binary(invitation),
-    do: [
-      verify: fn ->
-        with :ok <- Sanctum.Invitations.redeemable_hash(invitation),
-             do: Sanctum.Provisioning.personal_admissible()
-      end
-    ]
-
-  defp verify({:remote, _remote}), do: [verify: &Sanctum.Provisioning.personal_admissible/0]
 
   defp verify(_admission), do: []
 
-  defp restore_claim({:restore, %{claim: claim}}), do: [restore: claim]
-  defp restore_claim(_admission), do: []
-
-  # A remote person is named by the CYFR sign-in's identity, linked with
-  # them: what a later sign-in of theirs unlocks.
-  defp identity({:remote, %{identifier: identifier, directory_url: directory}}, now) do
-    %{
-      key: Sanctum.Auth.Identity.cyfr_key(directory, identifier),
-      provider: "cyfr",
-      issuer: directory,
-      subject: identifier,
-      first_seen_at: now,
-      last_seen_at: now
-    }
-  end
-
-  defp identity(_admission, _now), do: nil
-
   # Inside the mint's transaction, after the person's row and the first
-  # person's grant.
-  defp also({:setup, _token}, steps, person), do: local(person, steps)
-  defp also(:open, steps, person), do: local(person, steps)
-
-  defp also({:invitation, code}, steps, person) do
-    with {:ok, invitation} <- Sanctum.Invitations.redeem(code, person.id),
-         :ok <- local(person, steps),
-         do: Sanctum.Invitations.invited_seat(invitation, person.id)
-  end
-
-  defp also({:remote, remote}, _write, %{id: user_id} = person) do
+  # person's grant: the account's identity row and the athanor, then what
+  # the admission writes.
+  defp also(admission, account, also, %{id: user_id} = person) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
            user_id: user_id,
-           provenance: "remote",
-           identifier: remote.identifier,
-           directory_url: remote.directory_url,
-           genesis_hash: remote[:genesis_hash],
-           head_hash: remote[:head_hash]
+           identifier: account.identifier,
+           directory_url: account.directory_url,
+           head_hash: account.head_hash
          }) do
-      {:ok, _row} -> with :ok <- athanor(person), do: invited(remote, user_id)
+      {:ok, _row} ->
+        with :ok <- athanor(person),
+             :ok <- admitted(admission, account, user_id),
+             do: last(also, person)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp last(nil, _person), do: :ok
+  defp last(also, person) when is_function(also, 1), do: also.(person)
+
+  # Setup's account and an invitation's are allowed by identifier from
+  # here on, where no deny stands; the open door admits by the entry that
+  # already admitted them.
+  defp admitted({:setup, _token}, %{identifier: identifier}, user_id) do
+    case Sanctum.Door.Store.allow_unless_denied("identifier", identifier, user_id, note: "setup") do
+      {:ok, _entry} -> :ok
+      {:error, :denied} -> {:error, {:door, :denied}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp also({:restore, %{also: restored}}, _write, person) do
-    with :ok <- restored.(person), do: athanor(person)
-  end
+  defp admitted({:invitation, hash}, %{identifier: identifier}, user_id),
+    do:
+      Sanctum.Invitations.redeem_hash(hash, %{
+        user_id: user_id,
+        identifier: identifier,
+        label: nil
+      })
 
-  # The invitation a remote person's sign-in carried: redeemed, their seat
-  # and their identifier's allow, in the mint's transaction.
-  defp invited(%{invitation: invitation, identifier: identifier}, user_id)
-       when is_binary(invitation),
-       do:
-         Sanctum.Invitations.redeem_hash(invitation, %{
-           user_id: user_id,
-           identifier: identifier,
-           label: nil
-         })
+  defp admitted(:open, _account, _user_id), do: :ok
 
-  defp invited(_remote, _user_id), do: :ok
-
-  # The person's keys, athanor and passkey or device, then their
-  # enrollment, last.
-  defp local(person, {athanor, write, enroll}) do
-    with :ok <- Sanctum.Person.mint_keys(person),
-         :ok <- athanor.(person),
-         :ok <- write.(person),
-         do: enroll.(person)
-  end
-
-  defp athanor(person, reserved \\ nil) do
-    case Sanctum.Provisioning.mint_personal(person, reserved) do
+  defp athanor(person) do
+    case Sanctum.Provisioning.mint_personal(person) do
       {:ok, _athanor} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
 
-  # The athanor id a device's enrollment reserved, which its certificate
-  # and challenge already name.
-  defp reserved_athanor({:device, %{athanor_id: athanor_id}, _identity}), do: athanor_id
-  defp reserved_athanor(_credential), do: nil
-
-  # The credential written in the transaction: a passkey. A session needs
-  # the committed person, so it follows the commit.
-  defp written(%{id: user_id}, {:passkey, _registration, _identity}, verified),
-    do: Sanctum.Passkeys.write_newcomer(user_id, verified)
-
-  defp written(person, {:device, enrollment, _identity}, _verified),
-    do: Sanctum.DeviceUnlock.enrolled(person, enrollment)
-
-  defp written(_person, _credential, _verified), do: :ok
-
-  defp enrolled(%{id: user_id}, {_kind, _proof, identity}, directory),
-    do: Sanctum.Recovery.open_at_admission(user_id, identity, directory)
-
   # ---- after the commit -----------------------------------------------------
 
-  defp committed({:remote, remote} = admission, person, readmitted, :none) do
-    if is_binary(remote[:invitation]),
-      do: Sanctum.Invitations.announce(remote.invitation, person.id)
+  defp committed(admission, person) do
+    granted(admission, person)
+    announced(admission, person)
+    filled(person)
+
+    case Users.get(person.id) do
+      {:ok, user} -> {:ok, %{person: user}}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # The widest grant in the system, written once: audited when it is.
+  defp granted({:setup, _token}, %{id: user_id}) do
+    :telemetry.execute([:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap], %{count: 1}, %{
+      user_id: user_id,
+      admission: "setup"
+    })
+  end
+
+  defp granted(_admission, _person), do: :ok
+
+  # The thread an invitation seated the person in is told of its new
+  # member, and the shared-thread seats their identifier was invited to
+  # activate.
+  defp announced(admission, person) do
+    seated(admission, person)
 
     case Sanctum.SharedThreads.activate_invited(person) do
       {:ok, _n} ->
@@ -688,101 +333,13 @@ defmodule Sanctum.Newcomer do
       {:error, reason} ->
         Logger.error(
           "[Sanctum.Newcomer] an invitation's activation failed for #{person.id}: " <>
-            inspect(reason)
-        )
-    end
-
-    filled(admission, person)
-    answered(person, readmitted)
-  end
-
-  defp committed(admission, person, readmitted, credential) do
-    granted(admission, person, readmitted)
-    joined(admission, person)
-    filled(admission, person)
-
-    with {:ok, admitted} <- answered(person, readmitted),
-         {:ok, admitted} <- recovery(admission, admitted, person) do
-      case session(person, credential) do
-        {:ok, token} -> {:ok, Map.put(admitted, :session_token, token)}
-        :none -> {:ok, admitted}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
-
-  # The widest grant in the system, written once: audited when it is.
-  defp granted({first, _}, %{id: user_id}, false = _readmitted)
-       when first in [:setup, :restore] do
-    :telemetry.execute([:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap], %{count: 1}, %{
-      user_id: user_id,
-      admission: Atom.to_string(first)
-    })
-  end
-
-  defp granted(_admission, _person, _readmitted), do: :ok
-
-  # The thread an invitation seated the person in is told of its new member.
-  defp joined({:invitation, code}, _person) do
-    case Sanctum.Invitations.seat(code) do
-      {:ok, thread_id} -> Sanctum.SharedThreads.joined(thread_id)
-      :none -> :ok
-    end
-  end
-
-  defp joined(_admission, _person), do: :ok
-
-  # A restore may be superseded after its commit: `Sanctum.Recovery` asks
-  # for its fill once the head still names the restored keys.
-  defp filled({:restore, _restore}, _person), do: :ok
-  defp filled(_admission, person), do: Sanctum.Provisioning.after_sign_in(person.id)
-
-  defp answered(person, readmitted) do
-    case Users.get(person.id) do
-      {:ok, user} -> {:ok, %{person: user, readmitted: readmitted}}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  # A local person's enrollment: the one the admission opened, or the one a
-  # re-admission finds standing. A restored person's identity is the
-  # restore's, which opens no enrollment.
-  defp recovery({:restore, _restore}, admitted, _person), do: {:ok, admitted}
-
-  defp recovery(_local, admitted, %{id: user_id}) do
-    case Sanctum.Recovery.admission_recovery(user_id) do
-      {:ok, nil} -> {:ok, admitted}
-      {:ok, recovery} -> {:ok, Map.put(admitted, :recovery, recovery)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp session(person, {:passkey, _registration, _identity}), do: minted(person, "passkey")
-
-  defp session(_person, {:device, _enrollment, _identity}), do: :none
-  defp session(_person, :none), do: :none
-
-  defp minted(person, provider) do
-    ctx =
-      Context.build(
-        user_id: person.id,
-        email: person[:email],
-        provider: provider,
-        athanor_id: nil,
-        permissions: Context.person_permissions()
-      )
-
-    with {:ok, ctx} <- Sanctum.Tenancy.resolve_status(ctx, force: true),
-         {:ok, session} <- Sanctum.Session.create(ctx) do
-      {:ok, session.token}
-    else
-      {:error, reason} ->
-        Logger.warning(
-          "[Sanctum.Newcomer] #{person.id} was admitted and no session minted: " <>
             Prima.LoggerContext.shape(reason)
         )
-
-        {:error, :unavailable}
     end
   end
+
+  defp seated({:invitation, hash}, person), do: Sanctum.Invitations.announce(hash, person.id)
+  defp seated(_admission, _person), do: :ok
+
+  defp filled(person), do: Sanctum.Provisioning.after_sign_in(person.id)
 end

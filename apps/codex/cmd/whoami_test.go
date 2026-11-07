@@ -43,9 +43,9 @@ func captureStdout(t *testing.T, fn func()) string {
 func TestRenderWhoami_Claimed(t *testing.T) {
 	composed := map[string]any{
 		"session": map[string]any{
-			"user_id":  "google|https://accounts.google.com|107518896565179043523",
+			"user_id":  "usr_01a1b22b-65db-757a-bd55-ca3e66da8560",
 			"email":    "alice@example.com",
-			"provider": "google",
+			"provider": "passkey",
 		},
 		"registry": map[string]any{
 			"authenticated":      true,
@@ -58,9 +58,9 @@ func TestRenderWhoami_Claimed(t *testing.T) {
 
 	expectedLines := []string{
 		"CYFR User: moonmoon",
-		"Provider: Google",
+		"Provider: passkey",
 		"Email: alice@example.com",
-		"User ID: google|https://accounts.google.com|107518896565179043523",
+		"User ID: usr_01a1b22b-65db-757a-bd55-ca3e66da8560",
 	}
 	for _, line := range expectedLines {
 		if !strings.Contains(out, line) {
@@ -99,9 +99,9 @@ func TestRenderWhoami_ClaimedWithMemberships(t *testing.T) {
 func TestRenderWhoami_Unclaimed(t *testing.T) {
 	composed := map[string]any{
 		"session": map[string]any{
-			"user_id":  "google|https://accounts.google.com|107",
+			"user_id":  "usr_01a1b22b-65db-757a-bd55-ca3e66da8561",
 			"email":    "bob@example.com",
-			"provider": "google",
+			"provider": "passkey",
 		},
 		"registry": map[string]any{
 			"authenticated":      true,
@@ -173,9 +173,8 @@ func TestRenderWhoami_SignedOut(t *testing.T) {
 
 func TestPrettyProvider(t *testing.T) {
 	cases := map[string]string{
-		"github":        "GitHub",
-		"google":        "Google",
-		"oidcc":         "OIDC",
+		"passkey":       "passkey",
+		"device":        "device",
 		"":              "unknown",
 		"unknown-thing": "unknown-thing",
 	}

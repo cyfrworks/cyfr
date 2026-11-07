@@ -4,27 +4,33 @@
 defmodule Sanctum.Handle do
   @moduledoc """
   A handle at the registry, resolved to the identifier it names
-  (`Prima.HandleAnswer`, `cyfr-handle/v1`).
+  (`Prima.HandleAnswer`, `cyfr-handle/v1`), and that account's keys read
+  from the directory the answer names.
 
-  The answer is navigation, never authority: it names an identifier and
-  the directory that orders it, and carries no keys and no address. Whoever relies on the identifier reads its keys
-  fresh from that directory (`Sanctum.IdentityFreshness`), so a handle
-  the registry later reassigns moves no access.
+  The registry's answer is navigation, never authority: it names an
+  identifier and the directory that orders it, and carries no keys and no
+  address. `resolve/1` then reads the account's log at that directory
+  (`Sanctum.IdentityFreshness.fresh!/2`, which verifies it and caches its
+  head), so a handle the registry later reassigns moves no access, and an
+  account its directory answers gone resolves to nothing, as no holder
+  does: the registry keeps a gone account's name reserved, and it names
+  no one who can sign.
 
   `resolve/1` asks `GET /v1/handles/{handle}` of the registry this
   deployment names (`Sanctum.registry_host/0`), for that one exact handle:
   there is no listing or search. The request goes through
   `Sanctum.Egress.pinned_request/5` under `private_policy: :operator`, is
   bounded to 10 seconds and 16 KiB, follows no redirect, sends no
-  credential, and nothing is cached.
+  credential, and the answer is not cached.
 
   Refusals: `:invalid_handle` (a spelling `Prima.ComponentRef` refuses as
   a personal slug, before any request), `:no_registry` (before any
   request), `:not_found` (no one holds the handle, a reserved one
-  included), `:registry_unavailable` (unreachable, slow, refused by the
-  address policy, or any answer but the two above) and
-  `:malformed_answer` (an answer for another handle or registry, or
-  outside its grammar).
+  included, or its account is gone), `:registry_unavailable` (the
+  registry or the directory it names unreachable, slow, refused by the
+  address policy, a log that does not verify, or any answer but the ones
+  above) and `:malformed_answer` (an answer for another handle or
+  registry, or outside its grammar).
   """
 
   require Logger
@@ -46,7 +52,8 @@ defmodule Sanctum.Handle do
         Sanctum.registry_base_url(Sanctum.registry_url()) <>
           "/v1/handles/" <> URI.encode(handle, &URI.char_unreserved?/1)
 
-      url |> fetch() |> answer(handle, registry)
+      with {:ok, answer} <- url |> fetch() |> answer(handle, registry),
+           do: keys(answer)
     end
   end
 
@@ -59,8 +66,9 @@ defmodule Sanctum.Handle do
   is an invalid argument that says what a handle is; no one holding the
   handle is `:handle_not_found`; an unreadable answer is
   `:registry_unavailable`, as an unreachable registry is. It writes
-  nothing, so a caller that resolves first and writes after leaves no row
-  when it stops between the two.
+  nothing but this home's cache of the account's head, so a caller that
+  resolves first and writes after leaves no row of its own when it stops
+  between the two.
   """
   @spec identifier(String.t()) ::
           {:ok, String.t()}
@@ -88,6 +96,24 @@ defmodule Sanctum.Handle do
 
       {:error, reason} when reason in [:no_registry, :registry_unavailable] ->
         {:error, reason}
+    end
+  end
+
+  # The account the answer names, read at its directory: one gone there
+  # has no holder.
+  defp keys(%HandleAnswer{identifier: identifier, directory: directory} = answer) do
+    case Sanctum.IdentityFreshness.fresh!(identifier, directory: directory) do
+      {:ok, _head} ->
+        {:ok, answer}
+
+      {:refused, :identity_gone} ->
+        {:error, :not_found}
+
+      {:refused, :identity_stale} ->
+        {:error, :registry_unavailable}
+
+      {:error, :unavailable} ->
+        {:error, :registry_unavailable}
     end
   end
 

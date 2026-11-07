@@ -180,7 +180,7 @@ func readProperty(t *testing.T, pt tpm2.TPMPT) uint32 {
 
 func newChipRecord(t *testing.T) *Record {
 	t.Helper()
-	r, err := NewChip(testHome, "request-1", "admission-1", []byte(testPIN))
+	r, err := NewChip([]byte(testPIN))
 	if err != nil {
 		t.Fatalf("NewChip: %v", err)
 	}
@@ -212,8 +212,7 @@ func openWrong(t *testing.T, r *Record) {
 func TestChipOpen(t *testing.T) {
 	startSWTPM(t)
 	r := newChipRecord(t)
-	if r.Version != 1 || r.Kind != KindChip || r.Home != testHome || r.RequestID != "request-1" ||
-		r.Admission != "admission-1" || r.Software != nil || r.Chip == nil || len(r.PublicKey) != ed25519.PublicKeySize {
+	if r.Version != 2 || r.Kind != KindChip || r.Software != nil || r.Chip == nil || len(r.PublicKey) != ed25519.PublicKeySize {
 		t.Fatalf("record = %+v", r)
 	}
 	path := filepath.Join(t.TempDir(), "key.json")
@@ -281,7 +280,7 @@ func TestChipRefusesSomeoneElsesLockout(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	r, err := NewChip(testHome, "request-1", "admission-1", []byte(testPIN))
+	r, err := NewChip([]byte(testPIN))
 	var refused *ChipRefusedError
 	if !errors.As(err, &refused) || !errors.Is(err, ErrNoChip) || r != nil {
 		t.Fatalf("NewChip = record %t, %v; want a *ChipRefusedError matching ErrNoChip", r != nil, err)
@@ -302,7 +301,7 @@ func TestChipRefusesOwnerPassword(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	_, err := NewChip(testHome, "request-1", "admission-1", []byte(testPIN))
+	_, err := NewChip([]byte(testPIN))
 	var refused *ChipRefusedError
 	if !errors.As(err, &refused) || !errors.Is(err, ErrNoChip) {
 		t.Fatalf("NewChip = %v; want a *ChipRefusedError matching ErrNoChip", err)
@@ -434,11 +433,11 @@ func TestNewChipWithoutDevice(t *testing.T) {
 		t.Error("a malformed PIN reached the chip")
 		return nil, errors.New("unreachable")
 	}
-	if _, err := NewChip(testHome, "r", "a", []byte("12345")); !errors.Is(err, ErrSecretShape) {
+	if _, err := NewChip([]byte("12345")); !errors.Is(err, ErrSecretShape) {
 		t.Fatalf("NewChip(five digits) = %v; want ErrSecretShape", err)
 	}
 	openTPM = func() (transport.TPMCloser, error) { return nil, fmt.Errorf("open %s: %w", tpmPath, os.ErrNotExist) }
-	_, err := NewChip(testHome, "r", "a", []byte(testPIN))
+	_, err := NewChip([]byte(testPIN))
 	var refused *ChipRefusedError
 	if !errors.Is(err, ErrNoChip) || errors.As(err, &refused) {
 		t.Fatalf("NewChip without a device = %v; want ErrNoChip and no *ChipRefusedError", err)
@@ -506,7 +505,7 @@ func TestChipRefusesAnObjectReadBackOtherwise(t *testing.T) {
 		tp, err := swtpmOpen()
 		return liar{tp}, err
 	}
-	r, err := NewChip(testHome, "request-1", "admission-1", []byte(testPIN))
+	r, err := NewChip([]byte(testPIN))
 	var refused *ChipRefusedError
 	if !errors.As(err, &refused) || !errors.Is(err, ErrNoChip) || r != nil {
 		t.Fatalf("NewChip = record %t, %v; want a *ChipRefusedError matching ErrNoChip", r != nil, err)

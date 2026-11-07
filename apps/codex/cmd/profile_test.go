@@ -1795,12 +1795,10 @@ func TestProfileList_SaysWhatStandsInPlaceOfAHead(t *testing.T) {
 }
 
 // The CLI classifies a need by the credential kinds the server's owner
-// declares, as `mix ops.gen.cli` renders them, and names every sign-in
-// provider it may be told.
-func TestGeneratedRosters_ClassifyNeedsAndNameProviders(t *testing.T) {
-	if len(ops.CredentialKinds) == 0 || len(ops.SignInProviders) == 0 || len(ops.DeviceFlowProviders) == 0 {
-		t.Fatalf("a generated roster is empty: %v %v %v",
-			ops.CredentialKinds, ops.SignInProviders, ops.DeviceFlowProviders)
+// declares, as `mix ops.gen.cli` renders them.
+func TestGeneratedRosters_ClassifyNeeds(t *testing.T) {
+	if len(ops.CredentialKinds) == 0 {
+		t.Fatalf("the generated credential kinds are empty")
 	}
 	for _, kind := range ops.CredentialKinds {
 		need, ok := readNeed(map[string]any{"need": "n", "kind": kind})
@@ -1811,16 +1809,6 @@ func TestGeneratedRosters_ClassifyNeedsAndNameProviders(t *testing.T) {
 	for _, kind := range []string{"catalyst", "reagent", "formula", ""} {
 		if need, _ := readNeed(map[string]any{"need": "n", "kind": kind}); need.declared() {
 			t.Errorf("a %q need is read as a declared credential", kind)
-		}
-	}
-	for _, provider := range ops.DeviceFlowProviders {
-		if !slices.Contains(ops.SignInProviders, provider) {
-			t.Errorf("device-flow provider %q is no sign-in provider", provider)
-		}
-	}
-	for _, provider := range ops.SignInProviders {
-		if prettyProvider(provider) == provider {
-			t.Errorf("sign-in provider %q has no label", provider)
 		}
 	}
 }

@@ -411,14 +411,7 @@ defmodule Prima.Refusal do
        "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
 
   # A registry operation the person signs (`Prima.RegistryRequest`), refused
-  # before it is sent: the person has no identifier to sign under, their
-  # keys are held by another CYFR, or this deployment names no registry.
-  defp row(:not_enrolled),
-    do: {:setup_required, "This needs your identity: enroll it in Settings, then try again."}
-
-  defp row(:remote),
-    do: {:forbidden, "Your keys are held by your own CYFR; do this there."}
-
+  # before it is sent: this deployment names no registry.
   defp row(:no_registry),
     do: {:setup_required, "No registry is configured on this server (CYFR_REGISTRY_URL=none)."}
 
@@ -436,7 +429,7 @@ defmodule Prima.Refusal do
 
   # The registry's own refusals of a signed request that CYFR passes on
   # (`Prima.RegistryRequest.refusals/0` names each one's code); the last
-  # two are the directory's too, as a recovery meets them.
+  # three answer for the account the request names.
   defp row(:malformed_answer),
     do: {:unavailable, "The registry's answer could not be read; try again shortly."}
 
@@ -482,26 +475,15 @@ defmodule Prima.Refusal do
 
   defp row(:wrong_directory),
     do:
-      {:forbidden,
-       "The registry accepts only identities its own directory orders; this one names another."}
+      {:forbidden, "This account was made with another registry, so this one does not accept it."}
 
-  defp row(:unknown_identity), do: {:not_found, "The directory does not know this identity."}
+  defp row(:unknown_identity), do: {:not_found, "This account is not registered."}
 
-  defp row(:directory_unavailable), do: {:unavailable, "cyfr.run did not answer. Try again."}
+  defp row(:directory_unavailable),
+    do: {:unavailable, "The registry could not read your account just now. Try again shortly."}
 
-  # The registration of a person's name and identity at cyfr.run
-  # (`registry.register`): the registry's refusals of the name, the
-  # directory's of the identity, and a person with nothing to register.
+  # A name another holds: a vault entry's, or a handle's at the registry.
   defp row(:name_taken), do: {:conflict, "Someone holds that name. Choose another."}
-
-  defp row(:name_reserved),
-    do: {:invalid_argument, "cyfr.run keeps that name for itself. Choose another."}
-
-  defp row(:directory_refused),
-    do: {:forbidden, "cyfr.run refused this identity. Ask whoever runs this CYFR."}
-
-  defp row(:no_attempt),
-    do: {:not_found, "There is no unfinished name and recovery code to finish here."}
 
   # Stored bytes that no longer match the digest their row recorded: an
   # integrity refusal, not an outage — a retry will not help, and the
@@ -659,12 +641,6 @@ defmodule Prima.Refusal do
 
   defp row({:shared_thread, :not_together}),
     do: {:invalid_argument, "You can only pair with someone you already share a thread with"}
-
-  defp row({:shared_thread, :recovering_from_restore}),
-    do:
-      {:forbidden,
-       "This CYFR was restored from a backup, and someone in this thread has not yet " <>
-         "recovered their sign-in: no one is added until everyone has"}
 
   defp row({:limit_reached, :max_shared_threads_per_person, _limit}),
     do: {:rate_limited, "You have made as many threads as this CYFR allows — archive one first"}
@@ -968,14 +944,20 @@ defmodule Prima.Refusal do
       {:unauthenticated,
        "Your first passkey needs a recent sign-in here: sign in again, then register it."}
 
-  # An installation reserved for a restore: its first person comes back
-  # through the restore, so no ordinary first sign-in is admitted, whoever
-  # signs in. Not a denial of the person.
-  defp row(:restore_reserved),
-    do:
-      {:forbidden,
-       "This installation is waiting for its owner to restore their identity; no one signs " <>
-         "in here until that restore finishes or the operator ends it."}
+  # The door's refusal of a person or an account at a sign-in
+  # (`Sanctum.Door`): one sentence whichever entry refused, so a stranger
+  # learns nothing of the list. A door that could not be read is an
+  # outage, never a refusal.
+  defp row({:door, :unavailable}), do: row(:unavailable)
+
+  defp row({:door, reason}) when reason in [:denied, :not_allowed],
+    do: {:forbidden, "not allowed on this server — ask the operator"}
+
+  # An answer to a sign-in request this CYFR refused: spent, expired, for
+  # another browser or channel, or not signed by a key the account lists.
+  # The precise reason is the log's, never the answer's.
+  defp row(:answer_refused),
+    do: {:unauthenticated, "That sign-in answer was not accepted. Sign in again."}
 
   # The setup token past its person's first sign-in method: it opens
   # nothing, whoever presents it.
@@ -985,7 +967,7 @@ defmodule Prima.Refusal do
        "This CYFR is set up. Sign in with your passkey, a device you connected, or a " <>
          "sign-in method you linked."}
 
-  # An admission other than setup or a restore onto a CYFR with no person:
+  # An admission other than setup onto a CYFR with no person:
   # its first person is its administrator, made only by its setup.
   defp row(:not_set_up),
     do: {:setup_required, "This CYFR is not set up yet. Its operator opens the setup link first."}
@@ -1026,13 +1008,25 @@ defmodule Prima.Refusal do
        "That company account is bound to someone else here, or you are bound to another " <>
          "one. Sign in with the company account that is yours here."}
 
-  # A remote person's identity whose head this home could not confirm
-  # fresh within its bound: their work here pauses and their session
-  # stands, so it is no sign-out and no denial.
+  # An account whose head this CYFR could not read fresh within its
+  # bound: the person's work here pauses and their session stands, so it
+  # is no sign-out and no denial.
   defp row(:identity_stale),
+    do: {:unavailable, "Your account could not be checked just now; try again shortly."}
+
+  # An account its directory answered gone: every binding of it here is
+  # retired and nothing binds again, so it is a denial, never a pause.
+  defp row(:identity_gone),
+    do: {:forbidden, "This account has been closed. It can no longer sign in here."}
+
+  # A write that binds a key named an account head that moved while it was
+  # decided (the issuance fence): nothing was written, and the next try
+  # reads the account as it stands now.
+  defp row(:stale_head),
     do:
-      {:unavailable,
-       "Your identity could not be confirmed fresh with its directory just now; try again shortly."}
+      {:conflict,
+       "Your account's keys changed while this was being checked. Nothing was changed; try " <>
+         "again."}
 
   defp row(:execution_failed), do: {:internal, "The execution failed"}
 

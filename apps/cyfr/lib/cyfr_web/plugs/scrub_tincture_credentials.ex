@@ -27,6 +27,19 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentials do
 
   A credential in a path is visible to every intermediary that logs paths;
   this is the server's own part of keeping it out of logs.
+
+  The routes of the identity directory, the handle registry beside it and
+  the account pages (`/directory/…`, `/v1/handles/…`,
+  `/v1/namespaces/personal/claim`, `/account/…`) are named by their route
+  pattern alone (`/directory/v1/:identifier`), and a path under one of
+  those prefixes that no route matches by the prefix and a constant
+  (`/directory/[REDACTED]`): a directory keeps no record of who was
+  asked about past its rate windows, and the request log line names
+  neither an identifier, a hash, a name nor any text a caller put in a
+  path. Those routes log no dispatch (`log: false`), whose parameters
+  would carry what was submitted. `Emissary.Web.DirectoryPrivacyTest`
+  holds the mounted endpoint's log to it, and the router test holds this
+  table to the routes declared.
   """
 
   @behaviour Plug
@@ -50,17 +63,54 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentials do
 
   @doc """
   A request path with the segment after the served-file prefix or the
-  canvas page prefix replaced by `[REDACTED]`; any other path unchanged.
+  canvas page prefix replaced by `[REDACTED]`, a directory path as its
+  route pattern or its prefix and `[REDACTED]` (the module doc); any other
+  path unchanged.
   """
   @spec redact_path(String.t()) :: String.t()
   def redact_path(path) when is_binary(path) do
     segments = String.split(path, "/")
 
+    case directory_route(routed_names(segments)) do
+      nil -> redact_credential(path, segments)
+      route -> route
+    end
+  end
+
+  defp redact_credential(path, segments) do
     case credential_at(segments) do
       nil -> path
       index -> segments |> List.replace_at(index, @redacted) |> Enum.join("/")
     end
   end
+
+  defp routed_names(segments),
+    do: for(segment <- segments, segment != "", do: decoded(segment))
+
+  # A directory route by its pattern, or a path under a directory prefix no
+  # route matches by the prefix alone.
+  defp directory_route(["directory", "v1", "register"]), do: "/directory/v1/register"
+  defp directory_route(["directory", "v1", _identifier]), do: "/directory/v1/:identifier"
+
+  defp directory_route(["directory", "v1", _identifier, "from", _hash]),
+    do: "/directory/v1/:identifier/from/:hash"
+
+  defp directory_route(["directory", "v1", _identifier, "append"]),
+    do: "/directory/v1/:identifier/append"
+
+  defp directory_route(["directory" | _rest]), do: "/directory/" <> @redacted
+  defp directory_route(["v1", "handles", _handle]), do: "/v1/handles/:handle"
+  defp directory_route(["v1", "handles" | _rest]), do: "/v1/handles/" <> @redacted
+
+  defp directory_route(["v1", "namespaces", "personal", "claim"]),
+    do: "/v1/namespaces/personal/claim"
+
+  defp directory_route(["v1", "namespaces", "personal", "claim" | _rest]),
+    do: "/v1/namespaces/personal/claim/" <> @redacted
+
+  defp directory_route(["account", _name]), do: "/account/:name"
+  defp directory_route(["account" | _rest]), do: "/account/" <> @redacted
+  defp directory_route(_other), do: nil
 
   # Where among `segments` the credential stands: the first non-empty
   # segment after a prefix's own, when the path's non-empty segments,

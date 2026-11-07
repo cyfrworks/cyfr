@@ -1076,31 +1076,25 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end)
     end
 
-    test "the directory URL and the restore token are read into Sanctum; the directory is cyfr.run's when unset" do
-      unset = %{"CYFR_DIRECTORY_URL" => nil, "CYFR_RESTORE_TOKEN" => nil}
-
-      with_env(unset, fn ->
+    test "the directory URL is read into Sanctum; it is cyfr.run's when unset" do
+      with_env(%{"CYFR_DIRECTORY_URL" => nil}, fn ->
         config = read_prod_config!()
         assert config[:sanctum][:directory_url] == "https://cyfr.run"
-        assert config[:sanctum][:restore_token] == nil
       end)
 
-      token = String.duplicate("0f", 32)
+      with_env(%{"CYFR_DIRECTORY_URL" => "https://directory.example.com/v1"}, fn ->
+        config = read_prod_config!()
+        assert config[:sanctum][:directory_url] == "https://directory.example.com/v1"
 
-      with_env(
-        %{
-          "CYFR_DIRECTORY_URL" => "https://directory.example.com/v1",
-          "CYFR_RESTORE_TOKEN" => token
-        },
-        fn ->
-          config = read_prod_config!()
-          assert config[:sanctum][:directory_url] == "https://directory.example.com/v1"
-          assert config[:sanctum][:restore_token] == token
+        # It is no platform setting: nothing pins it.
+        assert config[:cyfr][:deployment_pinned] == []
+      end)
+    end
 
-          # Neither is a platform setting: nothing pins them.
-          assert config[:cyfr][:deployment_pinned] == []
-        end
-      )
+    test "a restore token is not a variable this server reads" do
+      with_env_file(["CYFR_RESTORE_TOKEN=" <> String.duplicate("0f", 32)], fn ->
+        assert refusal!() =~ "CYFR_RESTORE_TOKEN is not a variable this server reads"
+      end)
     end
 
     test "one parse of the registry URL sets both applications' copies" do
@@ -1133,7 +1127,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end)
     end
 
-    test "a malformed directory URL or restore token stops the boot naming the variable, never the value" do
+    test "a malformed directory URL stops the boot naming the variable, never the value" do
       for bad <- [
             "http://directory.example.com",
             "https://directory.example.com/",
@@ -1149,22 +1143,6 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           message = refusal!()
           assert message =~ "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be a directory URL"
           assert message =~ "at most 1024 bytes long, over https, or over http on this machine"
-          refute message =~ bad
-        end)
-      end
-
-      for bad <- [
-            String.duplicate("0F", 32),
-            String.duplicate("0f", 31),
-            String.duplicate("0f", 33),
-            String.duplicate("zz", 32)
-          ] do
-        with_env(%{"CYFR_RESTORE_TOKEN" => bad}, fn ->
-          message = refusal!()
-
-          assert message =~
-                   "[Cyfr] FATAL: CYFR_RESTORE_TOKEN must be exactly 64 lowercase hexadecimal"
-
           refute message =~ bad
         end)
       end
@@ -1233,26 +1211,6 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  :deployment_pinned
                ]
       end)
-    end
-
-    test "Sanctum installs the restore mode the token decides, and refuses a malformed one" do
-      assert Sanctum.Supervisor.installation_mode!(nil) == :ordinary
-
-      assert Sanctum.Supervisor.installation_mode!(String.duplicate("a1", 32)) ==
-               :restore_reserved
-
-      bad = String.duplicate("A1", 32)
-
-      message =
-        Exception.message(
-          assert_raise RuntimeError, fn -> Sanctum.Supervisor.installation_mode!(bad) end
-        )
-
-      assert message =~ "must be exactly 64 lowercase hexadecimal characters"
-      refute message =~ bad
-
-      # This suite's boot configured none, so setup admits its first person.
-      assert Arca.InstallationClaims.mode() == :ordinary
     end
 
     test "unset, the CORS allowlist is the empty one" do

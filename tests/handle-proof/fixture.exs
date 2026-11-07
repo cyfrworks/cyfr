@@ -15,7 +15,7 @@
 #       printable text answers `{"bytes": base64}`.
 #
 #   set TABLE ID FIELD @VALUE_FILE
-#       FIELD of the row of TABLE whose `id` is ID written to the JSON
+#       FIELD of the row of TABLE whose primary key is ID written to the JSON
 #       value the file holds (`{"bytes": base64}` for bytes), behind the
 #       server's back and with the database's foreign-key and check
 #       constraints off for that write, as a tamper or the restore of one:
@@ -25,12 +25,6 @@
 #       The whole table, every row as `rows` answers it, and the database's
 #       whole schema (`sqlite_master`), which a tamper's restore must leave
 #       as they were.
-#
-#   opens USER_ID ROLE @SEALED_FILE
-#       The sealed key the file holds (`{"bytes": base64}`), opened as
-#       `Sanctum.Person` opens a person's key (`CipherAAD.person_key/2`
-#       under USER_ID and ROLE, `live` or `operational`): the public half of
-#       what it holds, base64, or `{opens: false}`. No private key leaves.
 #
 #   reseal USER_ID REGISTRY SLUG @PATCH_FILE
 #       The person's sealed push token opened, the members the file's JSON
@@ -67,8 +61,8 @@ fn args ->
   end
 
   tables =
-    ~w(users person_identities passkeys server_allowlist sessions registry_tokens athanors
-       identity_attempts)
+    ~w(users person_identities directory_heads paired_clients server_allowlist sessions
+       registry_tokens athanors)
 
   table! = fn table ->
     if table in tables, do: table, else: raise("no table #{inspect(table)} for this proof")
@@ -101,6 +95,12 @@ fn args ->
   columns = fn table ->
     %{rows: info} = Arca.Repo.query!("PRAGMA table_info(#{table})", [])
     for [_cid, name | _rest] <- info, do: name
+  end
+
+  # The table's primary key column: `id`, or a cached head's `identifier`.
+  key = fn table ->
+    %{rows: info} = Arca.Repo.query!("PRAGMA table_info(#{table})", [])
+    Enum.find_value(info, fn [_cid, name, _type, _notnull, _default, pk] -> if pk == 1, do: name end)
   end
 
   sealed_token = fn user_id, registry, slug ->
@@ -150,7 +150,7 @@ fn args ->
       unless field in columns.(table), do: raise("no column #{field} in #{table}")
       value = value |> Jason.decode!() |> decode.()
 
-      answer.(%{set: unchecked.("UPDATE #{table} SET #{field} = ?1 WHERE id = ?2", [value, id])})
+      answer.(%{set: unchecked.("UPDATE #{table} SET #{field} = ?1 WHERE #{key.(table)} = ?2", [value, id])})
 
     ["state", table] ->
       table = table!.(table)
@@ -162,19 +162,6 @@ fn args ->
         )
 
       answer.(%{rows: rows.(table, nil), schema: schema})
-
-    ["opens", user_id, role, sealed] when role in ["live", "operational"] ->
-      sealed = sealed |> Jason.decode!() |> decode.()
-      aad = Sanctum.CipherAAD.person_key(user_id, String.to_existing_atom(role))
-
-      case Sanctum.Cipher.decrypt(sealed, aad) do
-        {:ok, private} when byte_size(private) == 32 ->
-          {public, _private} = :crypto.generate_key(:eddsa, :ed25519, private)
-          answer.(%{opens: true, public: Base.encode64(public)})
-
-        _unopened ->
-          answer.(%{opens: false})
-      end
 
     ["reseal", user_id, registry, slug, patch] ->
       {_ciphertext, aad} = sealed_token.(user_id, registry, slug)
@@ -233,9 +220,9 @@ fn args ->
       reason = String.to_existing_atom(reason)
 
       others =
-        ~w(wrong_destination identity_stale unavailable invalid_carry no_request not_allowed
-           banned registry_unavailable not_enrolled no_registry registry_token_missing
-           unknown_identity directory_unavailable wrong_directory policy_required)a -- [reason]
+        ~w(identity_stale unavailable banned registry_unavailable no_registry
+           registry_token_missing unknown_identity directory_unavailable wrong_directory
+           policy_required)a -- [reason]
 
       sentence = Prima.Refusal.message(reason)
 

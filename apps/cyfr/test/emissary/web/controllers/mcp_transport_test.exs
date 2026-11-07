@@ -259,13 +259,13 @@ defmodule Emissary.Web.MCPTransportTest do
       )
     end
 
-    # A person whose keys are at another home, admitted here: their identity
-    # row `remote`, their head cached as verified now from a genesis naming a
-    # directory nothing answers at (a loopback port nothing listens on), and
-    # a session bound to that head's `key_epoch`.
+    # A person admitted by their account, their head cached here
+    # (`Sanctum.TestContext.account!/1`) at the suite's directory, which
+    # this CYFR cannot reach, on a public CYFR, which pauses a head it cannot
+    # refresh past its bound, and a session of theirs.
     defp remote_session! do
       n = System.unique_integer([:positive])
-      directory = "https://localhost:1"
+      Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
 
       {:ok, user} =
         Sanctum.Test.People.linked(%{
@@ -276,61 +276,20 @@ defmodule Emissary.Web.MCPTransportTest do
         })
 
       athanor = Sanctum.Test.People.athanor!(user)
-      Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id))
 
-      {live, _} = :crypto.generate_key(:eddsa, :ed25519)
-      {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
-      {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
-
-      {:ok, genesis} =
-        Prima.Identity.Entry.genesis(
-          live_key: live,
-          operational_key: operational_pub,
-          recovery_keys: [recovery],
-          directory: directory
+      {:ok, session} =
+        Sanctum.TestContext.create_session(
+          Sanctum.Context.build(
+            user_id: user.id,
+            athanor_id: athanor.id,
+            provider: "passkey",
+            permissions: Sanctum.Context.person_permissions(),
+            auth_method: :oidc,
+            authenticated: true
+          )
         )
 
-      genesis = Prima.Identity.sign(genesis, operational)
-      identifier = Prima.Identity.identifier(genesis)
-      head = Prima.Identity.hash(genesis)
-
-      {:ok, _} =
-        Arca.PersonIdentities.create(Prima.Actor.system(), %{
-          user_id: user.id,
-          provenance: "remote",
-          identifier: identifier,
-          directory_url: directory
-        })
-
-      {:ok, _} =
-        Arca.DirectoryHeads.put(Prima.Actor.system(), %{
-          identifier: identifier,
-          genesis: Prima.Identity.canonical(genesis),
-          directory_url: directory,
-          head_hash: head,
-          key_epoch: head,
-          recovery_epoch: head,
-          state: ~s({"head":"#{head}"})
-        })
-
-      token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-      now = DateTime.utc_now()
-
-      Arca.Repo.insert_all(Arca.Schemas.Session, [
-        %{
-          id: Prima.UUID7.generate_id("ses"),
-          token_hash: Sanctum.Session.token_hash(token),
-          token_prefix: String.slice(token, 0, 8),
-          user_id: user.id,
-          provider: "cyfr",
-          athanor_id: athanor.id,
-          identity_key_epoch: head,
-          expires_at: DateTime.add(now, 30 * 86_400, :second),
-          inserted_at: now
-        }
-      ])
-
-      %{identifier: identifier, token: token}
+      %{identifier: Sanctum.TestContext.account!(user.id).identifier, token: session.token}
     end
 
     defp last_frame(conn) do
@@ -394,15 +353,15 @@ defmodule Emissary.Web.MCPTransportTest do
       assert %{"id" => 14, "error" => %{"code" => -33001}} = last_frame(conn)
     end
 
-    test "a remote person's stream whose identity cannot be confirmed fresh ends paused, " <>
+    test "a stream whose account cannot be confirmed fresh ends paused, " <>
            "never as a dead credential",
          %{conn: conn} do
       remote = remote_session!()
       task = open_listen(conn, remote.token, 15)
       await_open(task)
 
-      # The cached head ages past its bound, and the directory (a loopback
-      # port nothing listens on) cannot refresh it.
+      # The cached head ages past its bound, and the directory cannot
+      # refresh it.
       Arca.Repo.update_all(
         from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^remote.identifier),
         set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]

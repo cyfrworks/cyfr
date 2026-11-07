@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,11 +16,15 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/cyfr/codex/internal/account"
 )
 
-// DeviceProtocol is the device channel's message protocol
-// (tests/fixtures/device.json).
-const DeviceProtocol = "cyfr-device/v1"
+// The device channel's message protocol (tests/fixtures/device.json) and
+// the certificates a CYFR issues its devices (device_cert.json).
+const (
+	DeviceProtocol      = "cyfr-device/v1"
+	CertificateProtocol = "cyfr-device-cert/v2"
+)
 
 // reportEvery is how often an open channel reports this box's
 // capabilities, as the home's standing check reads its client every 30
@@ -56,7 +59,7 @@ func (d *duration) Set(v time.Duration) { d.Store(int64(v)) }
 var (
 	// ErrRevoked is a client whose standing ended (close 4403, or a
 	// revoke naming no grant).
-	ErrRevoked = errors.New("This screen's pairing was revoked")
+	ErrRevoked = errors.New("CYFR does not take this device any more")
 	// ErrRenew is a certificate the home will not take any more (4408):
 	// the channel renews it first.
 	ErrRenew = errors.New("this screen's certificate must be renewed")
@@ -120,30 +123,6 @@ func (e *IntentError) Error() string {
 	return "CYFR refused it"
 }
 
-// class is the refusal's class, which every refusal on the channel
-// carries (with its sentence) where it carries no reason: "unavailable"
-// for a home or a cyfr.run that did not answer.
-func (e *IntentError) class() string {
-	var m struct {
-		Class string `json:"class"`
-	}
-	_ = json.Unmarshal(e.Raw, &m)
-	return m.Class
-}
-
-// says is whether the refusal names one of reasons, as its tag, reason
-// or code.
-func (e *IntentError) says(reasons ...string) bool {
-	var m map[string]any
-	_ = json.Unmarshal(e.Raw, &m)
-	for _, k := range []string{"tag", "reason", "code", "error"} {
-		if v, ok := m[k].(string); ok && slices.Contains(reasons, v) {
-			return true
-		}
-	}
-	return false
-}
-
 // Dialer opens the home's device channel: its address and the HTTP client
 // (with the tailnet's proxy when the home is reached through it).
 type Dialer struct {
@@ -162,20 +141,60 @@ func (d Dialer) url() string {
 // Open connects as device under key: connect, the home's connect challenge
 // checked and signed, then its standing. A certificate the home will not
 // take (4408) is renewed first on a new connection, located by the old
-// certificate and proven by the key the home stores, unless another home
-// issued it, which renews it (ErrRenew is answered); renewed receives
-// every certificate the home issues, to persist before it is used.
-// report is this box's capability list, sent once the channel stands and
-// every 30 seconds after.
+// certificate and proven by the key; renewed receives every certificate
+// the home issues, to persist before it is used. report is this box's
+// capability list, sent once the channel stands and every 30 seconds
+// after.
 func (d Dialer) Open(ctx context.Context, device Device, key Signer, report func() []string, renewed func(json.RawMessage)) (*Channel, error) {
-	c, err := d.open(ctx, device, key, report, renewed, "connect")
-	if errors.Is(err, ErrRenew) && !readIssued(device.Certificate).elsewhere() {
-		c, err = d.open(ctx, device, key, report, renewed, "renew")
+	c, err := d.open(ctx, device, key, report, renewed, func(c *Channel, ctx context.Context) error { return c.handshake(ctx, "connect") })
+	if errors.Is(err, ErrRenew) {
+		c, err = d.open(ctx, device, key, report, renewed, func(c *Channel, ctx context.Context) error { return c.handshake(ctx, "renew") })
 	}
 	return c, err
 }
 
-func (d Dialer) open(ctx context.Context, device Device, key Signer, report func() []string, renewed func(json.RawMessage), asked string) (*Channel, error) {
+// Hello is a device's first connection to a CYFR (Prima.Device's hello):
+// the key it holds (its public half), the account whose log lists it, the
+// holder that keeps it, the name the CYFR lists it by and, for a new
+// person, the capability that admits them ({"setup": token} or
+// {"invitation": code}).
+type Hello struct {
+	Key         []byte
+	Identifier  string
+	HolderKind  string
+	DisplayName string
+	Admission   map[string]any
+}
+
+// Admitted is the CYFR's answer to a hello: the client it admitted this
+// key as and the first certificate it connects under.
+type Admitted struct {
+	ClientID    string
+	Athanor     string
+	Certificate json.RawMessage
+}
+
+// Hello opens a first connection: the hello, the CYFR's sign_in request
+// held to this home and purpose, its digest signed by key (the device's
+// answer), then the admission, which admitted persists before anything
+// else; then on the same connection the connect, its challenge and proof,
+// and the standing, as Open's.
+func (d Dialer) Hello(ctx context.Context, h Hello, key Signer, admitted func(Admitted) error, report func() []string, renewed func(json.RawMessage)) (*Channel, error) {
+	device := Device{Binding: Binding{Home: d.Address, DeviceKey: h.Key}}
+	return d.open(ctx, device, key, report, renewed, func(c *Channel, ctx context.Context) error {
+		got, err := c.hello(ctx, h)
+		if err != nil {
+			return err
+		}
+		if err := admitted(got); err != nil {
+			return err
+		}
+		c.device.Athanor, c.device.ClientID, c.device.Certificate = got.Athanor, got.ClientID, got.Certificate
+		return c.handshake(ctx, "connect")
+	})
+}
+
+func (d Dialer) open(ctx context.Context, device Device, key Signer, report func() []string, renewed func(json.RawMessage), first func(*Channel, context.Context) error) (*Channel, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	conn, _, err := websocket.Dial(dialCtx, d.url(), &websocket.DialOptions{HTTPClient: d.Client})
@@ -185,13 +204,110 @@ func (d Dialer) open(ctx context.Context, device Device, key Signer, report func
 	conn.SetReadLimit(1 << 20)
 	c := &Channel{conn: conn, device: device, key: key, report: report, renewed: renewed,
 		waiting: map[string]chan answer{}, done: make(chan struct{})}
-	if err := c.handshake(dialCtx, asked); err != nil {
+	if err := first(c, dialCtx); err != nil {
 		conn.CloseNow()
 		return nil, err
 	}
 	go c.read()
 	go c.reportLoop()
 	return c, nil
+}
+
+// hello sends the hello, answers the CYFR's sign_in request and reads its
+// admission: a client and a certificate for exactly this key and account
+// at this CYFR. Anything else is refused before it is kept.
+func (c *Channel) hello(ctx context.Context, h Hello) (Admitted, error) {
+	kid := account.Kid(h.Key)
+	if err := c.send(ctx, h.message()); err != nil {
+		return Admitted{}, err
+	}
+	for {
+		got, err := c.recv(ctx)
+		if err != nil {
+			return Admitted{}, err
+		}
+		switch got.Type {
+		case "sign_in_request":
+			r, err := account.ReadRequest(got.Request)
+			if err != nil || r.Purpose != "sign_in" || r.Audience != c.device.Home {
+				return Admitted{}, fmt.Errorf("%w: CYFR asked to sign something other than this device's sign-in here", ErrRefusedChallenge)
+			}
+			answer, err := r.Answer(kid, c.key.Sign)
+			if err != nil {
+				return Admitted{}, err
+			}
+			if err := c.send(ctx, map[string]any{"type": "sign_in_answer", "answer": answer}); err != nil {
+				return Admitted{}, err
+			}
+		case "admitted":
+			return admittedHere(got, h, c.device.Home)
+		case "refused":
+			// The CYFR's sentence for a refused hello or answer, sent
+			// right before it closes; one malformed is left to the close.
+			if r, ok := readRefused(got.raw); ok {
+				return Admitted{}, r
+			}
+		case "revoke":
+			return Admitted{}, ErrRevoked
+		}
+	}
+}
+
+// RefusedError is a CYFR's refusal of a hello or of its sign-in answer,
+// told before it closes (Prima.Device's refused): its class and the
+// sentence a person reads.
+type RefusedError struct{ Class, Message string }
+
+func (e *RefusedError) Error() string { return e.Message }
+
+// readRefused reads a refused message: exactly its protocol, type and
+// error, the error exactly a non-empty class and message.
+func readRefused(raw []byte) (*RefusedError, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || len(m) != 3 ||
+		string(m["protocol"]) != `"`+DeviceProtocol+`"` || string(m["type"]) != `"refused"` {
+		return nil, false
+	}
+	var e map[string]any
+	if json.Unmarshal(m["error"], &e) != nil || len(e) != 2 {
+		return nil, false
+	}
+	class, _ := e["class"].(string)
+	sentence, _ := e["message"].(string)
+	if class == "" || sentence == "" {
+		return nil, false
+	}
+	return &RefusedError{Class: class, Message: sentence}, true
+}
+
+// message is the hello as the channel sends it, but its protocol.
+func (h Hello) message() map[string]any {
+	m := map[string]any{"type": "hello", "kid": account.Kid(h.Key), "identifier": h.Identifier,
+		"holder_kind": h.HolderKind, "display_name": h.DisplayName}
+	if h.Admission != nil {
+		m["admission"] = h.Admission
+	}
+	return m
+}
+
+// admittedHere reads an admission: its client and the certificate this
+// CYFR issued for that client, this key and this account, at this CYFR.
+func admittedHere(m message, h Hello, home string) (Admitted, error) {
+	var cert struct {
+		Protocol   string `json:"protocol"`
+		Kid        string `json:"kid"`
+		ClientID   string `json:"client_id"`
+		Identifier string `json:"identifier"`
+		Athanor    string `json:"athanor"`
+		Audience   string `json:"audience"`
+		ExpiresAt  int64  `json:"expires_at"`
+	}
+	if json.Unmarshal(m.Certificate, &cert) != nil || cert.Protocol != CertificateProtocol || cert.Kid != account.Kid(h.Key) ||
+		cert.Identifier != h.Identifier || cert.Audience != home || cert.ClientID != m.ClientID ||
+		!strings.HasPrefix(cert.ClientID, "pcl_") || !strings.HasPrefix(cert.Athanor, "ath_") || cert.ExpiresAt == 0 {
+		return Admitted{}, fmt.Errorf("%w: the certificate is not for this device at this CYFR", ErrRefused)
+	}
+	return Admitted{ClientID: cert.ClientID, Athanor: cert.Athanor, Certificate: m.Certificate}, nil
 }
 
 // handshake is the connection's one proof: connect (or renew), the
@@ -208,7 +324,7 @@ func (c *Channel) handshake(ctx context.Context, asked string) error {
 		}
 		switch m.Type {
 		case "challenge":
-			ch, err := Challenge(m.Challenge, asked, c.device.Binding, nil)
+			ch, err := Challenge(m.Challenge, asked, c.device.Binding)
 			if err != nil {
 				return err
 			}
@@ -244,10 +360,13 @@ type message struct {
 	Type        string          `json:"type"`
 	ID          string          `json:"id"`
 	GrantID     string          `json:"grant_id"`
+	ClientID    string          `json:"client_id"`
 	Challenge   json.RawMessage `json:"challenge"`
 	Certificate json.RawMessage `json:"certificate"`
+	Request     any             `json:"request"`
 	Result      json.RawMessage `json:"result"`
 	Error       json.RawMessage `json:"error"`
+	raw         []byte
 }
 
 func (c *Channel) send(ctx context.Context, m map[string]any) error {
@@ -271,6 +390,7 @@ func (c *Channel) recv(ctx context.Context) (message, error) {
 	if typ != websocket.MessageText || json.Unmarshal(raw, &m) != nil {
 		return m, fmt.Errorf("%w: a frame that is not a device message", ErrRefused)
 	}
+	m.raw = raw
 	return m, nil
 }
 
@@ -432,7 +552,7 @@ func (c *Channel) Renew(ctx context.Context) error {
 	}
 	select {
 	case raw := <-r:
-		ch, err := Challenge(raw, "renew", c.device.Binding, nil)
+		ch, err := Challenge(raw, "renew", c.device.Binding)
 		if err != nil {
 			return err
 		}

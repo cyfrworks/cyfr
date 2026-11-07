@@ -24,13 +24,10 @@ defmodule Arca.SharedThreadMembers do
   first and the thread after it, the order a person's standing
   transitions take (`Arca.SecurityTransitions`), so a seat never lands
   beside a transition holding the person. A seat or an invitation is
-  written only into an active thread, by someone seated there, into a
-  thread no declared restore holds (`Arca.SecurityTransitions.frozen_shared_threads/0`:
-  one of its people still recovers), and while the thread's people, its
-  invitations included, stay under `max_people_per_thread`
-  (`Prima.Caps.check_counted/3`), each read under the thread's lock; an
-  activation seats no one in a thread a restore holds, whose invitation
-  waits for a later sign-in. Every write to a thread's people takes the
+  written only into an active thread, by someone seated there, and while
+  the thread's people, its invitations included, stay under
+  `max_people_per_thread` (`Prima.Caps.check_counted/3`), each read under
+  the thread's lock. Every write to a thread's people takes the
   thread's row lock before anything else of the thread is read, so a
   removal that commits first is read by the seat, the invitation or the
   message waiting on it. Withdrawing and removing are a person's act:
@@ -46,7 +43,7 @@ defmodule Arca.SharedThreadMembers do
   `:archived` (the thread is archived), `:conflict` (the person is seated
   already, or the identifier invited already), `:not_member` (the one
   acting sits nowhere in the thread), `:denied` (the person a seat names
-  no longer stands here), `:pair`, `:recovering_from_restore`, a cap's
+  no longer stands here), `:pair`, a cap's
   `{:limit_reached, key, cap}` or `{:cap_unverifiable, key}` (a row the
   thread already holds is `:conflict` first, since it takes no place), the
   `verify:` option's own refusal,
@@ -133,7 +130,6 @@ defmodule Arca.SharedThreadMembers do
     with {:ok, %SharedThread{}} <- open_thread(thread_id),
          :ok <- seated(thread_id, fields.added_by),
          :ok <- not_held(thread_id, fields),
-         :ok <- not_frozen(thread_id),
          :ok <- people_cap(actor, thread_id),
          :ok <- verify.() do
       row =
@@ -164,7 +160,7 @@ defmodule Arca.SharedThreadMembers do
 
   # A seat or an invitation the thread already holds is answered
   # `:conflict` before anything is counted, read under its lock: it takes
-  # no new place, so neither the cap nor a restore's hold refuses it.
+  # no new place, so the cap does not refuse it.
   # arca:unscoped-ok a shared thread is no athanor's; its row is read by its thread and key.
   defp not_held(thread_id, %{status: "active", user_id: user_id}),
     do: if(Arca.Repo.exists?(seat_of(thread_id, user_id)), do: {:error, :conflict}, else: :ok)
@@ -204,16 +200,6 @@ defmodule Arca.SharedThreadMembers do
 
   def seated?(_thread_id, _user_id), do: false
 
-  # A thread one of whose people still recovers from a declared restore
-  # admits no one new, read under its lock, so a seat racing one into the
-  # thread reads the first.
-  defp not_frozen(thread_id) do
-    frozen =
-      where(Arca.SecurityTransitions.frozen_shared_threads(), [m], m.thread_id == ^thread_id)
-
-    if Arca.Repo.exists?(frozen), do: {:error, :recovering_from_restore}, else: :ok
-  end
-
   # Every row the thread has handed out, its invitations included, since
   # an invitation is a seat someone will take: counted under the thread's
   # lock, so two writes cannot both take its last place.
@@ -231,10 +217,8 @@ defmodule Arca.SharedThreadMembers do
   Turn every invitation held for `identifier` in an active thread into the
   person `user_id`'s seat, and answer those threads' ids, sorted. An
   invitation to a thread the person already sits in is dropped; one to an
-  archived thread, or to one a declared restore holds while one of its
-  people recovers, stays an invitation, for a sign-in after it opens. The
-  person is locked first and the invitations' threads after, in id order,
-  and the restore's hold is read under those locks.
+  archived thread stays an invitation. The person is locked first and the
+  invitations' threads after, in id order.
   """
   @spec activate(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, {:invalid, map()}} | refusal()
@@ -260,12 +244,7 @@ defmodule Arca.SharedThreadMembers do
 
         {_count, ids} =
           Arca.Repo.update_all(
-            from(m in invited,
-              where:
-                m.thread_id in ^open and
-                  m.thread_id not in subquery(Arca.SecurityTransitions.frozen_shared_threads()),
-              select: m.thread_id
-            ),
+            from(m in invited, where: m.thread_id in ^open, select: m.thread_id),
             set: [user_id: user_id, person_identifier: nil, status: "active"]
           )
 

@@ -3,22 +3,39 @@
 
 defmodule Sanctum.Directory.Client do
   @moduledoc """
-  This home's client for any identity directory (`ARCHITECTURE.md` §9.1):
-  registration, resolution, appends and recoveries.
+  This home's client for any directory, `cyfr-directory/v2`
+  (`ARCHITECTURE.md` §9.1): registering a genesis, appending an entry, and
+  reading an account's log, from its genesis or after an entry's hash.
+  `tests/fixtures/directory_wire.json` holds the wire it speaks.
 
   ## Which directory
 
-  A person's directory is the one their genesis names, never a URL a
-  caller supplies and never this home's enrollment setting. Every function
-  takes the identifier and its genesis first (the genesis as its JSON text
-  or map), and holds one to the other with `Prima.Identity.locate/2` before
-  any network use: at most 16 KiB, a genesis by shape and signature, and
-  hashing to the identifier. A mismatch makes no request. So two people on
-  two directories resolve independently, each at their own.
+  A genesis names its own directory, and `register/2` posts it there. Every
+  other call takes the identifier and the directory URL the caller holds
+  for it: the one a cached head's genesis named, a handle's answer named
+  or a genesis the caller holds names. A directory URL names the node
+  serving it, with any path its proxy adds; the protocol's paths,
+  `/directory/v1/…`, follow it. A CYFR serving one serves it at its origin
+  alone (`Sanctum.Directory`).
 
-  A directory URL names the node serving it, with any path its proxy
-  adds; the protocol's paths, `/directory/v1/…`, follow it. A CYFR serving
-  one serves it at its origin alone (`Sanctum.Directory`).
+  A log whose directory is this node's own, where this node serves the
+  account service (`directory_serve` `writer`, `Sanctum.Directory.writer?/0`),
+  is read where it is kept (`Sanctum.Directory.read/2`), never over HTTP to
+  this node: its listener need not answer on the address its origin names,
+  as in the shipped stack, where it binds the edge network's address. The
+  directory URL and this node's origin are compared in the one spelling a
+  genesis names its directory in (`Sanctum.Directory.served/0`). The pages
+  are the ones `GET /directory/v1/…` answers, `:gone` and every other
+  refusal as the wire would carry it, so a caller reads the same answers
+  either way; the per-source windows that bound callers over the network
+  are not spent. Every other directory, a node that serves none, or one
+  that mirrors, is read over the wire. Writes always go over the wire.
+
+  The client verifies no chain: its reads answer the entries, each page
+  linked to the one before it (its first position, its `next`, its size),
+  with the head and length the last page named, and the caller verifies
+  them (`Sanctum.IdentityFreshness`). A write answers the directory's
+  `result` for exactly the entry sent.
 
   ## Transport
 
@@ -27,14 +44,14 @@ defmodule Sanctum.Directory.Client do
   (`:insecure_directory`, before any request): TLS protects a network
   path, loopback has none, and a directory is trusted only for ordering,
   since its writes carry signatures and its reads are verified chains
-  (`Sanctum.enrollment_directory?/1`). Every request goes over
+  (`Sanctum.directory_transport?/1`). Every request goes over
   `Sanctum.Egress.pinned_request/5` under `private_policy: :operator`: a
   loopback or private address is refused unless the operator lists it in
   `CYFR_PRIVATE_EGRESS_TARGETS`, a metadata address always, and a redirect
   is never followed (`:redirected`). No credential or cookie is sent. Each
   request is bounded to 10 seconds and 64 KiB, an operation to 30 seconds,
-  and a resolution to 1,000 pages. This member sheds its own requests to
-  one directory origin past 300 a minute, locally and retryably.
+  and a read to 1,000 pages. This member sheds its own requests to one
+  directory origin past 300 a minute, locally and retryably.
 
   The trailing `opts` take only `:resolver` (a module answering
   `getaddr/2` as `:inet` does) and `:cacerts` (DER certificates to trust):
@@ -44,54 +61,38 @@ defmodule Sanctum.Directory.Client do
   directory without options reach its scripted one; a caller's options
   win over it.
 
-  ## Resolution and the cache
+  ## Answers
 
-  `resolve/3` reads every page of the log, checks each links to the one
-  before it (its first position, its `next`, its size) and verifies the
-  whole chain from the genesis with `Prima.Identity.verify_chain/1`, the
-  last page's head and length included. Nothing partially verified is
-  cached. It then writes this home's cache (`Arca.DirectoryHeads`) against
-  the head it had cached before reading: the first head is put, the same
-  head is touched (`verified_at` moves), a head the verified chain descends
-  from is advanced (retiring what was bound to an old `key_epoch`, in the
-  same transaction). A chain that does not contain the cached head is
-  `:not_descendant` and leaves the cache untouched: an honest directory's
-  log only grows. The cache carries the head's `key_epoch` and
-  `recovery_epoch` beside it. The answer carries what an advance retired,
-  for the caller to announce. `cached/1` reads the cache back as a
-  `Prima.Identity.State`, and `state/1` reads a cached row as one.
-
-  Registration, appends and recoveries write no cache: they concern a
-  person's own identity, whose head their identity row holds.
+  A write answers `%{identifier, seq, entry_hash, result}`, `result`
+  `:created` or `:accepted`, or `:exists` with `head`, the current head,
+  for an entry already written. A read answers `%{entries, head, length}`:
+  the entries as the directory sent them, in log order, and the head and
+  length its last page named.
 
   ## Refusals
 
-  Before any request: `Prima.Identity.locate/2`'s refusals,
-  `:insecure_directory`, for an append `:invalid_entry` or `:not_rotate`,
-  and for a recovery `:invalid_request`, `:wrong_identifier` or
-  `:directory_changed`. The transport's: `:egress_refused`,
-  `:unreachable`, `:timeout`, `:redirected`, `:response_too_large`,
-  `:invalid_response`, and `{:rate_limited, seconds}` from this member's
-  shed. The directory's (`Emissary.Web.DirectoryController`'s codes):
-  `:not_served`, `:not_found`, `:read_only`, `:body_too_large`,
-  `{:stale_head, head}`, `{:stale_policy, recorded}`,
-  `:request_id_reused`, `:conflict`,
-  `{:refused, :invalid | :unverified | :wrong_identifier | :wrong_directory,
-  reason | nil}`,
-  `:corrupt`, and the retryable `{:rate_limited, seconds}`,
-  `{:capacity, seconds}` (a quota, or an identifier's day of rotations,
-  up to a day), `{:busy, seconds}` and `{:unavailable, seconds}`.
-  A resolution's own: `{:unverified, reason}`, `:truncated`,
-  `:invalid_page`, `:too_many_pages`, `:not_descendant`,
-  `:binding_changed`, and from the cache `:busy`, `:not_owner` and
-  `:unavailable`. The retryable ones are the transport's, the rate and
-  capacity answers, `:busy` and `:unavailable`.
+  Before any request: `:invalid_entry` (bytes that are no signed entry of
+  the kind the call takes, or a genesis naming no directory this home
+  speaks to), `:invalid_locator` (an identifier, directory or hash out of
+  its grammar) and `:insecure_directory`. The transport's:
+  `:egress_refused`, `:unreachable`, `:timeout`, `:redirected`,
+  `:response_too_large`, `:invalid_response`, and `{:rate_limited,
+  seconds}` from this member's shed. The directory's
+  (`Emissary.Web.DirectoryController`'s codes): `:not_served`,
+  `:not_found` (no such identifier, or a hash the log does not hold),
+  `:read_only`, `:body_too_large`, `{:stale_head, head}`,
+  `:duplicate_key`, `:conflict`, `:gone` (410, the account tombstoned),
+  `{:refused, :invalid | :unverified | :wrong_directory, reason | nil}`,
+  `:corrupt`, and the retryable `{:rate_limited, seconds}`, `{:capacity,
+  seconds}` (a quota, or an identifier's day of writes, up to a day) and
+  `{:unavailable, seconds}`. A read's own: `:invalid_page` and
+  `:too_many_pages`.
   """
 
   require Logger
 
   alias Prima.Identity
-  alias Prima.Identity.{Encoding, Entry, RecoverRequest, State}
+  alias Prima.Identity.{Encoding, Entry}
 
   @path "/directory/v1"
   # Compiled in: `config/test.exs` shortens it so the suite's unanswered
@@ -103,187 +104,153 @@ defmodule Sanctum.Directory.Client do
   @response_bytes 65_536
   @origin_cap 300
   @window_ms 60_000
-  @cache_rounds 2
-  # A directory's longest honest wait is its day's rotation window.
+  # A directory's longest honest wait is its day's write window.
   @max_retry_after 86_400
 
-  @typedoc "A genesis as a relying home was handed it: its JSON text, or the decoded map."
-  @type genesis :: binary() | map()
+  @typedoc "An entry as a caller holds it: the struct, its JSON map, or its JSON bytes."
+  @type entry :: Entry.t() | map() | binary()
 
   @typedoc "The only options: a resolver and the certificates to trust."
   @type opts :: [resolver: module(), cacerts: [binary()]]
 
-  @typedoc "What an advance retired (`t:Arca.DirectoryHeads.retired/0`); empty otherwise."
-  @type retired :: %{
-          session_hashes: [binary()],
-          passkey_ids: [String.t()],
-          confirmation_ids: [String.t()],
-          certificate_ids: [String.t()]
-        }
-
   @typedoc "Why an operation did not complete; the moduledoc groups them."
   @type reason :: atom() | {atom(), term()} | {:refused, atom(), String.t() | nil}
 
-  @typedoc "An accepted write."
-  @type accepted :: %{identifier: String.t(), seq: non_neg_integer(), entry_hash: String.t()}
+  @typedoc "A write's answer: `head` is present for `:exists` alone."
+  @type written :: %{
+          required(:identifier) => String.t(),
+          required(:seq) => non_neg_integer(),
+          required(:entry_hash) => String.t(),
+          required(:result) => :created | :accepted | :exists,
+          optional(:head) => String.t()
+        }
 
-  # ---- the operations ----------------------------------------------------------
+  @typedoc "A read's answer: the entries' JSON maps, in log order."
+  @type log :: %{entries: [map()], head: String.t(), length: pos_integer()}
 
-  @doc """
-  Register `genesis` at the directory it names. Answers the registration,
-  the same for a genesis registered before.
-  """
-  @spec register(String.t(), genesis(), opts()) :: {:ok, accepted()} | {:error, reason()}
-  def register(identifier, genesis, opts \\ []) do
-    with {:ok, ctx} <- prepare(identifier, genesis, opts),
-         {:ok, body} <- call(ctx, :post, "/genesis", Identity.canonical(ctx.genesis)) do
-      accepted(body, identifier, Identity.hash(ctx.genesis))
-    end
-  end
+  # ---- the writes --------------------------------------------------------------
 
   @doc """
-  The genesis of `identifier` at `directory_url`, for a caller that holds
-  only the identifier and the directory it was given (a printed kit's two
-  lines), never a genesis to locate it by: the log's first entry, read
-  from that directory, held to the identifier with
-  `Prima.Identity.locate/2` and required to name `directory_url` as its own
-  directory (`:directory_mismatch` otherwise). Answers the genesis's JCS
-  bytes, the locator every other function here takes. A malformed
-  identifier or directory makes no request (`:invalid_locator`).
+  Register `genesis` at the directory it names: `:created`, or `:exists`
+  for the same genesis registered before.
   """
-  @spec genesis(String.t(), String.t(), opts()) :: {:ok, binary()} | {:error, reason()}
-  def genesis(identifier, directory_url, opts \\ [])
-
-  def genesis(identifier, directory_url, opts)
-      when is_binary(identifier) and is_binary(directory_url) do
-    opts = options!(opts)
-
-    with true <- Encoding.identifier?(identifier) and Encoding.directory_url?(directory_url),
-         {:ok, base, origin} <- target(directory_url) do
-      ctx = %{
-        identifier: identifier,
-        base: base,
-        origin: origin,
-        transport: transport(opts),
-        deadline: now() + @operation_ms
-      }
-
-      with {:ok, body} <- call(ctx, :get, "/#{identifier}?after=-1", nil),
-           {:ok, %{entries: [first | _]}} <- page(body, identifier, -1),
-           {:ok, located} <- Identity.locate(first, identifier) do
-        if located.directory == directory_url,
-          do: {:ok, Identity.canonical(located)},
-          else: {:error, :directory_mismatch}
-      else
-        {:ok, %{entries: []}} -> {:error, :invalid_page}
-        {:error, _reason} = refusal -> refusal
-      end
+  @spec register(entry(), opts()) :: {:ok, written()} | {:error, reason()}
+  def register(genesis, opts \\ []) do
+    with {:ok, %Entry{kind: :genesis} = entry} <- entry(genesis),
+         {:ok, ctx} <- context(Identity.identifier(entry), entry.directory, opts),
+         {:ok, body} <- call(ctx, :post, "/register", Identity.canonical(entry)) do
+      written(body, ctx.identifier, Identity.hash(entry), [:created, :exists])
     else
-      false -> {:error, :invalid_locator}
+      {:ok, %Entry{}} -> {:error, :invalid_entry}
       {:error, _reason} = refusal -> refusal
     end
   end
 
-  def genesis(_identifier, _directory_url, _opts), do: {:error, :invalid_locator}
-
   @doc """
-  Resolve `identifier` at the directory its genesis names, verify the whole
-  log, and cache its head. Answers the verified state, the cached head's
-  row and what an advance retired.
+  Append one signed `entry` to `identifier`'s log at `directory`, naming in
+  its `prev` the head it extends: `:accepted`, or `:exists` for the entry
+  already the one after its `prev`. A genesis is `:invalid_entry`.
   """
-  @spec resolve(String.t(), genesis(), opts()) ::
-          {:ok, %{state: State.t(), head: map(), retired: retired()}} | {:error, reason()}
-  def resolve(identifier, genesis, opts \\ []) do
-    with {:ok, ctx} <- prepare(identifier, genesis, opts), do: resolve_in(ctx, @cache_rounds)
-  end
-
-  @doc """
-  Append a signed rotation to `identifier`'s log: `entry` is its
-  canonical JSON bytes, as `Sanctum.Person.sign_rotate/2` stages them.
-  Bytes that are not a signed entry are `:invalid_entry`, and a signed
-  entry of another kind is `:not_rotate`, before any request.
-  """
-  @spec append(String.t(), genesis(), binary(), opts()) :: {:ok, accepted()} | {:error, reason()}
-  def append(identifier, genesis, entry, opts \\ []) when is_binary(entry) do
-    with {:ok, ctx} <- prepare(identifier, genesis, opts),
-         {:ok, rotation} <- rotation(entry),
+  @spec append(String.t(), String.t(), entry(), opts()) :: {:ok, written()} | {:error, reason()}
+  def append(identifier, directory, entry, opts \\ []) do
+    with {:ok, %Entry{kind: kind} = entry} when kind != :genesis <- entry(entry),
+         {:ok, ctx} <- context(identifier, directory, opts),
          {:ok, body} <-
-           call(ctx, :post, "/" <> identifier <> "/entries", Identity.canonical(rotation)) do
-      accepted(body, identifier, Identity.hash(rotation))
+           call(ctx, :post, "/" <> identifier <> "/append", Identity.canonical(entry)) do
+      written(body, identifier, Identity.hash(entry), [:accepted, :exists])
+    else
+      {:ok, %Entry{kind: :genesis}} -> {:error, :invalid_entry}
+      {:error, _reason} = refusal -> refusal
+    end
+  end
+
+  # ---- the reads ---------------------------------------------------------------
+
+  @doc "Every entry of `identifier`'s log at `directory`, from its genesis."
+  @spec log(String.t(), String.t(), opts()) :: {:ok, log()} | {:error, reason()}
+  def log(identifier, directory, opts \\ []) do
+    with {:ok, ctx} <- read_context(identifier, directory, opts),
+         {:ok, body} <- fetch(ctx, {:after, -1}),
+         {:ok, page} <- page(body, identifier, -1) do
+      read_on(ctx, page, [page.entries], 1)
     end
   end
 
   @doc """
-  Submit a signed recover request (its `Prima.Identity.RecoverRequest` or
-  JSON map) for `identifier`. Answers the committed entry, or its recorded
-  outcome for a request submitted before.
+  The entries of `identifier`'s log at `directory` after the entry hashing
+  to `hash`, which sits at position `seq`: none at the head. A hash the log
+  does not hold is `:not_found`.
   """
-  @spec recover(String.t(), genesis(), RecoverRequest.t() | map(), opts()) ::
-          {:ok,
-           %{
-             identifier: String.t(),
-             seq: non_neg_integer(),
-             entry_hash: String.t(),
-             entry: Entry.t()
-           }}
-          | {:error, reason()}
-  def recover(identifier, genesis, request, opts \\ []) do
-    with {:ok, ctx} <- prepare(identifier, genesis, opts),
-         {:ok, request} <- recover_request(request),
-         :ok <- for_this(request, identifier, ctx.genesis),
-         {:ok, body} <-
-           call(ctx, :post, "/" <> identifier <> "/recover", Identity.canonical(request)),
-         {:ok, answer} <- accepted(body, identifier, nil),
-         {:ok, entry} <- recovery_entry(body["entry"], answer.entry_hash, request) do
-      {:ok, Map.put(answer, :entry, entry)}
+  @spec entries_after(String.t(), String.t(), String.t(), non_neg_integer(), opts()) ::
+          {:ok, log()} | {:error, reason()}
+  def entries_after(identifier, directory, hash, seq, opts \\ [])
+
+  def entries_after(identifier, directory, hash, seq, opts)
+      when is_binary(hash) and is_integer(seq) and seq >= 0 do
+    with :ok <- locator(Encoding.digest?(hash)),
+         {:ok, ctx} <- read_context(identifier, directory, opts),
+         {:ok, body} <- fetch(ctx, {:from, hash}),
+         {:ok, page} <- page(body, identifier, seq) do
+      read_on(ctx, page, [page.entries], 1)
     end
   end
 
-  @doc """
-  This home's cached head of `identifier`: the verified state it stored,
-  decoded, and the row (its genesis, directory and `verified_at`).
-  """
-  @spec cached(String.t()) ::
-          {:ok, %{state: State.t(), head: map()}}
-          | {:error, :not_found | :corrupt | :unavailable}
-  def cached(identifier) when is_binary(identifier) do
-    case Arca.DirectoryHeads.get(system(), identifier) do
-      {:ok, row} ->
-        with {:ok, state} <- state(row), do: {:ok, %{state: state, head: row}}
-
-      {:error, :not_found} ->
-        {:error, :not_found}
-
-      {:error, _reason} ->
-        {:error, :unavailable}
-    end
-  end
-
-  @doc """
-  The verified state a cached head row holds (`Arca.DirectoryHeads`'s row,
-  as `cached/1` and `Sanctum.IdentityFreshness` answer it), held to the
-  row's identifier, head and epochs: `{:ok, state}`, or `{:error, :corrupt}`
-  for a row whose stored state does not decode to them.
-  """
-  @spec state(map()) :: {:ok, State.t()} | {:error, :corrupt}
-  def state(row) when is_map(row) do
-    case decode_state(row) do
-      {:ok, state} -> {:ok, state}
-      :error -> {:error, :corrupt}
-    end
-  end
+  def entries_after(_identifier, _directory, _hash, _seq, _opts),
+    do: {:error, :invalid_locator}
 
   # ---- before any request ------------------------------------------------------
 
-  defp prepare(identifier, genesis, opts) when is_binary(identifier) do
+  defp entry(%Entry{} = entry), do: entry |> Entry.encode() |> entry()
+
+  defp entry(bytes) when is_binary(bytes) do
+    case Prima.Json.decode(bytes) do
+      {:ok, %{} = map} -> entry(map)
+      _other -> {:error, :invalid_entry}
+    end
+  end
+
+  defp entry(%{} = map) do
+    case Entry.decode(map) do
+      {:ok, entry} -> {:ok, entry}
+      {:error, _reason} -> {:error, :invalid_entry}
+    end
+  end
+
+  defp entry(_value), do: {:error, :invalid_entry}
+
+  defp locator(true), do: :ok
+  defp locator(false), do: {:error, :invalid_locator}
+
+  # A read of a log this node serves as its account service's is made where
+  # it is kept (the module doc); any other, over the wire.
+  defp read_context(identifier, directory, opts) do
+    options!(opts)
+
+    with :ok <- locator(Encoding.identifier?(identifier) and Encoding.directory_url?(directory)) do
+      if served_here?(directory),
+        do: {:ok, %{identifier: identifier, local: true}},
+        else: context(identifier, directory, opts)
+    end
+  end
+
+  defp served_here?(directory) do
+    with {:ok, spelled} <- Encoding.canonical_home(directory),
+         {:ok, ^spelled} <- Sanctum.Directory.served() do
+      Sanctum.Directory.writer?()
+    else
+      _elsewhere -> false
+    end
+  end
+
+  defp context(identifier, directory, opts) do
     opts = options!(opts)
 
-    with {:ok, located} <- Identity.locate(genesis, identifier),
-         {:ok, base, origin} <- target(located.directory) do
+    with :ok <- locator(Encoding.identifier?(identifier) and Encoding.directory_url?(directory)),
+         {:ok, base, origin} <- target(directory) do
       {:ok,
        %{
          identifier: identifier,
-         genesis: located,
+         local: false,
          base: base,
          origin: origin,
          transport: transport(opts),
@@ -321,7 +288,7 @@ defmodule Sanctum.Directory.Client do
     end
   end
 
-  # A genesis's directory URL is already a validated spelling
+  # A directory URL is already a validated spelling
   # (`Prima.Identity.Encoding.directory_url?/1`); HTTPS is spoken, or
   # plain HTTP to a loopback host (`Sanctum.directory_transport?/1`).
   defp target(directory) do
@@ -347,33 +314,56 @@ defmodule Sanctum.Directory.Client do
       else: base
   end
 
-  # `Prima.Identity.Entry.decode/1` reads a signed entry only.
-  defp rotation(bytes) do
-    with {:ok, %{} = map} <- Jason.decode(bytes),
-         {:ok, %Entry{} = entry} <- Entry.decode(map) do
-      if entry.kind == :rotate, do: {:ok, entry}, else: {:error, :not_rotate}
+  # ---- one page ----------------------------------------------------------------
+
+  # One page of a log, from this node's own directory where it is kept, or
+  # over the wire.
+  defp fetch(%{local: true, identifier: identifier}, at) do
+    case Sanctum.Directory.read(identifier, at) do
+      {:ok, page} -> served_page(page)
+      {:error, reason} -> {:error, served_refusal(reason)}
+    end
+  end
+
+  defp fetch(ctx, {:after, after_seq}),
+    do: call(ctx, :get, "/#{ctx.identifier}?after=#{after_seq}", nil)
+
+  defp fetch(ctx, {:from, hash}), do: call(ctx, :get, "/#{ctx.identifier}/from/#{hash}", nil)
+
+  # The page as the directory's route sends it, its stored entries decoded
+  # as a response body's are, so the reader checks it as it checks one
+  # that came over the wire.
+  defp served_page(page) do
+    decoded = Enum.map(page.entries, &Jason.decode/1)
+
+    if Enum.all?(decoded, &match?({:ok, %{}}, &1)) do
+      {:ok,
+       %{
+         "identifier" => page.identifier,
+         "from" => page.from,
+         "entries" => Enum.map(decoded, &elem(&1, 1)),
+         "next" => page.next,
+         "head" => page.head,
+         "length" => page.length
+       }}
     else
-      _other -> {:error, :invalid_entry}
+      {:error, :invalid_response}
     end
   end
 
-  defp recover_request(%RecoverRequest{} = request),
-    do: recover_request(RecoverRequest.encode(request))
+  # A refusal as the directory's route would carry it and `refusal/3` read
+  # it back (`Emissary.Web.DirectoryController`'s codes).
+  defp served_refusal(reason) when reason in [:not_served, :not_found, :gone, :corrupt],
+    do: reason
 
-  defp recover_request(map) when is_map(map) do
-    case RecoverRequest.decode(map) do
-      {:ok, request} -> {:ok, request}
-      {:error, _reason} -> {:error, :invalid_request}
-    end
-  end
+  defp served_refusal({:invalid, {tag, _field}}) when is_atom(tag),
+    do: {:refused, :invalid, Atom.to_string(tag)}
 
-  # A request for another identifier or directory is refused by the
-  # directory; saying so here spends no request on it.
-  defp for_this(%RecoverRequest{identifier: identifier} = request, identifier, genesis) do
-    if request.directory == genesis.directory, do: :ok, else: {:error, :directory_changed}
-  end
+  defp served_refusal({:invalid, reason}) when is_atom(reason),
+    do: {:refused, :invalid, Atom.to_string(reason)}
 
-  defp for_this(%RecoverRequest{}, _identifier, _genesis), do: {:error, :wrong_identifier}
+  defp served_refusal({:capacity, _which}), do: {:capacity, 60}
+  defp served_refusal(_unavailable), do: {:unavailable, 1}
 
   # ---- one request -------------------------------------------------------------
 
@@ -464,23 +454,18 @@ defmodule Sanctum.Directory.Client do
   defp refusal(404, %{"error" => "not_served"}, _headers), do: :not_served
   defp refusal(404, _body, _headers), do: :not_found
   defp refusal(405, _body, _headers), do: :read_only
+  defp refusal(410, %{"error" => "gone"}, _headers), do: :gone
   defp refusal(413, _body, _headers), do: :body_too_large
 
   defp refusal(409, %{"error" => "stale_head", "head" => head}, _headers) when is_binary(head) do
     if Encoding.digest?(head), do: {:stale_head, head}, else: :invalid_response
   end
 
-  defp refusal(409, %{"error" => "stale_policy", "recorded" => %{} = recorded}, _headers),
-    do: {:stale_policy, recorded}
-
-  defp refusal(409, %{"error" => "request_id_reused"}, _headers), do: :request_id_reused
+  defp refusal(409, %{"error" => "duplicate_key"}, _headers), do: :duplicate_key
   defp refusal(409, _body, _headers), do: :conflict
 
   defp refusal(422, %{"error" => "unverified"} = body, _headers),
     do: {:refused, :unverified, reason_text(body)}
-
-  defp refusal(422, %{"error" => "wrong_identifier"}, _headers),
-    do: {:refused, :wrong_identifier, nil}
 
   defp refusal(422, %{"error" => "wrong_directory"}, _headers),
     do: {:refused, :wrong_directory, nil}
@@ -488,7 +473,6 @@ defmodule Sanctum.Directory.Client do
   defp refusal(422, body, _headers), do: {:refused, :invalid, reason_text(body)}
   defp refusal(429, _body, headers), do: {:rate_limited, retry_after(headers)}
   defp refusal(503, %{"error" => "capacity"}, headers), do: {:capacity, retry_after(headers)}
-  defp refusal(503, %{"error" => "busy"}, headers), do: {:busy, retry_after(headers)}
   defp refusal(503, _body, headers), do: {:unavailable, retry_after(headers)}
   defp refusal(500, %{"error" => "corrupt"}, _headers), do: :corrupt
   defp refusal(status, _body, _headers), do: {:status, status}
@@ -512,72 +496,46 @@ defmodule Sanctum.Directory.Client do
 
   # ---- answers -----------------------------------------------------------------
 
-  defp accepted(body, identifier, expected_hash) do
-    with %{"identifier" => ^identifier, "seq" => seq, "entry_hash" => hash}
+  # The write's answer for exactly the entry sent: its identifier, its hash,
+  # a result the call takes, and for `exists` the head it names.
+  defp written(body, identifier, hash, results) do
+    with %{"identifier" => ^identifier, "seq" => seq, "entry_hash" => ^hash, "result" => word}
          when is_integer(seq) and seq >= 0 <- body,
-         true <- Encoding.digest?(hash),
-         true <- is_nil(expected_hash) or hash == expected_hash do
-      {:ok, %{identifier: identifier, seq: seq, entry_hash: hash}}
+         {:ok, result} <- result(word, results),
+         {:ok, head} <- exists_head(result, body) do
+      answer = %{identifier: identifier, seq: seq, entry_hash: hash, result: result}
+      {:ok, if(head, do: Map.put(answer, :head, head), else: answer)}
     else
       _ -> {:error, :invalid_response}
     end
   end
 
-  # The committed recovery entry must embed exactly the request sent and
-  # hash to the hash the directory names.
-  defp recovery_entry(%{} = map, hash, %RecoverRequest{} = request) do
-    with {:ok, %Entry{kind: :recover} = entry} <- Entry.decode(map),
-         true <- Identity.hash(entry) == hash,
-         true <- Identity.request_digest(entry.request) == Identity.request_digest(request) do
-      {:ok, entry}
-    else
-      _ -> {:error, :invalid_response}
+  defp result(word, results) do
+    case Enum.find(results, &(Atom.to_string(&1) == word)) do
+      nil -> :error
+      result -> {:ok, result}
     end
   end
 
-  defp recovery_entry(_value, _hash, _request), do: {:error, :invalid_response}
-
-  # ---- resolution --------------------------------------------------------------
-
-  # The cached head is read before the log, so the log read after it must
-  # contain it: a log that does not is not the history this home verified.
-  # A cache another resolution moved in between is read again, with the
-  # log, at most `@cache_rounds` times in all.
-  defp resolve_in(ctx, rounds) do
-    with {:ok, baseline} <- baseline(ctx.identifier),
-         {:ok, log} <- read_log(ctx, -1, [], 0),
-         {:ok, state} <- verified(ctx, log) do
-      case settle(ctx, baseline, state, log.entries) do
-        :moved when rounds > 1 -> resolve_in(ctx, rounds - 1)
-        :moved -> {:error, :busy}
-        settled -> settled
-      end
-    end
+  defp exists_head(:exists, %{"head" => head}) when is_binary(head) do
+    if Encoding.digest?(head), do: {:ok, head}, else: :error
   end
 
-  defp baseline(identifier) do
-    case Arca.DirectoryHeads.get(system(), identifier) do
-      {:ok, row} -> {:ok, row}
-      {:error, :not_found} -> {:ok, nil}
-      {:error, _reason} -> {:error, :unavailable}
-    end
+  defp exists_head(:exists, _body), do: :error
+  defp exists_head(_result, _body), do: {:ok, nil}
+
+  # Every page after the first, from its `next`, until one names none.
+  defp read_on(_ctx, _page, _pages, @max_pages), do: {:error, :too_many_pages}
+
+  defp read_on(_ctx, %{next: nil} = page, pages, _count) do
+    entries = pages |> Enum.reverse() |> Enum.concat()
+    {:ok, %{entries: entries, head: page.head, length: page.length}}
   end
 
-  defp read_log(_ctx, _after, _pages, @max_pages), do: {:error, :too_many_pages}
-
-  defp read_log(ctx, after_seq, pages, count) do
-    with {:ok, body} <- call(ctx, :get, "/#{ctx.identifier}?after=#{after_seq}", nil),
-         {:ok, page} <- page(body, ctx.identifier, after_seq) do
-      pages = [page.entries | pages]
-
-      case page.next do
-        nil ->
-          entries = pages |> Enum.reverse() |> Enum.concat()
-          {:ok, %{entries: entries, head: page.head, length: page.length}}
-
-        next ->
-          read_log(ctx, next, pages, count + 1)
-      end
+  defp read_on(ctx, %{next: next}, pages, count) do
+    with {:ok, body} <- fetch(ctx, {:after, next}),
+         {:ok, page} <- page(body, ctx.identifier, next) do
+      read_on(ctx, page, [page.entries | pages], count + 1)
     end
   end
 
@@ -611,149 +569,5 @@ defmodule Sanctum.Directory.Client do
 
   defp next_links?(_next, _after_seq, _entries), do: false
 
-  # The whole log verified from the genesis, which must be the one this
-  # identifier hashes from, and reaching the head and length the last page
-  # named: a log that stops short of its own head is truncated.
-  defp verified(ctx, log) do
-    with {:ok, state} <- chain(log.entries) do
-      cond do
-        state.identifier != ctx.identifier -> {:error, :identifier_mismatch}
-        state.length != log.length or state.head != log.head -> {:error, :truncated}
-        true -> {:ok, state}
-      end
-    end
-  end
-
-  defp chain(entries) do
-    case Identity.verify_chain(entries) do
-      {:ok, state} -> {:ok, state}
-      {:error, {_index, reason}} -> {:error, {:unverified, reason}}
-    end
-  end
-
-  defp settle(ctx, nil, state, _entries) do
-    attrs = ctx |> cache_attrs(state) |> Map.put(:identifier, ctx.identifier)
-
-    case Arca.DirectoryHeads.put(system(), attrs) do
-      {:ok, row} -> {:ok, %{state: state, head: row, retired: nothing_retired()}}
-      {:error, :exists} -> :moved
-      {:error, reason} -> cache_refusal(reason)
-    end
-  end
-
-  defp settle(ctx, cached, state, entries) do
-    cond do
-      cached.genesis != Identity.canonical(ctx.genesis) or
-          cached.directory_url != ctx.genesis.directory ->
-        {:error, :binding_changed}
-
-      cached.head_hash == state.head ->
-        case Arca.DirectoryHeads.touch(system(), ctx.identifier, state.head) do
-          {:ok, row} -> {:ok, %{state: state, head: row, retired: nothing_retired()}}
-          {:error, :stale} -> :moved
-          {:error, reason} -> cache_refusal(reason)
-        end
-
-      descends?(entries, cached.head_hash) ->
-        case Arca.DirectoryHeads.advance(
-               system(),
-               ctx.identifier,
-               cached.head_hash,
-               cache_attrs(ctx, state)
-             ) do
-          {:ok, %{head: row, retired: retired}} ->
-            {:ok, %{state: state, head: row, retired: retired}}
-
-          {:error, :stale} ->
-            :moved
-
-          {:error, :binding_changed} ->
-            {:error, :binding_changed}
-
-          {:error, reason} ->
-            cache_refusal(reason)
-        end
-
-      true ->
-        Logger.warning(
-          "[Sanctum.Directory.Client] the directory #{ctx.genesis.directory} served a log " <>
-            "of #{ctx.identifier} that does not contain the head this home verified; the " <>
-            "cache is left as it was"
-        )
-
-        {:error, :not_descendant}
-    end
-  end
-
-  defp descends?(entries, head) do
-    Enum.any?(entries, fn map ->
-      {:ok, entry} = Entry.decode(map)
-      Identity.hash(entry) == head
-    end)
-  end
-
-  defp cache_attrs(ctx, state) do
-    %{
-      genesis: Identity.canonical(ctx.genesis),
-      directory_url: ctx.genesis.directory,
-      head_hash: state.head,
-      key_epoch: state.key_epoch,
-      recovery_epoch: state.recovery_epoch,
-      state: Jason.encode!(State.encode(state))
-    }
-  end
-
-  defp cache_refusal(:not_owner), do: {:error, :not_owner}
-
-  defp cache_refusal(reason) do
-    Logger.warning("[Sanctum.Directory.Client] the head cache refused: #{inspect(reason)}")
-    {:error, :unavailable}
-  end
-
-  defp nothing_retired,
-    do: %{session_hashes: [], passkey_ids: [], confirmation_ids: [], certificate_ids: []}
-
-  # ---- the cached state --------------------------------------------------------
-
-  # `Prima.Identity.State.encode/1`'s JSON, as `resolve/3` stored it, held
-  # to the row it sits on.
-  defp decode_state(row) do
-    with {:ok, %{} = map} <- Jason.decode(row.state),
-         {:ok, identifier} <- Encoding.check(map, "identifier", &Encoding.identifier?/1),
-         {:ok, directory} <- Encoding.check(map, "directory", &Encoding.directory_url?/1),
-         {:ok, head} <- Encoding.check(map, "head", &Encoding.digest?/1),
-         {:ok, epoch} <- Encoding.check(map, "key_epoch", &Encoding.digest?/1),
-         {:ok, recovery_epoch} <- Encoding.check(map, "recovery_epoch", &Encoding.digest?/1),
-         {:ok, live} <- Encoding.binary(map, "live_key", Encoding.key_bytes()),
-         {:ok, operational} <- Encoding.binary(map, "operational_key", Encoding.key_bytes()),
-         {:ok, recovery} <- Encoding.keys(map, "recovery_keys"),
-         {:ok, revision} <- Encoding.check(map, "revision", &(is_integer(&1) and &1 >= 0)),
-         {:ok, length} <- Encoding.check(map, "length", &(is_integer(&1) and &1 > 0)),
-         {:ok, request_ids} <- Encoding.check(map, "request_ids", &request_ids?/1),
-         true <-
-           {identifier, head, epoch, recovery_epoch} ==
-             {row.identifier, row.head_hash, row.key_epoch, row.recovery_epoch} do
-      {:ok,
-       %State{
-         identifier: identifier,
-         directory: directory,
-         head: head,
-         key_epoch: epoch,
-         recovery_epoch: recovery_epoch,
-         live_key: live,
-         operational_key: operational,
-         recovery_keys: recovery,
-         revision: revision,
-         length: length,
-         request_ids: request_ids
-       }}
-    else
-      _ -> :error
-    end
-  end
-
-  defp request_ids?(ids), do: is_list(ids) and Enum.all?(ids, &Encoding.id?/1)
-
-  defp system, do: Prima.Actor.system()
   defp now, do: System.monotonic_time(:millisecond)
 end

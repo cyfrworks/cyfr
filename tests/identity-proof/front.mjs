@@ -13,13 +13,9 @@
 // A control listener beside it (plain HTTP, the same address) lets the
 // proof break the directory on purpose, and reports what reached it:
 //
-//   POST /fault {"mode": …}   none | down | drop-recover | block-reads-after-recover
+//   POST /fault {"mode": …}   none | down
 //     down                       every connection is closed before it is
 //                                answered: the directory is unreachable
-//     drop-recover               the next recovery is forwarded, and its
-//                                answer is never delivered: a lost reply
-//     block-reads-after-recover  once a recovery is answered, every read of
-//                                a log is closed unanswered until cleared
 //   GET /seen                 every request: method, path, status, fault
 //   GET /health               200 once listening, with the TOKEN it was
 //                             started with, so front.sh accepts readiness
@@ -38,24 +34,17 @@ if (!listen || !controlPort || !name || !cert || !key || !upstreamPort || !token
 }
 const [host, port] = listen.split(":");
 let mode = "none";
-let readsBlocked = false;
 const seen = [];
-
-const isRecover = (req) => req.method === "POST" && /^\/directory\/v1\/[^/]+\/recover$/.test(req.url.split("?")[0]);
-const isRead = (req) => req.method === "GET" && /^\/directory\/v1\/[^/]+$/.test(req.url.split("?")[0]);
 
 const front = createTls({ cert: readFileSync(cert), key: readFileSync(key) }, (req, res) => {
   const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, status: null, fault: null };
   seen.push(account);
 
-  if (mode === "down" || (readsBlocked && isRead(req))) {
-    account.fault = mode === "down" ? "down" : "read-blocked";
+  if (mode === "down") {
+    account.fault = "down";
     req.socket.destroy();
     return;
   }
-
-  const dropping = mode === "drop-recover" && isRecover(req);
-  if (dropping) mode = "none";
 
   const outbound = forward({
     host: "127.0.0.1",
@@ -70,14 +59,6 @@ const front = createTls({ cert: readFileSync(cert), key: readFileSync(key) }, (r
     },
   }, (upstream) => {
     account.status = upstream.statusCode;
-    if (dropping) {
-      // The directory answered; the answer never reaches the home.
-      account.fault = "reply-dropped";
-      upstream.resume();
-      upstream.on("end", () => req.socket.destroy());
-      return;
-    }
-    if (mode === "block-reads-after-recover" && isRecover(req) && upstream.statusCode === 200) readsBlocked = true;
     res.writeHead(upstream.statusCode, upstream.rawHeaders);
     upstream.pipe(res);
   });
@@ -103,9 +84,8 @@ const control = createHttp((req, res) => {
     req.on("end", () => {
       try {
         const next = JSON.parse(body).mode;
-        if (!["none", "down", "drop-recover", "block-reads-after-recover"].includes(next)) return reply(422, { error: "unknown mode" });
+        if (!["none", "down"].includes(next)) return reply(422, { error: "unknown mode" });
         mode = next;
-        readsBlocked = false;
         return reply(200, { mode });
       } catch {
         return reply(400, { error: "unreadable" });

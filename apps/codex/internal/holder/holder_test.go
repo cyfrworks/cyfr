@@ -19,8 +19,6 @@ import (
 	"testing"
 )
 
-const testHome = "https://home.example"
-
 // software is one software record shared by the tests that only read it:
 // Argon2id at 64 MiB makes each seal and open take a noticeable moment.
 var software struct {
@@ -40,7 +38,7 @@ func softwareRecord(t *testing.T) (*Record, []byte) {
 			return
 		}
 		software.pass = []byte(pass)
-		software.rec, software.err = NewSoftware(testHome, "request-1", "admission-1", software.pass)
+		software.rec, software.err = NewSoftware(software.pass)
 	})
 	if software.err != nil {
 		t.Fatalf("create the software record: %v", software.err)
@@ -124,7 +122,7 @@ func TestCheckPassphrase(t *testing.T) {
 
 func TestNewSoftwareRefusesDigits(t *testing.T) {
 	for _, p := range []string{"123456", "000000", "1234567890", "abandon ability able about above 1"} {
-		if r, err := NewSoftware(testHome, "r", "a", []byte(p)); !errors.Is(err, ErrSecretShape) || r != nil {
+		if r, err := NewSoftware([]byte(p)); !errors.Is(err, ErrSecretShape) || r != nil {
 			t.Errorf("NewSoftware(%q) = record %t, %v; want ErrSecretShape", p, r != nil, err)
 		}
 	}
@@ -145,8 +143,7 @@ func TestCheckPIN(t *testing.T) {
 
 func TestSoftwareRoundTrip(t *testing.T) {
 	r, pass := softwareRecord(t)
-	if r.Version != 1 || r.Kind != KindSoftware || r.Home != testHome || r.RequestID != "request-1" ||
-		r.Admission != "admission-1" || r.Chip != nil || len(r.PublicKey) != ed25519.PublicKeySize {
+	if r.Version != 2 || r.Kind != KindSoftware || r.Identifier != "" || r.Chip != nil || len(r.PublicKey) != ed25519.PublicKeySize {
 		t.Fatalf("record = %+v", r)
 	}
 	if s := r.Software; s.Time != 3 || s.MemoryKiB != 65536 || s.Threads != 4 || s.KeyLen != 32 ||
@@ -172,7 +169,7 @@ func TestSoftwareRoundTrip(t *testing.T) {
 
 func TestSoftwareFreshSeedEachTime(t *testing.T) {
 	r, pass := softwareRecord(t)
-	again, err := NewSoftware(testHome, "request-1", "admission-1", pass)
+	again, err := NewSoftware(pass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +193,6 @@ func TestSoftwareTamperRefused(t *testing.T) {
 		"ciphertext": func(r *Record) { r.Software.Ciphertext[0] ^= 1 },
 		"nonce":      func(r *Record) { r.Software.Nonce[0] ^= 1 },
 		"salt":       func(r *Record) { r.Software.Salt[0] ^= 1 },
-		"home":       func(r *Record) { r.Home = "https://other.example" },
 		"public key": func(r *Record) { r.PublicKey[0] ^= 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -249,33 +245,29 @@ func TestOpenDecryptsEveryCall(t *testing.T) {
 		k.Erase()
 	}
 	path := filepath.Join(t.TempDir(), "key.json")
-	r.Home = "https://moved.example"
+	r.Identifier, r.Directory = "per_"+strings.Repeat("ab", 32), "https://cyfr.run"
 	if err := r.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	moved, err := Load(path)
+	listed, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := moved.Open(pass); !errors.Is(err, ErrWrongSecret) {
-		t.Fatalf("Open of the saved record with a changed home = %v; want ErrWrongSecret", err)
+	k, err := listed.Open(pass)
+	if err != nil {
+		t.Fatalf("Open of the saved record once its account is named = %v", err)
 	}
-	if _, err := r.Open(pass); !errors.Is(err, ErrWrongSecret) {
-		t.Fatalf("Open of the opened record with a changed home = %v; want ErrWrongSecret", err)
-	}
+	k.Erase()
 }
 
 func TestSaveLoad(t *testing.T) {
 	r, _ := softwareRecord(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "key.json")
-	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+	if err := r.Create(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Save(path); err != nil {
-		t.Fatal(err)
-	}
-	r.ClientID, r.Athanor, r.Certificate = "client-1", "athanor-1", json.RawMessage(`{"chain":["x"]}`)
+	r.Identifier, r.Directory = "per_"+strings.Repeat("cd", 32), "https://cyfr.run"
 	if err := r.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +302,7 @@ func TestSaveLoad(t *testing.T) {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	if w := []string{"admission", "athanor", "certificate", "client_id", "home", "kind", "public_key", "request_id", "software", "version"}; !slices.Equal(keys, w) {
+	if w := []string{"directory", "identifier", "kind", "public_key", "software", "version"}; !slices.Equal(keys, w) {
 		t.Fatalf("record keys = %v, want %v", keys, w)
 	}
 	if doc["public_key"] != base64.RawURLEncoding.EncodeToString(r.PublicKey) {
@@ -324,7 +316,8 @@ func TestLoadRefuses(t *testing.T) {
 	}
 	r, _ := softwareRecord(t)
 	for name, edit := range map[string]func(doc map[string]any){
-		"unknown version":      func(doc map[string]any) { doc["version"] = 2 },
+		"unknown version":      func(doc map[string]any) { doc["version"] = 3 },
+		"a record of one CYFR": func(doc map[string]any) { doc["version"] = 1 },
 		"unknown kind":         func(doc map[string]any) { doc["kind"] = "paper" },
 		"chip kind":            func(doc map[string]any) { doc["kind"] = "chip" },
 		"both blobs":           func(doc map[string]any) { doc["chip"] = map[string]any{"public": "", "private": ""} },
@@ -350,5 +343,54 @@ func TestLoadRefuses(t *testing.T) {
 				t.Fatalf("Load accepted %s: %+v", data, got)
 			}
 		})
+	}
+}
+
+// The first key a machine makes is the one it keeps: a second Create at
+// the same path, of another key, answers ErrKeyExists and leaves the
+// first whole, and no save replaces a record of another key, or a file
+// that is no record; a save of the same key replaces it.
+func TestCreateAndSaveKeepTheFirstKey(t *testing.T) {
+	first, _ := softwareRecord(t)
+	pass, err := GeneratePassphrase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewSoftware([]byte(pass))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "key.json")
+	if err := first.Create(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Create(path); !errors.Is(err, ErrKeyExists) {
+		t.Fatalf("a second Create = %v; want ErrKeyExists", err)
+	}
+	if err := second.Save(path); !errors.Is(err, ErrOtherKey) {
+		t.Fatalf("a Save of another key = %v; want ErrOtherKey", err)
+	}
+	held, err := Load(path)
+	if err != nil || !bytes.Equal(held.PublicKey, first.PublicKey) {
+		t.Fatalf("the record holds %v (%v), not the first key", held, err)
+	}
+	first.Identifier = "per_" + strings.Repeat("e", 64)
+	if err := first.Save(path); err != nil {
+		t.Fatalf("a Save of the same key = %v", err)
+	}
+	if held, _ := Load(path); held.Identifier != first.Identifier {
+		t.Fatal("the same key's save was not kept")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("the directory holds %v, want only key.json", entries)
+	}
+	other := filepath.Join(dir, "other.json")
+	if err := os.WriteFile(other, []byte("not a record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Save(other); err == nil {
+		t.Fatal("a Save replaced a file that is no record")
 	}
 }

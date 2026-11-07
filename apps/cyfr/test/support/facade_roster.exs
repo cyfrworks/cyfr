@@ -21,7 +21,6 @@
   "Sanctum" => [
     "Sanctum.Annotations",
     "Sanctum.Attach",
-    "Sanctum.Auth.CyfrDoor",
     "Sanctum.Consent",
     "Sanctum.Decisions",
     "Sanctum.DeviceCerts",
@@ -29,7 +28,6 @@
     "Sanctum.Gate",
     "Sanctum.Pairing",
     "Sanctum.Passkeys",
-    "Sanctum.Recovery",
     "Sanctum.RegistryCredentials",
     "Sanctum.RequestLog",
     "Sanctum.Resources",

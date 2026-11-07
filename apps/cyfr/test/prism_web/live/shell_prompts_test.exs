@@ -416,7 +416,7 @@ defmodule PrismWeb.ShellPromptsTest do
 
       assert html =~ ~s(data-kind="pairing")
       assert has_element?(view, ~s([data-test="pairing-none"]))
-      assert has_element?(view, ~s([data-test="pairing-begin"]), "Pair a device")
+      refute has_element?(view, ~s([data-test="pairing-begin"]))
       [prompt_id] = Regex.run(~r/data-prompt-id="(pairing-[^"]+)"/, html, capture: :all_but_first)
 
       # Asked again while it is open: the same prompt, and keys typed into

@@ -12,50 +12,28 @@ defmodule Sanctum.DeviceWriteWindowTest do
   provider's client credentials) holds the device's client and
   certificate in that transaction (`Sanctum.Issuance.device_hold/1`); the
   revocation commits between the confirmation and the write. A change
-  whose confirmation is consumed in its write's own transaction (a
-  certification for another home, another recovery code, a live-key
-  rotation, a remote sign-in assertion, a passkey) is held there
-  by the consumption (`Sanctum.Consent.Authz.consume/2`); the revocation lands
-  inside that transaction, right after the device's standing was read
-  there. A device never reaches a door's link or unlink, which are a
-  session's. Each change still completes while the device stands.
+  whose confirmation is consumed in its write's own transaction is held
+  there by the consumption (`Sanctum.Consent.Authz.consume/2`); the
+  revocation lands inside that transaction, right after the device's
+  standing was read there. Each change still completes while the device
+  stands.
 
   These need what only this suite has: the component domain a webhook's
   target is checked in. A grant's token endpoint is a scripted
-  provider's (`:sanctum, :scripted_oauth_provider`). The rotation and the
-  vault's own writes are the sanctum suite's (`Sanctum.IssuanceTest`),
+  provider's (`:sanctum, :scripted_oauth_provider`). The vault's own
+  writes are the sanctum suite's (`Sanctum.IssuanceTest`),
   and two connections racing a consumption and a revocation are
   `Sanctum.Consent.AuthzRaceTest`'s.
   """
 
   use ExUnit.Case, async: false
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{DeviceCertification, IdentityAttempt, Passkey, PersonIdentity}
-  alias Prima.DeviceCert.{Challenge, Proof}
-  alias Prima.Identity.Encoding
-
-  alias Sanctum.{
-    Context,
-    DeviceCerts,
-    IdentityFreshness,
-    Pairing,
-    Passkeys,
-    Person,
-    ProviderCredentials,
-    Recovery,
-    RemoteCertification,
-    SignIn
-  }
+  alias Sanctum.{Context, DeviceCerts, Pairing, ProviderCredentials}
 
   alias Sanctum.Consent.Authz
   alias Sanctum.Test.DirectoryServer, as: Directory
-  alias Sanctum.TestContext.Authenticator
   alias Sanctum.Vault.OAuthGrant
 
   @source "198.51.100.11"
@@ -64,7 +42,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # Where the grants' entries may go, as `Prima.Destination`'s canonical
   # text; no case reads a token, so they stay attach-only.
   @destination ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"})
-  @hub "https://hub.example"
 
   setup_all do
     %{tls: Directory.tls()}
@@ -133,47 +110,11 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A device paired through the ceremony, and its context once a request
-  # under its certificate verified.
+  # A device of the person's account paired here, and its context once a
+  # request under its certificate verified.
   defp paired!(session_ctx) do
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    digest = Prima.Device.key_digest(device_key)
-
-    {:ok, invitation} =
-      session_ctx
-      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{"key_digest" => digest})
-
-    glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{holder: @holder, device_key: device_key}
-
-    {:ok, %{challenge: pairing}} =
-      Pairing.complete(glass, invitation.invitation_secret, submission)
-
-    {:ok, %{client_id: client_id, certificate: certificate}} =
-      Pairing.complete(
-        glass,
-        invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.encode(Proof.sign(pairing, private)))
-      )
-
-    {:ok, challenge} =
-      Challenge.new(
-        purpose: :connect,
-        home: certificate.audience,
-        athanor: certificate.athanor,
-        client_id: client_id,
-        device_key: certificate.device_key,
-        nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
-        now: System.system_time(:millisecond)
-      )
-
-    {:ok, ctx} =
-      DeviceCerts.verify_connect(
-        %{client_id: client_id, certificate: certificate, source: @source},
-        Proof.sign(challenge, private),
-        challenge
-      )
+    %{client_id: client_id, certificate: certificate, ctx: ctx} =
+      Sanctum.Test.Devices.paired!(session_ctx.user_id, @source)
 
     {:ok, ctx} = DeviceCerts.verify_request(certificate, ctx)
     {client_id, ctx}
@@ -251,67 +192,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
     send(held, :release)
     Task.await(task, 25_000)
   end
-
-  # A handler on the repo's statements: the process that put
-  # `{test, actor, client_id}` under `:revoke_in_place` revokes that client
-  # right after its first read of a paired client inside a transaction (the
-  # device's standing read where its change is consumed, in the write's own
-  # transaction), and tells the test what the revocation answered.
-  @doc false
-  def revoke_in_place(_event, _measurements, %{source: "paired_clients"}, _config) do
-    with {test, actor, client_id} <- Process.get(:revoke_in_place),
-         true <- Arca.Repo.in_transaction?() do
-      Process.delete(:revoke_in_place)
-      send(test, {:revoked_in_place, Arca.PairedClients.revoke(actor, client_id)})
-    end
-
-    :ok
-  end
-
-  def revoke_in_place(_event, _measurements, _metadata, _config), do: :ok
-
-  # `write`, run here with the person's revocation of the device landing
-  # inside the write's own transaction, right after the device's standing
-  # was read there: on the one connection a sandboxed test has, the only
-  # point a revocation can land between that read and the write. A refused
-  # write rolls the revocation back with everything else, so a case
-  # asserts what the write answered and that nothing was written.
-  defp revoked_in_place(session_ctx, client_id, write) do
-    handler = "device-write-in-place-#{System.unique_integer([:positive])}"
-    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_in_place/4, nil)
-    on_exit(fn -> :telemetry.detach(handler) end)
-    Process.put(:revoke_in_place, {self(), Context.actor(session_ctx), client_id})
-
-    answer =
-      try do
-        write.()
-      after
-        Process.delete(:revoke_in_place)
-        :telemetry.detach(handler)
-      end
-
-    assert_received {:revoked_in_place, {:ok, %{standing: "revoked"}}}
-    answer
-  end
-
-  # `site` under the device's `ctx` as its person confirms it
-  # (`Sanctum.TestContext.confirming/2`): asked, proven, then repeated under
-  # the proven record with the device revoked at its write.
-  defp revoked_at_its_write(session_ctx, client_id, ctx, site) do
-    Sanctum.TestContext.confirming(ctx, fn
-      %Context{confirmation_id: nil} = asking -> site.(asking)
-      repeating -> revoked_in_place(session_ctx, client_id, fn -> site.(repeating) end)
-    end)
-  end
-
-  defp confirmations(user_id) do
-    Arca.Repo.aggregate(from(c in "pending_confirmations", where: c.user_id == ^user_id), :count)
-  end
-
-  defp identity(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
-  defp attempt(request_id), do: Arca.Repo.get_by(IdentityAttempt, request_id: request_id)
-  defp request_id, do: "req_#{System.unique_integer([:positive])}"
-  defp recovery_secret, do: :crypto.strong_rand_bytes(32)
 
   defp webhook?(ctx, name) do
     Arca.Repo.exists?(
@@ -590,295 +470,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
       assert {:ok, %{"client_id" => "glass-id", "client_secret" => "glass"}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, @provider)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # A passkey
-  # ---------------------------------------------------------------------------
-
-  # The browser's registration of a new authenticator under the device's
-  # context, and the credential id it stores.
-  defp glass_registration!(ctx) do
-    authenticator = Authenticator.new("glass-#{System.unique_integer([:positive])}")
-    {:ok, options} = Passkeys.register(ctx, %{})
-    credential = Authenticator.registration(authenticator, options)
-    {credential, Encoding.b64(authenticator.credential_id)}
-  end
-
-  defp passkey?(credential_id),
-    do: Arca.Repo.exists?(from(p in Passkey, where: p.credential_id == ^credential_id))
-
-  describe "a passkey a device registers" do
-    test "is refused by a revocation at its write: none is stored", %{session_ctx: session_ctx} do
-      {client_id, ctx} = paired!(session_ctx)
-      {credential, credential_id} = glass_registration!(ctx)
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &Passkeys.register(&1, %{credential: credential})
-               )
-
-      refute passkey?(credential_id)
-    end
-
-    test "is registered while the device stands", %{session_ctx: session_ctx} do
-      {_client_id, ctx} = paired!(session_ctx)
-      {credential, credential_id} = glass_registration!(ctx)
-
-      assert {:ok, %{status: "active"}} =
-               Sanctum.TestContext.confirming(
-                 ctx,
-                 &Passkeys.register(&1, %{credential: credential})
-               )
-
-      assert passkey?(credential_id)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # A door
-  # ---------------------------------------------------------------------------
-
-  describe "a door a device names" do
-    test "is never linked from a device: refused at the door, nothing opened or written",
-         %{session_ctx: session_ctx, user: user} do
-      {_client_id, ctx} = paired!(session_ctx)
-      asked = confirmations(user.id)
-      {:ok, doors} = Arca.Users.identities(Prima.Actor.system(), user.id)
-      ticket = Encoding.b64(:crypto.strong_rand_bytes(32))
-
-      assert {:error, :unauthenticated} = SignIn.link_door(ctx, "github", ticket)
-
-      assert confirmations(user.id) == asked
-      assert {:ok, ^doors} = Arca.Users.identities(Prima.Actor.system(), user.id)
-    end
-
-    test "is never unlinked from a device: refused at the door, the door stays",
-         %{session_ctx: session_ctx, user: user} do
-      {_client_id, ctx} = paired!(session_ctx)
-      asked = confirmations(user.id)
-      {:ok, [door | _] = doors} = Arca.Users.identities(Prima.Actor.system(), user.id)
-
-      assert {:error, :unauthenticated} = SignIn.unlink_door(ctx, door.key)
-
-      assert confirmations(user.id) == asked
-      assert {:ok, ^doors} = Arca.Users.identities(Prima.Actor.system(), user.id)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # The person's identity
-  # ---------------------------------------------------------------------------
-
-  # The person enrolled at the scripted directory, as their admission
-  # enrolls them and `registry.register` registers them; answers their
-  # recovery code.
-  defp enrolled!(session_ctx, opts) do
-    identity = Sanctum.Test.Newcomers.identity()
-    :ok = Recovery.open_at_admission(session_ctx.user_id, identity, Sanctum.directory_url())
-    {:ok, %{phase: "accepted", identifier: identifier}} = Recovery.advance(session_ctx, opts)
-    Prima.RecoveryCode.encode(identifier, identity.recovery_secret)
-  end
-
-  defp certify_args do
-    {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
-
-    %{
-      "device_key" => Encoding.b64(device_key),
-      "audience" => @hub,
-      "athanor" => "ath_hub",
-      "client_id" => "pcl_hub"
-    }
-  end
-
-  defp certifications(user_id),
-    do: Arca.Repo.all(from(c in DeviceCertification, where: c.user_id == ^user_id))
-
-  defp holder_args(signer, added, id) do
-    %{
-      "recovery_code" => signer,
-      "holder" => %{"recovery_secret" => Encoding.b64(added)},
-      "request_id" => id
-    }
-  end
-
-  # The person's own pending carry to the hub, under the head their row
-  # holds, and the assertion request the hub's challenge makes of it.
-  defp carried!(user_id) do
-    payload = ~s({"genesis":{}})
-    head = identity(user_id).head_hash
-
-    {:ok, action} =
-      Arca.CarryActions.open(%Prima.Actor{user_id: user_id}, %{
-        user_id: user_id,
-        action_id: "car_#{System.unique_integer([:positive])}",
-        source_home: Person.home(),
-        destination_home: @hub,
-        return_url: Person.home() <> "/carry",
-        payload: payload,
-        payload_digest: Prima.Digest.sha256(payload),
-        key_epoch: head
-      })
-
-    request = %{
-      audience: @hub,
-      challenge: :crypto.strong_rand_bytes(32),
-      action_id: action.action_id,
-      key_epoch: head
-    }
-
-    {action, request}
-  end
-
-  describe "a person's identity, changed from a device" do
-    setup %{tls: tls} do
-      Directory.listen!()
-      pinned = Application.fetch_env(:sanctum, :directory_url)
-
-      on_exit(fn ->
-        case pinned do
-          {:ok, url} -> Application.put_env(:sanctum, :directory_url, url)
-          :error -> Application.delete_env(:sanctum, :directory_url)
-        end
-
-        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      end)
-
-      directory = Directory.start!(tls)
-      Application.put_env(:sanctum, :directory_url, directory.url)
-      {:ok, opts: Directory.opts(tls)}
-    end
-
-    test "certifying a device for another home is refused by a revocation at its write: none is recorded",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      args = certify_args()
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &RemoteCertification.certify(&1, args)
-               )
-
-      assert certifications(user.id) == []
-    end
-
-    test "a device for another home is certified while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      args = certify_args()
-
-      assert {:ok, %{certificate: %{}}} =
-               Sanctum.TestContext.confirming(ctx, &RemoteCertification.certify(&1, args))
-
-      assert [%{audience_home: @hub}] = certifications(user.id)
-    end
-
-    test "another recovery code is refused by a revocation at its write: no attempt is opened, the head stays",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      code = enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      head = identity(user.id).head_hash
-      id = request_id()
-      args = holder_args(code, recovery_secret(), id)
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &Recovery.recovery_code_add(&1, args, opts)
-               )
-
-      assert attempt(id) == nil
-      assert identity(user.id).head_hash == head
-    end
-
-    test "another recovery code is added while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      code = enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      args = holder_args(code, recovery_secret(), request_id())
-
-      assert {:ok, %{phase: "accepted", key_epoch: epoch}} =
-               Sanctum.TestContext.confirming(ctx, &Recovery.recovery_code_add(&1, args, opts))
-
-      assert identity(user.id).head_hash == epoch
-    end
-
-    test "rotating the live key is refused by a revocation at its write: no attempt, the key stays",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      before = identity(user.id)
-      id = request_id()
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &IdentityFreshness.rotate_live(&1, id, opts)
-               )
-
-      assert attempt(id) == nil
-      after_it = identity(user.id)
-
-      assert {after_it.live_public_key, after_it.head_hash} ==
-               {before.live_public_key, before.head_hash}
-    end
-
-    test "the live key is rotated while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      id = request_id()
-
-      assert {:ok, %{request_id: ^id, phase: "completed", key_epoch: epoch}} =
-               Sanctum.TestContext.confirming(ctx, &IdentityFreshness.rotate_live(&1, id, opts))
-
-      assert identity(user.id).head_hash == epoch
-    end
-
-    test "a remote sign-in assertion is refused by a revocation at its write: none is recorded",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {client_id, ctx} = paired!(session_ctx)
-      {action, request} = carried!(user.id)
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(
-                 session_ctx,
-                 client_id,
-                 ctx,
-                 &Person.sign_assertion(&1, request)
-               )
-
-      assert {:ok, %{assertion: nil}} =
-               Arca.CarryActions.get(%Prima.Actor{user_id: user.id}, action.id)
-    end
-
-    test "a remote sign-in assertion is signed while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      enrolled!(session_ctx, opts)
-      {_client_id, ctx} = paired!(session_ctx)
-      {action, request} = carried!(user.id)
-
-      assert {:ok, %{assertion: %Prima.PersonAssertion{}}} =
-               Sanctum.TestContext.confirming(ctx, &Person.sign_assertion(&1, request))
-
-      assert {:ok, %{assertion: recorded}} =
-               Arca.CarryActions.get(%Prima.Actor{user_id: user.id}, action.id)
-
-      assert is_binary(recorded)
     end
   end
 end

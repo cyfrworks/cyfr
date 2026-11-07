@@ -62,22 +62,18 @@ defmodule Sanctum.MixProject do
       {:arca, in_umbrella: true},
       {:jason, "~> 1.4"},
       # Contexts are established at the authentication boundary, which is
-      # a `Plug.Conn`, and the identity providers are Ueberauth strategies.
+      # a `Plug.Conn`.
       {:plug, "~> 1.14"},
-      {:ueberauth, "~> 0.11.0"},
+      # The company sign-in's OpenID Connect issuer: the provider
+      # configuration worker its exchange names (`Sanctum.Auth.OIDC.Oidcc`).
       {:ueberauth_oidcc, "~> 0.4.2"},
-      # The auth sliver's own HTTP: the device-flow pool
-      # (`Sanctum.Auth.Finch`) and the OAuth token exchange.
+      # The OAuth token exchange's HTTP.
       {:finch, "~> 0.19"},
       {:req, "~> 0.5"},
       {:telemetry, "~> 1.0"},
       # WebAuthn: passkey registration and assertion verification. Pinned,
       # and the only WebAuthn dependency; Ed25519 stays OTP's `:crypto`.
       {:wax_, "== 0.7.0"},
-      # ristretto255 for the home-assisted PIN's evaluation (RFC 9497,
-      # `Sanctum.DevicePin`): libsodium's group operations, built from
-      # the source the package carries (autoconf, automake and libtool).
-      {:libsodium, "3.0.1"},
       {:stream_data, "~> 1.1", only: [:test, :dev]}
     ]
   end

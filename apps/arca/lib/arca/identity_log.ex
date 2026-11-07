@@ -4,28 +4,23 @@
 defmodule Arca.IdentityLog do
   @moduledoc """
   The directory's store (`Arca.Schemas.IdentityLogEntry`): one append-only
-  log per identifier, and the recorded outcome of every recovery request
-  it answered.
+  log per identifier, each entry beside the verified state it leaves, and
+  the operator's tombstone.
 
   Arca stores bytes and hashes and verifies no signature: the directory's
-  decisions verify a chain before they write here. What this module owns
-  is the serialization rule a directory promises:
+  decisions verify an entry against the state its head stores before they
+  write here (`Sanctum.Directory`), so the next entry is checked against
+  one row, never the whole log. What this module owns is the serialization
+  rule a directory promises:
 
     * **Registration** (`register/3`) writes an identifier's genesis at
       position 0. Registering the same genesis again answers the existing
-      registration, whatever the quota.
-    * **Rotation** (`append/4`) names the head it extends; a head that moved
-      is refused `:stale` and nothing is written.
-    * **Recovery** (`recover/4`) names the recovery policy revision it
-      expects. The revision is the number of accepted recoveries in the
-      log, read under the lock; a request against a revision that is no
-      longer current is recorded and refused `:stale_policy`. A request id
-      is scoped to its identifier and its request digest: the same request
-      again answers its recorded outcome, refusal included, whatever the
-      state has become, and the same id with another digest is refused
-      `:request_id_reused`. An accepted recovery is appended at the head.
-      A head that moved while the revision still stands is `:stale` and
-      recorded nothing: the caller rebuilds its entry on the new head.
+      registration as `:exists`, whatever the quota.
+    * **Appending** (`append/4`) names the head it extends. An entry that
+      is already the one after its `prev` answers that entry as `:exists`;
+      a `prev` that is not the head is `:stale` and writes nothing.
+    * **A tombstone** (`tombstone/2`) marks an identifier gone: every later
+      read and write answers `:gone`.
 
   Order is the position and the `prev` link alone: the times a row
   records are never compared, so no clock decides which write lands.
@@ -37,10 +32,11 @@ defmodule Arca.IdentityLog do
   bytes; a quota is never checked by an unlocked count. `policy` is the
   deployment's (`:max_identities`, `:log_bytes`, `:recovery_reserve_bytes`,
   positive integers, the reserve below the total). A new genesis past
-  `:max_identities` is refused, a genesis or a rotation may not spend the
-  recovery reserve, and a recovery entry or its recorded refusal may: each
-  is `{:error, {:capacity, :identities | :log_bytes}}`, retryable and
-  distinct from any refusal of the identity. An entry past
+  `:max_identities` is refused; a genesis and an entry a listed key signed
+  may not spend the recovery reserve, and an entry appended after the
+  genesis that a recovery key signed may: each is
+  `{:error, {:capacity, :identities | :log_bytes}}`, retryable and distinct
+  from any refusal of the identity. An entry past
   `Prima.Identity.max_entry_bytes/0` is `:entry_too_large`.
 
   ## Who writes
@@ -56,6 +52,7 @@ defmodule Arca.IdentityLog do
 
   @usage_key "directory_usage"
   @max_page 100
+  @kinds ~w(add_key remove_key recover add_recovery)
 
   @typedoc "The deployment's directory quotas."
   @type policy :: %{
@@ -64,7 +61,7 @@ defmodule Arca.IdentityLog do
           required(:recovery_reserve_bytes) => pos_integer()
         }
 
-  @typedoc "An entry or a recorded outcome, as a plain map."
+  @typedoc "An entry, as a plain map."
   @type row :: map()
 
   @doc "The most entries one page of a log answers."
@@ -73,14 +70,17 @@ defmodule Arca.IdentityLog do
 
   @doc """
   Register an identifier's genesis: `attrs` names the `:identifier`, the
-  genesis `:entry` bytes and its `:entry_hash`. Answers `{:ok, entry}`,
-  the existing genesis for an exact repeat, `{:error, :conflict}` for other
-  bytes under the same identifier, or a quota refusal.
+  genesis `:entry` bytes, its `:entry_hash` and the verified `:state` it
+  leaves (text). Answers `{:ok, entry, :created}`, `{:ok, entry, :exists}`
+  for the same genesis again, `{:error, :conflict}` for other bytes under
+  the same identifier, `{:error, :gone}` for a tombstoned identifier, or a
+  quota refusal.
   """
-  @spec register(Prima.Actor.t(), map(), policy()) :: {:ok, row()} | {:error, term()}
+  @spec register(Prima.Actor.t(), map(), policy()) ::
+          {:ok, row(), :created | :exists} | {:error, term()}
   def register(%Prima.Actor{scope: :platform, system: true}, attrs, policy) when is_map(attrs) do
     with {:ok, policy} <- policy(policy),
-         {:ok, fields} <- fields(attrs, [:identifier, :entry, :entry_hash]) do
+         {:ok, fields} <- fields(attrs, [:identifier, :entry, :entry_hash, :state]) do
       write("Arca.IdentityLog.register", fn -> register_in(fields, policy) end)
     end
   end
@@ -88,17 +88,22 @@ defmodule Arca.IdentityLog do
   def register(%Prima.Actor{}, _attrs, _policy), do: {:error, :cross_tenant}
 
   @doc """
-  Append a rotation to `identifier`'s log: `attrs` names the `:entry`
-  bytes, its `:entry_hash` and the `:prev_hash` it extends. Answers
-  `{:ok, entry}`, `{:error, :stale}` when the head moved,
-  `{:error, :not_found}` for an unregistered identifier, or a quota
-  refusal.
+  Append an entry to `identifier`'s log: `attrs` names the `:entry` bytes,
+  its `:entry_hash`, the `:prev_hash` it extends, its `:kind`, the verified
+  `:state` it leaves (text), and `:recovery`, whether a recovery key
+  signed it, which lets it spend the recovery reserve. Answers
+  `{:ok, entry, :accepted}`, `{:ok, entry, :exists}` when that exact entry
+  is already the one after its `prev`, `{:error, :stale}` when `prev` is
+  not the head, `{:error, :not_found}` for an unregistered identifier,
+  `{:error, :gone}` for a tombstoned one, or a quota refusal.
   """
-  @spec append(Prima.Actor.t(), String.t(), map(), policy()) :: {:ok, row()} | {:error, term()}
+  @spec append(Prima.Actor.t(), String.t(), map(), policy()) ::
+          {:ok, row(), :accepted | :exists} | {:error, term()}
   def append(%Prima.Actor{scope: :platform, system: true}, identifier, attrs, policy)
       when is_binary(identifier) and is_map(attrs) do
     with {:ok, policy} <- policy(policy),
-         {:ok, fields} <- fields(attrs, [:entry, :entry_hash, :prev_hash]) do
+         {:ok, fields} <-
+           fields(attrs, [:entry, :entry_hash, :prev_hash, :kind, :state, :recovery]) do
       write("Arca.IdentityLog.append", fn -> append_in(identifier, fields, policy) end)
     end
   end
@@ -106,31 +111,20 @@ defmodule Arca.IdentityLog do
   def append(%Prima.Actor{}, _identifier, _attrs, _policy), do: {:error, :cross_tenant}
 
   @doc """
-  Apply a recovery to `identifier`'s log: `attrs` names the `:entry` bytes,
-  its `:entry_hash`, the `:prev_hash` it extends, the `:request_id`, the
-  `:request_digest` and the `:expected_revision`. See the module doc for
-  the rule. Answers `{:ok, entry}` for an accepted recovery (again for an
-  exact retry), or `{:error, :stale_policy | :stale | :request_id_reused |
-  :not_found}`, or a quota refusal.
+  Mark `identifier` gone, the operator's tombstone: every later read and
+  write of it answers `:gone`, and its entries stay. Answers `:ok`, also
+  for an identifier already gone, or `{:error, :not_found}`.
   """
-  @spec recover(Prima.Actor.t(), String.t(), map(), policy()) :: {:ok, row()} | {:error, term()}
-  def recover(%Prima.Actor{scope: :platform, system: true}, identifier, attrs, policy)
-      when is_binary(identifier) and is_map(attrs) do
-    with {:ok, policy} <- policy(policy),
-         {:ok, fields} <-
-           fields(attrs, [
-             :entry,
-             :entry_hash,
-             :prev_hash,
-             :request_id,
-             :request_digest,
-             :expected_revision
-           ]) do
-      write("Arca.IdentityLog.recover", fn -> recover_in(identifier, fields, policy) end)
+  @spec tombstone(Prima.Actor.t(), String.t()) :: :ok | {:error, term()}
+  def tombstone(%Prima.Actor{scope: :platform, system: true}, identifier)
+      when is_binary(identifier) do
+    case Arca.Repo.owned("Arca.IdentityLog.tombstone", fn -> tombstone_in(identifier) end) do
+      {:ok, :gone} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
-  def recover(%Prima.Actor{}, _identifier, _attrs, _policy), do: {:error, :cross_tenant}
+  def tombstone(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
 
   @doc """
   One page of `identifier`'s log in order: entries after position
@@ -150,7 +144,7 @@ defmodule Arca.IdentityLog do
       {:ok,
        Arca.Repo.all(
          from(e in IdentityLogEntry,
-           where: e.identifier == ^identifier and not is_nil(e.seq) and e.seq > ^after_seq,
+           where: e.identifier == ^identifier and e.seq > ^after_seq,
            order_by: [asc: e.seq],
            limit: ^limit
          )
@@ -161,14 +155,16 @@ defmodule Arca.IdentityLog do
 
   def entries(%Prima.Actor{}, _identifier, _opts), do: {:error, :cross_tenant}
 
-  @doc "The last entry of `identifier`'s log, or `{:error, :not_found}`."
+  @doc """
+  The last entry of `identifier`'s log, with the verified state it left,
+  or `{:error, :not_found}`, or `{:error, :gone}` for a tombstoned one.
+  """
   @spec head(Prima.Actor.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+          {:ok, row()} | {:error, :not_found | :gone | :cross_tenant | :database_error}
   def head(%Prima.Actor{scope: :platform}, identifier) when is_binary(identifier) do
     Arca.Repo.Errors.with_db_rescue("Arca.IdentityLog.head", fn ->
-      case head_of(identifier) do
-        nil -> {:error, :not_found}
-        entry -> {:ok, entry}
+      with :ok <- present(identifier) do
+        {:ok, head_of(identifier)}
       end
     end)
     |> Arca.Data.project()
@@ -177,62 +173,31 @@ defmodule Arca.IdentityLog do
   def head(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
 
   @doc """
-  The last entry of `identifier`'s log and its key-bearing entries: the
-  genesis and every accepted recovery up to that head, in position order.
-  Rotations name only a live key, so these alone carry the operational key
-  and the recovery set in force at the head and at every earlier policy
-  revision: what a directory checks a new entry's signature against before
-  it reads the whole log. A read, through the identifier's index.
+  The position of the entry hashing to `entry_hash` in `identifier`'s log,
+  or `{:error, :not_found}` for a hash the log does not hold, or
+  `{:error, :gone}` for a tombstoned identifier.
   """
-  @spec keys(Prima.Actor.t(), String.t()) ::
-          {:ok, %{head: row(), keyed: [row()]}}
-          | {:error, :not_found | :cross_tenant | :database_error}
-  def keys(%Prima.Actor{scope: :platform}, identifier) when is_binary(identifier) do
-    Arca.Repo.Errors.with_db_rescue("Arca.IdentityLog.keys", fn ->
-      case head_of(identifier) do
-        nil ->
-          {:error, :not_found}
-
-        head ->
-          # Bounded by the head read first, so an entry appended between
-          # the two reads is not answered beside a head that predates it.
-          keyed =
-            Arca.Repo.all(
-              from(e in IdentityLogEntry,
-                where:
-                  e.identifier == ^identifier and e.kind in ["genesis", "recover"] and
-                    not is_nil(e.seq) and e.seq <= ^head.seq,
-                order_by: [asc: e.seq]
-              )
-            )
-
-          {:ok, %{head: head, keyed: keyed}}
+  @spec position(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()}
+          | {:error, :not_found | :gone | :cross_tenant | :database_error}
+  def position(%Prima.Actor{scope: :platform}, identifier, entry_hash)
+      when is_binary(identifier) and is_binary(entry_hash) do
+    Arca.Repo.Errors.with_db_rescue("Arca.IdentityLog.position", fn ->
+      with :ok <- present(identifier) do
+        from(e in IdentityLogEntry,
+          where: e.identifier == ^identifier and e.entry_hash == ^entry_hash,
+          select: e.seq
+        )
+        |> Arca.Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          seq -> {:ok, seq}
+        end
       end
     end)
-    |> Arca.Data.project()
   end
 
-  def keys(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
-
-  @doc """
-  The recorded outcome of `request_id` under `identifier`: the accepted
-  entry, or the refusal's record (`outcome: "stale_policy"` with its
-  `outcome_body`).
-  """
-  @spec outcome(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
-  def outcome(%Prima.Actor{scope: :platform}, identifier, request_id)
-      when is_binary(identifier) and is_binary(request_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.IdentityLog.outcome", fn ->
-      case request_of(identifier, request_id) do
-        nil -> {:error, :not_found}
-        record -> {:ok, record}
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  def outcome(%Prima.Actor{}, _identifier, _request_id), do: {:error, :cross_tenant}
+  def position(%Prima.Actor{}, _identifier, _entry_hash), do: {:error, :cross_tenant}
 
   @doc "What the directory holds: registered identifiers and stored log bytes."
   @spec usage(Prima.Actor.t()) ::
@@ -251,12 +216,15 @@ defmodule Arca.IdentityLog do
 
   # ---- the writes ------------------------------------------------------------
 
-  defp register_in(%{identifier: identifier, entry: entry, entry_hash: hash}, policy) do
+  defp register_in(%{identifier: identifier, entry: entry} = fields, policy) do
     usage = lock_usage!()
 
     case genesis_of(identifier) do
+      %IdentityLogEntry{gone_at: %DateTime{}} ->
+        {:error, :gone}
+
       %IdentityLogEntry{entry: ^entry} = existing ->
-        {:ok, existing}
+        {:ok, {existing, :exists}}
 
       %IdentityLogEntry{} ->
         {:error, :conflict}
@@ -272,149 +240,83 @@ defmodule Arca.IdentityLog do
             {:error, {:capacity, :log_bytes}}
 
           true ->
-            row =
-              entry_row(identifier, 0, "genesis", entry, hash, nil)
-              |> Map.put(:bytes, size)
-
             put_usage!(%{
               usage
               | identities: usage.identities + 1,
                 log_bytes: usage.log_bytes + size
             })
 
-            insert!(row)
+            row = entry_row(identifier, 0, "genesis", fields, nil)
+            {:ok, {insert!(row), :created}}
         end
     end
   end
 
-  defp append_in(identifier, %{entry: entry, entry_hash: hash, prev_hash: prev}, policy) do
-    usage = lock_usage!()
-    size = byte_size(entry)
-
-    case head_of(identifier) do
-      nil ->
-        {:error, :not_found}
-
-      %IdentityLogEntry{entry_hash: ^prev, seq: seq} ->
-        if usage.log_bytes + size > policy.log_bytes - policy.recovery_reserve_bytes do
-          {:error, {:capacity, :log_bytes}}
-        else
-          put_usage!(%{usage | log_bytes: usage.log_bytes + size})
-
-          insert!(
-            entry_row(identifier, seq + 1, "rotate", entry, hash, prev)
-            |> Map.put(:bytes, size)
-          )
-        end
-
-      %IdentityLogEntry{} ->
-        {:error, :stale}
-    end
-  end
-
-  defp recover_in(identifier, fields, policy) do
+  defp append_in(identifier, %{entry: entry, prev_hash: prev} = fields, policy) do
     usage = lock_usage!()
 
-    case request_of(identifier, fields.request_id) do
-      %IdentityLogEntry{request_digest: digest} = record when digest == fields.request_digest ->
-        recorded(record)
+    with :ok <- present(identifier) do
+      case after_of(identifier, prev) do
+        %IdentityLogEntry{entry: ^entry} = existing ->
+          {:ok, {existing, :exists}}
 
-      %IdentityLogEntry{} ->
-        {:error, :request_id_reused}
+        %IdentityLogEntry{} ->
+          {:error, :stale}
 
-      nil ->
-        apply_recovery(identifier, fields, policy, usage)
+        nil ->
+          append_at(identifier, head_of(identifier), fields, policy, usage)
+      end
     end
   end
 
-  defp apply_recovery(identifier, fields, policy, usage) do
-    case head_of(identifier) do
-      nil ->
-        {:error, :not_found}
-
-      head ->
-        revision = revision_of(identifier)
-
-        cond do
-          fields.expected_revision != revision ->
-            refuse_stale_policy(identifier, fields, revision, policy, usage)
-
-          head.entry_hash != fields.prev_hash ->
-            {:error, :stale}
-
-          true ->
-            accept_recovery(identifier, head, fields, policy, usage)
-        end
-    end
-  end
-
-  defp accept_recovery(identifier, head, fields, policy, usage) do
+  defp append_at(identifier, %IdentityLogEntry{entry_hash: prev, seq: seq}, fields, policy, usage)
+       when prev == fields.prev_hash do
     size = byte_size(fields.entry)
+    # An entry a recovery key signed may spend the reserve, which is kept so
+    # an account can always be recovered; nothing else may.
+    budget =
+      if fields.recovery,
+        do: policy.log_bytes,
+        else: policy.log_bytes - policy.recovery_reserve_bytes
 
-    if usage.log_bytes + size > policy.log_bytes do
+    if usage.log_bytes + size > budget do
       {:error, {:capacity, :log_bytes}}
     else
       put_usage!(%{usage | log_bytes: usage.log_bytes + size})
-
-      entry_row(
-        identifier,
-        head.seq + 1,
-        "recover",
-        fields.entry,
-        fields.entry_hash,
-        head.entry_hash
-      )
-      |> Map.merge(%{
-        request_id: fields.request_id,
-        request_digest: fields.request_digest,
-        bytes: size
-      })
-      |> insert!()
+      {:ok, {insert!(entry_row(identifier, seq + 1, fields.kind, fields, prev)), :accepted}}
     end
   end
 
-  # A request against a revision that is no longer current is recorded with
-  # its body, so a retry answers the same refusal whatever the log does next.
-  defp refuse_stale_policy(identifier, fields, revision, policy, usage) do
-    body =
-      Jason.encode!(%{
-        "outcome" => "stale_policy",
-        "expected_revision" => fields.expected_revision,
-        "revision" => revision
-      })
+  defp append_at(_identifier, _head, _fields, _policy, _usage), do: {:error, :stale}
 
-    size = byte_size(body)
+  defp tombstone_in(identifier) do
+    _usage = lock_usage!()
 
-    if usage.log_bytes + size > policy.log_bytes do
-      {:error, {:capacity, :log_bytes}}
-    else
-      put_usage!(%{usage | log_bytes: usage.log_bytes + size})
+    case genesis_of(identifier) do
+      nil ->
+        {:error, :not_found}
 
-      %{
-        id: Prima.UUID7.generate_id("ile"),
-        identifier: identifier,
-        seq: nil,
-        kind: "recover",
-        entry_hash: nil,
-        prev_hash: nil,
-        entry: nil,
-        request_id: fields.request_id,
-        request_digest: fields.request_digest,
-        outcome: "stale_policy",
-        outcome_body: body,
-        bytes: size,
-        inserted_at: DateTime.utc_now()
-      }
-      |> insert!()
+      %IdentityLogEntry{gone_at: %DateTime{}} ->
+        {:ok, :gone}
 
-      {:refused, :stale_policy}
+      %IdentityLogEntry{id: id} ->
+        {1, _} =
+          from(e in IdentityLogEntry, where: e.id == ^id)
+          |> Arca.Repo.update_all(set: [gone_at: DateTime.utc_now()])
+
+        {:ok, :gone}
     end
   end
 
-  defp recorded(%IdentityLogEntry{outcome: "accepted"} = record), do: {:ok, record}
-  defp recorded(%IdentityLogEntry{outcome: "stale_policy"}), do: {:refused, :stale_policy}
+  # ---- reads -----------------------------------------------------------------
 
-  # ---- reads under the lock --------------------------------------------------
+  defp present(identifier) do
+    case genesis_of(identifier) do
+      nil -> {:error, :not_found}
+      %IdentityLogEntry{gone_at: %DateTime{}} -> {:error, :gone}
+      %IdentityLogEntry{} -> :ok
+    end
+  end
 
   defp genesis_of(identifier) do
     Arca.Repo.one(from(e in IdentityLogEntry, where: e.identifier == ^identifier and e.seq == 0))
@@ -423,48 +325,36 @@ defmodule Arca.IdentityLog do
   defp head_of(identifier) do
     Arca.Repo.one(
       from(e in IdentityLogEntry,
-        where: e.identifier == ^identifier and not is_nil(e.seq),
+        where: e.identifier == ^identifier,
         order_by: [desc: e.seq],
         limit: 1
       )
     )
   end
 
-  defp revision_of(identifier) do
+  defp after_of(identifier, prev) do
     Arca.Repo.one(
-      from(e in IdentityLogEntry,
-        where: e.identifier == ^identifier and e.kind == "recover" and not is_nil(e.seq),
-        select: count(e.id)
-      )
-    ) || 0
-  end
-
-  defp request_of(identifier, request_id) do
-    Arca.Repo.one(
-      from(e in IdentityLogEntry,
-        where: e.identifier == ^identifier and e.request_id == ^request_id
-      )
+      from(e in IdentityLogEntry, where: e.identifier == ^identifier and e.prev_hash == ^prev)
     )
   end
 
   defp insert!(row) do
     Arca.Repo.insert_all(IdentityLogEntry, [row])
-    {:ok, Arca.Repo.get!(IdentityLogEntry, row.id)}
+    Arca.Repo.get!(IdentityLogEntry, row.id)
   end
 
-  defp entry_row(identifier, seq, kind, entry, hash, prev) do
+  defp entry_row(identifier, seq, kind, fields, prev) do
     %{
       id: Prima.UUID7.generate_id("ile"),
       identifier: identifier,
       seq: seq,
       kind: kind,
-      entry_hash: hash,
+      entry_hash: fields.entry_hash,
       prev_hash: prev,
-      entry: entry,
-      request_id: nil,
-      request_digest: nil,
-      outcome: "accepted",
-      outcome_body: nil,
+      entry: fields.entry,
+      state: fields.state,
+      bytes: byte_size(fields.entry),
+      gone_at: nil,
       inserted_at: DateTime.utc_now()
     }
   end
@@ -539,20 +429,17 @@ defmodule Arca.IdentityLog do
   defp valid?(:entry, value), do: is_binary(value) and value != ""
   defp valid?(:entry_hash, value), do: Prima.Identity.Encoding.digest?(value)
   defp valid?(:prev_hash, value), do: Prima.Identity.Encoding.digest?(value)
-  defp valid?(:request_id, value), do: Prima.Identity.Encoding.id?(value)
-  defp valid?(:request_digest, value), do: Prima.Identity.Encoding.digest?(value)
-  defp valid?(:expected_revision, value), do: is_integer(value) and value >= 0
+  defp valid?(:kind, value), do: value in @kinds
+  defp valid?(:state, value), do: is_binary(value) and value != ""
+  defp valid?(:recovery, value), do: is_boolean(value)
 
   # One write: fenced (`Arca.Repo.owned/2`), then decided under the usage
-  # lock. A recorded refusal commits: the write answers it as its value,
-  # and the caller is answered the refusal.
+  # lock. A written entry answers with what it was: created, accepted or
+  # an existing entry.
   defp write(tag, decide) do
-    case Arca.Repo.owned(tag, fn -> decided(decide.()) end) do
-      {:ok, {:refused, reason}} -> {:error, reason}
-      other -> other
+    case Arca.Repo.owned(tag, decide) do
+      {:ok, {row, result}} when is_atom(result) -> {:ok, row, result}
+      {:error, _reason} = refusal -> refusal
     end
   end
-
-  defp decided({:refused, _reason} = refused), do: {:ok, refused}
-  defp decided(answer), do: answer
 end

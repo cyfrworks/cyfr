@@ -5,9 +5,9 @@ defmodule Arca.DeviceCertificatesTest do
   @moduledoc """
   The device certificates a home issued: recorded only for a standing
   paired client of the same person whose recorded device key is the
-  certificate's (a client paired without one is never certified), an
-  identity subject only under the `key_epoch` current when it is recorded,
-  scoped by athanor,
+  certificate's (a client paired without one is never certified), naming
+  the person's account, the device key's `kid` and the cached head of the
+  account when it is recorded, scoped by athanor,
   `active`, `revoked` or `expired` by the database's clock, revoked once
   (a second revocation answers it as it is), and revoked with the client
   it was issued to.
@@ -18,14 +18,14 @@ defmodule Arca.DeviceCertificatesTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{DeviceCertificates, DirectoryHeads, PairedClients, PersonIdentities}
+  alias Arca.{DeviceCertificates, PairedClients}
   alias Arca.Schemas.DeviceCertificate
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     hold_slot!()
     athanor = "ath_dct_#{System.unique_integer([:positive])}"
-    {:ok, actor: Prima.Actor.in_athanor(athanor)}
+    {:ok, actor: Prima.Actor.in_athanor(athanor), person: person!()}
   end
 
   @slot_keys [
@@ -59,40 +59,8 @@ defmodule Arca.DeviceCertificatesTest do
     slot
   end
 
-  defp device_client!(actor, user_id \\ "usr_dct") do
-    device_key = :crypto.strong_rand_bytes(32)
-
-    {:ok, client} =
-      PairedClients.record(actor, %{
-        user_id: user_id,
-        source_kind: "device_cert",
-        source_id: Prima.Digest.sha256(device_key),
-        device_public_key: device_key
-      })
-
-    client
-  end
-
-  defp identifier, do: "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
-
-  defp cached!(identifier, epoch) do
-    {:ok, _head} =
-      DirectoryHeads.put(Prima.Actor.system(), %{
-        identifier: identifier,
-        genesis: "genesis",
-        directory_url: "https://dir.example",
-        head_hash: epoch,
-        key_epoch: epoch,
-        recovery_epoch: epoch,
-        state: "{}"
-      })
-
-    :ok
-  end
-
-  # A person whose own identity, `identifier`, this home holds the keys of.
-  defp local_enrolled!(identifier) do
-    n = System.unique_integer([:positive])
+  # A person with an account this home has read.
+  defp person! do
     now = DateTime.utc_now()
 
     {:ok, person} =
@@ -100,49 +68,42 @@ defmodule Arca.DeviceCertificatesTest do
         Prima.Actor.system(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-          provider: "github",
           first_seen_at: now,
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|dct#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "dct#{n}",
-          first_seen_at: now,
-          last_seen_at: now
-        },
-        also: fn person ->
-          {:ok, _} =
-            PersonIdentities.create(Prima.Actor.system(), %{
-              user_id: person.id,
-              provenance: "local",
-              identifier: identifier,
-              head_hash: Prima.Digest.sha256("head-#{n}"),
-              directory_url: "https://dir.example",
-              live_public_key: :crypto.strong_rand_bytes(32),
-              operational_public_key: :crypto.strong_rand_bytes(32),
-              live_key_sealed: "l",
-              operational_key_sealed: "o"
-            })
-
-          :ok
-        end
+        }
       )
 
-    person
+    Map.merge(person, Arca.Test.People.account!(person.id))
   end
 
-  defp attrs(client, overrides \\ %{}) do
+  defp device_client!(actor, person) do
+    device_key = :crypto.strong_rand_bytes(32)
+
+    {:ok, client} =
+      PairedClients.record(actor, %{
+        user_id: person.id,
+        source_kind: "device_cert",
+        source_id: Prima.Digest.sha256(device_key),
+        device_public_key: device_key,
+        kid: Prima.Identity.Key.kid(device_key),
+        head: person.head
+      })
+
+    client
+  end
+
+  defp attrs(client, person, overrides \\ %{}) do
     now = DateTime.utc_now()
 
     Map.merge(
       %{
         paired_client_id: client.id,
-        user_id: client.user_id,
-        subject_kind: "local",
+        user_id: person.id,
+        identifier: person.identifier,
+        kid: client.device_public_key && Prima.Identity.Key.kid(client.device_public_key),
+        head: person.head,
         device_public_key: client.device_public_key,
         issuing_home: "https://home.example",
         audience_home: "https://home.example",
@@ -156,155 +117,113 @@ defmodule Arca.DeviceCertificatesTest do
   end
 
   test "records a certificate for a standing device client, answered with its status", %{
-    actor: actor
+    actor: actor,
+    person: person
   } do
-    client = device_client!(actor)
+    client = device_client!(actor, person)
 
-    assert {:ok, cert} = DeviceCertificates.record(actor, attrs(client))
+    assert {:ok, cert} = DeviceCertificates.record(actor, attrs(client, person))
     assert cert.status == "active"
     assert cert.athanor_id == actor.athanor_id
+    assert cert.kid == client.kid
+    assert cert.head == person.head
     assert {:ok, ^cert} = DeviceCertificates.current(actor, client.id)
     assert {:ok, [^cert]} = DeviceCertificates.list(actor, paired_client_id: client.id)
   end
 
   test "refuses another person's, another key's, or a revoked client's certificate", %{
-    actor: actor
+    actor: actor,
+    person: person
   } do
-    client = device_client!(actor)
+    client = device_client!(actor, person)
+    other = person!()
 
     assert {:error, :client_not_active} =
-             DeviceCertificates.record(actor, attrs(client, %{user_id: "usr_other"}))
+             DeviceCertificates.record(actor, attrs(client, other))
+
+    another_key = :crypto.strong_rand_bytes(32)
 
     assert {:error, :device_key_mismatch} =
              DeviceCertificates.record(
                actor,
-               attrs(client, %{device_public_key: :crypto.strong_rand_bytes(32)})
+               attrs(client, person, %{
+                 device_public_key: another_key,
+                 kid: Prima.Identity.Key.kid(another_key)
+               })
              )
 
     {:ok, _} = PairedClients.revoke(actor, client.id)
-    assert {:error, :client_not_active} = DeviceCertificates.record(actor, attrs(client))
+    assert {:error, :client_not_active} = DeviceCertificates.record(actor, attrs(client, person))
 
-    other = Prima.Actor.in_athanor("ath_dct_other_#{System.unique_integer([:positive])}")
-    fresh = device_client!(actor)
-    assert {:error, :client_not_active} = DeviceCertificates.record(other, attrs(fresh))
+    elsewhere = Prima.Actor.in_athanor("ath_dct_other_#{System.unique_integer([:positive])}")
+    fresh = device_client!(actor, person)
+
+    assert {:error, :client_not_active} =
+             DeviceCertificates.record(elsewhere, attrs(fresh, person))
   end
 
-  test "a client paired without a device key is never certified", %{actor: actor} do
+  test "a client paired without a device key is never certified", %{
+    actor: actor,
+    person: person
+  } do
     for {kind, source} <- [{"session", "ses_dct"}, {"api_key", "key_dct"}] do
       {:ok, client} =
         PairedClients.record(actor, %{
-          user_id: "usr_dct",
+          user_id: person.id,
           source_kind: kind,
           source_id: "#{source}_#{System.unique_integer([:positive])}"
         })
 
       assert is_nil(client.device_public_key)
+      key = :crypto.strong_rand_bytes(32)
 
       assert {:error, :no_device_key} =
                DeviceCertificates.record(
                  actor,
-                 attrs(client, %{device_public_key: :crypto.strong_rand_bytes(32)})
+                 attrs(client, person, %{device_public_key: key, kid: Prima.Identity.Key.kid(key)})
                )
     end
 
     assert {:ok, []} = DeviceCertificates.list(actor, status: :all)
   end
 
-  test "an identity subject names its identifier and key_epoch; a local one names neither", %{
-    actor: actor
+  test "a certificate names the person's account, its device key's kid and the cached head", %{
+    actor: actor,
+    person: person
   } do
-    client = device_client!(actor)
-    identifier = identifier()
-    epoch = Prima.Digest.sha256("epoch-#{System.unique_integer()}")
-    cached!(identifier, epoch)
+    client = device_client!(actor, person)
 
-    assert {:error, {:invalid, %{identifier: _, key_epoch: _}}} =
-             DeviceCertificates.record(actor, attrs(client, %{subject_kind: "identity"}))
-
-    assert {:error, {:invalid, %{identifier: _}}} =
-             DeviceCertificates.record(actor, attrs(client, %{identifier: identifier}))
-
-    assert {:ok, %{subject_kind: "identity"}} =
+    assert {:error, {:invalid, %{identifier: _, kid: _, head: _}}} =
              DeviceCertificates.record(
                actor,
-               attrs(client, %{subject_kind: "identity", identifier: identifier, key_epoch: epoch})
+               attrs(client, person, %{identifier: nil, kid: Prima.Digest.sha256("x"), head: nil})
              )
-  end
 
-  test "an identity subject binds only the key_epoch current when it is recorded", %{
-    actor: actor
-  } do
-    client = device_client!(actor)
-    identifier = identifier()
-    epoch = Prima.Digest.sha256("epoch-#{System.unique_integer()}")
-
-    identity = fn id, key_epoch ->
-      attrs(client, %{subject_kind: "identity", identifier: id, key_epoch: key_epoch})
-    end
-
-    # No cached head of the identifier, and not the person's own: no epoch
-    # of it is current here.
-    assert {:error, :stale_key_epoch} =
-             DeviceCertificates.record(actor, identity.(identifier, epoch))
-
-    cached!(identifier, epoch)
-
-    assert {:error, :stale_key_epoch} =
-             DeviceCertificates.record(actor, identity.(identifier, Prima.Digest.sha256("gone")))
-
-    assert {:ok, _} = DeviceCertificates.record(actor, identity.(identifier, epoch))
-    assert {:ok, [_]} = DeviceCertificates.list(actor, status: :all)
-  end
-
-  test "an identity subject of the person's own local identity binds its current head", %{
-    actor: actor
-  } do
-    identifier = identifier()
-    person = local_enrolled!(identifier)
-    client = device_client!(actor, person.id)
-
-    head =
-      Arca.Repo.one!(
-        from(p in Arca.Schemas.PersonIdentity,
-          where: p.user_id == ^person.id,
-          select: p.head_hash
-        )
-      )
-
-    own = fn key_epoch ->
-      attrs(client, %{subject_kind: "identity", identifier: identifier, key_epoch: key_epoch})
-    end
-
-    # No cached head is needed for the person's own identity, but its epoch
-    # is still compared: only the current head, the entry that introduced
-    # the live key, is current.
-    assert {:error, :stale_key_epoch} =
-             DeviceCertificates.record(actor, own.(Prima.Digest.sha256("own-epoch")))
-
-    assert {:ok, %{identifier: ^identifier}} = DeviceCertificates.record(actor, own.(head))
-
-    # Another person's identifier this home caches no head of is not theirs.
-    other = device_client!(actor, local_enrolled!(identifier()).id)
-
-    assert {:error, :stale_key_epoch} =
+    assert {:error, :stale_head} =
              DeviceCertificates.record(
                actor,
-               attrs(other, %{
-                 subject_kind: "identity",
-                 identifier: identifier,
-                 key_epoch: Prima.Digest.sha256("own-epoch")
-               })
+               attrs(client, person, %{head: Prima.Digest.sha256("gone")})
              )
+
+    other = person!()
+
+    assert {:error, :stale_head} =
+             DeviceCertificates.record(
+               actor,
+               attrs(client, person, %{identifier: other.identifier})
+             )
+
+    assert {:ok, _} = DeviceCertificates.record(actor, attrs(client, person))
   end
 
-  test "expiry is read from the clock and never stored", %{actor: actor} do
-    client = device_client!(actor)
+  test "expiry is read from the clock and never stored", %{actor: actor, person: person} do
+    client = device_client!(actor, person)
     past = DateTime.add(DateTime.utc_now(), -10, :second)
 
     {:ok, cert} =
       DeviceCertificates.record(
         actor,
-        attrs(client, %{not_before: DateTime.add(past, -60, :second), expires_at: past})
+        attrs(client, person, %{not_before: DateTime.add(past, -60, :second), expires_at: past})
       )
 
     assert cert.status == "expired"
@@ -315,10 +234,11 @@ defmodule Arca.DeviceCertificatesTest do
   end
 
   test "a certificate revoked twice answers it as it is; another athanor's is not found", %{
-    actor: actor
+    actor: actor,
+    person: person
   } do
-    client = device_client!(actor)
-    {:ok, cert} = DeviceCertificates.record(actor, attrs(client))
+    client = device_client!(actor, person)
+    {:ok, cert} = DeviceCertificates.record(actor, attrs(client, person))
 
     assert {:ok, %{status: "revoked"} = revoked} = DeviceCertificates.revoke(actor, cert.id)
     assert {:ok, ^revoked} = DeviceCertificates.revoke(actor, cert.id)
@@ -328,9 +248,9 @@ defmodule Arca.DeviceCertificatesTest do
     assert {:error, :not_found} = DeviceCertificates.get(other, cert.id)
   end
 
-  test "revoking a paired client revokes its certificates", %{actor: actor} do
-    client = device_client!(actor)
-    {:ok, cert} = DeviceCertificates.record(actor, attrs(client))
+  test "revoking a paired client revokes its certificates", %{actor: actor, person: person} do
+    client = device_client!(actor, person)
+    {:ok, cert} = DeviceCertificates.record(actor, attrs(client, person))
 
     {:ok, _} = PairedClients.revoke(actor, client.id)
 

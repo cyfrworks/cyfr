@@ -201,7 +201,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
     test "is refused on the sign-in pages and on an attachment", %{conn: conn} do
       conn = log_in_user(conn, test_user())
 
-      for path <- ["/login", "/auth/github", athanor_path("/attachments/msg_1/file.png")] do
+      for path <- [
+            "/login",
+            "/auth/company/callback",
+            athanor_path("/attachments/msg_1/file.png")
+          ] do
         framed = conn |> put_req_header("sec-fetch-dest", "embed") |> get(path)
         assert framed.status == 403, "#{path} answered #{framed.status} to a frame"
       end

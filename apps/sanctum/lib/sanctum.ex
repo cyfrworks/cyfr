@@ -12,30 +12,18 @@ defmodule Sanctum do
 
   ## People and signing in
 
-  A person is made only by an admission (`Sanctum.Newcomer`): setup, an
-  invitation (`Sanctum.Invitations`), an open door, a verified CYFR
-  sign-in, or a restore. Every session is
-  minted by `Sanctum.Session`, on one of these paths:
+  A person signs in with their account: this CYFR mints a request, a key
+  of the account signs it (a passkey at the account pages, or a device
+  over its channel) and the answer is verified against the account's log
+  (`Sanctum.SignIn`). A person is made only by an admission of an account
+  by its identifier (`Sanctum.Newcomer`): setup, an invitation
+  (`Sanctum.Invitations`) or the door. Every session is minted by
+  `Sanctum.Session`, on one of these paths:
 
-  - an admission that brings its credential (`Sanctum.Newcomer`);
-  - the OpenID Connect browser flow — `PrismWeb.AuthController.callback/2`
-    unlocks the person who linked the identity `Sanctum.Auth.OIDC` proves
-    (`Sanctum.SignIn.unlock/1`, which asks the door about them);
-  - the GitHub and Google device flows —
-    `Sanctum.Auth.DeviceFlow.poll_for_session/3` behind the sign-in page,
-    which unlock the same way;
+  - a sign-in's answer (`Sanctum.SignIn`), which asks the door about the
+    person (`Sanctum.Door`) or admits a new one;
   - a protected device's unlock (`Sanctum.DeviceUnlock`), redeemed by its
-    browser or its command line;
-  - the CYFR sign-in (`Sanctum.Auth.CyfrDoor`), which unlocks a person
-    admitted before or admits a remote newcomer, and a passkey
-    (`Sanctum.Passkeys`), which asks the door about the person;
-  - the installation-authorized restore (`Sanctum.Recovery`).
-
-  A sign-in method proves who someone is; it never makes a person and
-  never mints a session itself. The methods offered are the ones
-  configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`,
-  `Sanctum.Auth.OIDC.issuer/0`); passkeys, paired devices and the CYFR
-  sign-in are always offered.
+    browser or its command line.
 
   A CYFR may also require a company sign-in of every person here
   (`Sanctum.CompanyLogin`): a standing condition, never a sign-in method,
@@ -49,16 +37,11 @@ defmodule Sanctum do
       ApiKey,
       Attach,
       Auth,
-      Auth.CyfrDoor,
-      Auth.DeviceFlow,
-      Auth.EmailVerification,
-      Auth.Identity,
       Auth.OIDC,
       Authority,
       Authority.BudgetCounter,
       BearerToken,
       Caller,
-      Carry,
       Catalog,
       Catalog.NotLoadedError,
       Cipher,
@@ -76,10 +59,10 @@ defmodule Sanctum do
       Context,
       Decisions,
       DeviceCerts,
-      DevicePin,
       DeviceUnlock,
       Directory,
       Directory.Client,
+      Directory.Handles,
       Door,
       Door.Store,
       Egress,
@@ -96,17 +79,13 @@ defmodule Sanctum do
       Notify,
       Pairing,
       Passkeys,
-      Person,
       Policy.Enforcement,
       PolicyLog,
-      Providers.Assertion,
       Providers.Confirmation,
       Providers.Pairing,
       Providers.Passkey,
-      Providers.Person,
       Provisioning,
       Proxy,
-      Recovery,
       Refusals,
       RegistryCredentials,
       RequestLog,
@@ -179,6 +158,27 @@ defmodule Sanctum do
   @spec origin() :: String.t()
   def origin do
     public_url() || Application.get_env(:sanctum, :fallback_origin, "http://localhost:4000")
+  end
+
+  @doc """
+  How this home is reached, `:local`, `:tailnet` or `:public`: the access
+  mode `config/runtime.exs` resolves from `CYFR_ACCESS`
+  (`Cyfr.RuntimeConfig.resolve_access/1`); a boot that resolves none, as a
+  test's does, is a local home's (`config/config.exs`). It decides what
+  freshness answers while a directory cannot be read
+  (`Sanctum.IdentityFreshness`).
+  """
+  @spec access_mode() :: :local | :tailnet | :public
+  def access_mode do
+    case Application.fetch_env!(:sanctum, :access_mode) do
+      mode when mode in [:local, :tailnet, :public] ->
+        mode
+
+      other ->
+        raise ArgumentError,
+              "the access mode is none of local, tailnet or public: " <>
+                Prima.LoggerContext.shape(other)
+    end
   end
 
   @doc """
@@ -258,9 +258,7 @@ defmodule Sanctum do
   its people: a directory URL (`Prima.Identity.Encoding.directory_url?/1`)
   served over `https`, or over `http` on a loopback host
   (`loopback_host?/1`), no longer than a confirmation preview's text
-  (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes), since the
-  confirmation that shows a recovery code again names the directory in its
-  preview (`Sanctum.Recovery`).
+  (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes).
 
   Plain HTTP is allowed on loopback alone because TLS protects a network
   path and loopback has none, and because a directory is trusted only for
@@ -289,24 +287,6 @@ defmodule Sanctum do
       _other -> false
     end
   end
-
-  @doc """
-  Whether `value` is an installation's restore token: exactly 64 lowercase
-  hexadecimal characters, 32 random bytes. The token is optional (unset,
-  restore is disabled) and is never a platform setting or a log value.
-  """
-  @spec restore_token?(term()) :: boolean()
-  def restore_token?(value), do: is_binary(value) and Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
-
-  @doc """
-  Whether `value` is an installation's setup token, in the restore
-  token's form: exactly 64 lowercase hexadecimal characters, 32 random
-  bytes. The token admits the installation's first person
-  (`Sanctum.Newcomer`); unset, setup opens nothing. It is never a
-  platform setting or a log value.
-  """
-  @spec setup_token?(term()) :: boolean()
-  def setup_token?(value), do: restore_token?(value)
 
   @doc """
   Server-internal context for background/system operations — sweepers, health

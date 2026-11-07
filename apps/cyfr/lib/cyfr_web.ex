@@ -43,7 +43,6 @@ defmodule CyfrWeb do
       Plugs.BrowserCSP,
       Plugs.CORS,
       Plugs.CallIdentity,
-      Plugs.ConfiguredUeberauth,
       Plugs.ControlPlaneOwnership,
       Plugs.FrameRequest,
       Plugs.Headless,

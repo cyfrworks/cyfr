@@ -4,12 +4,12 @@
 defmodule Arca.Schemas.User do
   @moduledoc """
   A person this server knows: one row per person, written by the
-  admission that made them (`Arca.Users.mint/4`) and touched on every
+  admission that made them (`Arca.Users.mint/3`) and touched on every
   later sign-in.
 
   `id` is this server's own (`usr_…`, `id_prefix/0`) — the `user_id` the
-  rest of the system carries; a sign-in method linked to the person is an
-  `Arca.Schemas.ExternalIdentity` row. `admission` is how the person was
+  rest of the system carries; the account the person was admitted by is
+  their `Arca.Schemas.PersonIdentity` row. `admission` is how the person was
   made here (`admissions/0`), written once at birth. `email` is a contact
   field, lowercased and not unique, and decides nothing.
   `namespace` is the durable copy of the cyfr.run personal namespace; the
@@ -29,7 +29,7 @@ defmodule Arca.Schemas.User do
 
   `platform_admin_at` is the platform administrator's mark: when the
   installation's first person was made, written by that admission
-  (`Arca.Users.mint/4`) and cleared by their denial
+  (`Arca.Users.mint/3`) and cleared by their denial
   (`Arca.SecurityTransitions`), never by a changeset here.
   """
 
@@ -39,7 +39,7 @@ defmodule Arca.Schemas.User do
   @primary_key {:id, :string, autogenerate: false}
 
   @statuses ["active", "denied"]
-  @admissions ~w(setup invitation open remote restore)
+  @admissions ~w(setup invitation open remote)
 
   @type t :: %__MODULE__{}
 

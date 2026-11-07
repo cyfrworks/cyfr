@@ -7,8 +7,8 @@ defmodule Sanctum.Cipher.Rotation do
 
   Operator-driven and adapter-agnostic — the batched keyset walk runs the
   same against SQLite and Postgres. Re-encrypts every at-rest credential
-  blob and every person's sealed key onto the current keyring primary so a
-  retired key can be safely dropped.
+  blob onto the current keyring primary so a retired key can be safely
+  dropped.
 
   ## Usage
 
@@ -54,18 +54,10 @@ defmodule Sanctum.Cipher.Rotation do
   The cipher binds the row's canonical tenant tuple as AAD. This module
   rebuilds that tuple from each row's stored columns; the shapes here MUST
   stay identical to how `Sanctum.Vault`, `Sanctum.Webhook`,
-  `Sanctum.ProviderCredentials` and `Sanctum.DevicePin` persist them (the athanor id the storage
+  and `Sanctum.ProviderCredentials` persist them (the athanor id the storage
   layer persists is bound through unchanged). Every `Sanctum.CipherAAD`
   purpose has a `rotate_row/3` clause here — the roster test pins the two
   lists together.
-
-  A person's keys (`:person_key`) are the one purpose whose AAD differs
-  column by column within a row: each sealed column binds its role (the
-  live key, the operational key, a kit seed) beside the person's frame,
-  as `Sanctum.CipherAAD.person_key/2` states. The frame of an identity row
-  and of an enrollment or rotation attempt is its `user_id`; a restore
-  attempt's is `"restore:" <> request_id` for its whole life, even once it
-  names the person it minted.
   """
 
   require Logger
@@ -81,15 +73,14 @@ defmodule Sanctum.Cipher.Rotation do
         }
 
   @doc """
-  Re-encrypt every credential blob and every person's sealed key onto the
-  keyring primary.
+  Re-encrypt every credential blob onto the keyring primary.
 
   Options: `:dry_run` (default `false`) — report what would change, write
   nothing; `:batch_size` (default #{@batch}).
 
   Returns `{:ok, %{webhooks: summary, vault_entries: summary,
   registry_tokens: summary, oauth_provider_credentials: summary,
-  person_identities: summary, identity_attempts: summary, dry_run: bool}}`
+  dry_run: bool}}`
   or `{:error, {table, reason, sample_id}}` (the run aborted fail-closed;
   rerun after fixing the cause — already-rotated rows are skipped).
   """
@@ -225,45 +216,6 @@ defmodule Sanctum.Cipher.Rotation do
     rotate_columns(:oauth_provider_credentials, row, aad, opts)
   end
 
-  defp rotate_row(:device_pin_evaluators, row, opts) do
-    aad = Sanctum.CipherAAD.device_pin_key(row.athanor_id, row.id, row.paired_client_id)
-
-    rotate_columns(:device_pin_evaluators, row, aad, opts)
-  end
-
-  defp rotate_row(:person_identities, row, opts) do
-    rotate_person_keys(:person_identities, row, row.user_id, opts)
-  end
-
-  defp rotate_row(:identity_attempts, row, opts) do
-    rotate_person_keys(:identity_attempts, row, attempt_frame(row), opts)
-  end
-
-  # A person's sealed keys: one AAD per column, the person's frame beside
-  # the column's role. A row with no frame to rebuild aborts the run, as an
-  # undecryptable row does: walked past, its keys could never be opened
-  # again once the old key is dropped.
-  defp rotate_person_keys(_table, _row, frame, _opts) when not is_binary(frame) or frame == "",
-    do: {:error, :no_person_frame}
-
-  defp rotate_person_keys(table, row, frame, opts) do
-    rotate_columns(table, row, &Sanctum.CipherAAD.person_key(frame, person_key_role(&1)), opts)
-  end
-
-  # A restore staged its keys before any person existed, so its frame
-  # names the restore; every other attempt is its person's.
-  defp attempt_frame(%{kind: "restore", request_id: request_id}) when is_binary(request_id),
-    do: "restore:" <> request_id
-
-  defp attempt_frame(%{kind: "restore"}), do: nil
-  defp attempt_frame(%{user_id: user_id}), do: user_id
-
-  defp person_key_role(:live_key_sealed), do: :live
-  defp person_key_role(:staged_live_key_sealed), do: :live
-  defp person_key_role(:operational_key_sealed), do: :operational
-  defp person_key_role(:staged_operational_key_sealed), do: :operational
-  defp person_key_role(:kit_seed_sealed), do: :kit_seed
-
   # Skip the row iff every ciphertext column is already on the primary label;
   # otherwise re-encrypt the lagging columns and commit them together with one
   # compare-and-swap keyed on the row's *current* primary-secret ciphertext.
@@ -290,8 +242,7 @@ defmodule Sanctum.Cipher.Rotation do
   # planned: %{col => new_ct} for columns that needed rotation. A column is
   # finished only when it is already sealed on the primary key. Keys and
   # plaintext stay in this function: what leaves it is a map of re-sealed
-  # ciphertext. `aad` is the row's one AAD, or a function of the column for
-  # a row whose columns each bind their own.
+  # ciphertext under the row's one AAD.
   defp classify(ciphertexts, aad, primary) do
     Enum.reduce_while(ciphertexts, :skip, fn {col, ct}, state ->
       case Cipher.label(ct) do
@@ -299,14 +250,12 @@ defmodule Sanctum.Cipher.Rotation do
           {:cont, state}
 
         {:ok, _other_label} ->
-          column_aad = aad_for(aad, col)
-
-          case Cipher.decrypt(ct, column_aad) do
+          case Cipher.decrypt(ct, aad) do
             {:ok, plain} ->
               # encrypt/2 returns {:ok, _} or raises on keyring misconfig
               # (correct loud fail-closed for an operator-run task — it never
               # returns {:error, _}).
-              {:ok, new_ct} = Cipher.encrypt(plain, column_aad)
+              {:ok, new_ct} = Cipher.encrypt(plain, aad)
               {:cont, merge_plan(state, col, new_ct)}
 
             {:error, reason} ->
@@ -318,9 +267,6 @@ defmodule Sanctum.Cipher.Rotation do
       end
     end)
   end
-
-  defp aad_for(aad, column) when is_function(aad, 1), do: aad.(column)
-  defp aad_for(aad, _column), do: aad
 
   defp merge_plan(:skip, col, ct), do: {:rotate, %{col => ct}}
   defp merge_plan({:rotate, m}, col, ct), do: {:rotate, Map.put(m, col, ct)}

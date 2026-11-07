@@ -21,11 +21,10 @@ defmodule Sanctum.Provider do
   - `profile` - Consent profiles and their grants
   - `oauth` - OAuth grant flow for vault entries
   - `webhook` - Inbound webhooks
-  - `person` - A person's identity at their own home: enrollment, the kit, the
-    live key, doors, device certificates, the sign-in carry and its assertion
-  - `pairing` - Paired devices
-  - `pin` - A PIN this home evaluates for a remote software device
-  - `passkey` - Passkeys at this home
+  - `pairing` - The devices and passkeys of the person's account paired or
+    signed in at this CYFR: a device's certificate renewed, either revoked
+  - `passkey` - The passkeys of the person's account that signed in at this
+    CYFR, by their key, each signed out here
   - `confirmation` - Pending confirmations of sensitive changes
   - `share` - A person's own keys offered to a thread they sit in or to everyone
 
@@ -93,15 +92,14 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.SharedThread.definition(),
       Sanctum.Providers.Invitation.definition(),
       Sanctum.Providers.Door.definition(),
+      Sanctum.Providers.Directory.definition(),
       Sanctum.Providers.OAuth.definition(),
       Sanctum.Providers.Key.definition(),
       Sanctum.Providers.TinctureVisibility.definition(),
       Sanctum.Providers.Webhook.definition(),
       Sanctum.Providers.Vault.definition(),
       Sanctum.Providers.Profile.definition(),
-      Sanctum.Providers.Person.definition(),
       Sanctum.Providers.Pairing.definition(),
-      Sanctum.Providers.Pin.definition(),
       Sanctum.Providers.Passkey.definition(),
       Sanctum.Providers.Confirmation.definition(),
       Sanctum.Providers.Share.definition()
@@ -125,6 +123,7 @@ defmodule Sanctum.Provider do
   def handle("shared_thread", ctx, args), do: Sanctum.Providers.SharedThread.handle(ctx, args)
   def handle("invitation", ctx, args), do: Sanctum.Providers.Invitation.handle(ctx, args)
   def handle("door", ctx, args), do: Sanctum.Providers.Door.handle(ctx, args)
+  def handle("directory", ctx, args), do: Sanctum.Providers.Directory.handle(ctx, args)
   def handle("oauth", ctx, args), do: Sanctum.Providers.OAuth.handle(ctx, args)
   def handle("key", ctx, args), do: Sanctum.Providers.Key.handle(ctx, args)
 
@@ -134,9 +133,7 @@ defmodule Sanctum.Provider do
   def handle("webhook", ctx, args), do: Sanctum.Providers.Webhook.handle(ctx, args)
   def handle("vault", ctx, args), do: Sanctum.Providers.Vault.handle(ctx, args)
   def handle("profile", ctx, args), do: Sanctum.Providers.Profile.handle(ctx, args)
-  def handle("person", ctx, args), do: Sanctum.Providers.Person.handle(ctx, args)
   def handle("pairing", ctx, args), do: Sanctum.Providers.Pairing.handle(ctx, args)
-  def handle("pin", ctx, args), do: Sanctum.Providers.Pin.handle(ctx, args)
   def handle("passkey", ctx, args), do: Sanctum.Providers.Passkey.handle(ctx, args)
   def handle("confirmation", ctx, args), do: Sanctum.Providers.Confirmation.handle(ctx, args)
   def handle("share", ctx, args), do: Sanctum.Providers.Share.handle(ctx, args)

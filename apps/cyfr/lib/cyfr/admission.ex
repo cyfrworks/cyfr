@@ -14,9 +14,9 @@ defmodule Cyfr.Admission do
       routes, and the console's LiveView socket, each through the gate but
       at the entries that admit for themselves: a webhook's delivery, an
       execution's event stream, and what no person of this home admits,
-      the identity directory, restore, the recovery kit, the OAuth
-      callback that completes a `vault.authorize`, and the browser's
-      sign-in, re-authentication and policy acceptance.
+      the identity directory, the OAuth callback that completes a
+      `vault.authorize`, and the browser's sign-in, re-authentication and
+      policy acceptance.
     * `:http` — the endpoint's proxy listener, in a tailnet or public
       home, the one its proxy forwards to: the same entries, reached from
       other devices.
@@ -93,15 +93,12 @@ defmodule Cyfr.Admission do
     "Emissary.Web.WebhookController",
     "Emissary.Web.ExecutionEventsController",
     "Emissary.Web.DirectoryController",
-    "Emissary.Web.RestoreController",
-    "Emissary.Web.DeviceEnrollmentController",
-    "Emissary.Web.DevicePinController",
+    "Emissary.Web.HandleController",
     "Emissary.Web.DeviceSessionController",
     "Emissary.Web.OAuthCallbackController",
     "PrismWeb.AuthController",
     "PrismWeb.PasskeyController",
     "PrismWeb.DeviceUnlockController",
-    "PrismWeb.ReauthController",
     "CyfrWeb.Plugs.AuthRateLimit",
     "CyfrWeb.Plugs.Authenticate",
     "CyfrWeb.Plugs.ControlPlaneOwnership",
@@ -122,16 +119,13 @@ defmodule Cyfr.Admission do
                      "admitted under its row and run as its bound profile's root; an " <>
                      "execution's event stream, read under the caller's own standing; " <>
                      "and what no person of this CYFR admits: the identity directory, " <>
-                     "whose writes the identifier's own chain authorizes, restore, an " <>
-                     "entry path that runs before its person exists, the recovery " <>
-                     "kit, its own ingress (§9.1, §6.9), and a protected device's " <>
-                     "enrollment under the setup token or a restore's session, a locked device's PIN " <>
-                     "evaluation by its evaluator identifier and the reset its key proves, the OAuth callback, which " <>
+                     "whose writes the identifier's own chain authorizes (§9.1), the " <>
+                     "OAuth callback, which " <>
                      "completes the vault.authorize the gate admitted under the state it " <>
-                     "left, and the browser's sign-in, re-authentication and policy " <>
-                     "acceptance and a protected device's unlock ticket, which establish a " <>
-                     "person's sign-in, prove it fresh or complete it rather than act under " <>
-                     "a context the gate admitted"
+                     "left, and the browser's sign-in, the answer to a request this CYFR " <>
+                     "minted, policy acceptance and a protected device's unlock ticket, " <>
+                     "which establish a person's sign-in or complete it rather than act " <>
+                     "under a context the gate admitted"
 
   @roster [
     %{

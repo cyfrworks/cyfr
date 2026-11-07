@@ -17,8 +17,8 @@
 #     names, not only its own;
 #   * every front's address in CYFR_PRIVATE_EGRESS_TARGETS, as an operator
 #     lists a private directory, since each is a loopback address;
-#   * CYFR_DIRECTORY_URL, the one directory this deployment enrolls at
-#     and restores an identity from;
+#   * CYFR_DIRECTORY_URL, the one directory this deployment reads its
+#     people's accounts at;
 #
 # and, once its server answers, the run's authority as the node's trusted
 # store (`:public_key.cacerts_load/1` over `bin/cyfr rpc`), as an operator
@@ -38,10 +38,9 @@ identity_inetrc() {
 }
 
 # Cell `$1` reaches every declared directory, by name through the run's
-# inetrc and at an address listed as a private egress target, and
-# enrolls its people, and restores an identity, at the directory `$2`
-# (its hostname). `$3...` are further NAME=value lines for its
-# deployment file.
+# inetrc and at an address listed as a private egress target, and reads
+# its people's accounts at the directory `$2` (its hostname). `$3...` are
+# further NAME=value lines for its deployment file.
 identity_reaches_directory() {
   local cell="$1" directory="$2" line targets="locus-backends" host
   shift 2
@@ -76,53 +75,10 @@ identity_start() {
   [ "$answer" = ok ] || fail "cell $cell did not take the run's authority"
 }
 
-# A copy of the stopped cell `$1` at `$2`, answering as the hostname `$3`
-# on listener ports of its own from `$4`: everything the original held,
-# its database, its storage and its deployment's keys, as a thief who took
-# the machine holds them, moved to the new name as `cyfr access` moves a
-# home (`cell_hostname`). It is no home of the browsers' proxy.
-identity_preserved() {
-  local source="$1" cell="$2" host="$3" port="$4"
-  rm -rf "$cell"
-  cp -a "$source" "$cell"
-  rm -f "$cell/boot.log" "$cell/ready.json" "$cell/cli.log"
-  cell_hostname "$cell" "$host" "$port"
-}
-
-# Kill cell `$1`'s server where it stands, as a machine dies: its node
-# signalled at once, with no stop of its own, then its listener awaited.
-identity_kill() {
-  local cell="$1" node
-  node="$(cell_node "$cell")"
-  pkill -9 -f "sname $node( |\$)" 2>/dev/null || true
-  server_stop "$cell"
-}
-
 # Evaluate this proof's fixture (fixture.exs) inside cell `$1`'s running
 # server; `$2...` are its arguments, and its one JSON line is the answer.
 identity_fixture() {
   local cell="$1"
   shift
   cell_fixture "$cell" "$ROOT/tests/identity-proof/fixture.exs" FIXTURE "$@"
-}
-
-# POST a restore request to cell `$1` as the browser does through the
-# front, on its proxy listener with the front's headers: path `$2`, the
-# file `$3` holding the installation token, sent in the authorization
-# header, and the file `$4` holding the JSON body, a restore's
-# `{"recovery_code": code}`. Writes the answer's body to `$5` and prints
-# its status. The token and the recovery code are read from their files,
-# never put on a command line.
-identity_restore_post() {
-  local cell="$1" path="$2" token_file="$3" body="$4" out="$5" host port headers
-  host="$(sed -n 's/^CYFR_HOST=//p' "$cell/.env" | tail -1)"
-  port="$(cell_proxy_port "$cell")"
-  headers="$(mktemp "$WORK/headers.XXXXXX")"
-  printf 'authorization: Bearer %s\n' "$(cat "$token_file")" >"$headers"
-  curl -sS -m 60 -o "$out" -w '%{http_code}' -X POST "http://127.0.0.1:$port$path" \
-    -H "host: $host" -H "x-forwarded-proto: https" -H "x-forwarded-for: 127.0.0.1" \
-    -H "x-forwarded-host: $host" -H "origin: https://$host" \
-    -H "@$headers" -H "content-type: application/json" \
-    -H "accept: application/json" --data-binary "@$body"
-  rm -f "$headers"
 }

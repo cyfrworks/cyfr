@@ -180,7 +180,7 @@ defmodule Arca.Athanors do
   open transaction and count `caps` under it, as `mint/2` does: for a
   write that must be refused at a cap before it writes the rows a later
   mint in the same transaction needs (an admission's person, whose
-  athanor follows them, `Arca.Users.mint/4`'s `verify:`). The lock holds
+  athanor follows them, `Arca.Users.mint/3`'s `verify:`). The lock holds
   to the transaction's end, so what was counted cannot move before that
   mint lands, and that mint names no caps of its own. A cap refused is
   the caps port's answer. Raises outside a transaction.

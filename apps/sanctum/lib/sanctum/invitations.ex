@@ -5,8 +5,10 @@ defmodule Sanctum.Invitations do
   @moduledoc """
   Invitations to become a person at this CYFR (`Arca.Invitations`): who
   may issue and revoke one, what the invitation page shows of one, and
-  the checks its redemption makes in the invitation admission's
-  transaction (`Sanctum.Newcomer`, `{:invitation, code}`).
+  the checks its redemption makes by the identifier of the account that
+  redeems it, in the invitation admission's transaction for a new person
+  (`Sanctum.Newcomer`, `{:invitation, hash}`) or in its own for a person
+  this CYFR holds.
 
   ## Issuing
 
@@ -34,7 +36,10 @@ defmodule Sanctum.Invitations do
 
   ## Redeeming
 
-  `redeemable/1` is the check: the code's invitation exists and is
+  An account redeems an invitation, by its identifier: the browser or the
+  device that brings the code hands this CYFR its hash (`code_hash/1`),
+  which the request it signs holds, never the code.
+  `redeemable_hash/1` is the check: the hash's invitation exists and is
   unexpired, unredeemed and unrevoked; its issuer is still an active
   person here (a door deny marks them denied) at the standing they issued
   it under, their `security_generation` still the one the invitation
@@ -42,30 +47,20 @@ defmodule Sanctum.Invitations do
   restore since retires it and restored authority never redeems; one
   naming a thread needs the thread still active and the issuer still
   seated there, and one naming none needs the issuer still the platform
-  administrator. Any failure is
-  `:invitation_invalid`, one answer for all, so a code reveals nothing of
-  why. `lookup/1` makes exactly that check for the invitation page, and
-  reads only. `redeem/2` marks the invitation redeemed by the person, by
-  one conditional write that lands only while the row is open and
-  unexpired, inside the admission's transaction after the check. The seat
-  an invitation naming a thread makes is a row of the thread's people,
-  written under the thread's lock with its issuer's standing and seat
-  read there once more (`issuer_seated/1`), the thread's people cap
-  counted and a declared restore's hold read there too
-  (`Sanctum.SharedThreads.seat_invited/4`).
+  administrator. Any failure is `:invitation_invalid`, one answer for all,
+  so a code reveals nothing of why. `lookup/1` makes exactly that check
+  for the invitation page from the code, and reads only.
 
-  ## Redeeming as an existing identity
-
-  A person whose keys another CYFR holds redeems an invitation through
-  the CYFR sign-in, which carries the code's hash (`code_hash/1`) in this
-  CYFR's own session, never the code. `redeemable_hash/1` is
-  `redeemable/1`'s check from the hash. `redeem_for/2` redeems it for a
-  person this CYFR already knows, in a transaction of its own, and
-  `redeem_hash/2` for one it does not, in the remote admission's
-  (`Sanctum.Newcomer`). After the conditional write both write, in that
-  transaction, the seat the invitation names, under the thread's lock,
-  and the identifier's allow (`Sanctum.Door.Store.allow_unless_denied/4`),
-  the row `door.allow`
+  `redeem_hash/2` redeems it for a new person, in the admission's
+  transaction (`Sanctum.Newcomer`), and `redeem_for/2` for a person this
+  CYFR already knows, in a transaction of its own. Each marks the
+  invitation redeemed by one conditional write that lands only while the
+  row is open and unexpired, then writes, in that transaction, the seat
+  the invitation names, under the thread's lock with its issuer's
+  standing and seat read there once more (`issuer_seated/1`), the
+  thread's people cap counted there too
+  (`Sanctum.SharedThreads.seat_invited/4`), and the identifier's
+  allow (`Sanctum.Door.Store.allow_unless_denied/4`), the row `door.allow`
   writes, added by the issuer, noting the invitation, labelled with the
   person's name here when they have one. A deny of the identifier, even
   one committed a moment before, refuses the allow, and a deny of the
@@ -176,7 +171,7 @@ defmodule Sanctum.Invitations do
   CYFR", never an address), the thread's title when it names one, its
   expiry, and the name it offers when it offers one; or
   `:invitation_invalid` under exactly the check redemption makes
-  (`redeemable/1`). Reads only.
+  (`redeemable_hash/1`). Reads only.
   """
   @spec lookup(term()) :: {:ok, shown()} | {:error, :invitation_invalid | :unavailable}
   def lookup(code) do
@@ -189,20 +184,11 @@ defmodule Sanctum.Invitations do
   end
 
   @doc """
-  Whether the invitation `code` opens would admit a person now (the
-  module doc): `:ok`, `{:error, :invitation_invalid}`, or
-  `{:error, :unavailable}` when the store cannot answer. Reads only, so it
-  runs as the invitation admission's `verify:`.
-  """
-  @spec redeemable(term()) :: :ok | {:error, :invitation_invalid | :unavailable}
-  def redeemable(code) do
-    with {:ok, code_hash} <- code_hash(code), do: redeemable_hash(code_hash)
-  end
-
-  @doc """
-  `redeemable/1` from the code's hash (`code_hash/1`), making exactly its
-  checks: `:ok`, `{:error, :invitation_invalid}`, or `{:error,
-  :unavailable}`. A value that is no hash opens nothing. Reads only.
+  Whether the invitation the code's hash (`code_hash/1`) names would admit
+  an account now (the module doc): `:ok`, `{:error, :invitation_invalid}`,
+  or `{:error, :unavailable}` when the store cannot answer. A value that
+  is no hash opens nothing. Reads only, so it runs as the invitation
+  admission's `verify:`.
   """
   @spec redeemable_hash(term()) :: :ok | {:error, :invitation_invalid | :unavailable}
   def redeemable_hash(code_hash) do
@@ -211,38 +197,15 @@ defmodule Sanctum.Invitations do
 
   @doc """
   The hash an invitation is stored under, of the code `code` as it was
-  given (base64url without padding, of 32 bytes): the lowercase hex
-  SHA-256 of its bytes. Anything else is `:invitation_invalid`, as an
-  unknown code is.
+  given (`Prima.Device.invitation_code?/1`): the lowercase hex SHA-256 of
+  its bytes. Anything else is `:invitation_invalid`, as an unknown code
+  is.
   """
   @spec code_hash(term()) :: {:ok, String.t()} | {:error, :invitation_invalid}
-  def code_hash(code) when is_binary(code) do
-    case Base.url_decode64(code, padding: false) do
-      {:ok, <<_::binary-size(@code_bytes)>> = bytes} -> {:ok, Prima.Digest.sha256_hex(bytes)}
-      _malformed -> invalid()
-    end
-  end
-
-  def code_hash(_code), do: invalid()
-
-  @doc """
-  Mark the invitation `code` opens redeemed by the person `user_id`, in
-  the admission's transaction, after `redeemable/1` agreed: one
-  conditional write, which lands only while the invitation is unredeemed,
-  unrevoked and unexpired. Answers the redeemed invitation; one that
-  another redemption or a revocation closed first is
-  `:invitation_invalid`.
-  """
-  @spec redeem(term(), String.t()) ::
-          {:ok, map()} | {:error, :invitation_invalid | :unavailable}
-  def redeem(code, user_id) when is_binary(user_id) do
-    with {:ok, code_hash} <- code_hash(code) do
-      case Arca.Invitations.redeem(server(), code_hash, user_id) do
-        {:ok, row} -> {:ok, row}
-        {:error, :not_found} -> {:error, :invitation_invalid}
-        {:error, reason} -> {:error, unavailable(reason)}
-      end
-    end
+  def code_hash(code) do
+    if Prima.Device.invitation_code?(code),
+      do: {:ok, code |> Base.url_decode64!(padding: false) |> Prima.Digest.sha256_hex()},
+      else: invalid()
   end
 
   @doc """
@@ -364,22 +327,6 @@ defmodule Sanctum.Invitations do
       :ok -> :ok
       {:error, reason} when reason in [:not_found, :archived, :not_member, :pair] -> invalid()
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  The shared thread the redeemed invitation `code` opened seats its
-  person in, read after the admission committed: `{:ok, thread_id}`, or
-  `:none` when it names none or cannot be read.
-  """
-  @spec seat(term()) :: {:ok, String.t()} | :none
-  def seat(code) do
-    with {:ok, code_hash} <- code_hash(code),
-         {:ok, %{thread_id: thread_id}} when is_binary(thread_id) <-
-           Arca.Invitations.by_code_hash(server(), code_hash) do
-      {:ok, thread_id}
-    else
-      _none -> :none
     end
   end
 

@@ -3,14 +3,12 @@
 
 defmodule CyfrWeb.SignInResponseTest do
   @moduledoc """
-  The one transcription of a sign-in outcome to a browser response: a
-  proceed is a redirect to the console root carrying the session, and an
-  outage is a page. No sign-in speaks to the registry, so nothing beside
-  the session is written.
+  The one transcription of an admitted sign-in to a browser response: a
+  ticket's token becomes the session on a clean Plug session, and the
+  browser lands on the console root. Nothing beside the session is
+  written.
   """
   use CyfrWeb.ConnCase, async: false
-
-  import ExUnit.CaptureLog
 
   alias CyfrWeb.SignInResponse
 
@@ -23,14 +21,12 @@ defmodule CyfrWeb.SignInResponseTest do
     |> fetch_flash()
   end
 
-  defp session_dropped?(conn), do: conn.private[:plug_session_info] == :drop
-
   test "the session key is the context guard's" do
     assert SignInResponse.session_key() == CyfrWeb.ContextGuard.session_key()
   end
 
   describe "respond/3 — a proceed" do
-    test "a device ticket's token becomes the session and the console root is the landing" do
+    test "a ticket's token becomes the session and the console root is the landing" do
       conn =
         SignInResponse.respond(browser_conn(), :proceed, session: {:token, "tok-1"})
 
@@ -46,20 +42,6 @@ defmodule CyfrWeb.SignInResponseTest do
 
       assert get_session(conn, "_csrf_token") == nil
       assert get_session(conn, SignInResponse.session_key()) == "tok-2"
-    end
-
-    test "a minted session is a live session for the context" do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-
-      conn = SignInResponse.respond(browser_conn(), :proceed, session: {:mint, ctx})
-
-      assert redirected_to(conn) == "/"
-      token = get_session(conn, SignInResponse.session_key())
-      assert is_binary(token)
-      assert {:ok, %{user_id: user_id}} = Sanctum.Session.load(token)
-      assert user_id == ctx.user_id
-
-      Sanctum.Session.destroy(token)
     end
 
     test "nothing beside the session is written: no provider token is kept" do
@@ -81,133 +63,13 @@ defmodule CyfrWeb.SignInResponseTest do
     end
   end
 
-  describe "respond/3 — an outage" do
-    test "a mint that could not finish drops the session and answers a 503 page" do
-      ctx = Sanctum.TestContext.local()
-
-      conn =
-        %{sanctum_session_token: "stale"}
-        |> browser_conn()
-        |> SignInResponse.respond({:unavailable, :account_read}, session: {:mint, ctx})
-
-      assert conn.status == 503
-      assert ["text/html" <> _] = get_resp_header(conn, "content-type")
-      assert conn.resp_body =~ "could not read your account"
-      assert conn.resp_body =~ ~s(<a href="/login">Try again</a>)
-      assert session_dropped?(conn)
-    end
-
-    test "a ticket's session already minted stands through an outage" do
-      conn =
-        %{sanctum_session_token: "existing"}
-        |> browser_conn()
-        |> SignInResponse.respond({:unavailable, :other}, session: {:token, "existing"})
-
-      assert conn.status == 503
-      assert conn.resp_body =~ "Signing in did not finish"
-      refute session_dropped?(conn)
-      assert get_session(conn, SignInResponse.session_key()) == "existing"
-    end
-
-    test "the retry path is escaped into the page" do
-      conn =
-        SignInResponse.respond(browser_conn(), {:unavailable, :account_read},
-          session: {:token, "t"},
-          retry_path: "/legal?x=<b>"
-        )
-
-      assert conn.resp_body =~ ~s(href="/legal?x=&lt;b&gt;")
-    end
-
-    test "a caller that accepts JSON is answered with the same page" do
-      conn =
-        build_conn()
-        |> put_req_header("accept", "application/json")
-        |> SignInResponse.respond({:unavailable, :account_read}, session: {:token, "t"})
-
-      assert conn.status == 503
-      assert ["text/html" <> _] = get_resp_header(conn, "content-type")
-    end
-
-    test "a mint outage on a conn with no session is still a page" do
-      conn =
-        SignInResponse.respond(build_conn(), {:unavailable, :account_read},
-          session: {:mint, Sanctum.TestContext.local()}
-        )
-
-      assert conn.status == 503
-    end
-  end
-
-  describe "respond/3 — a remote person whose identity cannot be read fresh" do
-    import Ecto.Query, only: [from: 2]
-
-    alias Sanctum.Test.DirectoryServer
-
-    setup do
-      tls = DirectoryServer.tls()
-      DirectoryServer.listen!()
-      DirectoryServer.seam!(tls)
-
-      on_exit(fn ->
-        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      end)
-
-      %{directory: DirectoryServer.start!(tls)}
-    end
-
-    test "a minted sign-in pauses on a 503 page naming the reason, and establishes no session",
-         %{directory: directory} do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      identity = DirectoryServer.identity!(directory.dir, directory.url)
-      :ok = DirectoryServer.remote_person!(ctx.user_id, identity)
-
-      # The cached head aged past the bound, and the directory unreachable:
-      # neither the cache nor a live read can name the key epoch a session
-      # records.
-      {1, _} =
-        Arca.Repo.update_all(
-          from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identity.identifier),
-          set: [verified_at: DateTime.add(DateTime.utc_now(), -86_400, :second)]
-        )
-
-      DirectoryServer.Server.stop(directory.server)
-
-      {conn, log} =
-        with_log(fn ->
-          SignInResponse.respond(browser_conn(), :proceed, session: {:mint, ctx})
-        end)
-
-      assert log =~ "freshness bound"
-      refute log =~ "session create failed"
-
-      assert conn.status == 503
-      assert ["text/html" <> _] = get_resp_header(conn, "content-type")
-      assert conn.resp_body =~ "Temporarily unavailable"
-      assert conn.resp_body =~ Prima.Refusal.message(:identity_stale)
-      assert conn.resp_body =~ ~s(<a href="/login">Back to sign-in</a>)
-
-      # No session: none in the cookie, none in the store.
-      assert get_session(conn, SignInResponse.session_key()) == nil
-
-      refute Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.user_id == ^ctx.user_id))
-    end
-  end
-
-  describe "the session and flash helpers" do
+  describe "the flash helper" do
     test "put_flash_if_available/3 flashes when flash is fetched and is a no-op otherwise" do
       conn = SignInResponse.put_flash_if_available(browser_conn(), :info, "hello")
       assert Phoenix.Flash.get(conn.assigns.flash, :info) == "hello"
 
       bare = build_conn()
       assert SignInResponse.put_flash_if_available(bare, :info, "hello") == bare
-    end
-
-    test "safe_drop_session/1 drops a fetched session and is a no-op otherwise" do
-      assert session_dropped?(SignInResponse.safe_drop_session(browser_conn()))
-
-      bare = build_conn()
-      assert SignInResponse.safe_drop_session(bare) == bare
     end
   end
 end

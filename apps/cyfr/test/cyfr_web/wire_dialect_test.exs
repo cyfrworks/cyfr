@@ -46,7 +46,17 @@ defmodule CyfrWeb.WireDialectTest do
     # nothing of the credential or frame it names; none is an API error
     # body. Its 503 renders through ApiError.
     "emissary/web/controllers/canvas_controller.ex" =>
-      "the canvas page's 200 HTML document, its SDK's 200 script and their bodiless 404"
+      "the canvas page's 200 HTML document, its SDK's 200 script and their bodiless 404",
+    # The account pages are a static bundle: a 200 file of its own type, a
+    # 304 with no body to a revalidation, and a plain 404 for a name the
+    # bundle lacks; no API error body.
+    "emissary/web/controllers/account_controller.ex" =>
+      "the account pages' 200 files, their bodiless 304 and their plain 404",
+    # A handle's answer is the registry protocol's own bytes
+    # (`Prima.HandleAnswer.encode/1`), sent as encoded; its refusals render
+    # as JSON.
+    "emissary/web/controllers/handle_controller.ex" =>
+      "the handle answer's 200 body is the registry protocol's encoded bytes"
   }
 
   test "every bare send_resp is on the roster with a reason" do

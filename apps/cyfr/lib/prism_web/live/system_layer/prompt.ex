@@ -59,36 +59,21 @@ defmodule PrismWeb.SystemLayer.Prompt do
       person reads (a pair's is the other person's), which the sheet offers
       beside everyone as the share's audience. It creates the share
       through `share.create`;
-    * `:pairing` — nothing, or `key_code`, the code of the key a new
-      device shows (`Prima.Device.key_code/1`), which the prompt's form
-      starts filled with: the prompt reads the person's paired clients
-      itself and begins a pairing through `pairing.begin` when the person
-      asks, whose answer's link it draws as a QR code
+    * `:pairing` — nothing: the prompt reads the person's paired clients
+      itself and revokes one through `pairing.revoke` when the person asks
       (`PrismWeb.SystemLayer.Pairing`);
     * `:confirmation` — one pending confirmation as `confirmation.pending`
       lists it: its public `ref`, the `operation` and `action` it confirms,
-      the `preview` and `asker` the home stored, its `expires_at`, the
-      `webauthn` request options a passkey proves it with, the `methods`
-      the person can prove it by, for a person whose keys are at another
-      home `at_home`, what their browser carries there for it, `enroll`,
-      whether they must add a passkey or a device first, and `own`,
-      whether this client asked for it. A client that asked but cannot read the list carries
+      the `preview` and `asker` the CYFR stored, its `expires_at`, the
+      `methods` this client proves it by, and `own`, whether this client
+      asked for it. A client that asked but cannot read the list carries
       the ref, operation and expiry alone, the rest `nil`. The secret the
-      asking request was answered never enters a prompt;
-    * `:kit` and `:holder` — recovery material, each under the action
-      `:recovery_material` (`PrismWeb.SystemLayer.Recovery` builds them): a
-      kit names the `attempt_id` of the enrollment or added code whose
-      recovery code is shown again; another code names nothing. No secret,
-      recovery code or installation token is ever a prompt's subject: the
-      browser draws and holds the secret, and a recovery code goes to the
-      browser alone.
+      asking request was answered never enters a prompt.
 
   Anything else is refused as `:invalid_prompt`: nothing is drawn.
   """
 
-  @recovery_kinds [:kit, :holder]
-  @kinds [:grant, :unlock, :sign_in, :credential_entry, :share, :pairing, :confirmation] ++
-           @recovery_kinds
+  @kinds [:grant, :unlock, :sign_in, :credential_entry, :share, :pairing, :confirmation]
   @keys [:id, :kind, :action, :subject]
   @max_id_bytes 128
 
@@ -96,7 +81,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
   @field_name ~r/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/
   @prefill_keys [:athanor_id, :provider, :hosts, :paths, :disclose_needed, :return]
 
-  @methods ~w(passkey oidc email home device)
+  @methods ~w(passkey device)
 
   @typedoc "What a prompt asks for."
   @type kind ::
@@ -107,8 +92,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
           | :share
           | :pairing
           | :confirmation
-          | :kit
-          | :holder
 
   @typedoc "A prompt."
   @type t :: %{
@@ -121,10 +104,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
   @doc "The kinds of prompt the layer draws."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
-
-  @doc "The kinds of prompt that show recovery material, which only the layer draws."
-  @spec recovery_kinds() :: [kind()]
-  def recovery_kinds, do: @recovery_kinds
 
   @doc "The field a credential entry is stored under when its subject names none."
   @spec default_field() :: String.t()
@@ -172,10 +151,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
         :preview,
         :asker,
         :expires_at,
-        :webauthn,
-        :methods,
-        :at_home,
-        :enroll
+        :methods
       ])
       |> Map.put(:action, Map.get(entry, :action))
       |> Map.put(:own, own)
@@ -203,8 +179,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp action(:share, :credential_sharing), do: :ok
-  defp action(:pairing, :device_pairing), do: :ok
-  defp action(kind, :recovery_material) when kind in @recovery_kinds, do: :ok
+  defp action(:pairing, :pairing_revocation), do: :ok
 
   defp action(_kind, _action), do: {:error, :invalid_prompt}
 
@@ -258,20 +233,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}
 
-  defp subject(:pairing, %{key_code: code} = subject) when map_size(subject) == 1 do
-    case Prima.Device.from_key_code(code) do
-      {:ok, _digest} -> {:ok, subject}
-      :error -> {:error, :invalid_prompt}
-    end
-  end
-
-  # A kit is named by its attempt's id, and carries no secret.
-  defp subject(:kit, %{attempt_id: id} = subject)
-       when map_size(subject) == 1 and is_binary(id) and id != "" and byte_size(id) <= 128,
-       do: {:ok, %{attempt_id: id}}
-
-  defp subject(:holder, subject) when map_size(subject) == 0, do: {:ok, %{}}
-
   defp subject(
          :confirmation,
          %{ref: ref, operation: operation, expires_at: %DateTime{}, own: own} = subject
@@ -284,7 +245,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
        do:
          {:ok,
           Map.merge(
-            %{action: nil, preview: nil, asker: nil, webauthn: nil, methods: nil},
+            %{action: nil, preview: nil, asker: nil, methods: nil},
             subject
           )},
        else: {:error, :invalid_prompt}
@@ -363,15 +324,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
   defp optional_field?({:action, action}), do: is_binary(action)
   defp optional_field?({:preview, %{"operation" => op}}), do: is_binary(op)
   defp optional_field?({:asker, %{"kind" => kind}}), do: is_binary(kind)
-  defp optional_field?({:webauthn, %{"challenge" => challenge}}), do: is_binary(challenge)
 
   defp optional_field?({:methods, methods}),
     do: is_list(methods) and Enum.all?(methods, &(&1 in @methods))
-
-  defp optional_field?({:at_home, %{audience: audience, ref: ref}}),
-    do: is_binary(audience) and is_binary(ref)
-
-  defp optional_field?({:enroll, enroll}), do: is_boolean(enroll)
 
   defp optional_field?(_field), do: false
 

@@ -3,81 +3,63 @@
 
 defmodule Sanctum.DeviceUnlock do
   @moduledoc """
-  A protected device: one whose key a local unlock guards, a TPM `chip`
-  sealing it under a PIN or a passphrase-wrapped `software` file. It
-  enrolls its key at an admission, unlocks into a browser session, locks
-  that session again, and proves the person for one pending change. Every
-  proof is `Prima.DeviceCert.Proof` over a challenge this home holds in
+  A protected device: a device of a person's account whose key a local
+  unlock guards, a TPM chip sealing it under a PIN or a passphrase-wrapped
+  file. It is admitted here by its hello, unlocks into a browser session,
+  and locks that session again. Every unlock and lock proof is
+  `Prima.DeviceCert.Proof` over a challenge this CYFR holds in
   `Arca.Cache` and consumes at most once (`tests/fixtures/device_unlock.json`).
   A challenge a member does not hold (a cache lost or another member's) is
   refused and asked again, never skipped. Every fresh challenge expires
   60 seconds after the database's clock read when it was issued, and is
-  refused at that instant. The PIN or passphrase never reaches this home.
+  refused at that instant. The PIN or passphrase never reaches this CYFR.
 
-  ## Enrollment
+  ## The hello
 
-  `enrollment_challenge/2` answers an `enroll` challenge for the device
-  key, the request id the device drew and keeps, and the athanor and
-  client id reserved for it, held with what the device reports of its
-  holder. `enroll/2` takes the proof over it:
-
-    * `{:setup, token}` admits the installation's first person, or the
-      person setup made while they hold no method at this home's address
-      (`Sanctum.Newcomer`): their keys, athanor, platform administrator's mark, the
-      paired client under the reserved id, its first certificate, the
-      first-method latch and the recovery enrollment commit together
-      (`{:device, enrollment, identity}`), and the admission answers the
-      certificate and the recovery code. No session is minted: the device
-      unlocks for one.
-    * `{:invitation, code}` and `{:open, source}` admit a new person under
-      an invitation's code or the door's open admission
-      (`Sanctum.Newcomer`), as setup admits its first: their keys,
-      athanor, the paired client, its first certificate, the first-method
-      latch and the recovery enrollment commit together, or none of them,
-      and the admission answers the certificate and the recovery code. An
-      invitation's challenge is held for that code alone, so a proof over
-      it completes under no other. An open admission's challenges are
-      counted against their source address (20 a minute) and the
-      installation (200 a minute) before anything is held.
-    * `{:restore, ctx}` enrolls the first method of a person a restore
-      brought back, from the `restore` session that restore issued and
-      within its first-method window (`Sanctum.Passkeys.first_method_session?/2`).
-      The client, its certificate and the first-method latch commit
-      together under the person's lock, so the window enrolls one first
-      method: a passkey or another device that claimed the latch first
-      refuses it (`:first_method_used`). After the window, the restore's
-      reproof issues a new `restore` session (`Sanctum.Recovery`).
-
-  `resume/2` recovers a lost answer: the request id and the key of a
-  client an enrollment committed are answered an `enroll` challenge bound
-  to that client, and a proof over it the client's certificate (and, for
-  setup, the recovery code while it is unsaved). It takes the
-  installation capability the admission did (the setup token, or the
-  restore token for a restore), and the proof of the committed key, never
-  the request id alone. A resume is bound to the admission the enrollment
-  committed under, read from the store: setup's token for the person setup
-  made; an invitation's code that person redeemed, on the challenge and
-  the completion alike; an open admission's proof alone, counted against
-  its source address as its challenges are; a restore's token for a person
-  a restore brought back. No other capability resumes it. Nothing
-  is reopened or minted again.
+  A device's first connection here (`ARCHITECTURE.md` §9.3) names the key
+  it holds (`kid`), the account it is a key of (`identifier`), what holds
+  the key (`holder_kind`) and the name it shows (`display_name`), each in
+  `Prima.Device`'s grammar, and, when it comes with one, the capability
+  that admits a new person: the setup token or an invitation's code.
+  `hello/2` answers a `sign_in` request (`Prima.SignIn`) bound to the
+  channel that asked, by the client id it reserved for the device, and
+  held for the key, holder and name the hello named
+  (`Sanctum.SignIn.request/3`); a setup token that is not this CYFR's, or
+  an invitation code that names none, is refused before anything is held.
+  The device signs the request's digest after its local unlock, and
+  `admit/2` takes the answer: `Sanctum.SignIn.answer/3` spends the request
+  and verifies the answer against the account's log, by the key the hello
+  named, then admits the person: a new one under the capability or the
+  door (`Sanctum.Newcomer.admit/3`), one this CYFR holds by the door's
+  verdict. The device is paired in the same transaction as a new person's
+  admission, right after the door's verdict for a person this CYFR holds
+  (`pair/4`): the paired client, a key of the account at the head the
+  answer was verified under, with the holder and name its hello reported,
+  and its first certificate
+  (`Sanctum.DeviceCerts.issue/2`), under the issuance fence. A device
+  whose key already stands here as an active client of the person is
+  answered a new certificate for that client instead, so a hello asked
+  again pairs nothing twice. A capability that admits nobody writes
+  nothing. `admit/2` answers the paired client's id, its certificate and
+  its standing; from then on the device connects with that certificate
+  (`Sanctum.DeviceCerts`).
 
   ## Unlock and lock
 
-  Through the device channel only (`auth_method: :device`) and only for a
-  client that reports a holder: `unlock/2` with no proof answers an
-  `unlock` challenge reserving one session id, and reserves that session
-  as a row no token loads, expiring with the challenge
-  (`Arca.SessionStorage.reserve_client_session/2`), from the moment the
-  id leaves this home; with the proof over it, while that row still
-  stands, a 32-byte single-use ticket, held 60 seconds with the reserved
-  session, the client and the issuance expectation the channel's context
-  read, and the row carried to the ticket's deadline. `redeem/1`, the browser's exchange, spends the ticket once and
-  activates that row (`Sanctum.Session.create_unlocked/1`) in the
-  issuance transaction that rereads the person, athanor, client
-  and certificate the expectation names, under the client's lock and
-  then the row's. The ticket is bearer authority for this brief exchange
-  alone; a ticket this member's cache no longer holds redeems nothing.
+  Through the device channel only (`auth_method: :device`):
+  `unlock/2` with no proof answers an `unlock` challenge reserving one
+  session id, and reserves that session as a row no token loads, expiring
+  with the challenge (`Arca.SessionStorage.reserve_client_session/2`),
+  from the moment the id leaves this CYFR; with the proof over it, while
+  that row still stands, a 32-byte single-use ticket, held 60 seconds with
+  the reserved session, the client and the issuance expectation the
+  channel's context read, and the row carried to the ticket's deadline.
+  `redeem/1`, the browser's exchange, spends the ticket once and
+  activates that row (`Sanctum.Session.create_unlocked/1`) in the issuance
+  transaction that rereads the person, athanor, client and certificate the
+  expectation names, under the client's lock and then the row's. The
+  ticket is bearer authority for this brief exchange alone; a ticket this
+  member's cache no longer holds redeems nothing.
 
   The session expires 60 seconds after the database's clock, never past
   the certificate, and only the device channel's standing check moves it
@@ -91,60 +73,43 @@ defmodule Sanctum.DeviceUnlock do
   reservations go with it. A channel that dies without closing leaves
   them to their expiry.
 
-  ## Confirmation
-
-  `confirm_challenge/2` answers a `confirm` challenge for one pending
-  confirmation of the device's person: its public ref and stored digest,
-  expiring no later than the record. `confirm_proof/3` verifies the proof
-  over it for `Sanctum.Consent.Authz`, which records the client as the
-  confirmer.
+  A device confirms a pending change by answering this CYFR's `confirm`
+  request over its channel (`Sanctum.Providers.Confirmation`).
   """
 
   require Logger
 
-  alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
-  alias Prima.Identity.Encoding
-  alias Sanctum.{Context, Person}
+  alias Prima.Identity.{Encoding, Key}
+  alias Sanctum.Context
 
   @ticket_bytes 32
   @lifetime_ms 60_000
-  @max_display_name 64
-  @holder_kinds ~w(chip software)
-
-  # An open admission's challenges and resumes, per source address and for
-  # the installation, in a minute.
-  @window_ms 60_000
-  @open_source_cap 20
-  @open_installation_cap 200
 
   @typedoc """
-  What admits an enrollment: the setup token, a restore's session, an
-  invitation's code, or the door's open admission from a source address
-  (nil where the ingress knew none).
+  What a hello names (the module doc): the device's key, the account it is
+  a key of, what holds the key and the name it shows, and the capability
+  a new person comes in under, when it brings one.
   """
-  @type admission ::
-          {:setup, String.t()}
-          | {:restore, Context.t()}
-          | {:invitation, String.t()}
-          | {:open, String.t() | nil}
-
-  @typedoc "The capability a resume takes: the admission's own, or an open one's address."
-  @type capability ::
-          {:setup, String.t()}
-          | {:restore, String.t()}
-          | {:invitation, String.t()}
-          | {:open, String.t() | nil}
-
-  @typedoc "An enrollment the device proved, as `Sanctum.Newcomer` writes it."
-  @type enrollment :: %{
-          required(:athanor_id) => String.t(),
-          required(:client_id) => String.t(),
-          required(:device_key) => binary(),
-          required(:request_id) => String.t(),
+  @type hello :: %{
+          required(:kid) => String.t(),
+          required(:identifier) => String.t(),
           required(:holder_kind) => String.t(),
           required(:display_name) => String.t(),
-          required(:user_id) => String.t() | nil
+          optional(:admission) => {:setup, String.t()} | {:invitation, String.t()} | nil
+        }
+
+  @typedoc """
+  The device a hello pairs (`pair/4`): the client id the channel reserved
+  for it, what holds its key and the name it shows.
+  """
+  @type device :: %{client_id: String.t(), holder_kind: String.t(), display_name: String.t()}
+
+  @typedoc "What `admit/2` answers: the paired client, its certificate and its standing."
+  @type admitted :: %{
+          client_id: String.t(),
+          certificate: Prima.DeviceCert.t(),
+          standing: %{client_id: String.t(), athanor: String.t(), expires_at: pos_integer()}
         }
 
   @doc "How long a ticket and a fresh challenge live, and a session lasts unslid, in ms."
@@ -152,499 +117,189 @@ defmodule Sanctum.DeviceUnlock do
   def lifetime_ms, do: @lifetime_ms
 
   # ===========================================================================
-  # Enrollment
+  # The hello
   # ===========================================================================
 
   @doc """
-  An `enroll` challenge (the module doc). `params`: `"admission"`
-  (`"setup"`, `"restore"`, `"invitation"` or `"open"`, the credential's),
-  `"device_key"`, `"request_id"`, `"holder_kind"` and `"display_name"`.
-  Refusals: `:setup_closed`, `:invalid_request`, `:first_method_used`,
-  `:not_restored`, `:invitation_invalid`, `{:door, reason}`,
-  `:no_directory`, `{:rate_limited, seconds}` and `:unavailable`.
+  Answer a device's hello on the channel that reserved `client_id` for it
+  with a `sign_in` request held for that channel and the hello's key (the
+  module doc). Refusals: `:setup_closed` (a setup token that is not this
+  CYFR's), `:invitation_invalid` (an invitation code that names none),
+  `{:invalid_argument, sentence}`, `:no_directory`, `:unavailable`.
   """
-  @spec enrollment_challenge(admission(), map()) ::
-          {:ok, %{challenge: Challenge.t()}} | {:error, atom()}
-  def enrollment_challenge(admission, params) when is_map(params) do
-    with {:ok, reported} <- reported(params, kind(admission)),
-         {:ok, binding} <- enrollment_binding(admission),
-         {:ok, now} <- db_now_ms() do
-      issue_enroll(
-        %{
-          admission: kind(admission),
-          athanor: binding.athanor_id,
-          client_id: Prima.UUID7.generate_id("pcl"),
-          request_id: reported.request_id,
-          device_key: reported.device_key
-        },
-        Map.merge(reported, %{
-          user_id: binding.user_id,
-          kind: kind(admission),
-          admitter: admitter(admission)
-        }),
-        now
-      )
+  @spec hello(String.t(), hello()) :: {:ok, Prima.SignIn.t()} | {:error, term()}
+  def hello(
+        "pcl_" <> _ = client_id,
+        %{kid: kid, identifier: identifier, holder_kind: holder_kind, display_name: name} = hello
+      ) do
+    with :ok <- named(kid, identifier, holder_kind, name),
+         {:ok, admission} <- admission(Map.get(hello, :admission)),
+         {:ok, %{request: request}} <-
+           Sanctum.SignIn.request(:sign_in, {:channel, client_id},
+             identifier: identifier,
+             kid: kid,
+             holder_kind: holder_kind,
+             display_name: name,
+             admission: admission
+           ) do
+      {:ok, request}
     end
   end
 
-  def enrollment_challenge(_admission, _params), do: {:error, :invalid_request}
+  def hello(_client_id, _hello), do: unnamed()
+
+  defp named(kid, identifier, holder_kind, name) do
+    if Encoding.digest?(kid) and Encoding.identifier?(identifier) and
+         holder_kind in Prima.Device.holder_kinds() and Prima.Device.display_name?(name),
+       do: :ok,
+       else: unnamed()
+  end
+
+  defp unnamed,
+    do:
+      {:error, {:invalid_argument, "A hello names its key, its account, its holder and its name"}}
+
+  # A capability that admits nobody refuses here, before anything is held.
+  defp admission(nil), do: {:ok, nil}
+
+  defp admission({:setup, token} = admission) do
+    if Sanctum.Newcomer.setup_token?(token), do: {:ok, admission}, else: {:error, :setup_closed}
+  end
+
+  defp admission({:invitation, code}) do
+    with {:ok, hash} <- Sanctum.Invitations.code_hash(code),
+         :ok <- Sanctum.Invitations.redeemable_hash(hash) do
+      {:ok, {:invitation, hash}}
+    end
+  end
+
+  defp admission(_other),
+    do: {:error, {:invalid_argument, "A hello comes with the setup token or an invitation"}}
 
   @doc """
-  Enroll the device whose proof answers a held `enroll` challenge (the
-  module doc). `params`: `"proof"`, and for setup the new person's
-  `"name"` and `"recovery_secret"` (`Sanctum.Newcomer.identity/1`; the
-  request id is the challenge's), as for an invitation and an open
-  admission. Answers `%{certificate, recovery}`, the recovery absent for a
-  restore. Refusals: `:proof_refused`, `:setup_closed`,
-  `:first_method_used`, `:not_restored`, `{:invalid_argument, sentence}`,
-  `:invalid_request`, `:unavailable` and the admission's own
-  (`Sanctum.Newcomer`).
+  Take the device's answer to the request its hello was answered, on the
+  channel that reserved `client_id` (the module doc): admit the person,
+  pair the device and issue its first certificate. Answers
+  `t:admitted/0`. Refusals: `Sanctum.SignIn.answer/3`'s, among them
+  `:answer_refused`, `:identity_stale`, `:identity_gone`, `:stale_head`,
+  `{:door, reason}`, `:invitation_invalid`, `:setup_closed`, and
+  `:unavailable`.
   """
-  @spec enroll(admission(), map()) :: {:ok, map()} | {:error, term()}
-  def enroll(admission, %{"proof" => proof} = params) do
-    with {:ok, held} <- take_proven({:device_enroll, kind(admission)}, proof),
-         :ok <- same_admitter(admission, held) do
-      enrolled_by(admission, held, params)
+  @spec admit(String.t(), Prima.SignIn.DeviceAnswer.t() | map()) ::
+          {:ok, admitted()} | {:error, term()}
+  def admit("pcl_" <> _ = client_id, answer) do
+    with {:ok, answer} <- device_answer(answer),
+         {:ok, %{purpose: :sign_in, user: user, kid: kid}} <-
+           Sanctum.SignIn.answer(answer, {:channel, client_id}) do
+      paired(user.id, kid)
     end
   end
 
-  def enroll(_admission, _params), do: {:error, :invalid_request}
+  def admit(_client_id, _answer), do: {:error, :answer_refused}
 
-  defp enrolled_by({kind, _credential} = admission, held, params)
-       when kind in [:setup, :invitation, :open] do
-    with {:ok, identity} <-
-           Sanctum.Newcomer.identity(%{
-             "name" => params["name"],
-             "recovery_secret" => params["recovery_secret"],
-             "request_id" => held.challenge.request_id
-           }),
-         {:ok, admitted} <-
-           Sanctum.Newcomer.admit(newcomer(admission), {:device, enrollment(held), identity}),
-         {:ok, certificate} <- certificate(held.challenge.athanor, held.challenge.client_id) do
-      {:ok, Map.merge(%{certificate: certificate}, Map.take(admitted, [:recovery]))}
-    end
-  end
+  defp device_answer(%Prima.SignIn.DeviceAnswer{} = answer), do: {:ok, answer}
 
-  defp enrolled_by({:restore, %Context{} = ctx}, held, _params) do
-    with :ok <- restore_window(ctx),
-         {:ok, _client} <-
-           write_enrolled(held.challenge.athanor, ctx.user_id, enrollment(held), :claim),
-         {:ok, certificate} <- certificate(held.challenge.athanor, held.challenge.client_id) do
-      {:ok, %{certificate: certificate}}
-    end
-  end
-
-  @doc """
-  Resume an enrollment whose answer was lost (the module doc). Without a
-  proof, `params` names `"admission"`, `"device_key"` and `"request_id"`
-  and is answered `%{challenge}`; with `"proof"` alone, the committed
-  client's `%{certificate}` and, for setup, its person's `recovery`.
-  Refusals: `:invalid_token`, `:not_found`, `:proof_refused`,
-  `:invalid_request` and `:unavailable`.
-  """
-  @spec resume(capability(), map()) :: {:ok, map()} | {:error, atom()}
-  def resume(capability, params) when is_map(params) do
-    with :ok <- capable(capability) do
-      case params do
-        %{"proof" => proof} when map_size(params) == 1 -> resumed(capability, proof)
-        %{"proof" => _proof} -> {:error, :invalid_request}
-        _no_proof -> resume_challenge(capability, params)
-      end
-    end
-  end
-
-  def resume(_capability, _params), do: {:error, :invalid_request}
-
-  defp resume_challenge(capability, params) do
-    with {:ok, key} <- device_key(params["device_key"]),
-         {:ok, request_id} <- request_id(params["request_id"]),
-         true <- params["admission"] == Atom.to_string(elem(capability, 0)) or :invalid,
-         {:ok, client} <- enrolled_client(request_id, key),
-         :ok <- admitted_by(capability, client),
-         {:ok, now} <- db_now_ms() do
-      issue_enroll(
-        %{
-          admission: elem(capability, 0),
-          athanor: client.athanor_id,
-          client_id: client.id,
-          request_id: request_id,
-          device_key: key
-        },
-        %{user_id: client.user_id, kind: {:resume, elem(capability, 0)}},
-        now
-      )
-    else
-      :invalid -> {:error, :invalid_request}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp resumed({kind, _credential} = capability, proof) do
-    with {:ok, held} <- take_proven({:device_enroll, {:resume, kind}}, proof),
-         :ok <- admitted_by(capability, %{user_id: held.user_id}),
-         {:ok, certificate} <- certificate(held.challenge.athanor, held.challenge.client_id) do
-      if kind in [:setup, :invitation, :open] do
-        case Sanctum.Recovery.admission_recovery(held.user_id) do
-          {:ok, nil} -> {:ok, %{certificate: certificate}}
-          {:ok, recovery} -> {:ok, %{certificate: certificate, recovery: recovery}}
-          {:error, _unanswered} -> {:error, :unavailable}
-        end
-      else
-        {:ok, %{certificate: certificate}}
-      end
+  defp device_answer(map) do
+    case Prima.SignIn.DeviceAnswer.decode(map) do
+      {:ok, answer} -> {:ok, answer}
+      {:error, _malformed} -> {:error, :answer_refused}
     end
   end
 
   @doc false
-  # Inside a setup admission's transaction (`Sanctum.Newcomer`), after the
-  # person's keys and athanor: the device's client under the reserved id
-  # in the athanor reserved for it, its first certificate and the
-  # first-method mark, set if not set before.
-  @spec enrolled(map(), enrollment()) :: :ok | {:error, term()}
-  def enrolled(%{id: user_id}, %{} = enrollment) do
-    case write_enrolled(enrollment.athanor_id, user_id, enrollment, :mark) do
-      {:ok, _client} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  # Inside a new person's admission (`Sanctum.Newcomer.admit/3`), or right
+  # after the door admitted a person this CYFR holds (`Sanctum.SignIn`):
+  # the device `key` of `person`'s account, verified at `head`, paired in
+  # the person's athanor under the client id the channel reserved, with
+  # the holder and name its hello reported (`t:device/0`), and its first
+  # certificate, in one transaction; or, where the key already stands as
+  # an active client of theirs there, a new certificate for that client.
+  @spec pair(map(), device(), Key.t(), String.t()) :: :ok | {:error, term()}
+  def pair(
+        %{id: user_id},
+        %{client_id: client_id, holder_kind: holder_kind, display_name: display_name},
+        %Key{kind: :device, kid: kid, pub: pub},
+        head
+      ) do
+    with {:ok, athanor_id} <- athanor(user_id) do
+      actor = Prima.Actor.in_athanor(athanor_id)
 
-  # The reserved athanor is the person's own: a readmission whose person's
-  # athanor is another refuses, and the device asks again.
-  defp write_enrolled(athanor_id, user_id, enrollment, first_method) do
-    actor = Prima.Actor.in_athanor(athanor_id)
+      case standing_client(actor, user_id, kid) do
+        {:ok, %{} = client} ->
+          issued(Sanctum.DeviceCerts.issue(client, head))
 
-    with :ok <- own_athanor(user_id, athanor_id) do
-      actor
-      |> Arca.PairedClients.enroll(
-        %{
-          id: enrollment.client_id,
-          user_id: user_id,
-          source_kind: "device_cert",
-          source_id: enrollment.request_id,
-          device_public_key: enrollment.device_key,
-          holder_kind: enrollment.holder_kind,
-          display_name: enrollment.display_name
-        },
-        first_method: first_method,
-        also: &Sanctum.Pairing.certify_first(actor, &1)
-      )
-      |> case do
-        {:ok, client} -> {:ok, client}
-        {:error, :first_method_used} -> {:error, :first_method_used}
-        {:error, :conflict} -> {:error, :invalid_request}
-        {:error, :not_owner} -> {:error, :not_owner}
-        {:error, {:invalid, _errors}} -> {:error, :invalid_request}
-        {:error, :database_error} -> {:error, :unavailable}
-        {:error, reason} -> {:error, reason}
+        {:ok, nil} ->
+          actor
+          |> Arca.PairedClients.enroll(
+            %{
+              id: client_id,
+              user_id: user_id,
+              source_kind: "device_cert",
+              source_id: client_id,
+              device_public_key: pub,
+              holder_kind: holder_kind,
+              display_name: display_name,
+              kid: kid,
+              head: head
+            },
+            also: &Sanctum.DeviceCerts.issue(&1, head)
+          )
+          |> issued()
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
 
-  defp own_athanor(user_id, athanor_id) do
+  defp issued({:ok, _issued}), do: :ok
+  defp issued({:error, :conflict}), do: {:error, :answer_refused}
+  defp issued({:error, :database_error}), do: {:error, :unavailable}
+  defp issued({:error, {:invalid, _errors}}), do: {:error, :unavailable}
+  defp issued({:error, reason}), do: {:error, reason}
+
+  defp athanor(user_id) do
     case Arca.Athanors.get_by_owner(Prima.Actor.system(), user_id) do
-      {:ok, %{id: ^athanor_id}} -> :ok
-      {:ok, _another} -> {:error, :setup_closed}
-      {:error, :not_found} -> {:error, :setup_closed}
+      {:ok, %{id: athanor_id}} -> {:ok, athanor_id}
+      {:error, :not_found} -> {:error, :not_standing}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  defp enrollment(held) do
-    %{
-      athanor_id: held.challenge.athanor,
-      client_id: held.challenge.client_id,
-      device_key: held.challenge.device_key,
-      request_id: held.challenge.request_id,
-      holder_kind: held.holder_kind,
-      display_name: held.display_name,
-      user_id: held.user_id
-    }
-  end
-
-  # What admits the enrollment, and the athanor it is reserved in: a new
-  # one for the installation's first person, the person's own for one
-  # setup readmits or a restore brought back.
-  defp enrollment_binding({:setup, token}) do
-    case Sanctum.Newcomer.setup_admits(token) do
-      {:ok, :first} -> {:ok, %{user_id: nil, athanor_id: Prima.UUID7.generate_id("ath")}}
-      {:ok, {:readmit, %{id: user_id}}} -> own_binding(user_id)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp enrollment_binding({:invitation, code}) do
-    with :ok <- Sanctum.Newcomer.admits({:invitation, code}),
-         do: {:ok, %{user_id: nil, athanor_id: Prima.UUID7.generate_id("ath")}}
-  end
-
-  defp enrollment_binding({:open, source}) do
-    with :ok <- open_room(source),
-         :ok <- Sanctum.Newcomer.admits(:open),
-         do: {:ok, %{user_id: nil, athanor_id: Prima.UUID7.generate_id("ath")}}
-  end
-
-  defp enrollment_binding({:restore, %Context{} = ctx}) do
-    with :ok <- restore_window(ctx), do: own_binding(ctx.user_id)
-  end
-
-  defp enrollment_binding(_admission), do: {:error, :invalid_request}
-
-  defp own_binding(user_id) do
-    case Arca.Athanors.get_by_owner(Prima.Actor.system(), user_id) do
-      {:ok, %{id: athanor_id}} -> {:ok, %{user_id: user_id, athanor_id: athanor_id}}
-      {:error, :not_found} -> {:error, :setup_closed}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  # A restore's own session, inside the first-method window it opened,
-  # while no first method exists: the person the restore brought back.
-  defp restore_window(%Context{provider: "restore", user_id: user_id} = ctx)
-       when is_binary(user_id) do
-    cond do
-      not Sanctum.Passkeys.first_method_session?(ctx, user_id) ->
-        {:error, :not_restored}
-
-      true ->
-        case Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user_id) do
-          {:ok, true} -> :ok
-          {:ok, false} -> {:error, :first_method_used}
-          {:error, _unanswered} -> {:error, :unavailable}
-        end
-    end
-  end
-
-  defp restore_window(_ctx), do: {:error, :not_restored}
-
-  defp same_admitter({:setup, _token}, %{user_id: _any}), do: :ok
-  defp same_admitter({:open, _source}, %{user_id: nil}), do: :ok
-
-  # An invitation's challenge completes under the code it was issued for.
-  defp same_admitter({:invitation, code}, %{user_id: nil, admitter: held}) when is_binary(held) do
-    case Sanctum.Invitations.code_hash(code) do
-      {:ok, hash} ->
-        if Plug.Crypto.secure_compare(hash, held), do: :ok, else: {:error, :proof_refused}
-
-      {:error, _invalid} ->
-        {:error, :proof_refused}
-    end
-  end
-
-  defp same_admitter({:restore, %Context{user_id: user_id}}, %{user_id: user_id}), do: :ok
-  defp same_admitter(_admission, _held), do: {:error, :proof_refused}
-
-  defp kind({:setup, _token}), do: :setup
-  defp kind({:restore, _ctx}), do: :restore
-  defp kind({:invitation, _code}), do: :invitation
-  defp kind({:open, _source}), do: :open
-  defp kind(_admission), do: :none
-
-  # What a held challenge remembers of its admitter: an invitation's code
-  # hash, which its completion must name again.
-  defp admitter({:invitation, code}) do
-    case Sanctum.Invitations.code_hash(code) do
-      {:ok, hash} -> hash
-      {:error, _invalid} -> nil
-    end
-  end
-
-  defp admitter(_admission), do: nil
-
-  # The admission a new person's enrollment is admitted under.
-  defp newcomer({:open, _source}), do: :open
-  defp newcomer(admission), do: admission
-
-  defp capable({:setup, token}) do
-    if Sanctum.Newcomer.setup_token?(token), do: :ok, else: {:error, :invalid_token}
-  end
-
-  defp capable({:restore, token}) do
-    if Sanctum.Recovery.restore_token?(token), do: :ok, else: {:error, :invalid_token}
-  end
-
-  defp capable({:invitation, code}) do
-    case Sanctum.Invitations.code_hash(code) do
-      {:ok, _hash} -> :ok
-      {:error, _invalid} -> {:error, :invalid_token}
-    end
-  end
-
-  defp capable({:open, source}), do: open_room(source)
-
-  defp capable(_capability), do: {:error, :invalid_token}
-
-  # A resume is bound to how the enrollment's person came to be here, read
-  # from the store, never to the admission the caller names: setup's token
-  # for the person setup made, the open admission for one it made, the code
-  # an invited person redeemed, compared on the challenge and on the
-  # completion alike, and a restore's token for a person a restore brought
-  # back, whatever admission first made them. Any other capability finds no
-  # enrollment to resume.
-  defp admitted_by(capability, %{user_id: user_id}) when is_binary(user_id) do
-    case Sanctum.Tenancy.Users.get(user_id) do
-      {:ok, %{admission: admission}} -> admitted_as(capability, admission, user_id)
-      {:error, :not_found} -> {:error, :not_found}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  defp admitted_by(_capability, _client), do: {:error, :not_found}
-
-  defp admitted_as({:setup, _token}, "setup", _user_id), do: :ok
-  defp admitted_as({:open, _source}, "open", _user_id), do: :ok
-
-  defp admitted_as({:restore, _token}, _admission, user_id) do
-    case Arca.IdentityAttempts.restored?(Prima.Actor.system(), user_id) do
-      {:ok, true} -> :ok
-      {:ok, false} -> {:error, :not_found}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  defp admitted_as({:invitation, code}, "invitation", user_id) do
-    with {:ok, hash} <- Sanctum.Invitations.code_hash(code) do
-      case Arca.Invitations.by_code_hash(Prima.Actor.system(), hash) do
-        {:ok, %{redeemed_by: ^user_id}} -> :ok
-        {:ok, _another} -> {:error, :not_found}
-        {:error, :not_found} -> {:error, :not_found}
-        {:error, _unanswered} -> {:error, :unavailable}
-      end
-    else
-      {:error, _invalid} -> {:error, :invalid_token}
-    end
-  end
-
-  defp admitted_as(_capability, _admission, _user_id), do: {:error, :not_found}
-
-  # An open admission names no credential, so its calls are counted against
-  # their source address and the installation, this node's count and then
-  # the cell's (`Arca.RequestRateWindows`), before anything is held.
-  defp open_room(source) do
-    key = if is_binary(source) and source != "", do: source, else: "unknown"
-
-    with :ok <- on_node({:device_open, :source, key}, @open_source_cap),
-         :ok <- on_node({:device_open, :installation}, @open_installation_cap),
-         :ok <- in_cell(:device_open_source, key, @open_source_cap) do
-      in_cell(:device_open_installation, "installation", @open_installation_cap)
-    end
-  end
-
-  defp on_node(key, cap) do
-    case Prima.RateLimiter.check(key, cap, @window_ms) do
-      :ok -> :ok
-      {:deny, retry_after_s} -> {:error, {:rate_limited, retry_after_s}}
-    end
-  end
-
-  defp in_cell(bucket, key, cap) do
-    case Arca.RequestRateWindows.claim(Prima.Actor.system(), bucket, key, cap, @window_ms) do
-      :ok ->
-        :ok
-
-      {:error, {:rate_limited, retry_after_ms}} ->
-        {:error, {:rate_limited, seconds(retry_after_ms)}}
+  # The person's active device client in the athanor that is this key.
+  defp standing_client(actor, user_id, kid) do
+    case Arca.PairedClients.list(actor, user_id: user_id, standing: :active) do
+      {:ok, rows} ->
+        {:ok, Enum.find(rows, &(&1.source_kind == "device_cert" and &1.kid == kid))}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
     end
   end
 
-  defp seconds(ms), do: max(div(ms + 999, 1_000), 1)
-
-  defp enrolled_client(request_id, key) do
-    case Arca.PairedClients.enrolled(Prima.Actor.system(), request_id) do
-      {:ok, %{standing: "active", device_public_key: stored} = client} ->
-        if Plug.Crypto.secure_compare(stored, key), do: {:ok, client}, else: {:error, :not_found}
-
-      {:ok, _not_active} ->
-        {:error, :not_found}
-
-      {:error, :not_found} ->
-        {:error, :not_found}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  # What the device reports beside its key, read as the admission takes
-  # it: a setup or a restore's own word, the key, the request id it keeps,
-  # and its holder and name.
-  defp reported(params, admission) do
-    with true <- params["admission"] == Atom.to_string(admission) or :invalid,
-         {:ok, key} <- device_key(params["device_key"]),
-         {:ok, request_id} <- request_id(params["request_id"]),
-         {:ok, holder} <- holder(params["holder_kind"], params["display_name"]) do
-      {:ok, Map.merge(holder, %{device_key: key, request_id: request_id})}
+  # The client the hello paired, by its key, and its newest certificate,
+  # as recorded and signed.
+  defp paired(user_id, kid) do
+    with {:ok, athanor_id} <- athanor(user_id),
+         actor = Prima.Actor.in_athanor(athanor_id),
+         {:ok, %{} = client} <- standing_client(actor, user_id, kid),
+         {:ok, %{certificate: bytes}} <- Arca.DeviceCertificates.current(actor, client.id),
+         {:ok, map} <- Jason.decode(bytes),
+         {:ok, certificate} <- Prima.DeviceCert.decode(map) do
+      {:ok,
+       %{
+         client_id: client.id,
+         certificate: certificate,
+         standing: %{
+           client_id: client.id,
+           athanor: athanor_id,
+           expires_at: certificate.expires_at
+         }
+       }}
     else
-      _invalid -> {:error, :invalid_request}
-    end
-  end
-
-  @doc """
-  What a protected device reports of its holder, as an enrollment and a
-  pairing take it: `holder_kind` `"chip"` or `"software"`, and the
-  `display_name` it shows, text of at most 64 bytes. Reported
-  information, never an input to a decision. `:error` for anything else.
-  """
-  @spec holder(term(), term()) ::
-          {:ok, %{holder_kind: String.t(), display_name: String.t()}} | :error
-  def holder(kind, name) do
-    if kind in @holder_kinds and display_name?(name),
-      do: {:ok, %{holder_kind: kind, display_name: name}},
-      else: :error
-  end
-
-  defp device_key(value) do
-    case Encoding.unb64(value, Encoding.key_bytes()) do
-      {:ok, key} -> {:ok, key}
-      :error -> {:error, :invalid_request}
-    end
-  end
-
-  defp request_id(value) do
-    if Encoding.id?(value), do: {:ok, value}, else: {:error, :invalid_request}
-  end
-
-  defp display_name?(value),
-    do: Encoding.text?(value, @max_display_name)
-
-  defp issue_enroll(binding, held, now) do
-    nonce = :crypto.strong_rand_bytes(Challenge.nonce_bytes())
-
-    case Challenge.new(
-           purpose: :enroll,
-           home: Person.home(),
-           athanor: binding.athanor,
-           client_id: binding.client_id,
-           device_key: binding.device_key,
-           admission: binding.admission,
-           request_id: binding.request_id,
-           nonce: nonce,
-           now: now
-         ) do
-      {:ok, challenge} ->
-        hold({:device_enroll, held.kind}, challenge, Map.put(held, :challenge, challenge), now)
-        {:ok, %{challenge: challenge}}
-
-      {:error, _malformed} ->
-        {:error, :invalid_request}
-    end
-  end
-
-  # The certificate this home recorded for the client, as signed.
-  defp certificate(athanor_id, client_id) do
-    case Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor_id), client_id) do
-      {:ok, %{certificate: bytes}} ->
-        with {:ok, map} <- Jason.decode(bytes),
-             {:ok, certificate} <- DeviceCert.decode(map) do
-          {:ok, certificate}
-        else
-          _damaged -> {:error, :unavailable}
-        end
-
-      {:error, _none_or_unanswered} ->
-        {:error, :unavailable}
+      {:ok, nil} -> {:error, :unavailable}
+      {:error, reason} when reason in [:not_standing, :unavailable] -> {:error, reason}
+      _damaged_or_unanswered -> {:error, :unavailable}
     end
   end
 
@@ -805,16 +460,18 @@ defmodule Sanctum.DeviceUnlock do
   def lock(_ctx, _args), do: {:error, :invalid_request}
 
   defp lock_challenge(ctx, client, session_id) do
-    case Challenge.new(
-           purpose: :lock,
-           home: Person.home(),
-           athanor: ctx.athanor_id,
-           client_id: ctx.client_id,
-           device_key: client.device_public_key,
-           session_id: session_id
-         ) do
-      {:ok, challenge} -> {:ok, challenge}
-      {:error, _malformed} -> {:error, :proof_refused}
+    with {:ok, home} <- Sanctum.SignIn.audience() do
+      case Challenge.new(
+             purpose: :lock,
+             home: home,
+             athanor: ctx.athanor_id,
+             client_id: ctx.client_id,
+             device_key: client.device_public_key,
+             session_id: session_id
+           ) do
+        {:ok, challenge} -> {:ok, challenge}
+        {:error, _malformed} -> {:error, :proof_refused}
+      end
     end
   end
 
@@ -910,92 +567,17 @@ defmodule Sanctum.DeviceUnlock do
   end
 
   # ===========================================================================
-  # Confirmation
-  # ===========================================================================
-
-  @doc """
-  A `confirm` challenge for the pending confirmation `record` (its `ref`,
-  stored `digest` and `expires_at`), held for the device `ctx` names,
-  expiring with the record if sooner. `{:ok, nil}` for a context that is
-  not a protected device's.
-  """
-  @spec confirm_challenge(Context.t(), map()) :: {:ok, Challenge.t() | nil} | {:error, atom()}
-  def confirm_challenge(
-        %Context{auth_method: :device} = ctx,
-        %{ref: ref, digest: digest} = record
-      ) do
-    with {:ok, client} <- holder(ctx),
-         :ok <- current_head(ctx),
-         {:ok, now} <- db_now_ms(),
-         {:ok, challenge} <-
-           fresh(:confirm, ctx, client, now,
-             ref: ref,
-             digest: digest,
-             not_after: DateTime.to_unix(record.expires_at, :millisecond)
-           ) do
-      hold({:device_confirm, ctx.client_id}, challenge, %{challenge: challenge}, now)
-      {:ok, challenge}
-    else
-      {:error, :no_holder} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  def confirm_challenge(%Context{}, _record), do: {:ok, nil}
-
-  @doc """
-  Verify a device's proof over the `confirm` challenge it holds for the
-  record `ref` with the stored `digest`, consuming the challenge; a remote
-  person's device only while the head its certificate was verified under
-  is the one their directory names now, read live. Refusals:
-  `:not_a_device`, `:no_holder`, `:proof_refused`, `:certification_ended`,
-  `:identity_stale` and `:unavailable`.
-  """
-  @spec confirm_proof(Context.t(), map(), term()) ::
-          :ok | {:error, atom()}
-  def confirm_proof(%Context{} = ctx, %{ref: ref, digest: digest}, proof) do
-    with {:ok, _client} <- holder(ctx),
-         {:ok, held} <- take_proven({:device_confirm, ctx.client_id}, proof),
-         :ok <-
-           if(held.challenge.ref == ref and held.challenge.digest == digest,
-             do: :ok,
-             else: {:error, :proof_refused}
-           ) do
-      current_head(ctx)
-    end
-  end
-
-  # A remote person's device confirms for them only under the head its
-  # certificate was verified under while that is still the head their
-  # directory names, read live rather than within the request's freshness
-  # bound: a rotation or recovery at their home since ends what the device
-  # may prove (`:certification_ended`), and a directory that cannot answer
-  # pauses it (`:identity_stale`). A device this home certified reads no
-  # directory.
-  defp current_head(%Context{
-         credential_binding: %{identity: %{identifier: identifier}, key_epoch: epoch}
-       })
-       when is_binary(identifier) and is_binary(epoch) do
-    case Sanctum.DeviceCerts.live_head(identifier) do
-      {:ok, %{key_epoch: ^epoch}} -> :ok
-      {:ok, _moved} -> {:error, :certification_ended}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp current_head(%Context{}), do: :ok
-
-  # ===========================================================================
   # Challenges
   # ===========================================================================
 
-  # A protected device's own client row, as its channel's context names it.
+  # A protected device's own client row, as its channel's context names
+  # it: a device client, which only a hello pairs.
   defp holder(%Context{auth_method: :device, authenticated: true} = ctx)
        when is_binary(ctx.client_id) and is_binary(ctx.athanor_id) do
     case Arca.PairedClients.list(Context.actor(ctx), user_id: ctx.user_id, standing: :active) do
       {:ok, rows} ->
         case Enum.find(rows, &(&1.id == ctx.client_id)) do
-          %{holder_kind: kind} = client when kind in @holder_kinds -> {:ok, client}
+          %{source_kind: "device_cert"} = client -> {:ok, client}
           %{} -> {:error, :no_holder}
           nil -> {:error, :not_standing}
         end
@@ -1008,19 +590,21 @@ defmodule Sanctum.DeviceUnlock do
   defp holder(%Context{}), do: {:error, :not_a_device}
 
   defp fresh(purpose, ctx, client, now, fields) do
-    case Challenge.new(
-           [
-             purpose: purpose,
-             home: Person.home(),
-             athanor: ctx.athanor_id,
-             client_id: ctx.client_id,
-             device_key: client.device_public_key,
-             nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
-             now: now
-           ] ++ fields
-         ) do
-      {:ok, challenge} -> {:ok, challenge}
-      {:error, _malformed} -> {:error, :unavailable}
+    with {:ok, home} <- Sanctum.SignIn.audience() do
+      case Challenge.new(
+             [
+               purpose: purpose,
+               home: home,
+               athanor: ctx.athanor_id,
+               client_id: ctx.client_id,
+               device_key: client.device_public_key,
+               nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
+               now: now
+             ] ++ fields
+           ) do
+        {:ok, challenge} -> {:ok, challenge}
+        {:error, _malformed} -> {:error, :unavailable}
+      end
     end
   end
 

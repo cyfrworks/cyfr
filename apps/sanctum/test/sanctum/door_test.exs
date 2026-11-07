@@ -3,12 +3,12 @@
 
 defmodule Sanctum.DoorTest do
   @moduledoc """
-  The door judges people (`Sanctum.Door`): a local person is admitted
-  unless a deny names them; a remote person, and a remote newcomer, by `*`
-  or an allow naming their identifier, unless a deny names them; an
-  unadmitted remote one leaves one request naming the identifier; a deny
-  naming the platform administrator is refused where it is written; and a
-  store that cannot answer admits no one and denies no one.
+  The door judges people (`Sanctum.Door`): a person of an account, and a
+  newcomer, by `*` or an allow naming their identifier, unless a deny names
+  them; an unadmitted one leaves one request naming the identifier; a
+  person with no identity row names no account and stands on nothing; a
+  deny naming the platform administrator is refused where it is written;
+  and a store that cannot answer admits no one and denies no one.
   """
 
   use ExUnit.Case, async: false
@@ -17,7 +17,6 @@ defmodule Sanctum.DoorTest do
 
   alias Sanctum.Door
   alias Sanctum.Door.Store
-  alias Sanctum.Test.People
   alias Sanctum.Test.RegistryStub
 
   setup tags do
@@ -28,17 +27,28 @@ defmodule Sanctum.DoorTest do
   defp uid(n), do: "github|https://github.com|door#{n}"
   defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
 
-  # A person whose keys this server holds, with a sign-in method linked.
+  # A person with no identity row: no admission makes one, and the door
+  # admits no one by it.
   defp local!(n) do
-    {:ok, user} =
-      People.linked(%{
-        id: uid(n),
-        provider: "github",
-        email: "person#{n}@example.com",
-        verified: true
-      })
+    now = DateTime.utc_now()
 
-    user
+    {:ok, user} =
+      Arca.Test.People.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          email: "person#{n}@example.com",
+          email_verified: true,
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        }
+      )
+
+    {:ok, _athanor} = Sanctum.Provisioning.mint_personal(user)
+    {:ok, person} = Sanctum.Tenancy.Users.get(user.id)
+    person
   end
 
   # A person whose keys another CYFR holds, named here by their identifier.
@@ -55,34 +65,37 @@ defmodule Sanctum.DoorTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier(n)),
-          provider: "cyfr",
-          issuer: "https://dir.example",
-          subject: identifier(n),
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
     {:ok, _} =
       Arca.PersonIdentities.create(Prima.Actor.system(), %{
         user_id: user.id,
-        provenance: "remote",
         identifier: identifier(n),
-        directory_url: "https://dir.example"
+        directory_url: "https://dir.example",
+        head_hash: Prima.Digest.sha256("head-" <> identifier(n))
       })
 
     user
   end
 
+  # The person's identity row naming their account's identifier.
   defp enrolled!(user, n) do
+    now = DateTime.utc_now()
+
     {1, _} =
-      Arca.Repo.update_all(
-        Ecto.Query.from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id),
-        set: [identifier: identifier(n)]
-      )
+      Arca.Repo.insert_all(Arca.Schemas.PersonIdentity, [
+        %{
+          id: Prima.UUID7.generate_id("pid"),
+          user_id: user.id,
+          identifier: identifier(n),
+          head_hash: Prima.Digest.sha256("head-" <> identifier(n)),
+          directory_url: "https://dir.example",
+          revision: 1,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
 
     :ok
   end
@@ -103,21 +116,27 @@ defmodule Sanctum.DoorTest do
     session
   end
 
-  describe "a local person" do
-    test "is admitted with no entry at all, and refused only by a deny naming them" do
+  describe "a person with no identity row" do
+    test "names no account and stands on nothing: refused with no entry, under *, and by a deny" do
       alice = local!(1)
       bob = local!(2)
 
       assert Store.list() == []
-      assert {:ok, :allowed} = Door.admit_person(alice)
+      assert {:error, :not_allowed} = Door.admit_person(alice)
 
+      # `*` admits accounts, and they name none.
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      assert {:error, :not_allowed} = Door.admit_person(alice)
+
+      # A deny naming them is the answer they are given.
       {:ok, _} = Store.deny("person", alice.id, "ops")
       assert {:error, :denied} = Door.admit_person(alice)
-      assert {:ok, :allowed} = Door.admit_person(bob)
+      assert {:error, :not_allowed} = Door.admit_person(bob)
 
-      # `*` admits nobody past a deny.
-      {:ok, _} = Store.allow("wildcard", "*", "ops")
-      assert {:error, :denied} = Door.admit_person(alice)
+      # Refused at a sign-in, they leave no request: there is no identifier
+      # an operator could allow.
+      assert {:error, {:door, :not_allowed}} = Door.sign_in(bob)
+      assert Store.requests() == []
     end
 
     test "is refused by a deny of the identifier they enrolled under" do
@@ -275,10 +294,12 @@ defmodule Sanctum.DoorTest do
       operator = local!(31)
       enrolled!(operator, 31)
       {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      # The allow setup writes for its account.
+      {:ok, _} = Store.allow("identifier", identifier(31), "setup")
 
       assert {:error, :platform_admin} = Store.deny("person", operator.id, "ops")
       assert {:error, :platform_admin} = Store.deny("identifier", identifier(31), "ops")
-      assert Store.list() == []
+      assert [%{effect: "allow"}] = Store.list()
       assert {:ok, :allowed} = Door.admit_person(operator)
     end
 
@@ -328,6 +349,25 @@ defmodule Sanctum.DoorTest do
   end
 
   describe "an entry made from a handle" do
+    # A handle's answer is read at the directory it names: a scripted one.
+    setup do
+      tls = Sanctum.Test.DirectoryServer.tls()
+      Sanctum.Test.DirectoryServer.listen!()
+      Sanctum.Test.DirectoryServer.seam!(tls)
+      %{directory: Sanctum.Test.DirectoryServer.start!(tls)}
+    end
+
+    # An account at the scripted directory, held by no person here.
+    defp account_at!(directory),
+      do: Sanctum.Test.DirectoryServer.account!(directory.dir, directory.url).identifier
+
+    # The person `remote_at!/2` makes, and the identifier of their account.
+    defp held_at!(directory, n) do
+      user = remote_at!(directory, n)
+      {:ok, identifier} = Sanctum.Tenancy.Users.identifier(user.id)
+      {user, identifier}
+    end
+
     defp door(action, value, note \\ nil) do
       operator = Sanctum.Context.build(user_id: "usr_operator", authenticated: true)
       args = %{"action" => action, "value" => value}
@@ -335,49 +375,53 @@ defmodule Sanctum.DoorTest do
       Sanctum.Provider.handle("door", operator, args)
     end
 
-    test "a handle reassigned after an allow was made from it moves no access" do
-      first = remote!(40)
-      second = remote!(41)
+    test "a handle reassigned after an allow was made from it moves no access", %{
+      directory: directory
+    } do
+      {first, a} = held_at!(directory, 40)
+      {second, b} = held_at!(directory, 41)
 
-      RegistryStub.handles!(%{"alice" => identifier(40)})
+      RegistryStub.handles!(%{"alice" => a}, directory.url)
       assert {:ok, allowed} = door("allow", "@alice")
       assert %{kind: "identifier", label: "alice"} = allowed
-      assert allowed.value == identifier(40)
+      assert allowed.value == a
 
       # The registry gives the handle to someone else.
-      RegistryStub.handles!(%{"alice" => identifier(41)})
-      assert {:ok, identifier(41)} == Sanctum.Handle.identifier("alice")
+      RegistryStub.handles!(%{"alice" => b}, directory.url)
+      assert {:ok, b} == Sanctum.Handle.identifier("alice")
 
       assert [%{kind: "identifier", effect: "allow", label: "alice"} = entry] = Store.list()
-      assert entry.value == identifier(40)
+      assert entry.value == a
       assert {:ok, :allowed} = Door.admit_person(first)
       assert {:error, :not_allowed} = Door.admit_person(second)
-      assert {:error, :not_allowed} = Door.admit_identifier(identifier(41))
+      assert {:error, :not_allowed} = Door.admit_identifier(b)
     end
 
-    test "a deny by handle writes the identifier the handle names, and a platform administrator's is refused" do
-      carol = remote!(42)
-      operator = local!(43)
-      enrolled!(operator, 43)
+    test "a deny by handle writes the identifier the handle names, and a platform administrator's is refused",
+         %{directory: directory} do
+      {carol, c} = held_at!(directory, 42)
+      {operator, o} = held_at!(directory, 43)
       {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
       {:ok, _} = Store.allow("wildcard", "*", "ops")
 
-      RegistryStub.handles!(%{"carol" => identifier(42), "ops" => identifier(43)})
+      RegistryStub.handles!(%{"carol" => c, "ops" => o}, directory.url)
       assert {:ok, %{effect: "deny", label: "carol", ejected: 1}} = door("deny", "@carol")
       assert {:error, :denied} = Door.admit_person(carol)
 
       assert {:error, {:invalid_argument, _}} = door("deny", "@ops")
-      refute Enum.any?(Store.list(), &(&1.value == identifier(43)))
+      refute Enum.any?(Store.list(), &(&1.value == o))
     end
 
-    test "each write states the label anew: another handle relabels, the identifier clears it" do
-      {:ok, entry} = Store.allow("identifier", identifier(44), "ops", label: "alice")
+    test "each write states the label anew: another handle relabels, the identifier clears it",
+         %{directory: directory} do
+      x = account_at!(directory)
+      {:ok, entry} = Store.allow("identifier", x, "ops", label: "alice")
       assert entry.label == "alice"
 
-      {:ok, entry} = Store.deny("identifier", identifier(44), "ops", label: "alicia")
+      {:ok, entry} = Store.deny("identifier", x, "ops", label: "alicia")
       assert %{effect: "deny", label: "alicia"} = entry
 
-      {:ok, entry} = Store.allow("identifier", identifier(44), "ops", note: "back")
+      {:ok, entry} = Store.allow("identifier", x, "ops", note: "back")
       assert %{effect: "allow", label: nil, note: "back"} = entry
       assert [%{label: nil}] = Store.list()
 
@@ -389,9 +433,9 @@ defmodule Sanctum.DoorTest do
                Store.allow("identifier", identifier(45), "ops", label: "Not A Handle")
 
       # Through the operation: by handle, then by the identifier itself.
-      RegistryStub.handles!(%{"alice" => identifier(44)})
+      RegistryStub.handles!(%{"alice" => x}, directory.url)
       assert {:ok, %{label: "alice"}} = door("allow", "@alice")
-      assert {:ok, shown} = door("allow", identifier(44))
+      assert {:ok, shown} = door("allow", x)
       refute Map.has_key?(shown, :label)
     end
 
@@ -427,17 +471,20 @@ defmodule Sanctum.DoorTest do
       assert Store.list() == []
     end
 
-    test "the resolution writes nothing: no entry exists until the write" do
-      RegistryStub.handles!(%{"alice" => identifier(46)})
+    test "the resolution writes nothing: no entry exists until the write", %{
+      directory: directory
+    } do
+      x = account_at!(directory)
+      RegistryStub.handles!(%{"alice" => x}, directory.url)
 
-      assert {:ok, identifier(46)} == Sanctum.Handle.identifier("alice")
+      assert {:ok, x} == Sanctum.Handle.identifier("alice")
       assert_received {:registry_request, %{path: "/v1/handles/alice"}}
       assert Store.list() == []
-      assert {:error, :not_allowed} = Door.admit_identifier(identifier(46))
+      assert {:error, :not_allowed} = Door.admit_identifier(x)
 
       assert {:ok, _} = door("allow", "@alice")
       assert [%{label: "alice"} = entry] = Store.list()
-      assert entry.value == identifier(46)
+      assert entry.value == x
     end
   end
 
@@ -453,17 +500,18 @@ defmodule Sanctum.DoorTest do
 
     defp remote_at!(directory, n) do
       user = local!(n)
-      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
-      :ok = Sanctum.Test.DirectoryServer.remote_person!(user.id, identity)
+      account = Sanctum.Test.DirectoryServer.account!(directory.dir, directory.url)
+      :ok = Sanctum.Test.DirectoryServer.account_person!(user.id, account)
       user
     end
 
-    test "closing * ejects the remote people it admitted, and never a local person", %{
-      directory: directory
-    } do
+    test "closing * ejects the people it admitted, and never one an allow of their account admits",
+         %{directory: directory} do
       {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
       stranger = remote_at!(directory, 40)
-      local = local!(41)
+      local = remote_at!(directory, 41)
+      {:ok, identifier} = Sanctum.Tenancy.Users.identifier(local.id)
+      {:ok, _} = Store.allow("identifier", identifier, "ops")
 
       stranger_session = session_for(stranger)
       local_session = session_for(local)
@@ -519,6 +567,28 @@ defmodule Sanctum.DoorTest do
         end
 
       {600, _} = Arca.Repo.insert_all(Arca.Schemas.User, people)
+
+      # Each a person of an account, whom `*` admits.
+      {600, _} =
+        Arca.Repo.insert_all(
+          Arca.Schemas.PersonIdentity,
+          for %{id: user_id} <- people do
+            account = "per_" <> Prima.Digest.sha256_hex(user_id)
+
+            %{
+              id: Prima.UUID7.generate_id("pid"),
+              user_id: user_id,
+              identifier: account,
+              head_hash: Prima.Digest.sha256("head-" <> account),
+              directory_url: "https://dir.example",
+              revision: 1,
+              inserted_at: now,
+              updated_at: now
+            }
+          end
+        )
+
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
 
       refused = local!(50)
       session = session_for(refused)

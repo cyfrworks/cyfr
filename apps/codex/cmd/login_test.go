@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/confirmation"
 	"github.com/cyfr/codex/internal/holder"
@@ -39,6 +40,7 @@ type fakeDevice struct {
 	next    func(call string, d *fakeDevice)
 	locks   int
 	session string
+	terms   *account.Policy
 }
 
 func newFakeDevice(view shell.View, next func(string, *fakeDevice)) *fakeDevice {
@@ -61,31 +63,27 @@ func (d *fakeDevice) did(call string, secret []byte, given ...string) {
 
 func (d *fakeDevice) View() shell.View { d.mu.Lock(); defer d.mu.Unlock(); return d.view }
 func (d *fakeDevice) Begin()           { d.mu.Lock(); d.view.Notice = ""; d.mu.Unlock() }
-func (d *fakeDevice) Setup(_ context.Context, name string, secret, again []byte) {
-	d.did("setup", secret, name, string(again))
+func (d *fakeDevice) Make(secret, again []byte) {
+	d.did("make", secret, string(again))
 	clear(secret)
 	clear(again)
 }
-func (d *fakeDevice) Join(_ context.Context, invitation, name string, secret, again []byte) {
-	d.did("join", secret, invitation, name)
+func (d *fakeDevice) Setup(_ context.Context, name, accepted string, secret, again []byte) {
+	d.did("setup", secret, name, accepted)
 	clear(secret)
 	clear(again)
 }
-func (d *fakeDevice) Prepare(secret, again []byte) {
-	d.did("prepare", secret, string(again))
-	clear(again)
+func (d *fakeDevice) Create(_ context.Context, name, accepted string) {
+	d.did("create", nil, name, accepted)
 }
-func (d *fakeDevice) Pair(_ context.Context, link string, secret []byte) {
-	d.did("pair", secret, link)
-	clear(secret)
+func (d *fakeDevice) Terms(context.Context) (*account.Policy, error) { return d.terms, nil }
+func (d *fakeDevice) Enroll(_ context.Context, name string, _ time.Duration) {
+	d.did("enroll", nil, name)
 }
-func (d *fakeDevice) Finish(_ context.Context, name, code string, secret []byte) {
-	d.did("finish", secret, name, code)
-	clear(secret)
-}
-func (d *fakeDevice) Unlock(_ context.Context, secret []byte) { d.did("unlock", secret); clear(secret) }
-func (d *fakeDevice) Saved(context.Context)                   { d.did("saved", nil) }
-func (d *fakeDevice) Rename(_ context.Context, name string)   { d.did("rename", nil, name) }
+func (d *fakeDevice) Saved(_ context.Context, accepted string) { d.did("saved", nil, accepted) }
+func (d *fakeDevice) Resume(_ context.Context, code string)    { d.did("resume", []byte(code)) }
+func (d *fakeDevice) Unlock(_ context.Context, secret []byte)  { d.did("unlock", secret); clear(secret) }
+func (d *fakeDevice) Rename(_ context.Context, name string)    { d.did("rename", nil, name) }
 func (d *fakeDevice) Session(context.Context) (string, error) {
 	d.did("session", nil)
 	return d.session, nil
@@ -101,15 +99,6 @@ func (d *fakeDevice) Unlocked() bool {
 	return d.view.Page == shell.PageUnlocked || d.view.Page == shell.PageConfirm
 }
 func (d *fakeDevice) Lock(string) { d.mu.Lock(); d.locks++; d.mu.Unlock() }
-func (d *fakeDevice) Reenable(_ context.Context, code string, secret []byte) {
-	d.did("reenable", secret, code)
-	clear(secret)
-}
-func (d *fakeDevice) SetPIN(_ context.Context, pin, again []byte) {
-	d.did("setpin", pin, string(again))
-	clear(pin)
-	clear(again)
-}
 
 func (d *fakeDevice) set(v shell.View) { d.mu.Lock(); d.view = v; d.mu.Unlock() }
 
@@ -129,35 +118,37 @@ func typed(lines ...string) (*console, *bytes.Buffer) {
 const passphrase = "abandon ability able about above absent"
 
 // cyfr login on a machine without a chip makes the key under the
-// passphrase it shows, typed twice, before anything is sent; then shows
-// the approve address as a QR code, the address and the key's code a
-// person types on a device without a camera, takes the link pasted, and
-// completes the pairing with that link and the same passphrase, which
-// it never prints and erases once used.
-func TestLoginDriver_PairShowsTheApprovalAndTakesTheLink(t *testing.T) {
-	const digest = "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
+// passphrase it shows, typed twice, before anything is shown or sent;
+// then shows the key's code, the QR code of the account page that adds
+// it, that address and the command that adds it from a terminal, asks the
+// name and waits for the account to list it; the first unlock takes the
+// passphrase chosen, which it never prints again and erases once used.
+func TestLoginDriver_EnrollShowsTheCodeAndWaits(t *testing.T) {
+	const addURL = "https://cyfr.run/account/add#key=KEY&alg=ed25519&kind=device&code=0123456789abcdef"
+	enroll := shell.View{Page: shell.PageEnroll, Code: "0123456789abcdef", AddURL: addURL, Key: "KEY", Kind: holder.KindSoftware}
 	dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, func(call string, d *fakeDevice) {
 		switch call {
-		case "prepare":
-			d.set(shell.View{Page: shell.PageFinish, Admission: "pair", Digest: digest, Kind: holder.KindSoftware})
-		case "pair":
+		case "make":
+			d.set(enroll)
+		case "enroll":
+			d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindSoftware})
+		case "unlock":
 			d.set(shell.View{Page: shell.PageUnlocked})
 		}
 	})
-	c, out := typed(passphrase, passphrase, "https://alice.example/pair#code=CODE")
-	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	c, out := typed(passphrase, passphrase, "@mira")
+	d := &loginDriver{sh: dev, c: c, mode: "login", home: "https://alice.example"}
 	if err := d.run(t.Context()); err != nil {
 		t.Fatalf("run: %v\n%s", err, out)
 	}
-	if !slices.Equal(dev.calls, []string{"prepare", "pair"}) {
-		t.Fatalf("calls %v", dev.calls)
+	if !slices.Equal(dev.calls, []string{"make", "enroll", "unlock"}) || dev.given["enroll"] != "mira" {
+		t.Fatalf("calls %v, enrolled %q", dev.calls, dev.given["enroll"])
 	}
-	if string(dev.secrets["prepare"]) != passphrase || string(dev.secrets["pair"]) != passphrase ||
-		dev.given["pair"] != "https://alice.example/pair#code=CODE" {
-		t.Errorf("prepared with %q, paired with %q and %q", dev.secrets["prepare"], dev.secrets["pair"], dev.given["pair"])
+	if string(dev.secrets["make"]) != passphrase || string(dev.secrets["unlock"]) != passphrase {
+		t.Errorf("made with %q, unlocked with %q", dev.secrets["make"], dev.secrets["unlock"])
 	}
 	printed := out.String()
-	for _, want := range []string{passphrase, "https://alice.example/devices/add", shell.KeyCode(digest), "▀", "Link or code: "} {
+	for _, want := range []string{passphrase, "0123456789abcdef", addURL, "cyfr device approve KEY", "▀", "Your name: @", "Waiting until your account lists"} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("the output lacks %q:\n%s", want, printed)
 		}
@@ -166,30 +157,40 @@ func TestLoginDriver_PairShowsTheApprovalAndTakesTheLink(t *testing.T) {
 		t.Errorf("the passphrase was printed more than the once it is shown:\n%s", printed)
 	}
 	if d.held != nil {
-		t.Error("the passphrase is held after the pairing")
+		t.Error("the passphrase is held after the unlock")
 	}
 }
 
-// A key made by an earlier run whose pairing did not finish is paired by
-// a later one with the code alone, typed on a machine without a camera,
-// and the PIN asked once: the key is not made again.
-func TestLoginDriver_ALaterRunFinishesThePairingWithATypedCode(t *testing.T) {
-	dev := newFakeDevice(shell.View{Page: shell.PageFinish, Admission: "pair", Digest: "DIGEST", Kind: holder.KindChip},
+// A key an earlier run made, no account listing it yet, is added by a
+// later one, and the PIN asked once: the key is not made again; a key not
+// approved within the wait ends the run with the device's sentence.
+func TestLoginDriver_ALaterRunAddsTheKeyAndAsksThePIN(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageEnroll, Code: "c", AddURL: "https://cyfr.run/account/add#key=K", Key: "K", Kind: holder.KindChip},
 		func(call string, d *fakeDevice) {
-			if call == "pair" {
+			switch call {
+			case "enroll":
+				d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip})
+			case "unlock":
 				d.set(shell.View{Page: shell.PageUnlocked})
 			}
 		})
-	c, out := typed("7Kq2 pX9a bC3d eF4g hI", "123456")
-	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
-	if err := d.run(t.Context()); err != nil {
+	c, out := typed("mira", "123456")
+	if err := (&loginDriver{sh: dev, c: c, mode: "login"}).run(t.Context()); err != nil {
 		t.Fatalf("run: %v\n%s", err, out)
 	}
-	if !slices.Equal(dev.calls, []string{"pair"}) || dev.given["pair"] != "7Kq2 pX9a bC3d eF4g hI" || string(dev.secrets["pair"]) != "123456" {
-		t.Fatalf("calls %v, given %q, secret %q", dev.calls, dev.given["pair"], dev.secrets["pair"])
+	if !slices.Equal(dev.calls, []string{"enroll", "unlock"}) || string(dev.secrets["unlock"]) != "123456" || !strings.Contains(out.String(), "PIN: ") {
+		t.Fatalf("calls %v, secret %q\n%s", dev.calls, dev.secrets["unlock"], out)
 	}
-	if !strings.Contains(out.String(), "PIN: ") {
-		t.Errorf("no PIN asked:\n%s", out)
+
+	waits := newFakeDevice(shell.View{Page: shell.PageEnroll, Code: "c", AddURL: "u", Key: "K"}, func(call string, d *fakeDevice) {
+		v := d.View()
+		v.Notice = "This command line is not on @mira's account yet. Approve it on a device of yours, then try again."
+		d.set(v)
+	})
+	c, _ = typed("mira")
+	err := (&loginDriver{sh: waits, c: c, mode: "login"}).run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "not on @mira's account yet") || !strings.Contains(err.Error(), "Run cyfr login to go on") || waits.locks != 1 {
+		t.Fatalf("an unapproved key: %v, locks %d", err, waits.locks)
 	}
 }
 
@@ -199,26 +200,25 @@ func TestLoginDriver_ALaterRunFinishesThePairingWithATypedCode(t *testing.T) {
 func TestLoginDriver_ARefusedChipOffersThePassphrase(t *testing.T) {
 	dev := newFakeDevice(shell.View{Page: shell.PageSetup, Chip: true}, nil)
 	dev.next = func(call string, d *fakeDevice) {
-		if call != "prepare" {
-			if call == "pair" {
-				d.set(shell.View{Page: shell.PageUnlocked})
-			}
-			return
-		}
-		if string(d.secrets["prepare"]) == "123456" {
+		switch {
+		case call == "make" && string(d.secrets["make"]) == "123456":
 			d.set(shell.View{Page: shell.PageSetup, Chip: true, Passphrase: passphrase,
-				Notice: "This box's chip cannot keep your PIN safely (lockout). Use the passphrase below instead."})
-			return
+				Notice: "This machine's chip cannot keep your PIN safely (lockout). Use the passphrase below instead."})
+		case call == "make":
+			d.set(shell.View{Page: shell.PageEnroll, Code: "c", AddURL: "u", Key: "K", Kind: holder.KindSoftware})
+		case call == "enroll":
+			d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindSoftware})
+		case call == "unlock":
+			d.set(shell.View{Page: shell.PageUnlocked})
 		}
-		d.set(shell.View{Page: shell.PageFinish, Admission: "pair", Digest: "DIGEST", Kind: holder.KindSoftware})
 	}
-	c, out := typed("123456", "123456", passphrase, passphrase, "CODE")
-	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	c, out := typed("123456", "123456", passphrase, passphrase, "mira")
+	d := &loginDriver{sh: dev, c: c, mode: "login", home: "https://alice.example"}
 	if err := d.run(t.Context()); err != nil {
 		t.Fatalf("run: %v\n%s", err, out)
 	}
-	if !slices.Equal(dev.calls, []string{"prepare", "prepare", "pair"}) || string(dev.secrets["pair"]) != passphrase {
-		t.Fatalf("calls %v, paired with %q", dev.calls, dev.secrets["pair"])
+	if !slices.Equal(dev.calls, []string{"make", "make", "enroll", "unlock"}) || string(dev.secrets["unlock"]) != passphrase {
+		t.Fatalf("calls %v, unlocked with %q", dev.calls, dev.secrets["unlock"])
 	}
 	for _, want := range []string{"six-digit PIN", "cannot keep your PIN safely", passphrase} {
 		if !strings.Contains(out.String(), want) {
@@ -227,38 +227,80 @@ func TestLoginDriver_ARefusedChipOffersThePassphrase(t *testing.T) {
 	}
 }
 
-// --setup and --join make a person with this device: the name and the
-// secret go to the device's admission, the recovery code is shown, as a
-// QR code and as text, until Enter says it was saved, and a name taken
-// is asked again.
-func TestLoginDriver_ANewPersonSavesTheRecoveryCode(t *testing.T) {
+// --setup and --join make the account here: the terms the account service
+// names are accepted first, then the name and the secret go to the
+// device, the recovery code is shown, as a QR code and as text, until
+// Enter says it was saved, which sends it; a name taken meanwhile is
+// asked again. Without an answer to the terms nothing is made.
+func TestLoginDriver_ANewAccountSavesTheRecoveryCode(t *testing.T) {
 	for _, mode := range []string{"setup", "join"} {
 		dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, func(call string, d *fakeDevice) {
 			switch call {
-			case "setup", "join":
-				d.set(shell.View{Page: shell.PageName, Name: "mira", Notice: "Someone holds the name mira, or cyfr.run keeps it. Choose another."})
-			case "rename":
-				d.set(shell.View{Page: shell.PageRecovery, Recovery: &shell.Recovery{Code: "CYFR-RECOVERY-CODE", Name: "mira2"}})
+			case "setup":
+				d.set(shell.View{Page: shell.PageRecovery, RecoveryCode: "CYFR-RECOVERY-CODE", Name: "mira"})
 			case "saved":
+				d.set(shell.View{Page: shell.PageName, Name: "mira", Notice: "Someone holds the name @mira. Choose another: your account is made, and takes a name once one is free."})
+			case "rename":
 				d.set(shell.View{Page: shell.PageUnlocked})
 			}
 		})
-		c, out := typed(passphrase, passphrase, "@mira2", "")
+		dev.terms = &account.Policy{Version: "2026-10", URL: "https://cyfr.run/terms"}
+		c, out := typed("yes", passphrase, passphrase, "", "@mira2")
 		d := &loginDriver{sh: dev, c: c, mode: mode, name: "mira", invitation: "INVITE", home: "https://alice.example"}
 		if err := d.run(t.Context()); err != nil {
 			t.Fatalf("%s: %v\n%s", mode, err, out)
 		}
-		if !slices.Equal(dev.calls, []string{mode, "rename", "saved"}) || dev.given["rename"] != "mira2" {
-			t.Fatalf("%s: calls %v, renamed %q", mode, dev.calls, dev.given["rename"])
+		if !slices.Equal(dev.calls, []string{"setup", "saved", "rename"}) || dev.given["setup"] != "mira|2026-10" || dev.given["rename"] != "mira2" {
+			t.Fatalf("%s: calls %v, given %v", mode, dev.calls, dev.given)
 		}
-		if mode == "join" && dev.given["join"] != "INVITE|mira" {
-			t.Errorf("joined with %q", dev.given["join"])
-		}
-		for _, want := range []string{"CYFR-RECOVERY-CODE", "▀", "Press Enter once you saved it", "Choose another"} {
+		for _, want := range []string{"https://cyfr.run/terms", "CYFR-RECOVERY-CODE", "▀", "Press Enter once you saved it", "Choose another"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("%s: the output lacks %q:\n%s", mode, want, out)
 			}
 		}
+	}
+	dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, nil)
+	dev.terms = &account.Policy{Version: "2026-10", URL: "https://cyfr.run/terms"}
+	c, _ := typed("no")
+	if err := (&loginDriver{sh: dev, c: c, mode: "setup", name: "mira"}).run(t.Context()); err == nil || len(dev.calls) != 0 {
+		t.Fatalf("declined terms: %v, calls %v", err, dev.calls)
+	}
+}
+
+// A key that exists already makes the account with --setup, never again a
+// key; an account an earlier run began is finished with its recovery
+// code.
+func TestLoginDriver_AnExistingKeyMakesTheAccountOrFinishesIt(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageEnroll, Code: "c", AddURL: "u", Key: "K"}, func(call string, d *fakeDevice) {
+		if call == "create" {
+			d.set(shell.View{Page: shell.PageRecovery, RecoveryCode: "CYFR-CODE", Name: "mira"})
+		}
+		if call == "saved" {
+			d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip})
+		}
+		if call == "unlock" {
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	})
+	c, out := typed("", "123456")
+	if err := (&loginDriver{sh: dev, c: c, mode: "setup", name: "mira"}).run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"create", "saved", "unlock"}) || dev.given["create"] != "mira|" {
+		t.Fatalf("calls %v, given %v", dev.calls, dev.given)
+	}
+
+	resume := newFakeDevice(shell.View{Page: shell.PageResume, Name: "mira"}, func(call string, d *fakeDevice) {
+		if call == "resume" {
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	})
+	c, out = typed("CYFR-CODE")
+	if err := (&loginDriver{sh: resume, c: c, mode: "login"}).run(t.Context()); err != nil {
+		t.Fatalf("resume: %v\n%s", err, out)
+	}
+	if string(resume.secrets["resume"]) != "CYFR-CODE" || !strings.Contains(out.String(), "@mira") || strings.Contains(out.String(), "CYFR-CODE") {
+		t.Fatalf("resumed with %q\n%s", resume.secrets["resume"], out)
 	}
 }
 
@@ -270,7 +312,7 @@ func TestLoginDriver_AFailureEndsWithItsSentenceAndLocks(t *testing.T) {
 		d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip, Notice: "That is not this command line's PIN or passphrase. Nothing was sent anywhere."})
 	})
 	c, _ := typed("000000", "123456")
-	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	d := &loginDriver{sh: dev, c: c, mode: "login", home: "https://alice.example"}
 	err := d.run(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "not this command line's PIN") || len(dev.calls) != 1 || dev.locks != 1 {
 		t.Fatalf("run: %v, calls %v, locks %d", err, dev.calls, dev.locks)
@@ -278,7 +320,7 @@ func TestLoginDriver_AFailureEndsWithItsSentenceAndLocks(t *testing.T) {
 
 	ended := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, nil)
 	c, _ = typed()
-	if err := (&loginDriver{sh: ended, c: c, mode: "pair"}).run(t.Context()); !errors.Is(err, errInputEnded) || len(ended.calls) != 0 {
+	if err := (&loginDriver{sh: ended, c: c, mode: "login"}).run(t.Context()); !errors.Is(err, errInputEnded) || len(ended.calls) != 0 {
 		t.Fatalf("ended input: %v, calls %v", err, ended.calls)
 	}
 }
@@ -309,10 +351,6 @@ func TestLogin_RefusesWhatItCannotHold(t *testing.T) {
 			t.Errorf("%s: %v, want %q", args, err, want)
 		}
 	}
-	// The home at 127.0.0.1 is this machine: --pin is refused first.
-	if _, err := runCommand(t, t.Context(), "login", "--pin"); err == nil || err.Error() != shell.PINHereSentence("command line") {
-		t.Errorf("login --pin at a home here: %v", err)
-	}
 	t.Setenv(sessionHomeEnv, home.URL)
 	if _, err := runCommand(t, t.Context(), "login"); err == nil || !strings.Contains(err.Error(), "unlocked by cyfr login already") {
 		t.Errorf("a login shell's login: %v", err)
@@ -320,7 +358,7 @@ func TestLogin_RefusesWhatItCannotHold(t *testing.T) {
 	if opened != 0 || reached.Load() != 0 {
 		t.Errorf("refused logins opened the device %d times and asked the home %d things", opened, reached.Load())
 	}
-	entries, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".cyfr", "devices"))
+	entries, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".cyfr", "device"))
 	if len(entries) != 0 {
 		t.Errorf("a refused login made a key: %v", entries)
 	}
@@ -385,23 +423,26 @@ func TestOldSignIn_IsDeletedAndNeverSent(t *testing.T) {
 	}
 }
 
-// pairedRecord writes a paired device record for address, as cyfr login
-// leaves one.
+// pairedRecord writes this machine's key, listed in an account, and a
+// client at address in its context, as cyfr login leaves them.
 func pairedRecord(t *testing.T, address string) {
 	t.Helper()
-	path, err := deviceRecord(address)
+	path, err := deviceKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := holder.NewSoftware(address, "", "pair", []byte(passphrase))
+	rec, err := holder.NewSoftware([]byte(passphrase))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec.ClientID, rec.Athanor, rec.Certificate = "pcl_1", "ath_1", json.RawMessage(`{"client_id":"pcl_1"}`)
+	rec.Identifier, rec.Directory = "per_"+strings.Repeat("a", 64), "https://cyfr.run"
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := rec.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := (contextClients{address: address}).Save(shell.ClientRecord{ClientID: "pcl_1", Certificate: json.RawMessage(`{"client_id":"pcl_1"}`)}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -592,128 +633,60 @@ func TestSessionDevice_DrawsTheChangeThroughTheSession(t *testing.T) {
 	}
 }
 
-// A person made while cyfr.run does not answer has their name waiting for
-// it, not for another: cyfr login ends, locked, saying which command
-// finishes it, and asks for no other name.
-func TestLoginDriver_ASilentCyfrRunEndsTheRunToFinishLater(t *testing.T) {
+// An account whose submission got no answer is tried once more, then the
+// run ends, locked, saying which command finishes it, and asks for no
+// other name.
+func TestLoginDriver_AnAnswerThatDoesNotComeEndsTheRunToFinishLater(t *testing.T) {
 	for mode, again := range map[string]string{"setup": "cyfr login --setup", "join": "cyfr login --join --invitation CODE"} {
 		dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, func(call string, d *fakeDevice) {
-			if call == mode {
-				d.set(shell.View{Page: shell.PageName, Name: "proof", NameWaits: true,
-					Notice: "cyfr.run did not answer. Try again in a moment; you are set up already."})
+			switch call {
+			case "setup":
+				d.set(shell.View{Page: shell.PageRecovery, RecoveryCode: "CYFR-CODE", Name: "proof"})
+			case "saved":
+				d.set(shell.View{Page: shell.PageAccount, Name: "proof",
+					Notice: "Your account is not finished: Your account could not be reached just now. Try again; nothing is lost."})
 			}
 		})
-		c, out := typed(passphrase, passphrase)
+		c, out := typed(passphrase, passphrase, "")
 		err := (&loginDriver{sh: dev, c: c, mode: mode, name: "proof", invitation: "INVITE", home: "https://alice.example"}).run(t.Context())
-		if err == nil || err.Error() != "cyfr.run did not answer. Run "+again+" again to finish." || dev.locks != 1 ||
-			slices.Contains(dev.calls, "rename") || strings.Contains(out.String(), "Your name, yours for life") {
+		if err == nil || !strings.HasSuffix(err.Error(), "Run "+again+" to go on.") || dev.locks != 1 ||
+			!slices.Equal(dev.calls, []string{"setup", "saved", "saved"}) {
 			t.Fatalf("%s: %v, calls %v, locks %d\n%s", mode, err, dev.calls, dev.locks, out)
 		}
 	}
 }
 
-// The local context cyfr init saves names the home by its loopback IP,
-// while the home names itself localhost in what its devices sign: the
-// command line's device is the home's own address, so its key record and
-// every challenge it checks say localhost; any other address is kept.
-func TestDeviceShell_ALoopbackContextIsTheHomesLocalhost(t *testing.T) {
-	withContexts(t, "local", map[string]*config.Context{"local": {URL: "http://127.0.0.1:4000"}})
-	saved := deviceChip
-	deviceChip = func() bool { return false }
-	t.Cleanup(func() { deviceChip = saved })
+// The local context cyfr init saves names CYFR by its loopback IP, while
+// CYFR names itself localhost in what its devices sign: the command line's
+// device is CYFR's own address. One key serves every address, kept under
+// ~/.cyfr/device, and the client each CYFR admits it as is kept in that
+// CYFR's context, a new one named by its host where none is at it.
+func TestDeviceShell_OneKeyAndAClientPerContext(t *testing.T) {
+	path := withContexts(t, "local", map[string]*config.Context{"local": {URL: "http://127.0.0.1:4000"}})
 	for address, want := range map[string]string{
 		"http://127.0.0.1:4000":     "http://localhost:4000",
 		"http://[::1]:4000":         "http://localhost:4000",
 		"https://home.example":      "https://home.example",
 		"https://home.example:8443": "https://home.example:8443",
 	} {
-		sh, err := deviceShell(deviceOptions{address: address})
-		if err != nil {
+		if got := deviceHome(address); got != want {
+			t.Errorf("%s: %s, want %s", address, got, want)
+		}
+	}
+	key, _ := deviceKey()
+	if key != filepath.Join(filepath.Dir(path), "device", "key.json") {
+		t.Errorf("the key is at %s", key)
+	}
+	for address, id := range map[string]string{"http://127.0.0.1:4000/": "pcl_local", "https://home.example": "pcl_home"} {
+		if err := (contextClients{address: address}).Save(shell.ClientRecord{ClientID: id, Certificate: json.RawMessage(`{"a":1}`)}); err != nil {
 			t.Fatal(err)
 		}
-		p := sh.View().Passphrase
-		sh.Prepare([]byte(p), []byte(p))
-		path, _ := deviceRecord(address)
-		rec, err := holder.Load(path)
-		if err != nil || rec.Home != want {
-			t.Errorf("%s: the key is for %v (%v), want %s", address, rec, err, want)
-		}
-		_ = os.Remove(path)
 	}
-}
-
-// cyfr login --pin asks the new PIN twice once unlocked and hands both to
-// SetPIN; the device's sentence ends the run when no PIN was set.
-func TestLoginDriver_SetPINAsksThePINTwice(t *testing.T) {
-	dev := newFakeDevice(shell.View{Page: shell.PageUnlocked}, func(call string, d *fakeDevice) {
-		if call == "setpin" {
-			d.set(shell.View{Page: shell.PageUnlocked, Notice: "This command line's key is now kept under your six-digit PIN."})
-		}
-	})
-	c, out := typed("123456", "123456")
-	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
-	if err := d.setPIN(t.Context()); err != nil {
-		t.Fatalf("setPIN: %v\n%s", err, out)
+	cfg, _ := config.LoadFrom(path)
+	if cfg.Contexts["local"].ClientID != "pcl_local" || cfg.Contexts["home.example"] == nil || cfg.Contexts["home.example"].ClientID != "pcl_home" {
+		t.Fatalf("contexts %+v", cfg.Contexts)
 	}
-	if string(dev.secrets["setpin"]) != "123456" || dev.given["setpin"] != "123456" || !strings.Contains(out.String(), "now kept under") {
-		t.Fatalf("SetPIN given %q and %q\n%s", dev.secrets["setpin"], dev.given["setpin"], out)
-	}
-
-	refused := newFakeDevice(shell.View{Page: shell.PageUnlocked}, func(call string, d *fakeDevice) {
-		d.set(shell.View{Page: shell.PageUnlocked, Notice: "The two entries differ. Enter the same one twice."})
-	})
-	c, _ = typed("123456", "654321")
-	d = &loginDriver{sh: refused, c: c, mode: "pair", home: "https://alice.example"}
-	if err := d.setPIN(t.Context()); err == nil || err.Error() != "The two entries differ. Enter the same one twice." {
-		t.Fatalf("a refused PIN: %v", err)
-	}
-}
-
-// A key under a PIN its home counts is asked for as a PIN.
-func TestLoginDriver_AKeyUnderAPINAsksAPIN(t *testing.T) {
-	c, out := typed("123456")
-	d := &loginDriver{c: c}
-	if _, err := d.askSecret(t.Context(), shell.View{Kind: holder.KindSoftware, PIN: true}, "Unlock this command line with its"); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "its PIN: ") {
-		t.Fatalf("asked %q", out)
-	}
-}
-
-// A home that does not take this command line's PIN (or its standing)
-// offers the recovery code in the terminal: the code and the PIN, asked
-// again, re-enable it and it unlocks; an empty code leaves it locked with
-// the home's sentence, and nothing is re-enabled.
-func TestLoginDriver_ASuspendedPINOffersTheRecoveryCode(t *testing.T) {
-	const said = "CYFR does not take this command line's PIN: it was removed, or a restore from a backup suspended it. If it was suspended, your recovery code brings it back."
-	locked := shell.View{Page: shell.PageLocked, Kind: holder.KindSoftware, PIN: true}
-	next := func(call string, d *fakeDevice) {
-		switch call {
-		case "unlock":
-			v := locked
-			v.Kit, v.Notice = true, said
-			d.set(v)
-		case "reenable":
-			d.set(shell.View{Page: shell.PageUnlocked})
-		}
-	}
-	dev := newFakeDevice(locked, next)
-	c, out := typed("123456", "CYFR-RECOVERY-CODE", "123456")
-	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
-	if err := d.run(t.Context()); err != nil {
-		t.Fatalf("run: %v\n%s", err, out)
-	}
-	if !slices.Equal(dev.calls, []string{"unlock", "reenable"}) || dev.given["reenable"] != "CYFR-RECOVERY-CODE" ||
-		string(dev.secrets["reenable"]) != "123456" || !strings.Contains(out.String(), said) ||
-		!strings.Contains(out.String(), "Then this command line's PIN: ") {
-		t.Fatalf("calls %v, code %q, secret %q\n%s", dev.calls, dev.given["reenable"], dev.secrets["reenable"], out)
-	}
-
-	left := newFakeDevice(locked, next)
-	c, _ = typed("123456", "")
-	d = &loginDriver{sh: left, c: c, mode: "pair", home: "https://alice.example"}
-	if err := d.run(t.Context()); err == nil || err.Error() != said || slices.Contains(left.calls, "reenable") {
-		t.Fatalf("an empty code: %v, calls %v", err, left.calls)
+	if got, _ := (contextClients{address: "https://HOME.example"}).Load(); got.ClientID != "pcl_home" {
+		t.Errorf("the client at home.example is %+v", got)
 	}
 }

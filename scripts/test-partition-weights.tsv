@@ -22,7 +22,6 @@
 0.0	apps/arca/test/arca/cache_eviction_test.exs
 0.0	apps/arca/test/arca/cache_test.exs
 0.3	apps/arca/test/arca/canvas_versions_test.exs
-1.0	apps/arca/test/arca/carry_actions_test.exs
 0.5	apps/arca/test/arca/cipher_rotation_test.exs
 0.9	apps/arca/test/arca/company_authorizations_test.exs
 0.8	apps/arca/test/arca/company_login_attempts_test.exs
@@ -39,8 +38,6 @@
 1.5	apps/arca/test/arca/db_rescue_coverage_test.exs
 26.7	apps/arca/test/arca/decision_log_test.exs
 0.1	apps/arca/test/arca/device_certificates_test.exs
-0.5	apps/arca/test/arca/device_certifications_test.exs
-0.8	apps/arca/test/arca/device_pin_evaluators_test.exs
 1.4	apps/arca/test/arca/directory_heads_test.exs
 1.0	apps/arca/test/arca/doors_test.exs
 0.1	apps/arca/test/arca/ensure_roots_test.exs
@@ -54,7 +51,6 @@
 7.7	apps/arca/test/arca/file_offers_test.exs
 1.0	apps/arca/test/arca/frame_credentials_test.exs
 0.1	apps/arca/test/arca/health_test.exs
-2.4	apps/arca/test/arca/identity_attempts_test.exs
 0.9	apps/arca/test/arca/identity_log_test.exs
 2.5	apps/arca/test/arca/installation_claims_test.exs
 1.1	apps/arca/test/arca/invitations_test.exs
@@ -71,8 +67,6 @@
 30.9	apps/arca/test/arca/one_fence_test.exs
 0.1	apps/arca/test/arca/outbox_test.exs
 1.2	apps/arca/test/arca/paired_clients_test.exs
-4.3	apps/arca/test/arca/pairing_invitations_test.exs
-2.5	apps/arca/test/arca/passkeys_test.exs
 0.9	apps/arca/test/arca/pending_confirmations_test.exs
 0.4	apps/arca/test/arca/person_identities_test.exs
 0.8	apps/arca/test/arca/platform_settings_test.exs
@@ -449,9 +443,6 @@
 0.3	apps/cyfr/test/emissary/security_test.exs
 0.1	apps/cyfr/test/emissary/telemetry_test.exs
 4.0	apps/cyfr/test/emissary/web/controllers/canvas_controller_test.exs
-0.8	apps/cyfr/test/emissary/web/controllers/certificate_renewal_controller_test.exs
-0.7	apps/cyfr/test/emissary/web/controllers/device_enrollment_controller_test.exs
-1.4	apps/cyfr/test/emissary/web/controllers/device_pin_controller_test.exs
 0.2	apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs
 2.7	apps/cyfr/test/emissary/web/controllers/directory_controller_test.exs
 1.2	apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs
@@ -466,7 +457,6 @@
 0.2	apps/cyfr/test/emissary/web/controllers/mcp_listen_slot_release_test.exs
 6.0	apps/cyfr/test/emissary/web/controllers/mcp_transport_test.exs
 0.3	apps/cyfr/test/emissary/web/controllers/oauth_callback_controller_test.exs
-1.3	apps/cyfr/test/emissary/web/controllers/restore_controller_test.exs
 15.8	apps/cyfr/test/emissary/web/controllers/tincture_controller_test.exs
 13.5	apps/cyfr/test/emissary/web/controllers/tincture_data_controller_test.exs
 5.1	apps/cyfr/test/emissary/web/controllers/webhook_controller_test.exs
@@ -597,17 +587,14 @@
 1.8	apps/cyfr/test/prism_web/live/company_login_live_test.exs
 7.2	apps/cyfr/test/prism_web/live/components_live_test.exs
 4.9	apps/cyfr/test/prism_web/live/consent_sheet_component_test.exs
-1.1	apps/cyfr/test/prism_web/live/device_add_live_test.exs
 2.5	apps/cyfr/test/prism_web/live/enforcements_live_test.exs
 7.6	apps/cyfr/test/prism_web/live/files_live_test.exs
 2.0	apps/cyfr/test/prism_web/live/invite_live_test.exs
 8.4	apps/cyfr/test/prism_web/live/login_live_test.exs
 3.3	apps/cyfr/test/prism_web/live/mcp_servers_live_test.exs
 5.1	apps/cyfr/test/prism_web/live/modes_test.exs
-0.2	apps/cyfr/test/prism_web/live/pair_live_test.exs
 0.6	apps/cyfr/test/prism_web/live/redirect_live_test.exs
 1.9	apps/cyfr/test/prism_web/live/registry_live_test.exs
-0.4	apps/cyfr/test/prism_web/live/restore_live_test.exs
 5.4	apps/cyfr/test/prism_web/live/schedules_live_test.exs
 1.3	apps/cyfr/test/prism_web/live/secret_reveal_test.exs
 10.4	apps/cyfr/test/prism_web/live/settings_live_test.exs
@@ -620,8 +607,6 @@
 10.0	apps/cyfr/test/prism_web/live/shell_prompts_test.exs
 0.1	apps/cyfr/test/prism_web/live/shell_redirect_test.exs
 2.0	apps/cyfr/test/prism_web/live/shell_tincture_url_test.exs
-4.4	apps/cyfr/test/prism_web/live/system_layer_pairing_test.exs
-5.7	apps/cyfr/test/prism_web/live/system_layer_recovery_test.exs
 0.2	apps/cyfr/test/prism_web/live/system_layer_share_test.exs
 47.8	apps/cyfr/test/prism_web/live/system_layer_test.exs
 60.9	apps/cyfr/test/prism_web/live/thread_pane_live_test.exs
@@ -701,7 +686,6 @@
 1.5	apps/cyfr/test/sanctum/gate/typed_dispatch_test.exs
 0.0	apps/cyfr/test/sanctum/gate/virtual_tools_test.exs
 0.6	apps/cyfr/test/sanctum/gate/visibility_test.exs
-0.0	apps/cyfr/test/sanctum/invitation_freeze_race_test.exs
 17.4	apps/cyfr/test/sanctum/launch_stamp_boundary_test.exs
 0.3	apps/cyfr/test/sanctum/namespace_test.exs
 1.3	apps/cyfr/test/sanctum/permission_vocabulary_test.exs
@@ -719,9 +703,7 @@
 0.8	apps/cyfr/test/sanctum/providers/decision_test.exs
 0.2	apps/cyfr/test/sanctum/providers/invitation_test.exs
 0.8	apps/cyfr/test/sanctum/providers/mcp_log_test.exs
-2.5	apps/cyfr/test/sanctum/providers/pairing_test.exs
 0.7	apps/cyfr/test/sanctum/providers/person_rotation_test.exs
-1.5	apps/cyfr/test/sanctum/providers/person_test.exs
 0.6	apps/cyfr/test/sanctum/providers/policy_log_test.exs
 7.1	apps/cyfr/test/sanctum/providers/profile_grants_test.exs
 0.3	apps/cyfr/test/sanctum/providers/retired_sign_in_test.exs
@@ -731,7 +713,6 @@
 0.5	apps/cyfr/test/sanctum/provisioning_readiness_test.exs
 10.5	apps/cyfr/test/sanctum/provisioning_remote_deps_test.exs
 11.3	apps/cyfr/test/sanctum/provisioning_test.exs
-2.9	apps/cyfr/test/sanctum/restore_kit_proof_test.exs
 2.1	apps/cyfr/test/sanctum/session_test.exs
 0.4	apps/cyfr/test/sanctum/tenancy/archive_test.exs
 1.4	apps/cyfr/test/sanctum/tenancy/athanor_census_test.exs
@@ -835,7 +816,6 @@
 0.0	apps/prima/test/prima/component_path_test.exs
 0.1	apps/prima/test/prima/component_ref_test.exs
 0.0	apps/prima/test/prima/component_row_test.exs
-0.2	apps/prima/test/prima/confirmation_assertion_test.exs
 0.1	apps/prima/test/prima/confirmation_test.exs
 0.1	apps/prima/test/prima/consent_preview_test.exs
 0.2	apps/prima/test/prima/consent_signal_test.exs
@@ -843,7 +823,6 @@
 0.0	apps/prima/test/prima/decision_test.exs
 0.2	apps/prima/test/prima/destination_test.exs
 0.2	apps/prima/test/prima/device_cert_test.exs
-0.0	apps/prima/test/prima/device_pin_test.exs
 0.0	apps/prima/test/prima/device_test.exs
 0.1	apps/prima/test/prima/device_unlock_test.exs
 0.0	apps/prima/test/prima/digest_test.exs
@@ -966,7 +945,6 @@
 0.3	apps/sanctum/test/sanctum/context_test.exs
 11.6	apps/sanctum/test/sanctum/device_certs_test.exs
 0.0	apps/sanctum/test/sanctum/device_flow_providers_test.exs
-2.6	apps/sanctum/test/sanctum/device_pin_test.exs
 3.2	apps/sanctum/test/sanctum/device_unlock_test.exs
 6.5	apps/sanctum/test/sanctum/directory/client_test.exs
 22.5	apps/sanctum/test/sanctum/directory_test.exs
@@ -984,15 +962,11 @@
 0.9	apps/sanctum/test/sanctum/oauth/refresh_lock_test.exs
 11.2	apps/sanctum/test/sanctum/pairing_test.exs
 15.7	apps/sanctum/test/sanctum/passkeys_test.exs
-0.9	apps/sanctum/test/sanctum/person_test.exs
 0.0	apps/sanctum/test/sanctum/platform_context_audit_test.exs
-1.8	apps/sanctum/test/sanctum/platform_holder_test.exs
 0.1	apps/sanctum/test/sanctum/platform_settings_read_test.exs
 0.0	apps/sanctum/test/sanctum/policy/ceiling_test.exs
 0.0	apps/sanctum/test/sanctum/policy/enforcement_audit_test.exs
 0.0	apps/sanctum/test/sanctum/provider_vocabulary_test.exs
-0.1	apps/sanctum/test/sanctum/recovery_checklist_test.exs
-4.7	apps/sanctum/test/sanctum/recovery_test.exs
 0.4	apps/sanctum/test/sanctum/redaction_roster_test.exs
 0.2	apps/sanctum/test/sanctum/registry_credentials_test.exs
 4.9	apps/sanctum/test/sanctum/remote_certification_test.exs

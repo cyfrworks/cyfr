@@ -61,7 +61,7 @@ defmodule Sanctum.Providers.InvitationTest do
     assert {:ok, %{invitation: invitation, code: code, invitation_url: link} = created} =
              call(ctx(alice), %{"action" => "create", "thread_id" => thread.id})
 
-    assert link == Sanctum.Person.home() <> "/invite#" <> code
+    assert link == Sanctum.origin() <> "/invite#" <> code
     assert %{state: "pending", thread_id: thread_id, thread_title: title} = invitation
     assert {thread_id, title} == {thread.id, thread.title}
     assert nulls(created) == []

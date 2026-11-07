@@ -4,8 +4,6 @@
 defmodule Sanctum.Tenancy.UsersTest do
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
-
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
 
@@ -32,9 +30,8 @@ defmodule Sanctum.Tenancy.UsersTest do
     user
   end
 
-  # A person with no athanor of their own yet: the row and its linked
-  # sign-in method alone.
-  defp unhoused(n) do
+  # A person with no athanor of their own yet: the row alone.
+  defp unhoused do
     now = DateTime.utc_now()
 
     {:ok, %{id: user_id}} =
@@ -46,19 +43,43 @@ defmodule Sanctum.Tenancy.UsersTest do
           last_seen_at: now,
           created_at: now,
           updated_at: now
-        },
-        %{
-          key: "github|https://github.com|unhoused-#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "unhoused-#{n}",
-          first_seen_at: now,
-          last_seen_at: now
         }
       )
 
     {:ok, user} = Users.get(user_id)
     user
+  end
+
+  # How a person is named to other people: their display name, else their
+  # email, else @ and their recorded name, else someone; their id never,
+  # not even for a row that cannot be read.
+  describe "display_name/1" do
+    defp named!(user, name) do
+      {:ok, _user} = Users.set_namespace(user, name)
+      user.id
+    end
+
+    test "a display name comes first, then an email, then the recorded name, then someone" do
+      n = System.unique_integer([:positive])
+
+      everything = person(n, %{name: "Mira"})
+      assert Users.display_name(named!(everything, "mira-#{n}")) == "Mira"
+
+      email = person(n + 1, %{name: nil})
+      assert Users.display_name(named!(email, "only-#{n}")) == "p#{n + 1}@example.com"
+
+      name_only = person(n + 2, %{name: nil, email: nil})
+      assert Users.display_name(named!(name_only, "plain-#{n}")) == "@plain-#{n}"
+
+      nothing = person(n + 3, %{name: nil, email: nil})
+      assert Users.display_name(nothing.id) == "someone"
+      refute Users.display_name(nothing.id) =~ nothing.id
+    end
+
+    test "no person, or one that cannot be read, is someone and never their id" do
+      assert Users.display_name(nil) == "someone"
+      assert Users.display_name("usr_" <> String.duplicate("0", 26)) == "someone"
+    end
   end
 
   test "email is stored lowercased and is not unique — two people may share one" do
@@ -69,68 +90,9 @@ defmodule Sanctum.Tenancy.UsersTest do
     refute a.id == b.id
   end
 
-  # Missing provider fields must preserve previously recorded display data.
-  test "a sign-in that asserts no name or email keeps what is already stored" do
-    stored = person(41, %{email: "keep@example.com", name: "Keep Me"})
-    assert stored.display_name == "Keep Me"
-
-    {:ok, refreshed} = Users.seen(stored, info(41, %{email: nil, name: nil}))
-
-    assert refreshed.id == stored.id
-    assert refreshed.display_name == "Keep Me"
-    assert refreshed.email == "keep@example.com"
-  end
-
-  test "a sign-in that does assert them updates, and an email only when the provider proved it" do
-    stored = person(42, %{email: "old@example.com", name: "Old Name", verified: false})
-    refute stored.email_verified
-
-    {:ok, refreshed} =
-      Users.seen(stored, info(42, %{email: "new@example.com", name: "New Name"}))
-
-    assert refreshed.id == stored.id
-    assert refreshed.display_name == "New Name"
-    assert refreshed.email == "new@example.com"
-    assert refreshed.email_verified
-
-    for verified <- [false, :unknown] do
-      {:ok, unproved} =
-        Users.seen(refreshed, info(42, %{email: "unproved@example.com", verified: verified}))
-
-      assert unproved.email == "new@example.com"
-      assert unproved.email_verified
-    end
-  end
-
-  test "a person's id is this server's, and the method they linked unlocks them and no one else" do
-    n = System.unique_integer([:positive])
-    key = "github|https://github.com|minted-#{n}"
-    user = person(n, %{id: key})
-
-    assert Prima.PersonId.person?(user.id)
-    refute user.id == key
-    assert {:ok, %{id: same}} = Users.get_by_identity(key)
-    assert same == user.id
-    assert [%{key: ^key, provider: "github", subject: subject}] = Users.identities(user.id)
-    assert subject == "minted-#{n}"
-
-    # The same method signs in again: the same person, not a second one.
-    people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
-    assert {:ok, %{id: ^same}} = Sanctum.SignIn.unlock(info(n, %{id: key}))
-
-    # A method no person here linked unlocks no one, and makes no one.
-    nobody = "github|https://github.com|nobody-#{n}"
-    assert {:error, :no_person} = Sanctum.SignIn.unlock(info(n, %{id: nobody}))
-    assert {:error, :not_found} = Users.get_by_identity(nobody)
-    assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
-  end
-
-  test "only an IdP identity is a sign-in method: synthetic principal ids and bare ids name no one" do
+  test "a person is found by an account's identifier alone: synthetic principal ids and bare ids name no one" do
     for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes", "usr_x"] do
-      refute Sanctum.Auth.Identity.key?(id)
-
-      assert {:error, :no_person} =
-               Sanctum.SignIn.unlock(%{id: id, provider: "github", email: "x@example.com"})
+      assert {:error, :not_found} = Users.get_by_identifier(id)
     end
 
     # A row's id is a person's, never a synthetic principal's.
@@ -157,7 +119,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   end
 
   test "own_athanor?/2 reads the owner" do
-    u = unhoused(7)
+    u = unhoused()
 
     # Known, but no furnace minted yet.
     refute Users.own_athanor?(u.id, "ath_anything")
@@ -177,7 +139,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   end
 
   test "an athanor whose owner is the person is theirs to every reader" do
-    u = unhoused(8)
+    u = unhoused()
 
     {:ok, own} =
       Athanors.create(%{
@@ -248,29 +210,6 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert focused == personal.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
-
-  test "a post-restore period is the person's: a denial leaves it, the users row takes it" do
-    u = person(42)
-
-    # Written straight to the table: its store comes with the declared
-    # restore.
-    {1, _} =
-      Arca.Repo.insert_all("restore_people", [
-        %{restore_id: "rst_#{System.unique_integer([:positive])}", user_id: u.id}
-      ])
-
-    assert restore_periods(u.id) == 1
-
-    assert {:ok, _} = Users.deny(u)
-    assert restore_periods(u.id) == 1
-
-    # Its owner is the person's row: deleting it takes the period.
-    assert {1, _} = Arca.Repo.delete_all(from(p in "users", where: p.id == ^u.id))
-    assert restore_periods(u.id) == 0
-  end
-
-  defp restore_periods(user_id),
-    do: Arca.Repo.aggregate(from(r in "restore_people", where: r.user_id == ^user_id), :count)
 
   # A denial revokes every share of the person's own athanor in its
   # transaction, and each is announced once it committed, so recipients in

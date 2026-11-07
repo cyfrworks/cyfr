@@ -10,9 +10,24 @@ defmodule Arca.PairedClients do
   which alone decides what the client may do. A protected device also
   carries what it reports holds its key (`holder_kind`, `chip` or
   `software`) and the name it shows (`display_name`): information a person
-  reads in their devices, never an input to a decision.
-  Sanctum is the one caller above this layer (`Sanctum.Pairing`); the rows
-  are security rows no domain or surface names.
+  reads in their devices, never an input to a decision. A passkey of the
+  person's account that signed in here is a client too (`source_kind`
+  `passkey`), known by its key alone (`record_passkey/2`): it holds no
+  device key and reports nothing.
+  Sanctum is the one caller above this layer (`Sanctum.Pairing`,
+  `Sanctum.SignIn`, `Sanctum.Passkeys`); the rows are security rows no
+  domain or surface names.
+
+  ## The account key
+
+  A client that is a key of the person's account names it (`kid`) and the
+  account head it was admitted under (`head`), both or neither; a device
+  client's `kid` is its device key's (`Prima.Identity.Key.kid/1`). The
+  head must be the cached head of the person's account when the row is
+  written (`Arca.DirectoryHeads.fence!/2`, under the person's lock), and
+  the cached head's walk revokes the clients a removed key is, or on a
+  recovery every client that is a key (`revoke_bound!/2`). A passkey's
+  client always names both.
 
   ## Standing
 
@@ -22,23 +37,23 @@ defmodule Arca.PairedClients do
   (`Arca.SecurityTransitions`). Each revocation raises `updated_at`, which
   is when the row was retired, and revokes the client's device
   certificates (`Arca.DeviceCertificates`), voids the pending
-  confirmations it confirmed (`Arca.PendingConfirmations`), deletes the
-  sessions its unlock created (`Arca.SessionStorage`) and its PIN
-  evaluators (`Arca.DevicePinEvaluators`) in the same transaction.
+  confirmations it confirmed (`Arca.PendingConfirmations`) and deletes the
+  sessions its unlock created (`Arca.SessionStorage`) in the same
+  transaction.
 
   A declared restore suspends every active row (`Arca.SecurityTransitions`):
   a suspended client stands for nothing, is listed only when its standing
-  is asked for (`:suspended` or `:all`), and becomes active again only by
-  `reenable/4`, which also closes its person's restore. A suspended row may
-  still be revoked, and a revoked one is never re-enabled.
+  is asked for (`:suspended` or `:all`), and stays suspended; its device
+  comes back by a fresh hello, as a new client. A suspended row may still
+  be revoked.
 
   ## Ownership
 
-  Recording a client, and re-enabling one, widen what may be confirmed,
-  so `record/2` and `reenable/4` run in a locking transaction that checks
-  the member still owns its slot (`Arca.ControlPlane.verify_held/1`)
-  before it writes: a stale owner writes nothing. A revocation only
-  narrows, and is never refused for ownership.
+  Recording a client widens what may be confirmed, so `record/2` runs in
+  a locking transaction that checks the member still owns its slot
+  (`Arca.ControlPlane.verify_held/1`) before it writes: a stale owner
+  writes nothing. A revocation only narrows, and is never refused for
+  ownership.
 
   Every function takes the actor first. An athanor actor reads and writes
   its own athanor's rows; `list/2` also takes the platform system actor,
@@ -52,8 +67,7 @@ defmodule Arca.PairedClients do
   alias Arca.Schemas.{DeviceCertificate, PairedClient}
 
   @required ~w(user_id source_kind source_id)a
-  @optional ~w(device_public_key holder_kind display_name)a
-  @max_display_name 64
+  @optional ~w(device_public_key holder_kind display_name kid head)a
 
   @typedoc "A paired client row, as a plain map."
   @type row :: %{
@@ -66,8 +80,19 @@ defmodule Arca.PairedClients do
           standing: String.t(),
           holder_kind: String.t() | nil,
           display_name: String.t() | nil,
+          kid: String.t() | nil,
+          head: String.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
+        }
+
+  @typedoc """
+  A row `revoke/2` answers: the row, and the token hashes of the sessions
+  its revocation ended.
+  """
+  @type revoked :: %{
+          required(:revoked_session_hashes) => [binary()],
+          optional(atom()) => term()
         }
 
   @typedoc """
@@ -98,66 +123,20 @@ defmodule Arca.PairedClients do
   def list(%Prima.Actor{}, filters) when is_list(filters), do: {:error, :no_athanor}
 
   @doc """
-  Re-enable the suspended client `id` of the person `user_id` in the
-  actor's athanor, in one locking transaction that checks first that this
-  member still owns its slot (`Arca.Repo.owned/2`), since a standing
-  client widens what may be confirmed: the person's row locked first, the
-  head of the standing order a confirmation's consumption also takes, then
-  the client's, then `opts[:verify]` handed it as a plain map (anything but `:ok` rolls back
-  with that reason), then the row written `active`, and the person's open
-  restore closed in the same transaction
-  (`Arca.SecurityTransitions.close_restore!/1`), since a re-enabled method
-  ends their recovery. Answers the row with `closed_restore_ids`, the
-  restores it closed (none when the person had no open row).
-
-  Refusals: `:not_found` (no such row of that person in the athanor),
-  `:revoked` (never revived), `:passkey_holder` (a passkey's platform
-  holder moves with its credential, `Arca.Passkeys.reenable/4`),
-  `:not_suspended`, `:no_athanor`,
-  `:not_owner`, `:database_error`, or the verifier's reason.
-  """
-  @spec reenable(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
-          {:ok, map()}
-          | {:error,
-             :not_found
-             | :revoked
-             | :not_suspended
-             | :no_athanor
-             | :not_owner
-             | :database_error
-             | term()}
-  # arca:db-raise-ok the read and the write run inside `Arca.Repo.owned/2`, which rescues around its transaction.
-  def reenable(%Prima.Actor{athanor_id: athanor_id} = actor, user_id, id, opts)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_binary(id) and
-             is_list(opts) do
-    verify = Keyword.fetch!(opts, :verify)
-
-    Arca.Repo.owned("Arca.PairedClients.reenable", fn ->
-      _locked = Arca.DirectoryHeads.lock_person!(user_id)
-
-      PairedClient
-      |> QueryHelpers.where_tenant(actor)
-      |> where([p], p.id == ^id and p.user_id == ^user_id)
-      |> QueryHelpers.for_update()
-      |> Arca.Repo.one()
-      |> reenabled(verify)
-    end)
-  end
-
-  def reenable(%Prima.Actor{}, _user_id, _id, _opts), do: {:error, :no_athanor}
-
-  @doc """
   Record a client of the person `attrs.user_id` in the actor's athanor:
   the credential it stands on (`source_kind`, `"session"`, `"api_key"` or
   `"device_cert"`, and `source_id`), each required, and for a
   `device_cert` client the device's 32-byte `device_public_key`
-  (required) and, optionally, the `id` a pairing invitation or an
-  enrollment reserved for it, the `holder_kind` a protected device reports
-  and the `display_name` it shows. The row starts `active`.
+  (required) and, optionally, the `id` its hello reserved for it, the
+  `holder_kind` a protected device reports and the `display_name` it
+  shows, and for a client that is an account
+  key its `kid` and the `head` it was admitted under (the module doc).
+  The row starts `active`.
 
   Refused with `:no_athanor` for an actor that names none, `{:invalid,
-  errors}` for a missing or malformed field, `:conflict` for a credential
-  (or a reserved id) the athanor already records a client for,
+  errors}` for a missing or malformed field, `:stale_head` for a head that
+  is not the cached head of the person's account, `:conflict` for a
+  credential (or a reserved id) the athanor already records a client for,
   `:not_owner` on a member that no longer owns its slot, and
   `:database_error` when the store cannot answer.
   """
@@ -175,13 +154,7 @@ defmodule Arca.PairedClients do
 
     if changeset.valid? do
       Arca.Repo.owned("Arca.PairedClients.record", fn ->
-        case Arca.Repo.insert(changeset) do
-          {:ok, row} ->
-            {:ok, row}
-
-          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
-            conflict_or_invalid(errors, changeset)
-        end
+        with :ok <- fenced(changeset), do: inserted(changeset)
       end)
     else
       {:error, Arca.Data.invalid(changeset)}
@@ -192,15 +165,11 @@ defmodule Arca.PairedClients do
 
   @doc """
   Enroll a protected device's client in the actor's athanor: `record/2`'s
-  row, its `attrs` the same, written under the person's lock, the order
-  every first method takes (`Arca.DirectoryHeads.lock_person!/1`), with
-  the first-method mark (`Arca.PersonIdentities.first_method!/1`).
-  `first_method: :claim` enrolls only the person's first method, refused
-  `:first_method_used` once the mark is set; `:mark` sets it if unset and
-  enrolls either way. `also:` runs after the insert, handed the row, and
-  answers `{:ok, _}` or `{:error, reason}`, which rolls the enrollment
-  back: the certificate is issued and recorded in the same transaction.
-  Refused as `record/2` is.
+  row, its `attrs` the same, written under the person's lock, the first
+  of the standing order (`Arca.DirectoryHeads.lock_person!/1`). `also:`
+  runs after the insert, handed the row, and answers `{:ok, _}` or
+  `{:error, reason}`, which rolls the enrollment back: the certificate is
+  issued and recorded in the same transaction. Refused as `record/2` is.
   """
   @spec enroll(Prima.Actor.t(), map(), keyword()) ::
           {:ok, row()}
@@ -208,14 +177,12 @@ defmodule Arca.PairedClients do
              :no_athanor
              | :conflict
              | :not_owner
-             | :first_method_used
              | :database_error
              | {:invalid, map()}
              | term()}
   # arca:db-raise-ok the insert runs inside `owned/2`, which rescues around its transaction.
   def enroll(%Prima.Actor{athanor_id: athanor_id} = actor, %{user_id: user_id} = attrs, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_list(opts) do
-    first = Keyword.fetch!(opts, :first_method)
     also = Keyword.fetch!(opts, :also)
 
     changeset =
@@ -228,7 +195,7 @@ defmodule Arca.PairedClients do
       Arca.Repo.owned("Arca.PairedClients.enroll", fn ->
         _locked = Arca.DirectoryHeads.lock_person!(user_id)
 
-        with :ok <- first_method(user_id, first),
+        with :ok <- fenced(changeset),
              {:ok, row} <- inserted(changeset),
              {:ok, _also} <- also.(Arca.Data.project(row)) do
           {:ok, row}
@@ -272,17 +239,66 @@ defmodule Arca.PairedClients do
   def enrolled(%Prima.Actor{}, _request_id), do: {:error, :cross_tenant}
 
   @doc """
+  The client of the passkey `attrs.kid` of the person `attrs.user_id` in
+  the actor's athanor, as a sign-in by it records it: the one that stands
+  when there is one, else a new row (`source_kind` `passkey`, its own id
+  as `source_id`, no device key), active and naming the key and the head
+  `attrs.head` the sign-in was verified under. Either way the head is
+  fenced first, under the person's lock (`Arca.DirectoryHeads.fence!/2`),
+  so of two sign-ins by one passkey one writes the row and the other
+  finds it, and a head the cached head moved past records nothing.
+  Answers the row; refused with `:no_athanor`, `{:invalid, errors}`,
+  `:stale_head`, `:not_owner` or `:database_error`.
+  """
+  @spec record_passkey(Prima.Actor.t(), map()) ::
+          {:ok, row()}
+          | {:error, :no_athanor | :stale_head | :not_owner | :database_error | {:invalid, map()}}
+  # arca:db-raise-ok the read and the insert run inside `owned/2`, which rescues around its transaction.
+  def record_passkey(
+        %Prima.Actor{athanor_id: athanor_id} = actor,
+        %{user_id: user_id, kid: kid, head: head}
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
+    id = Prima.UUID7.generate_id("pcl")
+
+    changeset =
+      changeset(
+        id,
+        QueryHelpers.stamp_tenant!(actor, %{
+          user_id: user_id,
+          source_kind: "passkey",
+          source_id: id,
+          kid: kid,
+          head: head
+        })
+      )
+
+    if changeset.valid? do
+      Arca.Repo.owned("Arca.PairedClients.record_passkey", fn ->
+        with :ok <- fenced(changeset) do
+          case standing_passkey(actor, user_id, kid) do
+            nil -> inserted(changeset)
+            row -> {:ok, row}
+          end
+        end
+      end)
+    else
+      {:error, Arca.Data.invalid(changeset)}
+    end
+  end
+
+  def record_passkey(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
+
+  @doc """
   Revoke the row `id` in the actor's athanor, with its device
   certificates, the confirmations it confirmed and the sessions its unlock
-  created, whose token hashes the row answers as `revoked_session_hashes`
-  for the caller to drop from every memo; revoking a revoked row answers
-  it as it is, with none. A passkey's platform holder is refused
-  `:passkey_holder`: it is revoked with its credential
-  (`Arca.Passkeys.revoke/3`).
+  or its sign-ins created, whose token hashes the row answers as
+  `revoked_session_hashes` for the caller to drop from every memo;
+  revoking a revoked row answers it as it is, with none.
   """
   @spec revoke(Prima.Actor.t(), String.t()) ::
-          {:ok, row()}
-          | {:error, :not_found | :passkey_holder | :no_athanor | :database_error}
+          {:ok, revoked()}
+          | {:error, :not_found | :no_athanor | :database_error}
   def revoke(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.PairedClients.revoke", fn ->
@@ -298,11 +314,6 @@ defmodule Arca.PairedClients do
 
           %PairedClient{standing: "revoked"} = row ->
             {:ok, Map.put(row, :revoked_session_hashes, [])}
-
-          # A passkey's platform holder is revoked with its credential
-          # (`Arca.Passkeys.revoke/3`), never apart from it.
-          %PairedClient{source_kind: "passkey"} ->
-            {:error, :passkey_holder}
 
           row ->
             retire(row)
@@ -347,17 +358,13 @@ defmodule Arca.PairedClients do
           session_hashes: [binary()]
         }
   # What a client's revocation takes with it, in the caller's transaction:
-  # its PIN evaluators, the certificates issued to the revoked clients, the
-  # confirmations they confirmed and the sessions their unlock created,
+  # the certificates issued to the revoked clients, the confirmations they
+  # confirmed and the sessions their unlock created,
   # whose token hashes the caller drops from every memo once it commits.
   def retire_dependents!([]), do: %{certificate_ids: [], confirmation_ids: [], session_hashes: []}
 
   # arca:db-raise-ok a transaction step: its callers rescue around it.
   def retire_dependents!(client_ids) do
-    # A revoked client's PIN evaluators go with it, so its identifier
-    # evaluates nothing again (`Arca.DevicePinEvaluators`).
-    _evaluators = Arca.DevicePinEvaluators.delete_clients!(client_ids)
-
     certificates =
       DeviceCertificates.revoke_all(
         from(c in DeviceCertificate, where: c.paired_client_id in ^client_ids)
@@ -374,86 +381,32 @@ defmodule Arca.PairedClients do
   end
 
   @doc false
-  @spec project_passkey!(map()) :: %{session_hashes: [binary()]}
-  # The passkey `passkey` projected as its platform holder, in the caller's
-  # transaction, after the credential's own write and under its person's
-  # lock: one row per credential, in the person's own athanor, with
-  # `holder_kind` `platform`, `source_kind` `passkey`, the credential's id
-  # as `source_id` and as `passkey_id`, a reference that takes the row
-  # with the credential, and no key, so it is listed beside the person's devices
-  # and a passkey sign-in's session names it, and never signs as a device.
-  # Its standing follows the credential's: written `active` when the
-  # credential first stands, moved to `suspended` or `active` with it, and
-  # revoked with it, terminally, with what a client's revocation takes
-  # (`retire_dependents!/1`), whose session hashes the caller drops once it
-  # commits. A pending credential has none yet; a person with no athanor
-  # of their own has none at all.
-  # arca:unscoped-ok one person's row, named by the credential it projects.
-  # arca:db-raise-ok a transaction step: its callers rescue around it.
-  def project_passkey!(%{id: passkey_id, user_id: user_id, state: state}) do
-    existing =
-      from(p in PairedClient,
-        where: p.user_id == ^user_id and p.source_kind == "passkey" and p.source_id == ^passkey_id
-      )
-      |> QueryHelpers.for_update()
-      |> Arca.Repo.one()
+  @spec revoke_bound!([String.t()], String.t() | :all) :: %{
+          client_ids: [String.t()],
+          certificate_ids: [String.t()],
+          confirmation_ids: [String.t()],
+          session_hashes: [binary()]
+        }
+  # Revoke the clients of `user_ids` that are the account key `kid`, or
+  # with `:all` every client that is an account key, with what stands on
+  # them (`retire_dependents!/1`), in the caller's transaction
+  # (`Arca.DirectoryHeads.advance/5`).
+  def revoke_bound!([], _kid),
+    do: %{client_ids: [], certificate_ids: [], confirmation_ids: [], session_hashes: []}
 
-    now = Arca.ServerMetaStorage.now!()
+  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
+  def revoke_bound!(user_ids, kid) when is_list(user_ids) do
+    query =
+      case kid do
+        :all ->
+          from(p in PairedClient, where: p.user_id in ^user_ids and not is_nil(p.kid))
 
-    case {existing, state} do
-      {nil, "active"} ->
-        insert_platform!(passkey_id, user_id, now)
-        %{session_hashes: []}
+        kid when is_binary(kid) ->
+          from(p in PairedClient, where: p.user_id in ^user_ids and p.kid == ^kid)
+      end
 
-      {nil, _not_standing} ->
-        %{session_hashes: []}
-
-      {%PairedClient{standing: "revoked"}, _any} ->
-        %{session_hashes: []}
-
-      {%PairedClient{} = row, "revoked"} ->
-        set_standing!(row, "revoked", now)
-        %{session_hashes: retire_dependents!([row.id]).session_hashes}
-
-      {%PairedClient{} = row, standing} when standing in ["active", "suspended"] ->
-        if row.standing != standing, do: set_standing!(row, standing, now)
-        %{session_hashes: []}
-
-      {%PairedClient{}, "pending"} ->
-        %{session_hashes: []}
-    end
-  end
-
-  defp insert_platform!(passkey_id, user_id, now) do
-    case Arca.Repo.one(
-           from(a in Arca.Schemas.Athanor, where: a.owner_user_id == ^user_id, select: a.id)
-         ) do
-      athanor_id when is_binary(athanor_id) and athanor_id != "" ->
-        Arca.Repo.insert_all(PairedClient, [
-          %{
-            id: Prima.UUID7.generate_id("pcl"),
-            athanor_id: athanor_id,
-            user_id: user_id,
-            source_kind: "passkey",
-            source_id: passkey_id,
-            passkey_id: passkey_id,
-            standing: "active",
-            holder_kind: "platform",
-            display_name: "Passkey",
-            inserted_at: now,
-            updated_at: now
-          }
-        ])
-
-      _none ->
-        :ok
-    end
-  end
-
-  # arca:unscoped-ok one person's row, the platform holder `project_passkey!/1` read locked by its credential.
-  defp set_standing!(row, standing, now) do
-    from(p in PairedClient, where: p.id == ^row.id)
-    |> Arca.Repo.update_all(set: [standing: standing, updated_at: now])
+    ids = revoke_all(query)
+    ids |> retire_dependents!() |> Map.put(:client_ids, ids)
   end
 
   # ---- internals -------------------------------------------------------------
@@ -477,35 +430,32 @@ defmodule Arca.PairedClients do
   # `by_user/2` narrows the query to the person `list/2` required.
   defp person_listed(filters), do: listed(PairedClient, filters)
 
-  # The row read and locked under the actor's athanor and the person
-  # (`reenable/4`): only a suspended one moves, and only once the verifier
-  # admits it; its person's restore closes with it, after the row's lock,
-  # as every re-enabling write orders them: the person, the item, the
-  # restore row, then the kit's.
-  defp reenabled(nil, _verify), do: {:error, :not_found}
-  defp reenabled(%PairedClient{standing: "revoked"}, _verify), do: {:error, :revoked}
-  defp reenabled(%PairedClient{source_kind: "passkey"}, _verify), do: {:error, :passkey_holder}
-
-  # arca:unscoped-ok the row was read and locked under the actor's athanor (`reenable/4`).
-  defp reenabled(%PairedClient{standing: "suspended"} = row, verify) do
-    with :ok <- verified(verify.(Arca.Data.project(row))),
-         {:ok, active} <-
-           row
-           |> Ecto.Changeset.change(standing: "active", updated_at: Arca.ServerMetaStorage.now!())
-           |> Arca.Repo.update() do
-      closed = Arca.SecurityTransitions.close_restore!(active.user_id)
-      {:ok, active |> Arca.Data.project() |> Map.put(:closed_restore_ids, closed)}
-    end
+  # The person's active client in the actor's athanor that is the passkey
+  # `kid`, read under the person's lock its caller holds.
+  defp standing_passkey(actor, user_id, kid) do
+    PairedClient
+    |> QueryHelpers.where_tenant(actor)
+    |> where(
+      [p],
+      p.user_id == ^user_id and p.source_kind == "passkey" and p.kid == ^kid and
+        p.standing == "active"
+    )
+    |> order_by([p], asc: p.inserted_at, asc: p.id)
+    |> limit(1)
+    |> Arca.Repo.one()
   end
 
-  defp reenabled(%PairedClient{}, _verify), do: {:error, :not_suspended}
+  # A client that is an account key names the head it was admitted under,
+  # read under the person's lock, the first of the standing order; a
+  # client that is no key binds none.
+  defp fenced(changeset) do
+    case Ecto.Changeset.get_field(changeset, :head) do
+      nil ->
+        :ok
 
-  defp first_method(user_id, claim) when claim in [:claim, :mark] do
-    case {Arca.PersonIdentities.first_method!(user_id), claim} do
-      {:marked, _claim} -> :ok
-      {:already, :mark} -> :ok
-      {:already, :claim} -> {:error, :first_method_used}
-      {:no_identity, _claim} -> {:error, :no_identity}
+      head ->
+        user_id = Ecto.Changeset.get_field(changeset, :user_id)
+        with {:ok, _identifier} <- Arca.DirectoryHeads.fence!(user_id, head), do: :ok
     end
   end
 
@@ -519,10 +469,6 @@ defmodule Arca.PairedClients do
     end
   end
 
-  defp verified(:ok), do: :ok
-  defp verified({:error, reason}), do: {:error, reason}
-  defp verified(other), do: {:error, other}
-
   defp changeset(id, attrs) do
     id = if is_binary(id) and String.starts_with?(id, "pcl_"), do: id, else: nil
 
@@ -532,6 +478,7 @@ defmodule Arca.PairedClients do
     |> Ecto.Changeset.validate_inclusion(:source_kind, PairedClient.source_kinds())
     |> validate_device_key()
     |> validate_holder()
+    |> validate_key_binding()
     |> Ecto.Changeset.unique_constraint([:athanor_id, :source_kind, :source_id])
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_pkey)
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_id_index)
@@ -555,19 +502,45 @@ defmodule Arca.PairedClients do
     end
   end
 
+  # An account key's client names its kid and the head it was admitted
+  # under, both or neither, a passkey's always, and a device client's kid
+  # is its device key's.
+  defp validate_key_binding(changeset) do
+    kid = Ecto.Changeset.get_field(changeset, :kid)
+    head = Ecto.Changeset.get_field(changeset, :head)
+    device_key = Ecto.Changeset.get_field(changeset, :device_public_key)
+    source_kind = Ecto.Changeset.get_field(changeset, :source_kind)
+
+    cond do
+      is_nil(kid) and is_nil(head) and source_kind == "passkey" ->
+        Ecto.Changeset.add_error(changeset, :kid, "names the passkey's key and head")
+
+      is_nil(kid) and is_nil(head) ->
+        changeset
+
+      not (Prima.Identity.Encoding.digest?(kid) and Prima.Identity.Encoding.digest?(head)) ->
+        Ecto.Changeset.add_error(changeset, :kid, "names the key and the head, both or neither")
+
+      is_binary(device_key) and kid != Prima.Identity.Key.kid(device_key) ->
+        Ecto.Changeset.add_error(changeset, :kid, "is the device key's")
+
+      true ->
+        changeset
+    end
+  end
+
   # What holds a protected device's key, and the name it shows, are a
-  # device client's alone, and only as reported.
+  # device client's alone, and only as its hello reported them
+  # (`Prima.Device`); a passkey's row reports neither.
   defp validate_holder(changeset) do
     changeset =
       changeset
-      # A passkey's platform holder is projected from its credential
-      # (`project_passkey!/1`), never recorded as a device.
-      |> Ecto.Changeset.validate_inclusion(
-        :holder_kind,
-        PairedClient.holder_kinds() -- ["platform"]
-      )
-      |> Ecto.Changeset.validate_length(:display_name, min: 1, max: @max_display_name)
-      |> Ecto.Changeset.validate_format(:display_name, ~r/\A[^\p{Cc}]+\z/u)
+      |> Ecto.Changeset.validate_inclusion(:holder_kind, Prima.Device.holder_kinds())
+      |> Ecto.Changeset.validate_change(:display_name, fn :display_name, name ->
+        if Prima.Device.display_name?(name),
+          do: [],
+          else: [display_name: "is non-empty text of at most 64 bytes"]
+      end)
 
     reported? = Enum.any?([:holder_kind, :display_name], &Ecto.Changeset.get_field(changeset, &1))
 

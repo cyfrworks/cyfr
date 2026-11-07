@@ -3,76 +3,34 @@
 
 defmodule Sanctum.Providers.Pairing do
   @moduledoc """
-  The `pairing` tool: a person's paired clients in the athanor in focus —
-  begin a pairing for the device key the new glass shows, which issues a
-  short-lived invitation for that key alone after a fresh confirmation
-  (`device_pairing`); complete it from the new glass;
-  renew a paired client's certificate; revoke one (`pairing_revocation`);
-  re-enable one a declared restore suspended (`restore_reenable`); and
-  list them.
+  The `pairing` tool: a person's paired clients in the athanor in focus,
+  the devices of their account a hello paired here (`Sanctum.DeviceUnlock`)
+  and the passkeys that signed in here: renew a paired device's
+  certificate; revoke one (`pairing_revocation`); and list them. Every
+  action is a person's, through an interactive surface (`consent:
+  :interactive`); a proof is the field `proof`, which the redaction
+  vocabulary (`Prima.Sanitizer`) keeps out of every log.
 
-  `complete` is `auth: :anonymous`: the glass that
-  sends it holds neither a session nor a certificate, so the single-use
-  invitation carries the person and athanor, and a session cookie the
-  browser still holds never chooses the person. Every other action is a
-  person's, through an interactive surface (`consent: :interactive`).
-
-  The invitation's secret is the field `invitation_secret`, which the
-  redaction vocabulary (`Prima.Sanitizer`) keeps out of every log, in the
-  arguments `complete` takes and in the answer `begin` gives; a proof is
-  the field `proof`, redacted the same way.
-
-  The ceremony is `Sanctum.Pairing`'s. Here each action is read off the
+  The decisions are `Sanctum.Pairing`'s. Here each action is read off the
   wire and answered on it:
 
-    * `begin` takes `key_digest`, the digest of the key the new glass
-      generated and shows (`Prima.Device.key_digest/1`), and answers the
-      invitation's secret (unpadded base64url, for the pairing code), the
-      client id it reserves, the key digest it is for, its expiry, and the
-      `invitation_url` a new glass opens: this home's `/pair` page with the
-      secret in its fragment's `code`, so the page reads it in the browser
-      and no request line carries it. The pairing QR encodes that URL; it
-      is built here and nowhere else.
-    * `complete` carries the device key and its `key_digest`, which must
-      be the digest of that key and the one the invitation names; it
-      answers the `pair` challenge to sign when it carries no
-      proof, and the paired client's id and its first certificate
-      (`Prima.DeviceCert`'s JSON) when it carries the proof over it. For a
-      person whose identity is at another home it carries, with both
-      calls, the `certificate` their home issued for the reserved client,
-      and that certificate is the answer; for anyone else it carries none.
-      Such a person's first call without one is answered the challenge and
-      `certify`, `{audience, athanor, client_id}`: what their home is to
-      certify (`person.certify` there). It carries what the device reports
-      of its holder, `holder_kind` and `display_name`, with both calls: only
-      a device that keeps its key under a local unlock pairs. Asked again after it committed, with
-      the same secret and a fresh proof of the same key, it answers the
-      client it paired and its current certificate.
     * `renew` answers the client's id and its replacement certificate. It
       is reached from the device channel's renewal exchange alone, under
       the renewal context the channel obtains for the client that proved
       its key; any other caller, an ordinary device intent among them, is
       refused.
     * `revoke` answers the client's id and its standing, `revoked`.
-    * `reenable` answers the client's id and standing, `active`,
-      and `recovery_closed`, whether re-enabling it ended the person's
-      recovery from the restore. While the person recovers it is confirmed
-      by a door this home re-authenticates or an emailed code, never by a
-      passkey or a paired device; a recovery kit re-enables through the kit
-      ingress, not here. No certificate is issued: the device reconnects
-      under its own, or renews it through its channel.
-    * `list` answers the person's active paired clients; a protected
-      device's carry what holds its key (`holder_kind`), the name it shows
-      (`display_name`), whether its key may sync (`synced`, a passkey's
-      platform holder WebAuthn registered backup eligible; the passkey
-      revoked wherever it synced) and what it last reported of its disks within the
+    * `list` answers the person's active paired clients, each with the
+      credential it stands on (`source`: `device_cert`, or `passkey` for a
+      passkey that signed in here), what holds a device's key
+      (`holder_kind`) and the name it shows (`display_name`) where it
+      reported them, and what it last reported of its disks within the
       last minute (`storage`: `root` and `data`, each `encrypted`,
       `unencrypted` or `unknown`), information a person reads and never
       an input to a decision.
   """
 
   alias Prima.{Arg, DeviceCert, Operation}
-  alias Prima.DeviceCert.Challenge
   alias Prima.Identity.Encoding
   alias Sanctum.{Context, Pairing}
 
@@ -84,61 +42,13 @@ defmodule Sanctum.Providers.Pairing do
       [
         Operation.new(
           "pairing",
-          "begin",
-          "Begin pairing a device",
-          [
-            key_digest(
-              "begin: the code the new device shows, the digest of the key it generated; only that key completes the pairing"
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "pairing",
-          "complete",
-          "Complete pairing from the new device",
-          [
-            Arg.new("invitation_secret", :string,
-              required: true,
-              description: "complete: the invitation's secret, from the pairing code's fragment"
-            ),
-            Arg.new("device_key", :string,
-              required: true,
-              description: "The device's public key, unpadded base64url (complete, renew)"
-            ),
-            key_digest("complete: the digest of the device key, the code the device showed"),
-            proof(
-              "complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign",
-              false
-            ),
-            Arg.new("certificate", :json,
-              description:
-                "complete: for a person whose identity is at another CYFR, the device certificate their own CYFR issued for this client, device key, CYFR and athanor; absent for a person whose keys are here"
-            ),
-            Arg.new("holder_kind", :string,
-              description:
-                "complete: what holds the device's key under its local unlock, chip or software, given with display_name"
-            ),
-            Arg.new("display_name", :string,
-              description:
-                "complete: the name the device shows, at most 64 bytes, given with holder_kind"
-            )
-          ],
-          auth: :anonymous,
-          kind: :write,
-          planes: [:external]
-        ),
-        Operation.new(
-          "pairing",
           "renew",
           "Renew a paired device's certificate",
           [
             client_id(),
             Arg.new("device_key", :string,
               required: true,
-              description: "The device's public key, unpadded base64url (complete, renew)"
+              description: "renew: the device's public key, unpadded base64url"
             ),
             proof("renew: the device key's signature over the renew challenge", true)
           ],
@@ -156,31 +66,19 @@ defmodule Sanctum.Providers.Pairing do
           kind: :read,
           planes: [:external],
           consent: :interactive
-        ),
-        Operation.new(
-          "pairing",
-          "reenable",
-          "Re-enable a paired device suspended by a restore",
-          [client_id()],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
         )
       ],
       description:
-        "Your paired devices in the athanor in focus: begin pairing a new device, which shows a code the device completes with; renew or revoke a paired device; re-enable one a restore from a backup suspended; list them.",
+        "Your paired devices in the athanor in focus: renew or revoke a paired device, and list them.",
       title: "Paired Devices"
     )
   end
-
-  defp key_digest(description),
-    do: Arg.new("key_digest", :string, required: true, description: description)
 
   defp client_id,
     do:
       Arg.new("client_id", :string,
         required: true,
-        description: "The paired client (pcl_…) (renew, revoke, reenable)"
+        description: "The paired client (pcl_…) (renew, revoke)"
       )
 
   # A `Prima.DeviceCert.Proof` as JSON: the challenge's fields and the
@@ -191,7 +89,7 @@ defmodule Sanctum.Providers.Pairing do
       {:record,
        [
          Arg.new("protocol", :string, required: true),
-         Arg.new("purpose", :string, required: true, enum: ["connect", "renew", "pair"]),
+         Arg.new("purpose", :string, required: true, enum: ["renew"]),
          Arg.new("home", :string, required: true),
          Arg.new("athanor", :string, required: true),
          Arg.new("client_id", :string, required: true),
@@ -203,44 +101,6 @@ defmodule Sanctum.Providers.Pairing do
       required: required,
       description: description
     )
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "begin"} = args) do
-    case Pairing.begin(ctx, Map.delete(args, "action")) do
-      {:ok, invitation} ->
-        {:ok,
-         %{
-           invitation_secret: Encoding.b64(invitation.invitation_secret),
-           invitation_url: invitation_url(invitation.invitation_secret),
-           client_id: invitation.client_id,
-           key_digest: invitation.key_digest,
-           expires_at: Prima.Time.iso8601(invitation.expires_at)
-         }}
-
-      {:error, reason} ->
-        {:error, refusal(reason)}
-    end
-  end
-
-  # The glass's submission is read as the device protocol reads a
-  # `pair_request` (`Prima.Device`), so the secret and the key reach the
-  # ceremony as the raw bytes their codecs decode, or not at all.
-  def handle(%Context{} = ctx, %{"action" => "complete"} = args) do
-    with {:ok, secret, device_key} <- pair_request(args),
-         {:ok, proof} <- optional_proof(args),
-         {:ok, certificate} <- optional_certificate(args),
-         {:ok, holder} <- holder(args),
-         {:ok, answer} <-
-           Pairing.complete(ctx, secret, %{
-             device_key: device_key,
-             proof: proof,
-             certificate: certificate,
-             holder: holder
-           }) do
-      {:ok, completed(answer)}
-    else
-      {:error, reason} -> {:error, refusal(reason)}
-    end
   end
 
   def handle(%Context{} = ctx, %{"action" => "renew"} = args) do
@@ -265,17 +125,6 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "reenable", "client_id" => client_id})
-      when is_binary(client_id) do
-    case Pairing.reenable(ctx, client_id, :confirmation) do
-      {:ok, %{client: client, recovery_closed: closed?}} ->
-        {:ok, Map.put(client, :recovery_closed, closed?)}
-
-      {:error, reason} ->
-        {:error, refusal(reason)}
-    end
-  end
-
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     case Pairing.list(ctx) do
       {:ok, clients} -> {:ok, %{clients: Enum.map(clients, &listed/1)}}
@@ -283,82 +132,11 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
-  def handle(_ctx, %{"action" => action}) when action in ~w(revoke reenable),
+  def handle(_ctx, %{"action" => "revoke"}),
     do: {:error, {:invalid_argument, "Missing required argument: client_id"}}
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "pairing.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
-
-  defp pair_request(args) do
-    message = %{
-      "protocol" => Prima.Device.protocol(),
-      "type" => "pair_request",
-      "invitation_secret" => args["invitation_secret"],
-      "device_key" => args["device_key"],
-      "key_digest" => args["key_digest"]
-    }
-
-    case Prima.Device.decode(message, :glass) do
-      {:ok, {:pair_request, %{invitation_secret: secret, device_key: device_key}}} ->
-        {:ok, secret, device_key}
-
-      {:error, _malformed} ->
-        {:error,
-         {:invalid_argument,
-          "The pairing code, the device key or its digest is not one a pairing takes: unpadded " <>
-            "base64url of 16, 32 and 32 bytes, the digest that key's"}}
-    end
-  end
-
-  # The one spelling of the link a pairing code opens: this home's `/pair`
-  # page, the secret in the fragment, which a browser never sends.
-  defp invitation_url(secret),
-    do: Sanctum.Person.home() <> "/pair#code=" <> Encoding.b64(secret)
-
-  defp optional_proof(%{"proof" => proof}) when is_map(proof), do: {:ok, proof}
-  defp optional_proof(_args), do: {:ok, nil}
-
-  # A remote person's home's certificate, read as the device protocol reads
-  # one (`Prima.DeviceCert`), or none.
-  # The device's holder, both fields: a pairing without them is a browser's
-  # key, which `Sanctum.Pairing.complete/3` refuses.
-  defp holder(args) do
-    case {args["holder_kind"], args["display_name"]} do
-      {nil, nil} ->
-        {:error,
-         {:invalid_argument,
-          "A pairing link is for a command line or a box's screen, which reports holder_kind " <>
-            "and display_name; a browser signs in with a passkey instead"}}
-
-      {kind, name} ->
-        case Sanctum.DeviceUnlock.holder(kind, name) do
-          {:ok, holder} ->
-            {:ok, holder}
-
-          :error ->
-            {:error,
-             {:invalid_argument,
-              "holder_kind (chip or software) and display_name (at most 64 bytes) come together"}}
-        end
-    end
-  end
-
-  defp optional_certificate(%{"certificate" => certificate}) when is_map(certificate) do
-    case DeviceCert.decode(certificate) do
-      {:ok, decoded} ->
-        {:ok, decoded}
-
-      {:error, _malformed} ->
-        {:error, {:invalid_argument, "The certificate is not a device certificate a CYFR signs"}}
-    end
-  end
-
-  defp optional_certificate(%{"certificate" => nil}), do: {:ok, nil}
-
-  defp optional_certificate(%{"certificate" => _malformed}),
-    do: {:error, {:invalid_argument, "The certificate is a device certificate, as JSON"}}
-
-  defp optional_certificate(_args), do: {:ok, nil}
 
   defp device_key(value) do
     case Encoding.unb64(value, Encoding.key_bytes()) do
@@ -370,11 +148,6 @@ defmodule Sanctum.Providers.Pairing do
          {:invalid_argument, "The device key is not unpadded base64url of a 32-byte public key"}}
     end
   end
-
-  defp completed(%{challenge: challenge, certify: certify}),
-    do: %{challenge: Challenge.encode(challenge), certify: certify}
-
-  defp completed(%{challenge: challenge}), do: %{challenge: Challenge.encode(challenge)}
 
   defp completed(%{client_id: client_id, certificate: certificate}),
     do: %{client_id: client_id, certificate: DeviceCert.encode(certificate)}
@@ -388,7 +161,6 @@ defmodule Sanctum.Providers.Pairing do
       current: client.current,
       holder_kind: client.holder_kind,
       display_name: client.display_name,
-      synced: client.synced,
       storage: storage(client.storage)
     }
   end
@@ -400,79 +172,10 @@ defmodule Sanctum.Providers.Pairing do
   # renders (`Prima.Refusal`), each with the sentence its person reads; the
   # vocabulary's and the stores' own reasons (a confirmation signal, a
   # rate limit, a standing or tenancy refusal) pass as they are.
-  defp refusal(:invalid_invitation),
-    do:
-      refused(
-        :unauthenticated,
-        :invalid_invitation,
-        "This pairing code is not valid: it has expired or was already used. Show a new one."
-      )
-
-  defp refusal(:key_mismatch),
-    do:
-      refused(
-        :forbidden,
-        :key_mismatch,
-        "This device is not the one the pairing was approved for: approve the code this device shows"
-      )
-
-  defp refusal(:confirmer_revoked),
-    do:
-      refused(
-        :forbidden,
-        :confirmer_revoked,
-        "The passkey or device that approved this pairing no longer stands here: approve it again"
-      )
-
   defp refusal(:proof_refused),
     do: refused(:unauthenticated, :proof_refused, "The device's proof of its key was refused")
 
-  defp refusal(:wrong_audience),
-    do: refused(:invalid_argument, :wrong_audience, "This pairing code is for another CYFR")
-
-  defp refusal(:remote_identity_unavailable),
-    do:
-      refused(
-        :forbidden,
-        :remote_identity_unavailable,
-        "A device of a person whose identity is at another CYFR renews its certificate " <>
-          "there, not here"
-      )
-
-  defp refusal(:holder_required),
-    do:
-      refused(
-        :invalid_argument,
-        :holder_required,
-        "A pairing link is for a command line or a box's screen, which keeps its key under its " <>
-          "own PIN or passphrase; a browser signs in with a passkey instead"
-      )
-
-  defp refusal(:certificate_required),
-    do:
-      refused(
-        :invalid_argument,
-        :certificate_required,
-        "This pairing is for a person whose identity is at another CYFR: bring the certificate " <>
-          "their own CYFR issued for this device"
-      )
-
-  defp refusal(:certificate_unexpected),
-    do:
-      refused(
-        :invalid_argument,
-        :certificate_unexpected,
-        "This CYFR certifies this person's devices itself; complete the pairing without a certificate"
-      )
-
-  defp refusal(:certificate_refused),
-    do:
-      refused(
-        :unauthenticated,
-        :certificate_refused,
-        "The certificate was not issued by their own CYFR for this device, this CYFR and this athanor " <>
-          "under their current key; certify the device there again"
-      )
+  defp refusal(:stale_head), do: Prima.Refusal.classify(:stale_head)
 
   defp refusal(:revoked),
     do: refused(:forbidden, :revoked, "This device's pairing was revoked; pair it again")
@@ -498,9 +201,6 @@ defmodule Sanctum.Providers.Pairing do
 
   defp refusal({:rate_limited, retry_after_ms}) when is_integer(retry_after_ms),
     do: {:rate_limited, div(retry_after_ms + 999, 1_000)}
-
-  defp refusal({:invalid, _errors}),
-    do: {:invalid_argument, "The pairing could not be recorded as given"}
 
   defp refusal(reason), do: reason
 

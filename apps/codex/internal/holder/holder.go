@@ -7,7 +7,10 @@
 // Argon2id (the software holder). The home server sees the public key and
 // never the PIN, the passphrase or anything that verifies either.
 //
-// A record holds the protected seed and nothing that opens it. Open asks the
+// A machine keeps one record: its key serves every CYFR the person signs
+// in to, so the record names no CYFR, only the account whose log lists the
+// key once it does. A record holds the protected seed and nothing that
+// opens it. Open asks the
 // chip, or runs Argon2id, on every call; no opened key or authorization
 // outlives the Key it returns. The package keeps no copy of a PIN or
 // passphrase; callers erase their own buffers.
@@ -21,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,8 +42,9 @@ const (
 
 // recordVersion is the only record format this package reads and writes. The
 // chip holder's parent and sealed-object templates and the software holder's
-// associated-data encoding are part of it.
-const recordVersion = 1
+// associated-data encoding are part of it. Version 1 records were bound to
+// one CYFR and are refused.
+const recordVersion = 2
 
 var (
 	// ErrWrongSecret means the PIN or passphrase does not open the record.
@@ -56,6 +61,12 @@ var (
 	// ErrSecretShape means the secret is not a six-digit PIN or not a
 	// six-word passphrase, whichever the holder needs.
 	ErrSecretShape = errors.New("the PIN or passphrase has the wrong shape")
+	// ErrKeyExists means a first key was made where this machine keeps
+	// one already: another first use made it first.
+	ErrKeyExists = errors.New("this machine keeps a key there already")
+	// ErrOtherKey means a save found a record of another key at its path,
+	// which it never replaces.
+	ErrOtherKey = errors.New("the key record there holds another key")
 )
 
 // ChipRefusedError means a TPM is present but the chip holder cannot rely on
@@ -73,26 +84,19 @@ func (e *ChipRefusedError) Error() string {
 func (e *ChipRefusedError) Is(target error) bool { return target == ErrNoChip }
 
 // Record is a device's key holder as it is stored on disk: the protected
-// seed, its public key and what enrollment fills in later. A chip record
-// sets Chip alone; a software record sets Software (a passphrase) or PIN
-// (a PIN its home evaluates), never both.
+// seed, its public key and, once the account's log lists the key, that
+// account's identifier and the directory its log lives at. A chip record
+// sets Chip alone; a software record sets Software alone.
 type Record struct {
-	Version   int    `json:"version"`
-	Kind      Kind   `json:"kind"`
-	Home      string `json:"home"`
-	RequestID string `json:"request_id"`
-	Admission string `json:"admission"`
+	Version int  `json:"version"`
+	Kind    Kind `json:"kind"`
 	// PublicKey is the raw 32-byte Ed25519 public key; on disk it is an
 	// unpadded base64url string.
-	PublicKey []byte        `json:"public_key"`
-	Chip      *ChipBlob     `json:"chip,omitempty"`
-	Software  *SoftwareBlob `json:"software,omitempty"`
-	// PIN is a software record's seed under a six-digit PIN its home
-	// evaluates (pin.go), in place of Software.
-	PIN         *PINBlob        `json:"pin,omitempty"`
-	ClientID    string          `json:"client_id,omitempty"`
-	Athanor     string          `json:"athanor,omitempty"`
-	Certificate json.RawMessage `json:"certificate,omitempty"`
+	PublicKey  []byte        `json:"public_key"`
+	Chip       *ChipBlob     `json:"chip,omitempty"`
+	Software   *SoftwareBlob `json:"software,omitempty"`
+	Identifier string        `json:"identifier,omitempty"`
+	Directory  string        `json:"directory,omitempty"`
 }
 
 // ChipBlob is a seed sealed by the TPM: the sealed object's TPM2B_PUBLIC and
@@ -144,11 +148,11 @@ func (r *Record) check() error {
 	}
 	switch r.Kind {
 	case KindChip:
-		if r.Chip == nil || r.Software != nil || r.PIN != nil || len(r.Chip.Parent) == 0 {
+		if r.Chip == nil || r.Software != nil || len(r.Chip.Parent) == 0 {
 			return errors.New("a chip key record must carry the chip's blob and no other")
 		}
 	case KindSoftware:
-		if (r.Software == nil) == (r.PIN == nil) || r.Chip != nil {
+		if r.Software == nil || r.Chip != nil {
 			return errors.New("a software key record must carry its encrypted blob and no other")
 		}
 	default:
@@ -177,33 +181,71 @@ func Load(path string) (*Record, error) {
 	return &r, nil
 }
 
-// Save replaces the record at path in one step: it writes a private (0600)
-// temporary file in the same directory, flushes it, renames it over path and
-// flushes the directory, so a crash leaves either the old record or the new
-// one.
-func (r *Record) Save(path string) error {
-	if err := r.check(); err != nil {
+// Create writes the record at path only where no record is: the first
+// key a machine makes is the one it keeps, however many first uses race.
+// It writes a private (0600) temporary file in the same directory, flushes
+// it, and links it at path, which fails when path exists: the first writer
+// wins whole, and a later one is answered ErrKeyExists, its file removed.
+func (r *Record) Create(path string) error {
+	tmp, err := r.temp(path)
+	if err != nil {
 		return err
+	}
+	defer os.Remove(tmp)
+	if err := os.Link(tmp, path); errors.Is(err, fs.ErrExist) {
+		return ErrKeyExists
+	} else if err != nil {
+		return fmt.Errorf("make the key record %s: %w", path, err)
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+// Save replaces the record at path in one step, keeping its key: a record
+// of another key there is never replaced (ErrOtherKey), and neither is a
+// file that is no record this package reads. It writes a private (0600)
+// temporary file in the same directory, flushes it, renames it over path
+// and flushes the directory, so a crash leaves either the old record or
+// the new one.
+func (r *Record) Save(path string) error {
+	held, err := Load(path)
+	switch {
+	case err == nil && !bytes.Equal(held.PublicKey, r.PublicKey):
+		return ErrOtherKey
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("save the key record %s over what is there: %w", path, err)
+	}
+	tmp, err := r.temp(path)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("save the key record %s: %w", path, err)
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+// temp writes the record to a private, flushed temporary file beside path
+// and answers its name.
+func (r *Record) temp(path string) (string, error) {
+	if err := r.check(); err != nil {
+		return "", err
 	}
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	dir := filepath.Dir(path)
 	// CreateTemp makes the file 0600.
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
-		return fmt.Errorf("save the key record %s: %w", path, err)
+		return "", fmt.Errorf("save the key record %s: %w", path, err)
 	}
-	defer os.Remove(tmp.Name())
 	_, err = tmp.Write(data)
 	if err = errors.Join(err, tmp.Sync(), tmp.Close()); err != nil {
-		return fmt.Errorf("save the key record %s: %w", path, err)
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("save the key record %s: %w", path, err)
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("save the key record %s: %w", path, err)
-	}
-	return syncDir(dir)
+	return tmp.Name(), nil
 }
 
 // syncDir makes a rename in dir durable. Windows cannot flush a directory
@@ -238,7 +280,7 @@ func ChipPresent() bool { return chip != nil && chip.present() }
 
 // NewChip creates a fresh key and seals its seed in the TPM under pin. A
 // device without a usable chip reports ErrNoChip or a *ChipRefusedError.
-func NewChip(home, requestID, admission string, pin []byte) (*Record, error) {
+func NewChip(pin []byte) (*Record, error) {
 	if err := CheckPIN(pin); err != nil {
 		return nil, err
 	}
@@ -254,13 +296,12 @@ func NewChip(home, requestID, admission string, pin []byte) (*Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Record{Version: recordVersion, Kind: KindChip, Home: home, RequestID: requestID,
-		Admission: admission, PublicKey: pub, Chip: blob}, nil
+	return &Record{Version: recordVersion, Kind: KindChip, PublicKey: pub, Chip: blob}, nil
 }
 
 // NewSoftware creates a fresh key and encrypts its seed under passphrase,
 // which must pass CheckPassphrase.
-func NewSoftware(home, requestID, admission string, passphrase []byte) (*Record, error) {
+func NewSoftware(passphrase []byte) (*Record, error) {
 	if err := CheckPassphrase(passphrase); err != nil {
 		return nil, err
 	}
@@ -269,8 +310,7 @@ func NewSoftware(home, requestID, admission string, passphrase []byte) (*Record,
 		return nil, err
 	}
 	defer clear(seed)
-	r := &Record{Version: recordVersion, Kind: KindSoftware, Home: home, RequestID: requestID,
-		Admission: admission, PublicKey: pub}
+	r := &Record{Version: recordVersion, Kind: KindSoftware, PublicKey: pub}
 	if r.Software, err = sealSoftware(seed, passphrase, r.aad()); err != nil {
 		return nil, err
 	}
@@ -293,7 +333,6 @@ func newSeed() (seed, pub []byte, err error) {
 // Open unseals or decrypts the seed with secret, a PIN for a chip record and
 // a passphrase for a software record, and returns the key once its public
 // key matches the record's. Every call goes back to the chip or to Argon2id.
-// A record under a PIN its home evaluates opens through OpenPIN alone.
 func (r *Record) Open(secret []byte) (*Key, error) {
 	if err := r.check(); err != nil {
 		return nil, err
@@ -309,9 +348,6 @@ func (r *Record) Open(secret []byte) (*Key, error) {
 		}
 		seed, err = chip.unseal(r.Chip, secret)
 	} else {
-		if r.PIN != nil {
-			return nil, ErrNeedsHome
-		}
 		if err := CheckPassphrase(secret); err != nil {
 			return nil, err
 		}

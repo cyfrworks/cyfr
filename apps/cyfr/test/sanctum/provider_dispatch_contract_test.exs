@@ -14,13 +14,15 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   alias Sanctum.Provider
 
-  @tool_names ~w(session athanor shared_thread invitation door oauth key tincture_visibility
-                  webhook vault profile person pairing pin passkey confirmation share)
+  @tool_names ~w(session athanor shared_thread invitation door directory oauth key
+                  tincture_visibility webhook vault profile pairing passkey
+                  confirmation share)
 
   @action_enums %{
     "session" => [
       "logout",
       "whoami",
+      "name",
       "unlock",
       "lock",
       "read_resource"
@@ -45,6 +47,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     ],
     "invitation" => ["create", "revoke", "list"],
     "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],
+    "directory" => ["tombstone"],
     "oauth" => ["set_client", "list", "delete_client"],
     "key" => ["create", "get", "list", "revoke", "rotate", "reenable"],
     "tincture_visibility" => ["get"],
@@ -62,28 +65,9 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "delete"
     ],
     "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "grants", "revoke"],
-    "person" => [
-      "status",
-      "rotate",
-      "recovery_code",
-      "recovery_code_saved",
-      "link_door",
-      "unlink_door",
-      "recovery_code_add",
-      "carry_begin",
-      "carry_complete",
-      "carry_cancel",
-      "carry_list",
-      "certify",
-      "close_recovery",
-      "renew_certificate",
-      "assert",
-      "assert_confirmation"
-    ],
-    "pairing" => ["begin", "complete", "renew", "revoke", "list", "reenable"],
-    "pin" => ["enroll"],
-    "passkey" => ["register", "list", "revoke", "reenable", "recover_admin"],
-    "confirmation" => ["confirm", "reauth", "pending", "cancel"],
+    "pairing" => ["renew", "revoke", "list"],
+    "passkey" => ["list", "revoke"],
+    "confirmation" => ["request", "confirm", "pending", "cancel"],
     "share" => ["create", "list", "set_audience", "set_caps", "revoke", "usage", "offered"]
   }
 
@@ -93,6 +77,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "shared_thread" => "Unknown action: shared_thread.___no_such_action___",
     "invitation" => "Unknown action: invitation.___no_such_action___",
     "door" => "Unknown action: door.___no_such_action___",
+    "directory" => "Unknown action: directory.___no_such_action___",
     "oauth" => "Invalid oauth action. Use: set_client, list, or delete_client",
     "key" => "Invalid key action. Use: create, get, list, revoke, rotate, or reenable",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
@@ -102,9 +87,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "Invalid vault action. Use: list, status, set_default, create, rename, rotate, rebind, authorize, revoke, or delete",
     "profile" =>
       "Invalid profile action. Use: plan, preview, commit, grant, publish, list, grants, or revoke",
-    "person" => "Unknown action: person.___no_such_action___",
     "pairing" => "Unknown action: pairing.___no_such_action___",
-    "pin" => "Unknown action: pin.___no_such_action___",
     "passkey" => "Unknown action: passkey.___no_such_action___",
     "confirmation" => "Unknown action: confirmation.___no_such_action___",
     "share" =>
@@ -112,7 +95,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 17 tools, in order" do
+    test "exactly these 16 tools, in order" do
       assert Enum.map(Provider.tools(), & &1.name) == @tool_names
     end
 

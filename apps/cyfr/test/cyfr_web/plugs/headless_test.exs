@@ -19,7 +19,7 @@ defmodule CyfrWeb.Plugs.HeadlessTest do
           "/",
           "/login",
           "/a",
-          "/auth/github",
+          "/auth/company/callback",
           # a chat attachment is a page surface too: its bytes are for a
           # member reading the thread in a browser
           "/a/home/attachments/msg_1/file.png"

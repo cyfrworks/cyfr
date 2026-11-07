@@ -66,6 +66,69 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest do
     assert ScrubTinctureCredentials.redact_path(path) =~ "/_s/[REDACTED]/"
   end
 
+  # The identity directory, the handle registry beside it and the account
+  # pages: a path is named by its route pattern, and a path under one of
+  # their prefixes that no route matches by the prefix alone.
+  @person "per_" <> String.duplicate("ab", 32)
+
+  test "a directory path is named by its route, and an unmatched one by its prefix alone" do
+    for {path, named} <- [
+          {"/directory/v1/register", "/directory/v1/register"},
+          {"/directory/v1/#{@person}", "/directory/v1/:identifier"},
+          {"/directory/v1//#{@person}/", "/directory/v1/:identifier"},
+          {"/directory/v1/#{@person}/from/" <> String.duplicate("cd", 32),
+           "/directory/v1/:identifier/from/:hash"},
+          {"/directory/v1/#{@person}/append", "/directory/v1/:identifier/append"},
+          {"/%64irectory/v1/#{@person}", "/directory/v1/:identifier"},
+          {"/directory/v1/unmatched/#{@person}", "/directory/[REDACTED]"},
+          {"/directory/#{@person}", "/directory/[REDACTED]"},
+          {"/v1/handles/mira", "/v1/handles/:handle"},
+          {"/v1/handles/mira/more", "/v1/handles/[REDACTED]"},
+          {"/v1/namespaces/personal/claim", "/v1/namespaces/personal/claim"},
+          {"/v1/namespaces/personal/claim/mira", "/v1/namespaces/personal/claim/[REDACTED]"},
+          {"/account/sign", "/account/:name"},
+          {"/account/sign/#{@person}", "/account/[REDACTED]"}
+        ] do
+      conn = run(path)
+      assert conn.request_path == named, path
+      # Routing still reads every segment.
+      assert conn.path_info == String.split(path, "/", trim: true), path
+    end
+
+    for path <- ["/v1/namespaces/mira", "/accounts/x", "/directoryx/y"] do
+      assert run(path).request_path == path
+    end
+  end
+
+  test "every route under a directory prefix is named by its own pattern and logs no dispatch" do
+    prefixes = ["/directory/", "/v1/handles/", "/v1/namespaces/personal/claim", "/account/"]
+
+    routes =
+      for %{path: path, verb: verb} <- Phoenix.Router.routes(CyfrWeb.Router),
+          String.starts_with?(path, prefixes),
+          do: {verb, path}
+
+    assert length(routes) == 7
+
+    for {verb, route} <- routes do
+      concrete =
+        route
+        |> String.split("/")
+        |> Enum.map_join("/", fn
+          ":" <> param -> "canary-" <> param
+          segment -> segment
+        end)
+
+      assert ScrubTinctureCredentials.redact_path(concrete) == route, route
+
+      method = verb |> Atom.to_string() |> String.upcase()
+      segments = String.split(concrete, "/", trim: true)
+
+      assert %{log: false} = Phoenix.Router.route_info(CyfrWeb.Router, method, segments, nil),
+             route
+    end
+  end
+
   # A value no request path may carry once the plug has run.
   @canary "c4n4ryP4geCredential0123456789_-"
   @frame "frm_8f3c2a1b9d"

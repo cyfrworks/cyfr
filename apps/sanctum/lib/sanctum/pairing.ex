@@ -3,168 +3,46 @@
 
 defmodule Sanctum.Pairing do
   @moduledoc """
-  The pairing ceremony, which changes need a fresh confirmation, and which
-  clients can give one.
+  The devices connected here, which changes need a fresh confirmation,
+  and which clients can give one.
 
   Three facts stay apart: who a person is, established by their session;
   which devices they have connected; and whether a change needs a fresh
   confirmation. None of them is a rank, and the rule is the same for every
   person: members stay equals.
 
-  ## The ceremony
+  ## The devices connected here
 
-    * The new glass generates its device key first, before any
-      invitation exists, and shows the key's digest
-      (`Prima.Device.key_digest/1`), as the code the person carries to a
-      client already theirs.
-    * `begin/2` — a person, under their session in the athanor in focus,
-      opens a pairing invitation for that digest: a 128-bit random secret,
-      stored only as its hash (`Arca.PairingInvitations`), for this home,
-      alive five minutes, reserving the client id the device it pairs
-      will hold, and naming the one device key that may complete it. It
-      is a sensitive change (`device_pairing`): a device paired from a
-      stolen session would outlive the session, so the confirmation is
-      asked for exactly that key digest before anything is written and
-      consumed in the transaction that opens the invitation, its preview
-      names the digest, and the invitation records which passkey or
-      paired client confirmed it (below).
-    * `complete/3` — the new glass, holding neither a session nor a
-      certificate of this home's, presents the secret and its device
-      public key, which must be the key the invitation names, and is
-      answered a `pair` challenge; it signs the
-      challenge with its device key and presents the proof, and the home
-      records the paired client and issues its first certificate, or, for
-      a remote person, records the one their own home issued (below).
-      A remote person's glass that brings no certificate is answered the
-      challenge with what their home must certify (`certify`), and its
-      proof is refused until it brings one.
-      The invitation names the person
-      and athanor, and nothing about the caller does: a session cookie
-      the browser still holds never chooses the person. The person's
-      standing and athanor are locked and checked, the invitation rechecked
-      and consumed, the client recorded and the certificate issued and
-      recorded, in one transaction (`Arca.PairingInvitations.consume/5`),
-      so a closed invitation never reopens and a person denied or gone
-      from the athanor is paired nothing. In that transaction, under the
-      invitation's lock and before the certificate is signed, the
-      presented key's digest must be the invitation's and the passkey or
-      paired client that confirmed it must still stand; any other key,
-      one whose own proof is valid included, pairs nothing.
+  A device of a person's account comes here by its hello
+  (`Sanctum.DeviceUnlock`), which pairs it as a paired client that is a
+  key of the account (`kid`) and issues its first certificate under this
+  CYFR's installation key (`Sanctum.DeviceCerts`).
+
     * `renew/2` — a paired device's replacement certificate, through its
       device channel's renewal exchange alone: after the channel verified
       a fresh `renew` challenge it issued and holds against the key the
       paired-client row stores (`Sanctum.DeviceCerts.verify_connect/3`),
       with the proof consumed once, and only while the client and its
-      person stand; a revoked pairing is never revived.
+      person stand; a revoked client is never revived. The certificate is
+      issued under the account head this CYFR holds now, under the
+      issuance fence.
     * `revoke/2` — a person ends one of their paired clients, with its
       certificates and the confirmations it confirmed, in one transaction
       (`Arca.PairedClients.revoke/2`). A sensitive change
       (`pairing_revocation`).
     * `list/1` — the person's paired clients in the athanor in focus, a
-      protected device's with its reported holder, name and storage
+      protected device's with what it reports of its disks
       (`Sanctum.DeviceUnlock.storage/2`).
-    * `reenable/3` — after a declared restore suspended every paired
-      client, the person makes one active again (`:restore_reenable`):
-      while their restore is open, on a confirmation a door this home
-      re-authenticates or an emailed code gave (`restore_confirmed/1`), or
-      with their recovery kit (`kit_confirmed/2`); the re-enabling closes
-      their restore. No certificate is issued here: the glass
-      reconnects under its certificate while it is unexpired, or renews
-      through its channel (`renew/2`), which an active client is admitted
-      to again.
 
-  A local person's certificate is signed by their live key at this home
-  (`Sanctum.Person.issue_device_cert/4`) with a `local` subject, whose
-  issuer and audience are both this home. Local pairing reads no
-  directory and needs no identifier.
+  ## After a declared restore
 
-  ## Pairing a remote person's device
-
-  This home cannot sign for a person whose keys are at another home. Their
-  invitation reserves the client id as any does. A first call with no
-  certificate is answered, beside the `pair` challenge, `certify:
-  %{audience, athanor, client_id}`: this home, the invitation's athanor
-  and the reserved client id, which the invitation's bearer may know and
-  the glass takes to the person's own home. That home certifies that id,
-  the device key, this home and the athanor (`person.certify`, after a
-  fresh confirmation there), and the glass presents that certificate with
-  its completion (`complete/3`'s `:certificate`). Here the person's head is read fresh from their
-  directory, and the certificate must be signed by its current live key,
-  under its current `key_epoch`, for exactly the person's identifier, the
-  reserved client id, the submitted device key, this home as its audience
-  and the invitation's athanor, unexpired; the glass's proof over the
-  `pair` challenge shows it holds that device key. Then the client is
-  recorded with that certificate, bound to the epoch under the person's
-  lock, in the invitation's one transaction. A certificate offered for a
-  local person's invitation, or a proof with none for a remote person's,
-  is refused. A remote certificate is not renewed here: the glass renews
-  it at the person's own home by a proof of its device key
-  (`person.renew_certificate`), or is certified there again.
-
-  A completion is counted against the verification bounds
-  (`Sanctum.DeviceCerts`, its module doc): the source address's window
-  is read first, counting nothing. A secret that names a pending
-  invitation makes the attempt that invitation's person's, counted
-  against their own 20 a minute before anything more is read, and never
-  against the address or the installation. Any other is no one's: it is
-  counted against the address (20 a minute) and the installation (200 a
-  minute) and refused. So a flood of guessed codes, from any number of
-  addresses, leaves the invitation's bearer able to complete.
-
-  ## Adding a method or a device once one exists
-
-  Four changes add a way to act as the person here: pairing a device
-  (`device_pairing`, `begin/2` and a remote certification,
-  `Sanctum.RemoteCertification`), registering a passkey
-  (`passkey_registration`, `Sanctum.Passkeys.register/2`), linking a
-  door (`sign_in_methods`, `Sanctum.SignIn.link_door/3`) and giving a
-  remote device a PIN its home evaluates (`device_pin`,
-  `Sanctum.DevicePin.enroll/1`). Once the person
-  holds, or ever held, a passkey or a paired device here, each needs a
-  confirmation attributed to one of them: a passkey assertion
-  (`confirmed_passkey_id`), or a confirmation given on a standing paired
-  client (`confirmed_client_id`), whatever proof that client gave, or, for
-  a person whose keys are at another home, a confirmation that home
-  certified after its own passkey or device gave it (`home`,
-  `Sanctum.RemoteCertification.verify_confirmation/3`), which needs no
-  device already paired here. A fresh
-  re-authentication from a session that names no client confirms every
-  other change, and not these. Before the first passkey or device, a fresh
-  re-authentication bootstraps the first, and the bootstrap is latched by
-  whichever first method commits first (`Arca.PersonIdentities`, its
-  `first_method_at`): the first passkey's registration, the first
-  device's completed pairing or its first remote certification, each
-  setting the mark in the transaction that writes it, under the person's
-  lock. Revoking every passkey and device never reopens it: a person who
-  has lost them recovers with their kit or through the administrator's
-  recovery. `addition_confirmed/1` decides it
-  for a write that runs in the person's transaction after the
-  confirmation's consumption; the pairing's own invitation records its
-  confirmer, and an invitation that names none completes only as the
-  write that sets the latch.
-
-  ## The pair challenge
-
-  Only a protected device (`Sanctum.DeviceUnlock`) pairs: it completes with
-  what it reports of its holder, `holder_kind` and `display_name`
-  together, which the paired client records. A submission with neither, a
-  browser's key, which nothing unlocks, is refused `:holder_required`
-  before anything is read; a browser signs in with a passkey instead. A completion whose answer was lost is asked
-  again with the same secret and a fresh proof of the same key: once the
-  invitation was consumed, and until the expiry it was opened with, a
-  proof over the `pair` challenge by the key it named answers the client
-  it paired, while that client stands, and its current certificate.
-  Nothing is recorded or issued again, and any other key is refused as
-  before. Past that expiry a used code names no one, as any unknown one.
-
-  The glass completes through two stateless calls, so the challenge the
-  first answers must be one the second can recognise without storing it.
-  Its nonce is an HMAC-SHA256 keyed by the invitation's secret over this
-  home, the athanor, the reserved client id, the device key and the
-  challenge's expiry: only the home and the invitation's bearer can make
-  it, and the proof over it binds the device key to that one invitation.
-  The invitation is consumed with the issuance, so a proof is redeemed at
-  most once.
+  A declared restore suspends every paired client and revokes every
+  certificate (`Arca.SecurityTransitions`), and nothing re-enables them: a
+  device comes back by a fresh hello, which pairs it anew. What the person
+  re-enables is an API key or a webhook they created
+  (`Sanctum.ApiKey.reenable/2`, `Sanctum.Webhook.reenable/2`), each a
+  sensitive change (`:restore_reenable`); `restore_checklist/1` lists
+  those and what the restore asked for again in their athanor.
 
   ## The action table
 
@@ -180,16 +58,8 @@ defmodule Sanctum.Pairing do
   | `:vault_unlock` | a fresh confirmation |
   | `:home_transfer` | a fresh confirmation |
   | `:pairing_revocation` | a fresh confirmation |
-  | `:recovery_material` | a fresh confirmation |
-  | `:device_pairing` | a fresh confirmation |
-  | `:device_pin` | a fresh confirmation |
-  | `:passkey_registration` | a fresh confirmation |
-  | `:remote_sign_in` | a fresh confirmation |
-  | `:remote_confirmation` | a fresh confirmation, a passkey's or a protected device's |
-  | `:key_rotation` | a fresh confirmation |
-  | `:sign_in_methods` | a fresh confirmation |
-  | `:restore_reenable` | a fresh confirmation, from a door or the kit while the person recovers |
-  | `:restore_close` | a fresh confirmation, the platform administrator's |
+  | `:restore_reenable` | a fresh confirmation |
+  | `:directory_tombstone` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
   are sensitive, and no operation makes either (each is *Not built yet*
@@ -201,9 +71,9 @@ defmodule Sanctum.Pairing do
 
   `sensitive?/1` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
-  change needs a pending confirmation proven by a passkey assertion or a
-  fresh re-authentication, whoever makes it. No setting or client turns a
-  row off: the table is this module's constant, the same at every home.
+  change needs a pending confirmation that a key of the person's account
+  confirmed, whoever makes it. No setting or client turns a row off: the
+  table is this module's constant, the same at every home.
 
   ## Who can confirm
 
@@ -220,7 +90,7 @@ defmodule Sanctum.Pairing do
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
-  alias Sanctum.{Context, DeviceCerts, Person}
+  alias Sanctum.{Context, DeviceCerts}
   alias Sanctum.Consent.Authz
 
   @table %{
@@ -232,24 +102,9 @@ defmodule Sanctum.Pairing do
     vault_unlock: :fresh,
     home_transfer: :fresh,
     pairing_revocation: :fresh,
-    recovery_material: :fresh,
-    device_pairing: :fresh,
-    device_pin: :fresh,
-    passkey_registration: :fresh,
-    remote_sign_in: :fresh,
-    remote_confirmation: :fresh,
-    key_rotation: :fresh,
-    sign_in_methods: :fresh,
     restore_reenable: :fresh,
-    restore_close: :fresh
+    directory_tombstone: :fresh
   }
-
-  # A pairing invitation: 128 random bits, alive five minutes.
-  @secret_bytes 16
-  @invitation_ms 300_000
-  @invitation_minutes div(@invitation_ms, 60_000)
-
-  @nonce_protocol "cyfr-device-pair-nonce/v1"
 
   @typedoc "An action the table names."
   @type action ::
@@ -261,57 +116,8 @@ defmodule Sanctum.Pairing do
           | :vault_unlock
           | :home_transfer
           | :pairing_revocation
-          | :recovery_material
-          | :device_pairing
-          | :device_pin
-          | :passkey_registration
-          | :remote_sign_in
-          | :remote_confirmation
-          | :key_rotation
-          | :sign_in_methods
           | :restore_reenable
-          | :restore_close
-
-  @typedoc """
-  An opened invitation: its raw `invitation_secret` (16 bytes, shown to
-  the person once, in the pairing code, and stored nowhere), the
-  `client_id` it reserves for the device that redeems it, the
-  `key_digest` of the one device key that may, and when it expires.
-  """
-  @type invitation :: %{
-          invitation_secret: binary(),
-          client_id: String.t(),
-          key_digest: String.t(),
-          expires_at: DateTime.t()
-        }
-
-  @typedoc """
-  Who gave a consumed confirmation: the passkey whose assertion proved it,
-  the paired client it was given on, or `nil` for neither.
-  """
-  @type confirmer :: {:passkey, String.t()} | {:device, String.t()} | :home | nil
-
-  @typedoc """
-  What the new glass submits to `complete/3`: its device public key
-  (32 raw bytes), once it holds the `pair` challenge its `proof` as the
-  glass sends it (`Prima.DeviceCert.Proof`'s JSON map), and, for a remote
-  person's invitation, the `certificate` their own home issued for the
-  reserved client (with both calls), and with both calls the `holder` the
-  device reports, `holder_kind` and `display_name`: only a device that
-  keeps its key under a local unlock pairs (`:holder_required`).
-  """
-  @type submission :: %{
-          required(:device_key) => binary(),
-          optional(:proof) => map() | nil,
-          optional(:certificate) => DeviceCert.t() | nil,
-          required(:holder) => %{holder_kind: String.t(), display_name: String.t()}
-        }
-
-  @typedoc """
-  What a remote person's own home is to certify for the glass: this home
-  as the audience, the invitation's athanor and the client id it reserved.
-  """
-  @type certify :: %{audience: String.t(), athanor: String.t(), client_id: String.t()}
+          | :directory_tombstone
 
   @typedoc "A paired client and the certificate it connects under."
   @type paired :: %{client_id: String.t(), certificate: DeviceCert.t()}
@@ -327,43 +133,15 @@ defmodule Sanctum.Pairing do
         }
 
   @typedoc """
-  What a re-enabling after a declared restore rests on: the confirmation
-  `ctx` names (`Sanctum.Consent.Authz`), or a recovery kit's credential,
-  its person and the digest of the credential the kit ingress issued.
-  """
-  @type proof :: :confirmation | {:kit, %{user_id: String.t(), credential_digest: String.t()}}
+  The refusals, beside the ones passed on from the stores, the gate's
+  standing checks and a confirmation:
 
-  @typedoc """
-  The ceremony's refusals, beside the ones it passes on from the stores,
-  the gate's standing checks and a confirmation:
-
-    * `:invalid_invitation` — no pending, unexpired invitation has that
-      secret: unknown, used, withdrawn or expired alike, so the answer
-      says nothing about which.
-    * `:key_mismatch` — the device key presented is not the one whose
-      digest the invitation was opened for.
-    * `:confirmer_revoked` — the passkey or paired client that confirmed
-      the invitation no longer stands.
-    * `t:Prima.Refusal.t/0` with reason `:standing_confirmer_required`
-      (`addition_refusal/0`) — a device, passkey or door added on a
-      confirmation no passkey or paired client gave, once the person's
-      first-method latch is set.
     * `:proof_refused` — the proof does not answer the challenge under the
-      device key submitted, or the challenge is not one this home issued
-      for that invitation or client.
-    * `:wrong_audience` — the invitation is for another home.
-    * `:certificate_required` — a remote person's invitation's proof
-      presented without their home's certificate; `:certificate_unexpected`,
-      a local person's offered one.
-    * `:certificate_refused` — the certificate offered is not their home's
-      for exactly this person, client, device key, home and athanor under
-      their current live key, or has expired.
-    * `:identity_stale` — a remote person's directory could not be read
-      fresh.
-    * `{:corrupt, :person_identity}` — the invitation's person has no
-      identity row, which every person is minted with: damage.
-    * `:remote_identity_unavailable` — a renewal of a remote person's
-      certificate, which their own home certifies again instead.
+      device key the client's row stores, or the challenge is not one this
+      CYFR issued for that client.
+    * `:stale_head` — the account's head moved while the certificate was
+      issued: nothing was written, and the next renewal issues under the
+      new head.
     * `:not_standing` — the person is denied, the athanor archived or the
       athanor no longer theirs.
     * `:revoked` — the paired client was revoked.
@@ -371,538 +149,21 @@ defmodule Sanctum.Pairing do
       exchange of the client's own device channel: an ordinary device
       context, a session or any other.
     * `:replayed` — a renewal proof already consumed.
-    * `{:rate_limited, retry_after_ms}` — a verification bound is spent.
     * `:unavailable` — the store could not answer.
   """
   @type refusal ::
-          :invalid_invitation
-          | :key_mismatch
-          | :confirmer_revoked
-          | Prima.Refusal.t()
-          | :proof_refused
-          | :wrong_audience
-          | :certificate_required
-          | :certificate_unexpected
-          | :certificate_refused
-          | :identity_stale
-          | {:corrupt, :person_identity}
-          | :remote_identity_unavailable
+          :proof_refused
+          | :stale_head
           | :not_standing
           | :revoked
           | :renewal_exchange_only
           | :replayed
-          | {:rate_limited, non_neg_integer()}
           | :unavailable
           | term()
 
   # ---------------------------------------------------------------------------
-  # The ceremony
+  # The devices connected here
   # ---------------------------------------------------------------------------
-
-  @doc """
-  Open a pairing invitation for the person of `ctx` in the athanor in
-  focus (the module doc). `args` names `"key_digest"`, the digest of the
-  device key the new glass shows (`Prima.Device.key_digest/1`).
-
-  The `device_pairing` confirmation is asked first, for exactly that key
-  digest (`Sanctum.Consent.Authz.check/3`), and consumed inside the
-  transaction that opens the invitation (`Sanctum.Consent.Authz.consume/2`),
-  under the person and athanor locked and checked at the
-  generations the context read, and the credential the context holds (its
-  session, or a paired device's client and certificate) locked and checked
-  after them (`Sanctum.Issuance`). The invitation records the passkey or
-  paired client the consumed confirmation names, read from its row in that
-  transaction; one that names neither opens only while the person's
-  first-method latch is open (the module doc). Answers `t:invitation/0`.
-  """
-  @spec begin(Context.t(), map()) :: {:ok, invitation()} | {:error, refusal()}
-  def begin(%Context{} = ctx, args) when is_map(args) do
-    with :ok <- person_focused(ctx),
-         {:ok, key_digest} <- key_digest_argument(args),
-         change = invitation_change(key_digest),
-         :ok <- Authz.check(ctx, :device_pairing, change),
-         {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []),
-         :ok <- person_focus(expectation) do
-      secret = :crypto.strong_rand_bytes(@secret_bytes)
-
-      attrs = %{
-        user_id: ctx.user_id,
-        secret_hash: secret_hash(secret),
-        key_digest: key_digest,
-        confirmation_ref: confirmation_ref(ctx),
-        audience_home: Person.home(),
-        lifetime_ms: @invitation_ms,
-        source: expectation.source
-      }
-
-      # The invitation opens under the standing the context read and the
-      # credential it holds, locked last of them, and its confirmation is
-      # consumed with it; any of them refusing writes nothing.
-      policy = Sanctum.Issuance.verify(expectation)
-
-      verify = fn locked ->
-        with :ok <- policy.(locked), do: Authz.consume(ctx, {:device_pairing, change})
-      end
-
-      case Arca.PairingInvitations.open(Context.actor(ctx), attrs, verify) do
-        {:ok, invitation} ->
-          # Announced once the confirmation's consumption committed with
-          # the invitation it approved.
-          Authz.consumed(ctx)
-
-          {:ok,
-           %{
-             invitation_secret: secret,
-             client_id: invitation.prospective_client_id,
-             key_digest: invitation.key_digest,
-             expires_at: invitation.expires_at
-           }}
-
-        {:error, :database_error} ->
-          {:error, :unavailable}
-
-        {:error, :first_method_used} ->
-          {:error, addition_refusal()}
-
-        {:error, :confirmation_unconsumed} ->
-          {:error, :unavailable}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
-
-  defp key_digest_argument(args) do
-    digest = Map.get(args, "key_digest")
-
-    if Prima.Device.key_digest?(digest),
-      do: {:ok, digest},
-      else:
-        {:error,
-         {:invalid_argument,
-          "The key_digest is the code the new device shows: unpadded base64url of 32 bytes"}}
-  end
-
-  defp confirmation_ref(%Context{confirmation_id: id}) when is_binary(id) and id != "",
-    do: Prima.Confirmation.ref(id)
-
-  defp confirmation_ref(%Context{}), do: nil
-
-  @doc """
-  What confirming a pairing approves (`t:Sanctum.Consent.Authz.change/0`),
-  the change `begin/2` decides: an invitation for the device key whose
-  digest is `key_digest`, which the preview names as the code the new
-  device shows (`Prima.Device.key_code/1`).
-  """
-  @spec invitation_change(String.t()) :: Sanctum.Consent.Authz.change()
-  def invitation_change(key_digest) when is_binary(key_digest) do
-    code = Prima.Device.key_code(key_digest)
-
-    %{
-      operation: "pairing.begin",
-      arguments: %{"key_digest" => key_digest},
-      resource: "the device showing " <> code,
-      details: %{
-        "device" => code,
-        "invitation" =>
-          "The device that shows this code, and no other, pairs within " <>
-            "#{@invitation_minutes} minutes and acts as you in this athanor until you revoke it."
-      }
-    }
-  end
-
-  @doc """
-  Complete a pairing from the new glass: `secret` is the invitation's raw
-  16-byte bearer secret and `submission` its device key and, on the
-  second call, its proof (`t:submission/0`), and a protected device's
-  holder (`Sanctum.DeviceUnlock.holder/2`).
-
-  Without a proof, answers `%{challenge: challenge}`, the `pair`
-  challenge for this invitation and device key, and for a remote person's
-  invitation offered no certificate also `certify: %{audience, athanor,
-  client_id}`, what their own home is to certify. With the proof over it,
-  locks and checks the person's standing and athanor, records the paired
-  client under the reserved id, issues its first certificate and consumes
-  the invitation, in one transaction, and answers `t:paired/0`. Once the
-  invitation was consumed, the same calls by the key it named answer the
-  challenge and then the client it paired with its current certificate
-  (the module doc).
-
-  `ctx` is the caller's, and anonymous: its address is what a call that
-  names no invitation is counted by, and nothing in it chooses the
-  person. A call that names one is counted against its person's budget
-  before anything more is read (the module doc).
-  """
-  @spec complete(Context.t(), binary(), submission()) ::
-          {:ok, %{required(:challenge) => Challenge.t(), optional(:certify) => certify()}}
-          | {:ok, paired()}
-          | {:error, refusal()}
-  def complete(%Context{} = ctx, secret, %{device_key: device_key} = submission)
-      when is_binary(secret) and byte_size(secret) == @secret_bytes and is_binary(device_key) and
-             byte_size(device_key) == 32 do
-    now = now_ms()
-    source = ctx.client_ip
-
-    with :ok <- holder_reported(submission),
-         :ok <- DeviceCerts.verification_room(source),
-         {:ok, invitation} <- invitation(secret, now, source),
-         :ok <- DeviceCerts.claim_attributed({:person, invitation.user_id}),
-         :ok <- this_home(invitation),
-         :ok <- approved(invitation, device_key),
-         :ok <- pending(invitation, secret, device_key, Map.get(submission, :proof), now),
-         {:ok, issuer} <-
-           issuer(invitation, device_key, Map.get(submission, :certificate), now) do
-      case {Map.get(submission, :proof), issuer} do
-        {nil, :certify} ->
-          certify_first(secret, invitation, device_key, now)
-
-        {nil, _issuer} ->
-          challenged(secret, invitation, device_key, now)
-
-        {_proof, :certify} ->
-          {:error, :certificate_required}
-
-        {proof, issuer} ->
-          redeem(secret, invitation, device_key, proof, issuer, Map.get(submission, :holder), now)
-      end
-    else
-      {:halt, answer} -> {:ok, answer}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  def complete(%Context{}, _secret, _submission), do: {:error, :invalid_invitation}
-
-  # Only a device that keeps its key under a local unlock pairs: it reports
-  # what holds the key. A browser's key, which nothing unlocks, pairs
-  # nothing; a browser signs in with a passkey instead.
-  defp holder_reported(%{holder: %{holder_kind: kind, display_name: name}})
-       when kind in ["chip", "software"] and is_binary(name),
-       do: :ok
-
-  defp holder_reported(_submission), do: {:error, :holder_required}
-
-  # The invitation the secret names, which makes the attempt its person's:
-  # only the invitation's bearer holds the secret. A secret that names no
-  # pending invitation is no one's, counted against the address and the
-  # installation.
-  defp invitation(secret, now, source) do
-    case pending_invitation(secret, now) do
-      {:ok, invitation} -> {:ok, invitation}
-      {:error, :unavailable} -> {:error, :unavailable}
-      {:error, refused} -> DeviceCerts.refuse_unattributed(source, refused)
-    end
-  end
-
-  # Routing only, before any lock: the redemption rechecks the state and
-  # expiry on the database's clock under the invitation's lock. A consumed
-  # invitation routes the repeat of a completion whose answer was lost,
-  # until the expiry it was opened with; past it, it is no one's.
-  defp pending_invitation(secret, now) do
-    case Arca.PairingInvitations.lookup(secret_hash(secret)) do
-      {:ok, %{state: state, expires_at: expires_at} = invitation}
-      when state in ["pending", "consumed"] ->
-        if DateTime.to_unix(expires_at, :millisecond) > now,
-          do: {:ok, invitation},
-          else: {:error, :invalid_invitation}
-
-      {:ok, _closed} ->
-        {:error, :invalid_invitation}
-
-      {:error, :not_found} ->
-        {:error, :invalid_invitation}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  # A consumed invitation: the approved key's repeat is answered here,
-  # with the challenge or with the client it paired, and goes no further.
-  defp pending(%{state: "pending"}, _secret, _device_key, _proof, _now), do: :ok
-
-  defp pending(%{state: "consumed"} = invitation, secret, device_key, nil, now) do
-    with {:ok, answer} <- challenged(secret, invitation, device_key, now),
-         do: {:halt, answer}
-  end
-
-  defp pending(%{state: "consumed"} = invitation, secret, device_key, proof, now) do
-    with {:ok, proof} <- read_proof(proof),
-         :ok <- issued_window(proof, now),
-         {:ok, expected} <-
-           pair_challenge(secret, invitation, device_key, proof.challenge.expires_at),
-         :ok <- verified(Proof.verify(proof, expected, now)),
-         {:ok, answer} <- committed(invitation, device_key) do
-      {:halt, answer}
-    end
-  end
-
-  # The pairing a consumed invitation made, answered again.
-  defp committed(invitation, device_key) do
-    with {:ok, client} <- committed_client(invitation, device_key),
-         {:ok, certificate} <- current_certificate(invitation.athanor_id, client.id) do
-      {:ok, %{client_id: client.id, certificate: certificate}}
-    end
-  end
-
-  # The client the consumed invitation paired, still standing on it with
-  # the key it named.
-  defp committed_client(invitation, device_key) do
-    actor = Prima.Actor.in_athanor(invitation.athanor_id)
-
-    case Arca.PairedClients.list(actor, user_id: invitation.user_id, standing: :active) do
-      {:ok, rows} ->
-        case Enum.find(rows, &(&1.id == invitation.prospective_client_id)) do
-          %{source_id: source_id, device_public_key: key} = client
-          when source_id == invitation.id and key == device_key ->
-            {:ok, client}
-
-          _gone ->
-            {:error, :invalid_invitation}
-        end
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp current_certificate(athanor_id, client_id) do
-    with {:ok, %{certificate: bytes}} <-
-           Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor_id), client_id),
-         {:ok, map} <- Jason.decode(bytes),
-         {:ok, certificate} <- DeviceCert.decode(map) do
-      {:ok, certificate}
-    else
-      {:error, :not_found} -> {:error, :invalid_invitation}
-      _damaged_or_unanswered -> {:error, :unavailable}
-    end
-  end
-
-  defp this_home(%{audience_home: audience}) do
-    if audience == Person.home(), do: :ok, else: {:error, :wrong_audience}
-  end
-
-  # Routing only, before any challenge is answered: the key presented is
-  # the one the invitation was opened for. The redemption holds it again
-  # under the invitation's lock.
-  defp approved_key(%{key_digest: expected}, device_key) when is_binary(expected) do
-    if Plug.Crypto.secure_compare(expected, Prima.Device.key_digest(device_key)),
-      do: :ok,
-      else: {:error, :key_mismatch}
-  end
-
-  defp approved_key(_invitation, _device_key), do: {:error, :key_mismatch}
-
-  # A consumed invitation answers only its approved key's repeat: any other
-  # key is told what a code no one holds is told.
-  defp approved(%{state: "consumed"} = invitation, device_key) do
-    case approved_key(invitation, device_key) do
-      :ok -> :ok
-      {:error, _mismatch} -> {:error, :invalid_invitation}
-    end
-  end
-
-  defp approved(invitation, device_key), do: approved_key(invitation, device_key)
-
-  # Who certifies the device: this home, for a person whose keys are here,
-  # with no certificate offered; or the person's own home, whose
-  # certificate for exactly this invitation's client, the device key, this
-  # home and the athanor is verified under the head their directory names
-  # now (`Sanctum.DeviceCerts.remote_subject/3`, read live). Every person
-  # is minted with their identity row (`Sanctum.Tenancy.Users`), so a
-  # person with none is damage, never a local person.
-  defp issuer(invitation, device_key, certificate, now) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), invitation.user_id) do
-      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
-        remote_issuer(invitation, identifier, device_key, certificate, now)
-
-      {:ok, %{provenance: "remote"}} ->
-        {:error, :unavailable}
-
-      {:ok, _local} ->
-        local_issuer(invitation.user_id, certificate)
-
-      {:error, :not_found} ->
-        {:error, {:corrupt, :person_identity}}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp local_issuer(user_id, nil) do
-    with :ok <- DeviceCerts.local_identity(user_id), do: {:ok, :local}
-  end
-
-  defp local_issuer(_user_id, _certificate), do: {:error, :certificate_unexpected}
-
-  # No certificate yet: the glass is told what to have certified.
-  defp remote_issuer(_invitation, _identifier, _device_key, nil, _now), do: {:ok, :certify}
-
-  defp remote_issuer(invitation, identifier, device_key, %DeviceCert{} = certificate, now) do
-    with :ok <- binds?(certificate, invitation, identifier, device_key),
-         {:ok, %{user_id: user_id, certificate: certificate}} <-
-           remote_certificate(certificate, now) do
-      if user_id == invitation.user_id,
-        do: {:ok, {:remote, identifier, certificate}},
-        else: {:error, :certificate_refused}
-    end
-  end
-
-  defp remote_issuer(_invitation, _identifier, _device_key, _certificate, _now),
-    do: {:error, :certificate_refused}
-
-  # The exact binding the invitation reserved, before anything is read:
-  # the person's identifier, the reserved client id, the submitted device
-  # key, this home and the invitation's athanor.
-  defp binds?(certificate, invitation, identifier, device_key) do
-    if match?(%{kind: :identity, identifier: ^identifier}, certificate.subject) and
-         certificate.client_id == invitation.prospective_client_id and
-         certificate.device_key == device_key and certificate.audience == Person.home() and
-         certificate.athanor == invitation.athanor_id,
-       do: :ok,
-       else: {:error, :certificate_refused}
-  end
-
-  defp remote_certificate(certificate, now) do
-    case DeviceCerts.remote_subject(certificate, now, :live) do
-      {:ok, subject} -> {:ok, subject}
-      {:error, reason} when reason in [:identity_stale, :unavailable] -> {:error, reason}
-      {:error, _refused} -> {:error, :certificate_refused}
-    end
-  end
-
-  # A remote person's glass that brings no certificate: the challenge, and
-  # what their own home is to certify for it.
-  defp certify_first(secret, invitation, device_key, now) do
-    with {:ok, answer} <- challenged(secret, invitation, device_key, now) do
-      {:ok,
-       Map.put(answer, :certify, %{
-         audience: Person.home(),
-         athanor: invitation.athanor_id,
-         client_id: invitation.prospective_client_id
-       })}
-    end
-  end
-
-  defp challenged(secret, invitation, device_key, now) do
-    with {:ok, challenge} <-
-           pair_challenge(secret, invitation, device_key, now + Challenge.lifetime_ms()) do
-      {:ok, %{challenge: challenge}}
-    end
-  end
-
-  # The `pair` challenge expiring at `expires_at`: this home, the athanor,
-  # the reserved client id, the device key, and the nonce only the home
-  # and the invitation's bearer can make.
-  defp pair_challenge(secret, invitation, device_key, expires_at) do
-    nonce =
-      :crypto.mac(
-        :hmac,
-        :sha256,
-        secret,
-        Encoding.jcs!(%{
-          "protocol" => @nonce_protocol,
-          "home" => Person.home(),
-          "athanor" => invitation.athanor_id,
-          "client_id" => invitation.prospective_client_id,
-          "device_key" => Encoding.b64(device_key),
-          "expires_at" => expires_at
-        })
-      )
-
-    case Challenge.new(
-           purpose: :pair,
-           home: Person.home(),
-           athanor: invitation.athanor_id,
-           client_id: invitation.prospective_client_id,
-           device_key: device_key,
-           nonce: nonce,
-           now: expires_at - Challenge.lifetime_ms()
-         ) do
-      {:ok, challenge} -> {:ok, challenge}
-      {:error, _malformed} -> {:error, :unavailable}
-    end
-  end
-
-  defp redeem(secret, invitation, device_key, proof, issuer, holder, now) do
-    with {:ok, proof} <- read_proof(proof),
-         :ok <- issued_window(proof, now),
-         {:ok, expected} <-
-           pair_challenge(secret, invitation, device_key, proof.challenge.expires_at),
-         :ok <- verified(Proof.verify(proof, expected, now)) do
-      actor = Prima.Actor.in_athanor(invitation.athanor_id)
-
-      actor
-      |> Arca.PairingInvitations.consume(
-        secret_hash(secret),
-        Prima.Device.key_digest(device_key),
-        &redeemable(&1, invitation),
-        &paired(actor, &1, device_key, issuer, holder)
-      )
-      |> case do
-        # Another completion by the approved key committed first: this one,
-        # its proof verified, is that pairing's repeat.
-        {:error, :consumed} -> committed(invitation, device_key)
-        result -> redeemed(result)
-      end
-    end
-  end
-
-  # The standing a redemption is held to, over the rows locked for it: the
-  # person the invitation names active, and the athanor open and theirs.
-  defp redeemable(%{user: user, athanor: athanor}, invitation) do
-    if active?(user, invitation.user_id) and owned?(athanor, invitation),
-      do: :ok,
-      else: {:error, :not_standing}
-  end
-
-  defp active?(%{status: "active", id: user_id}, user_id), do: true
-  defp active?(_user, _user_id), do: false
-
-  defp owned?(
-         %{status: "active", id: athanor_id, owner_user_id: user_id},
-         %{user_id: user_id, athanor_id: athanor_id}
-       ),
-       do: true
-
-  defp owned?(_athanor, _invitation), do: false
-
-  # Inside the redemption's transaction: the client under the reserved id,
-  # standing on the invitation that paired it, and its first certificate:
-  # issued here for a local person, or their own home's, recorded bound to
-  # the `key_epoch` the cached head still names under the person's lock.
-  defp paired(actor, invitation, device_key, issuer, holder) do
-    with {:ok, client} <-
-           Arca.PairedClients.record(
-             actor,
-             Map.merge(holder || %{}, %{
-               id: invitation.prospective_client_id,
-               user_id: invitation.user_id,
-               source_kind: "device_cert",
-               source_id: invitation.id,
-               device_public_key: device_key
-             })
-           ),
-         {:ok, certificate} <- first_certificate(client, issuer),
-         {:ok, _row} <- DeviceCerts.record(actor, client, certificate) do
-      {:ok, %{client_id: client.id, certificate: certificate}}
-    end
-  end
-
-  defp first_certificate(client, :local), do: certify(client)
-  defp first_certificate(_client, {:remote, _identifier, certificate}), do: {:ok, certificate}
-
-  defp redeemed({:ok, paired}), do: {:ok, paired}
-
-  defp redeemed({:error, reason}) when reason in [:not_found, :consumed, :revoked, :expired],
-    do: {:error, :invalid_invitation}
-
-  defp redeemed({:error, :database_error}), do: {:error, :unavailable}
-  defp redeemed({:error, :first_method_used}), do: {:error, addition_refusal()}
-  defp redeemed({:error, :no_identity}), do: {:error, {:corrupt, :person_identity}}
-  defp redeemed({:error, reason}), do: {:error, reason}
 
   @doc """
   Issue a paired device's replacement certificate (the module doc).
@@ -919,15 +180,16 @@ defmodule Sanctum.Pairing do
   The proof is held again here: a `renew` challenge for this home, the
   context's athanor and client and the device key the paired-client row
   stores, signed by that key and unexpired. The client must stand, and
-  its person keep their standing and athanor and hold their keys here. Then
+  its person keep their standing and athanor. Then
   the proof is consumed: its challenge's nonce is claimed once, durably,
   for the challenge's lifetime (`Arca.RequestRateWindows`, a bound of one
   per nonce), so of any number of renewals presenting one proof, on any
   member, one alone goes on to issue, and every other is `:replayed`. A
   proof consumed by an issuance that then fails is spent: the glass asks
-  for another challenge. The certificate is recorded under the member's
-  live ownership, against the active client and its stored key
-  (`Arca.DeviceCertificates.record/2`). Answers `t:paired/0`.
+  for another challenge. The certificate is issued under the account head
+  this CYFR holds for the person now and recorded under the issuance
+  fence (`Sanctum.DeviceCerts.issue/2`): a head that moves meanwhile is
+  `:stale_head`. Answers `t:paired/0`.
   """
   @spec renew(Context.t(), renewal()) :: {:ok, paired()} | {:error, refusal()}
   def renew(
@@ -944,17 +206,15 @@ defmodule Sanctum.Pairing do
       when authenticated? == true and is_binary(client_id) and is_binary(user_id) and
              is_binary(a) and is_binary(device_key) do
     now = now_ms()
-    actor = Prima.Actor.in_athanor(a)
 
     with {:ok, proof} <- read_proof(proof),
          :ok <- renewal_proof(proof, ctx, device_key, now),
          {:ok, client} <- DeviceCerts.paired_client(a, user_id, client_id),
          :ok <- stored_key(client, device_key),
-         :ok <- DeviceCerts.local_identity(user_id),
          {:ok, _standing} <- DeviceCerts.standing(user_id, a),
+         {:ok, head} <- account_head(user_id),
          :ok <- consumed(proof),
-         {:ok, certificate} <- certify(client),
-         {:ok, _row} <- DeviceCerts.record(actor, client, certificate) do
+         {:ok, certificate} <- DeviceCerts.issue(client, head) do
       {:ok, %{client_id: client_id, certificate: certificate}}
     end
   end
@@ -962,16 +222,29 @@ defmodule Sanctum.Pairing do
   def renew(%Context{}, _renewal), do: {:error, :renewal_exchange_only}
 
   defp renewal_proof(%Proof{challenge: %Challenge{} = presented} = proof, ctx, device_key, now) do
-    expected = %Challenge{
-      presented
-      | purpose: :renew,
-        home: Person.home(),
-        athanor: ctx.athanor_id,
-        client_id: ctx.client_id,
-        device_key: device_key
-    }
+    with {:ok, home} <- Sanctum.SignIn.audience() do
+      expected = %Challenge{
+        presented
+        | purpose: :renew,
+          home: home,
+          athanor: ctx.athanor_id,
+          client_id: ctx.client_id,
+          device_key: device_key
+      }
 
-    with :ok <- issued_window(proof, now), do: verified(Proof.verify(proof, expected, now))
+      with :ok <- issued_window(proof, now), do: verified(Proof.verify(proof, expected, now))
+    end
+  end
+
+  # The account head this CYFR holds for the person now: the head a
+  # renewed certificate is issued under.
+  defp account_head(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{head_hash: head}} when is_binary(head) -> {:ok, head}
+      {:ok, _none} -> {:error, :not_standing}
+      {:error, :not_found} -> {:error, :not_standing}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
   end
 
   defp stored_key(%{device_public_key: device_key}, device_key), do: :ok
@@ -1020,15 +293,6 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  # A passkey's platform holder is revoked with its credential, wherever
-  # it synced, under the passkey's own revocation (`Sanctum.Passkeys.revoke/2`).
-  defp revoke_client(ctx, %{source_kind: "passkey", source_id: passkey_id} = client) do
-    with {:ok, _passkey} <- Sanctum.Passkeys.revoke(ctx, passkey_id) do
-      :ok = Sanctum.Telemetry.sessions_revoked(client.user_id)
-      {:ok, %{client | standing: "revoked"}}
-    end
-  end
-
   defp revoke_client(ctx, %{id: client_id}) do
     with :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{
@@ -1067,159 +331,13 @@ defmodule Sanctum.Pairing do
   end
 
   @doc """
-  Re-enable the paired client `client_id`, which a declared restore
-  suspended, under `proof` (`t:proof/0`). Answers `%{client: %{client_id:,
-  standing: "active"}, recovery_closed:}`, `recovery_closed` true
-  when this closed the person's open restore, as re-enabling a method
-  does (`Arca.PairedClients.reenable/4`).
-
-  With `:confirmation`, `ctx` is the person's own, in the athanor in focus
-  where the client is: a sensitive change (`:restore_reenable`), asked
-  first and consumed in the transaction that writes the client, where,
-  while the person's restore is open, a confirmation a passkey or a paired
-  client gave is refused (`restore_confirmed/1`), so no suspended method
-  approves its own return. With `{:kit, %{user_id:, credential_digest:}}`
-  the kit ingress has verified the person's recovery kit; the client is
-  one of theirs, and the write admits it only while the
-  credential stands under their open restore (`kit_confirmed/2`).
-
-  No certificate is issued: the device reconnects under its certificate
-  while it is unexpired, or renews it through its channel (`renew/2`),
-  which reads the client active again.
-
-  Refusals: `{:not_found, "paired client", id}`, a `t:Prima.Refusal.t/0`
-  with reason `:revoked` (a revoked client is never revived) or
-  `:not_suspended`, `kit_refusal/0` (the kit's credential no longer
-  stands), `restore_source_refusal/0`, the consent signal, and the
-  context's and the stores' own (`:unauthenticated`, `:missing_tenant`,
-  `:unavailable`).
-  """
-  @spec reenable(Context.t(), String.t(), proof()) :: {:ok, map()} | {:error, refusal()}
-  def reenable(%Context{} = ctx, client_id, :confirmation) when is_binary(client_id) do
-    with :ok <- person_focused(ctx),
-         {:ok, client} <- own_client(ctx, client_id),
-         :ok <- reenable_ready(client),
-         change = reenable_change(client),
-         :ok <- Authz.check(ctx, :restore_reenable, change) do
-      verify = fn _row ->
-        with :ok <- Authz.consume(ctx, {:restore_reenable, change}), do: restore_confirmed(ctx)
-      end
-
-      case Arca.PairedClients.reenable(Context.actor(ctx), ctx.user_id, client_id, verify: verify) do
-        {:ok, row} ->
-          Authz.consumed(ctx)
-          {:ok, reenabled(row)}
-
-        {:error, reason} ->
-          {:error, reenable_refusal(reason, client_id)}
-      end
-    end
-  end
-
-  def reenable(
-        %Context{},
-        client_id,
-        {:kit, %{user_id: user_id, credential_digest: digest}}
-      )
-      when is_binary(client_id) and is_binary(user_id) and is_binary(digest) do
-    with {:ok, client} <- persons_client(user_id, client_id) do
-      case Arca.PairedClients.reenable(
-             Prima.Actor.in_athanor(client.athanor_id),
-             user_id,
-             client_id,
-             verify: fn _row -> kit_confirmed(user_id, digest) end
-           ) do
-        {:ok, row} -> {:ok, reenabled(row)}
-        {:error, reason} -> {:error, reenable_refusal(reason, client_id)}
-      end
-    end
-  end
-
-  def reenable(%Context{}, _client_id, _proof),
-    do: {:error, {:invalid_argument, "Name the paired client and how its return is proven"}}
-
-  # Read before anything is asked, so a person is never asked to confirm a
-  # return the write would refuse; the write reads it again under its lock.
-  defp reenable_ready(%{source_kind: "passkey"}),
-    do: {:error, reenable_refusal(:passkey_holder, nil)}
-
-  defp reenable_ready(%{standing: "suspended"}), do: :ok
-  defp reenable_ready(%{standing: "revoked"}), do: {:error, reenable_refusal(:revoked, nil)}
-  defp reenable_ready(_active), do: {:error, reenable_refusal(:not_suspended, nil)}
-
-  defp reenable_change(client) do
-    %{
-      operation: "pairing.reenable",
-      arguments: %{"client_id" => client.id},
-      resource: client.id,
-      details: %{
-        "effect" =>
-          "This device, suspended when this CYFR was restored from a backup, stands for you again"
-      }
-    }
-  end
-
-  # The person's client of that id in whichever athanor holds it, for the
-  # kit, which names no athanor.
-  defp persons_client(user_id, client_id) do
-    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :all) do
-      {:ok, rows} ->
-        case Enum.find(rows, &(&1.id == client_id)) do
-          nil -> {:error, {:not_found, "paired client", client_id}}
-          row -> {:ok, row}
-        end
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp reenabled(row) do
-    %{
-      client: %{client_id: row.id, standing: row.standing},
-      recovery_closed: row.closed_restore_ids != []
-    }
-  end
-
-  defp reenable_refusal(:not_found, client_id), do: {:not_found, "paired client", client_id}
-
-  defp reenable_refusal(:revoked, _client_id),
-    do: %Prima.Refusal{
-      class: :conflict,
-      reason: :revoked,
-      message:
-        "This device's pairing was revoked, and a revoked pairing is never re-enabled: " <>
-          "pair it again"
-    }
-
-  defp reenable_refusal(:not_suspended, _client_id),
-    do: %Prima.Refusal{
-      class: :conflict,
-      reason: :not_suspended,
-      message: "This device is not suspended: there is nothing to re-enable"
-    }
-
-  defp reenable_refusal(:passkey_holder, _client_id),
-    do: %Prima.Refusal{
-      class: :conflict,
-      reason: :passkey_holder,
-      message: "This is a passkey: re-enable the passkey itself, and it returns with it"
-    }
-
-  defp reenable_refusal(reason, _client_id)
-       when reason in [:database_error, :not_owner, :no_athanor],
-       do: :unavailable
-
-  defp reenable_refusal(reason, _client_id), do: reason
-
-  @doc """
   The context person's active paired clients in the athanor in focus,
-  oldest first, their passkeys' platform holders among them: each with its
-  id, the credential it stands on (`device_cert` or `passkey`), when it was
-  paired, when its current certificate expires (nil for none current, and
+  oldest first, the passkeys of their account that signed in here among
+  them (`Sanctum.Passkeys`): each with its id, the credential it stands on
+  (`device_cert` or `passkey`), when it was paired or first signed in
+  here, when its current certificate expires (nil for none current, and
   always for a passkey), whether it is the client `ctx` itself came
-  through, what holds its key, its name, whether its key may sync
-  (`synced`, a passkey WebAuthn registered backup eligible) and its storage.
+  through, what holds a device's key, its name and its storage.
   """
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, refusal()}
   def list(%Context{} = ctx) do
@@ -1248,57 +366,15 @@ defmodule Sanctum.Pairing do
       current: row.id == ctx.client_id,
       holder_kind: row.holder_kind,
       display_name: row.display_name,
-      synced: synced?(row),
       storage: holder_storage(row)
     }
   end
 
-  # Whether the client's key may live on more than one machine: a
-  # passkey's platform holder whose credential WebAuthn registered backup
-  # eligible, so its revocation ends it on each of them. A device's key
-  # never leaves it.
-  defp synced?(%{source_kind: "passkey", source_id: passkey_id}) do
-    case Arca.Passkeys.get(Prima.Actor.system(), passkey_id) do
-      {:ok, %{backup_eligible: eligible}} -> eligible == true
-      _unread -> false
-    end
-  end
-
-  defp synced?(_device), do: false
-
   # What a protected device last reported of its disks within the last
   # minute (`Sanctum.DeviceUnlock.storage/2`), unknown when it reported
-  # nothing; a browser key reports nothing at all.
-  defp holder_storage(%{holder_kind: kind}) when kind in [nil, "platform"], do: nil
+  # nothing; a passkey reports nothing at all.
+  defp holder_storage(%{holder_kind: nil}), do: nil
   defp holder_storage(row), do: Sanctum.DeviceUnlock.storage(row.athanor_id, row.id)
-
-  # ---------------------------------------------------------------------------
-  # Certificates
-  # ---------------------------------------------------------------------------
-
-  @doc false
-  # Inside a protected device's enrollment (`Arca.PairedClients.enroll/3`,
-  # `Sanctum.DeviceUnlock`): its client's first certificate, issued here
-  # under the person's live key and recorded, as a local pairing's is.
-  @spec certify_first(Prima.Actor.t(), map()) :: {:ok, map()} | {:error, term()}
-  def certify_first(actor, client) do
-    with {:ok, certificate} <- certify(client), do: DeviceCerts.record(actor, client, certificate)
-  end
-
-  # The person's live key vouching for the client's device key, here: a
-  # `local` subject, whose issuer and audience are this home. A person with
-  # no local key set holds their keys at another home.
-  defp certify(client) do
-    case Person.issue_device_cert(client.user_id, client.device_public_key, client.id, %{
-           subject: :local,
-           audience: Person.home(),
-           athanor: client.athanor_id
-         }) do
-      {:ok, certificate} -> {:ok, certificate}
-      {:error, :not_found} -> {:error, :remote_identity_unavailable}
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # Proofs
@@ -1322,8 +398,6 @@ defmodule Sanctum.Pairing do
   defp verified(:ok), do: :ok
   defp verified({:error, _refused}), do: {:error, :proof_refused}
 
-  defp secret_hash(secret), do: Prima.Digest.sha256(secret)
-
   # ---------------------------------------------------------------------------
   # The context
   # ---------------------------------------------------------------------------
@@ -1339,287 +413,34 @@ defmodule Sanctum.Pairing do
 
   defp person_focused(%Context{}), do: {:error, :unauthenticated}
 
-  # A person focused on their athanor opens an invitation; a key, whose
-  # context is the athanor's channel and no person's, opens none.
-  defp person_focus(%{athanor_id: athanor_id, source: source})
-       when is_binary(athanor_id) and not is_tuple(source),
-       do: :ok
-
-  defp person_focus(%{athanor_id: athanor_id, source: source})
-       when is_binary(athanor_id) and elem(source, 0) != :api_key,
-       do: :ok
-
-  defp person_focus(_expectation), do: {:error, :not_standing}
-
   defp now_ms, do: System.os_time(:millisecond)
-
-  # ---------------------------------------------------------------------------
-  # Adding a method or a device
-  # ---------------------------------------------------------------------------
-
-  @additions ~w(pairing.begin person.certify passkey.register person.link_door pin.enroll)
-
-  @doc """
-  Whether the operation `operation` (`tool.action`) adds a way to act as
-  the person here (the module doc): pairing a device, certifying one for
-  another home, registering a passkey, linking a door or giving a device
-  a PIN its home evaluates (`Sanctum.DevicePin`).
-  """
-  @spec addition?(String.t()) :: boolean()
-  def addition?(operation) when is_binary(operation), do: operation in @additions
-
-  # The additions that are a first method, a passkey or a device, which set
-  # the first-method latch: a sign-in method linked is no method held.
-  @first_methods ~w(pairing.begin person.certify passkey.register)
-
-  @doc """
-  Whether the operation `operation` adds a first method, a passkey or a
-  device (a pairing, a remote certification or a passkey's registration):
-  what a sign-in method or an emailed code confirms before any passkey or
-  device existed for the person (`sign_in_may_confirm/2`). Linking another
-  sign-in method, or giving a device a PIN, is no first method.
-  """
-  @spec first_method?(String.t()) :: boolean()
-  def first_method?(operation) when is_binary(operation), do: operation in @first_methods
-
-  @doc """
-  Who gave the confirmation `ctx.confirmation_id` names (`t:confirmer/0`),
-  read from its record in the context's athanor: the passkey whose
-  assertion proved it, else the paired client it was given on, else
-  `:home` for a remote person's confirmation their own home certified
-  (`Sanctum.RemoteCertification.verify_confirmation/3`), else `nil`. A record is attributed once, when it is confirmed, and never
-  again, so the answer read once it is confirmed holds through its
-  consumption. A context that names no record, or a record of another
-  person, is `nil`.
-  """
-  @spec confirmer(Context.t()) :: {:ok, confirmer()} | {:error, :unavailable}
-  def confirmer(%Context{confirmation_id: id, athanor_id: a, user_id: u} = ctx)
-      when is_binary(id) and id != "" and is_binary(a) and a != "" and is_binary(u) do
-    case Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id)) do
-      {:ok, %{user_id: ^u, confirmed_passkey_id: passkey_id}} when is_binary(passkey_id) ->
-        {:ok, {:passkey, passkey_id}}
-
-      {:ok, %{user_id: ^u, confirmed_client_id: client_id}} when is_binary(client_id) ->
-        {:ok, {:device, client_id}}
-
-      {:ok, %{user_id: ^u, proof: "home"}} ->
-        {:ok, :home}
-
-      {:ok, _unattributed} ->
-        {:ok, nil}
-
-      {:error, :not_found} ->
-        {:ok, nil}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  def confirmer(%Context{}), do: {:ok, nil}
-
-  @doc """
-  Whether the addition whose confirmation `ctx` just consumed may be
-  written, inside the transaction that writes it (the module doc): a
-  confirmation a passkey or paired client gave always may; one neither
-  gave only while the person's first-method latch is open, read under
-  the person's lock (`Arca.PersonIdentities.first_method_open?/2`), so a
-  latch set by a write that committed first refuses it and one that starts
-  later waits. A write that itself sets the latch claims it instead
-  (`Sanctum.Passkeys`, `Arca.PairingInvitations`).
-  """
-  @spec addition_confirmed(Context.t()) :: :ok | {:error, Prima.Refusal.t() | :unavailable}
-  def addition_confirmed(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
-    case confirmer(ctx) do
-      {:ok, nil} ->
-        case Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user_id) do
-          {:ok, true} -> :ok
-          {:ok, false} -> {:error, addition_refusal()}
-          {:error, _unanswered} -> {:error, :unavailable}
-        end
-
-      {:ok, _confirmer} ->
-        :ok
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  def addition_confirmed(%Context{}), do: {:error, addition_refusal()}
-
-  @doc """
-  Whether a sign-in method's re-authentication or an emailed code may
-  confirm a record of `operation` for the person `user_id` now. Neither
-  proves a key the person holds, so only inside two windows: while their
-  recovery from a declared restore is open (`Arca.SecurityTransitions`),
-  any record; before any passkey or device ever existed for them (their
-  first-method latch open, `Arca.PersonIdentities`), only their first
-  method itself, a passkey or a device (`first_method?/1`), never another
-  sign-in method's link. The OpenID Connect re-authentication and
-  the emailed code ask it where each begins and where each confirms
-  (`Sanctum.Auth.OIDC`, `Sanctum.Auth.EmailVerification`). Revoking every
-  passkey and device never reopens the latch.
-
-  Refusals: `:enrollment_first` (latch open, another change: add a
-  passkey or device first), `:method_held` (latch set, no restore open),
-  `:unavailable`.
-  """
-  @spec sign_in_may_confirm(String.t(), String.t()) ::
-          :ok | {:error, Prima.Refusal.t() | :unavailable}
-  def sign_in_may_confirm(user_id, operation) when is_binary(user_id) and is_binary(operation) do
-    case Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user_id) do
-      {:ok, nil} ->
-        case Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user_id) do
-          {:ok, true} ->
-            if first_method?(operation),
-              do: :ok,
-              else: {:error, sign_in_refusal(:enrollment_first)}
-
-          {:ok, false} ->
-            {:error, sign_in_refusal(:method_held)}
-
-          {:error, _unanswered} ->
-            {:error, :unavailable}
-        end
-
-      {:ok, _restore} ->
-        :ok
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  @doc """
-  The refusal of a sign-in method's or an emailed code's proof outside its
-  windows (`sign_in_may_confirm/2`): `:enrollment_first` before the
-  person's first passkey or device, `:method_held` after it.
-  """
-  @spec sign_in_refusal(:enrollment_first | :method_held) :: Prima.Refusal.t()
-  def sign_in_refusal(:enrollment_first),
-    do: %Prima.Refusal{
-      class: :forbidden,
-      reason: :enrollment_first,
-      message:
-        "Add a passkey or a device first: until you hold one, a sign-in or an emailed code " <>
-          "confirms only that, and then your passkey or device confirms this change"
-    }
-
-  def sign_in_refusal(:method_held),
-    do: %Prima.Refusal{
-      class: :forbidden,
-      reason: :method_held,
-      message:
-        "A sign-in or an emailed code confirms only your recovery after this CYFR was " <>
-          "restored: confirm with your passkey or one of your devices"
-    }
-
-  @doc """
-  The refusal of an addition confirmed by neither a passkey nor a paired
-  client once the person's first-method latch is set, in the one refusal
-  shape every surface renders.
-  """
-  @spec addition_refusal() :: Prima.Refusal.t()
-  def addition_refusal do
-    %Prima.Refusal{
-      class: :forbidden,
-      reason: :standing_confirmer_required,
-      message:
-        "Once you hold a passkey or a paired device here, adding a device, a passkey or a " <>
-          "sign-in needs a confirmation from one of them: confirm with your passkey, or on a " <>
-          "device you paired"
-    }
-  end
 
   # ---------------------------------------------------------------------------
   # After a declared restore
   # ---------------------------------------------------------------------------
 
   @doc """
-  Whether the change whose confirmation `ctx` just consumed may be written
-  while the person recovers from a declared restore, inside the
-  transaction that writes it, the person's `restore_people` row locked
-  there (`Arca.SecurityTransitions.restore_open!/1`): while the row is
-  open, only a confirmation no passkey and no paired client here gave — a
-  door this home re-authenticated, a forced-fresh sign-in, an emailed code
-  or a remote person's own home certifying it, none of which a restored
-  row holds — may; once it has closed, any confirmation may. A restored passkey or
-  device is suspended and asserts nothing, so this holds even if one were
-  to stand again some other way before the person recovers.
+  The person's restore checklist, which the system layer draws: every API
+  key and webhook they created that a declared restore holds suspended,
+  each re-enabled by its own operation (`key.reenable`,
+  `webhook.reenable`) under a fresh confirmation, and with them every
+  profile to consent to again and every vault entry to rotate in their
+  athanor (`Arca.SecurityTransitions.restore_checklist/2`). `{:ok, nil}`
+  while no key or webhook of theirs is suspended: only a declared restore
+  suspends one, so a profile or entry blocked for another reason draws no
+  checklist.
   """
-  @spec restore_confirmed(Context.t()) :: :ok | {:error, Prima.Refusal.t() | :unavailable}
-  def restore_confirmed(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
-    case Arca.SecurityTransitions.restore_open!(user_id) do
-      nil ->
-        :ok
-
-      _restore_id ->
-        case confirmer(ctx) do
-          {:ok, nil} -> :ok
-          {:ok, :home} -> :ok
-          {:ok, _passkey_or_device} -> {:error, restore_source_refusal()}
-          {:error, reason} -> {:error, reason}
-        end
+  @spec restore_checklist(Context.t()) ::
+          {:ok, map() | nil} | {:error, :unauthenticated | :unavailable}
+  def restore_checklist(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    case Arca.SecurityTransitions.restore_checklist(Prima.Actor.system(), user_id) do
+      {:ok, %{api_keys: [], webhooks: []}} -> {:ok, nil}
+      {:ok, list} -> {:ok, list}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  def restore_confirmed(%Context{}), do: {:error, restore_source_refusal()}
-
-  @doc """
-  Whether a re-enabling the recovery kit proves may be written, inside the
-  transaction that writes it, after the item's lock: the person's
-  `restore_people` row is open, locked there
-  (`Arca.SecurityTransitions.restore_open!/1`), and the kit credential
-  whose digest is `credential_digest` stands under it, unexpired, for a
-  person still in good standing, read again here beside the row and the
-  digest (`Arca.SecurityTransitions.kit_stands!/2`), so a denial between
-  the credential's admission and this write re-enables nothing. Otherwise
-  `kit_refusal/0`: the kit authorizes nothing once the person's restore
-  has closed or the person no longer stands.
-  """
-  @spec kit_confirmed(String.t(), String.t()) :: :ok | {:error, Prima.Refusal.t()}
-  def kit_confirmed(user_id, credential_digest)
-      when is_binary(user_id) and is_binary(credential_digest) do
-    with restore_id when is_binary(restore_id) <-
-           Arca.SecurityTransitions.restore_open!(user_id),
-         {:ok, _restore_id} <- Arca.SecurityTransitions.kit_stands!(user_id, credential_digest) do
-      :ok
-    else
-      _closed_or_spent -> {:error, kit_refusal()}
-    end
-  end
-
-  @doc """
-  The refusal of a recovery kit's credential that no longer stands: it
-  expired, or the person's restore has closed.
-  """
-  @spec kit_refusal() :: Prima.Refusal.t()
-  def kit_refusal do
-    %Prima.Refusal{
-      class: :unauthenticated,
-      reason: :not_standing,
-      message:
-        "Your recovery kit's credential no longer stands here: it expired, or your recovery " <>
-          "from the restore has ended"
-    }
-  end
-
-  @doc """
-  The refusal of a confirmation a passkey or paired device gave while the
-  person recovers from a declared restore, in the one refusal shape every
-  surface renders.
-  """
-  @spec restore_source_refusal() :: Prima.Refusal.t()
-  def restore_source_refusal do
-    %Prima.Refusal{
-      class: :forbidden,
-      reason: :restore_source_required,
-      message:
-        "This CYFR was restored from a backup: until you re-enable a passkey or a device, " <>
-          "confirm with a fresh sign-in, an emailed code or your recovery kit"
-    }
-  end
+  def restore_checklist(%Context{}), do: {:error, :unauthenticated}
 
   # ---------------------------------------------------------------------------
   # The action table

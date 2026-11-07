@@ -28,9 +28,19 @@ defmodule Cyfr.WithElseScopeTest do
   # Every variable name appearing anywhere in an AST fragment. `_`-prefixed
   # names and the compile-time pseudo-variables are not bindings a reader
   # could confuse.
-  defp vars(ast) do
+  # The names `ast` reads or binds.
+  defp vars(ast), do: names(ast, :read)
+
+  # The names a pattern binds: a pinned name (`^name`) is read, never
+  # bound, so it is no rebinding.
+  defp bindings(pattern), do: names(pattern, :bound)
+
+  defp names(ast, which) do
     {_, acc} =
       Macro.prewalk(ast, MapSet.new(), fn
+        {:^, meta, _pinned}, acc when which == :bound ->
+          {{:^, meta, []}, acc}
+
         {name, _meta, ctx} = node, acc when is_atom(name) and is_atom(ctx) ->
           skip? =
             String.starts_with?(Atom.to_string(name), "_") or
@@ -52,10 +62,10 @@ defmodule Cyfr.WithElseScopeTest do
     {_, acc} =
       Macro.prewalk(body, MapSet.new(), fn
         {:->, _, [pats, _]} = node, acc ->
-          {node, Enum.reduce(pats, acc, &MapSet.union(&2, vars(&1)))}
+          {node, Enum.reduce(pats, acc, &MapSet.union(&2, bindings(&1)))}
 
         {op, _, [lhs, _]} = node, acc when op in [:=, :<-] ->
-          {node, MapSet.union(acc, vars(lhs))}
+          {node, MapSet.union(acc, bindings(lhs))}
 
         node, acc ->
           {node, acc}
@@ -87,13 +97,13 @@ defmodule Cyfr.WithElseScopeTest do
             {:<-, _, [pattern, _expr]} -> [pattern]
             _ -> []
           end)
-          |> Enum.reduce(MapSet.new(), &MapSet.union(&2, vars(&1)))
+          |> Enum.reduce(MapSet.new(), &MapSet.union(&2, bindings(&1)))
 
         Enum.flat_map(else_clauses, fn
           {:->, _, [patterns, body]} ->
             bound_here =
               patterns
-              |> Enum.reduce(MapSet.new(), &MapSet.union(&2, vars(&1)))
+              |> Enum.reduce(MapSet.new(), &MapSet.union(&2, bindings(&1)))
               |> MapSet.union(shadowed_in(body))
 
             stale =
@@ -112,11 +122,13 @@ defmodule Cyfr.WithElseScopeTest do
   end
 
   defp offenders(path) do
-    ast =
-      path
-      |> Prima.Test.SourceTree.read()
-      |> Code.string_to_quoted!(columns: true)
+    path
+    |> Prima.Test.SourceTree.read()
+    |> Code.string_to_quoted!(columns: true)
+    |> offenders(path)
+  end
 
+  defp offenders(ast, path) do
     {_, found} =
       Macro.prewalk(ast, [], fn
         {:with, meta, args} = node, acc when is_list(args) ->
@@ -127,6 +139,29 @@ defmodule Cyfr.WithElseScopeTest do
       end)
 
     found
+  end
+
+  test "a pinned name is read, never rebound; a rebound one is found" do
+    pinned =
+      Code.string_to_quoted!("""
+      with {:ok, %{id: ^id}} <- fetch(id) do
+        :ok
+      else
+        _ -> id
+      end
+      """)
+
+    rebound =
+      Code.string_to_quoted!("""
+      with {:ok, %{id: id}} <- fetch(id) do
+        :ok
+      else
+        _ -> id
+      end
+      """)
+
+    assert offenders(pinned, root()) == []
+    assert [{_path, _line, [:id]}] = offenders(rebound, root())
   end
 
   test "no `else` arm reads a name its own `with` rebinds" do

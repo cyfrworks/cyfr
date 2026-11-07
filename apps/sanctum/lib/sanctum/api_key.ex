@@ -366,37 +366,20 @@ defmodule Sanctum.ApiKey do
     Arca.ApiKeyStorage.revoke_all_created_by(user_id)
   end
 
-  @typedoc """
-  What re-enables a suspended item: the person's fresh confirmation
-  (`:confirmation`), or the kit credential their recovery kit was
-  redeemed for while their restore row is open (`{:kit, ...}`, its
-  person and the credential's digest).
-  """
-  @type proof :: :confirmation | {:kit, %{user_id: String.t(), credential_digest: String.t()}}
-
   @doc """
   Re-enable the key `key_id` that a declared restore suspended, one the
-  person created, under `proof`.
+  person created. `ctx` is the person's own, in the key's athanor: the
+  change (`key.reenable`) is asked first (`Sanctum.Consent.Authz.check/3`,
+  which may answer the confirmation signal), and the confirmation is
+  consumed in the transaction that writes the key, after its row is
+  locked.
 
-  Under `:confirmation`, `ctx` is the person's own, in the key's athanor:
-  the change (`key.reenable`) is asked first (`Sanctum.Consent.Authz.check/3`,
-  which may answer the confirmation signal), and in the transaction that
-  writes the key, after its row is locked, the confirmation is consumed
-  and must be one `Sanctum.Pairing.restore_confirmed/1` admits: while the
-  person's restore row is open, never one a passkey or paired device gave.
-
-  Under `{:kit, %{user_id, credential_digest}}` no confirmation is asked:
-  the key is found among the person's suspended keys in whichever athanor
-  holds it, and in the transaction that writes it the person's restore
-  row must be open and the kit credential still standing there.
-
-  Refusals: `:not_found` for a key that is not the person's,
-  `:revoked` for a revoked one, which is never revived, `:not_suspended`
-  for one that already stands, and `:not_standing` for a kit credential
-  that no longer stands; a confirmation's own refusals pass as they are.
+  Refusals: `:not_found` for a key that is not the person's, `:revoked`
+  for a revoked one, which is never revived, and `:not_suspended` for one
+  that already stands; a confirmation's own refusals pass as they are.
   """
-  @spec reenable(Context.t(), String.t(), proof()) :: {:ok, map()} | {:error, term()}
-  def reenable(%Context{} = ctx, key_id, :confirmation) when is_binary(key_id) do
+  @spec reenable(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def reenable(%Context{} = ctx, key_id) when is_binary(key_id) do
     with :ok <- tenant(ctx),
          {:ok, user_id} <- person(ctx),
          actor = actor!(ctx),
@@ -406,20 +389,11 @@ defmodule Sanctum.ApiKey do
          :ok <- Sanctum.Consent.Authz.check(ctx, :restore_reenable, change),
          {:ok, row} <-
            Arca.ApiKeyStorage.reenable(actor, user_id, key_id,
-             verify: fn _row -> confirmed_reenable(ctx, change) end
+             verify: fn _row ->
+               Sanctum.Consent.Authz.consume(ctx, {:restore_reenable, change})
+             end
            ) do
       Sanctum.Consent.Authz.consumed(ctx)
-      reenabled(row)
-    end
-  end
-
-  def reenable(%Context{}, key_id, {:kit, %{user_id: user_id, credential_digest: digest}})
-      when is_binary(key_id) and is_binary(user_id) and is_binary(digest) do
-    with {:ok, athanor_id} <- suspended_key_athanor(user_id, key_id),
-         {:ok, row} <-
-           Arca.ApiKeyStorage.reenable(Prima.Actor.in_athanor(athanor_id), user_id, key_id,
-             verify: fn _row -> Sanctum.Pairing.kit_confirmed(user_id, digest) end
-           ) do
       reenabled(row)
     end
   end
@@ -448,27 +422,6 @@ defmodule Sanctum.ApiKey do
     }
   end
 
-  # The confirmation is consumed after the key's row is locked, and the
-  # person's restore row is locked after it (`restore_confirmed/1`).
-  defp confirmed_reenable(ctx, change) do
-    with :ok <- Sanctum.Consent.Authz.consume(ctx, {:restore_reenable, change}),
-         do: Sanctum.Pairing.restore_confirmed(ctx)
-  end
-
-  # The kit sees the person's suspended keys alone, wherever they are.
-  defp suspended_key_athanor(user_id, key_id) do
-    case Arca.SecurityTransitions.restore_checklist(Prima.Actor.system(), user_id) do
-      {:ok, %{api_keys: keys}} ->
-        case Enum.find(keys, &(&1.id == key_id)) do
-          %{athanor_id: athanor_id} -> {:ok, athanor_id}
-          nil -> {:error, :not_found}
-        end
-
-      {:error, _unanswered} ->
-        {:error, :database_error}
-    end
-  end
-
   defp reenabled(row) do
     Sanctum.Telemetry.api_keys_changed(row.athanor_id)
     {:ok, redact_key(row)}
@@ -481,7 +434,7 @@ defmodule Sanctum.ApiKey do
 
   A key a declared restore suspended is refused (`{:error, :suspended}`):
   its successor would stand unsuspended, so it is re-enabled first
-  (`reenable/3`).
+  (`reenable/2`).
 
   A capability-bearing key is refused: rotation is `permission: :admin` and
   mints no capability of its own, so handing a fresh secret to a row that
@@ -616,7 +569,7 @@ defmodule Sanctum.ApiKey do
         {:error, :revoked}
 
       # A declared restore suspended it: it authenticates nothing until
-      # its person re-enables it (`reenable/3`).
+      # its person re-enables it (`reenable/2`).
       {:ok, %{suspended: true}} ->
         {:error, :suspended}
 

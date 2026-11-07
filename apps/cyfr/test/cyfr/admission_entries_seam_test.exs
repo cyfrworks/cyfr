@@ -91,34 +91,17 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.ExecutionEventsController, :stream} => :execution_events_unknown,
     {Emissary.Web.DirectoryController, :register} => :directory_register_unserved,
     {Emissary.Web.DirectoryController, :resolve} => :directory_resolve_bad_position,
+    {Emissary.Web.DirectoryController, :from} => :directory_from_unserved,
     {Emissary.Web.DirectoryController, :append} => :directory_append_unserved,
-    {Emissary.Web.DirectoryController, :recover} => :directory_recover_unserved,
-    {Emissary.Web.DeviceEnrollmentController, :challenge} => :device_enrollment_no_token,
-    {Emissary.Web.DeviceEnrollmentController, :complete} => :device_enrollment_no_proof,
-    {Emissary.Web.DeviceEnrollmentController, :resume} => :device_enrollment_resume_no_token,
+    {Emissary.Web.HandleController, :resolve} => :handle_resolve_unserved,
+    {Emissary.Web.HandleController, :claim} => :handle_claim_unserved,
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
     {Emissary.Web.DeviceSessionController, :create} => :device_session_ticket_unknown,
-    {Emissary.Web.DevicePinController, :evaluate} => :device_pin_evaluator_unknown,
-    {Emissary.Web.DevicePinController, :reset} => :device_pin_reset_malformed,
-    {Emissary.Web.RestoreController, :restore} => :restore_disabled,
-    {Emissary.Web.RestoreController, :challenge} => :restore_challenge_disabled,
-    {Emissary.Web.RestoreController, :reproof} => :restore_reproof_disabled,
-    {Emissary.Web.RestoreController, :kit_challenge} => :restore_kit_challenge_not_recovering,
-    {Emissary.Web.RestoreController, :kit} => :restore_kit_invalid_proof,
-    {Emissary.Web.RestoreController, :kit_reenable} => :restore_kit_reenable_unnamed,
     {Emissary.Web.OAuthCallbackController, :callback} => :oauth_callback_unknown_state,
-    {CyfrWeb.Plugs.AuthRateLimit, :call} => :restore_rate_limited,
-    {PrismWeb.AuthController, :link_start} => :sign_in_link_unsigned,
-    {PrismWeb.AuthController, :request} => :sign_in_cyfr_hop_expired,
-    {PrismWeb.AuthController, :cyfr_start} => :sign_in_cyfr_start_expired,
+    {CyfrWeb.Plugs.AuthRateLimit, :call} => :device_session_rate_limited,
     {PrismWeb.AuthController, :company_start} => :company_start_no_session,
     {PrismWeb.AuthController, :company_callback} => :company_callback_no_session,
-    {PrismWeb.AuthController, :device_complete} => :sign_in_device_ticket_unknown,
-    {PrismWeb.AuthController, :cyfr_callback} => :sign_in_cyfr_callback_expired,
-    {PrismWeb.AuthController, :callback} => :sign_in_callback_empty,
     {PrismWeb.PasskeyController, :complete} => :sign_in_passkey_ticket_unknown,
-    {PrismWeb.ReauthController, :callback} => :reauth_callback_unstated,
-    {PrismWeb.ReauthController, :decide} => :reauth_decide_no_ticket,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
     {Opus.Host.Children, :call} => :host_api_lost_attempt,
     {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven
@@ -518,65 +501,32 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     conn =
       build_conn()
       |> put_req_header("content-type", "application/json")
-      |> dispatch(@endpoint, method, path, "{}")
+      |> dispatch(@endpoint, method, path, if(method == :post, do: "{}"))
 
     assert json_response(conn, 404) == %{"error" => "not_served"}
     {request_id_of(conn), refused("not_found", :none)}
   end
 
   def directory_register_unserved(_conn, _ctx),
-    do: directory_unserved(:post, "/directory/v1/genesis")
+    do: directory_unserved(:post, "/directory/v1/register")
+
+  def directory_from_unserved(_conn, _ctx),
+    do: directory_unserved(:get, "/directory/v1/per_seam/from/sha256:seam")
 
   def directory_append_unserved(_conn, _ctx),
-    do: directory_unserved(:post, "/directory/v1/per_seam/entries")
+    do: directory_unserved(:post, "/directory/v1/per_seam/append")
 
-  def directory_recover_unserved(_conn, _ctx),
-    do: directory_unserved(:post, "/directory/v1/per_seam/recover")
+  # The handle registry beside the directory, which a node serving none
+  # answers as the directory does.
+  def handle_resolve_unserved(_conn, _ctx), do: directory_unserved(:get, "/v1/handles/seam")
+
+  def handle_claim_unserved(_conn, _ctx),
+    do: directory_unserved(:post, "/v1/namespaces/personal/claim")
 
   def directory_resolve_bad_position(_conn, _ctx) do
     conn = get(build_conn(), "/directory/v1/per_seam?after=x")
     assert %{"error" => "invalid", "field" => "after"} = json_response(conn, 422)
     {request_id_of(conn), refused("invalid_argument", :none)}
-  end
-
-  # This node configures no restore token, so the capability's routes
-  # refuse as `restore_disabled`; the kit's routes need no token and refuse
-  # what they were given.
-  defp restore_post(path, body) do
-    build_conn()
-    |> put_req_header("content-type", "application/json")
-    |> post(path, Jason.encode!(body))
-  end
-
-  defp restore_disabled_at(path) do
-    conn = restore_post(path, %{})
-    assert json_response(conn, 404) == %{"error" => "restore_disabled"}
-    {request_id_of(conn), refused("not_found", :none)}
-  end
-
-  # A protected device's enrollment: no setup token, a completion whose
-  # proof answers no held challenge, a resume without its capability.
-  def device_enrollment_no_token(_conn, _ctx) do
-    conn = restore_post("/device/enrollment/challenge", %{"admission" => "setup"})
-    assert json_response(conn, 401) == %{"error" => "invalid_token"}
-    {request_id_of(conn), refused("unauthenticated", :none)}
-  end
-
-  def device_enrollment_no_proof(_conn, _ctx) do
-    conn =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> put_req_header("x-cyfr-setup-token", String.duplicate("ab", 32))
-      |> post("/device/enrollment/complete", Jason.encode!(%{"proof" => %{}}))
-
-    assert json_response(conn, 422) == %{"error" => "proof_refused"}
-    {request_id_of(conn), refused("invalid_argument", :none)}
-  end
-
-  def device_enrollment_resume_no_token(_conn, _ctx) do
-    conn = restore_post("/device/enrollment/resume", %{"admission" => "restore"})
-    assert json_response(conn, 401) == %{"error" => "invalid_token"}
-    {request_id_of(conn), refused("unauthenticated", :none)}
   end
 
   def device_session_ticket_unknown(_conn, _ctx) do
@@ -589,34 +539,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused("forbidden", :none)}
   end
 
-  def device_pin_evaluator_unknown(_conn, _ctx) do
-    blinded = :libsodium_crypto_core_ristretto255.from_hash(:crypto.strong_rand_bytes(64))
-
-    conn =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post(
-        "/device/pin/evaluate",
-        Jason.encode!(%{
-          "evaluator" => Prima.DevicePin.evaluator(:crypto.strong_rand_bytes(32)),
-          "blinded" => Base.url_encode64(blinded, padding: false)
-        })
-      )
-
-    assert json_response(conn, 404) == %{"error" => "not_found"}
-    {request_id_of(conn), refused("not_found", :none)}
-  end
-
-  def device_pin_reset_malformed(_conn, _ctx) do
-    conn =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post("/device/pin/reset", Jason.encode!(%{"proof" => "nope"}))
-
-    assert json_response(conn, 400) == %{"error" => "bad_request"}
-    {request_id_of(conn), refused("invalid_argument", :none)}
-  end
-
   def device_unlock_ticket_unknown(_conn, _ctx) do
     conn = build_conn() |> post("/auth/device/complete", %{"ticket" => "nope"})
 
@@ -624,34 +546,20 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused("forbidden", :none)}
   end
 
-  def restore_disabled(_conn, _ctx), do: restore_disabled_at("/restore")
-  def restore_challenge_disabled(_conn, _ctx), do: restore_disabled_at("/restore/challenge")
-  def restore_reproof_disabled(_conn, _ctx), do: restore_disabled_at("/restore/reproof")
-
-  def restore_kit_challenge_not_recovering(_conn, _ctx) do
-    conn = restore_post("/restore/kit/challenge", %{"identifier" => "per_seam"})
-    assert json_response(conn, 404) == %{"error" => "not_recovering"}
-    {request_id_of(conn), refused("not_found", :none)}
-  end
-
-  def restore_kit_invalid_proof(_conn, _ctx) do
-    conn = restore_post("/restore/kit", %{"proof" => "not a proof"})
-    assert json_response(conn, 422) == %{"error" => "invalid_proof"}
-    {request_id_of(conn), refused("invalid_argument", :none)}
-  end
-
-  def restore_kit_reenable_unnamed(_conn, _ctx) do
-    conn = restore_post("/restore/kit/reenable", %{})
-    assert json_response(conn, 403) == %{"error" => "operation_not_permitted"}
-    {request_id_of(conn), refused("forbidden", :none)}
-  end
-
-  # The restore routes' budget is ten requests a minute an address.
-  def restore_rate_limited(_conn, _ctx) do
+  # A command line's session spend is metered thirty requests a minute
+  # an address.
+  def device_session_rate_limited(_conn, _ctx) do
     Prima.Test.RateLimiter.reset!()
-    for _ <- 1..10, do: assert(restore_post("/restore/kit", %{}).status == 422)
 
-    conn = restore_post("/restore/kit", %{})
+    spend = fn ->
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> post("/device/session", Jason.encode!(%{"ticket" => "nope"}))
+    end
+
+    for _ <- 1..30, do: assert(spend.().status == 403)
+
+    conn = spend.()
     assert conn.status == 429
     {request_id_of(conn), refused("rate_limited", :none)}
   end
@@ -663,33 +571,11 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused("not_found", :none)}
   end
 
-  # The browser's sign-in, re-authentication and policy acceptance: each
-  # refused with no person or athanor recorded.
+  # The browser's sign-in: each refused with no person or athanor recorded.
   defp sign_in_refused(conn, status, class) do
     assert conn.status == status
     {request_id_of(conn), refused(class, :none)}
   end
-
-  def sign_in_link_unsigned(_conn, _ctx),
-    do: build_conn() |> post("/auth/link/oidcc", %{}) |> sign_in_refused(302, "unauthenticated")
-
-  def sign_in_cyfr_hop_expired(_conn, _ctx),
-    do: build_conn() |> get("/auth/cyfr") |> sign_in_refused(302, "not_found")
-
-  def sign_in_cyfr_start_expired(_conn, _ctx),
-    do: build_conn() |> get("/auth/cyfr/start") |> sign_in_refused(302, "not_found")
-
-  def sign_in_device_ticket_unknown(_conn, _ctx),
-    do: build_conn() |> get("/auth/device/complete/nope") |> sign_in_refused(302, "not_found")
-
-  def sign_in_cyfr_callback_expired(_conn, _ctx),
-    do: build_conn() |> post("/auth/cyfr/callback", %{}) |> sign_in_refused(302, "not_found")
-
-  def sign_in_callback_empty(_conn, _ctx),
-    do:
-      build_conn()
-      |> get("/auth/nobody/callback")
-      |> sign_in_refused(400, "invalid_argument")
 
   def sign_in_passkey_ticket_unknown(_conn, _ctx),
     do: build_conn() |> get("/auth/passkey/complete/nope") |> sign_in_refused(302, "not_found")
@@ -711,12 +597,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     |> get("/auth/company/callback", %{"state" => "no-such-state", "code" => "c"})
     |> sign_in_refused(302, "forbidden")
   end
-
-  def reauth_callback_unstated(_conn, _ctx),
-    do: build_conn() |> get("/auth/oidcc/reauth") |> sign_in_refused(401, "unauthenticated")
-
-  def reauth_decide_no_ticket(_conn, _ctx),
-    do: build_conn() |> post("/auth/oidcc/reauth", %{}) |> sign_in_refused(409, "conflict")
 
   # ==========================================================================
   # Drivers: the execution-events stream
@@ -793,33 +673,33 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # Drivers: the device channel
   # ==========================================================================
 
-  # A glass connects under a certificate, is challenged, and proves its key;
-  # the verifier refuses the proof, and the refusal is the decision under
-  # the call id the channel assigned the proof. The transport still
-  # delivers what arrives before the peer's close: the connect's deadline
-  # and more frames record nothing, so the connection, counted by its
-  # request id, holds that one decision.
+  # A glass connects under a certificate naming a client this home does
+  # not hold, so no challenge can be bound to its key: the refusal is the
+  # decision under the call id the channel assigned the connect. The
+  # transport still delivers what arrives before the peer's close: more
+  # frames record nothing, so the connection, counted by its request id,
+  # holds that one decision.
   def device_channel_unproven(_conn, _ctx) do
-    {device_key, device_private} = :crypto.generate_key(:eddsa, :ed25519)
-    {_live_key, live_private} = :crypto.generate_key(:eddsa, :ed25519)
-    home = Sanctum.origin()
+    {device_key, _device_private} = :crypto.generate_key(:eddsa, :ed25519)
+    {_public, installation} = Sanctum.Cipher.installation_key()
+    {:ok, home} = Sanctum.SignIn.audience()
     now = System.system_time(:millisecond)
     client_id = Prima.UUID7.generate_id("pcl")
 
     {:ok, cert} =
       Prima.DeviceCert.new(
-        device_key: device_key,
+        kid: Prima.Identity.Key.kid(device_key),
         client_id: client_id,
-        subject: %{kind: :local, user_id: Prima.UUID7.generate_id("usr")},
-        issuer: home,
-        audience: home,
+        identifier: "per_" <> String.duplicate("a", 64),
+        head: "sha256:" <> String.duplicate("b", 64),
         athanor: Prima.UUID7.generate_id("ath"),
+        audience: home,
         not_before: now,
         expires_at: now + 3_600_000
       )
 
     connect =
-      {:connect, %{client_id: client_id, certificate: Prima.DeviceCert.sign(cert, live_private)}}
+      {:connect, %{client_id: client_id, certificate: Prima.DeviceCert.sign(cert, installation)}}
 
     {:ok, state} =
       DeviceChannel.connect(%{
@@ -832,21 +712,11 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
     {:ok, state} = DeviceChannel.init(state)
 
-    {:reply, :ok, {:text, json}, state} =
-      DeviceChannel.handle_in({device_frame(connect), [opcode: :text]}, state)
-
-    {:ok, {:challenge, %{challenge: challenge}}} =
-      Prima.Device.decode(Jason.decode!(json), :home)
-
-    proof = {:proof, %{proof: Prima.DeviceCert.Proof.sign(challenge, device_private)}}
-    {deadline, _timer} = state.deadline
-
     assert {:stop, :normal, {4401, "unauthenticated"}, closed} =
-             DeviceChannel.handle_in({device_frame(proof), [opcode: :text]}, state)
+             DeviceChannel.handle_in({device_frame(connect), [opcode: :text]}, state)
 
     after_close = [
-      fn -> DeviceChannel.handle_info({DeviceChannel, :deadline, deadline}, closed) end,
-      fn -> DeviceChannel.handle_in({device_frame(proof), [opcode: :text]}, closed) end,
+      fn -> DeviceChannel.handle_in({device_frame(connect), [opcode: :text]}, closed) end,
       fn -> DeviceChannel.handle_in({"{}", [opcode: :text]}, closed) end
     ]
 

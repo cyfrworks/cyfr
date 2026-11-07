@@ -3,33 +3,24 @@
 
 defmodule PrismWeb.SettingsLive do
   @moduledoc """
-  Settings: the person's own identity, sign-in doors and passkeys, their
-  lite/dev preference, and, for a platform admin, the door, the
-  invitations to this CYFR and the platform settings.
+  Settings: the person's name and identifier, the devices and passkeys of
+  their account connected here, their lite/dev preference, and, for a
+  platform admin, the door, the invitations to this CYFR and the platform
+  settings.
 
-  Every change is an operation through the gate, and every read of the
-  person's identity is one too (`person.status`, `passkey.list`). A change
-  that needs a fresh confirmation is asked through the page's system
-  layer (`PrismWeb.SystemLayer.call/5`) and made again once confirmed.
+  Every change is an operation through the gate. A change that needs a
+  fresh confirmation is asked through the page's system layer
+  (`PrismWeb.SystemLayer.call/5`) and made again once confirmed.
 
     * **Your name** — the identity card (`PrismWeb.IdentityCard`): the
-      person's name and identifier, another recovery code, what losing it
-      costs, and, for a person whose page ended before they saved their
-      recovery code, the finish of their name and code; beside it, for a
-      named person, the live key's rotation (`person.rotate`). Every
-      recovery code renders only in the system layer's recovery prompts
-      (`PrismWeb.SystemLayer.Recovery`): this page never holds a secret or
-      a recovery code.
-    * **Doors** — each linked door, unlinked through `person.unlink_door`;
-      a GitHub or Google door linked through a device flow that answers a
-      link ticket (`Sanctum.Auth.DeviceFlow`'s `poll_for_link/4`), and an
-      OpenID Connect door through `POST /auth/link/oidcc`, whose callback
-      leaves the ticket in the cookie session for this page to present
-      (`person.link_door`) when it loads. A ticket from the session that
-      no longer links (spent by this page's earlier load, or past its ten
-      minutes) is dropped without a word.
-    * **Passkeys** — registered through `passkey.register` and the system
-      layer's `webauthn:create` ceremony, listed, and revoked through
+      person's name and their account's identifier. A person with no name
+      recorded here types the name their account holds, which is recorded
+      once cyfr.run says it is theirs (`session.name`). The account itself,
+      its keys and its recovery code, are the account pages'.
+    * **Devices connected here** — the person's paired clients
+      (`pairing.list`), each revoked through `pairing.revoke`, and the
+      passkeys of their account that signed in here, by the short code of
+      their key (`passkey.list`), each signed out here through
       `passkey.revoke`.
     * **Invite to this CYFR** — the platform administrator's invitation
       links naming no thread (`invitation.create` with no `thread_id`): a
@@ -37,16 +28,14 @@ defmodule PrismWeb.SettingsLive do
       thread is listed (`invitation.list`) and, while pending, revoked
       (`invitation.revoke`). A thread's own links belong to its people.
 
-  The refusals each change can meet, the last door and the last passkey
-  among them, are shown as the refusal's own sentence.
+  The refusals each change can meet are shown as the refusal's own
+  sentence.
 
   The identity card's controls carry its own `data-test` names, and this
-  page's beside it `identity-rotate` and `identity-rotation`; `doors`, `door` (with `data-key`), `door-unlink`,
-  `door-link-github`, `door-link-google`, `door-link-oidcc`,
-  `door-link-flow`, `door-link-code`, `door-link-cancel`; `passkeys`,
-  `passkey` (with `data-id` and `data-state`), `passkey-register` and
-  `passkey-revoke`; `invite-cyfr`, `invitation-create`, `invitation-new`,
-  `invitation-link`, `invitation-copy` and `invitation-revoke`.
+  page's `devices`, `device` (with `data-id`), `device-revoke`,
+  `passkey` (with `data-kid`), `passkey-revoke`; `invite-cyfr`,
+  `invitation-create`, `invitation-new`, `invitation-link`,
+  `invitation-copy` and `invitation-revoke`.
   """
 
   use PrismWeb, :live_view
@@ -58,13 +47,9 @@ defmodule PrismWeb.SettingsLive do
 
   alias Phoenix.LiveView.JS
   alias PrismWeb.{IdentityCard, SystemLayer}
-  alias Sanctum.Auth.DeviceFlow
 
-  @default_link_poll_s 5
-  # The doors a device flow links.
-  @device_flow_providers Prima.SignInProviders.device_flow()
   @impl true
-  def mount(_params, session, socket) do
+  def mount(_params, _session, socket) do
     if connected?(socket) do
       actor = Sanctum.Context.actor(socket.assigns[:context])
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.requests(actor))
@@ -94,33 +79,15 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:settings_ttl_ms, nil)
       |> assign(:mode, Prism.Labels.default(socket.assigns.context))
       |> assign(:loading, true)
-      |> assign(:identity, nil)
-      |> assign(:identity_error, nil)
+      |> assign(:identifier, nil)
+      |> assign(:name, socket.assigns.context.namespace)
+      |> assign(:name_error, nil)
+      |> assign(:devices, nil)
       |> assign(:passkeys, nil)
-      |> assign(:passkeys_error, nil)
-      |> assign(:link_flow, nil)
-      |> assign(:link_ticket, session_ticket(session))
-      |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
-      |> assign(:device_providers, DeviceFlow.configured_providers())
-      |> assign(:oidc_door, is_binary(Sanctum.Auth.OIDC.issuer()))
+      |> assign(:devices_error, nil)
 
     {:ok, socket}
   end
-
-  # The ticket an OpenID Connect link's callback left in the cookie session
-  # for this page to present (`PrismWeb.AuthController.link_ticket_key/0`).
-  defp session_ticket(%{} = session) do
-    case Map.get(session, PrismWeb.AuthController.link_ticket_key()) do
-      %{"provider" => provider, "ticket" => ticket}
-      when is_binary(provider) and is_binary(ticket) ->
-        %{provider: provider, ticket: ticket}
-
-      _none ->
-        nil
-    end
-  end
-
-  defp session_ticket(_session), do: nil
 
   @impl true
   def handle_params(_params, _uri, socket) do
@@ -154,6 +121,17 @@ defmodule PrismWeb.SettingsLive do
 
   def handle_event("door_resolve", %{"id" => id, "decision" => decision}, socket) do
     door_call(socket, "door/resolve", %{"id" => id, "decision" => decision}, "Request resolved.")
+  end
+
+  # The name the person's account holds, recorded once cyfr.run says so.
+  def handle_event("identity_name", %{"name" => name}, socket) when is_binary(name) do
+    case call_tool(socket, "session/name", %{"name" => name}) do
+      {:ok, %{name: recorded}} ->
+        {:noreply, socket |> assign(:name, recorded) |> assign(:name_error, nil)}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :name_error, error_message(reason))}
+    end
   end
 
   # An invitation to this CYFR, naming no thread: the administrator's.
@@ -191,47 +169,10 @@ defmodule PrismWeb.SettingsLive do
     setting_call(socket, "settings/reset", args, "#{key} reset to its default.")
   end
 
-  # ---- identity --------------------------------------------------------------
+  # ---- devices connected here --------------------------------------------------
 
-  # A rotation in progress is finished under its own request id; otherwise
-  # a new one begins.
-  def handle_event("rotate", _params, socket) do
-    request_id =
-      case socket.assigns.identity do
-        %{rotation: %{request_id: id}} when is_binary(id) -> id
-        _none -> new_request_id("rot")
-      end
-
-    rotate(socket, request_id)
-  end
-
-  # ---- doors -----------------------------------------------------------------
-
-  def handle_event("link_device", %{"provider" => provider}, socket)
-      when provider in @device_flow_providers do
-    start_link_flow(socket, String.to_existing_atom(provider))
-  end
-
-  def handle_event("link_cancel", _params, socket),
-    do: {:noreply, assign(socket, :link_flow, nil)}
-
-  def handle_event("unlink", %{"key" => key}, socket), do: unlink(socket, key)
-
-  # ---- passkeys --------------------------------------------------------------
-
-  # The home's creation options, handed to the browser through the system
-  # layer's ceremony; the answer comes back as `:system_layer_passkey`.
-  def handle_event("passkey_register", _params, socket) do
-    case call_tool(socket, "passkey/register", %{}) do
-      {:ok, %{public_key: public_key, registration: registration}} ->
-        {:noreply, SystemLayer.create_passkey(socket, public_key, registration)}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Passkey: #{error_message(reason)}")}
-    end
-  end
-
-  def handle_event("passkey_revoke", %{"id" => id}, socket), do: revoke_passkey(socket, id)
+  def handle_event("device_revoke", %{"id" => id}, socket), do: revoke_device(socket, id)
+  def handle_event("passkey_revoke", %{"kid" => kid}, socket), do: revoke_passkey(socket, kid)
 
   def handle_event("set_mode", %{"mode" => mode}, socket) when mode in ["lite", "dev"] do
     case Sanctum.Tenancy.Users.get(socket.assigns.context.user_id) do
@@ -255,73 +196,24 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # A recovery prompt that ended leaves the identity to be read again, the
-  # identity card's by the card.
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_report(prompt_id, outcome, socket) do
-    if IdentityCard.prompt?(prompt_id) do
-      send_update(IdentityCard, id: IdentityCard.id(), report: {prompt_id, outcome})
-      {:noreply, load_identity(socket)}
-    else
-      :pass
-    end
-  end
-
   # A change this page asked for was confirmed: made again, once.
   @impl PrismWeb.SystemLayer.Hook
-  def system_layer_repeat(:rotate, _tool, %{"request_id" => id}, socket), do: rotate(socket, id)
-
-  def system_layer_repeat({:link, provider}, _tool, %{"ticket" => ticket}, socket),
-    do: link(socket, provider, ticket, [])
-
-  def system_layer_repeat({:unlink, key}, _tool, _args, socket), do: unlink(socket, key)
-
-  def system_layer_repeat(:passkey_register, _tool, %{"credential" => credential}, socket),
-    do: register_passkey(socket, credential)
-
-  def system_layer_repeat({:passkey_revoke, id}, _tool, _args, socket),
-    do: revoke_passkey(socket, id)
+  def system_layer_repeat({:device_revoke, id}, _tool, _args, socket),
+    do: revoke_device(socket, id)
 
   @impl true
   def handle_info(:load, socket) do
-    socket =
-      socket
-      |> load_system_status()
-      |> load_log_stats()
-      |> load_door()
-      |> load_invitations()
-      |> load_settings()
-      |> load_prefs()
-      |> load_identity()
-      |> load_passkeys()
-      |> assign(:loading, false)
-
-    case socket.assigns.link_ticket do
-      %{provider: provider, ticket: ticket} ->
-        link(assign(socket, :link_ticket, nil), provider, ticket, from_session: true)
-
-      nil ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_info({:system_layer_passkey, {:ok, credential}}, socket),
-    do: register_passkey(socket, credential)
-
-  def handle_info({:system_layer_passkey, :error}, socket) do
     {:noreply,
-     put_flash(
-       socket,
-       :error,
-       "The passkey was not created in this browser. Nothing was registered."
-     )}
-  end
-
-  def handle_info(:link_poll, socket) do
-    case socket.assigns.link_flow do
-      %{} = flow -> poll_link_flow(socket, flow)
-      nil -> {:noreply, socket}
-    end
+     socket
+     |> load_system_status()
+     |> load_log_stats()
+     |> load_door()
+     |> load_invitations()
+     |> load_settings()
+     |> load_prefs()
+     |> load_identifier()
+     |> load_devices()
+     |> assign(:loading, false)}
   end
 
   def handle_info(%Cyfr.Bus.Request{}, socket) do
@@ -509,211 +401,62 @@ defmodule PrismWeb.SettingsLive do
 
   # ---- identity --------------------------------------------------------------
 
-  defp load_identity(socket) do
-    case call_tool(socket, "person/status", %{}) do
-      {:ok, status} -> assign(socket, identity: status, identity_error: nil)
-      {:error, reason} -> assign(socket, identity: nil, identity_error: error_message(reason))
+  # The account's identifier, as this CYFR's row for the person names it.
+  defp load_identifier(socket) do
+    case Sanctum.Tenancy.Users.identifier(socket.assigns.context.user_id) do
+      {:ok, identifier} -> assign(socket, :identifier, identifier)
+      {:error, _unread} -> assign(socket, :identifier, nil)
     end
   end
 
-  # The identity card reads where the person stands again, after a change
-  # this page made beside it.
-  defp reload_card(socket) do
-    send_update(IdentityCard, id: IdentityCard.id(), reload: true)
-    socket
-  end
+  # ---- devices connected here --------------------------------------------------
 
-  defp new_request_id(prefix),
-    do: prefix <> "_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-
-  defp rotate(socket, request_id) do
-    case SystemLayer.call(socket, :rotate, "person/rotate", %{"request_id" => request_id}) do
-      {:ok, %{phase: "completed"}, socket} ->
-        {:noreply,
-         socket
-         |> load_identity()
-         |> reload_card()
-         |> put_flash(:info, "Your live key was rotated.")}
-
-      {:ok, %{phase: phase}, socket} ->
-        {:noreply,
-         socket
-         |> load_identity()
-         |> put_flash(:info, "The rotation stands at #{phase}; rotate again to finish it.")}
-
-      {:asked, socket} ->
-        {:noreply, socket}
-
-      {:error, reason, socket} ->
-        {:noreply, socket |> load_identity() |> put_flash(:error, error_message(reason))}
-    end
-  end
-
-  # ---- doors -----------------------------------------------------------------
-
-  defp start_link_flow(socket, provider) do
-    case DeviceFlow.impl().init_device_flow(provider, socket.assigns.client_ip) do
-      {:ok, info} ->
-        interval = info[:interval] || @default_link_poll_s
-        if connected?(socket), do: schedule_link_poll(interval)
-
-        flow = %{
-          provider: provider,
-          device_code: info.device_code,
-          user_code: info.user_code,
-          verification_uri: info.verification_uri,
-          interval: interval
-        }
-
-        {:noreply, assign(socket, :link_flow, flow)}
-
-      {:error, {:client_id_not_configured, _provider}} ->
-        {:noreply, put_flash(socket, :error, "#{provider} is not configured on this server.")}
-
+  defp load_devices(socket) do
+    with {:ok, devices} <- call_tool(socket, "pairing/list", %{}),
+         {:ok, %{passkeys: passkeys}} <- call_tool(socket, "passkey/list", %{}) do
+      assign(socket, devices: listed_devices(devices), passkeys: passkeys, devices_error: nil)
+    else
       {:error, reason} ->
-        Logger.warning(
-          "[SettingsLive] a door link's device flow did not start: " <>
-            Prima.LoggerContext.shape(reason)
-        )
-
-        {:noreply, put_flash(socket, :error, "Couldn't start linking. Try again in a moment.")}
+        assign(socket, devices: nil, passkeys: nil, devices_error: error_message(reason))
     end
   end
 
-  defp schedule_link_poll(seconds), do: Process.send_after(self(), :link_poll, seconds * 1000)
+  # The passkeys are listed by their key from `passkey.list`, beside the
+  # devices.
+  defp listed_devices(%{clients: clients}) when is_list(clients), do: listed_devices(clients)
 
-  # The provider's answer is a link ticket bound to this person and this
-  # session, never a session: the page presents it to `person.link_door`.
-  defp poll_link_flow(socket, flow) do
-    answer =
-      DeviceFlow.impl().poll_for_link(
-        flow.provider,
-        flow.device_code,
-        socket.assigns.client_ip,
-        socket.assigns.context
-      )
+  defp listed_devices(clients) when is_list(clients),
+    do: Enum.reject(clients, &(&1[:source] == "passkey"))
 
-    case answer do
-      {:ok, %{status: "pending"} = result} ->
-        interval = if result[:slow_down], do: flow.interval + 5, else: flow.interval
-        schedule_link_poll(interval)
-        {:noreply, assign(socket, :link_flow, %{flow | interval: interval})}
+  defp listed_devices(_other), do: []
 
-      {:ok, %{status: "complete", provider: provider, ticket: ticket}} ->
-        link(assign(socket, :link_flow, nil), provider, ticket, [])
-
-      {:ok, %{status: "expired"}} ->
-        {:noreply,
-         socket |> assign(:link_flow, nil) |> put_flash(:error, "The code expired. Link again.")}
-
-      {:ok, %{status: "denied"}} ->
-        {:noreply,
-         socket
-         |> assign(:link_flow, nil)
-         |> put_flash(:error, "The provider was not authorized, so nothing was linked.")}
-
-      {:error, {:door, _reason}} ->
-        {:noreply,
-         socket |> assign(:link_flow, nil) |> put_flash(:error, Sanctum.Door.refusal_message())}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(:link_flow, nil)
-         |> put_flash(:error, "Sign-in method: #{error_message(reason)}")}
-    end
-  end
-
-  defp link(socket, provider, ticket, opts) do
-    args = %{"provider" => provider, "ticket" => ticket}
-
-    case SystemLayer.call(socket, {:link, provider}, "person/link_door", args) do
-      {:ok, %{linked: true, door: door}, socket} ->
-        {:noreply,
-         socket
-         |> load_identity()
-         |> put_flash(:info, "Linked #{door.provider} sign-in #{door.subject}.")}
-
-      {:ok, %{linked: false}, socket} ->
-        {:noreply,
-         put_flash(socket, :info, "That sign-in is already one of your sign-in methods.")}
-
-      {:asked, socket} ->
-        {:noreply, socket}
-
-      {:error, reason, socket} ->
-        # A ticket the session still held from a link this page already
-        # presented, or one past its ten minutes: nothing to say.
-        if Keyword.get(opts, :from_session, false) and match?({:invalid_argument, _}, reason),
-          do: {:noreply, socket},
-          else: {:noreply, put_flash(socket, :error, "Sign-in method: #{error_message(reason)}")}
-    end
-  end
-
-  defp unlink(socket, key) do
-    case SystemLayer.call(socket, {:unlink, key}, "person/unlink_door", %{"door" => key}) do
-      {:ok, %{unlinked: door}, socket} ->
-        {:noreply,
-         socket
-         |> load_identity()
-         |> put_flash(:info, "Unlinked #{door.provider} sign-in #{door.subject}.")}
-
-      {:asked, socket} ->
-        {:noreply, socket}
-
-      {:error, reason, socket} ->
-        {:noreply, put_flash(socket, :error, "Sign-in method: #{error_message(reason)}")}
-    end
-  end
-
-  # ---- passkeys --------------------------------------------------------------
-
-  defp load_passkeys(socket) do
-    case call_tool(socket, "passkey/list", %{}) do
-      {:ok, %{passkeys: passkeys}} -> assign(socket, passkeys: passkeys, passkeys_error: nil)
-      {:error, reason} -> assign(socket, passkeys: nil, passkeys_error: error_message(reason))
-    end
-  end
-
-  defp register_passkey(socket, credential) do
-    args = %{"credential" => credential}
-
-    case SystemLayer.call(socket, :passkey_register, "passkey/register", args) do
-      {:ok, %{status: "active"}, socket} ->
-        {:noreply, socket |> load_passkeys() |> put_flash(:info, "Passkey registered.")}
-
-      {:ok, %{status: "awaiting_administrator"}, socket} ->
-        {:noreply,
-         socket
-         |> load_passkeys()
-         |> put_flash(
-           :info,
-           "This CYFR's platform administrator authorizes this passkey before it counts here."
-         )}
-
-      {:ok, _other, socket} ->
-        {:noreply, load_passkeys(socket)}
-
-      {:asked, socket} ->
-        {:noreply, socket}
-
-      {:error, reason, socket} ->
-        {:noreply, put_flash(socket, :error, "Passkey: #{error_message(reason)}")}
-    end
-  end
-
-  defp revoke_passkey(socket, id) do
-    case SystemLayer.call(socket, {:passkey_revoke, id}, "passkey/revoke", %{"passkey_id" => id}) do
+  defp revoke_device(socket, id) do
+    case SystemLayer.call(socket, {:device_revoke, id}, "pairing/revoke", %{"client_id" => id}) do
       {:ok, _revoked, socket} ->
-        {:noreply, socket |> load_passkeys() |> put_flash(:info, "Passkey revoked.")}
+        {:noreply, socket |> load_devices() |> put_flash(:info, "Device revoked.")}
 
       {:asked, socket} ->
         {:noreply, socket}
 
       {:error, reason, socket} ->
+        {:noreply, put_flash(socket, :error, "Device: #{error_message(reason)}")}
+    end
+  end
+
+  defp revoke_passkey(socket, kid) do
+    case call_tool(socket, "passkey/revoke", %{"kid" => kid}) do
+      {:ok, _revoked} ->
+        {:noreply, socket |> load_devices() |> put_flash(:info, "Passkey revoked.")}
+
+      {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Passkey: #{error_message(reason)}")}
     end
   end
+
+  # The short code of a key, as a device shows its own: the first 16
+  # hexadecimal digits of its kid.
+  defp short_code("sha256:" <> hex), do: String.slice(hex, 0, 16)
+  defp short_code(_kid), do: ""
 
   defp services_map(nil), do: %{}
   defp services_map(services) when is_map(services), do: services
@@ -778,22 +521,10 @@ defmodule PrismWeb.SettingsLive do
 
       <div :if={!@loading} class="space-y-6">
         <.card>
-          <.live_component module={IdentityCard} id={IdentityCard.id()} context={@context}>
-            <:named :let={status}>
-              <.rotation status={status} />
-            </:named>
-          </.live_component>
+          <IdentityCard.card name={@name} identifier={@identifier} error={@name_error} />
         </.card>
 
-        <.doors_card
-          identity={@identity}
-          link_flow={@link_flow}
-          device_providers={@device_providers}
-          oidc_door={@oidc_door}
-          return_to={PrismWeb.Focus.path(@athanor_route, "/settings")}
-        />
-
-        <.passkeys_card passkeys={@passkeys} error={@passkeys_error} />
+        <.devices_card devices={@devices} passkeys={@passkeys} error={@devices_error} />
 
         <%!-- System Status --%>
         <.card>
@@ -1126,158 +857,60 @@ defmodule PrismWeb.SettingsLive do
     """
   end
 
-  attr :status, :map, required: true
-
-  # Beside the identity card, for a named person: the live key's rotation.
-  defp rotation(assigns) do
-    ~H"""
-    <div class="space-y-2">
-      <p :if={@status.rotation} class="text-sm" data-test="identity-rotation">
-        A rotation of your live key stands at {@status.rotation.phase}.
-      </p>
-      <div class="flex flex-wrap gap-2">
-        <.button variant="ghost" phx-click="rotate" data-test="identity-rotate">
-          {if @status.rotation, do: "Finish the rotation", else: "Rotate the live key"}
-        </.button>
-      </div>
-    </div>
-    """
-  end
-
-  attr :identity, :map, default: nil
-  attr :link_flow, :map, default: nil
-  attr :device_providers, :list, required: true
-  attr :oidc_door, :boolean, required: true
-  attr :return_to, :string, required: true
-
-  # The doors the person signs in through here, and linking another.
-  defp doors_card(assigns) do
-    assigns = assign(assigns, :doors, (assigns.identity && assigns.identity.doors) || [])
-
-    ~H"""
-    <.card>
-      <section data-test="doors" class="space-y-3">
-        <h3 class="text-sm font-medium text-gray-400">Sign-in methods</h3>
-        <p class="text-xs text-gray-500">
-          The ways you sign in at this CYFR. Linking or unlinking one needs a fresh confirmation, and a sign-in method is linked only by signing in with it, never by a matching email.
-        </p>
-
-        <p :if={@doors == []} class="text-sm text-gray-400">No sign-in method is linked.</p>
-        <ul :if={@doors != []} class="divide-y divide-gray-800 text-sm">
-          <li
-            :for={door <- @doors}
-            class="flex items-center justify-between gap-2 py-2"
-            data-test="door"
-            data-key={door.key}
-          >
-            <span>
-              <span class="font-medium">{door.provider}</span>
-              <span class="text-gray-400 break-all">{door.subject}</span>
-            </span>
-            <.button
-              variant="ghost"
-              phx-click="unlink"
-              phx-value-key={door.key}
-              data-test="door-unlink"
-            >
-              Unlink
-            </.button>
-          </li>
-        </ul>
-
-        <div :if={@link_flow} class="space-y-1 text-sm" data-test="door-link-flow">
-          <p>
-            Open <a
-              href={@link_flow.verification_uri}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="underline"
-            >{@link_flow.verification_uri}</a>, and enter
-            <span class="font-mono" data-test="door-link-code">{@link_flow.user_code}</span>
-            to link your {@link_flow.provider} sign-in.
-          </p>
-          <.button variant="ghost" phx-click="link_cancel" data-test="door-link-cancel">
-            Cancel
-          </.button>
-        </div>
-
-        <div :if={is_nil(@link_flow)} class="flex flex-wrap gap-2">
-          <.button
-            :for={provider <- @device_providers}
-            variant="ghost"
-            phx-click="link_device"
-            phx-value-provider={provider}
-            data-test={"door-link-#{provider}"}
-          >
-            Link {provider_name(provider)}
-          </.button>
-          <.link
-            :if={@oidc_door}
-            href={"/auth/link/oidcc?return_to=" <> URI.encode_www_form(@return_to)}
-            method="post"
-            data-test="door-link-oidcc"
-            class="inline-flex items-center rounded-lg px-4 py-2 text-sm font-medium border border-gray-600 text-gray-200 hover:bg-gray-800"
-          >
-            Link your organization's sign-in
-          </.link>
-        </div>
-      </section>
-    </.card>
-    """
-  end
-
-  defp provider_name(:github), do: "GitHub"
-  defp provider_name(:google), do: "Google"
-  defp provider_name(other), do: to_string(other)
-
+  attr :devices, :list, default: nil
   attr :passkeys, :list, default: nil
   attr :error, :string, default: nil
 
-  # The person's passkeys at this home.
-  defp passkeys_card(assigns) do
+  # The devices and passkeys of the person's account connected here.
+  defp devices_card(assigns) do
     ~H"""
     <.card>
-      <section data-test="passkeys" class="space-y-3">
-        <h3 class="text-sm font-medium text-gray-400">Passkeys at this CYFR</h3>
-        <p class="text-xs text-gray-500">
-          A passkey proves it is you, here only: each CYFR registers its own. Registering or revoking one needs a fresh confirmation, except a first one right after you signed in or restored.
-        </p>
+      <section data-test="devices" class="space-y-3">
+        <h3 class="text-sm font-medium text-gray-400">Devices connected here</h3>
 
         <p :if={@error} role="alert" class="text-sm">{@error}</p>
-        <p :if={@passkeys == []} class="text-sm text-gray-400">No passkey is registered here.</p>
 
-        <ul :if={@passkeys not in [nil, []]} class="divide-y divide-gray-800 text-sm">
+        <ul class="divide-y divide-gray-800 text-sm">
           <li
-            :for={passkey <- @passkeys}
+            :for={device <- @devices || []}
+            class="flex items-center justify-between gap-2 py-2"
+            data-test="device"
+            data-id={device.client_id}
+          >
+            <span>
+              <span class="font-medium">{device.display_name || "Device"}</span>
+            </span>
+            <.button
+              variant="ghost"
+              phx-click="device_revoke"
+              phx-value-id={device.client_id}
+              data-test="device-revoke"
+            >
+              Revoke
+            </.button>
+          </li>
+          <li
+            :for={passkey <- @passkeys || []}
             class="flex items-center justify-between gap-2 py-2"
             data-test="passkey"
-            data-id={passkey.id}
-            data-state={passkey.state}
+            data-kid={passkey.kid}
           >
             <span>
               <span class="font-medium">Passkey</span>
-              <span class="text-gray-400">{passkey_state(passkey)}</span>
+              <span class="text-gray-400 font-mono">{short_code(passkey.kid)}</span>
             </span>
             <.button
               variant="ghost"
               phx-click="passkey_revoke"
-              phx-value-id={passkey.id}
+              phx-value-kid={passkey.kid}
               data-test="passkey-revoke"
             >
               Revoke
             </.button>
           </li>
         </ul>
-
-        <.button phx-click="passkey_register" data-test="passkey-register">
-          Register a passkey
-        </.button>
       </section>
     </.card>
     """
   end
-
-  defp passkey_state(%{state: "active", registered_at: at}), do: "registered #{at}"
-  defp passkey_state(%{state: "pending"}), do: "awaiting this CYFR's administrator"
-  defp passkey_state(%{state: state}), do: state
 end

@@ -82,6 +82,9 @@ defmodule Sanctum.Caller do
       refreshed from their directory (`Sanctum.IdentityFreshness`). Their
       work pauses and the session stands: retryable, never a sign-out and
       never a denial.
+    * `:identity_gone` — a session of a person whose account its
+      directory answered gone: the mark retired every session of theirs,
+      and nothing of theirs stands again.
     * `:company_login_required` — a person who stands in every other way
       at a CYFR that requires a company sign-in they have not given, or
       given too long ago or under another company configuration
@@ -92,24 +95,21 @@ defmodule Sanctum.Caller do
       the refusal only when nothing else refuses, and the session stands
       for the company sign-in alone (`Sanctum.CompanyLogin.held/1`).
 
-  ## A remote person's session
+  ## An account's session
 
-  A session of a person whose identity provenance is `remote` stands, at
-  every establish and every revalidation alike, only on that identity's
-  fresh head (`Sanctum.IdentityFreshness.fresh?/2`) and only while the
-  session's `identity_key_epoch` is that head's `key_epoch`. A session
-  bound to another epoch, or to none, is revoked there and then and
-  refused as `:unauthenticated`; a head that cannot be confirmed fresh
-  pauses the work as `:identity_stale`. A refresh that moves the head to
-  a new `key_epoch` has already deleted the sessions bound to the old one
-  in its own transaction, and their memos are dropped once it committed
-  (`drop_retired/2`). A local person's session never reads a directory.
+  A session of a person admitted by their account (identity provenance
+  `remote`) stands, at every establish and every revalidation alike, only
+  on that account's fresh head (`Sanctum.IdentityFreshness.fresh?/2`): a
+  head that cannot be confirmed fresh pauses the work as `:identity_stale`,
+  and an account gone is refused `:identity_gone`. A refresh that removes
+  the key a session was signed for, or a recovery, has already deleted the
+  sessions it retired in its own transaction, and their memos are dropped
+  once it committed (`drop_retired/2`). A local person's session never
+  reads a directory.
 
   Inside a caller's transaction (a revalidation a write makes under its
   locks) the check reads the cached head alone and writes nothing: a head
-  past its bound pauses the work without a directory read, and a session
-  bound to another epoch is refused without being revoked there, which
-  the next revalidation outside a transaction does.
+  past its bound pauses the work without a directory read.
   """
 
   alias Sanctum.Context
@@ -131,20 +131,19 @@ defmodule Sanctum.Caller do
           | :not_found
           | :unavailable
           | :identity_stale
+          | :identity_gone
           | :company_login_required
 
   @typedoc """
   A paired device as `Sanctum.DeviceCerts` verified it: the certificate
   it stands under (nil for a renewal), its paired-client row, the
-  identity row an identity subject's person was resolved by (`identity`,
-  absent or nil for a local subject), and its person's `users` row and
-  their athanor's row, read for this verification, and whether they hold
-  the platform administrator's mark.
+  identifier of the account its person's identity row names, and its
+  person's `users` row and their athanor's row, read for this
+  verification, and whether they hold the platform administrator's mark.
   """
   @type device :: %{
           required(:certificate) => Prima.DeviceCert.t() | nil,
-          optional(:identity) =>
-            %{user_id: String.t(), provenance: String.t(), identifier: String.t()} | nil,
+          required(:identifier) => String.t(),
           required(:client) => map(),
           required(:user) => map(),
           required(:athanor) => map(),
@@ -294,47 +293,6 @@ defmodule Sanctum.Caller do
     end
   end
 
-  @doc """
-  Establish a recovering person's kit credential (the token
-  `Sanctum.Recovery.kit_proof/2` answered) for exactly `operation`: one of
-  the four re-enable operations (`Sanctum.Recovery.kit_operations/0`). Any
-  other operation is refused `:operation_not_permitted` before the
-  credential is read. The credential is read standing now
-  (`Sanctum.Recovery.kit_grant/1`): its person in good standing and their
-  recovery from a declared restore open.
-
-  The context names the person and nothing else: no athanor, no
-  permission, no auth method and no session, so no other surface or
-  operation admits it and it confirms nothing
-  (`Sanctum.Pairing.can_confirm?/1`). It comes with the grant, which each
-  re-enable reads standing again in its own write.
-  """
-  @spec establish_kit(String.t() | nil, term()) ::
-          {:ok, Context.t(), Sanctum.Recovery.kit_grant()}
-          | {:error, :invalid_credential | :operation_not_permitted | :unavailable}
-  def establish_kit(token, operation) do
-    cond do
-      operation not in Sanctum.Recovery.kit_operations() ->
-        {:error, :operation_not_permitted}
-
-      not is_binary(token) ->
-        {:error, :invalid_credential}
-
-      true ->
-        with {:ok, grant} <- Sanctum.Recovery.kit_grant(token) do
-          ctx =
-            Context.build(
-              user_id: grant.user_id,
-              provider: "restore_kit",
-              permissions: [],
-              authenticated: true
-            )
-
-          {:ok, validated(ctx), grant}
-        end
-    end
-  end
-
   # The key store's answers, in this module's vocabulary. A malformed key
   # and an unknown one read alike, as the store already takes care they do,
   # and a key a declared restore suspended reads as a revoked one.
@@ -357,19 +315,18 @@ defmodule Sanctum.Caller do
   the person's company sign-in, last, when this CYFR requires one
   (`Sanctum.CompanyLogin.standing/1`), and checks that the rows it is
   handed agree with each other: one active device client of that person
-  in that athanor, the person and the
-  athanor active and theirs, and the certificate, when there is
-  one, naming that client, athanor, person and device key: a local
-  subject by the person's id, an identity subject by the identifier of
-  the remote identity row the person was resolved by, which must be that
-  person's. Rows that do not agree are `{:error, :unauthenticated}`.
+  in that athanor, the client a key of the account, the person and the
+  athanor active and theirs, and the certificate, when there is one,
+  naming that client, athanor, key and account. Rows that do not agree
+  are `{:error, :unauthenticated}`.
 
   The context is the person's own interactive client there
   (`auth_method: :device`, its `client_id`, `origin: :interactive`),
   whose credential deadline is the certificate's expiry and whose
   credential binding is the device's (`source_kind: :device`, naming the
-  client, and the remote identity row for an identity subject), so a
-  credential issued from it holds that client (`Sanctum.Issuance`). A renewal's
+  client, its key's `kid` and the head the certificate was issued
+  under), so a credential issued from it holds that client
+  (`Sanctum.Issuance`). A renewal's
   context carries no certificate and so no deadline: it is the fixed
   renewal exchange's, and the one operation it is used for,
   `Sanctum.Pairing.renew/2`, takes no other. Nothing is memoized: the
@@ -414,12 +371,9 @@ defmodule Sanctum.Caller do
 
   # The rows a device's verification read agree with each other, as they
   # were read (nothing is read here): one active device client of the
-  # person in the athanor, the person and the athanor active, the athanor
-  # theirs, and the certificate,
-  # when there is one, naming that client, athanor, person and device key:
-  # a local subject by the person's id, an identity subject by the
-  # identifier of the identity row the verifier resolved them by
-  # (`device.identity`).
+  # person in the athanor that is a key of their account, the person and
+  # the athanor active, the athanor theirs, and the certificate, when there
+  # is one, naming that client, athanor, key and account.
   defp device_stands?(
          %{
            certificate: certificate,
@@ -429,7 +383,8 @@ defmodule Sanctum.Caller do
                user_id: user_id,
                athanor_id: athanor_id,
                standing: "active",
-               source_kind: "device_cert"
+               source_kind: "device_cert",
+               kid: kid
              } = client,
            user: %{id: user_id, status: "active", security_generation: user_generation},
            athanor: %{
@@ -442,74 +397,41 @@ defmodule Sanctum.Caller do
          } = device
        )
        when is_binary(client_id) and is_binary(user_id) and is_binary(athanor_id) and
-              is_integer(user_generation) and is_integer(athanor_generation) and
-              is_boolean(platform_admin) do
-    certifies?(certificate, client, Map.get(device, :identity))
+              is_binary(kid) and is_integer(user_generation) and
+              is_integer(athanor_generation) and is_boolean(platform_admin) do
+    certifies?(certificate, client, Map.get(device, :identifier))
   end
 
   defp device_stands?(_device), do: false
 
-  defp certifies?(nil, _client, _identity), do: true
+  defp certifies?(_certificate, _client, identifier) when not is_binary(identifier), do: false
+  defp certifies?(nil, _client, _identifier), do: true
 
-  defp certifies?(%Prima.DeviceCert{} = certificate, client, identity) do
+  defp certifies?(%Prima.DeviceCert{} = certificate, client, identifier) do
     certificate.client_id == client.id and certificate.athanor == client.athanor_id and
-      subject_names?(certificate.subject, client.user_id, identity) and
-      certificate.device_key == client.device_public_key
+      certificate.kid == client.kid and certificate.identifier == identifier
   end
 
-  defp certifies?(_certificate, _client, _identity), do: false
-
-  # A local subject names the client's person by their id, with no identity
-  # row handed. An identity subject names them by an identifier, which must
-  # be the one the identity row handed holds, and that row must be the
-  # client's person's and remote: the subject, the row and the client agree.
-  defp subject_names?(%{kind: :local, user_id: user_id}, user_id, nil), do: true
-
-  defp subject_names?(
-         %{kind: :identity, identifier: identifier},
-         user_id,
-         %{provenance: "remote", user_id: user_id, identifier: identifier}
-       )
-       when is_binary(identifier),
-       do: true
-
-  defp subject_names?(_subject, _user_id, _identity), do: false
+  defp certifies?(_certificate, _client, _identifier), do: false
 
   # What the device's context was read against
   # (`t:Sanctum.Context.credential_binding/0`): the person's and the
-  # athanor's generations, and the
-  # paired client the context stands on, with the remote identity row an
-  # identity subject's person was resolved by and the `key_epoch` its
-  # certificate was verified under (both nil for a local subject). An
-  # issuance from it locks and rereads them all, the client after the
-  # person and athanor, so a revocation that commits after this
-  # verification and before the issuance refuses it (`Sanctum.Issuance`).
+  # athanor's generations, the paired client the context stands on, its
+  # key's `kid`, and the head its certificate was issued under (nil for a
+  # renewal's context, which stands under no certificate). An issuance from
+  # it locks and rereads them all, the client after the person and
+  # athanor, so a revocation that commits after this verification and
+  # before the issuance refuses it (`Sanctum.Issuance`).
   defp device_binding(device) do
-    {identity, key_epoch} = binding_subject(device.certificate, Map.get(device, :identity))
-
     %{
       source_kind: :device,
       source_id: device.client.id,
       user_generation: device.user.security_generation,
       athanor_generation: device.athanor.security_generation,
-      identity: identity,
-      key_epoch: key_epoch
+      kid: device.client.kid,
+      head: device.certificate && device.certificate.head
     }
   end
-
-  # `device_stands?/1` has already held a handed row to the certificate's
-  # subject and the client's person; the binding keeps the columns that
-  # bind it and nothing else, with the `key_epoch` the verifier checked the
-  # certificate's subject against the person's head under
-  # (`Sanctum.DeviceCerts.remote_subject/3`). A renewal's context stands
-  # under no certificate, so no row was held to one, and it carries none.
-  defp binding_subject(
-         %Prima.DeviceCert{subject: %{kind: :identity, key_epoch: key_epoch}},
-         %{} = identity
-       ),
-       do: {Map.take(identity, [:user_id, :provenance, :identifier]), key_epoch}
-
-  defp binding_subject(_certificate, _identity), do: {nil, nil}
 
   defp device_deadline(nil), do: nil
 
@@ -564,11 +486,10 @@ defmodule Sanctum.Caller do
       and its allowlist admits `client_ip:`.
 
   A session source of a remote person stands, as the session itself does
-  (the module doc), only on that person's fresh identity head and while
-  bound to its `key_epoch`. The head is read after the locked check and
-  outside its transaction, since a head past its bound reads the
-  directory. A head that cannot be confirmed fresh pauses the credential
-  as `:identity_stale`; a session bound to another epoch is revoked and
+  (the module doc), only on that person's fresh account head. The head is
+  read after the locked check and outside its transaction, since a head
+  past its bound reads the directory. A head that cannot be confirmed
+  fresh pauses the credential as `:identity_stale`; an account gone is
   refused as a retired source is, `:not_standing`.
 
   The person is held, last, to the company sign-in this CYFR may require
@@ -614,8 +535,8 @@ defmodule Sanctum.Caller do
   end
 
   # A session source is its person's: a remote person's stands on their
-  # identity's fresh head, as their session does at its revalidation. A
-  # key source is the athanor's channel and survives a `key_epoch` change.
+  # account's fresh head, as their session does at its revalidation. A
+  # key source is the athanor's channel and survives a removed key.
   defp derived_identity(%{source_kind: :session, user_id: user_id} = claims, standing) do
     with {:session, hash} when hash != <<>> <- source_row(claims),
          :ok <- identity_current(user_id, hash) do
@@ -763,6 +684,7 @@ defmodule Sanctum.Caller do
           | :not_member
           | :unavailable
           | :identity_stale
+          | :identity_gone
           | :company_login_required
 
   @doc """
@@ -796,13 +718,14 @@ defmodule Sanctum.Caller do
     * `:identity_stale` — a remote person's identity head could not be
       confirmed fresh (the module doc): the work pauses, and the session
       stands.
+    * `:identity_gone` — the person's account is gone at its directory.
     * `:company_login_required` — the person stands but for the company
       sign-in this CYFR requires (the module doc), checked last. A key's
       creator and a device's person are held to it the same way.
 
-  A remote person's session is held to their identity's fresh head as
-  well, as the module doc says: one bound to a `key_epoch` the fresh head
-  does not name is revoked here and refused as `:unauthenticated`.
+  A remote person's session is held to their account's fresh head as
+  well, as the module doc says: an account gone is refused
+  `:identity_gone`.
 
   An API-key context is held to its key the same way: the key row, its
   creator and its athanor are reread under the same lock — the key
@@ -971,25 +894,20 @@ defmodule Sanctum.Caller do
     {:error, refusal}
   end
 
-  # A remote person's session stands only on their identity's fresh head
+  # A person's session stands only on their account's fresh head
   # (`Sanctum.IdentityFreshness.fresh?/2`): past the bound with the
   # directory unable to refresh it, the work pauses as `:identity_stale`,
-  # and the session stays. A session bound to another `key_epoch` than
-  # the fresh head's, or to none, is revoked here and then: a refresh that
-  # retired its epoch deleted it already, and one minted against an epoch
-  # the head no longer names never stands. A local person's session reads
-  # no directory. A person's identity row is minted with their person row,
-  # so a person without one stands on nothing.
+  # and the session stays; an account gone is refused `:identity_gone`.
+  # The refresh's walk retires a session its removed key signed for, and
+  # every session of the person on a recovery, so the session is read
+  # again once the head is fresh: a session the refresh just retired
+  # stands for nothing, whatever was loaded before it. A person's identity
+  # row is minted with their person row, so a person without one stands on
+  # nothing.
   defp identity_current(user_id, hash) when is_binary(user_id) and is_binary(hash) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
-        remote_current(identifier, hash)
-
-      {:ok, %{provenance: "remote"}} ->
-        {:error, :unauthenticated}
-
-      {:ok, _local} ->
-        :ok
+      {:ok, %{identifier: identifier}} ->
+        with :ok <- account_current(identifier), do: session_survives(hash)
 
       {:error, :not_found} ->
         if Prima.PersonId.person?(user_id),
@@ -1003,40 +921,19 @@ defmodule Sanctum.Caller do
 
   defp identity_current(_user_id, _hash), do: {:error, :unauthenticated}
 
-  defp remote_current(identifier, hash) do
-    case Sanctum.IdentityFreshness.fresh?(identifier, []) do
-      {:ok, %{key_epoch: epoch}} -> session_epoch(hash, epoch)
-      {:refused, :identity_stale} -> {:error, :identity_stale}
-      {:error, :unavailable} -> {:error, :unavailable}
+  defp session_survives(hash) do
+    case Arca.SessionStorage.get_session(hash) do
+      {:ok, _row} -> :ok
+      {:error, :not_found} -> {:error, :unauthenticated}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  defp session_epoch(hash, epoch) do
-    case Arca.SessionStorage.get_session(hash) do
-      {:ok, %{identity_key_epoch: ^epoch}} when is_binary(epoch) ->
-        :ok
-
-      # Refused either way. Revoked only outside a transaction: a caller's
-      # transaction is no place to delete a session and announce it, so the
-      # next revalidation outside one revokes it.
-      {:ok, _retired_or_unbound} ->
-        if Arca.in_transaction?() do
-          {:error, :unauthenticated}
-        else
-          Logger.warning(
-            "[Sanctum.Caller] a remote person's session is bound to no key_epoch, or to " <>
-              "one the fresh head no longer names; revoking it"
-          )
-
-          _ = Session.destroy_by_hash(hash)
-          {:error, :unauthenticated}
-        end
-
-      {:error, :not_found} ->
-        {:error, :unauthenticated}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
+  defp account_current(identifier) do
+    case Sanctum.IdentityFreshness.fresh?(identifier, []) do
+      {:ok, _head} -> :ok
+      {:refused, reason} -> {:error, reason}
+      {:error, :unavailable} -> {:error, :unavailable}
     end
   end
 
@@ -1088,14 +985,16 @@ defmodule Sanctum.Caller do
   defp standing_athanor(_athanor, _athanor_id), do: {:error, :not_member}
 
   # A paired device's certificate deadline on this node's clock, then its
-  # paired client and its person's athanor, read from the store. Nothing is
-  # rebuilt: everything the context carries is the client row's.
+  # person's account head, then its paired client and its person's
+  # athanor, read from the store after the refresh, whose walk may have
+  # retired the client. Nothing is rebuilt: everything the context carries
+  # is the client row's.
   defp revalidate_device(%Context{credential_deadline: deadline} = ctx) do
     if expired?(deadline) do
       {:error, :unauthenticated}
     else
-      with :ok <- client_stands(ctx),
-           :ok <- device_identity(ctx.user_id),
+      with :ok <- device_identity(ctx.user_id),
+           :ok <- client_stands(ctx),
            :ok <- company(ctx.user_id) do
         {:ok, validated(ctx)}
       end
@@ -1110,24 +1009,14 @@ defmodule Sanctum.Caller do
     end
   end
 
-  # A remote person's device stands on their identity's fresh head as their
-  # session does: past the bound with the directory unable to refresh it,
-  # the work pauses and the pairing stands. A local person's device reads
-  # no directory; a person without an identity row stands on nothing.
+  # A person's device stands on their account's fresh head as their session
+  # does: past the bound with the directory unable to refresh it, the work
+  # pauses and the pairing stands. A person without an identity row stands
+  # on nothing.
   defp device_identity(user_id) when is_binary(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
-        case Sanctum.IdentityFreshness.fresh?(identifier, []) do
-          {:ok, _head} -> :ok
-          {:refused, :identity_stale} -> {:error, :identity_stale}
-          {:error, :unavailable} -> {:error, :unavailable}
-        end
-
-      {:ok, %{provenance: "remote"}} ->
-        {:error, :not_standing}
-
-      {:ok, _local} ->
-        :ok
+      {:ok, %{identifier: identifier}} ->
+        account_current(identifier)
 
       {:error, :not_found} ->
         if Prima.PersonId.person?(user_id),
@@ -1316,9 +1205,10 @@ defmodule Sanctum.Caller do
   end
 
   @doc """
-  Let go of the sessions a refreshed identity head retired: the head's
-  advance deleted every session bound to the `key_epoch` it replaced, in
-  its own transaction (`Arca.DirectoryHeads`), and once that committed
+  Let go of the sessions a refreshed account head retired: the head's
+  walk deleted every session bound to a key it removed, and a recovery's
+  every session of the person, in its own transaction
+  (`Arca.DirectoryHeads`), and once that committed
   each one's memo is dropped on this member and announced to the rest
   (`invalidate_hash/1`), and the revocation is announced for each person
   in `user_ids`, so their mounted views let go. Called by

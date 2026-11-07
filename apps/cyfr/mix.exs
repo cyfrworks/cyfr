@@ -75,10 +75,6 @@ defmodule Cyfr.App.MixProject do
       # How the members of a cell find each other; `Cyfr.Cell` starts the
       # supervisor and `config/runtime.exs` carries the topology.
       {:libcluster, "~> 3.5"},
-      # The Ueberauth route table the web face builds from the configured
-      # providers (`CyfrWeb.Plugs.ConfiguredUeberauth`); the strategies
-      # themselves are Sanctum's.
-      {:ueberauth, "~> 0.11.0"},
       # Ecto, for the errors the surfaces rescue and the sandbox the suite
       # runs on. The adapters and the drivers are Arca's.
       {:ecto_sql, "~> 3.12"},

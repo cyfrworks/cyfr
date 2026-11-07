@@ -48,7 +48,7 @@ defmodule Emissary.Web.DeviceSessionControllerTest do
         home: certificate.audience,
         athanor: certificate.athanor,
         client_id: certificate.client_id,
-        device_key: certificate.device_key,
+        device_key: elem(device.key, 0),
         session_id: session_id
       )
 
@@ -79,7 +79,7 @@ defmodule Emissary.Web.DeviceSessionControllerTest do
     assert {:ok, %Sanctum.Context{user_id: user_id, client_id: nil}} =
              Sanctum.Caller.establish({:session, token}, [])
 
-    assert user_id == device.certificate.subject.user_id
+    assert user_id == device.user.id
     client_id = ctx.client_id
     assert %{client_id: ^client_id} = Arca.Repo.get!(Arca.Schemas.Session, answer.session_id)
 

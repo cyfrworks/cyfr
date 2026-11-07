@@ -23,7 +23,8 @@ defmodule CyfrWeb.ScrubSpanCredentials do
 
     * a path (`url.path`, `http.route`) through
       `CyfrWeb.Plugs.ScrubTinctureCredentials.redact_path/1`, the one
-      definition of where a credential stands in a path;
+      definition of where a credential stands in a path and of how a
+      directory request is named, by its route pattern alone;
     * a query (`url.query`) pair by pair, each value whose key the
       redaction roster names (`Prima.Sanitizer.sensitive_key?/1`, which
       holds the tincture credential query keys) replaced by `[REDACTED]`.

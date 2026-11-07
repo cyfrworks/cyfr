@@ -29,7 +29,7 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
   import Ecto.Query, only: [from: 2]
 
   alias Arca.PlatformSettings, as: Store
-  alias Arca.Schemas.{Athanor, ExternalIdentity, User}
+  alias Arca.Schemas.{Athanor, User}
   alias Arca.Test.{Adapter, LockWait}
   alias Ecto.Adapters.SQL.Sandbox
   alias Sanctum.Tenancy.{Athanors, Users}
@@ -226,12 +226,11 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     count
   end
 
-  # A real person row, so a mint that holds them holds a row: the row and
-  # its sign-in method alone, with no athanor yet, so the case's own mints
-  # are the only athanors they hold.
+  # A real person row, so a mint that holds them holds a row: the row
+  # alone, with no athanor yet, so the case's own mints are the only
+  # athanors they hold.
   defp person!(run, i) do
     now = DateTime.utc_now()
-    subject = "census-#{run}-#{i}"
 
     {:ok, %{id: user_id}} =
       unboxed(fn ->
@@ -245,14 +244,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
             last_seen_at: now,
             created_at: now,
             updated_at: now
-          },
-          %{
-            key: "github|https://github.com|" <> subject,
-            provider: "github",
-            issuer: "https://github.com",
-            subject: subject,
-            first_seen_at: now,
-            last_seen_at: now
           }
         )
       end)
@@ -310,7 +301,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
         )
       )
 
-    Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^users))
     Arca.Repo.delete_all(from(u in User, where: u.id in ^users))
     Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^athanors))
   end

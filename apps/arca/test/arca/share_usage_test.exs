@@ -264,7 +264,6 @@ defmodule Arca.ShareUsageRaceTest do
   defp purge!(%{athanor: athanor, user: user}) do
     {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
     Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
-    Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id))
     Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user.id))
   end
 

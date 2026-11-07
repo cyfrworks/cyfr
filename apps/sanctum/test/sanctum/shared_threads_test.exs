@@ -5,14 +5,12 @@ defmodule Sanctum.SharedThreadsTest do
   @moduledoc """
   The rules of shared threads (`Sanctum.SharedThreads`): who makes a
   thread or a pair, who reads one, who adds, removes, withdraws and
-  leaves, what a declared restore's freeze holds back, what a message and
+  leaves, what a message and
   its files are, and whom each change is told to. A thread answers anyone
   not seated in it as a missing one, the platform administrator too.
   """
 
   use ExUnit.Case, async: false
-
-  import Ecto.Query
 
   alias Sanctum.SharedThreads
   alias Sanctum.Tenancy.Users
@@ -43,10 +41,14 @@ defmodule Sanctum.SharedThreadsTest do
     {:ok, user} =
       Sanctum.Test.People.remote(
         %{
-          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          id: "cyfr|https://dir.example|" <> identifier,
           provider: "cyfr"
         },
-        %{identifier: identifier, directory_url: "https://dir.example"}
+        %{
+          identifier: identifier,
+          directory_url: "https://dir.example",
+          head_hash: Prima.Digest.sha256("head-" <> identifier)
+        }
       )
 
     user
@@ -80,27 +82,6 @@ defmodule Sanctum.SharedThreadsTest do
   defp stored(thread_id) do
     {:ok, paths} = Arca.list_recursive(Prima.Actor.system(), ["shared", thread_id])
     paths
-  end
-
-  defp open_restore!(user_id) do
-    restore_id = Prima.UUID7.generate_id("rst")
-
-    {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
-        %{restore_id: restore_id, user_id: user_id, open: true}
-      ])
-
-    restore_id
-  end
-
-  defp close_restore!(restore_id) do
-    {1, _} =
-      Arca.Repo.update_all(
-        from(r in Arca.Schemas.RestorePerson, where: r.restore_id == ^restore_id),
-        set: [open: false, closed_at: DateTime.utc_now()]
-      )
-
-    :ok
   end
 
   # The people the next announcement of `kind` for the thread names.
@@ -500,47 +481,6 @@ defmodule Sanctum.SharedThreadsTest do
       assert {:ok, %{status: "active"}} = SharedThreads.unarchive(bob, thread.id)
       assert status!(thread.id) == "active"
       assert {:ok, %{title: "Again"}} = SharedThreads.rename(bob, thread.id, "Again")
-    end
-  end
-
-  describe "a declared restore's freeze" do
-    test "while a member recovers, adding and inviting are refused; removing and leaving stay admitted",
-         %{alice: alice, bob: bob, carol: carol, dave: dave} do
-      thread = thread!(alice) |> seated!(alice, [bob, dave])
-      _restore = open_restore!(bob)
-
-      assert {:error, {:shared_thread, :recovering_from_restore}} =
-               SharedThreads.add(alice, thread.id, user_id: carol)
-
-      assert {:error, {:shared_thread, :recovering_from_restore}} =
-               SharedThreads.add(alice, thread.id, identifier: identifier())
-
-      assert Enum.all?(people!(alice, thread), &(&1.status == "active"))
-
-      assert :ok = SharedThreads.remove(alice, thread.id, user_id: dave)
-      assert {:ok, %{ended: false}} = SharedThreads.leave(alice, thread.id)
-      assert seated_ids(bob, thread) == [bob]
-    end
-
-    test "an invitation it holds stays an invitation at sign-in, and becomes the seat once the recovery closes",
-         %{alice: alice, bob: bob} do
-      thread = thread!(alice) |> seated!(alice, [bob])
-      held = identifier()
-      {:ok, :added} = SharedThreads.add(alice, thread.id, identifier: held)
-      restore = open_restore!(bob)
-      user = remote!(held)
-
-      assert {:ok, 0} = SharedThreads.activate_invited(user)
-
-      assert [%{identifier: ^held, status: "invited"}] =
-               Enum.filter(people!(alice, thread), &(&1.status == "invited"))
-
-      refute user.id in seated_ids(alice, thread)
-
-      :ok = close_restore!(restore)
-      assert {:ok, 1} = SharedThreads.activate_invited(user)
-      assert user.id in seated_ids(alice, thread)
-      refute Enum.any?(people!(alice, thread), &(&1.status == "invited"))
     end
   end
 

@@ -23,10 +23,6 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
   # are application environment.
   use Emissary.Web.ConnCase, async: false
 
-  # What a device that keeps its key under a local unlock reports of it,
-  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
-  @holder %{holder_kind: "software", display_name: "Test device"}
-
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
@@ -43,7 +39,7 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
       {:sanctum, :company_login},
       {:sanctum, :oidc_issuer},
       {:sanctum, :caller_memo_ttl_ms},
-      {:ueberauth, Ueberauth}
+      {:sanctum, :oidc_client}
     ]
 
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.fetch_env(app, key)} end)
@@ -68,13 +64,7 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
   # The `oidcc` client the company's issuer knows this CYFR by: changing
   # its id is a configuration change, under which no binding stands.
   defp client!(client_id) do
-    Application.put_env(:ueberauth, Ueberauth,
-      providers: [
-        oidcc:
-          {Ueberauth.Strategy.Oidcc,
-           issuer: :cyfr_oidc, client_id: client_id, client_secret: "csec"}
-      ]
-    )
+    Application.put_env(:sanctum, :oidc_client, %{client_id: client_id, client_secret: "csec"})
   end
 
   # The person's company sign-in, given under the configuration this CYFR
@@ -280,30 +270,8 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
 
     # A device paired through the ceremony, from its own address.
     defp pair!(session_ctx) do
-      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-
-      {:ok, invitation} =
-        Sanctum.TestContext.confirming(
-          session_ctx,
-          &Sanctum.Pairing.begin(&1, %{"key_digest" => Device.key_digest(device_key)})
-        )
-
-      glass = Context.build(%{authenticated: false, client_ip: "198.51.100.61"})
-
-      {:ok, %{challenge: challenge}} =
-        Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
-          holder: @holder,
-          device_key: device_key
-        })
-
-      {:ok, %{client_id: client_id, certificate: certificate}} =
-        Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
-          holder: @holder,
-          device_key: device_key,
-          proof: Proof.encode(Proof.sign(challenge, private))
-        })
-
-      %{cert: certificate, client_id: client_id, private: private}
+      paired = Sanctum.Test.Devices.paired!(session_ctx.user_id, "198.51.100.61")
+      %{cert: paired.certificate, client_id: paired.client_id, private: elem(paired.key, 1)}
     end
 
     # The device's channel after its proof verified, driven through the

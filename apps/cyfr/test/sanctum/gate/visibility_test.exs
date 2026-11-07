@@ -592,8 +592,7 @@ defmodule Sanctum.Gate.VisibilityTest do
         MapSet.new(~w(
           session.logout session.whoami
           session.read_resource
-          system.status tincture.invoke_public pairing.complete
-          person.renew_certificate
+          system.status tincture.invoke_public
         ))
 
       assert anonymous == expected

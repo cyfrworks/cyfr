@@ -784,17 +784,10 @@ defmodule Locus.Runtime.AttachedFetchTest do
     {_nia, _head, refs} = first_sign_in!("Nia")
     assert refs == []
 
-    # Terry recovers his passkey, as a recovery re-enables it, and rotates
-    # both keys. A rotation revives neither share nor Alice's grant: the
-    # shares stay revoked, her run is refused, a first sign-in still binds
-    # nothing, and the revoked share cannot be granted again.
-    passkey = Arca.Repo.get_by!(Arca.Schemas.Passkey, user_id: terry.user.id)
-
-    {:ok, _reenabled} =
-      Arca.Passkeys.reenable(Prima.Actor.system(), terry.user.id, passkey.id,
-        verify: fn _passkey -> :ok end
-      )
-
+    # Terry rotates both keys, confirmed by his account. A rotation
+    # revives neither share nor Alice's grant: the shares stay revoked, her
+    # run is refused, a first sign-in still binds nothing, and the revoked
+    # share cannot be granted again.
     :ok = rotate!(terry, entry, %{"KEY" => @rotated_secret})
     :ok = rotate!(terry, model, %{"OPENAI_API_KEY" => @model_secret <> "-rotated"})
 

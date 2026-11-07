@@ -337,9 +337,9 @@ defmodule Cyfr.Boundaries do
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
-    Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
-    Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
-    Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
+    Arca.PersonIdentities Arca.IdentityLog
+    Arca.DirectoryHeads Arca.DeviceCertificates
+    Arca.PendingConfirmations Arca.InstallationClaims
     Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
@@ -412,8 +412,8 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
-        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Person Sanctum.Provisioning
-        Sanctum.Recovery Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
+        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning
+        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
         Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
@@ -423,16 +423,13 @@ defmodule Cyfr.Boundaries do
           "the component work and calls down into it. OCI and registry transports " <>
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
           "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`, " <>
-          "which also decides the fresh confirmation issuing another one needs; every " <>
-          "request a person makes at the registry is signed by their live key " <>
-          "(`Sanctum.Person.sign_registry_request/3`), and what its answer writes is " <>
-          "written only while the caller still stands " <>
-          "(`Sanctum.Caller.revalidate_session/1`). " <>
-          "`Sanctum.Recovery` is `registry.register`'s drive of the enrollment a " <>
-          "person's admission opened: registering it at the directory (`advance/1`) " <>
-          "and replacing the name it wants before the registry's claim " <>
-          "(`rename/2`), each decided by Sanctum on the caller's own attempt; " <>
-          "removing a component's last version revokes its profiles " <>
+          "which also decides the fresh confirmation issuing another one needs. " <>
+          "A registry operation a key of the person's account signs is minted and its " <>
+          "answer taken by `Sanctum.SignIn` (`binding/1`, `request/3`, `answer/3`), the " <>
+          "namespace a token mint names recorded by it (`record_namespace/2`), and the " <>
+          "caller's standing read again by `Sanctum.Caller` (`revalidate_session/1`) " <>
+          "before the answer's tokens are stored. " <>
+          "Removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
           "`Sanctum.TinctureAuth` is a canvas activation's spend of the validation " <>
@@ -457,9 +454,10 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
+        Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Mount
+        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
+        Sanctum.Mount
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
         Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.Vault
         Sanctum.VaultReader
@@ -500,8 +498,9 @@ defmodule Cyfr.Boundaries do
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
           "roots at: its public-profile and private-access policy. " <>
-          "`Sanctum.Carry` is `Cyfr.RetentionScheduler`'s periodic sweep of every " <>
-          "person's expired sign-in carries (`sweep/1`), which names no store. " <>
+          "`Sanctum.IdentityFreshness` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
+          "the account heads a sign-in read for no one here (`sweep/1`), which names no " <>
+          "store. " <>
           "`Sanctum.Shares` is " <>
           "`Cyfr.RetentionScheduler`'s periodic sweep of share usage days (`sweep_usage/0`), " <>
           "which names no share and no person; and the composition root's announcement of " <>
@@ -525,10 +524,10 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
-        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.DevicePin
-        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Egress
+        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts
+        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Directory.Handles Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
-        Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
+        Sanctum.Network Sanctum.Proxy Sanctum.Refusals Sanctum.Resources
         Sanctum.RunningTasks Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
@@ -556,9 +555,9 @@ defmodule Cyfr.Boundaries do
           "the loader reads a stored head (`admitted_blob/3`, with its one reading of a " <>
           "damaged head), for the flows the tincture's ingress declares to the origins " <>
           "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
-          "decisions, the restore ingress `Sanctum.Recovery`'s, a protected device's " <>
-          "enrollment `Sanctum.DeviceUnlock`'s, a locked device's PIN evaluation and " <>
-          "reset `Sanctum.DevicePin`'s, and the device channel checks each " <>
+          "decisions, the handle registry's beside it `Sanctum.Directory.Handles`'s, the " <>
+          "account pages' served only by the directory's writer, a device's hello and " <>
+          "its admission `Sanctum.DeviceUnlock`'s, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts` and slides, and at its end " <>
           "retires, the sessions its unlocks reserved and holds its device's storage report " <>
           "through `Sanctum.DeviceUnlock`. " <>
@@ -604,19 +603,18 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
+        Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
-        Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations
-        Sanctum.Newcomer Sanctum.Pairing
-        Sanctum.Passkeys Sanctum.PolicyLog
-        Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
+        Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Invitations
+        Sanctum.Newcomer Sanctum.Pairing Sanctum.PolicyLog
+        Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SharedThreads Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
-        "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
-          "sign-in method before the sign-in response mints a session), its context guard " <>
+        "the console, its browser sign-in (`PrismWeb.LoginLive`, which mints a request " <>
+          "and takes its answer into a session, `Sanctum.SignIn`), its context guard " <>
           "(`CyfrWeb.ContextGuard`, which names " <>
           "`Sanctum.Caller` and `Sanctum.Context` alone) and the web tier's shared " <>
           "ingress plugs (`CyfrWeb.Plugs.*`), which are the auth fabric's own " <>
@@ -630,52 +628,30 @@ defmodule Cyfr.Boundaries do
           "change of a thread goes through the `shared_thread` tool. " <>
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
-          "control and never decides: the operation a confirmation dispatches decides. " <>
-          "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
-          "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
-          "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
+          "control and never decides: the operation a confirmation dispatches decides; " <>
+          "and its read of the person's checklist after a declared restore " <>
+          "(`restore_checklist/1`), what it lists for them to re-enable, re-consent and " <>
+          "rotate; each re-enable it offers is an operation, decided there. " <>
           "`Sanctum.DeviceUnlock` is a protected device's unlock page: the ticket its " <>
           "shell's channel was answered, spent once for the session (`redeem/1`), which " <>
           "decides in the issuance transaction. " <>
-          "`Sanctum.Newcomer` is the setup page's admission of the installation's first " <>
-          "person: whether the setup link's token opens setup now (`setup_open/1`), " <>
-          "before any ceremony, and the setup admission its passkey brings (`admit/2`), " <>
-          "with the new person's name, recovery secret and request id parsed from the " <>
-          "page's fields (`identity/1`), which decides in its own transaction; it is " <>
-          "also the sign-in page's open " <>
-          "admission, offered while the door's `*` admits " <>
-          "(`Sanctum.Door.Store.wildcard/0`, which only shows the offer: the admission " <>
-          "asks the door again), and the invitation page's admission of the person an " <>
-          "invitation names (`admit/2`). `Sanctum.Invitations` is that page's read of " <>
-          "who invited and to which athanor, or that the code admits no one " <>
-          "(`lookup/1`), before any ceremony, which grants nothing: the admission " <>
-          "decides again in its transaction; the sign-in page reads the same for an " <>
-          "existing identity's invitation and keeps only its hash (`code_hash/1`), " <>
-          "which the CYFR sign-in redeems. `Sanctum.Handle` is the identity card's " <>
-          "live check of a handle against the registry's answer (`resolve/1`), " <>
-          "navigation that grants nothing. " <>
+          "`Sanctum.Newcomer` is the setup page's read of whether the setup link's token " <>
+          "opens setup now (`setup_open/1`), before it offers anything. " <>
+          "`Sanctum.SignIn` is the sign-in, setup and invitation pages' request, bound to " <>
+          "the browser, holding the setup token or an invitation's hash (`request/2,3`), " <>
+          "and the sign-in page's answer to it (`answer/2`), which decides for itself and " <>
+          "admits or signs in only under the door, the setup token or the invitation. " <>
+          "`Sanctum.Invitations` is the invitation page's read of who invited and to which " <>
+          "athanor, or that the code admits no one (`lookup/1`), which grants nothing, " <>
+          "and the hash it keeps (`code_hash/1`). " <>
           "`Sanctum.CompanyLogin` is the company page's: whether the browser's session is " <>
           "refused for the company sign-in alone (`held/1`), the sign-in it begins for that " <>
           "session (`start/1`) and the issuer's callback it finishes (`complete/2`), which " <>
           "binds only in its own transaction and unlocks no one. " <>
-          "`Sanctum.Passkeys` is the sign-in page's passkey sign-in method: the challenge it holds " <>
-          "and the answer it verifies into a session, as the device flow's poll is " <>
-          "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` sign-in method's: " <>
-          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), the " <>
-          "challenge it mints for the carry they bring back, held to the identifier a " <>
-          "handle requested (`challenge/2`), where the " <>
-          "callback's hop returns them (`redirect_url/1`), the assertion the callback " <>
-          "admits into a session, through the sign-in method (`callback/2`), and the carry's " <>
-          "lifetime the sign-in and `/carry` pages hand their script " <>
-          "(`carry_lifetime_ms/0`); " <>
-          "`Sanctum.Auth.OIDC.reauth_callback/1` and " <>
-          "`reauth_decide/3` are the re-authentication's callback and its person's answer " <>
-          "(`PrismWeb.ReauthController`), which confirm one pending confirmation on that " <>
-          "answer and mint nothing. " <>
           "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` " <>
           "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
           "it passes no rate-limit plug, which makes the console the only per-address " <>
-          "bound on the anonymous device flows it starts. " <>
+          "bound on the anonymous sign-in requests it mints. " <>
           "`Sanctum.Gate` is the gate the console's and the web tier's calls pass. " <>
           "`Sanctum.Catalog` is the approval card's read of an action's declaration, " <>
           "the stream ingress's read of a stream's (`CyfrWeb.SSE`) and the AQUA page's " <>
@@ -911,9 +887,10 @@ defmodule Cyfr.Boundaries do
       allow: ~w(Compendium),
       reason:
         "the console reads components, agents, path grammars, the projection epoch " <>
-          "and the registry's legal pages through the component domain's root facade " <>
-          "(the pages that admit a person register them through the gate, " <>
-          "`registry.register`), and a " <>
+          "and the registry's legal pages through the component domain's root facade, " <>
+          "and the sign-in page completes a registry request a passkey signed there " <>
+          "(`Compendium.complete_registry/2`), whose request was minted through the " <>
+          "gate; a " <>
           "registry refusal reaches it as a `%Prima.Refusal{}`; " <>
           "the publisher and version vocabularies it reads are Prima's. " <>
           "Boundary's exports are global, and `Compendium` exports its two paths, " <>
@@ -1042,17 +1019,15 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
-        CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.ConfiguredUeberauth
-        CyfrWeb.Plugs.FrameRequest
-        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
+        CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.FrameRequest
+        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
           "verified routes need, and never another adapter. Browser sign-in answers its " <>
           "refusals on the no-session page (`CyfrWeb.MinimalPage`), records each as the " <>
           "request's refused decision under the identity its pipeline mints, as every " <>
-          "admission entry does (`CyfrWeb.Plugs.CallIdentity`), and runs the " <>
-          "configured providers' strategy (`CyfrWeb.Plugs.ConfiguredUeberauth`). " <>
+          "admission entry does (`CyfrWeb.Plugs.CallIdentity`). " <>
           "`PrismWeb.verified_routes/0` " <>
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
@@ -1168,14 +1143,13 @@ defmodule Cyfr.Boundaries do
         CyfrWeb.Plugs.ParserErrors CyfrWeb.Plugs.RawBodyReader
         CyfrWeb.Plugs.ScrubTinctureCredentials CyfrWeb.Plugs.TinctureRateLimit
         CyfrWeb.Plugs.VerifyWebhookSignature CyfrWeb.Plugs.WebhookIdempotency
-        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE CyfrWeb.SignInResponse
+        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE
       ),
       reason:
         "Emissary's adapters read the host's shared web tier and never its root router, " <>
           "its endpoint or another adapter: the HTTP API renders its refusals " <>
           "(`CyfrWeb.ApiError`) and the OAuth grant callback its no-session page " <>
-          "(`CyfrWeb.MinimalPage`), the API's sign-out drops the cookie session through " <>
-          "the sign-in response (`CyfrWeb.SignInResponse`), and `Emissary.Router` " <>
+          "(`CyfrWeb.MinimalPage`), and `Emissary.Router` " <>
           "declares the OAuth callback throttle from the shared pipelines " <>
           "(`CyfrWeb.Pipelines`). The MCP pipeline parses its body behind the transport's " <>
           "rate limit and authentication with the host's one parser definition " <>
@@ -1225,14 +1199,14 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "profiles, consents and their proofs, standing tool grants, vault entries, " <>
-          "sessions, API keys, tincture frame credentials, paired clients, their " <>
-          "pairing invitations and device certificates, registry push tokens, " <>
+          "sessions, API keys, tincture frame credentials, paired clients and their " <>
+          "device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
           "the identities, athanors and sign-in permissions that decide standing, " <>
           "the invitations that admit a person and seat them, a person's company sign-in " <>
           "and the company sign-ins in flight, a " <>
-          "person's identity row, keys, attempts and carries, the directory's logs " <>
-          "and cached heads, passkeys, pending confirmations, the installation claim, " <>
+          "person's identity row, the directory's logs " <>
+          "and cached heads, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, shares and " <>
           "their use counts, the admission decisions and the request-log rows " <>
           "that project them, and the policy consultation log " <>
@@ -1736,14 +1710,6 @@ defmodule Cyfr.Boundaries do
           "a hash of its token, for a bounded time: server-local memory, never a row."
     },
     %{
-      from: "PrismWeb.AuthController",
-      into: "Arca.Cache",
-      functions: [:take],
-      reason:
-        "a sign-in ticket the login page left is taken once by the callback that " <>
-          "completes it, so a ticket cannot be replayed: server-local memory, never a row."
-    },
-    %{
       from: "PrismWeb.LoginLive",
       into: "Arca.Cache",
       functions: [:put],
@@ -1753,13 +1719,173 @@ defmodule Cyfr.Boundaries do
           "never a row."
     },
     %{
-      from: "PrismWeb.AdmissionCard",
+      from: "PrismWeb.ModelCatalog",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "a run's model catalogue is kept per athanor for a while; a read answers it or " <>
+          "a miss, and drops an expired entry as it finds it, which is the cache's own " <>
+          "housekeeping."
+    },
+    %{
+      from: "PrismWeb.ShellLive",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the shell's tincture scan is marked running per athanor so two refreshes " <>
+          "start one scan; a read answers the mark or a miss, and drops an expired mark " <>
+          "as it finds it, which is the cache's own housekeeping."
+    },
+    %{
+      from: "PrismWeb.ShellLive",
+      into: "Arca.Cache.Keys",
+      functions: [:tincture_scan_running],
+      reason:
+        "the scan mark's key is the cache's own spelling for the actor's athanor, so " <>
+          "the shell and the scan name one entry; it reads nothing."
+    },
+    %{
+      from: "PrismWeb.Surface",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the mode a browser session was last in, and its last Dashboard page, are kept " <>
+          "under a hash of its token; a read answers them or a miss, and drops an " <>
+          "expired entry as it finds it, which is the cache's own housekeeping."
+    },
+    %{
+      from: "PrismWeb.ThreadPaneLive",
+      into: "Arca.Execution",
+      functions: [:get_tenant],
+      reason:
+        "a pending card offers \"for this schedule\" only where its run was started " <>
+          "by one: the pane reads the run's execution row once, under the pane's actor, " <>
+          "for its schedule id alone."
+    },
+    %{
+      from: "PrismWeb.ThreadPaneLive",
+      into: "Arca.ThreadStorage",
+      functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
+      reason:
+        "the pane opens a thread, its latest messages and a room's crew threads under the " <>
+          "pane's actor, and decodes a message's stored payload and resolution with the " <>
+          "store's own projections, which read no row; the assistant owns every thread write."
+    },
+    # --- the MCP surface's web adapters ---
+    %{
+      from: "Emissary.Web.ExecutionEventsController",
+      into: "Arca.Execution",
+      functions: [:get_tenant],
+      reason:
+        "an execution's event stream opens only on an execution the caller's actor " <>
+          "finds in its own tenant, read once before the read is authorized; the " <>
+          "engine owns every execution write."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.Cache",
+      functions: [:get, :table_name],
+      reason:
+        "the readiness probe answers from its last checks within the cache window, " <>
+          "and checks that the cache's table exists: server-local memory, never a row."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
+      reason:
+        "a server that lost its control-plane slot is not ready: the probe asks " <>
+          "whether this server holds the slot, which reads its own lease state and no row."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.Health",
+      functions: [:check],
+      reason:
+        "the probe asks the storage layer whether the database answers, which " <>
+          "`Arca.Health` owns and which reads no table."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.PlatformSettings",
+      functions: [:effective],
+      reason:
+        "the probe's cache window is a platform setting, read as it stands; no " <>
+          "athanor's row."
+    },
+    %{
+      from: "Emissary.Web.TinctureAssets",
+      into: "Arca",
+      functions: [:get, :serve_to_conn],
+      reason:
+        "a tincture's files are read and streamed from the storage facade under the " <>
+          "frame credential's actor, tenant-relative, once the asset server has found " <>
+          "the version and its served type."
+    },
+    %{
+      from: "Emissary.Web.TinctureDataController",
+      into: "Arca.PlatformSettings",
+      functions: [:effective],
+      reason:
+        "the frame invocation rate's bounds are platform settings, read as they stand " <>
+          "on each request; no athanor's row."
+    }
+  ]
+
+  @surface_writes [
+    %{
+      from: "Emissary.Web.HealthController",
       into: "Arca.Cache",
       functions: [:put],
       reason:
-        "the page that admitted a newcomer leaves the passkey sign-in's single-use ticket, " <>
-          "bound to the browser, for the callback that completes it, once the person says " <>
-          "their recovery code is saved, for a bounded time: server-local memory, never a row."
+        "the readiness probe keeps its checks for the cache window, so several " <>
+          "monitors' probes cost one check: server-local memory, never a row."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca",
+      functions: [:delete, :put],
+      reason:
+        "the storage check writes and removes one fixed probe object under the " <>
+          "`system/` global root, so a full disk, a read-only volume or a broken " <>
+          "object-store credential flips readiness; it holds no athanor's data."
+    },
+    %{
+      from: "Emissary.Web.WebhookController",
+      into: "Arca.WebhookDeliveryStorage",
+      functions: [:settle],
+      reason:
+        "the delivery task settles the idempotency claim the ingress plug staked " <>
+          "(`CyfrWeb.Plugs.WebhookIdempotency`), the one code that knows how the " <>
+          "delivery ended: kept when it succeeded, re-deliverable when it failed. " <>
+          "The claim holds no athanor's data."
+    },
+    %{
+      from: "CyfrWeb.Plugs.WebhookIdempotency",
+      into: "Arca.WebhookDeliveryStorage",
+      functions: [:record, :release],
+      reason:
+        "a delivery's idempotency key is claimed before the delivery is admitted and " <>
+          "released when it is not taken up, so a retried delivery runs once: the claim " <>
+          "is the ingress plug's own, keyed by the webhook and the sender's key, and " <>
+          "holds no athanor's data."
+    },
+    %{
+      from: "PrismWeb.AquaPanelLive",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the panel keeps its open state, thread and placement per browser session, under " <>
+          "a hash of its token, for a bounded time: server-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.LoginLive",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the login page leaves a single-use ticket, bound to the browser, for the " <>
+          "callback that completes the sign-in, for a bounded time: server-local memory, " <>
+          "never a row."
     },
     %{
       from: "PrismWeb.ModelCatalog",
@@ -1774,8 +1900,8 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Cache",
       functions: [:take],
       reason:
-        "a passkey sign-in ticket is taken once by the request that completes it, so " <>
-          "a ticket cannot be replayed: server-local memory, never a row."
+        "a sign-in ticket is taken once by the request that completes it, so a ticket " <>
+          "cannot be replayed: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.ShellLive",
@@ -1896,8 +2022,6 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       origin: 0,
       registry_base_url: 1,
-      registry_host: 0,
-      setup_token?: 1,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
@@ -1910,22 +2034,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Attach" => [resolve: 5],
-    "Sanctum.Auth.CyfrDoor" => [
-      callback: 2,
-      carry_lifetime_ms: 0,
-      challenge: 2,
-      redirect_url: 1,
-      signing_home: 1
-    ],
-    "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1],
-    "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
-    "Sanctum.Auth.OIDC" => [
-      authenticate: 1,
-      email_verified: 1,
-      issuer: 0,
-      reauth_callback: 1,
-      reauth_decide: 3
-    ],
+    "Sanctum.Auth.OIDC" => [issuer: 0],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
@@ -1933,11 +2042,9 @@ defmodule Cyfr.Boundaries do
       drop_memo: 1,
       establish: 2,
       establish_context: 1,
-      establish_kit: 2,
       fresh?: 1,
       revalidate_session: 1
     ],
-    "Sanctum.Carry" => [sweep: 1],
     "Sanctum.Catalog" => [
       action_declaration: 1,
       auto_permitted?: 2,
@@ -2013,20 +2120,26 @@ defmodule Cyfr.Boundaries do
       purge_global: 2,
       refused: 3
     ],
-    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
-    "Sanctum.DevicePin" => [evaluate: 2, reset: 2],
+    "Sanctum.DeviceCerts" => [challenge_key: 2, verify_connect: 3, verify_request: 2],
     "Sanctum.DeviceUnlock" => [
+      admit: 2,
       closed: 3,
-      enroll: 2,
-      enrollment_challenge: 2,
+      hello: 2,
       redeem: 1,
       report_storage: 2,
-      resume: 2,
       slide: 2
     ],
-    "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
+    "Sanctum.Directory" => [
+      append: 2,
+      from: 1,
+      register: 1,
+      resolve: 1,
+      served: 0,
+      writer?: 0
+    ],
+    "Sanctum.Directory.Handles" => [claim: 1, resolve: 1],
     "Sanctum.Door" => [refusal_message: 0],
-    "Sanctum.Door.Store" => [requests: 0, wildcard: 0],
+    "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Gate" => [
@@ -2036,7 +2149,7 @@ defmodule Cyfr.Boundaries do
       open_stream: 2,
       open_stream: 3
     ],
-    "Sanctum.Handle" => [resolve: 1],
+    "Sanctum.IdentityFreshness" => [sweep: 1],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Mount" => [
@@ -2049,10 +2162,9 @@ defmodule Cyfr.Boundaries do
       signed_in: 2
     ],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
-    "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],
+    "Sanctum.Newcomer" => [setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
-    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
-    "Sanctum.Passkeys" => [newcomer_options: 1, sign_in: 2, sign_in_challenge: 0],
+    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1, restore_checklist: 1],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],
     "Sanctum.Provisioning" => [
@@ -2077,19 +2189,7 @@ defmodule Cyfr.Boundaries do
       under_claim: 3
     ],
     "Sanctum.Proxy" => [install!: 1],
-    "Sanctum.Recovery" => [
-      advance: 1,
-      checklist: 1,
-      kit_challenge: 1,
-      kit_proof: 1,
-      kit_reenable: 4,
-      rename: 2,
-      reproof: 2,
-      restore: 2,
-      restore_challenge: 1
-    ],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
-    "Sanctum.Person" => [sign_registry_request: 3],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,
       delete_push_token: 4,
@@ -2100,7 +2200,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
-    "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
+    "Sanctum.Session" => [cleanup: 0, destroy: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [
       attachment: 4,
@@ -2111,17 +2211,14 @@ defmodule Cyfr.Boundaries do
       tail: 3
     ],
     "Sanctum.SignIn" => [
-      link_ticket: 2,
-      record_claim: 2,
+      answer: 2,
+      answer: 3,
+      binding: 1,
       record_namespace: 2,
-      unlock: 1
+      request: 2,
+      request: 3
     ],
-    "Sanctum.Tenancy" => [
-      channel_active?: 2,
-      continuation: 3,
-      resolve_status: 2,
-      revalidate: 1
-    ],
+    "Sanctum.Tenancy" => [channel_active?: 2, continuation: 3, revalidate: 1],
     "Sanctum.Tenancy.Athanors" => [
       active?: 1,
       by_route_slug: 1,
@@ -2135,6 +2232,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Tenancy.Users" => [
       display_name: 1,
       get: 1,
+      identifier: 1,
       list_by_id: 1,
       own_athanor?: 2,
       prefs: 1,
@@ -2309,15 +2407,6 @@ defmodule Cyfr.Boundaries do
       admits: :flow_state,
       why: "a device-flow ticket or a post-acceptance hop, each single-use and consumed on lookup"
     },
-    browser_cyfr_callback: %{
-      admits: :flow_state,
-      why:
-        "the `cyfr` sign-in method's callback: a person assertion over the challenge this CYFR keeps " <>
-          "in the browser's own session cookie, posted with the browser pipeline's CSRF " <>
-          "token, verified under the person's head read fresh from the directory their " <>
-          "genesis names, and redeemed once through its login receipt " <>
-          "(`Sanctum.Auth.CyfrDoor`)"
-    },
     public_health: %{
       admits: :nothing,
       why: "a load balancer's probe, throttled per address"
@@ -2332,39 +2421,19 @@ defmodule Cyfr.Boundaries do
         "the sign-out post drops whatever session the browser has and needs none to " <>
           "be told to; POST and not GET, so the browser pipeline's CSRF token guards it"
     },
-    browser_oauth_start: %{
-      admits: :nothing,
-      why: "starts an IdP round trip and carries nothing of the caller into it"
-    },
     public_directory: %{
       admits: :nothing,
       why:
-        "the identity directory's reads and a genesis registration, which any caller may " <>
-          "make: a log is public history, and a genesis names its own keys and is its own " <>
-          "identifier. No session; every request is bounded per source and per installation"
+        "the identity directory's reads, a genesis registration, a handle's answer and the " <>
+          "account pages, which any caller may ask: a log and a handle are public, a genesis " <>
+          "names its own keys and is its own identifier, and the pages are static. No " <>
+          "session; every directory and handle request is bounded per source and per installation"
     },
     directory_signed: %{
       admits: :credential,
       why:
-        "a directory entry or recovery, signed by a key the identifier's verified chain " <>
-          "authorizes and verified against that chain before anything is written; no session"
-    },
-    device_key_proof: %{
-      admits: :credential,
-      why:
-        "a certified device's renewal at the CYFR that holds its person's identity: the device key's proof over a " <>
-          "renewal challenge this CYFR issued for a certification it recorded, under the " <>
-          "person's current `key_epoch` (`Sanctum.RemoteCertification`); no session or cookie " <>
-          "is read, and CORS answers any origin with no credentials, since the proof is the " <>
-          "only credential"
-    },
-    installation_capability: %{
-      admits: :credential,
-      why:
-        "the restore ingress: the installation capability (`CYFR_RESTORE_TOKEN`) as the " <>
-          "authorization header, checked in constant time before any kit is read, any key " <>
-          "staged or any outbound call made (`Sanctum.Recovery`); no session and no CSRF " <>
-          "token, since no cross-site form sets the header and no CORS answer admits one"
+        "a directory entry, or a handle claim, signed by a key the identifier's verified " <>
+          "chain lists and verified against that chain before anything is written; no session"
     },
     device_unlock_ticket: %{
       admits: :credential,
@@ -2378,42 +2447,6 @@ defmodule Cyfr.Boundaries do
           "`POST /device/session` spends the same ticket the same way and answers the " <>
           "session's token in its body, reading and setting no cookie, so no CSRF token " <>
           "is asked"
-    },
-    device_pin: %{
-      admits: :credential,
-      why:
-        "a locked remote device's PIN (`Sanctum.DevicePin`): the evaluation is reached by " <>
-          "the evaluator identifier alone, which the device holds while its key is wrapped " <>
-          "and which grants nothing but one charged evaluation of one blinded element, " <>
-          "bounded by the evaluator's own wait; the reset is the device key's proof over the " <>
-          "challenge its last evaluation answered, verified against the stored row and " <>
-          "consumed once. No session, cookie or CSRF token is read, and no CORS answer " <>
-          "admits a browser"
-    },
-    device_enrollment: %{
-      admits: :credential,
-      why:
-        "a protected device's enrollment (`Sanctum.DeviceUnlock`): the setup token in the " <>
-          "`x-cyfr-setup-token` header, checked in constant time, an invitation's code in " <>
-          "the `x-cyfr-invitation` header, the door's open admission counted against the " <>
-          "caller's address, or a restore's own session within its first-method window, " <>
-          "or for a resume the restore token as the authorization header; then the device " <>
-          "key's proof over an `enroll` challenge this CYFR holds and consumes once. No CSRF " <>
-          "token, since no cross-site form sets these headers and no CORS answer admits " <>
-          "one, and a restore's cookie or an open admission alone enrolls nothing without " <>
-          "the proof over a challenge only its answer carries"
-    },
-    restore_kit_proof: %{
-      admits: :credential,
-      why:
-        "a person recovering from a declared restore, with no sign-in method left: a " <>
-          "challenge this CYFR holds for their identifier while their recovery is open, " <>
-          "bounded per address and per person; a kit proof over it, signed by a recovery " <>
-          "key of their identity read fresh from its directory and redeemed once; and the " <>
-          "kit credential it answers, admitted for the four re-enable operations and their " <>
-          "previews alone (`Sanctum.Recovery`, `Sanctum.Caller.establish_kit/2`); no session " <>
-          "and no CSRF token, since no cross-site form sets the header and no CORS answer " <>
-          "admits one"
     },
     browser_company_login: %{
       admits: :session,
@@ -2435,17 +2468,17 @@ defmodule Cyfr.Boundaries do
   }
 
   @public_routes [
+    {:get, "/account/:name"},
     {:get, "/api/health"},
     {:get, "/api/health/ready"},
-    {:get, "/auth/:provider"},
     {:post, "/auth/logout"},
     {:get, "/directory/v1/:identifier"},
-    {:post, "/directory/v1/genesis"},
+    {:get, "/directory/v1/:identifier/from/:hash"},
+    {:post, "/directory/v1/register"},
     {:get, "/invite"},
     {:get, "/login"},
-    {:get, "/pair"},
-    {:get, "/restore"},
-    {:get, "/setup"}
+    {:get, "/setup"},
+    {:get, "/v1/handles/:handle"}
   ]
 
   @doc """
@@ -2545,7 +2578,7 @@ defmodule Cyfr.Boundaries do
   # ---------------------------------------------------------------------------
 
   @config_key_classes %{
-    # Test seams — see `Sanctum.Auth.DeviceFlow.impl/0` for the rule.
+    # Test seams: a hook a test sets and no release does.
     allow_tenancy_resolver_override: :seam,
     # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
     # read by `CyfrWeb.Plugs.Authenticate`): `CyfrWeb.ConnCase` sets it,
@@ -2554,13 +2587,10 @@ defmodule Cyfr.Boundaries do
     tenancy_resolver_override: :seam,
     tool_providers_lenient: :seam,
     thread_recovery: :seam,
-    device_flow: :seam,
-    device_flow_endpoints: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,
-    # The issuer's side of an OpenID Connect re-authentication or company
-    # sign-in (`Sanctum.Auth.OIDC`): a test stands in its own for the token
-    # exchange, as `device_flow` does for the device flow's.
+    # The issuer's side of a company sign-in (`Sanctum.Auth.OIDC`): a test
+    # stands in its own for the token exchange.
     oidc_reauth_client: :seam,
     # WorkOS's API base URL (`Sanctum.Auth.WorkOS`), which a suite points at
     # its scripted WorkOS on loopback; a release never sets it, so the
@@ -2654,11 +2684,6 @@ defmodule Cyfr.Boundaries do
     # The consent proofs' store (`Sanctum.Consent.Proof`), durable in every
     # release; the suite holds them in memory.
     consent_proof_store: :seam,
-    # A one-time confirmation code's transport
-    # (`Sanctum.Auth.EmailVerification`): the tree ships none, so only the
-    # suite sets one, its capture sink; with none the email method refuses
-    # `:email_unavailable`.
-    confirmation_code_transport: :seam,
     # The registry probe's switch, read by `Compendium.Provider.status/0`.
     registry_health_probe: :seam,
 
@@ -2967,67 +2992,18 @@ defmodule Cyfr.Boundaries do
     # identifier's own chain authorizes each write.
     %{module: Emissary.Web.DirectoryController, site: :register, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :resolve, plane: :external, origin: :none},
+    %{module: Emissary.Web.DirectoryController, site: :from, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :append, plane: :external, origin: :none},
-    %{module: Emissary.Web.DirectoryController, site: :recover, plane: :external, origin: :none},
-    # Restore, an entry path because no person exists yet to admit an
-    # operation, and the recovery kit, its own ingress: the installation
-    # capability, the kit, its proof and the kit credential. The kit
-    # credential's context is `Sanctum.Caller.establish_kit/2`'s and names
-    # no origin.
-    %{module: Emissary.Web.RestoreController, site: :restore, plane: :external, origin: :none},
-    # A protected device's enrollment, an entry path too: the setup token
-    # or a restore's session, then the device key's proof.
-    %{
-      module: Emissary.Web.DeviceEnrollmentController,
-      site: :challenge,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Emissary.Web.DeviceEnrollmentController,
-      site: :complete,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Emissary.Web.DeviceEnrollmentController,
-      site: :resume,
-      plane: :external,
-      origin: :none
-    },
-    # A locked remote device's PIN: its evaluator identifier, then the
-    # reset its unwrapped key proves.
-    %{
-      module: Emissary.Web.DevicePinController,
-      site: :evaluate,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Emissary.Web.DevicePinController,
-      site: :reset,
-      plane: :external,
-      origin: :none
-    },
+    # The handle registry beside the directory, which
+    # `Sanctum.Directory.Handles` decides: a node serving no directory, a
+    # handle no one holds, a claim its account's log does not verify, the
+    # directory's windows. The account's own chain authorizes a claim.
+    %{module: Emissary.Web.HandleController, site: :resolve, plane: :external, origin: :none},
+    %{module: Emissary.Web.HandleController, site: :claim, plane: :external, origin: :none},
     # A protected command line's session: the unlock's one-time ticket.
     %{
       module: Emissary.Web.DeviceSessionController,
       site: :create,
-      plane: :external,
-      origin: :none
-    },
-    %{module: Emissary.Web.RestoreController, site: :challenge, plane: :external, origin: :none},
-    %{module: Emissary.Web.RestoreController, site: :reproof, plane: :external, origin: :none},
-    %{
-      module: Emissary.Web.RestoreController,
-      site: :kit_challenge,
-      plane: :external,
-      origin: :none
-    },
-    %{module: Emissary.Web.RestoreController, site: :kit, plane: :external, origin: :none},
-    %{
-      module: Emissary.Web.RestoreController,
-      site: :kit_reenable,
       plane: :external,
       origin: :none
     },
@@ -3041,33 +3017,13 @@ defmodule Cyfr.Boundaries do
       plane: :external,
       origin: :none
     },
-    # The browser's sign-in, re-authentication and policy acceptance, which
-    # establish a person's sign-in, prove it fresh or complete it rather
-    # than act under a context the gate admitted: a sign-in's start,
-    # its tickets, callbacks and door link, a company sign-in's start and
-    # callback, a fresh sign-in's proof of a
-    # confirmation and the answer to it, and the registry policy a sign-in
-    # accepts. The browser's sign-out decides nothing and is no entry.
+    # The browser's sign-in, which establishes a person's sign-in or
+    # completes it rather than act under a context the gate admitted: a
+    # company sign-in's start and callback, the ticket that sets a sign-in's
+    # session cookie and a device's unlock ticket. The browser's sign-out
+    # decides nothing and is no entry.
     # Cyfr's boundary does not depend on PrismWeb, so these rows name their
     # controllers by string, as this module's other rosters name PrismWeb's.
-    %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :link_start,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :request,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :cyfr_start,
-      plane: :external,
-      origin: :none
-    },
     %{
       module: Module.concat(["PrismWeb", "AuthController"]),
       site: :company_start,
@@ -3081,24 +3037,6 @@ defmodule Cyfr.Boundaries do
       origin: :none
     },
     %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :device_complete,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :cyfr_callback,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :callback,
-      plane: :external,
-      origin: :none
-    },
-    %{
       module: Module.concat(["PrismWeb", "PasskeyController"]),
       site: :complete,
       plane: :external,
@@ -3107,18 +3045,6 @@ defmodule Cyfr.Boundaries do
     %{
       module: Module.concat(["PrismWeb", "DeviceUnlockController"]),
       site: :redeem,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "ReauthController"]),
-      site: :callback,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "ReauthController"]),
-      site: :decide,
       plane: :external,
       origin: :none
     },

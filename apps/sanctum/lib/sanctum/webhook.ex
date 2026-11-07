@@ -464,29 +464,19 @@ defmodule Sanctum.Webhook do
 
   @doc """
   Re-enable the webhook `webhook_id` that a declared restore suspended,
-  one the person created, under `proof` (`t:Sanctum.ApiKey.proof/0`).
-
-  Under `:confirmation`, `ctx` is the person's own, in the webhook's
+  one the person created. `ctx` is the person's own, in the webhook's
   athanor: the change (`webhook.reenable`) is asked first
   (`Sanctum.Consent.Authz.check/3`, which may answer the confirmation
-  signal), and in the transaction that writes the webhook, after its row
-  is locked, the confirmation is consumed and must be one
-  `Sanctum.Pairing.restore_confirmed/1` admits: while the person's
-  restore row is open, never one a passkey or paired device gave.
-
-  Under `{:kit, %{user_id, credential_digest}}` no confirmation is asked:
-  the webhook is found among the person's suspended webhooks in whichever
-  athanor holds it, and in the transaction that writes it the person's
-  restore row must be open and the kit credential still standing there.
+  signal), and the confirmation is consumed in the transaction that
+  writes the webhook, after its row is locked.
 
   Refusals: `:not_found` for a webhook that is not the person's,
-  `:revoked` for a disabled one, which is never revived, `:not_suspended`
-  for one that already stands, and `:not_standing` for a kit credential
-  that no longer stands; a confirmation's own refusals pass as they are.
+  `:revoked` for a disabled one, which is never revived, and
+  `:not_suspended` for one that already stands; a confirmation's own
+  refusals pass as they are.
   """
-  @spec reenable(Context.t(), String.t(), Sanctum.ApiKey.proof()) ::
-          {:ok, map()} | {:error, term()}
-  def reenable(%Context{} = ctx, webhook_id, :confirmation) when is_binary(webhook_id) do
+  @spec reenable(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def reenable(%Context{} = ctx, webhook_id) when is_binary(webhook_id) do
     with :ok <- tenant(ctx),
          {:ok, user_id} <- person(ctx),
          actor = actor!(ctx),
@@ -496,20 +486,11 @@ defmodule Sanctum.Webhook do
          :ok <- Sanctum.Consent.Authz.check(ctx, :restore_reenable, change),
          {:ok, row} <-
            WebhookStorage.reenable(actor, user_id, webhook_id,
-             verify: fn _row -> confirmed_reenable(ctx, change) end
+             verify: fn _row ->
+               Sanctum.Consent.Authz.consume(ctx, {:restore_reenable, change})
+             end
            ) do
       Sanctum.Consent.Authz.consumed(ctx)
-      reenabled(row)
-    end
-  end
-
-  def reenable(%Context{}, webhook_id, {:kit, %{user_id: user_id, credential_digest: digest}})
-      when is_binary(webhook_id) and is_binary(user_id) and is_binary(digest) do
-    with {:ok, athanor_id} <- suspended_webhook_athanor(user_id, webhook_id),
-         {:ok, row} <-
-           WebhookStorage.reenable(Prima.Actor.in_athanor(athanor_id), user_id, webhook_id,
-             verify: fn _row -> Sanctum.Pairing.kit_confirmed(user_id, digest) end
-           ) do
       reenabled(row)
     end
   end
@@ -543,27 +524,6 @@ defmodule Sanctum.Webhook do
             "from a backup, so deliveries signed with its secret run again"
       }
     }
-  end
-
-  # The confirmation is consumed after the webhook's row is locked, and
-  # the person's restore row is locked after it (`restore_confirmed/1`).
-  defp confirmed_reenable(ctx, change) do
-    with :ok <- Sanctum.Consent.Authz.consume(ctx, {:restore_reenable, change}),
-         do: Sanctum.Pairing.restore_confirmed(ctx)
-  end
-
-  # The kit sees the person's suspended webhooks alone, wherever they are.
-  defp suspended_webhook_athanor(user_id, webhook_id) do
-    case Arca.SecurityTransitions.restore_checklist(Prima.Actor.system(), user_id) do
-      {:ok, %{webhooks: webhooks}} ->
-        case Enum.find(webhooks, &(&1.id == webhook_id)) do
-          %{athanor_id: athanor_id} -> {:ok, athanor_id}
-          nil -> {:error, :not_found}
-        end
-
-      {:error, _unanswered} ->
-        {:error, :database_error}
-    end
   end
 
   defp reenabled(row) do

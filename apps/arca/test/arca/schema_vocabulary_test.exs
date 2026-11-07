@@ -54,28 +54,21 @@ defmodule Arca.SchemaVocabularyTest do
        Arca.StatusTransitions.statuses(:credentials)},
       {"shares", "shares_status_known", "status", Arca.StatusTransitions.statuses(:shares)},
       {"shares", "shares_audience_known", "audience", Arca.Schemas.Share.audiences()},
-      # `Arca.PairingInvitations` writes the kind of the confirmer it reads
-      # from the consumed confirmation: a passkey, a paired device, or a
-      # remote person's own home that certified it.
-      {"pairing_invitations", "pairing_invitations_confirmer_kind_known", "confirmer_kind",
-       ~w(passkey device home)},
       {"consumer_receipts", "consumer_receipts_outcome_known", "outcome",
        Arca.ConsumerReceipts.outcomes()},
-      # A declared restore suspends an active client or passkey
-      # (`Arca.SecurityTransitions.restore/1`) until its person re-enables it.
+      # A declared restore suspends an active client
+      # (`Arca.SecurityTransitions.restore/1`), for good.
       {"paired_clients", "paired_clients_standing_known", "standing",
        Arca.Schemas.PairedClient.standings()},
-      # What holds a client's key: a protected device's report, or the
-      # platform of a passkey's projected holder.
+      # What holds a protected device's key, as the device reports it.
       {"paired_clients", "paired_clients_holder_kind_known", "holder_kind",
        Arca.Schemas.PairedClient.holder_kinds()},
-      {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()},
       {"shared_threads", "shared_threads_kind_known", "kind", Arca.Schemas.SharedThread.kinds()},
       {"shared_threads", "shared_threads_status_known", "status",
        Arca.Schemas.SharedThread.statuses()},
       {"shared_thread_members", "shared_thread_members_status_known", "status",
        Arca.Schemas.SharedThreadMember.statuses()},
-      # How a person was made here (`Arca.Users.mint/4`), written once.
+      # How a person was made here (`Arca.Users.mint/3`), written once.
       {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()},
       {"mcp_servers", "mcp_servers_home_known", "home", Arca.Schemas.McpServer.homes()},
       {"threads", "threads_kind_known", "kind", Arca.Schemas.Thread.kinds()},
@@ -308,11 +301,12 @@ defmodule Arca.SchemaVocabularyTest do
 
   describe "a person's admission" do
     test "lands every admission, and refuses any other and none" do
-      for admission <- ~w(setup invitation open remote restore) do
+      for admission <- ~w(setup invitation open remote) do
         assert {1, _} = insert!("users", person(admission))
       end
 
       refused!("users", person("github"), "users_admission_known")
+      refused!("users", person("restore"), "users_admission_known")
 
       refused!("users", person(nil), [
         "users_admission_known",
@@ -342,35 +336,6 @@ defmodule Arca.SchemaVocabularyTest do
           ] do
         refused!("server_allowlist", door(kind, effect), "server_allowlist_kind_known")
       end
-    end
-  end
-
-  describe "a pairing invitation's confirmer" do
-    test "lands every kind with its id, or neither, and refuses another kind or one without the other",
-         ctx do
-      assert {1, _} = insert!("pairing_invitations", invitation(ctx, nil, nil))
-
-      for kind <- ~w(passkey device) do
-        assert {1, _} = insert!("pairing_invitations", invitation(ctx, kind, id("cfm")))
-      end
-
-      refused!(
-        "pairing_invitations",
-        invitation(ctx, "bogus", id("cfm")),
-        "pairing_invitations_confirmer_kind_known"
-      )
-
-      refused!(
-        "pairing_invitations",
-        invitation(ctx, "passkey", nil),
-        "pairing_invitations_confirmer_whole"
-      )
-
-      refused!(
-        "pairing_invitations",
-        invitation(ctx, nil, id("cfm")),
-        "pairing_invitations_confirmer_whole"
-      )
     end
   end
 
@@ -476,58 +441,6 @@ defmodule Arca.SchemaVocabularyTest do
           seat(thread.id, status, user, identifier),
           "shared_thread_members_seat_whole"
         )
-      end
-    end
-  end
-
-  describe "a person's recovery from a declared restore" do
-    test "is open exactly while it has no closing time, and a text false is refused" do
-      user = id("usr")
-
-      {1, _} =
-        insert!("users", %{
-          id: user,
-          admission: "open",
-          email: "#{user}@example.com",
-          first_seen_at: now(),
-          last_seen_at: now(),
-          created_at: now(),
-          updated_at: now()
-        })
-
-      # Written through the typed schema, as `Arca.SecurityTransitions` writes.
-      row = fn open, closed_at ->
-        %{
-          restore_id: id("rst"),
-          user_id: user,
-          open: open,
-          closed_at: closed_at && DateTime.utc_now()
-        }
-      end
-
-      table = Arca.Schemas.RestorePerson
-      assert {1, _} = insert!(table, row.(true, nil))
-      assert {1, _} = insert!(table, row.(false, :closed))
-      refused!(table, row.(true, :closed), "restore_people_open_until_closed")
-      refused!(table, row.(false, nil), "restore_people_open_until_closed")
-
-      # SQLite stores an untyped `false` as the text 'false', which the
-      # CHECK refuses: every write goes through `Arca.Schemas.RestorePerson`.
-      if sqlite?() do
-        message =
-          try do
-            Arca.Repo.query!(
-              "INSERT INTO restore_people (restore_id, user_id, open, closed_at) " <>
-                "VALUES (?1, ?2, 'false', ?3)",
-              [id("rst"), user, now()]
-            )
-
-            nil
-          rescue
-            error -> Exception.message(error)
-          end
-
-        assert message =~ "restore_people_open_until_closed"
       end
     end
   end
@@ -905,23 +818,6 @@ defmodule Arca.SchemaVocabularyTest do
       kind: "api_key",
       destination: ~s({"hosts":["api.example.com"]}),
       status: status,
-      inserted_at: now(),
-      updated_at: now()
-    }
-  end
-
-  defp invitation(%{athanor: athanor}, confirmer_kind, confirmer_id) do
-    %{
-      id: id("pin"),
-      athanor_id: athanor,
-      secret_hash: id("hash"),
-      user_id: "user_vocab",
-      prospective_client_id: id("pcl"),
-      audience_home: "https://home.example",
-      expires_at: now(),
-      key_digest: id("digest"),
-      confirmer_kind: confirmer_kind,
-      confirmer_id: confirmer_id,
       inserted_at: now(),
       updated_at: now()
     }

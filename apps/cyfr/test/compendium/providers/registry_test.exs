@@ -4,13 +4,16 @@
 defmodule Compendium.Providers.RegistryTest do
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
-
   import ExUnit.CaptureLog
 
   alias Compendium.Providers.Registry, as: RegistryProvider
+  alias Compendium.Registry.CredentialStore
   alias Sanctum.Refusals
   alias Sanctum.Test.{DirectoryServer, RegistryStub}
+
+  setup_all do
+    %{tls: DirectoryServer.tls()}
+  end
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -204,62 +207,61 @@ defmodule Compendium.Providers.RegistryTest do
     end
   end
 
-  # Every operation a person makes at the registry is a request their live
-  # key signs (`Prima.RegistryRequest`); the registry is a stub that
-  # verifies each one under the person's head as the registry does
-  # (`Sanctum.Test.RegistryStub`), and nothing else ever reaches it: no
-  # bearer, no identity provider's token.
+  # Every operation a person makes at the registry is a request a key of
+  # their account signs (`Prima.RegistryRequest`), in two calls of one
+  # action: without an answer it answers the request to sign; with the
+  # terminal's signed request, or a passkey's answer from the account
+  # pages, it sends it and does what its success does. The registry is a
+  # stub that checks each request is the one the device signed, and fails
+  # the case on any other.
   describe "the operations a person signs" do
-    # A signed-in, enrolled person with no namespace yet, as the context
-    # their session establishes, their head and the session's token.
-    defp signed_in_person do
-      n = System.unique_integer([:positive])
-
-      {:ok, %{id: person_id}} =
-        Sanctum.Test.People.linked(%{
-          id: "github|https://github.com|claim-op-#{n}",
-          provider: "github",
-          email: "claim-op#{n}@example.com",
-          verified: true
-        })
-
-      state = RegistryStub.enroll!(person_id)
-      athanor = Sanctum.Test.People.athanor!(person_id)
-
-      {:ok, session} =
-        Sanctum.TestContext.create_session(
-          Sanctum.Context.build(
-            user_id: person_id,
-            email: "claim-op#{n}@example.com",
-            provider: "github",
-            athanor_id: athanor.id,
-            permissions: [:*],
-            auth_method: :oidc,
-            origin: :interactive,
-            authenticated: true
-          )
-        )
-
-      {:ok, ctx} = Sanctum.Caller.establish(session.token, refresh: false)
-      %{ctx: ctx, state: state, token: session.token, slug: "claimed-op#{n}"}
+    setup do
+      user = RegistryStub.person!()
+      device = Sanctum.Test.Devices.paired!(user.id)
+      {:ok, ctx} = Sanctum.DeviceCerts.verify_request(device.certificate, device.ctx)
+      {:ok, identifier} = Sanctum.Tenancy.Users.identifier(user.id)
+      %{user: user, device: device, ctx: ctx, identifier: identifier}
     end
 
-    # The registry: each request verified under `state`, and answered by
-    # `answer.(request)` once it verifies.
-    defp registry(state, answer) do
+    # The registry: each request checked as the device's signature over its
+    # own bytes, and answered by `answer.(request)`.
+    defp registry(%{key: {pub, _priv}}, answer) do
       RegistryStub.start!(fn %{body: body} = request ->
-        case RegistryStub.verify(body, state) do
-          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
-          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
-        end
+        {:ok, signed} = body |> Jason.decode!() |> Prima.RegistryRequest.decode()
+
+        if signed.signer == Prima.Identity.Key.kid(pub) and
+             :crypto.verify(
+               :eddsa,
+               :none,
+               Prima.RegistryRequest.signing_bytes(signed),
+               signed.sig,
+               [pub, :ed25519]
+             ),
+           do: answer.(Map.put(request, :signed, signed)),
+           else: flunk("the registry refused the request: #{inspect(signed)}")
       end)
     end
 
-    defp accept(ctx, version),
-      do: RegistryProvider.handle(ctx, %{"action" => "legal_accept", "policy_version" => version})
+    # The registry request a call answered, signed by the device as its
+    # terminal signs it: the signed request's JSON. `change` alters it
+    # first.
+    defp signs(%{key: {pub, priv}}, {:ok, %{request: %{"registry_request" => map}}}, change) do
+      {:ok, request} = Prima.RegistryRequest.to_sign(map)
+      request = change.(%{request | signer: Prima.Identity.Key.kid(pub)})
+      {:ok, bytes} = Prima.RegistryRequest.sign(request, priv)
+      Jason.decode!(bytes)
+    end
 
-    defp namespace(ctx) do
-      {:ok, user} = Sanctum.Tenancy.Users.get(ctx.user_id)
+    defp signs(device, asked), do: signs(device, asked, & &1)
+
+    # Both calls of `args`: the request, then the device's answer.
+    defp signed(ctx, device, args) do
+      asked = RegistryProvider.handle(ctx, args)
+      RegistryProvider.handle(ctx, Map.put(args, "answer", signs(device, asked)))
+    end
+
+    defp namespace(user_id) do
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
       user.namespace
     end
 
@@ -271,581 +273,97 @@ defmodule Compendium.Providers.RegistryTest do
           slug
         )
 
-    test "a head that moved between the signing and the registry's read is signed once more" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      moved = Prima.Digest.sha256("the rotated head")
-      parent = self()
+    test "without an answer, each answers the registry request to sign for the caller's account, and sends nothing",
+         %{ctx: ctx, device: device, identifier: identifier} do
+      registry(device, fn _request -> flunk("nothing is sent before it is signed") end)
 
-      RegistryStub.start!(fn %{body: body} ->
-        {:ok, %{"key_epoch" => epoch}} = Jason.decode(body)
-        send(parent, {:signed_under, epoch})
-
-        if epoch == state.key_epoch do
-          # The rotation lands while the registry reads the log.
-          Arca.Repo.update_all(
-            from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^ctx.user_id),
-            set: [head_hash: moved]
-          )
-
-          RegistryStub.refusal(:stale_key_epoch)
-        else
-          {:ok, _} = RegistryStub.verify(body, %{state | key_epoch: moved, head: moved})
-          {201, RegistryStub.answer(%{"accepted" => true})}
-        end
-      end)
-
-      assert {:ok, %{"accepted" => true}} = accept(ctx, "2026-10")
-      assert_received {:signed_under, first}
-      assert_received {:signed_under, ^moved}
-      assert first == state.key_epoch
-
-      assert_received {:registry_request, _}
-      assert_received {:registry_request, _}
-
-      # A registry still ahead after the re-sign is answered as it says, once.
-      RegistryStub.start!(fn _ -> RegistryStub.refusal(:stale_key_epoch) end)
-      capture_log(fn -> assert {:error, :stale_key_epoch} = accept(ctx, "2026-10") end)
-      assert_received {:registry_request, _}
-      assert_received {:registry_request, _}
-      refute_received {:registry_request, _}
-    end
-
-    test "a person with no identifier sends nothing" do
-      n = System.unique_integer([:positive])
-
-      {person, _user} =
-        Sanctum.TestContext.person!(%{
-          Sanctum.TestContext.local()
-          | user_id: "local|local|unenrolled#{n}"
-        })
-
-      RegistryStub.start!(fn _ -> flunk("nothing is sent") end)
-
-      assert {:error, :not_enrolled} = accept(person, "2026-10")
-      refute_received {:registry_request, _}
-    end
-
-    test "an API key is nobody's registry identity" do
-      key = %{Sanctum.TestContext.local() | auth_method: :api_key}
-
-      for args <- [
-            %{"action" => "register"},
-            %{"action" => "register", "name" => "alice"},
-            %{"action" => "legal_accept", "policy_version" => "2026-09"}
+      for {args, operation, body} <- [
+            {%{"action" => "legal_accept", "policy_version" => "2026-09"}, "policy.accept",
+             %{"policy_version" => "2026-09"}},
+            {%{
+               "action" => "appeal",
+               "action_type" => "ban",
+               "action_ref" => "per_x",
+               "argument" => "mine"
+             }, "appeal.file",
+             %{"action_type" => "ban", "action_ref" => "per_x", "argument" => "mine"}},
+            {%{"action" => "claim_publisher", "slug" => "acme.com"}, "publisher.claim",
+             %{"slug" => "acme.com"}},
+            {%{"action" => "verify_publisher", "slug" => "acme.com"}, "publisher.verify",
+             %{"slug" => "acme.com", "label" => CredentialStore.wire_label()}},
+            {%{"action" => "sync"}, "tokens.mint", %{"label" => CredentialStore.wire_label()}}
           ] do
-        assert {:error, {:invalid_argument, message}} = RegistryProvider.handle(key, args)
-        assert message =~ "API key"
+        assert {:ok, %{request: request} = answer} = RegistryProvider.handle(ctx, args)
+
+        # A device's request travels over its channel: no page.
+        refute Map.has_key?(answer, :url)
+        assert {:ok, %Prima.SignIn{purpose: :registry} = decoded} = Prima.SignIn.decode(request)
+
+        assert %Prima.RegistryRequest{
+                 registry: "127.0.0.1",
+                 operation: ^operation,
+                 identifier: ^identifier,
+                 body: ^body,
+                 signer: nil
+               } = decoded.registry_request
       end
+
+      refute_received {:registry_request, _}
     end
 
-    test "a policy acceptance and an appeal are the bodies signed for" do
-      %{ctx: ctx, state: state} = signed_in_person()
-
-      registry(state, fn %{path: path, signed: signed} ->
+    test "the device's signed request is sent, and a policy acceptance, an appeal and a publisher claim answer the registry",
+         %{ctx: ctx, device: device} do
+      registry(device, fn %{path: path, signed: signed} ->
         case path do
           "/v1/legal/accept" ->
             assert signed.body == %{"policy_version" => "2026-09"}
             {201, RegistryStub.answer(%{"accepted" => true})}
 
           "/v1/appeals" ->
-            assert signed.body == %{
-                     "action_type" => "ban",
-                     "action_ref" => state.identifier,
-                     "argument" => "it was not me"
-                   }
-
             {201, RegistryStub.answer(%{"id" => "apl_1"})}
+
+          "/v1/namespaces/publisher/claim" ->
+            assert signed.body == %{"slug" => "acme.com"}
+            {201, RegistryStub.answer(%{"slug" => "acme.com", "txt_value" => "cyfr-verify=x"})}
         end
       end)
 
       assert {:ok, %{"accepted" => true}} =
-               RegistryProvider.handle(ctx, %{
-                 "action" => "legal_accept",
-                 "policy_version" => "2026-09"
-               })
+               signed(ctx, device, %{"action" => "legal_accept", "policy_version" => "2026-09"})
 
       assert {:ok, %{"id" => "apl_1"}} =
-               RegistryProvider.handle(ctx, %{
+               signed(ctx, device, %{
                  "action" => "appeal",
-                 "action_type" => "ban",
-                 "action_ref" => state.identifier,
-                 "argument" => "it was not me"
+                 "action_type" => "takedown",
+                 "action_ref" => "cmp_1",
+                 "argument" => "it was not mine"
                })
-    end
-
-    test "a publisher claim is signed, with no bearer" do
-      %{ctx: ctx, state: state} = signed_in_person()
-
-      registry(state, fn %{path: "/v1/namespaces/publisher/claim", signed: signed} ->
-        assert signed.body == %{"slug" => "acme.com"}
-        {201, RegistryStub.answer(%{"slug" => "acme.com", "txt_record" => "cyfr-verify=x"})}
-      end)
 
       assert {:ok, %{"slug" => "acme.com"}} =
-               RegistryProvider.handle(ctx, %{"action" => "claim_publisher", "slug" => "acme.com"})
-    end
-  end
+               signed(ctx, device, %{"action" => "claim_publisher", "slug" => "acme.com"})
 
-  # `registry.register` finishes what an admission began: the enrollment
-  # it opened is registered at a scripted directory, the registry's policy
-  # accepted and the name claimed, each refusal leaving the attempt where
-  # the module doc says.
-  describe "registering a person's name and identity" do
-    setup do
-      tls = DirectoryServer.tls()
-      DirectoryServer.listen!()
-      DirectoryServer.seam!(tls)
-      Arca.Cache.init()
-      on_exit(fn -> Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable()) end)
-      %{directory: DirectoryServer.start!(tls)}
-    end
-
-    # A person as an admission leaves them: signed in by a session, their
-    # enrollment opened at the scripted directory with `name`, nothing sent.
-    defp admitted!(directory, name) do
-      n = System.unique_integer([:positive])
-
-      {:ok, %{id: person_id}} =
-        Sanctum.Test.People.linked(%{
-          id: "github|https://github.com|register-#{n}",
-          provider: "github",
-          email: "register#{n}@example.com",
-          verified: true
-        })
-
-      identity = Sanctum.Test.Newcomers.identity(name)
-      :ok = Sanctum.Recovery.open_at_admission(person_id, identity, directory.url)
-      athanor = Sanctum.Test.People.athanor!(person_id)
-
-      {:ok, session} =
-        Sanctum.TestContext.create_session(
-          Sanctum.Context.build(
-            user_id: person_id,
-            email: "register#{n}@example.com",
-            provider: "github",
-            athanor_id: athanor.id,
-            permissions: [:*],
-            auth_method: :oidc,
-            origin: :interactive,
-            authenticated: true
-          )
-        )
-
-      {:ok, ctx} = Sanctum.Caller.establish(session.token, refresh: false)
-      %{ctx: ctx, token: session.token, identity: identity, attempt: attempt(person_id)}
-    end
-
-    defp attempt(user_id),
-      do: Arca.Repo.get_by!(Arca.Schemas.IdentityAttempt, user_id: user_id, kind: "enrollment")
-
-    defp register(ctx, args \\ %{}),
-      do: RegistryProvider.handle(ctx, Map.put(args, "action", "register"))
-
-    # The registry: its current policy version, and every signed request
-    # verified as the registry verifies it, under the person's head at the
-    # directory their genesis names, before `answer` sees it.
-    defp registry(person, directory, answer) do
-      {:ok, {recovery, _}} = Prima.Identity.derive_recovery_key(person.identity.recovery_secret)
-
-      RegistryStub.start!(fn
-        %{method: "GET"} = request ->
-          answer.(request)
-
-        %{body: body} = request ->
-          state = %{RegistryStub.state(person.ctx.user_id, [recovery]) | directory: directory.url}
-          registry = %{host: RegistryStub.host(), directory: directory.url}
-
-          case Prima.RegistryRequest.verify(body, state, registry, System.os_time(:millisecond)) do
-            {:ok, signed} -> answer.(Map.put(request, :signed, signed))
-            {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
-          end
-      end)
-    end
-
-    # A registry that names policy `2026-10`, takes its acceptance, and
-    # gives the name it is asked for to the identifier that signed.
-    defp accepting do
-      fn
-        %{method: "GET", path: "/v1/legal/version"} ->
-          {200, RegistryStub.answer(%{"policy_version" => "2026-10", "policies" => []})}
-
-        %{
-          path: "/v1/legal/accept",
-          signed: %{operation: "policy.accept", body: %{"policy_version" => "2026-10"}}
-        } ->
-          {201, RegistryStub.answer(%{"accepted" => true})}
-
-        %{path: "/v1/namespaces/personal/claim", signed: %{operation: "handle.claim"} = signed} ->
-          {201,
-           RegistryStub.answer(%{
-             "handle" => signed.body["handle"],
-             "identifier" => signed.identifier
-           })}
+      # One request each, and no bearer on any.
+      for _ <- 1..3 do
+        assert_received {:registry_request, %{method: "POST", headers: headers}}
+        refute Enum.any?(headers, &String.starts_with?(String.downcase(&1), "authorization"))
       end
     end
 
-    # `accepting/0`, but the claim answered by `claim`.
-    defp claiming(claim) do
-      accepted = accepting()
+    test "a sync mints, records the personal namespace and stores every token, naming none",
+         %{ctx: ctx, device: device, user: user} do
+      registry(device, fn %{path: "/v1/tokens/mint", signed: signed} ->
+        assert signed.body == %{"label" => CredentialStore.wire_label()}
 
-      fn
-        %{path: "/v1/namespaces/personal/claim"} = request -> claim.(request)
-        request -> accepted.(request)
-      end
-    end
-
-    defp registry_requests do
-      receive do
-        {:registry_request, request} -> [request | registry_requests()]
-      after
-        0 -> []
-      end
-    end
-
-    defp next_refusal([]), do: {nil, []}
-    defp next_refusal([next | rest]), do: {next, rest}
-
-    defp claim_bodies(requests) do
-      for %{path: "/v1/namespaces/personal/claim", body: body} <- requests,
-          do: Jason.decode!(body)["body"]
-    end
-
-    defp directory_writes, do: Enum.filter(DirectoryServer.requests(), &(&1.method == "POST"))
-
-    # A rename that lands while a claim is in flight: the claimed name is
-    # recorded, the attempt follows it, and every answer after names it.
-    test "a name edit overlapping a successful claim cannot change the name reported after saving",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-
-      registry(
-        person,
-        directory,
-        claiming(fn request ->
-          assert {:ok, %{name: "nova"}} = Sanctum.Recovery.rename(person.ctx, "nova")
-          accepting().(request)
-        end)
-      )
-
-      assert {:ok, %{"name" => "mira"} = first} = register(person.ctx)
-      assert namespace(person.ctx) == "mira"
-
-      assert {:ok, %{name: "mira"}} =
-               Arca.IdentityAttempts.get(Sanctum.Context.actor(person.ctx), person.attempt.id)
-
-      assert {:error, {:invalid_argument, "Your name is set and cannot be changed."}} =
-               Sanctum.Recovery.rename(person.ctx, "nova")
-
-      assert {:ok, %{phase: "completed"}} =
-               Sanctum.Recovery.recovery_code_saved(person.ctx, person.attempt.id)
-
-      assert {:ok, ^first} = register(person.ctx)
-    end
-
-    test "a staged enrollment, as a crash after the admission leaves it, is registered, its policy accepted and its name claimed and recorded",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-      assert person.attempt.phase == "staged"
-      registry(person, directory, accepting())
-
-      assert {:ok, answer} = register(person.ctx)
-
-      assert answer == %{
-               "attempt_id" => person.attempt.id,
-               "identifier" => person.attempt.identifier,
-               "name" => "mira"
-             }
-
-      assert %{phase: "accepted"} = attempt(person.ctx.user_id)
-      assert namespace(person.ctx) == "mira"
-      assert [_genesis] = directory_writes()
-
-      assert ["/v1/legal/version", "/v1/legal/accept", "/v1/namespaces/personal/claim"] ==
-               Enum.map(registry_requests(), & &1.path)
-
-      # A repeat answers the same: the directory step sends nothing, and the
-      # registry answers a repeated claim by the same identifier the same.
-      assert {:ok, ^answer} = register(person.ctx)
-      assert directory_writes() == []
-
-      # Once the code is saved, it answers at once and sends nothing.
-      assert {:ok, %{phase: "completed"}} =
-               Sanctum.Recovery.recovery_code_saved(person.ctx, person.attempt.id)
-
-      _ = registry_requests()
-      assert {:ok, ^answer} = register(person.ctx)
-      assert registry_requests() == []
-      assert directory_writes() == []
-    end
-
-    test "a silent directory leaves the attempt submitted and nothing asked of the registry; a repeat finishes it",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-      DirectoryServer.next(directory.dir, person.attempt.identifier, :drop)
-      registry(person, directory, accepting())
-
-      assert {:error, :directory_unavailable} = register(person.ctx)
-      assert %{phase: "submitted"} = attempt(person.ctx.user_id)
-      assert registry_requests() == []
-      assert namespace(person.ctx) == nil
-
-      assert {:ok, %{"name" => "mira"}} = register(person.ctx)
-      assert namespace(person.ctx) == "mira"
-    end
-
-    test "a directory that refuses the identity ends the attempt refused", %{directory: directory} do
-      person = admitted!(directory, "mira")
-      DirectoryServer.next(directory.dir, person.attempt.identifier, :refuse)
-      registry(person, directory, accepting())
-
-      assert {:error, :directory_refused} = register(person.ctx)
-      assert Refusals.classify(:directory_refused).class == :forbidden
-      assert %{phase: "refused"} = attempt(person.ctx.user_id)
-      assert registry_requests() == []
-      assert namespace(person.ctx) == nil
-    end
-
-    test "a silent registry, or one whose policy cannot be read, leaves the attempt accepted and no name",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-      {:ok, answers} = Agent.start_link(fn -> :close end)
-      accepted = accepting()
-
-      registry(person, directory, fn
-        %{method: "GET"} = request ->
-          case Agent.get(answers, & &1) do
-            :pass -> accepted.(request)
-            answer -> answer
-          end
-
-        request ->
-          accepted.(request)
+        {200,
+         RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => "mint-person", "token" => "cyfr_pt_personal"},
+           "memberships" => [
+             %{"slug" => "acme.com", "role" => "admin", "token" => "cyfr_pt_acme"}
+           ]
+         })}
       end)
 
-      for answer <- [
-            :close,
-            {503, "Bad Gateway"},
-            {200, RegistryStub.answer(%{"policies" => []})}
-          ] do
-        Agent.update(answers, fn _ -> answer end)
-        capture_log(fn -> assert {:error, :registry_unavailable} = register(person.ctx) end)
-        assert %{phase: "accepted"} = attempt(person.ctx.user_id)
-        assert namespace(person.ctx) == nil
-      end
-
-      # The claim's own answer unreadable is a registry that did not answer.
-      RegistryStub.start!(fn
-        %{method: "GET"} -> {200, RegistryStub.answer(%{"policy_version" => "2026-10"})}
-        %{path: "/v1/legal/accept"} -> {201, RegistryStub.answer(%{"accepted" => true})}
-        %{path: "/v1/namespaces/personal/claim"} -> {201, "not json"}
-      end)
-
-      capture_log(fn -> assert {:error, :registry_unavailable} = register(person.ctx) end)
-      assert namespace(person.ctx) == nil
-    end
-
-    test "a taken or reserved name is refused in the person's words, and another name is claimed in its place",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-
-      {:ok, refusals} =
-        Agent.start_link(fn -> [:handle_taken, :handle_reserved, :namespace_reserved] end)
-
-      registry(
-        person,
-        directory,
-        claiming(fn request ->
-          case Agent.get_and_update(refusals, &next_refusal/1) do
-            nil -> accepting().(request)
-            refusal -> RegistryStub.refusal(refusal)
-          end
-        end)
-      )
-
-      assert {:error, :name_taken} = register(person.ctx)
-
-      assert %Prima.Refusal{class: :conflict, message: "Someone holds that name. Choose another."} =
-               Refusals.classify(:name_taken)
-
-      for _reserved <- 1..2 do
-        assert {:error, :name_reserved} = register(person.ctx)
-      end
-
-      assert %Prima.Refusal{class: :invalid_argument} = Refusals.classify(:name_reserved)
-      assert %{phase: "accepted", name: "mira"} = attempt(person.ctx.user_id)
-      assert namespace(person.ctx) == nil
-
-      # Each refused claim asked for the name chosen at creation.
-      assert [%{"handle" => "mira"}, %{"handle" => "mira"}, %{"handle" => "mira"}] =
-               claim_bodies(registry_requests())
-
-      assert {:ok, %{"name" => "nova"} = answer} = register(person.ctx, %{"name" => "nova"})
-      assert answer["attempt_id"] == person.attempt.id
-      assert %{name: "nova"} = attempt(person.ctx.user_id)
-      assert namespace(person.ctx) == "nova"
-
-      assert [%{"handle" => "nova"}] = claim_bodies(registry_requests())
-
-      # The name is recorded: it is theirs for life.
-      assert {:error, {:invalid_argument, "Your name is set and cannot be changed."}} =
-               register(person.ctx, %{"name" => "stella"})
-    end
-
-    test "a name that is no name is refused before anything is sent", %{directory: directory} do
-      person = admitted!(directory, "mira")
-      registry(person, directory, fn _ -> flunk("nothing is sent") end)
-
-      assert {:error, {:invalid_argument, _}} = register(person.ctx, %{"name" => "Not A Name"})
-      assert %{phase: "staged", name: "mira"} = attempt(person.ctx.user_id)
-      assert directory_writes() == []
-    end
-
-    test "with no registry configured, the identity is registered and no name is made",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-      for app <- [:sanctum, :cyfr], do: Prima.Test.Env.put_app_env(app, :registry_url, "none")
-
-      assert {:error, :no_registry} = register(person.ctx)
-      assert Refusals.classify(:no_registry).class == :setup_required
-      assert %{phase: "accepted"} = attempt(person.ctx.user_id)
-      assert [_genesis] = directory_writes()
-      assert namespace(person.ctx) == nil
-    end
-
-    test "a person with no enrollment has nothing to register", %{directory: directory} do
-      %{ctx: ctx} = admitted!(directory, "mira")
-      %{ctx: bare} = signed_in_person()
-      Arca.Repo.delete_all(Arca.Schemas.IdentityAttempt)
-      RegistryStub.start!(fn _ -> flunk("nothing is sent") end)
-
-      for ctx <- [ctx, bare] do
-        assert {:error, :no_attempt} = register(ctx)
-      end
-
-      assert %Prima.Refusal{class: :not_found} = Refusals.classify(:no_attempt)
-    end
-
-    test "a session revoked while the registry answered records nothing", %{directory: directory} do
-      person = admitted!(directory, "mira")
-      hash = Sanctum.Session.token_hash(person.token)
-
-      registry(
-        person,
-        directory,
-        claiming(fn request ->
-          Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
-          accepting().(request)
-        end)
-      )
-
-      assert {:error, :unauthenticated} = register(person.ctx)
-      assert namespace(person.ctx) == nil
-    end
-
-    test "a name another person here holds is refused, and nothing is recorded",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-      %{ctx: holder} = signed_in_person()
-      {:ok, holder_row} = Sanctum.Tenancy.Users.get(holder.user_id)
-      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(holder_row, "mira")
-      registry(person, directory, accepting())
-
-      assert {:error, {:conflict, message}} = register(person.ctx)
-
-      assert message ==
-               "cyfr.run gave you that name, but another person on this CYFR holds it. Ask " <>
-                 "whoever runs this CYFR."
-
-      assert namespace(person.ctx) == nil
-    end
-
-    test "an answer naming another identifier is one the registry did not give, and nothing is recorded",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-
-      registry(
-        person,
-        directory,
-        claiming(fn _request ->
-          {201,
-           RegistryStub.answer(%{
-             "handle" => "mira",
-             "identifier" => "per_" <> String.duplicate("b", 64)
-           })}
-        end)
-      )
-
-      assert {:error, :registry_unavailable} = register(person.ctx)
-      assert namespace(person.ctx) == nil
-    end
-
-    test "the calling process killed mid-call leaves nothing written", %{directory: directory} do
-      person = admitted!(directory, "mira")
-      registry(person, directory, claiming(fn _request -> :hang end))
-
-      caller = spawn(fn -> register(person.ctx) end)
-      assert_receive {:registry_request, %{path: "/v1/namespaces/personal/claim"}}, 15_000
-      Process.exit(caller, :kill)
-      refute Process.alive?(caller)
-      assert namespace(person.ctx) == nil
-      assert %{phase: "accepted"} = attempt(person.ctx.user_id)
-    end
-
-    test "a member whose slot is taken while the registry answers a claim records nothing",
-         %{directory: directory} do
-      person = admitted!(directory, "mira")
-      slot = hold_slot()
-
-      registry(
-        person,
-        directory,
-        claiming(fn request ->
-          taken_over(slot)
-          accepting().(request)
-        end)
-      )
-
-      assert {:error, :not_owner} = register(person.ctx)
-      assert {:error, :not_owner} = Arca.Repo.owned("positive control", fn -> {:ok, :ran} end)
-      assert namespace(person.ctx) == nil
-    end
-  end
-
-  # The operations that mint a push token wait on a fresh confirmation
-  # (`credential_issuance`), send nothing until it is proven, and store
-  # every token they are answered; the answer they give names no token.
-  describe "the operations that mint push tokens" do
-    defp minted do
-      RegistryStub.answer(%{
-        "personal_namespace" => %{"slug" => "mint-person", "token" => "cyfr_pt_personal"},
-        "memberships" => [%{"slug" => "acme.com", "role" => "admin", "token" => "cyfr_pt_acme"}]
-      })
-    end
-
-    test "a sync asks a fresh confirmation and sends nothing until it is proven" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      registry(state, fn _ -> flunk("nothing is sent before the confirmation") end)
-
-      assert {:error, {:confirmation_required, %{operation: "registry.sync"}}} =
-               RegistryProvider.handle(ctx, %{"action" => "sync"})
-
-      refute_received {:registry_request, _}
-    end
-
-    test "a confirmed sync mints, stores every token and records the personal namespace" do
-      %{ctx: ctx, state: state} = signed_in_person()
-
-      registry(state, fn %{path: "/v1/tokens/mint", signed: signed} ->
-        assert %{"label" => label} = signed.body
-        assert label == Compendium.Registry.CredentialStore.device_label()
-        {200, minted()}
-      end)
-
-      assert {:ok, answer} =
-               Sanctum.TestContext.confirming(
-                 ctx,
-                 &RegistryProvider.handle(&1, %{"action" => "sync"})
-               )
+      assert {:ok, answer} = signed(ctx, device, %{"action" => "sync"})
 
       assert answer == %{
                personal_namespace: "mint-person",
@@ -853,7 +371,7 @@ defmodule Compendium.Providers.RegistryTest do
              }
 
       refute inspect(answer) =~ "cyfr_pt_"
-      assert namespace(ctx) == "mint-person"
+      assert namespace(user.id) == "mint-person"
 
       assert {:ok, %{token: "cyfr_pt_personal", role: "personal"}} =
                push_token(ctx, "mint-person")
@@ -861,266 +379,219 @@ defmodule Compendium.Providers.RegistryTest do
       assert {:ok, %{token: "cyfr_pt_acme", role: "admin"}} = push_token(ctx, "acme.com")
     end
 
-    test "a confirmed sync the registry cannot answer stores nothing" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      registry(state, fn _ -> {503, "Bad Gateway"} end)
-
-      capture_log(fn ->
-        assert {:error, :registry_unavailable} =
-                 Sanctum.TestContext.confirming(
-                   ctx,
-                   &RegistryProvider.handle(&1, %{"action" => "sync"})
-                 )
-      end)
-
-      assert namespace(ctx) == nil
-      assert {:error, :not_found} = push_token(ctx, "mint-person")
-    end
-
-    test "a verification asks a fresh confirmation, stores the founding token, and a repeat mints nothing" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      args = %{"action" => "verify_publisher", "slug" => "acme.com"}
+    test "a verification stores the founding token, and a repeat that mints none stores nothing",
+         %{ctx: ctx, device: device} do
       {:ok, answers} = Agent.start_link(fn -> [] end)
 
-      registry(state, fn %{path: "/v1/namespaces/publisher/verify", signed: signed} ->
-        assert %{"slug" => "acme.com", "label" => _} = signed.body
+      registry(device, fn %{path: "/v1/namespaces/publisher/verify"} ->
         Agent.get_and_update(answers, &{hd(&1), tl(&1)})
       end)
 
-      assert {:error, {:confirmation_required, %{operation: "registry.verify_publisher"}}} =
-               RegistryProvider.handle(ctx, args)
-
-      refute_received {:registry_request, _}
-
       Agent.update(answers, fn _ ->
-        [{200, RegistryStub.answer(%{"slug" => "acme.com", "token" => "cyfr_pt_founder"})}]
+        [
+          {200, RegistryStub.answer(%{"slug" => "acme.com", "token" => "cyfr_pt_founder"})},
+          {200, RegistryStub.answer(%{"slug" => "acme.com"})}
+        ]
       end)
 
-      assert {:ok, %{slug: "acme.com", token_stored: true} = answer} =
-               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
-
-      refute inspect(answer) =~ "cyfr_pt_"
+      args = %{"action" => "verify_publisher", "slug" => "acme.com"}
+      assert {:ok, %{slug: "acme.com", token_stored: true}} = signed(ctx, device, args)
       assert {:ok, %{token: "cyfr_pt_founder", role: "admin"}} = push_token(ctx, "acme.com")
 
-      # The registry answers a repeat as verified and mints nothing: the
-      # stored token stays, and `sync` is what mints another.
-      Agent.update(answers, fn _ -> [{200, RegistryStub.answer(%{"slug" => "acme.com"})}] end)
-
-      assert {:ok, %{token_stored: false}} =
-               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
-
+      assert {:ok, %{token_stored: false}} = signed(ctx, device, args)
       assert {:ok, %{token: "cyfr_pt_founder"}} = push_token(ctx, "acme.com")
     end
 
-    test "no registry refuses before any confirmation is asked" do
-      %{ctx: ctx} = signed_in_person()
-      previous = Application.get_env(:sanctum, :registry_url)
-      on_exit(fn -> Application.put_env(:sanctum, :registry_url, previous) end)
-      Application.put_env(:sanctum, :registry_url, "none")
+    test "a mint answer outside its shape, or no answer, writes nothing",
+         %{ctx: ctx, device: device, user: user} do
+      {:ok, answers} = Agent.start_link(fn -> nil end)
+      registry(device, fn _request -> Agent.get(answers, & &1) end)
 
-      assert {:error, :no_registry} = RegistryProvider.handle(ctx, %{"action" => "sync"})
-
-      assert {:error, :no_registry} =
-               RegistryProvider.handle(ctx, %{
-                 "action" => "verify_publisher",
-                 "slug" => "acme.com"
-               })
-    end
-  end
-
-  # What a registry answer may write, and when: only an answer of the
-  # operation's shape, only by the member that still holds its slot, and
-  # with a label the protocol takes, whatever the operator configured.
-  describe "what an answer writes" do
-    # This member's slot, taken as the control plane's claimant takes it;
-    # the claim switch and the slot's terms restored on exit, registered
-    # before either changes.
-    defp hold_slot do
-      keys = for k <- [:standing, :generation, :slot], do: {Arca.ControlPlane, k}
-      saved = for k <- keys, do: {k, :persistent_term.get(k, :absent)}
-      claimed = Application.fetch_env(:arca, :control_plane_claim_enabled)
-
-      on_exit(fn ->
-        for {k, v} <- saved do
-          if v == :absent, do: :persistent_term.erase(k), else: :persistent_term.put(k, v)
-        end
-
-        case claimed do
-          {:ok, v} -> Application.put_env(:arca, :control_plane_claim_enabled, v)
-          :error -> Application.delete_env(:arca, :control_plane_claim_enabled)
-        end
-      end)
-
-      Application.put_env(:arca, :control_plane_claim_enabled, true)
-      node = "registry-#{System.unique_integer([:positive])}"
-      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot", 60_000)
-      slot
-    end
-
-    # A successor takes the slot while the registry answers.
-    defp taken_over(slot) do
-      {1, _} =
-        Arca.Repo.update_all(
-          from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
-          set: [owner: "successor", generation: slot.generation + 1]
-        )
-
-      :ok
-    end
-
-    test "a member whose slot is taken while the registry mints stores nothing" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      slot = hold_slot()
-
-      registry(state, fn _request ->
-        taken_over(slot)
-
-        {200,
-         RegistryStub.answer(%{
-           "personal_namespace" => %{"slug" => "stale-owner", "token" => "cyfr_pt_stale"},
-           "memberships" => [
-             %{"slug" => "acme.com", "role" => "admin", "token" => "cyfr_pt_stale_acme"}
-           ]
-         })}
-      end)
-
-      assert {:error, :not_owner} =
-               Sanctum.TestContext.confirming(
-                 ctx,
-                 &RegistryProvider.handle(&1, %{"action" => "sync"})
-               )
-
-      assert namespace(ctx) == nil
-      assert {:error, :not_found} = push_token(ctx, "stale-owner")
-      assert {:error, :not_found} = push_token(ctx, "acme.com")
-    end
-
-    test "a member whose slot is taken while the registry verifies stores no founding token" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      slot = hold_slot()
-
-      registry(state, fn _request ->
-        taken_over(slot)
-        {200, RegistryStub.answer(%{"slug" => "acme.com", "token" => "cyfr_pt_founder"})}
-      end)
-
-      assert {:error, :not_owner} =
-               Sanctum.TestContext.confirming(
-                 ctx,
-                 &RegistryProvider.handle(&1, %{
-                   "action" => "verify_publisher",
-                   "slug" => "acme.com"
-                 })
-               )
-
-      assert {:error, :not_found} = push_token(ctx, "acme.com")
-    end
-
-    test "a mint answer outside its shape writes nothing" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      {:ok, answers} = Agent.start_link(fn -> [] end)
-      registry(state, fn _request -> Agent.get(answers, & &1) end)
-
-      for body <- [
-            ~s({"personal_namespace":{"slug":"mint-null","token":null},"memberships":[]}),
-            ~s({"personal_namespace":{"token":"cyfr_pt_x"},"memberships":[]}),
-            ~s({"personal_namespace":null,"memberships":[]}),
-            ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"},"memberships":["acme.com"]}),
-            ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"},"memberships":[{"slug":"acme.com","role":"admin","token":""}]}),
-            ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"}})
+      for answer <- [
+            {200, ~s({"personal_namespace":{"slug":"mint-null","token":null},"memberships":[]})},
+            {200, ~s({"personal_namespace":null,"memberships":[]})},
+            {200,
+             ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"},"memberships":["acme.com"]})},
+            {200, ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"}})},
+            {503, "Bad Gateway"}
           ] do
-        Agent.update(answers, fn _ -> {200, body} end)
+        Agent.update(answers, fn _ -> answer end)
 
-        assert {:error, :malformed_answer} =
-                 Sanctum.TestContext.confirming(
-                   ctx,
-                   &RegistryProvider.handle(&1, %{"action" => "sync"})
-                 ),
-               body
+        capture_log(fn ->
+          assert {:error, reason} = signed(ctx, device, %{"action" => "sync"})
+          assert reason in [:malformed_answer, :registry_unavailable], inspect(answer)
+        end)
 
-        assert namespace(ctx) == nil
+        assert namespace(user.id) == nil
         assert {:error, :not_found} = push_token(ctx, "mint-ok")
         assert {:error, :not_found} = push_token(ctx, "acme.com")
       end
     end
 
-    test "a verification answer with a null token is malformed; an absent one minted nothing" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      {:ok, answers} = Agent.start_link(fn -> [] end)
-      registry(state, fn _request -> Agent.get(answers, & &1) end)
-      args = %{"action" => "verify_publisher", "slug" => "acme.com"}
-
-      Agent.update(answers, fn _ -> {200, ~s({"slug":"acme.com","token":null})} end)
-
-      assert {:error, :malformed_answer} =
-               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
-
-      Agent.update(answers, fn _ -> {200, ~s({"slug":"other.com","token":"cyfr_pt_x"})} end)
-
-      assert {:error, :malformed_answer} =
-               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
-
-      assert {:error, :not_found} = push_token(ctx, "acme.com")
-
-      Agent.update(answers, fn _ -> {200, ~s({"slug":"acme.com"})} end)
-
-      assert {:ok, %{token_stored: false}} =
-               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
-    end
-
-    test "a configured label too long for the protocol, or not ASCII, mints under its wire form" do
-      %{ctx: ctx, state: state} = signed_in_person()
-      parent = self()
-
-      registry(state, fn %{signed: signed} ->
-        send(parent, {:label, signed.body["label"]})
-        {200, RegistryStub.answer(%{"memberships" => []})}
-      end)
-
-      for {configured, wire} <- [
-            {String.duplicate("x", 65), String.duplicate("x", 64)},
-            {"筆電 laptop", " laptop"},
-            {"筆電", nil}
-          ] do
-        {:ok, entry} = Cyfr.Platform.Settings.Roster.fetch("device_label")
-        assert {:ok, ^configured} = entry.validator.(configured)
-        Cyfr.Test.Settings.put("device_label", configured)
-
-        assert {:ok, _synced} =
-                 Sanctum.TestContext.confirming(
-                   ctx,
-                   &RegistryProvider.handle(&1, %{"action" => "sync"})
-                 )
-
-        assert_receive {:label, label}
-        assert label =~ ~r/\A[\x20-\x7E]{1,64}\z/
-
-        if wire,
-          do: assert(label == wire),
-          else: assert(label == Compendium.Registry.CredentialStore.wire_label())
-      end
-    end
-
-    test "the registry's typed refusals on 429 and 5xx reach the caller typed" do
-      %{ctx: ctx, state: state, slug: slug} = signed_in_person()
-      {:ok, answers} = Agent.start_link(fn -> [] end)
-      registry(state, fn _request -> Agent.get(answers, & &1) end)
-
-      for refusal <- [:directory_unavailable, :dns_timeout, :rate_limited] do
-        Agent.update(answers, fn _ -> RegistryStub.refusal(refusal) end)
-
-        capture_log(fn ->
-          assert Compendium.Registry.Client.signed(ctx.user_id, "handle.claim", %{
-                   "handle" => slug
-                 }) == {:error, refusal}
-        end)
-      end
-
-      Agent.update(answers, fn _ -> {503, "Bad Gateway"} end)
+    test "an account the registry does not know, a closed one among them, is refused as one",
+         %{ctx: ctx, device: device} do
+      registry(device, fn _request -> RegistryStub.refusal(:unknown_identity) end)
 
       capture_log(fn ->
-        assert {:error, :registry_unavailable} = accept(ctx, "2026-10")
+        assert {:error, :unknown_identity = reason} =
+                 signed(ctx, device, %{"action" => "legal_accept", "policy_version" => "2026-09"})
+
+        assert Refusals.render(reason) == "This account is not registered."
       end)
+    end
+
+    test "an answer is taken once: a replay, another request, another identifier or another channel sends nothing",
+         %{ctx: ctx, device: device, user: user} do
+      registry(device, fn _request -> {201, RegistryStub.answer(%{"accepted" => true})} end)
+      args = %{"action" => "legal_accept", "policy_version" => "2026-09"}
+
+      # Replayed, it meets a spent request.
+      answer = signs(device, RegistryProvider.handle(ctx, args))
+      assert {:ok, _accepted} = RegistryProvider.handle(ctx, Map.put(args, "answer", answer))
+      assert_received {:registry_request, _}
+
+      assert {:error, %Prima.Refusal{reason: :answer_refused}} =
+               RegistryProvider.handle(ctx, Map.put(args, "answer", answer))
+
+      # A signed request that is not the one held: another body, or another
+      # identifier.
+      for change <- [
+            &%{&1 | body: %{"policy_version" => "2026-10"}},
+            &%{&1 | identifier: "per_" <> String.duplicate("ab", 32)}
+          ] do
+        answer = signs(device, RegistryProvider.handle(ctx, args), change)
+
+        assert {:error, %Prima.Refusal{reason: :answer_refused}} =
+                 RegistryProvider.handle(ctx, Map.put(args, "answer", answer))
+      end
+
+      # The completing call names another operation or body than the request.
+      answer = signs(device, RegistryProvider.handle(ctx, args))
+
+      assert {:error, %Prima.Refusal{reason: :answer_refused}} =
+               RegistryProvider.handle(ctx, %{
+                 "action" => "legal_accept",
+                 "policy_version" => "2026-10",
+                 "answer" => answer
+               })
+
+      # Another device of the same person: its channel holds no such request.
+      other = Sanctum.Test.Devices.paired!(user.id)
+      {:ok, other_ctx} = Sanctum.DeviceCerts.verify_request(other.certificate, other.ctx)
+      answer = signs(device, RegistryProvider.handle(ctx, args))
+
+      assert {:error, %Prima.Refusal{reason: :answer_refused}} =
+               RegistryProvider.handle(other_ctx, Map.put(args, "answer", answer))
+
+      # A malformed answer is no answer.
+      assert {:error, %Prima.Refusal{reason: :answer_refused}} =
+               RegistryProvider.handle(ctx, Map.put(args, "answer", %{"not" => "a request"}))
+
+      refute_received {:registry_request, _}
+    end
+
+    test "no registry refuses before any request is minted", %{ctx: ctx} do
+      Prima.Test.Env.put_app_env(:sanctum, :registry_url, "none")
+
+      for args <- [
+            %{"action" => "sync"},
+            %{"action" => "verify_publisher", "slug" => "acme.com"},
+            %{"action" => "legal_accept", "policy_version" => "2026-09"}
+          ] do
+        assert {:error, :no_registry} = RegistryProvider.handle(ctx, args), inspect(args)
+      end
+    end
+
+    test "a caller that is no client of a person's, an API key among them, asks for nothing" do
+      key = %{Sanctum.TestContext.local() | auth_method: :api_key}
+
+      assert {:error, {:invalid_argument, message}} =
+               RegistryProvider.handle(key, %{"action" => "legal_accept", "policy_version" => "v"})
+
+      assert message =~ "API key"
+
+      # A context with neither a session nor a device's channel.
+      for args <- [%{"action" => "sync"}, %{"action" => "claim_publisher", "slug" => "acme.com"}] do
+        assert {:error, %Prima.Refusal{reason: :unauthenticated}} =
+                 RegistryProvider.handle(Sanctum.TestContext.local(), args)
+      end
+    end
+  end
+
+  # The browser's way: the request is bound to the person's session and
+  # names the account pages' sign page, where their passkey signs it; the
+  # answer the pages return completes it in the same call.
+  describe "a passkey at the account pages" do
+    setup %{tls: tls} do
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+      dir = DirectoryServer.start!(tls)
+      Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
+
+      user = RegistryStub.person!()
+      account = DirectoryServer.add_passkey!(dir.dir, DirectoryServer.account!(dir.dir, dir.url))
+      :ok = DirectoryServer.account_person!(user.id, account)
+      athanor = Sanctum.Test.People.athanor!(user)
+
+      {:ok, session} =
+        Sanctum.TestContext.create_session(
+          Sanctum.Context.build(
+            user_id: user.id,
+            athanor_id: athanor.id,
+            provider: "passkey",
+            permissions: Sanctum.Context.person_permissions(),
+            auth_method: :oidc,
+            authenticated: true
+          )
+        )
+
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+      %{ctx: ctx, account: account, dir: dir}
+    end
+
+    test "signs the request named at the sign page, and the answer completes it",
+         %{ctx: ctx, account: account, dir: dir} do
+      {:ok, state} = Prima.Identity.verify_chain(account.log)
+
+      RegistryStub.start!(fn %{path: "/v1/legal/accept", body: body} ->
+        {:ok, _signed} =
+          Prima.RegistryRequest.verify(
+            body,
+            state,
+            %{host: RegistryStub.host(), directory: account.url},
+            System.system_time(:millisecond)
+          )
+
+        {201, RegistryStub.answer(%{"accepted" => true})}
+      end)
+
+      args = %{"action" => "legal_accept", "policy_version" => "2026-09"}
+      assert {:ok, %{request: map, url: url}} = RegistryProvider.handle(ctx, args)
+      assert url =~ dir.url <> "/account/sign#"
+      {:ok, request} = Prima.SignIn.decode(map)
+
+      fragment =
+        request
+        |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
+        |> Prima.SignIn.fragment()
+
+      assert {:ok, %{"accepted" => true}} =
+               RegistryProvider.handle(ctx, Map.put(args, "answer", fragment))
+
+      # A passkey of another account signs nothing for this one.
+      stranger =
+        DirectoryServer.add_passkey!(dir.dir, DirectoryServer.account!(dir.dir, dir.url))
+
+      assert {:ok, %{request: map}} = RegistryProvider.handle(ctx, args)
+      {:ok, request} = Prima.SignIn.decode(map)
+
+      fragment =
+        request
+        |> DirectoryServer.passkey_answer(stranger, hd(stranger.passkeys))
+        |> Prima.SignIn.fragment()
+
+      assert {:error, %Prima.Refusal{reason: :answer_refused}} =
+               RegistryProvider.handle(ctx, Map.put(args, "answer", fragment))
     end
   end
 
@@ -1161,7 +632,7 @@ defmodule Compendium.Providers.RegistryTest do
   # Each action as its handler reaches the registry
   # (`Compendium.Registry.Client`): a POST or PATCH changes something
   # there, a DELETE deletes it, a GET reads.
-  @remote_changes ~w(sync register claim_publisher verify_publisher tokens_issue
+  @remote_changes ~w(sync claim_publisher verify_publisher tokens_issue
                      members_add members_update report legal_accept appeal)
   @remote_deletes ~w(tokens_revoke members_remove)
   @reads ~w(tokens_list members_list whoami get_namespace list_my_reports legal_page

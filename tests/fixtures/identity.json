@@ -4,202 +4,488 @@
       "entries": [
         "alice_genesis"
       ],
-      "name": "a genesis alone",
+      "name": "a genesis alone: an account with no keys yet",
       "state": {
         "directory": "https://directory.example",
-        "head": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "length": 1,
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "recovery_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        "head": "sha256:4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
         ],
-        "request_ids": [],
-        "revision": 0
+        "seq": 0
       }
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate"
+        "alice_add_device_1"
       ],
-      "name": "a rotation",
+      "name": "a device added by the recovery key",
       "state": {
         "directory": "https://directory.example",
-        "head": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
-        "length": 2,
-        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "recovery_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        "head": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          }
         ],
-        "request_ids": [],
-        "revision": 0
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 1
       }
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate",
+        "alice_add_device_1",
+        "alice_add_passkey_1"
+      ],
+      "name": "a passkey added by the device",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+            "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+            "kind": "passkey",
+            "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+          }
+        ],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 2
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey"
+      ],
+      "name": "a device added by the passkey",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:327e63186bf2c5f70168b53abb842ba5aa4789117eec2c05cfaebfe91d332921",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+            "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+            "kind": "passkey",
+            "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+            "kind": "device",
+            "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+          }
+        ],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1"
+      ],
+      "name": "a device removed by another device",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:303c52357471485ec6f0f15546f8c7e4314cead1826a23a9efe61cfd24f3f0be",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "es256",
+            "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+            "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+            "kind": "passkey",
+            "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+            "kind": "device",
+            "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+          }
+        ],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 4
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1",
+        "alice_add_recovery"
+      ],
+      "name": "a second recovery key added by the first",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:735fca88db28e1bd13c8eb84e9ea43560486d6707416ede95fb050792afb6f88",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "es256",
+            "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+            "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+            "kind": "passkey",
+            "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+            "kind": "device",
+            "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+          }
+        ],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI",
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
+        ],
+        "seq": 5
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1",
+        "alice_add_recovery",
         "alice_recover"
       ],
-      "name": "a recovery after a rotation",
+      "name": "a recovery that replaces every key and the recovery set",
       "state": {
         "directory": "https://directory.example",
-        "head": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "key_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-        "length": 3,
-        "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-        "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-        "recovery_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        "head": "sha256:47efb174689898d49ceb7c2be1accb90d4a862def92101cf1164de0a04a7656a",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+            "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+            "kind": "passkey",
+            "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+          }
         ],
-        "request_ids": [
-          "req-alice-1"
+        "recovery": [
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
         ],
-        "revision": 1
+        "seq": 6
       }
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1",
+        "alice_add_recovery",
         "alice_recover",
-        "alice_rotate_after_recover"
+        "alice_readd_device_1"
       ],
-      "name": "a rotation after a recovery",
+      "name": "a removed key added again after the recovery",
       "state": {
         "directory": "https://directory.example",
-        "head": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "key_epoch": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
-        "length": 4,
-        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
-        "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-        "recovery_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        "head": "sha256:d6f9d9cf1ea4d6e503d61cf06aef86f43d3b39454a77126a655013be111c416b",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+            "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+            "kind": "passkey",
+            "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          }
         ],
-        "request_ids": [
-          "req-alice-1"
+        "recovery": [
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
         ],
-        "revision": 1
+        "seq": 7
       }
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1",
+        "alice_add_recovery",
         "alice_recover",
-        "alice_rotate_after_recover",
-        "alice_recover_add_holder"
+        "alice_readd_device_1",
+        "alice_remove_passkey_2_by_recovery"
       ],
-      "name": "a second kit enrolled by a recovery",
+      "name": "a passkey removed by the recovery key",
       "state": {
         "directory": "https://directory.example",
-        "head": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "key_epoch": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
-        "length": 5,
-        "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
-        "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
-        "recovery_epoch": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
-          "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
+        "head": "sha256:b39d6ad70e9a6212c849db0a237be0ddc29e2b2c6e4eed397d4d08e4e4f9835e",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          }
         ],
-        "request_ids": [
-          "req-alice-1",
-          "req-alice-holder"
+        "recovery": [
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
         ],
-        "revision": 2
+        "seq": 8
       }
     },
     {
       "entries": [
-        "alice_genesis",
-        "alice_rotate",
-        "alice_recover",
-        "alice_rotate_after_recover",
-        "alice_recover_add_holder",
-        "alice_recover_by_second_kit"
+        "bob_genesis"
       ],
-      "name": "a recovery by the second kit",
+      "name": "another account's genesis",
       "state": {
         "directory": "https://directory.example",
-        "head": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "key_epoch": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
-        "length": 6,
-        "live_key": "PnDWMCC74EvzJGErWiryLH_P9DYCgRmT1puJexMaWCM",
-        "operational_key": "PS-7PiwaKDwmGoeDBnFsj4D69FYyi3jEaUJMro0vDgc",
-        "recovery_epoch": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
-          "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
+        "head": "sha256:b1e8c0782eb58d2ccbc1afcad8a9c2caaf0ad79e009cebab1e92083054ec057a",
+        "identifier": "per_b1e8c0782eb58d2ccbc1afcad8a9c2caaf0ad79e009cebab1e92083054ec057a",
+        "keys": [],
+        "recovery": [
+          "NX6ReiqEOZ5JGQ1_tQahgadRBiDCW4vxG5_3rMCGqZU"
         ],
-        "request_ids": [
-          "req-alice-1",
-          "req-alice-holder",
-          "req-alice-kit-b"
-        ],
-        "revision": 3
+        "seq": 0
       }
     },
     {
       "entries": [
-        "bob_genesis",
-        "bob_recover"
+        "genesis_signed_by_a_device"
       ],
-      "name": "one kit recovers another identifier by name",
-      "state": {
-        "directory": "https://directory.example",
-        "head": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
-        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
-        "key_epoch": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
-        "length": 2,
-        "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
-        "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
-        "recovery_epoch": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-        ],
-        "request_ids": [
-          "req-bob-1"
-        ],
-        "revision": 1
-      }
-    },
-    {
-      "entries": [],
       "error": {
         "index": 0,
-        "reason": "empty"
+        "reason": "wrong_signer"
       },
-      "name": "an empty log"
+      "name": "genesis signed by a device"
     },
     {
       "entries": [
-        "alice_rotate"
+        "genesis_signed_by_a_recovery_key_it_does_not_list"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "wrong_signer"
+      },
+      "name": "genesis signed by a recovery key it does not list"
+    },
+    {
+      "entries": [
+        "genesis_altered_after_signing"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "wrong_signer"
+      },
+      "name": "genesis altered after signing"
+    },
+    {
+      "entries": [
+        "genesis_with_a_passkey_signature"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "wrong_signer"
+      },
+      "name": "genesis with a passkey signature"
+    },
+    {
+      "entries": [
+        "genesis_at_seq_one"
+      ],
+      "error": {
+        "field": "seq",
+        "index": 0,
+        "reason": "invalid_field"
+      },
+      "name": "genesis at seq one"
+    },
+    {
+      "entries": [
+        "genesis_with_a_prev"
+      ],
+      "error": {
+        "field": "prev",
+        "index": 0,
+        "reason": "unknown_field"
+      },
+      "name": "genesis with a prev"
+    },
+    {
+      "entries": [
+        "genesis_with_a_label"
+      ],
+      "error": {
+        "field": "label",
+        "index": 0,
+        "reason": "unknown_field"
+      },
+      "name": "genesis with a label"
+    },
+    {
+      "entries": [
+        "genesis_without_a_signature"
+      ],
+      "error": {
+        "field": "sig",
+        "index": 0,
+        "reason": "missing_field"
+      },
+      "name": "genesis without a signature"
+    },
+    {
+      "entries": [
+        "genesis_with_no_recovery_key"
+      ],
+      "error": {
+        "field": "recovery",
+        "index": 0,
+        "reason": "invalid_field"
+      },
+      "name": "genesis with no recovery key"
+    },
+    {
+      "entries": [
+        "genesis_with_nine_recovery_keys"
+      ],
+      "error": {
+        "field": "recovery",
+        "index": 0,
+        "reason": "invalid_field"
+      },
+      "name": "genesis with nine recovery keys"
+    },
+    {
+      "entries": [
+        "genesis_with_a_recovery_key_twice"
+      ],
+      "error": {
+        "field": "recovery",
+        "index": 0,
+        "reason": "invalid_field"
+      },
+      "name": "genesis with a recovery key twice"
+    },
+    {
+      "entries": [
+        "genesis_with_a_directory_ending_in_a_slash"
+      ],
+      "error": {
+        "field": "directory",
+        "index": 0,
+        "reason": "invalid_field"
+      },
+      "name": "genesis with a directory ending in a slash"
+    },
+    {
+      "entries": [
+        "genesis_of_the_first_version"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "wrong_protocol"
+      },
+      "name": "genesis of the first version"
+    },
+    {
+      "entries": [
+        "a_rotation_of_the_first_version"
+      ],
+      "error": {
+        "index": 0,
+        "kind": "rotate",
+        "reason": "unknown_kind"
+      },
+      "name": "a rotation of the first version"
+    },
+    {
+      "entries": [
+        "genesis_over_16_kib"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "too_large"
+      },
+      "name": "genesis over 16 kib"
+    },
+    {
+      "entries": [
+        "alice_add_device_1"
       ],
       "error": {
         "index": 0,
         "reason": "not_genesis"
       },
-      "name": "a first entry that is not a genesis"
+      "name": "a log that starts after its genesis"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_genesis"
+        "bob_genesis"
       ],
       "error": {
         "index": 1,
@@ -210,940 +496,2494 @@
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate_broken_link"
+        "alice_add_device_1",
+        "add_key_naming_an_earlier_head"
       ],
       "error": {
-        "index": 1,
+        "index": 2,
         "reason": "broken_link"
       },
-      "name": "a broken link"
-    },
-    {
-      "entries": [
-        "alice_genesis_signed_by_live_key"
-      ],
-      "error": {
-        "index": 0,
-        "reason": "wrong_signer"
-      },
-      "name": "a genesis its operational key did not sign"
+      "name": "add key naming an earlier head"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate_signed_by_live_key"
+        "alice_add_device_1",
+        "add_key_at_the_wrong_position"
       ],
       "error": {
-        "index": 1,
-        "reason": "wrong_signer"
-      },
-      "name": "a rotate not signed by the operational key"
-    },
-    {
-      "entries": [
-        "alice_genesis",
-        "alice_rotate",
-        "alice_recover",
-        "alice_rotate_on_old_branch"
-      ],
-      "error": {
-        "index": 3,
+        "index": 2,
         "reason": "broken_link"
       },
-      "name": "a rotation after a recovery on the old branch"
+      "name": "add key at the wrong position"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate",
-        "alice_recover",
-        "alice_rotate_by_replaced_key"
+        "alice_add_device_1",
+        "add_key_of_a_key_already_listed"
+      ],
+      "error": {
+        "index": 2,
+        "reason": "duplicate_key"
+      },
+      "name": "add key of a key already listed"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_by_a_key_the_log_never_listed"
+      ],
+      "error": {
+        "index": 2,
+        "reason": "wrong_signer"
+      },
+      "name": "add key by a key the log never listed"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_naming_a_listed_signer_signed_by_another_key"
+      ],
+      "error": {
+        "index": 2,
+        "reason": "wrong_signer"
+      },
+      "name": "add key naming a listed signer signed by another key"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_by_a_recovery_key_the_log_does_not_list"
+      ],
+      "error": {
+        "index": 2,
+        "reason": "wrong_signer"
+      },
+      "name": "add key by a recovery key the log does not list"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_of_an_ed25519_passkey"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of an ed25519 passkey"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_of_an_es256_device"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of an es256 device"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_whose_kid_is_not_its_key"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key whose kid is not its key"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_of_a_passkey_without_its_credential_id"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of a passkey without its credential id"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_of_a_device_with_a_credential_id"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of a device with a credential id"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_of_a_passkey_with_a_credential_id_of_1024_bytes"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of a passkey with a credential id of 1024 bytes"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_of_a_compressed_point"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of a compressed point"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_of_a_point_not_in_uncompressed_form"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of a point not in uncompressed form"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_with_a_label"
+      ],
+      "error": {
+        "field": "key",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key with a label"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_whose_client_data_carries_another_member"
+      ],
+      "name": "a passkey signature whose client data carries another member",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:81fe7e493130a7bb48291de0f825b9478996af7e2087c0c06aa3c3fced2a6fe9",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+            "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+            "kind": "passkey",
+            "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+            "kind": "device",
+            "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+          }
+        ],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_without_cross_origin"
+      ],
+      "name": "a passkey signature without cross origin",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:340fa019f81d5123e5e4dd35a89e8b3103548e53f1ba50c72ac4c12844bc5506",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+            "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+            "kind": "passkey",
+            "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+            "kind": "device",
+            "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+          }
+        ],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_made_at_another_origin"
       ],
       "error": {
         "index": 3,
         "reason": "wrong_signer"
       },
-      "name": "a rotation by the operational key a recovery replaced"
+      "name": "a passkey signature made at another origin"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_recover_by_stranger"
-      ],
-      "error": {
-        "index": 1,
-        "reason": "wrong_signer"
-      },
-      "name": "a recover signed by a key that is no holder"
-    },
-    {
-      "entries": [
-        "alice_genesis",
-        "alice_recover_altered_after_signing"
-      ],
-      "error": {
-        "index": 1,
-        "reason": "wrong_signer"
-      },
-      "name": "a recover request altered after it was signed"
-    },
-    {
-      "entries": [
-        "alice_genesis",
-        "alice_recover_stale_revision"
-      ],
-      "error": {
-        "index": 1,
-        "reason": "stale_revision"
-      },
-      "name": "a recover expecting another revision"
-    },
-    {
-      "entries": [
-        "alice_genesis",
-        "alice_rotate",
-        "alice_recover",
-        "alice_recover_replayed"
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_for_another_relying_party"
       ],
       "error": {
         "index": 3,
-        "reason": "stale_revision"
+        "reason": "wrong_signer"
       },
-      "name": "the same recovery again after the revision moved"
+      "name": "a passkey signature for another relying party"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_recover_with_request_for_bob"
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_without_user_verification"
       ],
       "error": {
-        "index": 1,
-        "reason": "wrong_identifier"
+        "index": 3,
+        "reason": "wrong_signer"
       },
-      "name": "a recover request signed for another identifier by the same kit"
+      "name": "a passkey signature without user verification"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_recover_naming_another_directory"
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_without_user_presence"
       ],
       "error": {
-        "index": 1,
-        "reason": "directory_changed"
+        "index": 3,
+        "reason": "wrong_signer"
       },
-      "name": "a recover naming another directory"
+      "name": "a passkey signature without user presence"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_rotate",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_made_cross_origin"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "a passkey signature made cross origin"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_of_a_registration"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "a passkey signature of a registration"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_over_another_challenge"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "a passkey signature over another challenge"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_whose_authenticator_data_was_altered"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "a passkey signature whose authenticator data was altered"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_passkey_signature_in_ed25519_form"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "a passkey signature in ed25519 form"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "a_device_signature_in_passkey_form"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "a device signature in passkey form"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "remove_key_by_the_key_it_removes"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "remove key by the key it removes"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "remove_key_of_a_key_the_log_does_not_list"
+      ],
+      "error": {
+        "field": "kid",
+        "index": 3,
+        "reason": "invalid_field"
+      },
+      "name": "remove key of a key the log does not list"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "recover_by_a_device"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "recover by a device"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "recover_by_a_passkey"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "recover by a passkey"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "recover_listing_a_key_twice"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "duplicate_key"
+      },
+      "name": "recover listing a key twice"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "recover_listing_65_keys"
+      ],
+      "error": {
+        "field": "keys",
+        "index": 3,
+        "reason": "invalid_field"
+      },
+      "name": "recover listing 65 keys"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "add_recovery_by_a_device"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "add recovery by a device"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "add_recovery_that_drops_a_recovery_key"
+      ],
+      "error": {
+        "field": "recovery",
+        "index": 3,
+        "reason": "invalid_field"
+      },
+      "name": "add recovery that drops a recovery key"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "add_recovery_that_adds_nothing"
+      ],
+      "error": {
+        "field": "recovery",
+        "index": 3,
+        "reason": "invalid_field"
+      },
+      "name": "add recovery that adds nothing"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1",
+        "add_key_by_a_removed_key"
+      ],
+      "error": {
+        "index": 5,
+        "reason": "wrong_signer"
+      },
+      "name": "add key by a removed key"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1",
+        "alice_add_recovery",
         "alice_recover",
-        "alice_rotate_after_recover",
-        "alice_recover_reusing_request_id"
+        "add_key_by_a_key_the_recovery_replaced"
       ],
       "error": {
-        "index": 4,
-        "reason": "request_id_reused"
+        "index": 7,
+        "reason": "wrong_signer"
       },
-      "name": "a recover reusing a request id"
+      "name": "add key by a key the recovery replaced"
     },
     {
       "entries": [
         "alice_genesis",
-        "alice_recover_live_key_is_a_recovery_key"
+        "alice_add_device_1",
+        "alice_add_passkey_1",
+        "alice_add_device_2_by_passkey",
+        "alice_remove_device_1",
+        "alice_add_recovery",
+        "alice_recover",
+        "add_key_by_a_recovery_key_the_recovery_replaced"
       ],
       "error": {
-        "index": 1,
-        "reason": "key_overlap"
+        "index": 7,
+        "reason": "wrong_signer"
       },
-      "name": "a recover whose live key is a recovery key"
-    },
-    {
-      "entries": [
-        "genesis_live_key_is_operational_key"
-      ],
-      "error": {
-        "index": 0,
-        "reason": "key_overlap"
-      },
-      "name": "a genesis whose live key is its operational key"
-    },
-    {
-      "entries": [
-        "alice_genesis",
-        "alice_address"
-      ],
-      "error": {
-        "index": 1,
-        "reason": "unknown_kind"
-      },
-      "name": "an address entry, an unknown kind"
-    },
-    {
-      "entries": [
-        "alice_genesis_other_version"
-      ],
-      "error": {
-        "index": 0,
-        "reason": "wrong_protocol"
-      },
-      "name": "another protocol version"
-    },
-    {
-      "entries": [
-        "alice_genesis_unknown_field"
-      ],
-      "error": {
-        "index": 0,
-        "reason": "unknown_field"
-      },
-      "name": "an unknown field"
-    },
-    {
-      "entries": [
-        "alice_genesis_padded_key"
-      ],
-      "error": {
-        "index": 0,
-        "reason": "invalid_field"
-      },
-      "name": "a padded key"
-    },
-    {
-      "entries": [
-        "alice_genesis_revision_one"
-      ],
-      "error": {
-        "index": 0,
-        "reason": "invalid_field"
-      },
-      "name": "a genesis at revision one"
+      "name": "add key by a recovery key the recovery replaced"
     }
   ],
-  "comment": "The vectors pinning Prima.Identity: every side derives each public key from its seed, re-signs every entry and request whose signer is named and reproduces its sig byte for byte, reproduces every entry hash, request digest and identifier, walks every chain to its state or to the index and reason it is refused, holds every genesis to its identifier as locate does, and derives each kit's recovery key from its seed. Binary values are unpadded base64url; hashes are sha256:<hex> over JCS bytes; the identifier is per_ and the hex of SHA-256 over the genesis's JCS bytes. A signature covers the JCS bytes of its map without sig. A recover entry carries no sig; its request's signer is named under requests. An entry with signer null was altered after signing or is not signed at all. A locate genesis given as raw is read as those exact bytes, padded with spaces to pad_with_spaces_to when present.",
+  "comment": "The vectors pinning Prima.Identity (cyfr-identity/v2), read by CYFR, by cyfr.run and by the account pages. Every side derives each Ed25519 public key from its seed and each P-256 point from its private scalar, and each kid as sha256:<hex> over the public key's bytes; re-signs every entry whose signer is an Ed25519 key and reproduces its sig byte for byte over the JCS bytes of the entry without sig (a passkey's signature is randomised, so an es256 signer's entries are verified, never re-signed); reproduces every hash and identifier as SHA-256 over the entry's JCS bytes; maps each identifier to its 32 user_id bytes (a passkey's WebAuthn user.id) and back; walks every chain to its state, or to the index and reason of the first entry refused; and checks every webauthn case's assertion over its challenge at its origin and relying party, reaching ok or a refusal named by the check that fails first, in the order type, challenge, origin, crossOrigin, authenticator data, rpIdHash, user presence, user verification, signature. In a chain every WebAuthn refusal is wrong_signer, and a refusal that names a field or a kind carries it as field or kind, as each side's typed result does. A signer of null was altered after signing or is not signed by any key the vectors hold.",
   "directory": "https://directory.example",
   "entries": {
-    "alice_address": {
+    "a_device_signature_in_passkey_form": {
       "entry": {
-        "address": "https://alice.example",
-        "kind": "address",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "sig": "dY-C-0Pjq4MI1j3ubmSkXbSICr33lH4V4ixvUOJhRthWDgTkwGGBqqZuqzYiFJqWHAk8IWTpc9ReQ8b3-XxNAQ"
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiWEREMjAtSFRaVWdhT1lxUjFpcHctZkllNDNZSjhHbm1UTE9ScTcwbDJ1dyIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEUCIQDJCT4jm9ztuYuNK6zZydjCcIpaUhxPROxA1XEzXGMa3gIgKrKyxeGozOChyxUZKk1rQrGpNwLgQut1VWpVh11VQLk"
+        },
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
       },
-      "signer": "alice_op_1"
+      "hash": "sha256:8b547b79b4ee1f330275c4ac208691f41bb2d339afd7f2c08063f7e53db7d0f5",
+      "signer": null
+    },
+    "a_passkey_signature_for_another_relying_party": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "nBgN4M1pnueIl8R8_bPn7h11kG4xt3RqR0fepTaQmDcFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEQCIG2TlmjHtMbndOKNitFyj6I5AnAOn1LcS4MF0990sHaIAiAO9NSg10Tk6aUVOd3KAnd_ma74r_B3pey0jN1mUysVuw"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:cf2339ca9a9c12791bda07f1cf34b9beb7adb9822e12fbddf8c827733e96656e",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_in_ed25519_form": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:4a321f11170c6c98b3f7f1df33a884f06f63df6f8e47d21515b339fc81dd24bb",
+      "signer": null
+    },
+    "a_passkey_signature_made_at_another_origin": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZXZpbC5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEQCIF6eGbyEVIC6g0Zwu_yazLYxnlBCUIgcTxBvuwkDa6tJAiBYJQaf_N4hSzBerlFgXR67zOky6WgLLn3YuQDT7JnJNA"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:80aef3021b393a8d67286fe82caf0590317a283c68e3dc146921b27d1b58dc27",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_made_cross_origin": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6dHJ1ZX0",
+          "signature": "MEYCIQDFIdw_yIlL1F_8CnuTMckz7-Vodci8vp-Av5ZMMgXowAIhANgiR6LLN7VizxLv9BOt8g9B43X6huU97FhyveVOzkcX"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:99805930d6c67d0ae2f885da39f5efa16f218d5b24c8b01070e32a49d149a038",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_of_a_registration": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEQCIBTwFD5Y8t3GWRwvxnVokYKRGayjFKGxHGG5NP54cUhwAiBZocoKDM0krqIsgASsQsR1L0r5-0WA0ecehMqQhRDSCw"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:849233f2e254a7730cb7a98781b915232cb681bb36960a7b65e953457784205b",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_over_another_challenge": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiSnIyTG5IMGNpVW41TUdxMUNTQTdPdnNsQUhySl8tMkhuQnllYkNuWnRxWSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEQCIGJDg6Go-gBdXZ6tQ0ex4JKUYxepwPvdOaDn_3QtXfABAiBuClSGOiUVkb_sm2qYMug1fpHVREyfvclTRkMuKsBrHg"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:c8e51816ed924609be455a25c351ac94043284a91eeac2975ef5e29ab1391335",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_whose_authenticator_data_was_altered": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABg",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEUCIQDwxlGSx0_C3xbWxmnrR4YEUFtazWp-m_X9PFm7vSQoZwIgRDd87GNaCUCLncWb153crqbb6pZvtmUe32shVwgriZI"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:55f1d50e309be6046e1815248b690ead0aa59b631ca343ee843f0ce12f5448fb",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_whose_client_data_carries_another_member": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2UsIm90aGVyX2tleXNfY2FuX2JlX2FkZGVkX2hlcmUiOiJkbyBub3QgY29tcGFyZSBjbGllbnREYXRhSlNPTiJ9",
+          "signature": "MEYCIQC-gzjamRvUm4JysgM6TIzBSwZw9F8cj484LAXqvNKKyAIhAK6FdTirbrosKFBPads_hzWcy7p3CBIV9eoEr_Ps4nB9"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:81fe7e493130a7bb48291de0f825b9478996af7e2087c0c06aa3c3fced2a6fe9",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_without_cross_origin": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUifQ",
+          "signature": "MEQCIHgplLRRxW_9taawrHBjrQHkHskPQXsQ527_8COuiad6AiB25dIBnJOV5urbtwen3xcjePymenxw32IPNWah3Ej2fA"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:340fa019f81d5123e5e4dd35a89e8b3103548e53f1ba50c72ac4c12844bc5506",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_without_user_presence": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwEAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEYCIQDZqLbGTBpNo3LI7lvXbDTs5fCElmfu7UbHJGE61rUEwQIhAPhY0iit_Ydpcr1gLuen8ZqcLANTLDtlyTazGO0cJRnv"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:94a58d4de73b76224be556e794f4f09b2e0c9e760cbe94dd5a12b819637850d6",
+      "signer": "passkey_1"
+    },
+    "a_passkey_signature_without_user_verification": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwBAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEQCIH8G_2HxaWHAda1vAFywyLIS8pD4a8IFrMBxNgqqy_dPAiAECB7O8uLWdhsBhDTHf0MrAbOqxcM39nHS3RzzUNiWiQ"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:6849376b344c19d8402b6e0b9a9e7f82442f2a8afc65c3c517394e74a4c7d38f",
+      "signer": "passkey_1"
+    },
+    "a_rotation_of_the_first_version": {
+      "entry": {
+        "at": 1790000001000,
+        "kind": "rotate",
+        "live_key": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U",
+        "prev": "sha256:4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "protocol": "cyfr-identity/v2",
+        "seq": 1,
+        "sig": "iCXKxp4KEWJRqT3XpFeYR402B0OSvthHApgeiNim8fhncVORXLxV2b2Vv4GamUiJbxFWwxMtnfuHEgl34T9bCw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:26c7f6017f7d3a3b1dec8dc443f88c68c53d36bfac73083eba574ebfcd3a47ef",
+      "signer": "device_1"
+    },
+    "add_key_at_the_wrong_position": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 5,
+        "sig": "pT5EY7Pm2Uop-PFCt2_dmsW6eP6P6TM7FrVl3SMLlzTsr0420cT4fW9VKL8962TYA7L3fB3Qo-tu1zyzAa3GAw",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:23c4c3ac6528c2688aa52cbe21a663595be08b802b052b958daa89d478ea9818",
+      "signer": "kit_a"
+    },
+    "add_key_by_a_key_the_log_never_listed": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "70RaHtkwACNDdK7Uz_i-MfDQ46M5_XOfyJEtQEUy2L5sgTCsTcF5AchL0-fZ4dnNiu83VRx3tOX4MWD111dBCw",
+        "signer": "sha256:a496f9a75035947fb57a6ccd71d87c2d0b9d83b40f6e7c580faa74c522b02388"
+      },
+      "hash": "sha256:52840a69b0c885a8c3c8f50c858ed722a944bbdcbd9b056733a79605eefc8e58",
+      "signer": "stranger"
+    },
+    "add_key_by_a_key_the_recovery_replaced": {
+      "entry": {
+        "at": 1790000007000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+          "kind": "device",
+          "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+        },
+        "kind": "add_key",
+        "prev": "sha256:47efb174689898d49ceb7c2be1accb90d4a862def92101cf1164de0a04a7656a",
+        "protocol": "cyfr-identity/v2",
+        "seq": 7,
+        "sig": "_FaeKDQTsMtFR1PHHspE7y_oFJ7uRPyypg0gZG7IGhIXIoygW3lYuCWvVJ1CsQoSEj5UI0u9-musbFHj_EJQAg",
+        "signer": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4"
+      },
+      "hash": "sha256:6c3ba7a5701c4208a565e03a07f80f1d13a4897466db24ee0110195cda46687e",
+      "signer": "device_2"
+    },
+    "add_key_by_a_recovery_key_the_log_does_not_list": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "vMGEl-4mQ10DicsEfY8KBmcE08xZUcYAMtRiiGd_GPMBRC7CfO9YbELkfSMwnEA-zEHGQXjkL6FjtY57ZIZ4AA",
+        "signer": "recovery:sha256:325c793f207b9375b783815bff85afb4f3482cf0fd0a00bdc163d98752c53f24"
+      },
+      "hash": "sha256:040d2c07702afddf94bc51bf3662ee6fc38461e65e9691918bca921685b8781d",
+      "signer": "kit_b"
+    },
+    "add_key_by_a_recovery_key_the_recovery_replaced": {
+      "entry": {
+        "at": 1790000007000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+          "kind": "device",
+          "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+        },
+        "kind": "add_key",
+        "prev": "sha256:47efb174689898d49ceb7c2be1accb90d4a862def92101cf1164de0a04a7656a",
+        "protocol": "cyfr-identity/v2",
+        "seq": 7,
+        "sig": "ehYg4F1z5dZkAj-hRQ92lB5MW6FVkOlKvAHK6Y4YlKIJY76MAhs9gewyPiuGrzsalsmIq_pd5pHj1Cz0ypvRBA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:541b7b6bed90c38c23b43d6911f9c60651ebfaf7ebef572a865b5b259214d852",
+      "signer": "kit_a"
+    },
+    "add_key_by_a_removed_key": {
+      "entry": {
+        "at": 1790000005000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+          "kind": "device",
+          "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+        },
+        "kind": "add_key",
+        "prev": "sha256:303c52357471485ec6f0f15546f8c7e4314cead1826a23a9efe61cfd24f3f0be",
+        "protocol": "cyfr-identity/v2",
+        "seq": 5,
+        "sig": "3rO1phPoC4oGbMZCKjYyZPc0YDtEGW7romI3KmQIOc4yCKgGlkWW3J8hgX4Gopujc6DLvTLXS12gZhYlwPDHCQ",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:4b41e3639f85ed6ad4f11b838606af7594ec3cc01f2203091d1c0b3fbe016d99",
+      "signer": "device_1"
+    },
+    "add_key_naming_a_listed_signer_signed_by_another_key": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "yyB5dZjodhxEeaSL4fDSL6PPlN_ZRhRaxw-OzZ7cOrSNbyWLvWuqPqlfwVqtDnQND1e1Docl1_weScXlvoexDg",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:50b78bb30d0c13da50f52bbccde2342d2a42b6daf283cdfba5b9ecfa76deab89",
+      "signer": "stranger"
+    },
+    "add_key_naming_an_earlier_head": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "Ix4Rym2HrrZmcFJVraztSEurIC1Mvi45lLEcVG3wTgvvtToo8i91qnSmdLeh2h3LvVLKoRVrRw1TmKut6fdDAQ",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:b02335d2c987f1bdf71c51a3cc214bcc1b915e20217b299c3b33b114ae12e9ad",
+      "signer": "kit_a"
+    },
+    "add_key_of_a_compressed_point": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:34727c67c6209b6bfc975b67af7768467f1b28072a73ee38bfd3d40611f3cef6",
+          "kind": "passkey",
+          "pub": "A9FTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxU"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "WdqV17t02Og7I4EpZKe6uI5rj_O734AljZVherdk302xFYUaFAW47j9XNIgZ4iY3gOTPpzwRQZC56fz0szkZBw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:f279d6d311c11d03569335a893a22da9d3cb7d4be7600c6930ff004ca24f6a89",
+      "signer": "device_1"
+    },
+    "add_key_of_a_device_with_a_credential_id": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "credential_id": "AQEBAQEBAQEBAQEBAQEBAQ",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "cgHePTDo4YExerlOSEVsQ2-cG7eQtXsAZ0Zt25u6zLPQrlToF5Z40_1qLjGgqmLfIdMXj3LAWIlve2H1mT_wBw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:3422230fcec63a48cabbe51837e2026cba8255db48ba807adfb2d7aab0d2f96d",
+      "signer": "device_1"
+    },
+    "add_key_of_a_key_already_listed": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+          "kind": "device",
+          "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "dRCwF3GXsHNwqNCrb8ZWLYIfpakdwhbpNEe0uZ0aO9jK4dCCaLVY-ww3vbzY77FevEyhE3AgRlmbHgDR_CIWDQ",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:2adbb48ecc458cec77ebec221d76fdf741ce9f3a86bd5386c81ee181d4cc34cf",
+      "signer": "kit_a"
+    },
+    "add_key_of_a_passkey_with_a_credential_id_of_1024_bytes": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "B97wMQaSzjEEJtd2I96ZjEiXgoz1YR64P3iPIf74ZfoYHzcMMJgOyKZUsZwF94rEQ5OXt4_xHlFQdAVrq1v7Cw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:2714ec1d6361c91db12a02cdc83576978cb347721a254aa431c9c0e55c46b14b",
+      "signer": "device_1"
+    },
+    "add_key_of_a_passkey_without_its_credential_id": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "passkey",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "dnzYpgMfGXW1u2aybhCtMy5E0agoIcolrTmA_Yy2RQHMkw-7KaQuPlC4qY620CamqM7eO099yjTO9L_C3bPuCQ",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:086ec862eba2c5185d84d167aca4d07ca147e0a3e5b5ea1166f1efda18d3bcc3",
+      "signer": "device_1"
+    },
+    "add_key_of_a_point_not_in_uncompressed_form": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:711d655d0ba21a85debedc3cfae49f9659fa60dcfdb9ae170f610bd6a2db4b76",
+          "kind": "passkey",
+          "pub": "BtFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "OP-wHRr_jI3yyWKkrlNsHqmaBNrAR44N-HIxIqvO9E0bx-DHWEG4tWbrECRqWQgdjJ9eTWtrvtIAPwbVuqjPAw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:fdf6cedc6fe53b787e8d082590c79882d003083e713cde3a98f309edc1848c1b",
+      "signer": "device_1"
+    },
+    "add_key_of_an_ed25519_passkey": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "passkey",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "B-UenTi_V4AO8G7SbxatjdGEqw8uuMLQvHdMumBfhr8jOxOEZMvvZ57rss-nMjh1Ue-thLZZOMEOD666jYw5Aw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:97355bcb73df4482216274167c353cea523dcc0cd2d1e79493b0a4dc7cf2c6a0",
+      "signer": "device_1"
+    },
+    "add_key_of_an_es256_device": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+          "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+          "kind": "device",
+          "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "1nXDGUN5NbkXXBvANA8wAcvqBZLN8WksHHxqM6IlGWR0dZjDoZJyFmDQOTphAQ_FwNqWCDVPwsakmOLE835BDQ",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:75e4c0907d7bad8b6682123837ff84583f4f83d47d0c60f490ff4b07bdde8b4a",
+      "signer": "device_1"
+    },
+    "add_key_whose_kid_is_not_its_key": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "4A1Yctv3tMjAGOsDtsWVtZ3bjJv0L5mXBgcEvRdiQi9Du9PYCpX51VvooQmdhv2FT-5p1JDY6UEQNKwDNWakDw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:3e719b1bf4e77ef2cc1abdefad719a21c8362b6a99c50f7050d7de18fd811f53",
+      "signer": "device_1"
+    },
+    "add_key_with_a_label": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "label": "laptop",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "CsGr15NAH1dYQxUCYhKE_3Yyo-FpaQiqZQQ6B4JH8ETwHgr5SeyCb-7ItiQ9uHmf5K91rLKMmHSIsJE6Igr-DQ",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:13547f79017bc24ff67b0b0c5cd062c681b16743cd1448bcf3fd9b230bded80d",
+      "signer": "device_1"
+    },
+    "add_recovery_by_a_device": {
+      "entry": {
+        "at": 1790000003000,
+        "kind": "add_recovery",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI",
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
+        ],
+        "seq": 3,
+        "sig": "gB20xKkBOEthDXwijpmLTngVMWTnD_CKhXOLF5OEhIayCU-AVVm_ehSFhp4X-yZVLvh22XxgStCu_7JQPPJ5Cg",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:cd5dc7ac611217ee335c15597238b47c7fb8d90d8b1d74a6df9f607e8c82aec3",
+      "signer": "device_1"
+    },
+    "add_recovery_that_adds_nothing": {
+      "entry": {
+        "at": 1790000003000,
+        "kind": "add_recovery",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3,
+        "sig": "n2SXKSGmgRuGt6FTJJDbHxD0V5LULjPfU1I1ZHl5-ywD418K6SUzChOPcqNOjT8GSy6WK8PZFEhJLb2tygBfBA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:c5acae48815c7b00d3f3ad57e8c632ae9d0c74b204ce2b09a22a741f00b9cdd7",
+      "signer": "kit_a"
+    },
+    "add_recovery_that_drops_a_recovery_key": {
+      "entry": {
+        "at": 1790000003000,
+        "kind": "add_recovery",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
+        ],
+        "seq": 3,
+        "sig": "oqoGbRpszMnwVh6b5PXYSb8-8VAvM6NxF6nkXl7ouGqua6UZLwkR2HzyzGFovGoOp_AQA6cAseLXmXnXVzLPCA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:1d94f27a60866356b632cefb7960d2b83176b86d1d6b69557cce47ba8eba29d6",
+      "signer": "kit_a"
+    },
+    "alice_add_device_1": {
+      "entry": {
+        "at": 1790000001000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+          "kind": "device",
+          "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+        },
+        "kind": "add_key",
+        "prev": "sha256:4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "protocol": "cyfr-identity/v2",
+        "seq": 1,
+        "sig": "UImpPpQyne_1YrVomCs0_zhSlv44HSIe3kmBxqwXwXFIXQrwqZ0-MgnMxNLzRIuG5gBUw_wNRp5eeTlTxD3BBA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+      "signer": "kit_a"
+    },
+    "alice_add_device_2_by_passkey": {
+      "entry": {
+        "at": 1790000003000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNjlJeVdNMHI1M2VpcmJiM3FkeTY1bkJQUmhHR0U0b183b1kyWTBfc0pIRSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEUCIQDwxlGSx0_C3xbWxmnrR4YEUFtazWp-m_X9PFm7vSQoZwIgRDd87GNaCUCLncWb153crqbb6pZvtmUe32shVwgriZI"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:327e63186bf2c5f70168b53abb842ba5aa4789117eec2c05cfaebfe91d332921",
+      "signer": "passkey_1"
+    },
+    "alice_add_passkey_1": {
+      "entry": {
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+          "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+          "kind": "passkey",
+          "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "Ny9Ch2x6qATK0lilwqpEOSwfW8zhau0AELx4oMjAo0jty5K-Oo7XcBetPGKYq3PMp6V7w19ALsG4gbj-O98ZBA",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+      "signer": "device_1"
+    },
+    "alice_add_recovery": {
+      "entry": {
+        "at": 1790000005000,
+        "kind": "add_recovery",
+        "prev": "sha256:303c52357471485ec6f0f15546f8c7e4314cead1826a23a9efe61cfd24f3f0be",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI",
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
+        ],
+        "seq": 5,
+        "sig": "M-JKGbK9bWFa5xkEe4K7cFwvEfsp4cWbKCRcmrU4e1oeSeeVo9-DR9VFVo6UrucaDlu3MFolGocjWQxY7LEUAg",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:735fca88db28e1bd13c8eb84e9ea43560486d6707416ede95fb050792afb6f88",
+      "signer": "kit_a"
     },
     "alice_genesis": {
       "entry": {
+        "at": 1790000000000,
         "directory": "https://directory.example",
         "kind": "genesis",
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-        ],
-        "revision": 0,
-        "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
-      },
-      "hash": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "signer": "alice_op_1"
-    },
-    "alice_genesis_directory_changed": {
-      "entry": {
-        "directory": "https://other-directory.example",
-        "kind": "genesis",
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-        ],
-        "revision": 0,
-        "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
-      },
-      "hash": "sha256:f78843cb8695c46720aae2d075c43397d4ef84b2786e580147fe82cb5378253b",
-      "signer": null
-    },
-    "alice_genesis_other_version": {
-      "entry": {
-        "directory": "https://directory.example",
-        "kind": "genesis",
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
         "protocol": "cyfr-identity/v2",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
         ],
-        "revision": 0,
-        "sig": "ldvcfO_RDudyKLutiLx3bOGaGRwMtiambLDSH0gk2ylswSxVNgRwRwJC44HkVKtrNZTaiN9GCcDytK5ysimfAA"
+        "seq": 0,
+        "sig": "nGIz0gHiqom7twcQ_5FhuvwJtPhkloqy_j8Hq0-WDzWiLnWFQtsX4gShOCWG28NgxKA309k_p89R-vRIZNAdAA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
       },
-      "signer": "alice_op_1"
+      "hash": "sha256:4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+      "signer": "kit_a"
     },
-    "alice_genesis_padded_key": {
+    "alice_readd_device_1": {
       "entry": {
-        "directory": "https://directory.example",
-        "kind": "genesis",
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU=",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-        ],
-        "revision": 0,
-        "sig": "vVSC2YHLHxL5-XMU8DzTFBmkVo0r81mkuE8xpgpH7V9B98P9hXO3hsQWF2Ztbcfu0QC_-I9lrdBRG_AIh9pCCQ"
+        "at": 1790000007000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+          "kind": "device",
+          "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+        },
+        "kind": "add_key",
+        "prev": "sha256:47efb174689898d49ceb7c2be1accb90d4a862def92101cf1164de0a04a7656a",
+        "protocol": "cyfr-identity/v2",
+        "seq": 7,
+        "sig": "bQCzWQpm5aKDtDGbjFTIxaL7MnAn1ekw1KEtE1xLIKF4LUw4zx05snss_Y7w45GZ46uKpft4ELv3qEZLLVCADw",
+        "signer": "recovery:sha256:325c793f207b9375b783815bff85afb4f3482cf0fd0a00bdc163d98752c53f24"
       },
-      "signer": "alice_op_1"
-    },
-    "alice_genesis_revision_one": {
-      "entry": {
-        "directory": "https://directory.example",
-        "kind": "genesis",
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-        ],
-        "revision": 1,
-        "sig": "XgacIAe9__g5AO2GAi6pmY64Z0cD0xB1VbGBUJekyHFfiQ_6v5YHQJHepJ4Ep4Y5mPcvQbHx_zWUu2oDo2fDCA"
-      },
-      "signer": "alice_op_1"
-    },
-    "alice_genesis_signed_by_live_key": {
-      "entry": {
-        "directory": "https://directory.example",
-        "kind": "genesis",
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-        ],
-        "revision": 0,
-        "sig": "Y-AwafKyEL7FK6LtZSXZCEGMD485K0_ifeUCkqmMIeOU6sqv82FprfzAPPz4gOcj5vVmHYqY5ChizQfkMhjXBQ"
-      },
-      "hash": "sha256:60b6ec1386ebfb4cb8cfd19f1d7adbafd05c79b946f1c5f801df9c6d1e6d4a9d",
-      "signer": "alice_live_1"
-    },
-    "alice_genesis_unknown_field": {
-      "entry": {
-        "directory": "https://directory.example",
-        "kind": "genesis",
-        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-        "note": "hello",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-        ],
-        "revision": 0,
-        "sig": "8JDN2envxwiGNyup3g4X6MGwtq9-uCGzJoQPKIjI00XRp-VHS14nGvkJAPlqnE6PUpkoEgQY2exgvOnqLJY9DA"
-      },
-      "signer": "alice_op_1"
+      "hash": "sha256:d6f9d9cf1ea4d6e503d61cf06aef86f43d3b39454a77126a655013be111c416b",
+      "signer": "kit_b"
     },
     "alice_recover": {
       "entry": {
+        "at": 1790000006000,
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+            "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+            "kind": "passkey",
+            "pub": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
+          }
+        ],
         "kind": "recover",
-        "prev": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 0,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-1",
-          "sig": "uASfNWPmehzu6bX7XR4xtp_QM89gXjrRsi7rllBLFHNMaSxL4NFae4IfFaL1r8SyLp7SQ6FJW6DFFZSbL-KZAA"
-        }
+        "prev": "sha256:735fca88db28e1bd13c8eb84e9ea43560486d6707416ede95fb050792afb6f88",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY"
+        ],
+        "seq": 6,
+        "sig": "jiFwbwosgtkD6iD7lP_EYcoNoTTqkEPV4HjefUWn9QiS9GOKosKLyN-ZitSFumPyhRVvyMKrWZzCgFS6cqW0Aw",
+        "signer": "recovery:sha256:325c793f207b9375b783815bff85afb4f3482cf0fd0a00bdc163d98752c53f24"
       },
-      "hash": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-      "signer": null
+      "hash": "sha256:47efb174689898d49ceb7c2be1accb90d4a862def92101cf1164de0a04a7656a",
+      "signer": "kit_b"
     },
-    "alice_recover_add_holder": {
+    "alice_remove_device_1": {
       "entry": {
-        "kind": "recover",
-        "prev": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 1,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
-          "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
-          "protocol": "cyfr-identity/v1",
-          "recovery_keys": [
-            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
-            "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
-          ],
-          "request_id": "req-alice-holder",
-          "sig": "4iCn60xWy7YWQ9K-31avtraSm07TVYTI8Ohd2FWcwZ2RX-nZn4vJqAIZq2vzKwa4fEIjQe9zUULp_HTqB4scDw"
-        }
+        "at": 1790000004000,
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "kind": "remove_key",
+        "prev": "sha256:327e63186bf2c5f70168b53abb842ba5aa4789117eec2c05cfaebfe91d332921",
+        "protocol": "cyfr-identity/v2",
+        "seq": 4,
+        "sig": "k6jfgpdIoXmTYBOsLZSKs17VLRzM7NjsKaTjLq2yyEjrpbmZF0VrqIUlSzjogiYa4ULLmIuMDCYtm4RuJIe7AQ",
+        "signer": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4"
       },
-      "hash": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
-      "signer": null
+      "hash": "sha256:303c52357471485ec6f0f15546f8c7e4314cead1826a23a9efe61cfd24f3f0be",
+      "signer": "device_2"
     },
-    "alice_recover_altered_after_signing": {
+    "alice_remove_passkey_2_by_recovery": {
       "entry": {
-        "kind": "recover",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 0,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
-          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-2",
-          "sig": "8B9uNmQtQS8ijtjKUykGo8ktIGZ06qo--ao43VxckOA8GowZtnnngaNZu_ANl2Y-pCTzCYYSmFjLMxw_rHa_BQ"
-        }
+        "at": 1790000008000,
+        "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+        "kind": "remove_key",
+        "prev": "sha256:d6f9d9cf1ea4d6e503d61cf06aef86f43d3b39454a77126a655013be111c416b",
+        "protocol": "cyfr-identity/v2",
+        "seq": 8,
+        "sig": "JZBe1sQXgKZflv-Tqvac_7m_FelOVfS8aaY5Dk4ushWhJz-lY4Dyo_TU_ye82tV2e5ooTQP1cK0KDCUgq1GzCw",
+        "signer": "recovery:sha256:325c793f207b9375b783815bff85afb4f3482cf0fd0a00bdc163d98752c53f24"
       },
-      "hash": "sha256:e227654b0697f26f4737c43b3651a43deb8a4c67e35950c02c3bdd6e93ad203b",
-      "signer": null
-    },
-    "alice_recover_by_second_kit": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 2,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "PnDWMCC74EvzJGErWiryLH_P9DYCgRmT1puJexMaWCM",
-          "operational_key": "PS-7PiwaKDwmGoeDBnFsj4D69FYyi3jEaUJMro0vDgc",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-kit-b",
-          "sig": "IGWwV1VBYxXqM5dWNS8JD0u5Qf8uLNXom5YwXaJT-w75qNxacMS3uH6IW-dT8wp2RUIog6IcVvxmlmpimdMBCQ"
-        }
-      },
-      "hash": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
-      "signer": null
-    },
-    "alice_recover_by_stranger": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 0,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-2",
-          "sig": "-b5gxjV5qKumRN65lIGae2M2MgLPGTxFQzOJkjbERVN0sZmDi7jQX2CXTg_mQJoBS5jsaA5AZ5-hzayxy6XHCg"
-        }
-      },
-      "hash": "sha256:1469c9c6322ce03d3ca383dda30a3e8f5a8cd4a97db61c6bba295b9ddb3dfad4",
-      "signer": null
-    },
-    "alice_recover_live_key_is_a_recovery_key": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 0,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
-          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-2",
-          "sig": "q20WyOCGqZTd7qk4m0rE53Q-_WB5qQppPb6M9MZ64C9TXKvh7v-lm4Vu9N5W4AeEMoggPO2EafLwhLhyN0tNDw"
-        }
-      },
-      "hash": "sha256:7501cd175d0088cbabac0f2e7bd9675e8024afa713f83448a94c797ce57f79ec",
-      "signer": null
-    },
-    "alice_recover_naming_another_directory": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://other-directory.example",
-          "expected_revision": 0,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-2",
-          "sig": "VnEWzhrNhzN7pY224NoY04hgsBUENhJYDGCboT02LRRnPBIfXIuGG5dCgJcMHwmyGbedPU50ts4rEYXEGhzbAQ"
-        }
-      },
-      "hash": "sha256:3c8157e1e49a6cb92847635fc93de411ad38176674e2ad1457ee1734c4245cec",
-      "signer": null
-    },
-    "alice_recover_replayed": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 0,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-1",
-          "sig": "uASfNWPmehzu6bX7XR4xtp_QM89gXjrRsi7rllBLFHNMaSxL4NFae4IfFaL1r8SyLp7SQ6FJW6DFFZSbL-KZAA"
-        }
-      },
-      "hash": "sha256:efdb6bf796218e37561e9b82e625c6de6b04ade10d902cd8cb077801d229013c",
-      "signer": null
-    },
-    "alice_recover_reusing_request_id": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 1,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
-          "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-1",
-          "sig": "HVZDC7cMJITcA0xSz421SKDLgqLERghVt9e4huxVQOyL1WixPOL7_N-ZvdJqhrEuiA8EVHp30T3ImxkGZSTmBg"
-        }
-      },
-      "hash": "sha256:77ab071f486aff4828545b025817384848b007842e6554c48ba00a6e3504e7cf",
-      "signer": null
-    },
-    "alice_recover_stale_revision": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 1,
-          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-alice-2",
-          "sig": "6poKGzh4WzVlOWB7FiWW4ohd38thcCP6kexMRj3DxIaTcniYddKRxp00KMsmNx2_xxhx6PA5q8EyK3Ed5stCAw"
-        }
-      },
-      "hash": "sha256:f8f7529470b6240eb388e2b1011f789ecda927d32259c951a2707195318728ef",
-      "signer": null
-    },
-    "alice_recover_with_request_for_bob": {
-      "entry": {
-        "kind": "recover",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 0,
-          "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
-          "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
-          "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-bob-1",
-          "sig": "d2ZGTePZdy1i-g8GRlpY0kvZoRQ7fx31bFWnYNS9DJjcm93fhcrfyIAmFrYeYKoDuerjIoNqlNN4p-gvhWmFDg"
-        }
-      },
-      "hash": "sha256:0903c2ada83547cb083f204061a86f87c4dae87761eaa246f1107a5534f74758",
-      "signer": null
-    },
-    "alice_rotate": {
-      "entry": {
-        "kind": "rotate",
-        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "sig": "lhw0CzOMJbp7wolzNdMbXHwhmHIot00peCDY_XHx7pUfoJuE0PHniBEbnkjwfIzikqT6LSvOj89Ay77IRWEcBw"
-      },
-      "hash": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
-      "signer": "alice_op_1"
-    },
-    "alice_rotate_after_recover": {
-      "entry": {
-        "kind": "rotate",
-        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
-        "prev": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-        "protocol": "cyfr-identity/v1",
-        "sig": "sRtbXGCTMMjXxIGSO0LFwHzO5Apc-MTi-L9aYarxpDhGwvIjv0k9m63Y0otL5dBNXPBkd7KqNCDSjo7Psj-VAA"
-      },
-      "hash": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
-      "signer": "alice_op_3"
-    },
-    "alice_rotate_broken_link": {
-      "entry": {
-        "kind": "rotate",
-        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
-        "prev": "sha256:076dfe051c5b704d7c2abddddea9c4e6dca335d7a1b4179b51a31c6de8b4bf23",
-        "protocol": "cyfr-identity/v1",
-        "sig": "3B3VLysczuNos1Ry5yTydLENkbyLOVqdhx8lRjeMq9LYsEoQxy4VM6T6KkFtUGtYDKNv1HXjW7tRSJ3cSr25Aw"
-      },
-      "hash": "sha256:0938efb93214798da858985f1db0c48e06c05fef4127fe1abf33006b3eb07ce4",
-      "signer": "alice_op_1"
-    },
-    "alice_rotate_by_replaced_key": {
-      "entry": {
-        "kind": "rotate",
-        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
-        "prev": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
-        "protocol": "cyfr-identity/v1",
-        "sig": "w9AzDTNCNciOvu4S5FLATis1l8cQ_Lzu7wkEb3khdp0t9lQJM_L84_dJ2dk8JkxEmtPB2EECErUzhBTO-ecYAg"
-      },
-      "hash": "sha256:8813f6af214f31b01e42238df94147305773d653da0f4ef4f5225aff9bc1994d",
-      "signer": "alice_op_1"
-    },
-    "alice_rotate_on_old_branch": {
-      "entry": {
-        "kind": "rotate",
-        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
-        "prev": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
-        "protocol": "cyfr-identity/v1",
-        "sig": "haXuESOKr5fBO9o0XKub_fNOHz55DEl9x-h5XaUA742tTQ1ovpzXtBESdT9zKFxJ0P59M4GGdSxQ2D56_A3ECw"
-      },
-      "hash": "sha256:d5a80b119e94d7939cab539b6779ed94f217e8a2809c83f1e8a5c85157bac72d",
-      "signer": "alice_op_1"
-    },
-    "alice_rotate_signed_by_live_key": {
-      "entry": {
-        "kind": "rotate",
-        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
-        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "protocol": "cyfr-identity/v1",
-        "sig": "aKod_t_evDzCqsdFxyD27I0fVdGn6OBWjprNHeWmFyTBeseNDdd6tG9oOXcEFb2osp1duVcy4Wdr5V4JtjyOCw"
-      },
-      "hash": "sha256:b7d5177e4d16ff18c612b17a58fc9089df4f6a5909a726c8368fd4b43690f277",
-      "signer": "alice_live_1"
+      "hash": "sha256:b39d6ad70e9a6212c849db0a237be0ddc29e2b2c6e4eed397d4d08e4e4f9835e",
+      "signer": "kit_b"
     },
     "bob_genesis": {
       "entry": {
+        "at": 1790000000000,
         "directory": "https://directory.example",
         "kind": "genesis",
-        "live_key": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
-        "operational_key": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "NX6ReiqEOZ5JGQ1_tQahgadRBiDCW4vxG5_3rMCGqZU"
         ],
-        "revision": 0,
-        "sig": "vwLl1IlNSg3fPc5RHbWzv2osciq7udxIF1utIokYMI960o3zXBl69edDepkfJQ_v0NHaVqDrrsSTUBOow3F-CQ"
+        "seq": 0,
+        "sig": "XMelh5wI8H6KgIFKJLr7jivVjbIPfcX4GIyePSwF3U11txaEp9Ot9uI05pYTHiV7AD47ec_gluYg5KtTIvOXCQ",
+        "signer": "recovery:sha256:a99b122048614d735ee2d5f3ddfc61ff78ae3c2c174f9509333ca3a8c2188348"
       },
-      "hash": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
-      "signer": "bob_op"
+      "hash": "sha256:b1e8c0782eb58d2ccbc1afcad8a9c2caaf0ad79e009cebab1e92083054ec057a",
+      "signer": "bob_kit"
     },
-    "bob_recover": {
+    "genesis_altered_after_signing": {
       "entry": {
-        "kind": "recover",
-        "prev": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
-        "protocol": "cyfr-identity/v1",
-        "request": {
-          "directory": "https://directory.example",
-          "expected_revision": 0,
-          "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
-          "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
-          "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
-          "protocol": "cyfr-identity/v1",
-          "request_id": "req-bob-1",
-          "sig": "d2ZGTePZdy1i-g8GRlpY0kvZoRQ7fx31bFWnYNS9DJjcm93fhcrfyIAmFrYeYKoDuerjIoNqlNN4p-gvhWmFDg"
-        }
+        "at": 1790000000000,
+        "directory": "https://other.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "nGIz0gHiqom7twcQ_5FhuvwJtPhkloqy_j8Hq0-WDzWiLnWFQtsX4gShOCWG28NgxKA309k_p89R-vRIZNAdAA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
       },
-      "hash": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
+      "hash": "sha256:98fc8da0b1c6f60a2b1be92297c61f913502d5e9a9ea6705775e4a4742dda083",
       "signer": null
     },
-    "genesis_live_key_is_operational_key": {
+    "genesis_at_seq_one": {
       "entry": {
+        "at": 1790000000000,
         "directory": "https://directory.example",
         "kind": "genesis",
-        "live_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
         ],
-        "revision": 0,
-        "sig": "tx1H_cLcN3UzsGasVdcufipx0Xupt5A2iv3bO8sdj0OdyPqNFcBbuLf2e5CPs9_a0dmqQFSAshGM-OT9eNKSDQ"
+        "seq": 1,
+        "sig": "qwacECUV7J9mDIleC1u___zZhXaXzsV2PqqX_NE37UumO-h-eFDBcO7fEJDhdleJ4r0naWUSp0xORUPjfTUFBQ",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
       },
-      "hash": "sha256:337427c1fd52d2bbd3032e4c5db10f01ab71eaedc47e858f301a85a963a178be",
-      "signer": "alice_op_1"
+      "hash": "sha256:f5c96540f259fad003bd87aaa32eaebd17cf9c2f2ef2a2be091cfdf937aab49f",
+      "signer": "kit_a"
+    },
+    "genesis_of_the_first_version": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v1",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "5gpaI-qkETzasR4ghKYr_pLYCySWZ1C6-lirwP1Ou9p8ze4OrD_tFbRdph30AZYy_HXypdppLInIdkUC8cIyBA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:13c2fad42cf9404a6bbb51ca570ca8fe15e650d1414cdaeda4f08adf802c97b5",
+      "signer": "kit_a"
+    },
+    "genesis_over_16_kib": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "padding": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "iIVKWADK34tZ7kzS9iQS_PfaJSH701xhrw4CQZggsowMb9c2Pz9-oVJs8cKGA58d8ddQUUAH29H-JHlaMestAg",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:caa57c1912beb935aa0c020489faa9b0d20c2043c4b497618d2cc5bfbc192dee",
+      "signer": "kit_a"
+    },
+    "genesis_signed_by_a_device": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "ujNgWqFr5c65PDI1oZkM-vlqtxxB6E0dfOfH5e393EGxWEjt7TDmR8Xp4wTw2IOSTaV2w97geJfI3soSqcyfBg",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:793e49b6f15b4c5659c8f5dd264883a51ebc5d394ec9bf560d07ffca77f6e15c",
+      "signer": "device_1"
+    },
+    "genesis_signed_by_a_recovery_key_it_does_not_list": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "RwOzFfszY_vfZV7Yeo5gQgwh5k40IfRoD267-ko-Yhjp5ZC04-LBFz8AFf7MnXUz_ydqZtaTRKgfJQp0SmmFCQ",
+        "signer": "recovery:sha256:325c793f207b9375b783815bff85afb4f3482cf0fd0a00bdc163d98752c53f24"
+      },
+      "hash": "sha256:5401a361536de871e6d5f5982bbbf20238c4d84835cb641b8f95fed672ebc66b",
+      "signer": "kit_b"
+    },
+    "genesis_with_a_directory_ending_in_a_slash": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example/",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "A7FZrkgwh5nXKHBhuNoVczZAckG-N7ddrwwx_-ORF8pLjoTbY56DHuwO905SygP1In904N9L5xxUpxbAqOXSDg",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:89747089901dabfce504bbc42fe02953bfef44ca3bf38a67d6f21eda77eb5cce",
+      "signer": "kit_a"
+    },
+    "genesis_with_a_label": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "label": "Mira",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "a1vXYQXZPM9GTYUJEVanYWusXGTPcWPLVGI-J6LXsWjxGGIjudDkbvmyzMaok2XN9hK5Do8iOGZtdfnLeWxgDw",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:96c9dd8d317bfd2018fe190396e7db7256dc4821e5f2753d7c542f10c09d046e",
+      "signer": "kit_a"
+    },
+    "genesis_with_a_passkey_signature": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiS0xrQkZzSGljT0QtMXlWNjFTQUxvOW5GQmo3SWNqWTV2dkl1RU83U2FycyIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEUCID0-ldhWcjHgkVuiSKi1VZuDeBkBt5UAxSwYKZOwzEJHAiEAscgVMuYgujAxfxAdbsi6Z84O--qsbQA1dWt0zpPqlMY"
+        },
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:7e28c7489d6039a06c744c29b6f6e8051151d617df013d0fe9a4af759f9b37c2",
+      "signer": null
+    },
+    "genesis_with_a_prev": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "prev": "sha256:b1e8c0782eb58d2ccbc1afcad8a9c2caaf0ad79e009cebab1e92083054ec057a",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "A9QGpLrjVmy7OqLMj_CBpwR7UAdYurryXSb67kaJ7FkwBu50HDqV0LOcS4tLsv-fRCI_D1vPQFr2s04Cxc-RAw",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:9986f31376c9e05b1aeaa9a0a6e7195945c4684828bd31d5ca3eaa6fd7539d82",
+      "signer": "kit_a"
+    },
+    "genesis_with_a_recovery_key_twice": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI",
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "sig": "eVu52nklTDJ_GV6o9E0yrvAdzNAY7lN4hGrme2t_RIJy8DHG2jQaM0Cv8rjIdr12CLa-hUhjudxaNMH9y4j9BA",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:66ce081c40f7d51d4ff3bf162f91358a86d1af1adc5ce6af76d071ebe5a1c294",
+      "signer": "kit_a"
+    },
+    "genesis_with_nine_recovery_keys": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "9NtcB-7ojFOie-q058ZPDIsdWJngaa_BkieotMJJLg4",
+          "Uc2L-Lus9z9GFJr5YYWDQlTqcXXEDei5Q4K5o0D5I7o",
+          "bNNt4G-Z3Qxd9z5QrSgLPtkajVZBarsXkxD3sNhq1Yo",
+          "0r5HtFNWGK-s7CrUYiJeBfJs5DTHDpTSD4MdvaNRjKQ",
+          "sSwuj9hSTBzuP-iJlhTpo1v-poH-ZxmCMwvaVW_Xp0s",
+          "L25uvatZkcolyjc1VCnLr4knVEL84g0AX-WVmEcfxPU",
+          "frq5GtVt-2ReFYMgS-vJOJsmKv5YTX1LrYptudql4zY",
+          "Axei8vF4YBo731r79s3E96MvXu5xmov8eiL2qqpHf0k",
+          "OyyUfejEdQZ2o1JQH9RBil0jRlwyNSoWZvmuIL5x5Cs"
+        ],
+        "seq": 0,
+        "sig": "-I6p4ypfm5kt9JZn7IYd8UvWZYqtl5dmSNxndLoyBFq-0kDMTO-YDLm4tJtweKWlPH24oGXpLVvSm0WBJ3npBg",
+        "signer": "recovery:sha256:ef22df28e803bca5fc5a8f806607fffb70a9ec68ecd42522006c8cfa3e761368"
+      },
+      "hash": "sha256:ba1420c75021741cf282255e1da987f68ff12f9062b39f72b994fecc62e563de",
+      "signer": null
+    },
+    "genesis_with_no_recovery_key": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [],
+        "seq": 0,
+        "sig": "D8NXhhEeX7GeEeXDVKFaO2Y73LOh0VPNmKOXNVb6xC29-EzwRTUOoEBE8XTu2cVP_BbOZy2CM-XAp5NH9lLTBQ",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:d412ac2190c4a3d058bc3cd1b98b301e007072e6f505f38a37589df337e421da",
+      "signer": "kit_a"
+    },
+    "genesis_without_a_signature": {
+      "entry": {
+        "at": 1790000000000,
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 0,
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:28b90116c1e270e0fed7257ad5200ba3d9c5063ec8723639bef22e10eed26abb",
+      "signer": null
+    },
+    "recover_by_a_device": {
+      "entry": {
+        "at": 1790000003000,
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          }
+        ],
+        "kind": "recover",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3,
+        "sig": "loA5P7BcnkHGXRgIvSV0JgDPfqu2kRPJOv3y64F4Y5AaJ9oQnE3gNl2juXUAmvWmyzobErdsyKXmRfJBhr6bAg",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:24fce7ccd6dbe31b2a74a5298cc1f24af15f555d750f9f2d0a2107d42d7c74c3",
+      "signer": "device_1"
+    },
+    "recover_by_a_passkey": {
+      "entry": {
+        "at": 1790000003000,
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          }
+        ],
+        "kind": "recover",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3,
+        "sig": {
+          "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+          "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiR2Vudk9aRjJuSUstbjVmV1RYWHhHaDFITi1xc1F6SndqaUR0b09RdmpaayIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+          "signature": "MEYCIQCA2H-TifIGDvpj_lRXuvBWW7EUOD2R_jt2nr8Zi76klgIhAPTjCxVR50SgKT0TmkPlzhczqAvtZelS1AZkUrWiOmvs"
+        },
+        "signer": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8"
+      },
+      "hash": "sha256:013da5ec325581f929b283b489f59b7b709e06aa81af3644f82eaea0327ae3eb",
+      "signer": "passkey_1"
+    },
+    "recover_listing_65_keys": {
+      "entry": {
+        "at": 1790000003000,
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:784083a9bccf84c14f9aa6b3b1d4e7fd164eeff01773f51622ab865ec8ca708d",
+            "kind": "device",
+            "pub": "znI2VrjJbj5gQKojPjuu8_NM2aB_mHlaO8N4253GfY8"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:e61312095249863d015ca5683d286b50475d8c56f0ed64ea734ab07042fd6f08",
+            "kind": "device",
+            "pub": "9wtEMaylrYtYaX7YHJGZLpns0w_K3FC0Q3QSrYmQCC4"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:846ee742a59d47c89e6af03a7e05fb502a8f1de5a58f1942bbee8203f20aa3c8",
+            "kind": "device",
+            "pub": "5C_FIUUsHBi-XhifF0_9fj3yVNEu0jPGgMJbo8xmQRU"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:bfb2d3bb715e846517eb77b5f2cc9ae64e1525c66a26459e789467df9644a9ea",
+            "kind": "device",
+            "pub": "BO37PrUfleHOFir6p8RToNe1rcxnDa49vUJvULzYKso"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:fcba6515bdd7fb458376363fd17a6a3d1391cc6db09f9cffd71bec9d7032876a",
+            "kind": "device",
+            "pub": "-iVEju0-xGEuTFjVlZk9MMkmnXcg98TgTTF0B9d-lZ4"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:d452731fa6f1772968d943f8d5d6624feae1666ad7e5168b26ba70e07ac2dc41",
+            "kind": "device",
+            "pub": "qM4QRDtzZ9ApLgy5g0i2n0a5ARbGZosTMxZDwvbMgVc"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:e46e507ad93ef0e253ba80c585e165158dd22ddeb2edf1e209175a3c5be59ec4",
+            "kind": "device",
+            "pub": "zP8seA1Dpknb7L6E3YNba_cuODP9JCL0Mybm27WkWLY"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:6a00c254dab97896f0089c02a000780071db3c317cd6b750a919acb48a7f5db4",
+            "kind": "device",
+            "pub": "cP4D6sP3OAX51Xw9XN-KgMvET_LZdU_5CC1XAXybJvA"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:ed438706b9f30e56659d4da786d9fa64aa210977aa7ebf275bd57c35f21a965c",
+            "kind": "device",
+            "pub": "-f9F6JBsV-dK1xp_LttC2E2YKNkd8fW6YnyZGEpv_Wg"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:4cae7d3ea4df439ecc3caa1c3c723bebe32ed8f0d476d11f4ddc24bc8360b0e0",
+            "kind": "device",
+            "pub": "wrICwO_HGkUSWAodwUO6fF1zb0q1fcKA6pJr0xYxEB0"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:86d77f10990a8e35082ea40f77cab6709220bd123bbeca32dce2e894d4a32671",
+            "kind": "device",
+            "pub": "rDl7m-wlAuFlSGQfr_b3AkAdDjLhUMTAFd3lRotw69U"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:983a73e8d8434db7a71f1154881d9fbf5c8b9961ee07f96d3d6a086fcacfba57",
+            "kind": "device",
+            "pub": "L9oVKW5kgMigZiXDa7Kglw3hBhgVPOE2_5Guuwp2c98"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:dd26dbe50bd81ceb1515841d9110f9834e9964696bdba316d840e53df7252e47",
+            "kind": "device",
+            "pub": "onjSqsGgi9cT0JNv_YFF0GY-sJ1xTwIIheBVBq14h1E"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:2b1ac8782d65f355362c1ad1abe4d0a61fa47e5f3a8b4a8b96cd635ba52fc685",
+            "kind": "device",
+            "pub": "ABvQ5auPSX7SMovEi6d0bNnWv9n4N5z4AIHk8jgNMRc"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:3f1dda93f43ad94d8a9dd49e158a501a2bd864f73895a9247d5efe50f2f3533d",
+            "kind": "device",
+            "pub": "mtN0yHpCJatQBvlikcc_OANaV-Oz3WBe2yr4pMAtoNM"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:1bba1ca1d41f839c3f39464f9ed024839c9c3790370df84c3a52630270be02c0",
+            "kind": "device",
+            "pub": "wywIvIqJV5sOs0T_56H8g3ALotAYoLjgh7WSAtU-kOI"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:b498a13edba3872c7e999d81e726fbb7108a2661f83d726f263cbdad060052c0",
+            "kind": "device",
+            "pub": "gnD_5aOrJKDeaobbBkm1A8Lu3z5Ma-X9-3p1OFhyTB4"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:20289a93e6aed01ad2b544470fee134635bdb1d2ba2f7dcf5e3899584f10a843",
+            "kind": "device",
+            "pub": "fU6-_5LqlYS5sD3gHLhdvUPGqW-5LqR0tQJFunzzBls"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:bb376ee700e072a5bef9936e424faf6f19efc091b7790ffd66c7814f691f985d",
+            "kind": "device",
+            "pub": "3Wh1gWVeFzdyPECzFXtz0rGw2y-uPlBwk_gplzYGfLw"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:9884e2616629a723327d057fa053cacb48d50b54334c9f3d1f4af132410c4737",
+            "kind": "device",
+            "pub": "hfUrRa--JtRaUs3MZSU2c-D6C_pU4yAwosZnkAoYD4E"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:3160927424abf311e1e14c82c6e1d8293fe5024bd9215279a5122b61c89a28b6",
+            "kind": "device",
+            "pub": "-_4Z51TPFS2zeJNRZMzfz-0Q4y-JiNUbZH_cvhZiXK4"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:e57aa211e5ba7bb34a3e774782a0de6aa0cfac81758140872e2a033541eaf8ce",
+            "kind": "device",
+            "pub": "wgVDXZuvwfoIFYDyZga96SIHnvPg7LatF9C0pwQmaZA"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:896197ff30224fecd348f7edd9d0f99855099c398930154bb811b34dbda48ccc",
+            "kind": "device",
+            "pub": "dHagXEgyFh4Jq1r2aKkWRWX471EtZGFxcescoq4JNH4"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:eb379139c58305c10eccc823fd76d9421420d0134efbf072515c1f736b0104a9",
+            "kind": "device",
+            "pub": "3gYxrWH_goRz6Tob9iAofwDYCxBjpyAOtqOBLTZs_BQ"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:7523b3738ab89de3deddca331aa9b25e4fe9fbc45a0b2683d487619586a6d518",
+            "kind": "device",
+            "pub": "Vme9SqwQtfGDKq7JZvMzyUjTi2d23k2R-Dl77GwCQV4"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:2a59d3f19985b0fe1d8a18d1ea272f55bade3edf11dcafb106adab57be7fe423",
+            "kind": "device",
+            "pub": "NxL4fdM7FYx4_l8unEl0QtPalpclbWijso4hQNhb8Kc"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c527c3495dbd20e1e3a887dcc3f7f143f52485a00b0c925aec05f9bb27becdc3",
+            "kind": "device",
+            "pub": "wA9IOokGIYEdzyWK2XJuaQV8ceGJrjY5iQBItUnEMyg"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:23cd8a64411ad9e0b3f9e84ae6f62f42995c801cce4613118a69464af329e000",
+            "kind": "device",
+            "pub": "orj0geHeMkB_U8LagayOInD7qutBl-_a6jaeCHa1GtE"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:cc350ac834974a40de9988a9f69ded81a5c16efbc51b51ca93ba673d13cea19d",
+            "kind": "device",
+            "pub": "vM2xAS7TgXoMO1T9H65vZ7x0mIq2Dj2LONdBBUOJQts"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:d202015a024238698bb6f606e3af0d76c7c811340803fdfe338b21c2d154fcfc",
+            "kind": "device",
+            "pub": "Qj3HdLFK8dAYR-fdJ2gy2Sh4QHtFuV_o0RFPOpeS5vc"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:45f8e446d588565a1f539339fcdbc43c5629315594c91313709223b3367c1da6",
+            "kind": "device",
+            "pub": "WHwuJ1UxwZ3NwmxhlnresGGlH5lA8DWq6xBz9H3Yagw"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:0d56c5f00320fd1db9ed82d8fe127181137bd316486c6c794e3b8e237f40f21a",
+            "kind": "device",
+            "pub": "JgXGU7g1C3LRk_lE16553kY6k9WjA5dSkuD6iWoFM_I"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:268571486c989b297d63268524d5ac0f36fa5c04de50adbd81c75eb9a96f0e6d",
+            "kind": "device",
+            "pub": "_nVh1XcONNsANBNM7MW_B5lL7Pj5mza6_ych6eqmlBo"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:16ca69468e2318a93d373874664044f7fd951fd757f1ecaf2f3ebee0278a1952",
+            "kind": "device",
+            "pub": "4XITXivE7YeHicFwS0Z9I_wrcvGJhB8_pN3F40eLGbA"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:0e4b5dcb98ecf9e7a13c6069939299910cdd5662e705766e3681b8bc24505bb4",
+            "kind": "device",
+            "pub": "ZJ69Or92IcU9fMHMRfiFI3AjrG1r17gHO2hncZCMzY0"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:14c5c05099bc52b81f683280c2737508965593e5bff00e5a5d257a1aa4f27ad4",
+            "kind": "device",
+            "pub": "RzLlWA4-UbDVtSLOTmI1d3EHaRAwL9Fruht_cOqrU7s"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:ce2f5d00070f1240c3c2ef7284527ffb75fa34ad36f90d58113447e3facbd9e7",
+            "kind": "device",
+            "pub": "n3GWn9JgNjpYGn50WqmPwNbmzx77xPc5GqWxEnx6Iak"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:ca58c5393a58b2ed675f134f1d2d4e2aef6dbde9cad0145cd32e67174b4f73fd",
+            "kind": "device",
+            "pub": "KBT1uhUxsywH34d_55uKj3SK-AMkdzQjOuwxGarMiOI"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:fabc0ad01968468f5169712644a5ab87b8c57f9146ca260590c8c4b3b4b6512d",
+            "kind": "device",
+            "pub": "EXtYrD6YPynRP_eOC5llIXabXNvnLu1rGOGtYN76RHY"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:f94e8556c7f0b5037f82f1b8cdb4e5caa8da5e7d946123b2132c2aeb8fa715c4",
+            "kind": "device",
+            "pub": "v9Ois5vdrp5t9ZF57Kw49Ix1DXR-6ATjW8gwNPBohyY"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:9e9bb298973620593ae5c47a95d32a1deaa740712177bd2ff719bc3aa0b7bed6",
+            "kind": "device",
+            "pub": "8qaX1q8xhnZhcav2lwAjqwmaFGlHKQ-NJKdO090rfT0"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:aafbdd990f4d1f977ebaeaa9c0feedf8a844be96a32d00ee9f43683e96e686cf",
+            "kind": "device",
+            "pub": "towkUkn2WXmfnUFDmG5LVKONwZW9b8aD3IcYHhuOwqg"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:b3c9463ca5b98eb887a16e55dcbf52f18a64e87f1226b3edb17324b5935bd92b",
+            "kind": "device",
+            "pub": "y2YDXIxEb4J9Pnqmkkd39dHrN2k8vGg2YDBCnWxgozI"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:5d831b0e7d31271e089e9257364136ca275e97795fa91965ec87bb93bfd03d95",
+            "kind": "device",
+            "pub": "I_UcEhu2qDfcMBgRukjSlkcuU68WpYbnO7oNH_S6y9w"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:f2ce9d4310fe1cf362abe0299bc6870944359a9610bd5d63259b010afebe7cc8",
+            "kind": "device",
+            "pub": "9ObLWiblimNbc2h3NSV1XS0VSoxb5bA6uNgdglh9DMw"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:616578e5987b7ec0a75acb81f0fb904fe74990737eec864c9cbe263936f8437c",
+            "kind": "device",
+            "pub": "QVhxGkDcNYe6w_E3eIyQfn72Pz-6LJQrpljdYbKVlN4"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:2014d9111c57907aa0c076c23be33cb6654d13b3dcee5334c32760332fa47327",
+            "kind": "device",
+            "pub": "PIrz-D_vIrBERagfgiZRayzVSRW_ToMpZrbuZUi3f_s"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:82f999ea80e71630fe1d55ef41dc7a85ae01a7d2f3142a3287a997fb1dbbca46",
+            "kind": "device",
+            "pub": "jq_hHWqbr5M_oHeQzPgIx5XUhBxVt-PWWbd1QnNFPp0"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:b9ced9e7ae1f84f04616e8c42be3830d065285d66381d4a41ff6bd605c186c02",
+            "kind": "device",
+            "pub": "axSpypnQB1ssBhFS4bZwbVOssq84gWs6ojwv1VakrJo"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:3534d239df54b44fa8640625af9d41fb79688b275b33148db1a4b022996a6a11",
+            "kind": "device",
+            "pub": "orDvG_YwxdvLLqtoi1DlJe9nC8P26Ul2JToTd0z89So"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:4b507f171010c9863d64e04e631a98adcc1f70173acde1fa873d8c5878a7fb1a",
+            "kind": "device",
+            "pub": "pqayqX-Ha79nS4qsPJwznYm43L5SSMG7WcXaESdbojk"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:bc39eea97ab2a6fe637becd3a96949779587502da350068793c0caf95f3ba79e",
+            "kind": "device",
+            "pub": "2u9ZUYtNkruq0fXawXXSjrAHKxZvy82gmotUA_COXSw"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:5facaa0f19c896da63f6d967ce2f4f468d3b9e8de065371e8dcb6ebf25e4aaed",
+            "kind": "device",
+            "pub": "KS8hP9zX1M0lxpPXUfqhkrEuekbSTnVZkeIxcS_l5Sc"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:31c62b5daf580fecab43fb82f85868f35d3646acc6a02a0a95a8d4b962f685c0",
+            "kind": "device",
+            "pub": "vLTCS8gOAcZJNghnD2sViQNdHvhJ1luO7DHCP3bgrq8"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:80e7b06397ac7416ae69bcb9473c02523eb135213e5a17043d099409c36e96fe",
+            "kind": "device",
+            "pub": "VHzqSgcfkfidGTiT7dh9oA7_yX9-VJHfxTYxNi6GMwc"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c110af2a3dfdd4d713619fb762d06f55c64dadc98c1ffabaf86efa1d28d8cdee",
+            "kind": "device",
+            "pub": "Suuw7d69UPGj8Ub-bN_ap8klpxrKqu9EXLDXD6t0USY"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:019ff3f60ab6377fc5029682b25e976f909fc7ae8887a8c783c3b2186d02996f",
+            "kind": "device",
+            "pub": "8_a5-AWe2QepakbXwJh5S1cYA2bvD4yPAli4rccwLwE"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:0e955f01ee9840801b8781e9cb32524d8749d4c5434e3483ad8e3572a6cf1e52",
+            "kind": "device",
+            "pub": "XsRLxTz25oTrGgaw5sKPax4Ad52lnMlcSaoWctXrCuw"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:73646a3ff1c80fed72ca3f358476ea2b374aaece14fa533b4043ecc14f9cab88",
+            "kind": "device",
+            "pub": "zjMpJc5-rEyfa7ELttZS61nsBlG6ZJltAXrhPy0OUNY"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c50993b26b0961b0693153fdb0f340ac8bd54037dc232b21245f28eedc84c1a7",
+            "kind": "device",
+            "pub": "_NSHcFZoqlSEyd3wiG6LOqw-cSKF2e8HSuCexilUL54"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:2c9ba0cce3f5919112a50c776f8aff79fe2845692d89395e910bec2cedb017eb",
+            "kind": "device",
+            "pub": "QjzPiEExiGwSIvJCpSQlxJfHdepRSasp3ybfILMirVk"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:263edbd235117d2086b497cf34e14fbc0ff384d70fb74d7c75c2268623cc2cc0",
+            "kind": "device",
+            "pub": "0QK2esVj-4aeVtj4nBADRAC1u18LLJ_bzMJo_hTC0Rg"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:4a773736e005f382c2e9eb59ef6d11f0bd41a21ba68977c20406b066803e54a8",
+            "kind": "device",
+            "pub": "WmW3Zj6H43urmnMLkNpFLygQrQ9ZF50EA1O4XUiAEbs"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:ad9ac8be75de7b80e7f374b751bf962dec8b513ff132fef27b9aa1e9ddb52af6",
+            "kind": "device",
+            "pub": "Dcz_9AIADkrIEs7z6kwJEiklAK4-5J8vant0YSCx2fo"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:fdc270f0e8c6d411f15d0777b4888ca4c2c0d01173a18c74fcc30d07eb37a760",
+            "kind": "device",
+            "pub": "yyY4JA3RD90GqBHGHcuhf8d94z3y3oh0qSs5rIQ0jto"
+          }
+        ],
+        "kind": "recover",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3,
+        "sig": "dAPgp0O9fK0BGauFTUF1YUiaH2gOSfiFJZ2Ovw63FMf3lywCoHBUr1aph2WfpIb58MoPm1SfI45lY2vxwRQ6BQ",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:4fc053ca6cb014cdee0f3cc5e529a644ae710e3470838bbe3d12483527770c68",
+      "signer": "kit_a"
+    },
+    "recover_listing_a_key_twice": {
+      "entry": {
+        "at": 1790000003000,
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          },
+          {
+            "alg": "ed25519",
+            "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+            "kind": "device",
+            "pub": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk"
+          }
+        ],
+        "kind": "recover",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 3,
+        "sig": "zKae5Tymm0DYKelJDaF6JymeCCGcClVEDaWgeW_XuaEdDgICZ8pQbGmDMoOgKtJDe3If-0iXXOvN3e2LxEB0Aw",
+        "signer": "recovery:sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557"
+      },
+      "hash": "sha256:dd603a828e11e6cd9c3729a4123833568f0bc772b964206be3f1b2f0f93fe29a",
+      "signer": "kit_a"
+    },
+    "remove_key_by_the_key_it_removes": {
+      "entry": {
+        "at": 1790000003000,
+        "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+        "kind": "remove_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": "M1sL-0v7JXjmistu-aJ5sRJIRggyfFPkEUgqHFsMnPd1OJPCq3ngYUN3ZgN5CNmxN0iDh1hMBoTQY6xuDElwAA",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:d0da37b374f017d81c6062921a4eb1fe6ab8b6bb9663f24ef5913d50eb6d2b73",
+      "signer": "device_1"
+    },
+    "remove_key_of_a_key_the_log_does_not_list": {
+      "entry": {
+        "at": 1790000003000,
+        "kid": "sha256:a496f9a75035947fb57a6ccd71d87c2d0b9d83b40f6e7c580faa74c522b02388",
+        "kind": "remove_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": "xX0yRTGcNRrIPg1NLU_2berXK6R_oG8IYxjo_WqmUkZL1Xv3J1l1jJE_X97wpJOTwN9_9JK_vjx1eNN_mz8vDw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:a2161d4ccadf820a194a67731b643b3b8ff49727e7d3fa2ccf839bb41f577c10",
+      "signer": "device_1"
     }
   },
   "identifiers": {
-    "alice": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-    "bob": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9"
+    "alice": {
+      "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+      "user_id": "TukbpzrucuKGrvz1g1WsIvZHeKrftVEIKTplqVk_q7U"
+    },
+    "bob": {
+      "identifier": "per_b1e8c0782eb58d2ccbc1afcad8a9c2caaf0ad79e009cebab1e92083054ec057a",
+      "user_id": "sejAeC61jSzLwa_K2KnCyq8K154AnOurHpIIMFTsBXo"
+    }
   },
   "keys": {
-    "alice_live_1": {
-      "public": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-      "seed": "4vIF-wGusnX6R8S7SdjJjBxW6dBj3EU4QcOQUbcbIe4"
+    "bob_kit": {
+      "alg": "ed25519",
+      "kid": "sha256:a99b122048614d735ee2d5f3ddfc61ff78ae3c2c174f9509333ca3a8c2188348",
+      "public": "NX6ReiqEOZ5JGQ1_tQahgadRBiDCW4vxG5_3rMCGqZU",
+      "seed": "3dKpZw7XjPelJQ5fBGccUMDRflCSBibz4opbu2QfCDM"
     },
-    "alice_live_2": {
-      "public": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
-      "seed": "3Qr8Wgo0gayyfmVRyc1AnQvPy6Sm-IO3J5IJr4PLBUk"
+    "device_1": {
+      "alg": "ed25519",
+      "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+      "public": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U",
+      "seed": "jXx9yTsmkEpHJ20dstSmCSShIu1RADHjUGzlBEElMUs"
     },
-    "alice_live_3": {
-      "public": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-      "seed": "7nF-tWgTc0ssOVcktGwGSXhuHb9ildATVJf5CNNqabE"
+    "device_2": {
+      "alg": "ed25519",
+      "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+      "public": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI",
+      "seed": "sttB5qTlaHu65WKDnxLehIzzbjhEK0mu17N2cYF7v-o"
     },
-    "alice_live_4": {
-      "public": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
-      "seed": "OWrl4xaZ4AYOSrB1lkqrfrVimDlzstKkqVlERqKHk_g"
-    },
-    "alice_live_5": {
-      "public": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
-      "seed": "5q5NiDB30iZmZxwy9rCREV-onufnG14X0UcUT7Z0krQ"
-    },
-    "alice_live_6": {
-      "public": "PnDWMCC74EvzJGErWiryLH_P9DYCgRmT1puJexMaWCM",
-      "seed": "ZvDCgw74ULKivVdPXkGXxzlH_RNnHerGWnyqjBLXGqc"
-    },
-    "alice_op_1": {
-      "public": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-      "seed": "jPMRJIjhizAe6c-JHpn_mu0pkNgRyKnng33Q-29zt2g"
-    },
-    "alice_op_3": {
-      "public": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-      "seed": "4XttHfIMyvlJywy8bMskQgZQGCa1UPMh7Qm2ccBB2WA"
-    },
-    "alice_op_5": {
-      "public": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
-      "seed": "bFVRAKvDSdAbP9n_pgn7F0bAb8w72XCE0NnoA3JUVb4"
-    },
-    "alice_op_6": {
-      "public": "PS-7PiwaKDwmGoeDBnFsj4D69FYyi3jEaUJMro0vDgc",
-      "seed": "M2ynxEEfwJvRgNTCFlz2FmsMnoOlJx28xQ_9RG_3xGg"
-    },
-    "bob_live": {
-      "public": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
-      "seed": "229bxvj6IOXutXkKfZRBVu8J8XIkYFAF7YYUSh4VxoE"
-    },
-    "bob_live_2": {
-      "public": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
-      "seed": "21jkjoxAICn0BpgOMDYsdRMOkCpwW72BLecuZ2gRMCI"
-    },
-    "bob_op": {
-      "public": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
-      "seed": "36LAjjXux6K0-YLe-MzxRF3z3wO-cSjarLfzZ_uZqZg"
-    },
-    "bob_op_2": {
-      "public": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
-      "seed": "ytWXCp_CCZLyHpB4trYJfOLjjStomu2y4ZiC2ZW8hOc"
+    "device_3": {
+      "alg": "ed25519",
+      "kid": "sha256:c0b457972c5e2d262fe3f8a8ea495800ae605955b6710523d210262b47f5b48d",
+      "public": "8MBz5mklPDZUpYsQoWez2DDS4Ro2Nm6xubOYctoU3fk",
+      "seed": "OoWUJgwtUWEwr8fhykRsdQ0_4VAM_xG0aJrws2L4UCg"
     },
     "kit_a": {
-      "public": "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
-      "seed": "ykx6n7J2WvwsQ09vE1IqJO_R1Q8mUXP41S-J7RGvQVs"
+      "alg": "ed25519",
+      "kid": "sha256:6c571e46beaeff946514ff0c706ee9d50b65c656e1fc08dde3934b4f51de3557",
+      "public": "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI",
+      "seed": "zRsg9S7s15ZZ4Fulxt_RArIdXRqLKyjJGE7oLorzMJk"
     },
     "kit_b": {
-      "public": "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g",
-      "seed": "sZ6nELB-GzHz9BL97QzxaTY6CuwBwlEzy9mY_jMTuUU"
+      "alg": "ed25519",
+      "kid": "sha256:325c793f207b9375b783815bff85afb4f3482cf0fd0a00bdc163d98752c53f24",
+      "public": "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY",
+      "seed": "AdTIAWaX8thG8PN2dHsg9CHwinPyrakPOwAKZyOLuFM"
+    },
+    "passkey_1": {
+      "alg": "es256",
+      "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+      "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+      "private": "h0iSkk4fcu97zUhJ-80D8JiMs71fdmY2Z8jPLHhHSKk",
+      "public": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+    },
+    "passkey_2": {
+      "alg": "es256",
+      "credential_id": "-DwZuyKDuhoUanQXuUNiHw",
+      "kid": "sha256:90536cacfa8672157599f6dd36c2c3dce193843adce2d895e6ae0a6b59dde141",
+      "private": "c5PnyHrFSLi_65nA2oQuUQkcEUuN4ir5oK0nh67pXwE",
+      "public": "BNFTOpjuFFZ8jlup53BbIHcIpI_V3HKp2QDPYGT68yxUhQ9aQz1aHNx8CyEaG-tlQ5rTlYUCwtKFbJ3ne0bCiAU"
     },
     "stranger": {
-      "public": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
-      "seed": "ldiVKG7kxLyNRN_VHEKHfueVbbSQg6yAFDXkOpRuj8I"
+      "alg": "ed25519",
+      "kid": "sha256:a496f9a75035947fb57a6ccd71d87c2d0b9d83b40f6e7c580faa74c522b02388",
+      "public": "o8OOZTNaPxxzM-21WDDLcgTezPO5KIjS5Nkm7Zf_BQ8",
+      "seed": "WOZtr7KcMnT6MKU9rjLhnkb5maPc5glSFUk4q5Mwu-E"
     }
   },
   "kinds": [
     "genesis",
-    "rotate",
-    "recover"
+    "add_key",
+    "remove_key",
+    "recover",
+    "add_recovery"
   ],
   "kits": {
     "invalid": [
-      "279UNC8AaEna5-6f87Ah4Lke68fUh_jPTHk8GDYPmg",
-      "gScu7ew219Srm23MjzuEzKnyOD1UUhPKCmMmmDr3uwyG",
+      "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+      "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
       ""
     ],
     "valid": [
       {
-        "public": "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
-        "seed": "ykx6n7J2WvwsQ09vE1IqJO_R1Q8mUXP41S-J7RGvQVs"
+        "public": "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI",
+        "seed": "zRsg9S7s15ZZ4Fulxt_RArIdXRqLKyjJGE7oLorzMJk"
       },
       {
-        "public": "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g",
-        "seed": "sZ6nELB-GzHz9BL97QzxaTY6CuwBwlEzy9mY_jMTuUU"
+        "public": "PZ_DpudLvry3tgRfnI9P6_ymOxGC3xMB-Tfo0fNXsmY",
+        "seed": "AdTIAWaX8thG8PN2dHsg9CHwinPyrakPOwAKZyOLuFM"
       }
     ]
   },
-  "locate": [
-    {
-      "directory": "https://directory.example",
-      "genesis": {
-        "raw": "{\"directory\":\"https://directory.example\",\"kind\":\"genesis\",\"live_key\":\"z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU\",\"operational_key\":\"eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o\",\"protocol\":\"cyfr-identity/v1\",\"recovery_keys\":[\"0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc\"],\"revision\":0,\"sig\":\"lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ\"}"
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "the genesis of its identifier, as bytes"
-    },
-    {
-      "directory": "https://directory.example",
-      "genesis": {
-        "entry": {
-          "directory": "https://directory.example",
-          "kind": "genesis",
-          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-          "protocol": "cyfr-identity/v1",
-          "recovery_keys": [
-            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-          ],
-          "revision": 0,
-          "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
-        }
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "the genesis of its identifier, as an object"
-    },
-    {
-      "directory": "https://directory.example",
-      "genesis": {
-        "pad_with_spaces_to": 16384,
-        "raw": "{\"directory\":\"https://directory.example\",\"kind\":\"genesis\",\"live_key\":\"z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU\",\"operational_key\":\"eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o\",\"protocol\":\"cyfr-identity/v1\",\"recovery_keys\":[\"0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc\"],\"revision\":0,\"sig\":\"lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ\"}"
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "the genesis padded to exactly 16 KiB"
-    },
-    {
-      "error": "too_large",
-      "genesis": {
-        "pad_with_spaces_to": 16385,
-        "raw": "{\"directory\":\"https://directory.example\",\"kind\":\"genesis\",\"live_key\":\"z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU\",\"operational_key\":\"eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o\",\"protocol\":\"cyfr-identity/v1\",\"recovery_keys\":[\"0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc\"],\"revision\":0,\"sig\":\"lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ\"}"
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "a genesis over 16 KiB, refused before it is read"
-    },
-    {
-      "error": "identifier_mismatch",
-      "genesis": {
-        "entry": {
-          "directory": "https://directory.example",
-          "kind": "genesis",
-          "live_key": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
-          "operational_key": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
-          "protocol": "cyfr-identity/v1",
-          "recovery_keys": [
-            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-          ],
-          "revision": 0,
-          "sig": "vwLl1IlNSg3fPc5RHbWzv2osciq7udxIF1utIokYMI960o3zXBl69edDepkfJQ_v0NHaVqDrrsSTUBOow3F-CQ"
-        }
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "an unrelated genesis"
-    },
-    {
-      "error": "identifier_mismatch",
-      "genesis": {
-        "entry": {
-          "directory": "https://other-directory.example",
-          "kind": "genesis",
-          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-          "protocol": "cyfr-identity/v1",
-          "recovery_keys": [
-            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-          ],
-          "revision": 0,
-          "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
-        }
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "the genesis with its directory changed"
-    },
-    {
-      "error": "wrong_signer",
-      "genesis": {
-        "entry": {
-          "directory": "https://directory.example",
-          "kind": "genesis",
-          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
-          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
-          "protocol": "cyfr-identity/v1",
-          "recovery_keys": [
-            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
-          ],
-          "revision": 0,
-          "sig": "Y-AwafKyEL7FK6LtZSXZCEGMD485K0_ifeUCkqmMIeOU6sqv82FprfzAPPz4gOcj5vVmHYqY5ChizQfkMhjXBQ"
-        }
-      },
-      "identifier": "per_60b6ec1386ebfb4cb8cfd19f1d7adbafd05c79b946f1c5f801df9c6d1e6d4a9d",
-      "name": "a genesis its operational key did not sign, under its own identifier"
-    },
-    {
-      "error": "not_genesis",
-      "genesis": {
-        "entry": {
-          "kind": "rotate",
-          "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
-          "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-          "protocol": "cyfr-identity/v1",
-          "sig": "lhw0CzOMJbp7wolzNdMbXHwhmHIot00peCDY_XHx7pUfoJuE0PHniBEbnkjwfIzikqT6LSvOj89Ay77IRWEcBw"
-        }
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "a rotate entry"
-    },
-    {
-      "error": "invalid_json",
-      "genesis": {
-        "raw": "not json"
-      },
-      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-      "name": "bytes that are not JSON"
-    }
-  ],
   "max_entry_bytes": 16384,
+  "max_keys": 64,
+  "max_recovery": 8,
   "prefix": "per",
-  "protocol": "cyfr-identity/v1",
-  "requests": {
-    "alice_recover": {
-      "digest": "sha256:916543b65e9ba249bf8ad45acb16013590b77a1cb61590a16204a000ec58c4b1",
-      "request": {
-        "directory": "https://directory.example",
-        "expected_revision": 0,
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
-        "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
-        "protocol": "cyfr-identity/v1",
-        "request_id": "req-alice-1",
-        "sig": "uASfNWPmehzu6bX7XR4xtp_QM89gXjrRsi7rllBLFHNMaSxL4NFae4IfFaL1r8SyLp7SQ6FJW6DFFZSbL-KZAA"
+  "protocol": "cyfr-identity/v2",
+  "user_ids": {
+    "refused_identifiers": [
+      "per_000000000000000000000000000000000000000000000000000000000000000",
+      "per_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "usr_0000000000000000000000000000000000000000000000000000000000000000",
+      "per_00000000000000000000000000000000000000000000000000000000000000000"
+    ],
+    "refused_user_ids": [
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      ""
+    ]
+  },
+  "webauthn": [
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEUCIQCjjEAgwFXEMnBF3GzTW-5EHe8oM7eCl7Kq2JpFTs_3zwIgae3dGUjszR90DMITQNbmyyUWRt9uN1jWJ_5t3u7hyvk"
       },
-      "signer": "kit_a"
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "key": "passkey_1",
+      "name": "an assertion at the directory, present and verified",
+      "origin": "https://directory.example",
+      "result": "ok",
+      "rp_id": "directory.example"
     },
-    "alice_recover_add_holder": {
-      "digest": "sha256:e484483b308ecc4c1133dedba0f02e25b9d2928bed87b3b5d9d121153359f21f",
-      "request": {
-        "directory": "https://directory.example",
-        "expected_revision": 1,
-        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
-        "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
-        "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
-        "protocol": "cyfr-identity/v1",
-        "recovery_keys": [
-          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
-          "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
-        ],
-        "request_id": "req-alice-holder",
-        "sig": "4iCn60xWy7YWQ9K-31avtraSm07TVYTI8Ohd2FWcwZ2RX-nZn4vJqAIZq2vzKwa4fEIjQe9zUULp_HTqB4scDw"
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2UsIm90aGVyX2tleXNfY2FuX2JlX2FkZGVkX2hlcmUiOiJkbyBub3QgY29tcGFyZSBjbGllbnREYXRhSlNPTiJ9",
+        "signature": "MEUCIQC-cExIaYF8DmNvHj9nUKvstzr1pKXGwL7-7qLblcIwTwIgU6wHV7vQgc_ttFYm1E9nHgJ5LNNevO67lPTGF1ZXHGs"
       },
-      "signer": "kit_a"
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "key": "passkey_1",
+      "name": "an assertion whose client data carries another member",
+      "origin": "https://directory.example",
+      "result": "ok",
+      "rp_id": "directory.example"
     },
-    "bob_recover": {
-      "digest": "sha256:53752755f9e226f75e84a9da2b139a90734376143a620624b3ddc3eb79435f16",
-      "request": {
-        "directory": "https://directory.example",
-        "expected_revision": 0,
-        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
-        "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
-        "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
-        "protocol": "cyfr-identity/v1",
-        "request_id": "req-bob-1",
-        "sig": "d2ZGTePZdy1i-g8GRlpY0kvZoRQ7fx31bFWnYNS9DJjcm93fhcrfyIAmFrYeYKoDuerjIoNqlNN4p-gvhWmFDg"
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUifQ",
+        "signature": "MEYCIQC8okzpouWOMoJ4q1LYDlhBvozvDlbw9EGWNZlb8OjBdQIhAMbjwLoyQwUOiyUaZDQWh079BRAB5WF-RZtgqK98s11C"
       },
-      "signer": "kit_a"
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "key": "passkey_1",
+      "name": "an assertion without crossOrigin",
+      "origin": "https://directory.example",
+      "result": "ok",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEUCIBVwAUpEedhujxnyCoP_aRfg6jVPSbb2xJ7BdE4iMJ5ZAiEAh5BiTDBI_ugRJFja3PgRod9yogXi4zxCOZHIM_hM4fs"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "wrong_type",
+      "key": "passkey_1",
+      "name": "a registration's client data",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicmtTS3lHeE9qazNzWkZjcGNJNzBHSE91ZWNiZi1FN19jellKaVVoX0NPVSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEQCICWaw--BYywoGTkJ2-kWGV74Lg20rXlo17aSLqaQ_a0CAiAWBaqhxlfR1SC3W4yqdRHLim5M9OdRxUGQbA2Bk-PCmg"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "wrong_challenge",
+      "key": "passkey_1",
+      "name": "an assertion over another challenge",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZXZpbC5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEQCIDtgwt1z4OCi4u-fSx7e5Xv0pCmQoo7StErhoo6ShSypAiBJmOvSiPrROOOc5cBYMXh8LaSq35MuMjM0YXGzFPpMFw"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "wrong_origin",
+      "key": "passkey_1",
+      "name": "an assertion made at another origin",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6dHJ1ZX0",
+        "signature": "MEUCIA5B3miQnX9xB_jzsQRHBStEKNPELGFHt6lf3Dan-GctAiEA43QuCrTC7MoBwzqVf9yvB0eg8Tq7Utw9IB-me_vPB3s"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "cross_origin",
+      "key": "passkey_1",
+      "name": "an assertion made cross-origin",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "nBgN4M1pnueIl8R8_bPn7h11kG4xt3RqR0fepTaQmDcFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEYCIQCx7b0UGyFYg8IxVFTWlsZfw7cz3SIieRDZWgiC-Wl5sQIhAKyIZup8l_h1O5SizunakzAW029fibCsQjlDDEKhUcZ5"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "wrong_rp",
+      "key": "passkey_1",
+      "name": "an assertion for another relying party",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwEAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEQCIAYvnoVz_ehfa5wblB4Id129d2Eoa_gPD4B9y3THe1YJAiAFtghpolsuztSBtV4mZ5fdSBR9xMWyWbUftOb7J0pO-Q"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "user_not_present",
+      "key": "passkey_1",
+      "name": "an assertion without user presence",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwBAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEUCIH5wQH25_xshOG1viVPo46t2Amvzg1L7oGU7wH_C20xnAiEAiyFpg4dCog_YQT-Aua5Sxg2c0yD1AyEJnFf1Dl_SAWI"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "user_not_verified",
+      "key": "passkey_1",
+      "name": "an assertion without user verification",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEUCIGBYWysHmioNSxJ1prLa5vvV2TuZ6rWbEC6MPOiWXu47AiEA8OzU_6hNOkl__hu29Cbt0t0FJSF3ux0b8Q_dZ3XsQHw"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "bad_signature",
+      "key": "passkey_1",
+      "name": "an assertion by another passkey",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABg",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEUCIQCjjEAgwFXEMnBF3GzTW-5EHe8oM7eCl7Kq2JpFTs_3zwIgae3dGUjszR90DMITQNbmyyUWRt9uN1jWJ_5t3u7hyvk"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "bad_signature",
+      "key": "passkey_1",
+      "name": "an assertion whose authenticator data was altered",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAA",
+        "client_data": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVTekwzU1NfVnVBbVQ4NDFKMzFWNGpEWDBLdUp2bDFMZ1VaekRPanZWQSIsIm9yaWdpbiI6Imh0dHBzOi8vZGlyZWN0b3J5LmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEUCIQCjjEAgwFXEMnBF3GzTW-5EHe8oM7eCl7Kq2JpFTs_3zwIgae3dGUjszR90DMITQNbmyyUWRt9uN1jWJ_5t3u7hyvk"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "malformed",
+      "key": "passkey_1",
+      "name": "authenticator data shorter than 37 bytes",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
+    },
+    {
+      "assertion": {
+        "authenticator_data": "RoGqFkEODMYMrmFSRO0D3FE2MjlemGhulIRX3sgiGvwFAAAABw",
+        "client_data": "WzEsMl0",
+        "signature": "MEUCIQCjjEAgwFXEMnBF3GzTW-5EHe8oM7eCl7Kq2JpFTs_3zwIgae3dGUjszR90DMITQNbmyyUWRt9uN1jWJ_5t3u7hyvk"
+      },
+      "challenge": "r5SzL3SS_VuAmT841J31V4jDX0KuJvl1LgUZzDOjvVA",
+      "error": "malformed",
+      "key": "passkey_1",
+      "name": "client data that is no JSON object",
+      "origin": "https://directory.example",
+      "rp_id": "directory.example"
     }
-  }
+  ]
 }

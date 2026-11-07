@@ -21,13 +21,13 @@ import (
 // Every registered command must appear in its group.
 var groupCommandOrder = map[string][]string{
 	"server":   {"init", "setup", "access", "up", "down", "update", "restore"},
-	"identity": {"login", "logout", "whoami", "open", "status", "athanor", "thread"},
+	"identity": {"login", "logout", "device", "whoami", "open", "status", "athanor", "thread"},
 	"component": {
 		"new", "build", "search", "list", "inspect", "pull", "register",
 		"run", "fork", "remove", "push", "deprecate", "yank", "schedule",
 		"tincture",
 	},
-	"security": {"key", "profile", "webhook", "pair"},
+	"security": {"key", "profile", "webhook"},
 	"admin": {
 		"admin", "settings", "log", "decision", "retention", "aqua", "mcp", "registry", "report",
 		"notify", "context", "call",

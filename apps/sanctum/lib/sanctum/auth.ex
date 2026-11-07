@@ -3,14 +3,13 @@
 
 defmodule Sanctum.Auth do
   @moduledoc """
-  Behaviour for a sign-in method that proves an identity through a browser
-  callback: `Sanctum.Auth.OIDC`, the configured OpenID Connect issuer.
+  Behaviour for a bearer-credential provider, the test harness's seam
+  (`current_user/1`). No shipped module signs anyone in through it: a
+  person signs in with their account (`Sanctum.SignIn`).
 
-  `authenticate/1` returns a `Sanctum.Context` carrying the identity key
-  the method proved (`user_id`, `door`), the email it asserted and the
-  provider. Whose identity that is, and whether they may sign in, is the
-  unlock's decision (`Sanctum.SignIn.unlock/1`), taken by the caller that
-  mints the session — never by the method.
+  `authenticate/1` returns a `Sanctum.Context` for the credentials it is
+  handed; whose they are, and whether they may sign in, is never the
+  provider's decision.
   """
 
   alias Sanctum.Context

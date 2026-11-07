@@ -39,15 +39,7 @@ defmodule Arca.Test.Shares do
             updated_at: now
           },
           overrides
-        ),
-        %{
-          key: "github|https://github.com|sh#{n}",
-          provider: "github",
-          issuer: "https://github.com",
-          subject: "sh#{n}",
-          first_seen_at: now,
-          last_seen_at: now
-        }
+        )
       )
 
     user

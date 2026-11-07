@@ -76,6 +76,16 @@ func (r *Release) Managed() []string {
 	return names
 }
 
+// File answers the bytes of the regular file the release ships at name.
+func (r *Release) File(name string) ([]byte, bool) {
+	for _, e := range r.entries {
+		if !e.dir && e.name == name {
+			return e.data, true
+		}
+	}
+	return nil, false
+}
+
 // Write extracts the release into the current working directory. When
 // overwriteManaged is true, managed files are replaced with the tarball
 // contents, each through a temporary file renamed over it, so a managed
