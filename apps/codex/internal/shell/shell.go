@@ -641,6 +641,11 @@ func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again 
 		s.madeElsewhere()
 		return
 	}
+	// The PIN or passphrase is checked before the account service is
+	// asked anything, so a refused one is said even with it out of reach.
+	if _, err := s.checkSecret(secret, again); err != nil {
+		return
+	}
 	c, ok := s.checkNew(ctx, name, accepted)
 	if !ok {
 		return

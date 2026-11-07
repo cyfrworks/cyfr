@@ -152,7 +152,9 @@ func TestSetup_MakesTheAccountAndOpensPrism(t *testing.T) {
 	if !strings.Contains(b.page(), "This box keeps its data unencrypted, whoever takes it reads everything: its CYFR data volume is not encrypted.") {
 		t.Fatal("setup does not warn about the unencrypted data volume")
 	}
+	home.accounts.Down = true
 	b.post("/setup", url.Values{"name": {"alice"}, "secret": {"123456"}, "again": {"123456"}})
+	home.accounts.Down = false
 	if page := b.page(); !strings.Contains(page, "needs the six-word passphrase") {
 		t.Fatalf("six digits were not refused:\n%s", page)
 	}
