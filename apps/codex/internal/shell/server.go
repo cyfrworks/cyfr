@@ -185,8 +185,14 @@ var actions = map[string]action{
 		srv.Shell.Resume(ctx, string(f.get("code")))
 		srv.onward(ctx, w, r)
 	}},
+	// The account's log is read before the key is opened, as cyfr login
+	// reads it: a key the log no longer lists shows its code again, and
+	// the PIN typed is erased unused.
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Unlock(ctx, f.get("secret"))
+		srv.Shell.CheckListed(ctx)
+		if v := srv.Shell.View(); v.Page == PageLocked && v.Notice == "" {
+			srv.Shell.Unlock(ctx, f.get("secret"))
+		}
 		srv.onward(ctx, w, r)
 	}},
 	"/name": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {

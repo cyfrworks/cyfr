@@ -397,8 +397,8 @@ func removeKey(t *testing.T, home *fakeHome, identifier string, dev ed25519.Priv
 	home.accounts.Append(t, identifier, entry)
 }
 
-// A key the account's log still lists is left as it is before an unlock:
-// no code is shown, the record keeps its account, and the unlock goes
+// A key the account's log still lists unlocks as before: the screen reads
+// the log first, shows no code, keeps the record's account and goes
 // straight to the hello.
 func TestCheckListed_AListedKeyGoesStraightToTheHello(t *testing.T) {
 	home := newFakeHome(t)
@@ -408,24 +408,21 @@ func TestCheckListed_AListedKeyGoesStraightToTheHello(t *testing.T) {
 	home.mu.Unlock()
 	b, p, rec := addedBox(t, home, identifier, dev)
 
-	b.shell.CheckListed(t.Context())
-	if page := b.page(); !strings.Contains(page, "CYFR is locked") || strings.Contains(page, "no longer lists") {
-		t.Fatalf("a listed key's page:\n%s", page)
-	}
-	if after, _ := holder.Load(b.record); after.Identifier != identifier {
-		t.Fatalf("the record names %q after the check", after.Identifier)
-	}
 	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	if after, _ := holder.Load(b.record); after.Identifier != identifier {
+		t.Fatalf("the record names %q after the unlock", after.Identifier)
+	}
 	if hellos := home.hellosSeen(); len(hellos) != 1 || hellos[0]["identifier"] != identifier || hellos[0]["kid"] != account.Kid(rec.PublicKey) {
 		t.Fatalf("hellos %v", hellos)
 	}
 }
 
-// A key removed from the account is said so before any PIN is asked: the
-// record names no account, the certificate the removal retired at this
-// CYFR is dropped, and the same key's code, the address that adds it and
-// the command are shown again. Approved again and its name typed, the
-// same key is listed, and the unlock says hello and connects.
+// A key removed from the account is said so at the screen's unlock,
+// before the key is opened: the record names no account, the certificate
+// the removal retired at this CYFR is dropped, nothing reaches CYFR, and
+// the same key's code, the address that adds it and the command are shown
+// again. Approved again and its name typed, the same key is listed, and
+// the unlock says hello and connects.
 func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
 	home := newFakeHome(t)
 	identifier, dev, _ := home.account(t, "mira")
@@ -444,7 +441,8 @@ func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
 	removeKey(t, home, identifier, dev, rec.PublicKey)
 	home.revoke()
 
-	b.shell.CheckListed(t.Context())
+	ops := len(home.opsSeen())
+	b.post("/unlock", url.Values{"secret": {p}})
 	code := account.ShortCode(account.Kid(rec.PublicKey))
 	page := b.page()
 	if !strings.Contains(page, "Your account no longer lists this screen's key.") || !strings.Contains(page, code) ||
@@ -457,11 +455,13 @@ func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
 	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
 		t.Fatalf("the client after the removal: %+v", c)
 	}
+	if len(home.hellosSeen()) != 1 || len(home.opsSeen()) != ops || b.shell.Unlocked() {
+		t.Fatal("the removed key reached CYFR")
+	}
 
 	home.approve(t, identifier, dev, rec.PublicKey)
 	b.post("/enroll", url.Values{"name": {"mira"}})
-	b.shell.CheckListed(t.Context())
-	if page := b.page(); !strings.Contains(page, "CYFR is locked") || strings.Contains(page, "no longer lists") {
+	if page := b.page(); !strings.Contains(page, "CYFR is locked") {
 		t.Fatalf("the key added again:\n%s", page)
 	}
 	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
@@ -469,8 +469,8 @@ func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
 	if len(hellos) != 2 || hellos[1]["identifier"] != identifier || hellos[1]["kid"] != account.Kid(rec.PublicKey) || hellos[1]["admission"] != nil {
 		t.Fatalf("hellos %v", hellos)
 	}
-	if !b.shell.Unlocked() {
-		t.Fatal("the key added again did not connect")
+	if after, _ := holder.Load(b.record); !bytes.Equal(after.PublicKey, rec.PublicKey) {
+		t.Fatal("the key was made again")
 	}
 }
 
