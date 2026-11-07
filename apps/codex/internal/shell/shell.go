@@ -68,12 +68,12 @@ type Config struct {
 	Tokens func() (setup string)
 	// SetupOpen is set for a device whose .env holds the setup token
 	// whether or not anyone is set up (a box's screen), and says whether
-	// no one is set up on this CYFR yet. Such a device's first hello brings
-	// the token then, since the installation's first person binds it
-	// whoever they are, or after an account this device made here; on a
-	// CYFR someone is set up on it brings none, and the CYFR's door
-	// decides. Unset, a first hello brings whatever token Tokens reads
-	// (cyfr login --setup).
+	// no one is set up on this CYFR yet. Such a device's first hello
+	// brings the token only then, whether it made its account here or was
+	// added to one, since the installation's first person binds it
+	// whoever they are; on a CYFR someone is set up on it brings none, and
+	// the CYFR's door decides. Unset, a first hello brings whatever token
+	// Tokens reads (cyfr login --setup).
 	SetupOpen func(context.Context) bool
 	// Invitation is the invitation's code a first hello brings, when
 	// there is one.
@@ -96,13 +96,10 @@ type Config struct {
 }
 
 // ClientRecord is the client a CYFR admitted this device's key as and the
-// certificate it connects under there; before the first admission,
-// Admission is "setup" when this device made its account here, which the
-// first hello of a device with SetupOpen brings the setup token for.
+// certificate it connects under there.
 type ClientRecord struct {
 	ClientID    string          `json:"client_id,omitempty"`
 	Certificate json.RawMessage `json:"certificate,omitempty"`
-	Admission   string          `json:"admission,omitempty"`
 }
 
 // ClientStore keeps this device's ClientRecord at one CYFR.
@@ -879,13 +876,6 @@ func (s *Shell) submit(ctx context.Context) {
 	clear(m.key)
 	s.making, s.unfinished = nil, nil
 	_ = os.Remove(s.attemptPath())
-	if s.here.ClientID == "" {
-		s.here.Admission = "setup"
-		if err := s.cfg.Clients.Save(s.here); err != nil {
-			s.say("This %s could not keep that it made your account here (%v). Try again.", s.cfg.Noun, err)
-			return
-		}
-	}
 	s.firstConnection(ctx)
 }
 
@@ -1077,13 +1067,13 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 
 // admission is the capability a first hello brings: none once this CYFR
 // admitted this device (the door decides), else the setup token (for a
-// device with SetupOpen, only after it made its account here or while no
-// one is set up), else the invitation's code.
+// device with SetupOpen, only while no one is set up), else the
+// invitation's code.
 func (s *Shell) admission(ctx context.Context) map[string]any {
 	if s.here.ClientID != "" {
 		return nil
 	}
-	if t := s.cfg.Tokens(); t != "" && (s.cfg.SetupOpen == nil || s.here.Admission == "setup" || s.cfg.SetupOpen(ctx)) {
+	if t := s.cfg.Tokens(); t != "" && (s.cfg.SetupOpen == nil || s.cfg.SetupOpen(ctx)) {
 		return map[string]any{"setup": t}
 	}
 	if s.cfg.Invitation != "" {

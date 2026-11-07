@@ -5,7 +5,6 @@ package shell
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"html"
@@ -38,9 +37,6 @@ type box struct {
 	record   string
 	restarts atomic.Int32
 	now      atomic.Int64
-	// setupOpen is whether no one is set up on the CYFR yet, as the
-	// screen reads it; false unless a test says otherwise.
-	setupOpen atomic.Bool
 }
 
 func newBox(t *testing.T, home *fakeHome, dir string) *box {
@@ -51,7 +47,7 @@ func newBox(t *testing.T, home *fakeHome, dir string) *box {
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
 		Directory: home.accounts.URL(),
 		Tokens:    func() string { return home.setupToken },
-		SetupOpen: func(context.Context) bool { return b.setupOpen.Load() },
+		SetupOpen: home.setupOpen,
 		Restart:   func() { b.restarts.Add(1) },
 		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
 		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
@@ -493,7 +489,6 @@ func TestSetup_AnAddedBoxBringsTheTokenOnlyWhileNoOneIsSetUp(t *testing.T) {
 			home.mu.Unlock()
 		}
 		b := newBox(t, home, t.TempDir())
-		b.setupOpen.Store(open)
 		p := b.shown()
 		b.post("/make", url.Values{"secret": {p}, "again": {p}})
 		rec, _ := holder.Load(b.record)
@@ -514,6 +509,28 @@ func TestSetup_AnAddedBoxBringsTheTokenOnlyWhileNoOneIsSetUp(t *testing.T) {
 			t.Fatalf("set up: the hello brought %v", hellos[0]["admission"])
 		}
 	}
+}
+
+// A box that makes its account on its setup page, on a CYFR someone is
+// set up on and whose door is open, says its first hello with no
+// capability: the setup token goes only while no one is set up, on every
+// path, and the door admits the new person.
+func TestSetup_ANewAccountOnASetUpCyfrBringsNoToken(t *testing.T) {
+	home := newFakeHome(t)
+	owner, _, _ := home.account(t, "owner")
+	home.mu.Lock()
+	home.members[owner] = true
+	home.setupUsed = true
+	home.openDoor = true
+	home.mu.Unlock()
+	b := newBox(t, home, t.TempDir())
+	b.setUp("alice")
+	answer := b.post("/saved", nil)
+	hellos := home.hellosSeen()
+	if len(hellos) != 1 || hellos[0]["admission"] != nil {
+		t.Fatalf("hellos %v", hellos)
+	}
+	ticketOf(t, answer, home)
 }
 
 // setUpAndOpen sets a box up through to Prism and answers its passphrase.

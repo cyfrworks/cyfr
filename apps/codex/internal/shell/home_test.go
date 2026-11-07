@@ -108,6 +108,14 @@ func newFakeHome(t *testing.T) *fakeHome {
 
 func (h *fakeHome) address() string { return h.srv.URL }
 
+// setupOpen is whether no one is set up here yet, as a box's screen reads
+// it: no setup was spent and no one is a member.
+func (h *fakeHome) setupOpen(context.Context) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !h.setupUsed && len(h.members) == 0
+}
+
 func reply(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
