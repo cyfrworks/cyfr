@@ -258,7 +258,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       opener: "session:restore-test",
       asker: ~s({"kind":"session"}),
       state: "pending",
-      email_code_failures: 0,
       opened_at: now(),
       expires_at: DateTime.add(now(), 300, :second),
       inserted_at: now(),

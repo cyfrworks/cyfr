@@ -760,11 +760,11 @@ defmodule Arca.Repo.Migrations.Baseline do
         "state",
         ~w(pending confirmed consumed cancelled voided expired)
       ),
-      known(
-        "pending_confirmations_proof_known",
-        "proof",
-        ~w(passkey oidc_reauth email_code device home)
-      )
+      known("pending_confirmations_proof_known", "proof", ~w(passkey device)),
+      %{
+        name: "pending_confirmations_proof_keyed",
+        expr: "proof IS NULL OR (kid IS NOT NULL AND head IS NOT NULL)"
+      }
     ]
 
     # A pending confirmation of one sensitive change (`Prima.Confirmation`),
@@ -772,9 +772,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     # holds (`Prima.Confirmation.ref/1`): the record's fields, its digest
     # and secret-free preview, the credential that opened it and alone may
     # consume it, a name for the client that asked, how it was proven and
-    # by which client, and a state each transition moves once.
-    # A record a key confirmed names that key (`kid`) and the account head
-    # it was verified under (`head`).
+    # by which client, and a state each transition moves once. A record is
+    # proven only by a key of the person's account: once proven it names
+    # that key (`kid`) and the account head it was verified under (`head`).
     create table(:pending_confirmations, primary_key: false) do
       add :ref, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -790,7 +790,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :opener, :string, null: false
       add :asker, :text, null: false
       add :kid, :string
-      add :head, :string
+      add :head, :string, check: if(sqlite?, do: Enum.at(confirmation_checks, 2))
 
       add :state, :string,
         null: false,
@@ -799,9 +799,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :proof, :string, check: if(sqlite?, do: Enum.at(confirmation_checks, 1))
       add :confirmed_client_id, :string
-      add :reauth_nonce, :string
-      add :email_code_hash, :string
-      add :email_code_failures, :integer, null: false, default: 0
       add :opened_at, :utc_datetime_usec, null: false
       add :expires_at, :utc_datetime_usec, null: false
       add :confirmed_at, :utc_datetime_usec
