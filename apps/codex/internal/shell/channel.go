@@ -241,10 +241,43 @@ func (c *Channel) hello(ctx context.Context, h Hello) (Admitted, error) {
 			}
 		case "admitted":
 			return admittedHere(got, h, c.device.Home)
+		case "refused":
+			// The CYFR's sentence for a refused hello or answer, sent
+			// right before it closes; one malformed is left to the close.
+			if r, ok := readRefused(got.raw); ok {
+				return Admitted{}, r
+			}
 		case "revoke":
 			return Admitted{}, ErrRevoked
 		}
 	}
+}
+
+// RefusedError is a CYFR's refusal of a hello or of its sign-in answer,
+// told before it closes (Prima.Device's refused): its class and the
+// sentence a person reads.
+type RefusedError struct{ Class, Message string }
+
+func (e *RefusedError) Error() string { return e.Message }
+
+// readRefused reads a refused message: exactly its protocol, type and
+// error, the error exactly a non-empty class and message.
+func readRefused(raw []byte) (*RefusedError, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || len(m) != 3 ||
+		string(m["protocol"]) != `"`+DeviceProtocol+`"` || string(m["type"]) != `"refused"` {
+		return nil, false
+	}
+	var e map[string]any
+	if json.Unmarshal(m["error"], &e) != nil || len(e) != 2 {
+		return nil, false
+	}
+	class, _ := e["class"].(string)
+	sentence, _ := e["message"].(string)
+	if class == "" || sentence == "" {
+		return nil, false
+	}
+	return &RefusedError{Class: class, Message: sentence}, true
 }
 
 // message is the hello as the channel sends it, but its protocol.
@@ -333,6 +366,7 @@ type message struct {
 	Request     any             `json:"request"`
 	Result      json.RawMessage `json:"result"`
 	Error       json.RawMessage `json:"error"`
+	raw         []byte
 }
 
 func (c *Channel) send(ctx context.Context, m map[string]any) error {
@@ -356,6 +390,7 @@ func (c *Channel) recv(ctx context.Context) (message, error) {
 	if typ != websocket.MessageText || json.Unmarshal(raw, &m) != nil {
 		return m, fmt.Errorf("%w: a frame that is not a device message", ErrRefused)
 	}
+	m.raw = raw
 	return m, nil
 }
 

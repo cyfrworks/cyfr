@@ -195,7 +195,8 @@ func TestEnroll_AnUnapprovedKeyWaitsNoLonger(t *testing.T) {
 // terminal: the recovery code is shown before anything is sent, then the
 // account is made with this command line its first device and the hello
 // brings the invitation's code; a code that admits no one leaves the
-// command line locked, its account made.
+// command line locked, its account made, saying the sentence the CYFR
+// sent before it closed.
 func TestJoin_AnInvitationAdmitsTheAccountMadeHere(t *testing.T) {
 	home := newFakeHome(t)
 	code := "kWv9JM-SnFKinXOrSQ1Vln_O2Arkef-2GgvR8NdiTd4"
@@ -209,8 +210,8 @@ func TestJoin_AnInvitationAdmitsTheAccountMadeHere(t *testing.T) {
 		t.Fatalf("the recovery page: %+v, %d writes", v, home.accounts.Writes)
 	}
 	sh.Saved(t.Context(), "")
-	if v := sh.View(); v.Page != PageLocked || sh.Unlocked() || !strings.Contains(v.Notice, "does not admit your account") {
-		t.Fatalf("a wrong code: page %s, notice %q", v.Page, v.Notice)
+	if v := sh.View(); v.Page != PageLocked || sh.Unlocked() || v.Notice != "This invitation can no longer be used. Ask whoever invited you for a new one." {
+		t.Fatalf("a wrong code: page %s, notice %q, not the CYFR's sentence", v.Page, v.Notice)
 	}
 
 	sh.cfg.Invitation = code

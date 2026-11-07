@@ -357,6 +357,10 @@ func (h *fakeHome) hello(m map[string]any, read func() map[string]any, send func
 		h.setupUsed = true
 	case admission["invitation"] != nil:
 		if h.invitationCode == "" || admission["invitation"] != h.invitationCode {
+			// As the CYFR tells a refused hello its sentence before the
+			// close (device.json's refused vector).
+			send(map[string]any{"type": "refused", "error": map[string]any{"class": "unauthenticated",
+				"message": "This invitation can no longer be used. Ask whoever invited you for a new one."}})
 			return 4403
 		}
 		h.invitationCode = ""

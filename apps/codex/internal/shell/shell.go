@@ -519,7 +519,10 @@ func sentence(err error, noun string) string {
 	var intent *IntentError
 	var home *HomeError
 	var dir *account.DirectoryRefusal
+	var refused *RefusedError
 	switch {
+	case errors.As(err, &refused):
+		return refused.Message
 	case errors.Is(err, holder.ErrWrongSecret), errors.Is(err, holder.ErrSecretShape):
 		return "That is not this " + noun + "'s PIN or passphrase. Nothing was sent anywhere."
 	case errors.Is(err, holder.ErrLockedOut):

@@ -91,6 +91,51 @@ func TestDeviceVectors_TheFirstConnection(t *testing.T) {
 	}
 }
 
+// A refused hello as device.json pins it: the message vector is read as
+// its class and the sentence a person reads, and every refusal of a
+// refused message the CYFR sends (no error, an error that is no object, an
+// error with no message, a field it does not carry) is not read as one.
+func TestDeviceVectors_ARefusalIsReadAsItsSentence(t *testing.T) {
+	var v struct {
+		Messages []struct {
+			Message map[string]any `json:"message"`
+			Name    string         `json:"name"`
+		} `json:"messages"`
+		Refusals []struct {
+			Message map[string]any `json:"message"`
+			Name    string         `json:"name"`
+			Sender  string         `json:"sender"`
+		} `json:"refusals"`
+	}
+	fixture(t, "device.json", &v)
+	read, refused := 0, 0
+	for _, m := range v.Messages {
+		if m.Message["type"] != "refused" {
+			continue
+		}
+		raw, _ := json.Marshal(m.Message)
+		got, ok := readRefused(raw)
+		want := m.Message["error"].(map[string]any)
+		if !ok || got.Class != want["class"] || got.Message != want["message"] || sentence(got, "command line") != want["message"] {
+			t.Errorf("%s: read %+v, %v", m.Name, got, ok)
+		}
+		read++
+	}
+	for _, r := range v.Refusals {
+		if r.Message["type"] != "refused" || r.Sender != "home" {
+			continue
+		}
+		raw, _ := json.Marshal(r.Message)
+		if got, ok := readRefused(raw); ok {
+			t.Errorf("%s: read as %+v", r.Name, got)
+		}
+		refused++
+	}
+	if read != 1 || refused < 4 {
+		t.Fatalf("the fixture held %d refused messages and %d refusals of one", read, refused)
+	}
+}
+
 func jcsOf(t *testing.T, v any) string {
 	t.Helper()
 	raw, _ := json.Marshal(v)
