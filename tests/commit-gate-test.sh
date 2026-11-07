@@ -123,6 +123,9 @@ case "$1" in
       drop) rm "$CYFR_TEST_RUN_ROOT/database-created" ;;
     esac ;;
   test) echo 'Result: 1 passed' ;;
+  # The production tree scripts/dependency-audit.sh reads, in Mix's plain
+  # format: one dependency, none of the test-only ones it refuses.
+  deps.tree) printf '==> cyfr\ncyfr\n`-- jason ~> 1.4 (Hex package)\n' ;;
 esac
 exit 0
 FAKE
@@ -1429,13 +1432,14 @@ locks=$(cd "$root" && find seed/components -name package-lock.json -not -path '*
 # Nothing the legs made is left.
 [ -z "$(ls -A "$scratch/pass.tmp")" ] || fail "the passing gate left $(ls -A "$scratch/pass.tmp") in TMPDIR"
 # The Elixir audit's Mix under its own build path, in the environment
-# security.yml gives it.
-for want in "-|-|$root/_build/audit|-|$root|deps.loadpaths" "-|-|$root/_build/audit|-|$root|compile" "-|-|$root/_build/audit|-|$root|hex.audit" \
+# security.yml gives it, the production tree read under MIX_ENV=prod.
+for want in "-|-|$root/_build/audit|-|$root|deps.loadpaths" "-|-|$root/_build/audit|-|$root|compile" \
+  "prod|-|$root/_build/audit|-|$root|deps.tree --only prod --format plain" "-|-|$root/_build/audit|-|$root|hex.audit" \
   "-|-|$root/_build/audit|-|$root|deps.audit" "-|-|$root/_build/audit|-|$root|deps.unlock --check-unused" \
   "-|-|$root/_build/audit|-|$root/apps/cyfr|sobelow --config"; do
   grep -qxF -- "$want" "$pt/mix.calls" || fail "the audit leg did not run $want: $(grep _build/audit "$pt/mix.calls")"
 done
-[ "$(grep -c '_build/audit' "$pt/mix.calls")" = 6 ] || fail "the audit build path reached another Mix call: $(grep _build/audit "$pt/mix.calls")"
+[ "$(grep -c '_build/audit' "$pt/mix.calls")" = 7 ] || fail "the audit build path reached another Mix call: $(grep _build/audit "$pt/mix.calls")"
 # The boots: SQLite with no database URL, PostgreSQL on the database the
 # leg created and dropped, a name of its own.
 grep -qxF 'tests/release-boot/boot.sh sqlite|skip=unset browsers= join= db= case_image=' "$pt/harness.calls" ||
