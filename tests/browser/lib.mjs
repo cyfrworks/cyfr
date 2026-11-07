@@ -633,7 +633,8 @@ export function secureContext(page) {
 
 // The harness's fragment fixture: a fragment of `size` bytes carried from
 // home `from` to home `to` and back by top-level navigations each page
-// makes itself, as a carry travels, and read where it arrived. `intact`
+// makes itself, as a sign-in's request and answer travel to the account
+// pages and back, and read where it arrived. `intact`
 // when what arrived is what was sent; `leaked` when any request the proxy
 // saw carried it, in its address or its referrer.
 export async function roundTripFragment(page, proxy, from, to, { size = 16 * 1024, timeoutMs = 30_000 } = {}) {

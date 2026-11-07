@@ -10,7 +10,7 @@
 // /out and exits non-zero when a check fails.
 
 import { writeFileSync } from "node:fs";
-import { admissionState, chromium, typeName } from "../browser/lib.mjs";
+import { chromium } from "../browser/lib.mjs";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 
 const [address, homePort] = process.argv.slice(2);
@@ -75,15 +75,10 @@ try {
   check("the Done page names the setup link at localhost, its token in the fragment", new RegExp(`^http://localhost:${homePort}/setup#[0-9a-f]{64}$`).test(shown), { shown: shown.replace(/#.*/, "#…") });
   await screen("done");
 
-  // The browser moves to the setup link, the token in its fragment, and
-  // a virtual authenticator holds the passkey the page asks for.
-  const cdp = await context.newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true }
-  });
+  // The browser moves to the setup link, the token in its fragment.
   await page.waitForURL((url) => url.origin === `http://localhost:${homePort}`, { timeout: 30_000 });
   const setupLink = page.url();
+  const token = new URL(setupLink).hash.slice(1);
   {
     const url = new URL(setupLink);
     check("the pages moved the browser to the setup link, its token in the fragment alone", url.pathname === "/setup" && /^#[0-9a-f]{64}$/.test(url.hash) && url.search === "", { path: url.pathname, query: url.search, fragment: url.hash.length });
@@ -105,51 +100,57 @@ try {
     await page.evaluate(() => window.cachedSetupBundle !== true));
   await heading("Set up CYFR").waitFor();
 
-  // The first screen: the name typed, and the check under it saying the
-  // registry did not answer (its name is .invalid, compose.yml), which
-  // leaves "Create a passkey" enabled.
-  const checked = await typeName(page, "proof", { check: "unavailable" });
-  check("the first screen says cyfr.run did not answer the name's check",
-    checked === "cyfr.run did not answer, so your name is checked again when you create it.", { checked });
-  const create = page.locator('[data-test="admission-create"]');
-  check("Create a passkey stays enabled while cyfr.run is silent", await create.isEnabled());
-  await page.screenshot({ path: `${OUT}/setup-name.png` });
-  await create.tap();
+  // The setup page reads the token and offers the account's two ways in.
+  const create = page.locator('[data-test="setup-create"]');
+  await create.waitFor({ timeout: 60_000 });
+  check("the setup page offers to sign in with an account or to create one",
+    await page.locator('[data-test="setup-sign-in"]').isVisible() && await create.isVisible());
+  await screen("setup");
 
-  // The second screen: the person is made, and their registration meets
-  // a directory that does not answer (.invalid), so it offers to try
-  // again and nothing more.
-  const state = await admissionState(page);
-  const second = page.locator('[data-test="admission-code"]');
-  const says = (await second.innerText()).trim();
-  check("the second screen says cyfr.run did not answer and offers to try again",
-    state === "silent" && says.includes("cyfr.run did not answer. Try again.") &&
-      await page.locator('[data-test="admission-retry"]').isVisible(), { state, says });
-  check("the second screen shows no recovery code and no way on into CYFR",
-    (await page.locator('[data-test="admission-saved"]').count()) === 0 &&
-      ((await page.locator('[data-test="recovery-code"]').allTextContents()).join("").trim() === "") &&
-      new URL(page.url()).pathname === "/setup", { url: page.url().replace(/#.*/, "#…") });
-  const { credentials } = await cdp.send("WebAuthn.getCredentials", { authenticatorId });
-  check("the authenticator holds one passkey, for this CYFR", credentials.length === 1 && credentials[0].rpId === "localhost", { credentials: credentials.map((c) => c.rpId) });
-  await page.screenshot({ path: `${OUT}/setup-silent.png` });
+  // "Create your account" sends the browser to the new page of CYFR's
+  // directory with CYFR's sign-in request in the fragment. The directory's
+  // name is .invalid (compose.yml), so the browser's own router answers
+  // for it, with an empty page, and the address the page was sent to is
+  // read whole.
+  await page.route("https://directory.invalid/**", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>directory</title>" }));
+  await create.tap();
+  await page.waitForURL((url) => url.origin === "https://directory.invalid", { timeout: 30_000 });
+  const hop = new URL(page.url());
+  const params = new URLSearchParams(hop.hash.slice(1));
+  let request = null;
+  try {
+    request = JSON.parse(Buffer.from(params.get("request") || "", "base64url").toString("utf8"));
+  } catch {
+    request = null;
+  }
+  check("the new page is sent CYFR's sign-in request, which names CYFR and returns to its sign-in page",
+    hop.pathname === "/account/new" && params.get("name") === "" && request?.purpose === "sign_in" &&
+      request.audience === `http://localhost:${homePort}` && request.return === `http://localhost:${homePort}/login` &&
+      request.expires_at > Date.now(),
+    { path: hop.pathname, purpose: request?.purpose, audience: request?.audience, return: request?.return });
+  check("the setup token goes nowhere but CYFR: not in the address the browser was sent to",
+    !hop.href.includes(token));
+  await page.unroute("https://directory.invalid/**");
   {
     // The browser holds no session: CYFR's root, in the same browser,
     // sends it to sign in.
     const root = await context.newPage();
     await root.goto(`http://localhost:${homePort}/`);
     await root.waitForURL((url) => url.pathname === "/login", { timeout: 60_000 }).catch(() => {});
-    check("the browser that made the passkey is not signed in to CYFR", new URL(root.url()).pathname === "/login", { url: root.url() });
+    check("the browser that went to the account pages is not signed in to CYFR", new URL(root.url()).pathname === "/login", { url: root.url() });
     await root.close();
   }
 
-  // The same link in another browser, once the person holds a passkey.
+  // The same link in another browser: nobody was admitted, so it offers
+  // the same two ways in.
   const fresh = await browser.newContext(HANDHELD);
   const again = await fresh.newPage();
   await again.goto(setupLink);
-  await again.waitForURL((url) => url.pathname !== "/setup", { timeout: 60_000 });
-  check("the link again, once the first person holds a passkey, goes on to CYFR and starts no ceremony",
-    (await again.locator('[data-test="admission-create"]').count()) === 0);
-  await again.screenshot({ path: `${OUT}/setup-closed.png` });
+  await again.locator('[data-test="setup-create"]').waitFor({ timeout: 60_000 });
+  check("the link again, with nobody admitted, offers the same two ways in",
+    await again.locator('[data-test="setup-sign-in"]').isVisible());
+  await again.screenshot({ path: `${OUT}/setup-again.png` });
   await fresh.close();
   const failing = unmet(record.screens);
   check("every screen meets the handheld's checks", failing.length === 0, { failing });

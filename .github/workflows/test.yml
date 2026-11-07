@@ -1598,8 +1598,9 @@ jobs:
       # The setup proof (tests/setup-proof/run.sh) on the same image:
       # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
       # the browser harness, ask nothing, set up a CYFR reached from this
-      # device and move to its setup link, where a passkey makes the first
-      # person, and refuse a project whose .env exists.
+      # device and move to its setup link, whose page sends the browser to
+      # the account pages with CYFR's request, and say the next step for a
+      # project whose .env exists.
       # The setup proof's teardown on a run that fails while its browser
       # and its cyfr setup run: the browser's container stopped, both
       # awaited, the scratch gone.

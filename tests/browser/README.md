@@ -144,7 +144,7 @@ helpers:
 | `askHome(home, path, headers)` | a GET of a home's cell as the front forwards a browser's request: a check of the server itself |
 | `launchBrowser(name, proxy)` | a browser of the matrix through the proxy, trusting the authority |
 | `secureContext(page)` | the page's protocol, `isSecureContext`, `crypto.subtle` and a digest made with it |
-| `roundTripFragment(page, proxy, from, to)` | the fragment fixture: 16 KiB carried from one home to another and back by top-level navigations the pages make themselves, as a carry travels; intact or not, and whether any request carried it |
+| `roundTripFragment(page, proxy, from, to)` | the fragment fixture: 16 KiB carried from one home to another and back by top-level navigations the pages make themselves, as a sign-in's request and answer travel; intact or not, and whether any request carried it |
 | `framedRequest(page, proxy, parent, target, path)` | a page of one home framing a path of another, as the front saw the request |
 | `crossedCookies(seen, scripted)` | every request to one host that carried a cookie another host set |
 | `virtualAuthenticator(page)` | Chromium's virtual WebAuthn authenticator: resident keys, user verification, presence simulated; `add` gives it a credential another one listed, as a synced passkey reaches another device; Firefox and WebKit offer none to Playwright, so a passkey ceremony is Chromium's |
