@@ -66,7 +66,7 @@ defmodule Emissary.Web.AccountController do
                File.exists?(path),
                body = File.read!(path),
                into: %{} do
-             etag = ~s(") <> Base.encode16(:crypto.hash(:sha256, body), case: :lower) <> ~s(")
+             etag = ~s(") <> Prima.Digest.sha256_hex(body) <> ~s(")
              {name, %{body: body, type: type, etag: etag}}
            end)
 
@@ -113,7 +113,7 @@ defmodule Emissary.Web.AccountController do
     )
   end
 
-  defp etag(body), do: ~s(") <> Base.encode16(:crypto.hash(:sha256, body), case: :lower) <> ~s(")
+  defp etag(body), do: ~s(") <> Prima.Digest.sha256_hex(body) <> ~s(")
 
   # The body with its digest as ETag, or 304 to a revalidation naming it.
   defp answer(conn, body, type, etag) do

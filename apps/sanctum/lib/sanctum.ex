@@ -171,8 +171,13 @@ defmodule Sanctum do
   @spec access_mode() :: :local | :tailnet | :public
   def access_mode do
     case Application.fetch_env!(:sanctum, :access_mode) do
-      mode when mode in [:local, :tailnet, :public] -> mode
-      other -> raise ArgumentError, "unknown access mode #{inspect(other)}"
+      mode when mode in [:local, :tailnet, :public] ->
+        mode
+
+      other ->
+        raise ArgumentError,
+              "the access mode is none of local, tailnet or public: " <>
+                Prima.LoggerContext.shape(other)
     end
   end
 
