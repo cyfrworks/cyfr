@@ -310,6 +310,10 @@ defmodule Sanctum.WebhookMCPTest do
   describe "webhook/reenable" do
     test "answers the webhook a restore suspended, once confirmed, and refuses in sentences",
          %{ctx: ctx} do
+      # One person makes it and re-enables it: a fixture's person is minted
+      # anew at each call from a bare context.
+      {ctx, _user} = Sanctum.TestContext.person!(ctx)
+
       {:ok, _} =
         handle(ctx, %{
           "action" => "create",

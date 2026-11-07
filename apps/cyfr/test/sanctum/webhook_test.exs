@@ -533,7 +533,9 @@ defmodule Sanctum.WebhookTest do
 
       {:ok, %{id: id}} = Webhook.get(ctx, "held")
       :ok = suspend!(ctx, "held")
-      {person, _user} = Sanctum.TestContext.person!(ctx)
+      # The person who made it, read off its row: a fixture's person is
+      # minted anew at each call, so asking for one again names another.
+      person = %{ctx | user_id: stored_hook(id).created_by}
       %{id: id, slug: slug, secret: secret, person: person}
     end
 
@@ -581,7 +583,7 @@ defmodule Sanctum.WebhookTest do
 
       assert %{enabled: false} = stored_hook(id)
 
-      {:ok, _} = create(ctx, %{name: "live", target_ref: "f:local.h"})
+      {:ok, _} = create(person, %{name: "live", target_ref: "f:local.h"})
       {:ok, %{id: live}} = Webhook.get(ctx, "live")
 
       assert {:error, :not_suspended} =
