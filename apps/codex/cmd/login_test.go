@@ -285,6 +285,37 @@ func TestLoginDriver_ARefusedChipOffersThePassphrase(t *testing.T) {
 	}
 }
 
+// The terms are asked once a run: a chip that cannot keep the PIN shows
+// the setup page again with the passphrase, and the account it makes
+// keeps the acceptance given before the PIN.
+func TestLoginDriver_TheChipsFallbackKeepsTheTermsAccepted(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageSetup, Chip: true}, nil)
+	dev.next = func(call string, d *fakeDevice) {
+		switch {
+		case call == "setup" && string(d.secrets["setup"]) == "123456":
+			d.set(shell.View{Page: shell.PageSetup, Chip: true, Passphrase: passphrase,
+				Notice: "This machine's chip cannot keep your PIN safely (lockout). Use the passphrase below instead."})
+		case call == "setup":
+			d.set(shell.View{Page: shell.PageRecovery, RecoveryCode: "CYFR-RECOVERY-CODE", Name: "mira"})
+		case call == "saved":
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	}
+	dev.terms = &account.Policy{Version: "2026-10", URL: "https://cyfr.run/terms"}
+	c, out := typed("yes", "123456", "123456", passphrase, passphrase, "")
+	d := &loginDriver{sh: dev, c: c, mode: "setup", name: "mira", home: "https://alice.example"}
+	if err := d.run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"setup", "setup", "saved"}) || dev.given["setup"] != "mira|2026-10" ||
+		string(dev.secrets["setup"]) != passphrase {
+		t.Fatalf("calls %v, given %v, made with %q", dev.calls, dev.given, dev.secrets["setup"])
+	}
+	if n := strings.Count(out.String(), "Accept them?"); n != 1 {
+		t.Errorf("the terms were asked %d times:\n%s", n, out)
+	}
+}
+
 // --setup and --join make the account here: the terms the account service
 // names are accepted first, then the name and the secret go to the
 // device, the recovery code is shown, as a QR code and as text, until
