@@ -323,6 +323,25 @@ export async function signIn(page, keys, home, { timeoutMs = STEP_MS } = {}) {
   return { what: asked.what, ...(await landing(page, home, { timeoutMs })) };
 }
 
+// `home` set up by its first person through its setup link (`token` in
+// the fragment): "Sign in with your account", the sign page's passkey, and
+// the landing; answers what the sign page asked and where the browser
+// landed.
+export async function setUp(page, keys, home, token, { timeoutMs = STEP_MS } = {}) {
+  await page.goto(`${home.origin}/setup#${token}`);
+  await page.locator('[data-test="setup-sign-in"]').click({ timeout: timeoutMs });
+  const asked = await usePasskey(page, keys, { timeoutMs });
+  if (!asked.returned) return { ...asked, landed: false };
+  return { what: asked.what, ...(await landing(page, home, { timeoutMs })) };
+}
+
+// The session cookie `page`'s browser holds for `home`, the value a run
+// reads the session from (harness.sh `browser_session`), or null.
+export async function sessionCookie(page, home) {
+  const cookie = (await page.context().cookies(home.origin)).find((c) => c.name === "_cyfr_key");
+  return cookie ? cookie.value : null;
+}
+
 // A confirmation given with the passkey: `click` makes the page ask (the
 // system layer's "Confirm with a passkey", which opens the sign page in a
 // new tab), the tab's request is signed, and the tab returns to the CYFR,
