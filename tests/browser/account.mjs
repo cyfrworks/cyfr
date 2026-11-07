@@ -100,17 +100,22 @@ function codeReader() {
   return reader;
 }
 
-// The recovery code the page shows (`#code`), read as the person reads it:
+// The recovery code `code`, as `where` showed it, decoded:
 // `{code, identifier, secret}`, both joined to `secrets` as they are read.
-export async function readShownCode(page, secrets) {
-  await page.locator("#show-code:not([hidden]) #code").waitFor({ timeout: STEP_MS });
-  const code = (await page.locator("#code").textContent()).trim();
+export async function decodeCode(code, secrets, where = "the page") {
   secrets.push(code);
   const { decodeRecoveryCode } = await codeReader();
   const read = await decodeRecoveryCode(code);
-  if (read.error) throw new Error(`the recovery code the page shows does not read: ${read.error}`);
+  if (read.error) throw new Error(`the recovery code ${where} shows does not read: ${read.error}`);
   secrets.push(read.secret);
   return { code, identifier: read.identifier, secret: read.secret };
+}
+
+// The recovery code the page shows (`#code`), read as the person reads it
+// (`decodeCode`).
+export async function readShownCode(page, secrets) {
+  await page.locator("#show-code:not([hidden]) #code").waitFor({ timeout: STEP_MS });
+  return decodeCode((await page.locator("#code").textContent()).trim(), secrets);
 }
 
 // A key's short code, as a device and the pages show it.

@@ -2,31 +2,32 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The pairing proof (README.md): a `cyfr` release started as the browser
-# harness starts a home (tests/browser/harness.sh), the home home.test
-# behind the harness's HTTPS front, its device certificates made short
-# through the settings operation, and one person signed in twice — a
-# desktop and a phone — driven in Chromium (proof.mjs) through pairing,
-# confirmation on the glass, a command line paired as a device (its code
-# typed on the desktop and confirmed on the glass, its certificate renewed,
-# cyfr open's ticket, the shell's exit, a lost answer), a sleep
-# beyond the certificate's expiry and revocation, with the device-intent
-# measurement. The command line is the real cyfr binary, built here into
-# the output directory, where the proof runs it.
-#
-# The proof asks the server for its part through the output directory
-# (`ask-N.json`), and this script answers each (`answer-N.json`): the
-# phone's passkey registration, begun and completed through the console's
-# adapter under the phone's session (`passkey_options`,
-# `passkey_register`), and the names of the person's vault entries
-# (`vault_names`), and the device certificates' life the command line's
-# steps set and restore (`cert_seconds`).
+# The pairing proof (README.md): `cyfr` releases started as the browser
+# harness starts homes (tests/browser/harness.sh), each a SQLite cell on a
+# `.test` name behind the harness's HTTPS front: the directory dir.test,
+# which serves the account pages, and three CYFRs, x.test, y.test and
+# z.test, which reach it through the identity proof's front
+# (tests/identity-proof/front.sh and cells.sh). proof.mjs drives Chromium,
+# test devices and the real `cyfr` binary, built here into the output
+# directory, through devices added to the person's account by the page and
+# by `cyfr device approve`, a confirmation from a device, a device's key
+# removed and added again, a declared restore of x.test, and z.test set up
+# from the terminal; this
+# script answers its asks for the CYFRs' part (`ask-N.json`, answered
+# `answer-N.json`).
 #
 # Usage: tests/pairing-proof/run.sh
 # Writes pairing-proof.json and pairing-proof.md into PROOF_OUT (default:
 # the scratch directory, kept with RELEASE_BOOT_KEEP=1) and prints the
 # table. Set RELEASE_BOOT_SKIP_BUILD=1 to reuse a release a previous run
-# built, and PAIRING_PROOF_CERT_SECONDS for the certificates' life (20).
+# built; PAIRING_PROOF_FRESHNESS (20) is the CYFRs'
+# identity_freshness_seconds.
+#
+# Everything it starts is removed when it ends, whether it succeeds or
+# fails: the cells' servers, the directory's front container, the
+# Playwright container, the command line built into the output directory,
+# and the scratch directory with the run's authority key and the setup
+# tokens.
 set -euo pipefail
 
 ADAPTER=sqlite
@@ -35,24 +36,30 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-pairing-proof-XXXXX
 source "$(cd "$(dirname "$0")" && pwd)/../release-boot/release.sh"
 # shellcheck source=../browser/harness.sh
 source "$ROOT/tests/browser/harness.sh"
+# shellcheck source=../identity-proof/front.sh
+source "$ROOT/tests/identity-proof/front.sh"
+# shellcheck source=../identity-proof/cells.sh
+source "$ROOT/tests/identity-proof/cells.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
-CERT_SECONDS="${PAIRING_PROOF_CERT_SECONDS:-20}"
+FRESH="${PAIRING_PROOF_FRESHNESS:-20}"
 PROOF_PID=""
+SECRETS="$WORK/secrets"
+mkdir -p -m 700 "$SECRETS"
 
-# The scratch directory holds the run's authority key, so it goes even
-# when a stop fails. `server_stop` ends in `fail`, an `exit`, when a
-# listener outlives its stop, and an exit inside this trap would end it
-# before the removal, so the stop runs in a subshell, whose exit ends only
-# that subshell; the stop's failure still fails the run. The asks and
-# answers go on every exit, a kept or outside PROOF_OUT included; the
-# record stays.
+# The scratch directory holds the run's authority key and the setup
+# tokens, so it goes even when a stop fails; the asks and answers that held
+# a token go from PROOF_OUT too, and so does the command line. `server_stop`
+# ends in `fail`, an `exit`, when a listener outlives its stop, so it runs
+# in a subshell: the exit ends that subshell, never this trap, and the
+# stop's failure still fails the run.
 cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
-  rm -f "$OUT"/ask-* "$OUT"/answer-*
-  rm -rf "$OUT/bin"
+  identity_front_stop
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
+  rm -f "$OUT"/ask-* "$OUT"/answer-* 2>/dev/null || true
+  rm -rf "$OUT/bin"
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
@@ -64,51 +71,61 @@ trap cleanup EXIT
 
 release_build
 
-step "the run's authority and the home home.test"
+step "the run's authority and the cells"
 browser_authority
-CELL="$WORK/home"
-browser_home "$CELL" home.test
+DIR="$WORK/dir"
+X="$WORK/x"
+Y="$WORK/y"
+Z="$WORK/z"
+browser_home "$DIR" dir.test
+browser_home "$X" x.test
+browser_home "$Y" y.test
+browser_home "$Z" z.test
 
-step "starting home.test on a fresh SQLite cell"
-server_start "$CELL"
+identity_directory dir.test 127.77.0.1
+identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
+for cell in "$X" "$Y" "$Z"; do
+  openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-$(basename "$cell")"
+  identity_reaches_directory "$cell" dir.test "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH"
+  identity_env "$cell" CYFR_REGISTRY_URL dir.test
+  identity_env "$cell" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-$(basename "$cell")")"
+done
 
-step "one person, signed in twice: the desktop and the phone"
-desktop="$(server_fixture "$CELL" person operator@example.com pairing-proof)"
-phone="$(server_fixture "$CELL" person operator@example.com pairing-proof)"
-[ -n "$desktop" ] && [ -n "$phone" ] || fail "the fixture signed nobody in"
-segment="$(field "$desktop" segment)"
-desktop_token="$(field "$desktop" token)"
-phone_token="$(field "$phone" token)"
-desktop_cookie="$(browser_cookie "$CELL" "$desktop_token")"
-phone_cookie="$(browser_cookie "$CELL" "$phone_token")"
-# No canvas runs: the shell draws its picker, so no canvas's deadline
-# or fallback comes between the prompts this proof drives.
-browser_picker_layout "$CELL" "$desktop_token"
+step "starting the directory, its front, and the CYFRs"
+server_start "$DIR"
+identity_front_start "$DIR"
+for cell in "$X" "$Y" "$Z"; do identity_start "$cell"; done
 
-step "device certificates live $CERT_SECONDS seconds"
-answer="$(server_fixture "$CELL" console "$desktop_token" settings/set \
-  "{\"key\":\"device_cert_seconds\",\"value\":\"$CERT_SECONDS\"}")"
-printf '%s' "$answer" | grep -q '"ok"' || fail "device_cert_seconds was not set: $answer"
-
-# Each step the proof asks for (harness.sh `answer_asks`).
+# Each step the proof asks for (harness.sh `answer_asks`, which removes
+# each ask before its answer appears).
 answer_ask() {
-  local ask="$1" op arguments
+  local ask="$1" op cell
   op="$(asked "$ask" op)"
   case "$op" in
-    device_confirm) ANSWER="$(device_confirmed "$CELL" "$ask")" ;;
-    replay_assertion)
-      # An assertion the phone gave for one record, presented for another
-      # through the console's adapter under the phone's session.
-      arguments="$(python3 -I -c "import json, sys; a = json.load(open(sys.argv[1])); print(json.dumps({'ref': a['ref'], 'assertion': a['credential']}))" "$ask")"
-      ANSWER="$(server_fixture "$CELL" console "$phone_token" confirmation/confirm "$arguments")"
+    setup_token)
+      cell="$(asked "$ask" cell)"
+      [[ "$cell" =~ ^[xyz]$ ]] || fail "no CYFR named '$cell'"
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$SECRETS/setup-$cell")"
       ;;
-    cert_seconds)
-      ANSWER="$(server_fixture "$CELL" console "$desktop_token" settings/set \
-        "{\"key\":\"device_cert_seconds\",\"value\":\"$(asked "$ask" value)\"}")"
+    people)
+      cell="$(asked "$ask" cell)"
+      [[ "$cell" =~ ^[xyz]$ ]] || fail "no CYFR named '$cell'"
+      ANSWER="$(identity_fixture "$WORK/$cell" people)"
       ;;
-    vault_names)
-      ANSWER="$(server_fixture "$CELL" console "$desktop_token" vault/list '{}' |
-        python3 -c "import json, sys; a = json.load(sys.stdin); print(json.dumps({'names': sorted(e['name'] for e in a.get('ok', {}).get('entries', []))} if 'ok' in a else a))")"
+    bound)
+      ANSWER="{\"seconds\": $FRESH}"
+      ;;
+    restore)
+      # The CYFR stopped, its restore declared as `cyfr restore` declares
+      # one (tests/fixtures/restore_barrier.json), and started again, which
+      # runs the restore's transition before anything is served.
+      cell="$(asked "$ask" cell)"
+      [[ "$cell" =~ ^[xyz]$ ]] || fail "no CYFR named '$cell'"
+      barrier() { python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$ROOT/tests/fixtures/restore_barrier.json" "$1"; }
+      server_stop "$WORK/$cell"
+      declared="$(cell_cyfr "$WORK/$cell" eval "$(barrier declare_expr)" | sed -n "s/^$(barrier declared_prefix)//p" | tail -1)"
+      identity_start "$WORK/$cell"
+      ANSWER="$(python3 -c 'import json, sys; print(json.dumps({"declared": sys.argv[1]}))' "$declared")"
       ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;
   esac
@@ -120,9 +137,8 @@ mkdir -p "$OUT/bin"
   fail "the cyfr command line did not build"
 
 step "the pairing proof in Chromium, in $PLAYWRIGHT_IMAGE"
-mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run pairing-proof proof.mjs /authority/homes.json "$segment" "$desktop_cookie" "$phone_cookie" /out "$CERT_SECONDS" &
+playwright_run pairing-proof proof.mjs /authority/homes.json /out &
 PROOF_PID=$!
 proof_await answer_ask
 

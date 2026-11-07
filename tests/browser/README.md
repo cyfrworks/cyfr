@@ -248,7 +248,7 @@ proof's own README holds how to run it and its steps.
 | markdown | `tests/markdown-proof/` | no release: a page of its own, `markdown.test`, serving the console's markdown hook from `/assets` | Chromium | a; Chromium |
 | tincture | `tests/tincture-proof/` | one home, `cyfr.test` | Chromium, Firefox and WebKit (`TINCTURE_PROOF_BROWSERS`) | a; Chromium |
 | containment (the hostile frame) | `tests/hostile-frame-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test` | Chromium, Firefox and WebKit; the pointer-lock attempt in Chromium alone | a; all three |
-| pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium | c; Chromium |
+| pairing | `tests/pairing-proof/` | the directory `dir.test` and the homes `x.test`, `y.test` and `z.test` | Chromium | c; Chromium |
 | multi-home smoke | `tests/multi-home-smoke/` | two homes, `alpha.test` and `beta.test` | Chromium, Firefox and WebKit; the passkey in Chromium | d; all three |
 | identity | `tests/identity-proof/` | the directory `dir.test` and the home `a.test` | Chromium | b; Chromium |
 | join | `tests/join-proof/` | the directory `dir.test` and the home `h.test` | Chromium | b; Chromium |
