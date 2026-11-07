@@ -116,6 +116,8 @@ defmodule Emissary.Web.AccountController do
   defp etag(body), do: ~s(") <> Prima.Digest.sha256_hex(body) <> ~s(")
 
   # The body with its digest as ETag, or 304 to a revalidation naming it.
+  # `type` is a compile-time literal per file, or application/json; never a request value.
+  # sobelow_skip ["XSS.ContentType"]
   defp answer(conn, body, type, etag) do
     conn = conn |> put_resp_content_type(type) |> put_resp_header("etag", etag)
 
