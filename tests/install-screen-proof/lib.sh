@@ -17,8 +17,7 @@
 # tree's cyfr and server image; per guest cyfr_run_guard, which keeps it
 # from cyfr.run, candidate_server_load, account_settings and
 # account_service, the box's own account service. On the screen:
-# guest_chord, screen_find and screen_open drive its Chrome as a keyboard
-# does, and
+# guest_chord and screen_find drive its Chrome as a keyboard does, and
 # profile_cookie, screen_cookie and cookie_answer read the session cookie
 # Chrome holds and ask the home what it opens.
 #
@@ -571,11 +570,12 @@ candidate_server_load() {
 # The box serves its own account service (CYFR_DIRECTORY_SERVE=writer):
 # the directory an account's log lives at, the handle registry beside it
 # and /account/config.json, which names both and no policy. Its address is
-# the box's own, http://localhost:4000, one string the screen on the guest
-# and the server in its container both reach: the guest through the port
-# Docker publishes on its loopback, the container at its own listener on
-# that port. It is the address the box's CYFR names itself by, the one a
-# genesis made there names as its directory.
+# the box's own, http://localhost:4000, the address the box's CYFR names
+# itself by and so the one a genesis made there names as its directory:
+# the screen on the guest reaches it through the port Docker publishes on
+# its loopback. The server never asks it over HTTP: it reads the logs of
+# the accounts it keeps in-process (Sanctum.Directory.Client), since in
+# the shipped stack nothing listens on its container's loopback.
 ACCOUNT_SERVICE=http://localhost:4000
 
 # account_settings: before cyfr up, .env makes the box its own account
@@ -598,11 +598,12 @@ account_settings() {
     guest_ssh '! grep -qE "^(CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=" ~/cyfr/.env'
 }
 
-# account_service WHEN: the box's account service answers one
-# configuration at one address from the guest, where the screen asks it,
-# and from cyfr's container's network namespace, where the server asks
-# it: its directory and its registry that address, and no policy. It
-# waits, within the case's budget, for the server to answer after a boot.
+# account_service WHEN: the box's account service answers the screen's
+# side, the guest, at its address: its directory and its registry that
+# address, and no policy. The server's own reads need no HTTP (above), so
+# nothing is asked from its container; the box's admission after setup
+# shows them. It waits, within the case's budget, for the server to answer
+# after a boot.
 account_service() {
   local closes
   budget 120 || fail "the case's deadline came before the account service answered"
@@ -612,14 +613,12 @@ account_service() {
     sleep 2
   done
   guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/account/config.json" >"$GUEST_DIR/account-config-guest-$1.json" 2>&1
-  guest_root_out "nsenter -t \$(docker inspect -f '{{.State.Pid}}' cyfr) -n curl -s --max-time 5 $ACCOUNT_SERVICE/account/config.json" \
-    >"$GUEST_DIR/account-config-container-$1.json"
-  check "the box answers its account service at $ACCOUNT_SERVICE alike from the guest and from cyfr's container ($1)" \
+  check "the box answers its account service at $ACCOUNT_SERVICE to the guest, where the screen asks it ($1)" \
     python3 -I -c '
 import json, sys
-want = {"directory": sys.argv[3], "registry": sys.argv[3], "policy": None}
-sys.exit(0 if all(json.load(open(f)) == want for f in sys.argv[1:3]) else 1)' \
-    "$GUEST_DIR/account-config-guest-$1.json" "$GUEST_DIR/account-config-container-$1.json" "$ACCOUNT_SERVICE"
+want = {"directory": sys.argv[2], "registry": sys.argv[2], "policy": None}
+sys.exit(0 if json.load(open(sys.argv[1])) == want else 1)' \
+    "$GUEST_DIR/account-config-guest-$1.json" "$ACCOUNT_SERVICE"
 }
 
 # Nothing in the run reaches cyfr.run: before the install script, the
@@ -762,15 +761,6 @@ screen_find() {
     printf '%s' "$1" | guest_keys && sleep 2 &&
     { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
     guest_chord esc && sleep 1
-}
-
-# screen_open URL: the screen's running Chrome opens URL in a window of its
-# own, as a link opened there would: a second Chrome on the same profile
-# hands it over and exits.
-screen_open() {
-  printf '%s' "$1" | guest_ssh_in 'url=$(cat); run=/run/user/$(id -u); way=$(cd "$run" && ls -d wayland-? | head -n 1)
-    XDG_RUNTIME_DIR=$run WAYLAND_DISPLAY=$way timeout 30 google-chrome-stable --ozone-platform=wayland \
-      --user-data-dir="$HOME/cyfr/.cyfr/screen/chrome" "$url" >/dev/null 2>&1'
 }
 
 # The boot's journal and apt's history, read once nothing else is to be
