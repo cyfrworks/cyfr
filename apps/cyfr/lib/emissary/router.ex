@@ -315,18 +315,28 @@ defmodule Emissary.Router do
       # decoded (`CyfrWeb.Plugs.RawBodyReader`), and every request to the
       # directory's per-source and per-installation windows before any
       # signature is checked. The literal `register` is declared above the
-      # `:identifier` routes.
+      # `:identifier` routes. These routes, the handle registry's and the
+      # account pages' log no dispatch, whose parameters would name an
+      # account or carry what was submitted, and the request log line names
+      # their route pattern alone (`CyfrWeb.Plugs.ScrubTinctureCredentials`).
       scope "/directory/v1", Emissary.Web do
         pipe_through :directory
 
-        post "/register", DirectoryController, :register, metadata: %{auth: :public_directory}
-        get "/:identifier", DirectoryController, :resolve, metadata: %{auth: :public_directory}
+        post "/register", DirectoryController, :register,
+          metadata: %{auth: :public_directory},
+          log: false
+
+        get "/:identifier", DirectoryController, :resolve,
+          metadata: %{auth: :public_directory},
+          log: false
 
         get "/:identifier/from/:hash", DirectoryController, :from,
-          metadata: %{auth: :public_directory}
+          metadata: %{auth: :public_directory},
+          log: false
 
         post "/:identifier/append", DirectoryController, :append,
-          metadata: %{auth: :directory_signed}
+          metadata: %{auth: :directory_signed},
+          log: false
       end
 
       # The handle registry a CYFR serving a directory serves beside it
@@ -336,17 +346,20 @@ defmodule Emissary.Router do
       scope "/v1", Emissary.Web do
         pipe_through :directory
 
-        get "/handles/:handle", HandleController, :resolve, metadata: %{auth: :public_directory}
+        get "/handles/:handle", HandleController, :resolve,
+          metadata: %{auth: :public_directory},
+          log: false
 
         post "/namespaces/personal/claim", HandleController, :claim,
-          metadata: %{auth: :directory_signed}
+          metadata: %{auth: :directory_signed},
+          log: false
       end
 
       # The account pages the directory's writer serves beside it
       # (`Emissary.Web.AccountController`): the static bundle and its
       # `config.json`, with their own headers, no session and no cookie.
       scope "/account", Emissary.Web do
-        get "/:name", AccountController, :show, metadata: %{auth: :public_directory}
+        get "/:name", AccountController, :show, metadata: %{auth: :public_directory}, log: false
       end
 
       # A protected command line spends its unlock's ticket for its session.
