@@ -5,7 +5,7 @@ person's devices join their account and every CYFR that admits them: a
 device is added to the account at the account pages with a passkey, or
 from an unlocked command line with `cyfr device approve`; each CYFR admits
 it by its hello alone; a device confirms a change its person asked for
-in the browser; a key removed from the account ends its device's channel
+in the browser and renews its certificate on its open channel; a key removed from the account ends its device's channel
 at every CYFR within the bound; a key removed and added again is
 retired and admitted afresh; and a declared restore suspends a CYFR's
 own bindings and no key of the account, a device coming back by its
@@ -60,6 +60,7 @@ one rests on.
 | `command_line` | with x.test its context (`cyfr context add`, `cyfr context set`), `cyfr login` shows a passphrase, asks it twice, then shows the key's code, the address that adds it (a QR code and the link) and the `cyfr device approve` command with the same key, and asks the name; the link opened with the passkey adds it, showing the same code, and the command line goes on by itself: it says hello at X, unlocks and starts a shell whose `cyfr whoami` acts there |
 | `approve` | in that shell, `cyfr device approve` with a new test device's key shows that key's short code, asks the passphrase once and adds it to the account; the new device's hello at X stands |
 | `terminal_confirm` | an API key the browser asks for at X waits on a fresh confirmation; the first test device reads it over its channel (`confirmation.pending`), asks X's `confirm` request for it (`confirmation.request`), signs the request's digest with its key and answers it (`confirmation.confirm`), and the waiting page makes the key |
+| `renewal` | the first test device, on its open channel at X, sends `renew`, signs X's `renew` challenge and takes the certificate X answers: for the same client, living longer than the one it replaced; the channel's `standing` names the replacement's expiry, and the device's next intent is answered under it |
 | `remove_key` | the test device's key removed at the devices page: X and Y each close its channel `4403` within their freshness bound (plus six seconds for the device's two-second asks), and neither holds it standing |
 | `readd` | added again at the page, the device's hello admits it at X as a new client; then, while it waits, its key is removed and added again, both entries landing between two of X's refreshes: X retires it all the same (`4403`), although the account lists it, and its next hello admits it once more as another client |
 | `restore` | x.test stopped, its restore declared as `cyfr restore` declares one (`bin/cyfr eval` of `tests/fixtures/restore_barrier.json`'s `declare_expr`, which answers a `rst_` id) and started again: the device's certificate, presented on a connection of its own, is refused, the browser's next page at x.test lands on the sign-in page, and x.test holds no client of the person standing, while the account's log is as it was; the device's hello admits it again as a new client, and the passkey signs in afresh |

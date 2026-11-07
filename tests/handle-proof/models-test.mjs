@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 const {
-  bytes, bytesFrom, check, mismatches, objectModels, sha256hex,
+  bytes, bytesFrom, check, entryOf, mismatches, objectModels, sha256hex,
 } = await import(process.env.HANDLE_PROOF_MODELS || "./models.mjs");
 
 test("directory bytes decode from PostgreSQL and CYFR whole-row reads", () => {
@@ -15,66 +15,54 @@ test("directory bytes decode from PostgreSQL and CYFR whole-row reads", () => {
   assert.deepEqual(bytesFrom(bytes(genesis)), genesis);
 });
 
-test("the proof holds every column of a native directory row through tamper and restore", async () => {
+test("the proof holds every column of a log's rows through tamper and restore", async () => {
   const fixture = JSON.parse(readFileSync(new URL("../fixtures/directory_wire.json", import.meta.url)));
   const genesis = Buffer.from(fixture.entries["genesis-alice"]);
+  const added = Buffer.from(fixture.entries["add-device"]);
   const identifier = `per_${sha256hex(genesis)}`;
-  const key = "setup:registry.directory.identity_log_entries";
-  const now = Date.parse("2026-10-29T00:00:00Z");
-  const row = {
-    id: 1,
+  const key = "setup:registry.directory.entries[a]";
+  const now = Date.parse("2026-11-07T00:00:00Z");
+  const row = (seq, kind, entry, prev) => ({
     identifier,
-    seq: 0,
-    kind: "genesis",
-    entry_hash: `sha256:${sha256hex(genesis)}`,
-    prev_hash: null,
-    entry: `\\x${genesis.toString("hex")}`,
-    request_id: null,
-    request_digest: null,
-    outcome: "accepted",
-    outcome_body: null,
-    bytes: genesis.length,
-    inserted_at: "2026-10-29T00:00:00Z",
-  };
+    seq,
+    kind,
+    entry_hash: `sha256:${sha256hex(entry)}`,
+    prev_hash: prev,
+    entry: `\\x${entry.toString("hex")}`,
+    bytes: entry.length,
+    inserted_at: "2026-11-07T00:00:00+00:00",
+  });
+  const rows = [row(0, "genesis", genesis, null), row(1, "add_key", added, `sha256:${sha256hex(genesis)}`)];
+  const listed = entryOf(rows[1].entry).parsed.key;
   const seen = {
     identifier,
     origins: { a: "https://a.test", b: "https://b.test" },
-    genesis: { a: genesis.toString("base64") },
-    rows: { [key]: [structuredClone(row)] },
-    w: { enroll: { name: "the enrollment", from: now, to: now } },
+    credentials: { a: { kid: listed.kid, credentialIdB64url: listed.credential_id } },
+    rows: { [key]: structuredClone(rows) },
+    w: { make: { name: "the account's making", from: now, to: now } },
+    at: {},
   };
+  // The fixture's genesis names its own directory, where the run's names
+  // registry.test, so the model refuses it there; held to its own bytes,
+  // every other field holds.
   const model = objectModels(seen)[key]();
-  assert.deepEqual(mismatches([row], model), []);
-  assert.notDeepEqual(mismatches([{ ...row, id: "ile_old" }], model), []);
-  assert.notDeepEqual(mismatches([{ ...row, id: Number.MAX_SAFE_INTEGER }], model), []);
-  assert.notDeepEqual(mismatches([{ ...row, entry: genesis.toString() }], model), []);
+  assert.deepEqual(mismatches(rows, model).map((m) => m.field), ["[0].entry"]);
+  model[0].entry = { ...model[0].entry, value: rows[0].entry };
+  assert.deepEqual(mismatches(rows, model), []);
+  assert.notDeepEqual(mismatches([{ ...rows[0], seq: 7 }, rows[1]], model), []);
+  assert.notDeepEqual(mismatches([rows[0], { ...rows[1], prev_hash: rows[1].entry_hash }], model), []);
+  assert.notDeepEqual(mismatches([rows[0], { ...rows[1], entry: rows[0].entry }], model), []);
 
-  const result = await check([structuredClone(row)], model, {
-    read: async () => [structuredClone(row)],
-    state: async () => ({ rows: [structuredClone(row)], constraints: ["unchanged"] }),
-    write: async (_index, field, value) => {
-      row[field] = value;
+  const stored = structuredClone(rows);
+  const result = await check(structuredClone(stored), model, {
+    read: async () => structuredClone(stored),
+    state: async () => ({ rows: structuredClone(stored), constraints: ["unchanged"] }),
+    write: async (i, field, value) => {
+      stored[i][field] = value;
       return { set: 1, role: "origin" };
     },
   });
   assert.deepEqual(result.failures, []);
-  assert.equal(result.loops.length, Object.keys(row).length);
+  assert.equal(result.loops.length, Object.keys(rows[0]).length * 2);
   assert.ok(result.loops.every((loop) => loop.named && loop.state_same && loop.held_again));
-
-  // Read again at the end, the row is held to what setup read, and every
-  // field's loop runs again.
-  const heldModel = objectModels(seen)["held:registry.directory.identity_log_entries"]();
-  assert.deepEqual(mismatches([row], heldModel), []);
-  assert.notDeepEqual(mismatches([{ ...row, id: 2 }], heldModel), []);
-  const heldResult = await check([structuredClone(row)], heldModel, {
-    read: async () => [structuredClone(row)],
-    state: async () => ({ rows: [structuredClone(row)], constraints: ["unchanged"] }),
-    write: async (_index, field, value) => {
-      row[field] = value;
-      return { set: 1, role: "origin" };
-    },
-  });
-  assert.deepEqual(heldResult.failures, []);
-  assert.equal(heldResult.loops.length, Object.keys(row).length);
-  assert.ok(heldResult.loops.every((loop) => loop.named && loop.state_same && loop.held_again));
 });

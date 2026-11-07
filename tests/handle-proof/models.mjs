@@ -267,18 +267,13 @@ export const bytesFrom = (v) => {
 export const b64url = (b64) => b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 export const fromB64url = (text) => Buffer.from(text.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 
-// The COSE key a virtual authenticator's credential (its PKCS#8 private
-// key, base64) registers, as Erlang's term_to_binary writes the map CYFR
-// stores (`passkeys.public_key`): {-3 => y, -2 => x, -1 => 1, 1 => 2,
-// 3 => -7} in term order.
-export function coseTerm(privateKeyB64) {
+// The kid a passkey's key is listed under in an account's log: `sha256:`
+// and the hex SHA-256 of its 65-byte uncompressed P-256 point, from the
+// virtual authenticator's credential (its PKCS#8 private key, base64).
+export function passkeyKid(privateKeyB64) {
   const jwk = createPublicKey(createPrivateKey({ key: Buffer.from(privateKeyB64, "base64"), format: "der", type: "pkcs8" })).export({ format: "jwk" });
-  const int = (n) => (n >= 0 && n < 256 ? Buffer.from([97, n]) : (() => { const b = Buffer.alloc(5); b[0] = 98; b.writeInt32BE(n, 1); return b; })());
-  const bin = (buffer) => { const head = Buffer.alloc(5); head[0] = 109; head.writeUInt32BE(buffer.length, 1); return Buffer.concat([head, buffer]); };
-  const head = Buffer.from([131, 116, 0, 0, 0, 5]);
-  return bytes(Buffer.concat([head,
-    int(-3), bin(fromB64url(jwk.y)), int(-2), bin(fromB64url(jwk.x)),
-    int(-1), int(1), int(1), int(2), int(3), int(-7)]));
+  const point = Buffer.concat([Buffer.from([4]), fromB64url(jwk.x), fromB64url(jwk.y)]);
+  return `sha256:${sha256hex(point)}`;
 }
 
 // `inserted_at` plus `hours`, in the stored form (microseconds, Z).
@@ -286,6 +281,19 @@ export function plusHours(stamp, hours) {
   const [, date, time, fraction = ""] = stamp.match(/^(\S+)[T ](\d{2}:\d{2}:\d{2})(\.\d+)?/);
   const at = new Date(Date.parse(`${date}T${time}Z`) + hours * 3_600_000).toISOString().slice(0, 19);
   return `${at}${fraction}Z`;
+}
+
+// An entry of a log as the directory stores it (`directory.entries.entry`,
+// BYTEA as PostgreSQL's JSON writes it), parsed: its JCS bytes and object.
+export function entryOf(stored) {
+  const raw = bytesFrom(stored);
+  let parsed = null;
+  try {
+    parsed = raw ? JSON.parse(raw.toString("utf8")) : null;
+  } catch {
+    parsed = null;
+  }
+  return { raw, parsed };
 }
 
 // ---------------------------------------------------------------------------
@@ -300,11 +308,8 @@ export const REGISTRY = "registry.test";
 // `registry.` before CYFR_REGISTRY_URL (`Compendium.RegistryHost`).
 export const OCI = `registry.${REGISTRY}`;
 export const HANDLE = "proof";
-// The name B's administrator types on B's first screen.
+// The name B's administrator makes their account under.
 export const ADMIN_HANDLE = "proof-b";
-// This fresh proof database mints IDs from 1; the largest exact JS integer
-// remains a valid PostgreSQL BIGINT without colliding with another proof row.
-const DIRECTORY_ID_TAMPER = Number.MAX_SAFE_INTEGER;
 const NONE_TIME = { tamper: LONG_AGO };
 const nil = () => exact(null);
 const noTime = () => exact(null, NONE_TIME);
@@ -348,14 +353,19 @@ export function objectModels(S) {
 const withLabels = (labels, rows) => rows.map((m, i) => labelled(m, labels[i]));
 
 function models(S) {
-  const A = S.origins.a;
   const id = S.identifier ?? "";
   const genesisHash = `sha256:${id.slice(4)}`;
-  const first = (name) => S.rows[name];
-  const aUser = () => first("setup:a.passkeys")[0].user_id;
-  const bAdmin = () => first("allow:b.passkeys")[0].user_id;
-  const genesisA = S.genesis.a;
-  const bytesHex = (hex) => `\\x${hex}`;
+  const first = (name) => S.rows[name] ?? [];
+  const aUser = () => first("setup:a.users")[0]?.id;
+  const bAdmin = () => first("allow:b.users")[0]?.id;
+  const bytesHex = (buffer) => `\\x${buffer.toString("hex")}`;
+  // The two entries the account pages wrote: the genesis, whose hash is
+  // the identifier, and the passkey's add_key after it.
+  const log = () => first("setup:registry.directory.entries[a]");
+  const entry = (seq) => entryOf(log()[seq]?.entry);
+  const entryHash = (seq) => `sha256:${sha256hex(entry(seq).raw ?? Buffer.alloc(0))}`;
+  const headHash = () => entryHash(1);
+  const passkey = () => S.credentials.a?.kid;
 
   const nsRow = (slug, owner, created, updated) => ({
     slug: exact(slug),
@@ -373,29 +383,16 @@ function models(S) {
     owner_identifier: owner,
     reserved_reason: nil(),
   });
-  const head = (identifier, genesis, readAt) => ({
-    identifier: derived(identifier, "the identity's genesis, hashed"),
-    head: derived(genesis, "the genesis's hash: one entry, so the head (`Prima.Identity`)"),
-    entries: exact(1),
-    recovery_epoch: derived(genesis, "a genesis's own hash (`Prima.Identity`, identity.ex:1150)"),
-    key_epoch: derived(genesis, "a genesis's own hash (`Prima.Identity`, identity.ex:1150)"),
-    read_at: readAt,
-  });
-  const policy = (identifier, window) => ({
-    id: aUuid("an acceptance id"),
-    policy_version: derived(S.policyVersion, "the registry's GET /v1/legal/version"),
-    accepted_at: within(window),
-    ip_address: exact("::ffff:127.0.0.1", { tamper: "::ffff:127.0.0.2", shown: "`\"::ffff:127.0.0.1\"`: the front's forwarded loopback address, as PostgreSQL's inet stores it" }),
-    user_agent: derived(S.clients?.cyfr, "the signer's HTTP client: Req's default for a CYFR (req 0.7.5, mix.lock)"),
-    identifier: derived(identifier, "the signer's identifier"),
-    former_identity: nil(),
-  });
-  // A nonce the signer drew for one request, expiring 120 s after it was
-  // signed (`Prima.RegistryRequest`), inside `window` shifted by that.
-  const nonce = (identifier, window) => ({
+  // A nonce the signer drew for one request, expiring `lifeS` after it
+  // was signed, inside `window` shifted by that: 120 s for a request the
+  // account pages sign (`Prima.RegistryRequest`), five minutes for one a
+  // CYFR mints for a passkey to sign (`Prima.SignIn.lifetime_ms/0`).
+  const nonce = (identifier, window, lifeS = 120, minted = "a signed request") => ({
     identifier: derived(identifier, "the signer's identifier"),
     nonce: captured("16 new bytes", (v) => typeof v === "string" && /^\\x[0-9a-f]{32}$/.test(v), "\\x00"),
-    expires_at: within({ name: `${window.name}, plus the 120 s a signed request lives`, from: window.from + 120_000, to: window.to + 120_000 }),
+    expires_at: within({
+      name: `${window.name}, plus the ${lifeS} s ${minted} lives`, from: window.from + lifeS * 1000, to: window.to + lifeS * 1000,
+    }),
   });
   const handleAnswer = (handle, identifier) => ({
     status: exact(200),
@@ -405,337 +402,229 @@ function models(S) {
     identifier: derived(identifier, "the owner's genesis, hashed"),
     directory: exact(DIRECTORY),
   });
-  const logEntry = (identifier, genesis, window) => ({
-    id: { ...captured("a new directory row id", (v) => Number.isSafeInteger(v) && v > 0, DIRECTORY_ID_TAMPER), tamper: DIRECTORY_ID_TAMPER },
-    identifier: derived(identifier, "the identifier the signer's genesis hashes to"),
-    seq: exact(0),
-    kind: exact("genesis"),
-    entry_hash: derived(`sha256:${sha256hex(fromB64(genesis))}`, "the entry's bytes, hashed"),
-    prev_hash: nil(),
-    entry: relatedTo(bytesHex(fromB64(genesis).toString("hex")), sha256hex(fromB64(genesis)) === identifier.slice(4), "the genesis its signer sent, whose hash is the identifier"),
-    request_id: nil(),
-    request_digest: nil(),
-    outcome: exact("accepted"),
-    outcome_body: nil(),
-    bytes: derived(fromB64(genesis).length, "the entry's length"),
-    inserted_at: within(window),
-  });
-  const genesisKey = (genesis, key) => bytes(fromB64url(JSON.parse(fromB64(genesis).toString("utf8"))[key]));
 
   const M = {};
 
-  // setup: the passkey, read once setup is done.
-  M["setup:a.passkeys"] = () => [{
-    id: anId("psk"),
-    user_id: anId("usr"),
-    credential_id: derived(b64url(S.credentials.a.credentialId), "the credential the browser's authenticator holds for a.test, base64url"),
-    rp_id: exact("a.test"),
-    relying_home: exact(A),
-    public_key: derived(S.credentials.a.cose, "the authenticator's key, as the COSE map CYFR stores (term_to_binary)"),
-    sign_count: derived(S.credentials.a.signCount, "the authenticator's count for that credential"),
-    identity_recovery_epoch: nil(),
-    state: exact("active"),
-    registration_digest: aDigest("the registration's digest"),
-    possession_verified: exact(1),
-    // WebAuthn's backup-eligible flag as the registration reported it: the
-    // proof's virtual authenticator leaves defaultBackupEligibility at its
-    // default, false, so the flag is clear.
-    backup_eligible: exact(0),
-    expires_at: noTime(),
-    admin_confirmation_id: nil(),
-    activated_at: within(win(S, "setup")),
-    revoked_at: noTime(),
-    inserted_at: within(win(S, "setup")),
-    updated_at: within(win(S, "setup")),
+  // setup: the account made at registry.test's pages: its log, its name,
+  // its acceptance of the registry's policy and the nonces of the two
+  // requests the recovery key signed; then A, set up by signing in with it.
+  M["setup:registry.directory.entries[a]"] = () => withLabels(["the genesis", "the passkey's add_key"], [
+    {
+      identifier: derived(id, "the identifier the recovery code names"),
+      // A seq no entry of the log holds, so the tamper meets no other row.
+      seq: exact(0, { tamper: 7 }),
+      kind: exact("genesis"),
+      entry_hash: derived(genesisHash, "the identifier's digits: the genesis's hash"),
+      prev_hash: nil(),
+      entry: relatedTo(log()[0]?.entry, `sha256:${sha256hex(entry(0).raw ?? Buffer.alloc(0))}` === genesisHash && entry(0).parsed?.directory === DIRECTORY,
+        "the genesis the page signed: its bytes hash to the identifier, and it names registry.test"),
+      bytes: derived(entry(0).raw?.length, "the entry's length"),
+      inserted_at: within(win(S, "make")),
+    },
+    {
+      identifier: derived(id, "the identifier the recovery code names"),
+      seq: exact(1, { tamper: 8 }),
+      kind: exact("add_key"),
+      entry_hash: derived(entryHash(1), "the entry's bytes, hashed"),
+      prev_hash: derived(genesisHash, "the genesis's hash"),
+      entry: relatedTo(log()[1]?.entry, entry(1).parsed?.prev === genesisHash && entry(1).parsed?.key?.kid === passkey() &&
+        entry(1).parsed?.key?.credential_id === S.credentials.a?.credentialIdB64url,
+        "the passkey's add_key: after the genesis, listing the key and credential the browser's authenticator holds"),
+      bytes: derived(entry(1).raw?.length, "the entry's length"),
+      inserted_at: within(win(S, "make")),
+    },
+  ]);
+  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the identifier the recovery code names"), within(win(S, "make")), within(win(S, "make")))];
+  M["setup:registry.identity_heads[a]"] = () => [{
+    identifier: derived(id, "the identifier the recovery code names"),
+    head: derived(headHash(), "the add_key's hash: the head of the log the claim was verified against"),
+    entries: exact(2),
+    recovery_epoch: derived(genesisHash, "the genesis's hash: no recover entry since"),
+    read_at: within(win(S, "make")),
   }];
+  M["setup:registry.policy_acceptances[a]"] = () => [{
+    id: aUuid("an acceptance id"),
+    policy_version: derived(S.policyVersion, "the registry's GET /v1/legal/version"),
+    accepted_at: within(win(S, "make")),
+    identifier: derived(id, "the signer's identifier"),
+    former_identity: nil(),
+  }];
+  M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "make")), nonce(id, win(S, "make"))];
+  M["setup:handle_answer[proof]"] = () => handleAnswer(HANDLE, id);
 
-  // setup, before the recovery code is saved: the accepted enrollment, the
-  // directory's entry, and the name claimed at the registry.
-  M["setup:registry.directory.identity_log_entries"] = () => [logEntry(id, genesisA, win(S, "enroll"))];
-  M["setup:pre:a.identity_attempts"] = () => {
-    const pre = first("setup:pre:a.identity_attempts")[0];
-    return [{
-      id: anId("iat"),
-      kind: exact("enrollment"),
-      request_id: captured("a new request id, req_ and 32 hexadecimal digits", (v) => typeof v === "string" && /^req_[0-9a-f]{32}$/.test(v), "~"),
-      user_id: derived(aUser(), "A's passkey's person"),
-      identifier: derived(id, "the identifier the recovery code names, as the browser showed it"),
-      directory_url: exact(DIRECTORY),
-      name: exact(HANDLE, { shown: "`\"proof\"`: the name typed on setup's first screen" }),
-      phase: exact("accepted"),
-      genesis: derived(storedForm(fromB64(genesisA)), "the directory's stored genesis"),
-      entry: nil(),
-      entry_hash: nil(),
-      expected_head: nil(),
-      expected_revision: nil(),
-      request_digest: derived(genesisHash, "the genesis's hash: an enrollment's request is its genesis"),
-      token_digest: nil(),
-      staged_live_public_key: exact(null, { shown: "`null`: the accepted enrollment moved its staged keys onto the identity row" }),
-      staged_operational_public_key: nil(),
-      staged_live_key_sealed: nil(),
-      staged_operational_key_sealed: nil(),
-      kit_seed_sealed: sealedBytes("the recovery code's secret, sealed until the code is saved"),
-      kit_acknowledged_at: noTime(),
-      outcome: exact("accepted"),
-      reproof_challenge_digest: nil(),
-      reproof_expires_at: noTime(),
-      revision: exact(3, { shown: "`3`: the attempt as its enrollment's acceptance leaves it" }),
-      inserted_at: within(win(S, "enroll")),
-      updated_at: within(win(S, "enroll")),
-    }];
-  };
-
-  // setup, after it: the transition, and the claim.
-  M["setup:a.identity_attempts"] = () => [held(first("setup:pre:a.identity_attempts")[0], {
-    phase: exact("completed"),
-    kit_acknowledged_at: within(win(S, "ack")),
-    kit_seed_sealed: exact(null, { shown: "`null`: the recovery code's secret is dropped once the code is saved" }),
-    revision: exact(first("setup:pre:a.identity_attempts")[0].revision + 1, { shown: "the revision read before the code was saved, plus one" }),
-    updated_at: within(win(S, "ack")),
-  }, "as read before the recovery code was saved")];
-  M["setup:a.users"] = () => [{
-    id: derived(aUser(), "the user A's passkey names"),
+  const userRow = (window, admission, readKey) => ({
+    id: anId("usr"),
     email: nil(),
     email_verified: nil(),
-    admission: exact("setup"),
+    admission: exact(admission),
     display_name: nil(),
-    namespace: exact(HANDLE),
+    namespace: nil(),
     status: exact("active"),
-    prefs: exact("{}", { shown: "`\"{}\"`: Newcomer's empty document (newcomer.ex:264), the cleared handle_wanted removed" }),
-    first_seen_at: within(win(S, "setup")),
-    last_seen_at: within(until(S, "setup", "setup:a.users")),
+    prefs: exact("{}"),
+    first_seen_at: within(win(S, window)),
+    last_seen_at: within(until(S, window, readKey)),
     denied_at: noTime(),
-    platform_admin_at: within(win(S, "setup")),
+    platform_admin_at: admission === "setup" ? within(win(S, window)) : nil(),
     security_generation: exact(1),
-    created_at: within(win(S, "setup")),
-    updated_at: within(until(S, "setup", "setup:a.users")),
-  }];
-  M["setup:a.athanors"] = () => [{
+    created_at: within(win(S, window)),
+    updated_at: within(until(S, window, readKey)),
+  });
+  const athanorRow = (owner, slug, window, readKey) => ({
     id: anId("ath"),
     name: exact("Me"),
-    slug: exact("me"),
-    owner_user_id: derived(aUser(), "A's person"),
+    slug: exact(slug),
+    owner_user_id: derived(owner, "its person"),
     status: exact("active"),
     archived_at: noTime(),
-    created_by: derived(aUser(), "A's person"),
+    created_by: derived(owner, "its person"),
     settings: nil(),
-    provisioned_at: within(until(S, "setup", "setup:a.athanors")),
+    provisioned_at: bound(`null, or a time inside ${until(S, window, readKey).name}`, (v) => v === null || inside(until(S, window, readKey), v), LONG_AGO),
     provisioning_failed_at: noTime(),
     provisioning_failure: nil(),
     security_generation: exact(1),
-    created_at: within(win(S, "setup")),
-    updated_at: within(until(S, "setup", "setup:a.athanors")),
-  }];
-  M["setup:a.person_identities"] = () => {
-    const row = first("setup:a.person_identities")[0];
-    return [{
-      id: anId("pid"),
-      user_id: derived(aUser(), "A's passkey's person"),
-      identifier: derived(id, "the identifier the recovery code names"),
-      provenance: exact("local"),
-      enrollment: exact("enrolled"),
-      live_public_key: derived(genesisKey(genesisA, "live_key"), "the directory's genesis's live key"),
-      operational_public_key: derived(genesisKey(genesisA, "operational_key"), "the directory's genesis's operational key"),
-      live_key_sealed: relatedTo(row.live_key_sealed, S.opens["identity.live"] === genesisKey(genesisA, "live_key").bytes, "opens, in A, to the genesis's live key"),
-      operational_key_sealed: relatedTo(row.operational_key_sealed, S.opens["identity.operational"] === genesisKey(genesisA, "operational_key").bytes, "opens, in A, to the genesis's operational key"),
-      genesis_hash: derived(genesisHash, "the directory's genesis, hashed"),
-      head_hash: derived(genesisHash, "the directory's one entry"),
-      directory_url: exact(DIRECTORY),
-      first_method_at: within(win(S, "setup")),
-      revision: exact(4, { shown: "`4`: 1 at insertion, then first_method! (person_identities.ex:233), enrolling! (:145) and enrolled! (:174), each one step (:259)" }),
-      inserted_at: within(win(S, "setup")),
-      updated_at: within(win(S, "enroll")),
-    }];
-  };
-  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the identifier the recovery code names"), within(win(S, "enroll")), within(win(S, "enroll")))];
-  M["setup:registry.identity_heads[a]"] = () => [head(id, genesisHash, within(win(S, "enroll")))];
-  M["setup:registry.policy_acceptances[a]"] = () => [policy(id, win(S, "enroll"))];
-  M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "enroll")), nonce(id, win(S, "enroll"))];
-  M["setup:handle_answer[proof]"] = () => handleAnswer(HANDLE, id);
-
-  // The nonces read before, each held, and `added` new ones.
-  const grown = (before, now, step, added, window) => {
-    const fresh = now.filter((r) => !before.some((b) => b.nonce === r.nonce)).map((r) => r.nonce);
-    return byKey(now, (r) => r.nonce, [
-      ...before.map((b) => [b.nonce, held(b, {}, `as read at ${step}`), `a nonce read at ${step}`]),
-      ...Array.from({ length: added }, (_, i) => [fresh[i] ?? `new ${i}`, nonce(id, window), `a new nonce`]),
-    ]);
-  };
-
-  // allow
-  M["allow:b.passkeys"] = () => [{
-    ...M["setup:a.passkeys"]()[0],
-    credential_id: derived(b64url(S.credentials.b.credentialId), "the credential the administrator's authenticator holds for b.test, base64url"),
-    rp_id: exact("b.test"),
-    relying_home: exact(S.origins.b),
-    public_key: derived(S.credentials.b.cose, "the administrator's authenticator's key, as the COSE map CYFR stores"),
-    sign_count: derived(S.credentials.b.signCount, "the authenticator's count for that credential"),
-    activated_at: within(win(S, "admin")),
-    inserted_at: within(win(S, "admin")),
-    updated_at: within(win(S, "admin")),
-  }];
-  M["allow:b.users"] = () => [{
-    ...M["setup:a.users"]()[0],
-    id: derived(bAdmin(), "the user B's administrator's passkey names"),
-    namespace: exact(ADMIN_HANDLE, { shown: "`\"proof-b\"`: the name typed on B's first screen" }),
-    first_seen_at: within(win(S, "admin")),
-    last_seen_at: within(until(S, "admin", "allow:b.users")),
-    platform_admin_at: within(win(S, "admin")),
-    created_at: within(win(S, "admin")),
-    updated_at: within(until(S, "admin", "allow:b.users")),
-  }];
-  M["allow:b.athanors"] = () => [{
-    ...M["setup:a.athanors"]()[0],
-    owner_user_id: derived(bAdmin(), "B's administrator"),
-    created_by: derived(bAdmin(), "B's administrator"),
-    provisioned_at: within(until(S, "admin", "allow:b.athanors")),
-    created_at: within(win(S, "admin")),
-    updated_at: within(until(S, "admin", "allow:b.athanors")),
-  }];
-  M["allow:b.server_allowlist"] = () => [{
-    id: anId("door"),
-    kind: exact("identifier"),
-    value: derived(id, "the identifier @proof names at the registry (A's recovery code's)"),
-    effect: exact("allow"),
-    status: exact("allowed"),
-    requested_by: nil(),
-    added_by: derived(bAdmin(), "B's administrator"),
-    note: nil(),
-    label: exact(HANDLE),
-    created_at: within(win(S, "allow")),
-    updated_at: within(win(S, "allow")),
-  }];
-
-  // sign_in: B's people, identities, sessions and athanors. The
-  // administrator's keys are minted at setup, which also registers them at
-  // registry.test: each public key is the public half of its sealed key,
-  // opened in B, and the identifier is the hash of the genesis over them.
-  const adminKeys = () => {
-    const row = first("sign_in:b.person_identities").find((r) => r.user_id === bAdmin()) ?? {};
-    const pair = (role, pub, sealedCol) => ({
-      [pub]: relatedTo(row[pub], !!row[pub] && S.opens[`b.identity.${role}`] === row[pub].bytes, `the public half of the sealed ${role} key, opened in B`),
-      [sealedCol]: relatedTo(row[sealedCol], !!row[pub] && S.opens[`b.identity.${role}`] === row[pub].bytes, `opens, in B, to the ${role} public key beside it`),
-    });
-    return { ...pair("live", "live_public_key", "live_key_sealed"), ...pair("operational", "operational_public_key", "operational_key_sealed") };
-  };
-  const remote = () => first("sign_in:b.person_identities").find((r) => r.identifier === id)?.user_id;
-  const personAthanor = () => (first("sign_in:b.athanors") ?? []).find((r) => r.owner_user_id === remote());
-  const adminIdentifier = () => first("sign_in:b.person_identities").find((r) => r.user_id === bAdmin())?.identifier;
-  M["sign_in:b.person_identities"] = () => withLabels(["the administrator's", "the person's"], [
-    {
-      id: anId("pid"),
-      user_id: derived(bAdmin(), "B's administrator"),
-      identifier: captured("B's administrator's identifier, per_ and 64 hexadecimal digits", (v) => typeof v === "string" && /^per_[0-9a-f]{64}$/.test(v), "~"),
-      provenance: exact("local"),
-      enrollment: exact("enrolled"),
-      ...adminKeys(),
-      genesis_hash: derived(`sha256:${adminIdentifier()?.slice(4)}`, "the identifier's 64 hexadecimal digits: the genesis's hash"),
-      head_hash: derived(`sha256:${adminIdentifier()?.slice(4)}`, "the genesis: the administrator's log holds one entry"),
-      directory_url: exact(DIRECTORY),
-      first_method_at: within(win(S, "admin")),
-      revision: exact(4, { shown: "`4`: 1 at insertion, then first_method! (person_identities.ex:233), enrolling! (:145) and enrolled! (:174), each one step (:259)" }),
-      inserted_at: within(win(S, "admin")),
-      updated_at: within(win(S, "admin")),
-    },
-    {
-      id: anId("pid"),
-      user_id: anId("usr"),
-      identifier: derived(id, "the identifier A's recovery code names"),
-      provenance: exact("remote"),
-      enrollment: exact("enrolled"),
-      live_public_key: exact(null, { shown: "`null`: B keeps no copy of a remote person's keys; it reads them at the directory" }),
-      operational_public_key: nil(),
-      live_key_sealed: nil(),
-      operational_key_sealed: nil(),
-      genesis_hash: derived(genesisHash, "the directory's genesis, hashed"),
-      head_hash: derived(genesisHash, "the directory's one entry"),
-      directory_url: exact(DIRECTORY),
-      first_method_at: noTime(),
-      revision: exact(1),
-      inserted_at: within(win(S, "signin")),
-      updated_at: within(win(S, "signin")),
-    },
-  ]);
-  M["sign_in:b.users"] = () => withLabels(["the administrator's", "the person's"], [
-    held(first("allow:b.users")[0], {
-      last_seen_at: sameOrWithin(first("allow:b.users")[0].last_seen_at, win(S, "signin"), "as read at allow"),
-      updated_at: sameOrWithin(first("allow:b.users")[0].updated_at, win(S, "signin"), "as read at allow"),
-    }, "as read at allow"),
-    {
-      id: derived(remote(), "B's identity row for A's identifier"),
-      email: nil(),
-      email_verified: nil(),
-      admission: exact("remote"),
-      display_name: nil(),
-      namespace: nil(),
-      status: exact("active"),
-      prefs: exact("{}", { shown: "`\"{}\"`: Newcomer's empty document (newcomer.ex:264)" }),
-      first_seen_at: within(win(S, "signin")),
-      last_seen_at: within(until(S, "signin", "sign_in:b.users")),
-      denied_at: noTime(),
-      platform_admin_at: nil(),
-      security_generation: exact(1),
-      created_at: within(win(S, "signin")),
-      updated_at: within(until(S, "signin", "sign_in:b.users")),
-    },
-  ]);
-  M["sign_in:b.sessions[proof]"] = () => [{
+    created_at: within(win(S, window)),
+    updated_at: within(until(S, window, readKey)),
+  });
+  const identityRow = (user, identifier, head, window) => ({
+    id: anId("pid"),
+    user_id: derived(user, "its person"),
+    identifier: derived(identifier, "the account's identifier"),
+    head_hash: derived(head, "the head of the account's log when it was admitted"),
+    directory_url: exact(DIRECTORY),
+    revision: exact(1),
+    inserted_at: within(win(S, window)),
+    updated_at: within(win(S, window)),
+  });
+  const directoryHead = (identifier, head, window, readKey) => ({
+    identifier: derived(identifier, "the account's identifier"),
+    genesis: derived(identifier === id ? entry(0).raw?.toString("utf8") : undefined, "the genesis the directory stores, as its JCS text"),
+    directory_url: exact(DIRECTORY),
+    head_hash: derived(head, "the head of the account's log as the directory serves it"),
+    state: captured("the verified state the head leaves, as JSON text", (v) => typeof v === "string" && v.includes(identifier), "{}"),
+    verified_at: within(until(S, window, readKey)),
+    gone_at: noTime(),
+    revision: captured("the cached head's revision", (v) => Number.isInteger(v) && v >= 1, 0),
+    inserted_at: within(win(S, window)),
+    updated_at: within(until(S, window, readKey)),
+  });
+  // A passkey that signed in here: the CYFR knows it by its kid alone,
+  // and the client is its own source.
+  const passkeyClient = (user, athanor, kid, head, window, row) => ({
+    id: anId("pcl"),
+    athanor_id: derived(athanor, "the person's own athanor here"),
+    user_id: derived(user, "its person"),
+    source_kind: exact("passkey"),
+    source_id: relatedTo(row?.source_id, !!row && row.source_id === row.id, "the client's own id"),
+    device_public_key: nil(),
+    standing: exact("active"),
+    holder_kind: nil(),
+    display_name: nil(),
+    kid: derived(kid, "the kid of the key the browser's authenticator holds"),
+    head: derived(head, "the head it signed in under"),
+    inserted_at: within(win(S, window)),
+    updated_at: within(win(S, window)),
+  });
+  const session = (user, athanor, kid, head, client, cookie, window, row) => ({
     id: anId("ses"),
-    token_hash: derived(bytes(Buffer.from(S.cookies.remote?.sha256 ?? "", "hex")), "the SHA-256 of the session token the browser's cookie carries"),
-    token_prefix: derived(S.cookies.remote?.prefix, "the first 8 characters of that token"),
-    user_id: derived(remote(), "B's identity row for A's identifier"),
-    email: nil(),
-    provider: exact("cyfr", { shown: "`\"cyfr\"`: the CYFR identity kind, as `CyfrDoor.context/1` mints it (cyfr_door.ex:509)" }),
-    expires_at: derived(plusHours(first("sign_in:b.sessions[proof]")[0]?.inserted_at ?? "", S.ttlHours), "inserted_at plus session_ttl_hours (Sanctum.Session)"),
-    athanor_id: derived(personAthanor()?.id, "the person's own athanor at B"),
-    identity_key_epoch: derived(genesisHash, "a genesis's key epoch, its own hash"),
-    client_id: nil(),
-    inserted_at: within(win(S, "signin")),
-  }];
-  // Every person admitted here has an athanor here, minted in their
-  // admission (Sanctum.Newcomer), the remote person included: named "Me"
-  // like any person who names none, under the next free slug, and filled
-  // after the admission commits, so it may not be filled yet when read.
-  M["sign_in:b.athanors"] = () => {
-    const signinUntil = until(S, "signin", "sign_in:b.athanors");
-    return byKey(first("sign_in:b.athanors"), (r) => r.owner_user_id, [
-      [bAdmin(), held(first("allow:b.athanors")[0], {}, "as read at allow"), "the administrator's"],
-      [remote(), {
-        id: anId("ath"),
-        name: exact("Me"),
-        slug: exact("me-2", { shown: "`\"me-2\"`: the next free slug for \"Me\", the administrator's athanor holding `me`" }),
-        owner_user_id: derived(remote(), "B's identity row for A's identifier"),
-        status: exact("active"),
-        archived_at: noTime(),
-        created_by: derived(remote(), "B's identity row for A's identifier"),
-        settings: nil(),
-        provisioned_at: bound(`null, or a time inside ${signinUntil.name}`, (v) => v === null || inside(signinUntil, v), LONG_AGO),
-        provisioning_failed_at: noTime(),
-        provisioning_failure: nil(),
-        security_generation: exact(1),
-        created_at: within(win(S, "signin")),
-        updated_at: within(signinUntil),
-      }, "the person's"],
-    ]);
-  };
-
-  // sign_in, B's sessions whole: the administrator's and the person's.
-  M["sign_in:b.sessions"] = () => (() => {
-    const adminSession = first("sign_in:b.sessions").find((r) => r.user_id === bAdmin()) ?? {};
-    return byKey(first("sign_in:b.sessions"), (r) => r.user_id, [[bAdmin(), {
-    id: anId("ses"),
-    token_hash: derived(bytes(Buffer.from(S.cookies.admin?.sha256 ?? "", "hex")), "the SHA-256 of the session token the administrator's cookie carries"),
-    token_prefix: derived(S.cookies.admin?.prefix, "the first 8 characters of that token"),
-    user_id: derived(bAdmin(), "B's administrator"),
+    token_hash: derived(bytes(Buffer.from(cookie?.sha256 ?? "", "hex")), "the SHA-256 of the session token the browser's cookie carries"),
+    token_prefix: derived(cookie?.prefix, "the first 8 characters of that token"),
+    user_id: derived(user, "its person"),
     email: nil(),
     provider: exact("passkey"),
-    expires_at: derived(plusHours(adminSession.inserted_at ?? "", S.ttlHours), "inserted_at plus session_ttl_hours (Sanctum.Session)"),
-    athanor_id: derived(first("allow:b.athanors")[0]?.id, "B's one athanor"),
-    identity_key_epoch: nil(),
-    client_id: nil(),
-    inserted_at: within(win(S, "admin")),
-  }, "the administrator's"], [remote(), held(first("sign_in:b.sessions[proof]")[0], {}, "as read at sign_in"), "the person's"]]);
-  })();
+    expires_at: derived(plusHours(row?.inserted_at ?? "1970-01-01T00:00:00Z", S.ttlHours), "inserted_at plus session_ttl_hours (Sanctum.Session)"),
+    athanor_id: derived(athanor, "the person's own athanor here"),
+    kid: derived(kid, "the kid of the key the browser's authenticator holds"),
+    head: derived(head, "the head it signed in under"),
+    client_id: derived(client, "the passkey's paired client here"),
+    inserted_at: within(win(S, window)),
+  });
+
+  M["setup:a.users"] = () => [userRow("setup", "setup", "setup:a.users")];
+  M["setup:a.athanors"] = () => [athanorRow(aUser(), "me", "setup", "setup:a.athanors")];
+  M["setup:a.person_identities"] = () => [identityRow(aUser(), id, headHash(), "setup")];
+  M["setup:a.directory_heads"] = () => [directoryHead(id, headHash(), "setup", "setup:a.directory_heads")];
+  M["setup:a.paired_clients"] = () => [passkeyClient(aUser(), first("setup:a.athanors")[0]?.id, passkey(), headHash(), "setup", first("setup:a.paired_clients")[0])];
+
+  // allow: B, set up by its administrator's own account, allows @proof.
+  const adminId = () => first("allow:b.person_identities")[0]?.identifier;
+  const adminHead = () => first("allow:b.person_identities")[0]?.head_hash;
+  M["allow:b.users"] = () => [userRow("admin", "setup", "allow:b.users")];
+  M["allow:b.athanors"] = () => [athanorRow(bAdmin(), "me", "admin", "allow:b.athanors")];
+  M["allow:b.person_identities"] = () => [{
+    ...identityRow(bAdmin(), adminId(), adminHead(), "admin"),
+    identifier: captured("the administrator's identifier, per_ and 64 hexadecimal digits", (v) => typeof v === "string" && PER.test(v), "~"),
+    head_hash: captured("the head of the administrator's log", (v) => typeof v === "string" && HASH.test(v), "~"),
+  }];
+  M["allow:b.server_allowlist"] = () => byKey(first("allow:b.server_allowlist"), (r) => r.value, [
+    [adminId(), {
+      id: anId("door"),
+      kind: exact("identifier"),
+      value: derived(adminId(), "the administrator's identifier"),
+      effect: exact("allow"),
+      status: exact("allowed"),
+      requested_by: nil(),
+      added_by: derived(bAdmin(), "B's administrator"),
+      note: exact("setup"),
+      label: nil(),
+      created_at: within(win(S, "admin")),
+      updated_at: within(win(S, "admin")),
+    }, "setup's allow of the administrator"],
+    [id, {
+      id: anId("door"),
+      kind: exact("identifier"),
+      value: derived(id, "the identifier @proof names at the registry"),
+      effect: exact("allow"),
+      status: exact("allowed"),
+      requested_by: nil(),
+      added_by: derived(bAdmin(), "B's administrator"),
+      note: nil(),
+      label: exact(HANDLE),
+      created_at: within(win(S, "allow")),
+      updated_at: within(win(S, "allow")),
+    }, "the allow of @proof"],
+  ]);
+
+  // sign_in: the person's passkey, synced to a browser that never visited
+  // B, signs them in there: B admits A's identifier under its allow.
+  const remote = () => first("sign_in:b.person_identities").find((r) => r.identifier === id)?.user_id;
+  const personAthanor = () => first("sign_in:b.athanors").find((r) => r.owner_user_id === remote())?.id;
+  const personClient = () => first("sign_in:b.paired_clients").find((r) => r.user_id === remote())?.id;
+  M["sign_in:b.person_identities"] = () => byKey(first("sign_in:b.person_identities"), (r) => r.user_id, [
+    [bAdmin(), held(first("allow:b.person_identities")[0] ?? {}, {}, "as read at allow"), "the administrator's"],
+    [remote(), identityRow(remote(), id, headHash(), "signin"), "the person's"],
+  ]);
+  M["sign_in:b.users"] = () => byKey(first("sign_in:b.users"), (r) => r.id, [
+    [bAdmin(), held(first("allow:b.users")[0] ?? {}, {
+      last_seen_at: sameOrWithin(first("allow:b.users")[0]?.last_seen_at, win(S, "signin"), "as read at allow"),
+      updated_at: sameOrWithin(first("allow:b.users")[0]?.updated_at, win(S, "signin"), "as read at allow"),
+    }, "as read at allow"), "the administrator's"],
+    [remote(), { ...userRow("signin", "open", "sign_in:b.users"), id: derived(remote(), "B's identity row for A's identifier") }, "the person's"],
+  ]);
+  M["sign_in:b.athanors"] = () => byKey(first("sign_in:b.athanors"), (r) => r.owner_user_id, [
+    [bAdmin(), held(first("allow:b.athanors")[0] ?? {}, {
+      provisioned_at: sameOrWithin(first("allow:b.athanors")[0]?.provisioned_at, win(S, "signin"), "as read at allow"),
+      updated_at: sameOrWithin(first("allow:b.athanors")[0]?.updated_at, win(S, "signin"), "as read at allow"),
+    }, "as read at allow"), "the administrator's"],
+    [remote(), athanorRow(remote(), "me-2", "signin", "sign_in:b.athanors"), "the person's"],
+  ]);
+  M["sign_in:b.directory_heads"] = () => byKey(first("sign_in:b.directory_heads"), (r) => r.identifier, [
+    [adminId(), { ...directoryHead(adminId(), adminHead(), "admin", "sign_in:b.directory_heads"), genesis: captured("the administrator's genesis", (v) => typeof v === "string" && v.includes("genesis"), "~") }, "the administrator's"],
+    // B read the person's log when the allow resolved @proof.
+    [id, directoryHead(id, headHash(), "allow", "sign_in:b.directory_heads"), "the person's, read at the allow"],
+  ]);
+  const clientOf = (user) => first("sign_in:b.paired_clients").find((r) => r.user_id === user);
+  M["sign_in:b.paired_clients"] = () => byKey(first("sign_in:b.paired_clients"), (r) => r.user_id, [
+    [bAdmin(), { ...passkeyClient(bAdmin(), first("allow:b.athanors")[0]?.id, S.credentials.b?.kid, adminHead(), "admin", clientOf(bAdmin())),
+      kid: derived(S.credentials.b?.kid, "the kid of the key the administrator's authenticator holds") }, "the administrator's"],
+    [remote(), passkeyClient(remote(), personAthanor(), passkey(), headHash(), "signin", clientOf(remote())), "the person's"],
+  ]);
+  const sessionOf = (user) => first("sign_in:b.sessions").find((r) => r.user_id === user);
+  M["sign_in:b.sessions"] = () => byKey(first("sign_in:b.sessions"), (r) => r.user_id, [
+    [bAdmin(), session(bAdmin(), first("allow:b.athanors")[0]?.id, S.credentials.b?.kid, adminHead(),
+      first("sign_in:b.paired_clients").find((r) => r.user_id === bAdmin())?.id, S.cookies.admin, "admin", sessionOf(bAdmin())), "the administrator's"],
+    [remote(), session(remote(), personAthanor(), passkey(), headHash(), personClient(), S.cookies.remote, "signin", sessionOf(remote())), "the person's"],
+  ]);
+
   // sync
   const token = () => first("sync:registry.push_tokens[proof]")[0];
   const sealed = () => first("sync:a.registry_tokens")[0];
@@ -753,25 +642,34 @@ function models(S) {
     type: exact("push_token"),
     token: derived({ sha256: String(token()?.token_hash ?? "").replace(/^\\x/, "") }, "the registry's token_hash for the one @proof token"),
     namespace: exact(HANDLE),
-    role: exact("personal", { shown: "`\"personal\"`: a personal namespace's role, in `Sanctum.RegistryCredentials`' stored shape (registry_credentials.ex:28)" }),
+    role: exact("personal", { shown: "`\"personal\"`: a personal namespace's role, in `Sanctum.RegistryCredentials`' stored shape" }),
     issued_at: derived(sealed()?.issued_at, "the row's issued_at"),
     label: derived(token()?.label, "the registry's label for that token"),
   });
   M["sync:registry.push_tokens[proof]"] = () => [{
     id: aUuid("a token id"),
-    token_hash: derived(bytesHex(S.credentialDigest ?? ""), "the digest of the token A sealed"),
+    token_hash: derived(`\\x${S.credentialDigest ?? ""}`, "the digest of the token A sealed"),
     namespace_slug: exact(HANDLE),
     label: derived(S.credentialLabel, "the label A sealed with the token"),
     created_at: within(win(S, "sync")),
-    last_used_at: within(win(S, "sync")),
+    last_used_at: noTime(),
     revoked_at: noTime(),
     created_by: derived(id, "A's identifier"),
-    recovery_epoch: derived(genesisHash, "a genesis's recovery epoch, its own hash"),
+    recovery_epoch: derived(genesisHash, "the genesis's hash: no recover entry since"),
   }];
+  // The nonces read before, each held, and `added` new ones.
+  const grown = (before, now, step, added, model) => {
+    const fresh = now.filter((r) => !before.some((b) => b.nonce === r.nonce)).map((r) => r.nonce);
+    return byKey(now, (r) => r.nonce, [
+      ...before.map((b) => [b.nonce, held(b, {}, `as read at ${step}`), `a nonce read at ${step}`]),
+      ...Array.from({ length: added }, (_, i) => [fresh[i] ?? `new ${i}`, model, "a new nonce"]),
+    ]);
+  };
   M["sync:registry.request_nonces[a]"] = () =>
-    grown(first("setup:registry.request_nonces[a]"), first("sync:registry.request_nonces[a]"), "setup", 1, win(S, "sync"));
-  M["sync:registry.identity_heads[a]"] = () => [held(first("setup:registry.identity_heads[a]")[0], {
-    read_at: sameOrWithin(first("setup:registry.identity_heads[a]")[0].read_at, win(S, "sync"), "as read at setup"),
+    grown(first("setup:registry.request_nonces[a]"), first("sync:registry.request_nonces[a]"), "setup", 1,
+      nonce(id, win(S, "sync"), 300, "a request a CYFR mints for a passkey"));
+  M["sync:registry.identity_heads[a]"] = () => [held(first("setup:registry.identity_heads[a]")[0] ?? {}, {
+    read_at: sameOrWithin(first("setup:registry.identity_heads[a]")[0]?.read_at, win(S, "sync"), "as read at setup"),
   }, "as read at setup")];
 
   // ban
@@ -787,11 +685,11 @@ function models(S) {
     identifier: derived(id, "A's identifier"),
     former_identity: nil(),
   }];
-  M["ban:registry.push_tokens[proof]"] = () => [held(token(), { revoked_at: within(win(S, "ban")) }, "as read at sync", M["sync:registry.push_tokens[proof]"]()[0])];
+  M["ban:registry.push_tokens[proof]"] = () => [held(token() ?? {}, { revoked_at: within(win(S, "ban")) }, "as read at sync", M["sync:registry.push_tokens[proof]"]()[0])];
   M["ban:token_refused"] = () => ({ status: exact(401), body: exact({ errors: [{ code: "UNAUTHORIZED", message: "token revoked" }] }) });
-  M["ban:a.sync_refused"] = () => ({ shown: exact(`Sync failed: ${S.refusals.banned.sentence}`), shared_with: exact([]) });
+  M["ban:a.sync_refused"] = () => ({ shown: exact(`That did not go through: ${S.refusals.banned?.sentence}`), shared_with: exact([]) });
   M["ban:registry.request_nonces[a]"] = () =>
-    grown(first("sync:registry.request_nonces[a]"), first("ban:registry.request_nonces[a]"), "sync", 0, win(S, "ban"));
+    grown(first("sync:registry.request_nonces[a]"), first("ban:registry.request_nonces[a]"), "sync", 0, null);
 
   // ban, last: every object read earlier, held since, each with the
   // fields later steps legitimately move.
@@ -800,35 +698,30 @@ function models(S) {
     const base = M[name] ? M[name]() : [];
     return first(name).map((r, i) => held(r, moves(r), `as read at ${step}`, Array.isArray(base) ? base[i] : {}));
   };
-  M["held:a.passkeys"] = () => heldAll("setup:a.passkeys", "setup", (r) => ({
-    sign_count: derived(S.credentials.aLast?.signCount, "the authenticator's count for that credential now"),
-    updated_at: sameOrWithin(r.updated_at, since("a.passkeys", "setup"), "as read at setup"),
-  }));
+  const moving = (name, step, fields) => (r) => Object.fromEntries(fields.map((f) =>
+    [f, sameOrWithin(r[f], since(name, step), `as read at ${step}`)]));
   M["held:a.users"] = () => heldAll("setup:a.users", "setup", (r) => ({
-    last_seen_at: sameOrWithin(r.last_seen_at, since("a.users", "ack"), "as read at setup"),
-    updated_at: sameOrWithin(r.updated_at, since("a.users", "ack"), "as read at setup"),
+    ...moving("a.users", "setup", ["last_seen_at", "updated_at"])(r),
+    namespace: exact(HANDLE, { shown: "`\"proof\"`: the personal namespace the sync recorded (`Sanctum.SignIn.record_namespace/2`)" }),
   }));
-  for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.athanors", "setup"],
-    ["setup:a.identity_attempts", "setup"], ["sync:a.registry_tokens", "sync"], ["setup:registry.directory.identity_log_entries", "setup"],
+  M["held:a.athanors"] = () => heldAll("setup:a.athanors", "setup", moving("a.athanors", "setup", ["provisioned_at", "updated_at"]));
+  M["held:a.directory_heads"] = () => heldAll("setup:a.directory_heads", "setup", (r) => ({
+    ...moving("a.directory_heads", "setup", ["verified_at", "updated_at"])(r),
+    revision: captured("the cached head's revision, moved by each read since", (v) => Number.isInteger(v) && v >= r.revision, 0),
+  }));
+  M["held:b.users"] = () => heldAll("sign_in:b.users", "sign_in", moving("b.users", "signin", ["last_seen_at", "updated_at"]));
+  M["held:b.athanors"] = () => heldAll("sign_in:b.athanors", "sign_in", moving("b.athanors", "signin", ["provisioned_at", "updated_at"]));
+  for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.paired_clients", "setup"],
+    ["sync:a.registry_tokens", "sync"], ["setup:registry.directory.entries[a]", "setup"],
     ["setup:registry.namespaces[proof]", "setup"], ["setup:registry.policy_acceptances[a]", "setup"],
-    ["ban:registry.banned_identities", "ban"], ["allow:b.passkeys", "allow"], ["allow:b.server_allowlist", "allow"],
-    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"]]) {
+    ["ban:registry.banned_identities", "ban"], ["allow:b.server_allowlist", "allow"],
+    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"], ["sign_in:b.paired_clients", "sign_in"]]) {
     M[`held:${name.split(":").pop()}`] = () => heldAll(name, step);
   }
-  M["held:registry.identity_heads[a]"] = () => heldAll("setup:registry.identity_heads[a]", "setup", (r) => ({
-    read_at: sameOrWithin(first("sync:registry.identity_heads[a]")[0].read_at, since("registry.identity_heads[a]", "sync"), "as read at sync"),
+  M["held:registry.identity_heads[a]"] = () => heldAll("setup:registry.identity_heads[a]", "setup", () => ({
+    read_at: sameOrWithin(first("sync:registry.identity_heads[a]")[0]?.read_at, since("registry.identity_heads[a]", "sync"), "as read at sync"),
   }));
-  M["held:b.athanors"] = () => first("sign_in:b.athanors").map((r) => held(r, {
-    provisioned_at: sameOrWithin(r.provisioned_at, since("b.athanors", "signin"), "as read at sign_in"),
-    updated_at: sameOrWithin(r.updated_at, since("b.athanors", "signin"), "as read at sign_in"),
-  }, "as read at sign_in"));
-  M["held:b.users"] = () => first("sign_in:b.users").map((r) => held(r, {
-    last_seen_at: sameOrWithin(r.last_seen_at, since("b.users", "signin"), "as read at sign_in"),
-    updated_at: sameOrWithin(r.updated_at, since("b.users", "signin"), "as read at sign_in"),
-  }, "as read at sign_in"));
   M["held:registry.push_tokens[proof]"] = () => heldAll("ban:registry.push_tokens[proof]", "ban");
   M["held:registry.request_nonces[a]"] = () => heldAll("ban:registry.request_nonces[a]", "ban");
   return M;
 }
-
-const fromB64 = (text) => Buffer.from(text, "base64");

@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The handle proof (README.md): a handle at the registry names the person
-# another CYFR allows, who signs in there from their own CYFR, end to end. `cyfr` releases started as the
-# browser harness starts homes (tests/browser/harness.sh), each a SQLite
-# cell on a `.test` name behind the harness's HTTPS front: the person's
-# CYFR a.test and the CYFR b.test they sign in at, both set up through
-# /setup. The registry and directory are cyfr.run's, built from the
+# The handle proof (README.md): a handle at the registry names the account
+# another CYFR allows, whose passkey signs the person in there with no
+# address typed, end to end. `cyfr` releases started as the browser
+# harness starts homes (tests/browser/harness.sh), each a SQLite cell on a
+# `.test` name behind the harness's HTTPS front: a.test, which the person
+# sets up with their account, and b.test, set up by its administrator's,
+# where they sign in. The registry, directory and account pages are
+# cyfr.run's, built from the
 # checkout CYFR_RUN_DIR names (its `git archive HEAD`, as its Dockerfile
 # builds it), on a PostgreSQL of the run's own, behind a front of the
 # identity proof's kind (tests/identity-proof/front.sh and cells.sh) at
@@ -265,12 +267,6 @@ answer_ask() {
     state)
       ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" state "$(asked "$ask" table)")" || ANSWER=""
       ;;
-    opens)
-      file="$(mktemp "$WORK/sealed.XXXXXX")"
-      python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["sealed"]))' "$ask" >"$file"
-      ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" opens "$(asked "$ask" user_id)" "$(asked "$ask" role)" "@$file")" || ANSWER=""
-      rm -f "$file"
-      ;;
     reseal)
       file="$(mktemp "$WORK/patch.XXXXXX")"
       python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["patch"]))' "$ask" >"$file"
@@ -305,11 +301,6 @@ SQL
         ANSWER="$(python3 -I -c 'import json, sys; print(json.dumps({"error": "the registry refused the write: " + open(sys.argv[1]).read().strip()}))' "$WORK/psql.err")"
       fi
       ;;
-    user_agents)
-      # The registry records each signer's HTTP client: a CYFR's is Req's
-      # default, named for the version mix.lock pins.
-      ANSWER="$(python3 -I -c 'import json, re, sys; v = re.search(r"\"req\": \{:hex, :req, \"([^\"]+)\"", open(sys.argv[1]).read()).group(1); print(json.dumps({"cyfr": "req/" + v}))' "$ROOT/mix.lock")" || ANSWER=""
-      ;;
     legal_version)
       ANSWER="$(python3 -I -c 'import json, sys; a = json.loads(sys.argv[1]); print(json.dumps({"status": a["status"], "policy_version": json.loads(a["body"]).get("policy_version")}))' "$(registry_http GET /v1/legal/version)")" || ANSWER=""
       ;;
@@ -341,7 +332,7 @@ SQL
 step "the handle proof in Chromium, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run handle-proof proof.mjs /authority/homes.json /out &
+playwright_run handle-proof proof.mjs /authority/homes.json /out "$REGISTRY_PORT" &
 PROOF_PID=$!
 proof_await answer_ask
 

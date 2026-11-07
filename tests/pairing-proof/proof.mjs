@@ -26,7 +26,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  addDevice, createAccount, decodeCode, devicesPage, landing, passkeys, readLog, signIn, usePasskey,
+  addDevice, createAccount, decodeCode, devicesPage, passkeys, readLog, setUp, signIn,
 } from "../browser/account.mjs";
 import { answer, connectDevice, helloDevice, newDevice } from "../browser/device.mjs";
 import {
@@ -98,13 +98,10 @@ async function closedWithin(ch, from, limitS) {
 
 // The setup link of `home`, signed in with the person's passkey: where the
 // browser landed.
-async function setUp(page, keys, home) {
+async function setUpAt(page, keys, home) {
   const { token } = await ask({ op: "setup_token", cell: home.name }, { secret: true });
   secrets.push(token);
-  await page.goto(`${home.origin}/setup#${token}`);
-  await page.locator('[data-test="setup-sign-in"]').click({ timeout: 60_000 });
-  const asked = await usePasskey(page, keys);
-  return asked.returned ? landing(page, home) : { landed: false, error: asked.error };
+  return setUp(page, keys, home, token);
 }
 
 // The command line run.sh built, on a terminal of its own under
@@ -162,8 +159,8 @@ async function main(browser) {
   // account
   const made = await createAccount(laptop, keys, { directory: DIR, name: NAME, secrets });
   const identifier = made.code?.identifier;
-  const atX = made.section === "done" ? await setUp(laptop, keys, X) : { landed: false };
-  const atY = atX.landed ? await setUp(laptop, keys, Y) : { landed: false };
+  const atX = made.section === "done" ? await setUpAt(laptop, keys, X) : { landed: false };
+  const atY = atX.landed ? await setUpAt(laptop, keys, Y) : { landed: false };
   record.account = { made: made.section, x: atX, y: atY };
   if (!row("account", made.section === "done" && atX.landed && atY.landed,
     `@${NAME} is made at the pages and sets up both x.test and y.test by signing in with it`, record.account)) return;
@@ -287,6 +284,27 @@ async function main(browser) {
     "an API key the browser asks for at x.test waits on a fresh confirmation; the device reads the record over its channel, " +
       "signs the confirm request with its key, and the browser's page makes the key",
     record.terminal_confirm)) return;
+
+  // renewal: the device renews its certificate on its open channel at X
+  // and goes on working there under the replacement.
+  const renewedFrom = device.certificate;
+  await sleep(2_000);
+  const renewal = await Promise.race([
+    ch.renew(), ch.closed.then((code) => ({ closed: code })), sleep(30_000).then(() => ({ timed_out: true })),
+  ]);
+  const afterRenewal = await ch.intent("confirmation.pending", {});
+  record.renewal = {
+    renewed: !!renewal.certificate, closed: renewal.closed ?? null, timed_out: !!renewal.timed_out,
+    expires_before: renewedFrom?.expires_at, expires_after: device.certificate?.expires_at,
+    standing_expires: ch.standing?.expires_at, same_client: device.certificate?.client_id === renewedFrom?.client_id,
+    intent_after: { ok: afterRenewal.ok, error: afterRenewal.error },
+  };
+  if (!row("renewal",
+    !!renewal.certificate && device.certificate.expires_at > renewedFrom.expires_at &&
+      ch.standing?.expires_at === device.certificate.expires_at && record.renewal.same_client && afterRenewal.ok,
+    "the device renews its certificate on its open channel at x.test: the replacement, for the same client, lives longer, the " +
+      "channel's standing names it, and the device's next intent is answered under it",
+    record.renewal)) return;
 
   // remove_key: the device removed at the devices page; both CYFRs end its
   // channel within their bound.
@@ -466,7 +484,8 @@ try {
 }
 
 const STEPS = [
-  "account", "page", "command_line", "approve", "terminal_confirm", "remove_key", "readd", "restore", "setup_terminal",
+  "account", "page", "command_line", "approve", "terminal_confirm", "renewal", "remove_key", "readd", "restore",
+  "setup_terminal",
 ];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);

@@ -13,8 +13,8 @@
 // sign-in request with Ed25519 over the request's digest
 // (tests/fixtures/sign_in.json), takes the client and certificate it is
 // admitted with, and connects under them on the same connection. It
-// renews the certificate when the CYFR will not take it, and sends
-// intents. Every frame either way, and the close with its code, is logged
+// renews the certificate when the CYFR will not take it, or on an open
+// connection when asked, and sends intents. Every frame either way, and the close with its code, is logged
 // by type; no signature, nonce, token, code or argument is kept in the
 // log. A proof reaches the CYFR as the browsers do: an HTTP CONNECT through
 // the run's proxy to the CYFR's name, TLS under the run's authority
@@ -193,6 +193,10 @@ export function channel(device, { proxyPort, base, purpose = "connect", home = b
   let socketClosed = false;
   let next = 0;
   let standing = null;
+  // The purpose the next challenge must name: the connection's own, or
+  // `renew` once the device asks to renew on it.
+  let expecting = purpose;
+  let renewed = null;
   let settle;
   const opened = new Promise((resolve) => { settle = resolve; });
   let closedWith;
@@ -212,7 +216,7 @@ export function channel(device, { proxyPort, base, purpose = "connect", home = b
         // A challenge this device would not sign ends the connection here,
         // as a device that refuses it closes its own.
         try {
-          send({ type: "proof", proof: prove(device, m.challenge, { purpose, home, client_id: device.clientId }) });
+          send({ type: "proof", proof: prove(device, m.challenge, { purpose: expecting, home, client_id: device.clientId }) });
         } catch (error) {
           log.push({ at: at(), event: "challenge_refused", error: error.message });
           socket.end();
@@ -236,6 +240,11 @@ export function channel(device, { proxyPort, base, purpose = "connect", home = b
         break;
       case "certificate":
         device.certificate = m.certificate;
+        expecting = purpose;
+        if (renewed) {
+          renewed({ certificate: m.certificate });
+          renewed = null;
+        }
         break;
       case "standing":
         standing = m;
@@ -313,6 +322,15 @@ export function channel(device, { proxyPort, base, purpose = "connect", home = b
         w.sent = at();
         waiting.set(id, w);
         send({ type: "intent", id, operation, args });
+      });
+    },
+    // The certificate renewed on this connection: `renew`, the challenge
+    // signed, and the replacement the CYFR answers, which the device keeps.
+    renew() {
+      expecting = "renew";
+      return new Promise((resolve) => {
+        renewed = resolve;
+        send({ type: "renew", client_id: device.clientId, certificate: device.certificate });
       });
     },
     sleep() { asleep = true; log.push({ at: at(), event: "sleep" }); },

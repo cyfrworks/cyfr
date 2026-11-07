@@ -80,6 +80,21 @@ browser_cookie() {
   printf '%s' "$cookie"
 }
 
+# The session the browser cookie in the file `$2` holds on cell `$1`, the
+# cookie of a person who signed in in the browser: a JSON object of its
+# token, its person, the athanor it is focused on and that athanor's route
+# segment, for a proof whose server-side steps act under that session.
+browser_session() {
+  local cookie session
+  cookie="$(tr -d '\n' <"$2")"
+  [[ "$cookie" =~ ^[A-Za-z0-9._-]+$ ]] || fail "the browser's cookie is not a signed session cookie"
+  session="$(cell_cyfr "$1" rpc \
+    "{answer, _} = Code.eval_file(\"$BROWSER_HOME/session.exs\"); IO.puts(answer.([\"read\", \"$cookie\"]))" \
+    | sed -n 's/^SESSION=//p' | tail -1)"
+  [ -n "$session" ] || fail "the browser's cookie holds no session the server reads"
+  printf '%s' "$session"
+}
+
 # Publish, for the person whose session token is `$2` on cell `$1`, the
 # layout document `$3` (version 2) over revision `${4:-0}`: `layout.edit`
 # under that session, through the gate. No console page publishes a layout.
@@ -256,16 +271,6 @@ stop_proof_container() {
 # Field `$2...` of the ask file `$1`, as release.sh's `field` prints it.
 asked() {
   field "$(cat "$1")" "${@:2}"
-}
-
-# The setup device's confirmation of the pending record the ask `$2` names
-# by its `ref`, on cell `$1` (the release fixture's `device_confirm`, which
-# alone reads the device's seed from the cell): made wrong on purpose when
-# the ask names a `tamper` (`digest`, `ref` or `key`).
-device_confirmed() {
-  local cell="$1" ask="$2" tamper
-  tamper="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("tamper") or "")' "$ask")"
-  server_fixture "$cell" device_confirm "$(asked "$ask" ref)" ${tamper:+"$tamper"}
 }
 
 # Each ask the proof has written into OUT, answered once. The proof's

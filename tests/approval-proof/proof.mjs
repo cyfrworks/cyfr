@@ -2,8 +2,11 @@
 // Copyright 2026 CYFR Works Inc.
 //
 // The approval proof, run in the official Playwright image by run.sh
-// against a `cyfr` release behind the harness's HTTPS front (README.md).
-// One person, in Chromium, grants the tincture approval-probe on the
+// against `cyfr` releases behind the harness's HTTPS front (README.md):
+// home.test and the directory dir.test, whose account pages hold the
+// person's passkey (../browser/account.mjs). The person makes their
+// account there, sets home.test up by signing in with it, and, in
+// Chromium, grants the tincture approval-probe on the
 // Components page, in the system layer's grant prompt. Each step is one
 // row of the record; the proof fails when a row does not hold, and stops
 // at the first row a later one rests on.
@@ -49,14 +52,15 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { confirmInTab, createAccount, passkeys, sessionCookie, setUp } from "../browser/account.mjs";
 import {
-  ask as askRunSh, firstPasskey, launchBrowser, MARKER, pageTokens, readHomes, recordText, redact, redactFrames, sleep, startProxy,
-  waitFor,
+  ask as askRunSh, homeOf, launchBrowser, MARKER, pageTokens, readHomes, recordText, redact, redactFrames, sleep,
+  startProxy, waitFor,
 } from "../browser/lib.mjs";
 
-const [homesFile, segment, cookie, outDir, viewportName] = process.argv.slice(2);
-if (!homesFile || !segment || !cookie || !outDir || !viewportName) {
-  console.error("usage: node proof.mjs HOMES_FILE SEGMENT COOKIE OUT_DIR VIEWPORT");
+const [homesFile, outDir, viewportName] = process.argv.slice(2);
+if (!homesFile || !outDir || !viewportName) {
+  console.error("usage: node proof.mjs HOMES_FILE OUT_DIR VIEWPORT");
   process.exit(64);
 }
 
@@ -74,7 +78,16 @@ const STEPS = [
   "destination_match",
 ];
 const { homes } = readHomes(homesFile);
-const base = homes[0].origin;
+const CELL_HOME = homeOf(homes, "home.test");
+const DIR = homeOf(homes, "dir.test");
+const base = CELL_HOME.origin;
+// The person's passkeys, held by the proof as their platform keeps them;
+// the session cookie and route segment their sign-in leaves; and the
+// recovery code and setup token, which no output holds.
+const keys = passkeys();
+let cookie = null;
+let segment = null;
+const codes = [];
 const layer = "#system-layer-dialog";
 const rows = [];
 const record = { viewport: { name: viewportName, ...viewport } };
@@ -472,7 +485,7 @@ const holdsKey = (text) => MATERIAL().some((secret) => String(text).includes(sec
 // Every textual writer uses the same known values. Comparisons and material
 // detection keep the original values in memory; redaction only changes output.
 const knownPageTokens = new Set();
-const outputSecrets = () => [cookie, ...MATERIAL(), ...knownPageTokens];
+const outputSecrets = () => [cookie, ...codes, ...MATERIAL(), ...knownPageTokens];
 const outputText = (text) => redact(text, outputSecrets());
 const pagePath = (suffix) => `${base}/a/${encodeURIComponent(segment)}${suffix}`;
 
@@ -480,14 +493,11 @@ const pagePath = (suffix) => `${base}/a/${encodeURIComponent(segment)}${suffix}`
 // The browser
 // ---------------------------------------------------------------------------
 
-async function signedIn(browser) {
+async function browserContext(browser) {
   const context = await browser.newContext({ viewport });
   // The page's data-confirm controls ask the browser's native confirm; the
   // proof agrees to each one as its page asks it.
   context.on("page", (page) => page.on("dialog", (dialog) => dialog.accept()));
-  await context.addCookies([{
-    name: "_cyfr_key", value: cookie, url: base, httpOnly: true, secure: true, sameSite: "Lax",
-  }]);
   return context;
 }
 
@@ -500,16 +510,29 @@ async function open(page, url) {
 const told = (page, words, timeout = 30_000) =>
   page.getByText(words, { exact: false }).first().waitFor({ timeout }).then(() => true).catch(() => false);
 
-// The person's first passkey, made by the virtual authenticator and
-// registered from the Settings page through the system layer's ceremony:
-// she was made by setup with a protected device, so the registration waits
-// on a fresh confirmation the setup device gives (`firstPasskey`), after
-// its proofs over another digest, another ref and by another key are each
-// refused. Every entry she makes after is a sensitive change she confirms
-// with the passkey.
-async function registerPasskey(page) {
-  await open(page, pagePath("/settings"));
-  return firstPasskey(page, { ask, layer, refusals: true });
+// The person: her account made at dir.test's pages, home.test set up with
+// it through its setup link, and the session her browser then holds handed
+// to run.sh (`signed_in`), which reads it from the cookie and acts under
+// it from then on. Every entry she makes after is a sensitive change she
+// confirms with the passkey (`proveHere`).
+async function signUp(page) {
+  const made = await createAccount(page, keys, { directory: DIR, name: "approval-a", secrets: codes });
+  const { token } = await ask({ op: "setup_token" }, { secret: true });
+  codes.push(token);
+  const setup = made.section === "done" ? await setUp(page, keys, CELL_HOME, token) : { landed: false };
+  cookie = setup.landed ? await sessionCookie(page, CELL_HOME) : null;
+  const session = cookie ? await ask({ op: "signed_in", cookie }, { secret: true }) : {};
+  segment = session.segment || null;
+  return { made: made.section, setup, ok: setup.landed && !!segment };
+}
+
+// The page's own request, waiting on its record, proven with the passkey at
+// the account pages in the tab the system layer opens: what the sign page
+// asked and whether the tab came back to home.test.
+async function proveHere(page, panel) {
+  const tab = await confirmInTab(page, keys, CELL_HOME,
+    () => page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 }));
+  return { what: tab.what, landed: tab.landed, error: tab.error || null };
 }
 
 // The grant prompt for the component `ref`, the tincture unless named,
@@ -709,10 +732,10 @@ async function connect(page, block, spec) {
   const panel = `${layer} [data-test="confirmation"][data-own="true"]`;
   const confirmation = await page.waitForSelector(panel, { timeout: 30_000 })
     .then((el) => el.innerText()).catch(() => "");
-  await page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 });
+  const proven = await proveHere(page, panel);
   await granting(page);
   const cleared = await typedAway(page);
-  return { title, prefilled, sent, cleared, confirmation: confirmation.replace(/\s+/g, " ") };
+  return { title, prefilled, sent, cleared, proven, confirmation: confirmation.replace(/\s+/g, " ") };
 }
 
 // Each entry's id by its name, as the Vault page lists them: a row of its
@@ -750,11 +773,11 @@ async function createOnVault(page, spec) {
   const panel = `${layer} [data-test="confirmation"][data-own="true"]`;
   const confirmation = await page.waitForSelector(panel, { timeout: 30_000 })
     .then((el) => el.innerText()).catch(() => "");
-  await page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 });
+  const proven = await proveHere(page, panel);
   const created = await told(page, "Entry created.");
   const cleared = await typedAway(page);
   return {
-    suggested, label: spec.provider, sent, created, cleared, confirmation: confirmation.replace(/\s+/g, " "),
+    suggested, label: spec.provider, sent, created, cleared, proven, confirmation: confirmation.replace(/\s+/g, " "),
   };
 }
 
@@ -778,7 +801,7 @@ async function main() {
   const proxy = await startProxy(readHomes(homesFile));
   const browser = await launchBrowser("chromium", proxy);
   record.browser = browser.version();
-  const page = await (await signedIn(browser)).newPage();
+  const page = await (await browserContext(browser)).newPage();
   const frames = [];
   page.on("websocket", (ws) => {
     ws.on("framesent", (f) => frames.push({ dir: "out", data: outputText(f.payload).slice(0, 600) }));
@@ -794,6 +817,12 @@ async function main() {
     // every field through its class: a change behind the browser to any of
     // it fails the next step, whichever step that is.
     const model = { entries: [], defaults: [], profiles: [], consents: [], refs: [], turns: [], executions: [] };
+    const passkey = await signUp(page);
+    if (!passkey.ok) {
+      record.provided_preview = { passkey };
+      row("provided_preview", false, "the person's account sets home.test up and signs her in", { passkey });
+      return;
+    }
     const person = await ask({ op: "person" });
     // The database's time as the run starts: the window every stored time
     // is held to opens here, before anything the proof names is made.
@@ -917,7 +946,6 @@ async function main() {
     // provided_preview
     // -----------------------------------------------------------------------
     const published = await ask({ op: "publish", manifest: MANIFEST, index: INDEX });
-    const passkey = await registerPasskey(page);
     await openGrant(page);
     const first = await sheet(page);
     const grok = depNeed(first, GROK);
