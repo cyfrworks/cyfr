@@ -128,9 +128,11 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const typedDigest = (spec) => sha256(JSON.stringify(canonical({ v: 3, fields: { [FIELD]: spec.key } })));
 // The field the key is typed under in the Vault page's form.
 const FIELD = "API_KEY";
-// The administrator's name as others read it: the name their account
-// holds, `@share-admin`, which they chose at the account pages.
-const OWNER = "@share-admin";
+// The name the administrator's account holds, chosen at the account
+// pages, and as others read it once the administrator has finished it on
+// the Settings page.
+const ADMIN_NAME = "share-admin";
+const OWNER = `@${ADMIN_NAME}`;
 // What the sharing sheet says of its caps, and of a share to everyone with
 // none, to the platform administrator.
 const CAPS_MEANING = "An empty cap is no limit. 0 admits no use. A number is the most requests that day; " +
@@ -565,15 +567,26 @@ async function entryIds(page, vault, count) {
 // The administrator: their account made at dir.test's pages, home.test
 // set up with it through its setup link, and the session their browser
 // then holds handed to run.sh (`admin_session`), which reads it from the
-// cookie: their person, athanor and route segment.
+// cookie: their person, athanor and route segment. The setup page asks
+// nothing, so they finish their name on the Settings page, which records
+// it once the registry home.test names (dir.test) answers it with their
+// account's identifier.
 async function signUpAdmin(page) {
-  const made = await createAccount(page, adminKeys, { directory: DIR, name: "share-admin", secrets: codes });
+  const made = await createAccount(page, adminKeys, { directory: DIR, name: ADMIN_NAME, secrets: codes });
   const { token } = await ask({ op: "setup_token" }, { secret: true });
   const setup = made.section === "done" ? await setUp(page, adminKeys, HOME, token) : { landed: false };
   const cookie = setup.landed ? await sessionCookie(page, HOME) : null;
   const session = cookie ? await ask({ op: "admin_session", cookie }, { secret: true }) : {};
   adminSegment = session.segment || null;
-  return { made: made.section, setup, ok: setup.landed && !!adminSegment };
+  let named = null;
+  if (adminSegment) {
+    await open(page, pagePath(adminSegment, "/settings"));
+    await page.locator('[data-test="identity-name-input"]').fill(ADMIN_NAME);
+    await page.locator('[data-test="identity-name-form"] button[type="submit"]').click();
+    named = await page.locator('[data-test="identity-name"]').innerText({ timeout: 30_000 })
+      .then((text) => text.trim()).catch(() => null);
+  }
+  return { made: made.section, setup, named, ok: setup.landed && !!adminSegment && named === OWNER };
 }
 
 // The page's own request waiting on its record, proven with the passkey at
