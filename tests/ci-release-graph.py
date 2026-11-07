@@ -177,6 +177,8 @@ MERGED_DOWNLOADS = {
 # the merged digests, release.json written once, checked, then signed.
 # release.json and its bundle live outside the checkout, in
 # $RUNNER_TEMP/release, which GoReleaser's step names to .goreleaser.yml.
+# Both signatures run through scripts/ci/retry.sh: a keyless signing is
+# safe to repeat, and a transparency log too slow to answer fails one run.
 SCAFFOLD_RUN = """set -euo pipefail
 cyfr=$(cat "$RUNNER_TEMP/merged/cyfr/digest")
 locus=$(cat "$RUNNER_TEMP/merged/cyfr-locus/digest")
@@ -188,7 +190,8 @@ VALIDATE_RUN = (
     '--version "$GITHUB_REF_NAME" --scaffold apps/codex/cyfr-scaffold.tar.gz'
 )
 SIGN_RUN = (
-    'cosign sign-blob --yes --new-bundle-format --bundle "$RUNNER_TEMP/release/release.json.sigstore.json" '
+    'scripts/ci/retry.sh cosign sign-blob --yes --new-bundle-format '
+    '--bundle "$RUNNER_TEMP/release/release.json.sigstore.json" '
     '"$RUNNER_TEMP/release/release.json"'
 )
 MANIFEST_DIR_ENV = {"RELEASE_MANIFEST_DIR": "${{ runner.temp }}/release"}
@@ -196,8 +199,10 @@ MANIFEST_DIR_ENV = {"RELEASE_MANIFEST_DIR": "${{ runner.temp }}/release"}
 # apps/codex, and the manifest and its bundle from RELEASE_MANIFEST_DIR
 # alone: an unset variable or a missing file fails the release.
 SCAFFOLD_GLOB = "cyfr-scaffold.tar.gz"
-# GoReleaser's signature over checksums.txt, as the protobuf bundle.
-CHECKSUM_SIGN_ARGS = ["sign-blob", "--new-bundle-format", "--bundle=${signature}", "${artifact}", "--yes"]
+# GoReleaser's signature over checksums.txt, as the protobuf bundle, with
+# retry.sh's path from GoReleaser's workdir, apps/codex.
+CHECKSUM_SIGN_CMD = "../../scripts/ci/retry.sh"
+CHECKSUM_SIGN_ARGS = ["cosign", "sign-blob", "--new-bundle-format", "--bundle=${signature}", "${artifact}", "--yes"]
 MANIFEST_GLOBS = [
     "{{ .Env.RELEASE_MANIFEST_DIR }}/release.json",
     "{{ .Env.RELEASE_MANIFEST_DIR }}/release.json.sigstore.json",
@@ -848,9 +853,12 @@ def check_goreleaser(config):
     # `cyfr init` and `cyfr update` refuse.
     signs = config.get("signs") or []
     if [(s.get("cmd"), s.get("artifacts"), s.get("signature"), s.get("args")) for s in signs] != [
-        ("cosign", "checksum", "${artifact}.sigstore.json", CHECKSUM_SIGN_ARGS)
+        (CHECKSUM_SIGN_CMD, "checksum", "${artifact}.sigstore.json", CHECKSUM_SIGN_ARGS)
     ]:
-        return f".goreleaser.yml's signs are {signs}, not cosign over checksums.txt with {CHECKSUM_SIGN_ARGS}"
+        return (
+            f".goreleaser.yml's signs are {signs}, not {CHECKSUM_SIGN_CMD} over checksums.txt "
+            f"with {CHECKSUM_SIGN_ARGS}"
+        )
     return None
 
 
@@ -2374,6 +2382,11 @@ def sign_legacy_bundle(wf):
     step["run"] = step["run"].replace(" --new-bundle-format", "", 1)
 
 
+def sign_once(wf):
+    step = release_step(wf, is_sign)
+    step["run"] = step["run"].replace("scripts/ci/retry.sh ", "", 1)
+
+
 def manifest_in_checkout(wf):
     step = release_step(wf, is_validate)
     step["run"] = step["run"].replace('"$RUNNER_TEMP/release/release.json"', "apps/codex/release.json")
@@ -2417,7 +2430,8 @@ GORELEASER_MUTANTS = [
     ("the bundle attached by a wildcard", replace_glob(MANIFEST_GLOBS[1], "{{ .Env.RELEASE_MANIFEST_DIR }}/*")),
     ("a second release.json attached", lambda c: c["release"]["extra_files"].append({"glob": "dist/release.json"})),
     ("checksums.txt signed into the legacy bundle", sign_args([a for a in CHECKSUM_SIGN_ARGS if a != "--new-bundle-format"])),
-    ("checksums.txt signed without a bundle", sign_args(["sign-blob", "--new-bundle-format", "${artifact}", "--yes"])),
+    ("checksums.txt signed without a bundle", sign_args(["cosign", "sign-blob", "--new-bundle-format", "${artifact}", "--yes"])),
+    ("checksums.txt signed once", lambda c: c["signs"][0].update(cmd="cosign", args=CHECKSUM_SIGN_ARGS[1:])),
     ("no prerelease: auto", lambda c: c["release"].pop("prerelease")),
     ("every release a pre-release", lambda c: c["release"].update(prerelease=True)),
     ("no release a pre-release", lambda c: c["release"].update(prerelease=False)),
@@ -2503,6 +2517,7 @@ MUTANTS = [
     ("no manifest signature", remove_release_step(is_sign)),
     ("a manifest signature without --bundle", sign_without_bundle),
     ("a manifest signed into the legacy bundle", sign_legacy_bundle),
+    ("the manifest signed once", sign_once),
     ("the manifest's bundle under another name", bundle_renamed),
     ("GoReleaser before the manifest's signature", move_release_step(is_goreleaser, is_sign)),
     ("the manifest validated inside the checkout", manifest_in_checkout),

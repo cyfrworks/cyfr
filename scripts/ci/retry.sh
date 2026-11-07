@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Run a fetch from a registry, up to three times: scripts/ci/retry.sh CMD [ARGS...]
+# Run a request to a network service, up to three times:
+# scripts/ci/retry.sh CMD [ARGS...]
 #
-# A registry that answers 500 or 503 usually answers again within the
-# minute. Only for a command that is safe to repeat.
+# A registry that answers 500 or 503, or a transparency log too slow to
+# answer a signing, usually answers again within the minute. Only for a
+# command that is safe to repeat.
 #
 # Exit status is CMD's last, 64 with no command.
 set -uo pipefail
