@@ -12,8 +12,10 @@ defmodule Sanctum.Door do
 
     * A person this server holds is admitted by `*` or by an allow naming
       their account's identifier (`per_…`), unless a deny names them.
-    * A person with no identity row, which no admission makes, is judged
-      by their own id alone: admitted unless a deny names them.
+    * A person with no identity row names no account, and every person
+      an admission makes is an account's: such a person stands on nothing
+      and is refused, `:denied` when a deny names them, else
+      `:not_allowed`, which records no request.
 
   The server allowlist (`Sanctum.Door.Store`) holds allows of an
   identifier or `*`, and denies of a person (their `usr_…` id) or an
@@ -56,8 +58,8 @@ defmodule Sanctum.Door do
           {:error, :not_allowed}
         end
 
-      {:ok, identity} ->
-        with :no <- deny_arm(user_id, identity[:identifier]), do: {:ok, :allowed}
+      {:ok, _no_account} ->
+        with :no <- deny_arm(user_id, nil), do: {:error, :not_allowed}
 
       {:error, :unavailable} ->
         {:error, :unavailable}
@@ -202,7 +204,7 @@ defmodule Sanctum.Door do
   def refusal_message, do: "not allowed on this server — ask the operator"
 
   # The person's identity row, which names their account's identifier. A
-  # person with no row is judged by their own id alone.
+  # person with no row names none.
   defp identity(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, identity} -> {:ok, identity}

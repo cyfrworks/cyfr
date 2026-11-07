@@ -3,12 +3,12 @@
 
 defmodule Sanctum.DoorTest do
   @moduledoc """
-  The door judges people (`Sanctum.Door`): a local person is admitted
-  unless a deny names them; a remote person, and a remote newcomer, by `*`
-  or an allow naming their identifier, unless a deny names them; an
-  unadmitted remote one leaves one request naming the identifier; a deny
-  naming the platform administrator is refused where it is written; and a
-  store that cannot answer admits no one and denies no one.
+  The door judges people (`Sanctum.Door`): a person of an account, and a
+  newcomer, by `*` or an allow naming their identifier, unless a deny names
+  them; an unadmitted one leaves one request naming the identifier; a
+  person with no identity row names no account and stands on nothing; a
+  deny naming the platform administrator is refused where it is written;
+  and a store that cannot answer admits no one and denies no one.
   """
 
   use ExUnit.Case, async: false
@@ -27,8 +27,8 @@ defmodule Sanctum.DoorTest do
   defp uid(n), do: "github|https://github.com|door#{n}"
   defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
 
-  # A person this server holds no account row for, with a sign-in method
-  # linked: the door reads them as local.
+  # A person with no identity row: no admission makes one, and the door
+  # admits no one by it.
   defp local!(n) do
     now = DateTime.utc_now()
 
@@ -116,21 +116,27 @@ defmodule Sanctum.DoorTest do
     session
   end
 
-  describe "a local person" do
-    test "is admitted with no entry at all, and refused only by a deny naming them" do
+  describe "a person with no identity row" do
+    test "names no account and stands on nothing: refused with no entry, under *, and by a deny" do
       alice = local!(1)
       bob = local!(2)
 
       assert Store.list() == []
-      assert {:ok, :allowed} = Door.admit_person(alice)
+      assert {:error, :not_allowed} = Door.admit_person(alice)
 
+      # `*` admits accounts, and they name none.
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      assert {:error, :not_allowed} = Door.admit_person(alice)
+
+      # A deny naming them is the answer they are given.
       {:ok, _} = Store.deny("person", alice.id, "ops")
       assert {:error, :denied} = Door.admit_person(alice)
-      assert {:ok, :allowed} = Door.admit_person(bob)
+      assert {:error, :not_allowed} = Door.admit_person(bob)
 
-      # `*` admits nobody past a deny.
-      {:ok, _} = Store.allow("wildcard", "*", "ops")
-      assert {:error, :denied} = Door.admit_person(alice)
+      # Refused at a sign-in, they leave no request: there is no identifier
+      # an operator could allow.
+      assert {:error, {:door, :not_allowed}} = Door.sign_in(bob)
+      assert Store.requests() == []
     end
 
     test "is refused by a deny of the identifier they enrolled under" do
@@ -499,12 +505,13 @@ defmodule Sanctum.DoorTest do
       user
     end
 
-    test "closing * ejects the remote people it admitted, and never a local person", %{
-      directory: directory
-    } do
+    test "closing * ejects the people it admitted, and never one an allow of their account admits",
+         %{directory: directory} do
       {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
       stranger = remote_at!(directory, 40)
-      local = local!(41)
+      local = remote_at!(directory, 41)
+      {:ok, identifier} = Sanctum.Tenancy.Users.identifier(local.id)
+      {:ok, _} = Store.allow("identifier", identifier, "ops")
 
       stranger_session = session_for(stranger)
       local_session = session_for(local)
@@ -560,6 +567,28 @@ defmodule Sanctum.DoorTest do
         end
 
       {600, _} = Arca.Repo.insert_all(Arca.Schemas.User, people)
+
+      # Each a person of an account, whom `*` admits.
+      {600, _} =
+        Arca.Repo.insert_all(
+          Arca.Schemas.PersonIdentity,
+          for %{id: user_id} <- people do
+            account = "per_" <> Prima.Digest.sha256_hex(user_id)
+
+            %{
+              id: Prima.UUID7.generate_id("pid"),
+              user_id: user_id,
+              identifier: account,
+              head_hash: Prima.Digest.sha256("head-" <> account),
+              directory_url: "https://dir.example",
+              revision: 1,
+              inserted_at: now,
+              updated_at: now
+            }
+          end
+        )
+
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
 
       refused = local!(50)
       session = session_for(refused)
