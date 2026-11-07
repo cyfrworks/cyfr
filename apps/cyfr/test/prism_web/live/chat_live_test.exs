@@ -881,9 +881,12 @@ defmodule PrismWeb.ChatLiveTest do
          %{conn: conn} do
       alice = person()
       carol = test_user()
-      %{identifier: identifier} = Sanctum.Test.RegistryStub.enroll!(carol.user_id)
+
+      %{account: %{identifier: identifier}, dir: dir} =
+        Sanctum.Test.DirectoryServer.member!(carol.user_id)
+
       record_namespace!(carol)
-      Sanctum.Test.RegistryStub.handles!(%{carol.namespace => identifier})
+      Sanctum.Test.RegistryStub.handles!(%{carol.namespace => identifier}, dir.url)
       conn = log_in_user(conn, alice)
 
       {view, _html} = mount_chat(conn)

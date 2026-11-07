@@ -626,6 +626,24 @@ defmodule Sanctum.Test.DirectoryServer do
     :ok
   end
 
+  @doc """
+  Make the person `user_id` this CYFR's member by a new account at a
+  scripted directory started for the calling test (`account_person!/2`),
+  so a name the registry answers with its identifier and the directory's
+  url (`Sanctum.Test.RegistryStub.handles!/2`) resolves to them. Answers
+  the account and the directory (`start!/2`'s).
+  """
+  @spec member!(String.t()) :: %{account: map(), dir: map()}
+  def member!(user_id) do
+    tls = tls()
+    listen!()
+    seam!(tls)
+    dir = start!(tls)
+    account = account!(dir.dir, dir.url)
+    :ok = account_person!(user_id, account)
+    %{account: account, dir: dir}
+  end
+
   defp keypair, do: :crypto.generate_key(:eddsa, :ed25519)
   defp now, do: System.os_time(:millisecond)
 end

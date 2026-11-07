@@ -440,13 +440,18 @@ defmodule Cyfr.RetentionSchedulerTest do
 
       Logger.configure(level: previous)
 
-      # A first batch filled, so a second one ran.
+      # A first batch filled, so a second one ran: every one of this test's
+      # heads is gone. The count the sweep logs also takes any head another
+      # test left cached for no one, so it is read as at least this test's.
       assert Arca.Repo.aggregate(
                from(h in Arca.Schemas.DirectoryHead, where: h.identifier in ^heads),
                :count
              ) == 0
 
-      assert log =~ "Removed 501 cached account head(s) no one here holds"
+      assert [_line, removed] =
+               Regex.run(~r/Removed (\d+) cached account head\(s\) no one here holds/, log)
+
+      assert String.to_integer(removed) >= 501
     end
   end
 
