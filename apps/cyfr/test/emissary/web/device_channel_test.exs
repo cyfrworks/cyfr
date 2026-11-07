@@ -1472,6 +1472,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     test "a device new here is admitted by its hello and connects on the same connection",
          %{account: account, key: key} do
       kid = DirectoryServer.kid(key)
+      sent = System.system_time(:millisecond)
 
       assert {:reply, :ok, {:text, json}, state} =
                send_frame(channel(), hello_message(account, key, {:setup, @token}))
@@ -1481,10 +1482,16 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert request.audience == Sanctum.origin()
       assert {:asked, "pcl_" <> _, ^request} = state.hello
 
-      # The wait is the request's own, not the challenge's.
+      # The wait is the request's own, not the challenge's: what is left of
+      # it is the request's life left, read on the clock the channel arms it
+      # by, between the hello sent and the timer read, within the
+      # millisecond the clock's reading truncates.
       {_token, timer} = state.deadline
-      assert Process.read_timer(timer) > Challenge.lifetime_ms()
-      assert Process.read_timer(timer) <= request.expires_at - System.system_time(:millisecond)
+      left = Process.read_timer(timer)
+      read = System.system_time(:millisecond)
+      assert left > Challenge.lifetime_ms()
+      assert left <= request.expires_at - sent
+      assert left >= request.expires_at - read - 1
 
       assert {:reply, :ok, {:text, json}, state} =
                send_frame(state, answer_message(request, key))

@@ -7,7 +7,8 @@
 # (tests/release-boot/release.sh `release_build`, RELEASE_BOOT_SKIP_BUILD=1)
 # against a git tree of the test's own; the readiness window of
 # `server_start` against a listener that accepts and never answers, and
-# the redaction of the boot log it prints; a cell's deployment file from
+# the redaction of the boot log it prints; a cell's directory, which runs
+# while its server does; a cell's deployment file from
 # the command line (`cell_new`, `cell_hostname`, `cell_cli`), with a
 # stand-in `cyfr` that records how it was run, and the dotenv reading of
 # it (`cell_assignments`); the identity front's readiness
@@ -368,9 +369,11 @@ pass "a listener that never answers fails server_start in ${took}s, naming the c
 # --- a cell's deployment file, from the command line --------------------------
 
 # A checkout holding what cell_new reads of one: .env.example, a seed tree
-# and a wasm-tools installer that installs nothing.
-mkdir -p "$scratch/checkout/scripts" "$scratch/checkout/seed/aqua" "$scratch/bin"
+# and a wasm-tools installer that installs nothing; and the directory a
+# cell's server starts beside it.
+mkdir -p "$scratch/checkout/scripts" "$scratch/checkout/seed/aqua" "$scratch/bin" "$scratch/checkout/tests/registry-stand-in"
 cp "$root/.env.example" "$scratch/checkout/.env.example"
+cp "$root/tests/registry-stand-in/standin.py" "$scratch/checkout/tests/registry-stand-in/standin.py"
 printf '#!/bin/sh\nexit 0\n' >"$scratch/checkout/scripts/wasm-tools.sh"
 chmod +x "$scratch/checkout/scripts/wasm-tools.sh"
 # The stand-in `cyfr`: it records how each run was made (its arguments,
@@ -433,6 +436,13 @@ for pair in CYFR_ACCESS=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=s
   [ "$(assigned local "${pair%%=*}")" = 1 ] && [ "$(value local "${pair%%=*}")" = "${pair#*=}" ] ||
     fail "the local cell's deployment file does not assign $pair once: $(grep "^${pair%%=*}=" "$scratch/cells/local/.env" | tr '\n' ' ')"
 done
+# The cell's own directory, on loopback, a private egress target beside
+# the ones init wrote.
+[[ "$(value local CYFR_DIRECTORY_URL)" =~ ^http://127\.78\.0\.2:[0-9]+$ ]] &&
+  [ "$(value local CYFR_DIRECTORY_URL)" = "$(cat "$scratch/cells/local/directory/url")" ] ||
+  fail "the local cell names no directory of its own: $(value local CYFR_DIRECTORY_URL)"
+[ "$(value local CYFR_PRIVATE_EGRESS_TARGETS)" = "$(sed -n 's/^CYFR_PRIVATE_EGRESS_TARGETS=//p' "$root/.env.example"),127.78.0.2" ] ||
+  fail "the local cell's private egress targets are $(value local CYFR_PRIVATE_EGRESS_TARGETS)"
 # init's own lines stay where init wrote them; the test's settings
 # rewrite in place.
 [ "$(grep -n '^CYFR_PORT=' "$scratch/cells/local/.env" | cut -d: -f1)" = "$(grep -n '^CYFR_PORT=' "$root/.env.example" | cut -d: -f1)" ] ||
@@ -580,6 +590,15 @@ case "$1" in
     fi
     echo "chosen listener $(cell_port "$WORK/cell")"
     server_start "$WORK/cell"
+    if [ "$1" = release ]; then
+      # The cell's directory serves while its server runs, and stops with it.
+      directory="$(cell_value "$WORK/cell" CYFR_DIRECTORY_URL)"
+      pid="$(cat "$WORK/cell/directory/pid")"
+      curl -fsS -m 5 -o /dev/null "$directory/account/config.json" || fail "the cell's directory does not answer at $directory"
+      server_stop "$WORK/cell"
+      ! kill -0 "$pid" 2>/dev/null || fail "the cell's directory outlived its server"
+      ! curl -fsS -m 5 -o /dev/null "$directory/account/config.json" 2>/dev/null || fail "something still answers at $directory"
+    fi
     ;;
   address)
     ADDRESS="$WORK/cell"

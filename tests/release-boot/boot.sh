@@ -349,8 +349,10 @@ cleanup() {
     done
   fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
-  # The stand-in after the server that calls it.
+  # The stand-in after the server that calls it, and the reserve case's
+  # directory, which a SQLite cell in its container starts apart.
   stand_in_stop
+  [ -z "$RESERVE" ] || cell_directory_stop "$RESERVE"
   # The reserve case's filesystem goes with the container that holds it,
   # and the access case's namespace with its own.
   [ -z "$RESERVE_HOLDER" ] || docker rm -f "$RESERVE_HOLDER" >/dev/null 2>&1 || true
@@ -1281,13 +1283,15 @@ reserve_awaits() {
 # as every other cell; a SQLite cell in the container holding its data
 # directory, under the environment the host's would run with, its
 # database moved onto that directory's filesystem, where the reserve's
-# directory defaults to.
+# directory defaults to, and the cell's own directory on the host, which
+# the container shares the network of.
 reserve_start() {
   if [ "$ADAPTER" = postgres ]; then
     server_start "$RESERVE"
     return
   fi
   local mark closes
+  cell_directory_start "$RESERVE"
   mark="$( [ -f "$RESERVE/boot.log" ] && wc -l <"$RESERVE/boot.log" || echo 0)"
   cell_env "$RESERVE" CYFR_DATABASE_PATH="$RESERVE/data/cyfr.db" RELEASE_TMP="$RESERVE/tmp" \
     env >"$RESERVE/container.env"
@@ -1315,6 +1319,7 @@ reserve_stop() {
     [ "$SECONDS" -lt "$closes" ] || fail "the reserve case's cell outlived its stop"
     sleep 1
   done
+  cell_directory_stop "$RESERVE"
 }
 
 step "the storage reserve: a $ADAPTER cell on a size-limited filesystem"

@@ -18,7 +18,9 @@
 # deployment file names.
 #
 # A cell answers on the default listeners under the node name NODE, one at
-# a time, reached at its localhost address (CYFR_ACCESS=local). A cell given
+# a time, reached at its localhost address (CYFR_ACCESS=local). Its people's
+# accounts are at a directory of its own, which runs while its server does
+# (`cell_directory_start`). A cell given
 # a hostname of its own (`cell_hostname`) is a public home of that name
 # (CYFR_ACCESS=public), behind a TLS-terminating front that forwards to its
 # proxy listener, on listeners and under a node name of its own, so
@@ -268,10 +270,11 @@ cell_value() {
 # database adapter the release was COMPILED for (runtime.exs refuses a
 # disagreement), auto-migration on, the listener ports, the host API on
 # loopback, the runtime's service id, the operators, and the pinned
-# validator. `$2` is the PostgreSQL URL of the cell's database, ignored
-# for SQLite.
+# validator, and the cell's own directory (`cell_directory_start`), its
+# address a private egress target as an operator names one. `$2` is the
+# PostgreSQL URL of the cell's database, ignored for SQLite.
 cell_new() {
-  local cell="$1" url="${2:-}"
+  local cell="$1" url="${2:-}" directory_port targets
   "$ROOT/scripts/wasm-tools.sh" install "$ROOT/_tools" >/dev/null ||
     fail "the pinned wasm-tools could not be installed"
   mkdir -p "$cell/data" "$cell/home"
@@ -289,6 +292,65 @@ cell_new() {
   # its image it is the checkout's own (scripts/wasm-tools.sh).
   cell_set "$cell" CYFR_WASM_TOOLS "$ROOT/_tools/wasm-tools"
   if [ "$ADAPTER" = postgres ]; then cell_set "$cell" CYFR_DATABASE_URL "$url"; fi
+  cell_pick_port directory_port || fail "could not pick cell $cell's directory port"
+  mkdir -p "$cell/directory"
+  printf 'http://%s:%s\n' "$CELL_DIRECTORY_ADDRESS" "$directory_port" >"$cell/directory/url"
+  cell_set "$cell" CYFR_DIRECTORY_URL "http://$CELL_DIRECTORY_ADDRESS:$directory_port"
+  targets="$(cell_value "$cell" CYFR_PRIVATE_EGRESS_TARGETS)"
+  cell_set "$cell" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$CELL_DIRECTORY_ADDRESS"
+}
+
+# A cell's directory: the cyfr.run stand-in
+# (tests/registry-stand-in/standin.py) on CELL_DIRECTORY_ADDRESS, at the
+# port cell_new picked, its state, ready file and log in `$cell/directory/`.
+# Its people's accounts are published there (tests/release-boot/fixture.exs),
+# so a public cell reads them again past the freshness bound as it reads any
+# account, and nothing reaches cyfr.run. It starts with the cell's server
+# (`server_start`) while the deployment file still names it, a proof being
+# free to name another directory, and stops with it (`server_halt`).
+CELL_DIRECTORY_ADDRESS=127.78.0.2
+
+# Start cell `$1`'s directory, if the cell reads it. One that ends, or does
+# not serve within 30 s, fails the run.
+cell_directory_start() {
+  local cell="$1" url pid closes=$((SECONDS + 30))
+  [ -f "$cell/directory/url" ] || return 0
+  url="$(cat "$cell/directory/url")"
+  [ "$(cell_value "$cell" CYFR_DIRECTORY_URL)" = "$url" ] || return 0
+  rm -f "$cell/directory/ready"
+  python3 -I "$ROOT/tests/registry-stand-in/standin.py" --address "$CELL_DIRECTORY_ADDRESS" \
+    --port "${url##*:}" --state "$cell/directory/state.json" --ready-file "$cell/directory/ready" \
+    </dev/null >>"$cell/directory/log" 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" >"$cell/directory/pid"
+  until [ -s "$cell/directory/ready" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      tail -n 20 "$cell/directory/log" >&2 || true
+      cell_directory_stop "$cell"
+      fail "cell $cell's directory ended before it served at $url"
+    fi
+    if [ "$SECONDS" -ge "$closes" ]; then
+      cell_directory_stop "$cell"
+      fail "cell $cell's directory did not serve at $url within 30 s"
+    fi
+    sleep 0.1
+  done
+}
+
+# Stop cell `$1`'s directory, if it runs, by SIGTERM, which it takes,
+# killing it after five seconds.
+cell_directory_stop() {
+  local cell="$1" pid _
+  [ -f "$cell/directory/pid" ] || return 0
+  pid="$(cat "$cell/directory/pid")"
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -9 "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  rm -f "$cell/directory/pid"
 }
 
 # Cell `$1` is a public home at the hostname `$2`, as `cyfr access public
@@ -517,6 +579,7 @@ server_start() {
     fail "something already answers on 127.0.0.1:$port — stop it before this proof"
   fi
 
+  cell_directory_start "$cell"
   local log="$cell/boot.log"
   local mark
   mark="$( [ -f "$log" ] && wc -l <"$log" || echo 0)"
@@ -580,8 +643,8 @@ server_stop() {
   [ -z "$outlived" ] || fail "the server of $outlived outlived its stop"
 }
 
-# Stop the server `start`ed as the background job `$1` on cell `$2`, and
-# answer whether its listener is gone.
+# Stop the server `start`ed as the background job `$1` on cell `$2`, then
+# the cell's directory, and answer whether the server's listener is gone.
 server_halt() {
   local pid="$1" cell="$2" node port
   node="$(cell_node "$cell")"
@@ -597,11 +660,16 @@ server_halt() {
   # The node name ends there: another cell's name may begin with this one.
   pkill -f "sname $node( |\$)" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  local gone=1
   for _ in $(seq 1 30); do
-    curl -fsS -m 1 -o /dev/null "http://127.0.0.1:$port/api/health" 2>/dev/null || return 0
+    if ! curl -fsS -m 1 -o /dev/null "http://127.0.0.1:$port/api/health" 2>/dev/null; then
+      gone=0
+      break
+    fi
     sleep 1
   done
-  return 1
+  cell_directory_stop "$cell"
+  return "$gone"
 }
 
 # Evaluate the fixture file `$2` inside cell `$1`'s running server, as
