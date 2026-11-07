@@ -1553,27 +1553,58 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert_refused(DeviceChannel.handle_info({DeviceChannel, :deadline, token}, state), 4401)
     end
 
-    test "a capability that admits nobody closes 4401, recorded, with nothing held",
+    test "a capability that admits nobody is told so, closes 4401, recorded, with nothing held",
          %{account: account, key: key} do
       for {admission, reason} <- [
             {{:setup, String.duplicate("0f", 32)}, :setup_closed},
             {{:invitation, b64(32)}, :invitation_invalid}
           ] do
         state =
-          assert_refused(send_frame(channel(), hello_message(account, key, admission)), 4401)
+          assert_told(
+            send_frame(channel(), hello_message(account, key, admission)),
+            4401,
+            "unauthenticated",
+            Prima.Refusal.message(reason)
+          )
 
         assert is_nil(state.hello)
-        assert [%{reason: sentence}] = decisions_of(state.ctx.request_id)
-        assert sentence == Prima.Refusal.message(reason)
       end
 
       assert Arca.Repo.all(Arca.Schemas.PairedClient) == []
     end
 
-    test "an answer by another key closes 4401 and pairs nothing", %{account: account, key: key} do
+    test "an answer by another key is told so, closes 4401 and pairs nothing", %{
+      account: account,
+      key: key
+    } do
       {state, request} = asked(hello_message(account, key, {:setup, @token}))
       other = :crypto.generate_key(:eddsa, :ed25519)
-      assert_refused(send_frame(state, answer_message(request, other)), 4401)
+
+      assert_told(
+        send_frame(state, answer_message(request, other)),
+        4401,
+        "unauthenticated",
+        Prima.Refusal.message(:answer_refused)
+      )
+
+      assert Arca.Repo.all(Arca.Schemas.PairedClient) == []
+    end
+
+    test "an account closed at its directory is told so and closes 4403", %{
+      account: account,
+      key: key,
+      dir: dir
+    } do
+      {state, request} = asked(hello_message(account, key, {:setup, @token}))
+      DirectoryServer.tombstone(dir.dir, account.identifier)
+
+      assert_told(
+        send_frame(state, answer_message(request, key)),
+        4403,
+        "forbidden",
+        Prima.Refusal.message(:identity_gone)
+      )
+
       assert Arca.Repo.all(Arca.Schemas.PairedClient) == []
     end
 
@@ -1587,22 +1618,26 @@ defmodule Emissary.Web.DeviceChannelTest do
       stranger_key = List.last(stranger.devices)
       {state, request} = asked(hello_message(stranger, stranger_key, nil))
 
-      closed =
-        assert_refused(
-          send_frame(state, answer_message(request, stranger_key)),
-          4403,
-          "forbidden"
-        )
-
-      assert [%{reason: reason}] = decisions_of(closed.ctx.request_id)
-      assert reason == Sanctum.Door.refusal_message()
+      assert_told(
+        send_frame(state, answer_message(request, stranger_key)),
+        4403,
+        "forbidden",
+        Prima.Refusal.message({:door, :not_allowed})
+      )
     end
 
-    test "an account whose directory does not answer closes 1013",
+    test "an account whose directory does not answer is told so and closes 1013",
          %{account: account, key: key, dir: dir} do
       {state, request} = asked(hello_message(account, key, {:setup, @token}))
       DirectoryServer.Server.stop(dir.server)
-      assert_refused(send_frame(state, answer_message(request, key)), 1013, "unavailable")
+
+      assert_told(
+        send_frame(state, answer_message(request, key)),
+        1013,
+        "unavailable",
+        [Prima.Refusal.message(:unavailable), Prima.Refusal.message(:identity_stale)]
+      )
+
       assert Arca.Repo.all(Arca.Schemas.PairedClient) == []
     end
 
@@ -1615,9 +1650,11 @@ defmodule Emissary.Web.DeviceChannelTest do
         Prima.Test.Env.with_logger([level: :debug], fn ->
           with_log([level: :debug], fn ->
             refused =
-              assert_refused(
+              assert_told(
                 send_frame(channel(), hello_message(account, key, {:invitation, code})),
-                4401
+                4401,
+                "unauthenticated",
+                Prima.Refusal.message(:invitation_invalid)
               )
 
             {asked, request} = asked(hello)
@@ -2398,6 +2435,23 @@ defmodule Emissary.Web.DeviceChannelTest do
 
     assert frames == pairing_ended(state, code)
     assert_one_decision(state, class, caller)
+    assert_closed(state)
+    state
+  end
+
+  # A hello's or its answer's refusal: `refused` first, its class and the
+  # refusal table's sentence (one of `sentences` when a list), then the
+  # close in that class, one decision naming the same sentence, and a
+  # channel closed for good.
+  defp assert_told(result, code, class, sentences) do
+    assert {:stop, :normal, {^code, ^class}, [{:text, json}], state} = result
+
+    assert {:ok, {:refused, %{error: %{"class" => ^class, "message" => sentence}}}} =
+             Device.decode(Jason.decode!(json), :home)
+
+    assert sentence in List.wrap(sentences)
+    decision = assert_one_decision(state, class, :none)
+    assert decision.reason == sentence
     assert_closed(state)
     state
   end
