@@ -199,9 +199,9 @@ defmodule Sanctum.Door do
     end
   end
 
-  @doc "The one refusal a stranger sees, whichever branch refused."
+  @doc "The one refusal a stranger sees, whichever branch refused (`Prima.Refusal`'s)."
   @spec refusal_message() :: String.t()
-  def refusal_message, do: "not allowed on this server — ask the operator"
+  def refusal_message, do: Prima.Refusal.message({:door, :denied})
 
   # The person's identity row, which names their account's identifier. A
   # person with no row names none.

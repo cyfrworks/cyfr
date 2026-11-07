@@ -34,7 +34,8 @@ defmodule Emissary.Web.DeviceChannel do
   exchange below follows. A second `hello`, a `hello` after a `connect`
   or `renew`, and a `sign_in_answer` with no hello held are refused as
   anything else before a proof is. A hello or an answer this CYFR refuses
-  closes the channel (Refusals).
+  is answered `refused`, the refusal's class and its sentence, and the
+  channel closes (Refusals).
 
   A device this CYFR holds as a client sends `connect`, naming its client
   id and the certificate it connects under, and the home answers a
@@ -176,8 +177,12 @@ defmodule Emissary.Web.DeviceChannel do
   with its refusal class. A client's decision opens its request-log row
   with what was refused: the message's type and its field names, and an
   intent's argument names, never a value, so a hello's setup token or
-  invitation code and an answer's signature reach no row. Then the socket
-  closes with a WebSocket close code whose reason is that class:
+  invitation code and an answer's signature reach no row. A refusal of a
+  hello or of its answer, by `Sanctum.DeviceUnlock.hello/2` or `admit/2`,
+  is told first: `refused`, carrying the refusal's class and its sentence
+  (`Prima.Refusal`'s), as an answer's `error` carries them; nothing else
+  sends it. Then the socket closes with a WebSocket close code whose
+  reason is that class:
 
     * `4400` (`unauthenticated`) — a frame that does not decode as a
       `Prima.Device` message a glass sends: over 131,072 bytes (refused
@@ -565,7 +570,7 @@ defmodule Emissary.Web.DeviceChannel do
         {:reply, :ok, {:text, wire({:sign_in_request, %{request: request}})}, state}
 
       {:error, reason} ->
-        refuse(state, reason, refusal: admission_refusal(reason))
+        refused(state, reason)
     end
   end
 
@@ -579,7 +584,7 @@ defmodule Emissary.Web.DeviceChannel do
         {:reply, :ok, {:text, wire({:admitted, admitted})}, state}
 
       {:error, reason} ->
-        refuse(state, reason, refusal: admission_refusal(reason))
+        refused(state, reason)
     end
   end
 
@@ -1093,21 +1098,26 @@ defmodule Emissary.Web.DeviceChannel do
 
   defp close_code(%Prima.Refusal{}), do: @unproven
 
+  # A hello's or its answer's refusal: told first, as `refused` with the
+  # refusal's class and its sentence, then closed by the channel's table
+  # and recorded as every refusal is.
+  defp refused(state, reason) do
+    refusal = admission_refusal(reason)
+    error = %{"class" => Atom.to_string(refusal.class), "message" => refusal.message}
+    refuse(state, reason, refusal: refusal, frames: [{:text, wire({:refused, %{error: error}})}])
+  end
+
   # A hello's or its answer's refusal, in the channel's table, with the
-  # sentence a person reads for it. A head that moved while the device was
-  # admitted is a refresh that raced the hello, never a certificate to
-  # renew: a pause, after which the device says hello again.
+  # refusal table's sentence for it (`Prima.Refusal`), the one a person
+  # reads. A head that moved while the device was admitted is a refresh
+  # that raced the hello, never a certificate to renew: a pause, after
+  # which the device says hello again.
   defp admission_refusal(:stale_head),
-    do: %{refusal(:stale_head) | class: :unavailable, message: admission_sentence(:stale_head)}
+    do: %{refusal(:stale_head) | class: :unavailable, message: sentence_of(:stale_head)}
 
-  defp admission_refusal(reason), do: %{refusal(reason) | message: admission_sentence(reason)}
+  defp admission_refusal(reason), do: %{refusal(reason) | message: sentence_of(reason)}
 
-  defp admission_sentence(:answer_refused),
-    do: "The device's answer to its sign-in request was refused"
-
-  defp admission_sentence({:door, _reason}), do: Sanctum.Door.refusal_message()
-  defp admission_sentence(:unavailable), do: sentence(:unavailable)
-  defp admission_sentence(reason), do: Sanctum.Refusals.classify(reason).message
+  defp sentence_of(reason), do: Sanctum.Refusals.classify(reason).message
 
   defp answer_refused(id, %Prima.Refusal{} = refusal) do
     error = %{"class" => Atom.to_string(refusal.class), "message" => refusal.message}
@@ -1134,6 +1144,7 @@ defmodule Emissary.Web.DeviceChannel do
        when reason in [:revoked, :not_standing, :company_login_required, :identity_gone],
        do: :forbidden
 
+  defp class({:door, :unavailable}), do: :unavailable
   defp class({:door, _reason}), do: :forbidden
 
   # An account that could not be read fresh is a pause, as a store that
