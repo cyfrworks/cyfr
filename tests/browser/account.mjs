@@ -32,8 +32,10 @@ const STEP_MS = 60_000;
 
 // A person's passkeys: every credential an authenticator of theirs made,
 // given to each page `attach` names. `list()` reads them back first.
-export function passkeys() {
-  const held = new Map();
+// `initial`, credentials another holder listed, start it as a synced
+// passkey reaches another device of the person's.
+export function passkeys(initial = []) {
+  const held = new Map(initial.map((credential) => [credential.credentialId, credential]));
   const attached = new Map();
   const sync = async () => {
     for (const [page, authenticator] of attached) {
@@ -146,6 +148,8 @@ export async function createAccount(page, keys, { directory = null, name, secret
   const chose = await settle(page, ["choose"], { timeoutMs });
   if (chose.section !== "choose") return { ...chose, code: null };
   await page.locator("#name").fill(name);
+  // A registry that names a policy asks it accepted before a first claim.
+  if (await page.locator("#acceptance:not([hidden])").count()) await page.locator("#accept").check();
   await page.locator("#create").click();
   const codeShown = await settle(page, ["show-code"], { timeoutMs });
   if (codeShown.section !== "show-code") return { ...codeShown, code: null };

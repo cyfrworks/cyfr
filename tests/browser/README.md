@@ -132,7 +132,7 @@ holds the cookies the request carried and the cookies its answer set;
 `proxy.refusals` holds each handshake a browser broke off. The proxy
 starts only once every home answers its readiness check as its hostname,
 and otherwise throws naming each cell that does not; a cell that stops
-answering later is named in the 502 the front answers for it.
+answering later is named in the 502 the front answers for it. A name that is no home, a service a proof starts beside its cells such as cyfr.run's registry, is routed the same way to its listener with the certificate the run's authority issued for it (`routed`), and is asked no readiness check.
 
 **What a proof is offered.** `lib.mjs` exports, beside the one-cell
 helpers:

@@ -1,15 +1,19 @@
 # The handle proof
 
-`run.sh` proves, on the browser harness (`tests/browser/`), that a handle
-at the registry names the person another CYFR allows, and that the person
-signs in there from their own CYFR: a person sets up their CYFR through
-its two setup screens as `@proof`, another CYFR allows `@proof`, and the person
-signs in at that CYFR by typing their own CYFR's address; and a ban at the
-registry retires the person's push token.
+`run.sh` proves, on the browser harness (`tests/browser/`), that a name at
+the registry names the account another CYFR allows, and that the person
+signs in there with their passkey, typing no address: a person makes
+their account `@proof` at the registry's account pages and sets up their
+CYFR A with it; B's administrator, with an account of their own, sets B
+up and allows `@proof`; the person's passkey, synced to a browser that
+never visited B, signs them in at B's sign-in page; a push token the
+passkey signs for at A is stored at both ends, and a ban at the registry
+retires it.
 
-The registry is cyfr.run's own, built from the checkout `CYFR_RUN_DIR`
-names. CI cannot read that source, so CI never runs this proof; without
-`CYFR_RUN_DIR` the script says it did not run and why, and exits 0.
+The registry, directory and account pages are cyfr.run's own, built from
+the checkout `CYFR_RUN_DIR` names. CI cannot read that source, so CI never
+runs this proof; without `CYFR_RUN_DIR` the script says it did not run and
+why, and exits 0.
 
 ```bash
 CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -p -- tests/handle-proof/run.sh
@@ -19,29 +23,26 @@ CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -p -- tests/handle-proof
 
 | Part | Name | Configured |
 |---|---|---|
-| A | `a.test` | a `cyfr` release with a `CYFR_SETUP_TOKEN` of its own; enrolls at `registry.test`; `CYFR_REGISTRY_URL=registry.test` |
+| A | `a.test` | a `cyfr` release with a `CYFR_SETUP_TOKEN` of its own; reads accounts at `CYFR_DIRECTORY_URL=https://registry.test` and names at `CYFR_REGISTRY_URL=registry.test` |
 | B | `b.test` | the same, with its own setup token |
-| the registry and directory | `registry.test` | cyfr.run's image, built from `git archive HEAD` of `CYFR_RUN_DIR` by its `Dockerfile`, on a `postgres:16-alpine` of the run's own, with `DOMAIN=registry.test`, behind a front of the identity proof's kind on `127.77.0.3` |
+| the registry, directory and account pages | `registry.test` | cyfr.run's image, built from `git archive HEAD` of `CYFR_RUN_DIR` by its `Dockerfile`, on a `postgres:16-alpine` of the run's own, with `DOMAIN=registry.test`, behind a front of the identity proof's kind on `127.77.0.3` for the CYFRs, and routed by the browsers' proxy to its listener (`startProxy`'s `routed`) |
 
 The model checks run independently with
 `node --test tests/handle-proof/models-test.mjs`. The PostgreSQL tamper
 helper's checks run with
 `scripts/heavy-check.sh -s -- bash tests/handle-proof/registry-test.sh`.
 
-The directory's whole rows are read from `directory.identity_log_entries`
-in the registry's PostgreSQL. Their canonical entries, hashes, lengths
-and timestamps are checked and tampered as before. A generated ID is
-updated in `BY DEFAULT` mode, with its `ALWAYS` declaration restored in
-the same transaction. Every tamper's restore compares the identity
-columns' declarations as well as the rows and constraints.
+The directory's rows are read from `directory.entries` in the registry's
+PostgreSQL. Their canonical entries, hashes, lengths and timestamps are
+checked and tampered as every other row; a row is found by its entry's
+hash.
 
-The CYFRs reach the directory and the registry by name through their
-`ERL_INETRC` at addresses listed in `CYFR_PRIVATE_EGRESS_TARGETS`, and trust
-the run's authority (`tests/identity-proof/cells.sh`). No DNS,
-`/etc/hosts`, trust store or other configuration outside the scratch
-directory is read or changed. cyfr.run's smoke person (`cmd/smokeid`,
-built from the same checkout) computes the TOTP code the registry's admin
-sign-in takes.
+The CYFRs reach the registry by name through their `ERL_INETRC` at an
+address listed in `CYFR_PRIVATE_EGRESS_TARGETS`, and trust the run's
+authority (`tests/identity-proof/cells.sh`). No DNS, `/etc/hosts`, trust
+store or other configuration outside the scratch directory is read or
+changed. cyfr.run's smoke person (`cmd/smokeid`, built from the same
+checkout) computes the TOTP code the registry's admin sign-in takes.
 
 Everything the run starts is removed when it ends, on every exit path, a
 signal included: the cells' servers, the fronts, the registry's container
@@ -55,22 +56,22 @@ under heavy-check's exclusive slot, as every other release proof builds it.
 
 ## Steps
 
-Chromium runs every step with its virtual WebAuthn authenticator; the
-person's passkey for A is copied to the profile that signs in at B, as a
-synced passkey is. `proof.mjs` drives the browsers and `run.sh` answers its
-asks for the servers' part (`fixture.exs` inside a CYFR, `psql` in the
-registry's database, including its `directory` schema, `curl` through the
-fronts). `models.mjs` holds every object's model, the comparison and the
-tamper loop, apart from the browsers, so the models can be rebuilt from a
-run's record.
+Chromium runs every step with its virtual WebAuthn authenticator
+(`tests/browser/account.mjs`); the person's passkey is copied to the
+profile that signs in at B, as a synced passkey is. `proof.mjs` drives the
+browsers and `run.sh` answers its asks for the servers' part (`fixture.exs`
+inside a CYFR, `psql` in the registry's database, including its
+`directory` schema, `curl` through the front). `models.mjs` holds every
+object's model, the comparison and the tamper loop, apart from the
+browsers, so the models can be rebuilt from a run's record.
 
 | Step | What holds |
 |---|---|
-| `setup` | A is set up through `/setup`'s two screens: `@proof` is typed on the first and found free at the registry, and a passkey is made, which admits the person and opens their enrollment; the second screen registers the identity at `registry.test` and claims `@proof` before it shows the recovery code. With the code shown and not yet saved, the directory holds A's genesis, the enrollment attempt is accepted, and the registry holds `@proof` owned by A's identifier, that identifier's acceptance of its policy, the nonces of its two signed requests and its read of A's log, and answers `@proof` with A's identifier and directory; "I saved it" completes the attempt (a transition from the attempt read before it) and lands in CYFR signed in, where Settings says "Your name is @proof.". A's person (with the first person's platform administrator's mark), passkey, identity and athanor are read whole |
-| `allow` | B, set up through `/setup`'s two screens by its administrator as `@proof-b`, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person (with the platform administrator's mark) and athanor are its administrator's |
-| `sign_in` | a fresh profile at B's sign-in page, "Sign in from your CYFR" with A's address, reaches A, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, with an athanor of their own there made in the admission, landing them in its chat; B's athanors are its administrator's and the person's own, its sessions are its administrator's and the person's, and the person's session holds the token the browser's cookie carries |
-| `sync` | Sync push tokens at A, confirmed with the passkey, stores one push token for `@proof`, whose digest is the registry's token for it, made by A's identifier |
-| `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync shows `banned`'s sentence and records no nonce; then every object read in the run is read again and held to what was read before |
+| `setup` | `@proof` is made at `registry.test`'s `/account/new`: the registry's policy accepted, the recovery code shown and saved, then the passkey. The directory holds the account's genesis and the passkey's `add_key`, and the registry holds `@proof` owned by the account's identifier, that identifier's acceptance of its policy, the nonces of the two requests the recovery key signed and its read of the log, and answers `@proof` with the identifier and `https://registry.test`. A is then set up by signing in with the account through its setup link; A's person (with the platform administrator's mark), identity, cached head, athanor and paired client (the passkey, by its kid) are read whole |
+| `allow` | B's administrator makes `@proof-b` at the pages, sets B up with it, and allows `@proof` in Settings; B's allowlist holds setup's allow of the administrator's identifier and `@proof`'s identifier labelled `proof`; B's person, identity and athanor are its administrator's |
+| `sign_in` | a fresh profile holding the person's passkey opens B's sign-in page and signs in with the account, typing no address: the sign page says "Sign in to https://b.test", and B admits the identifier under its allow (`admission` `open`), with an athanor of their own there; B's identities, people, athanors, cached heads, paired clients and sessions are read whole, each session bound to its passkey's kid and head and holding the token its browser's cookie carries |
+| `sync` | "Sync push tokens" at A opens the sign page, which shows the registry request in words ("Create a publishing token named … at registry.test"); the passkey signs it, A completes it and says "Your push tokens are synced."; A stores one push token for `@proof`, whose digest is the registry's token for it, made by the account's identifier |
+| `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync says banned's sentence and records no nonce; then every object read in the run is read again and held to what was read before |
 | `readme` | this file's field table holds exactly the rows the proof's models print |
 
 ## Whole objects
@@ -85,24 +86,26 @@ four classes:
 - **exact**: the value the step must leave, or a value this run read
   before and holds from then on;
 - **derived**: a value read from another source, independent of the row:
-  the browser's authenticator (a passkey's credential id, count, and the
-  COSE key its private key gives), the browser's session cookie (the
+  the browser's authenticator (a passkey's credential id, and the kid its
+  private key's public point gives), the browser's session cookie (the
   token's SHA-256 and first 8 characters, read inside the CYFR that set
-  it), the recovery code, the directory's stored genesis (the identifier is
-  its hash; the keys are its keys; a genesis's key and recovery epochs are
-  its own hash), the run's admin account, the other store's digest;
+  it), the recovery code, the directory's stored entries (the identifier is
+  the genesis's hash; a head is its last entry's hash; the recovery epoch
+  is the genesis's hash), the run's admin account, the other store's
+  digest;
 - **captured**: a value the server generated, read here for the first
-  time, that no other source names (a row id, a registration digest, a
-  nonce, the recovery code's sealed secret): held to its shape and to the value its
-  first read read, and exact at every later read;
+  time, that no other source names (a row id, a nonce, a cached head's
+  verified state): held to its shape and to the value its first read
+  read, and exact at every later read;
 - **bound**: a time the server stamps, inside a window whose two ends are
   the proof's own clock readings around the step (5 ms either side for the
   stamp's resolution); a session's `expires_at` is derived exactly, as its
   `inserted_at` plus `session_ttl_hours`.
 
-A sealed key is held once its relationship is checked: it opens, inside
-the CYFR that sealed it, to the private half of the public key beside it or
-of the genesis's key. A field the model does not classify, or a classified
+A field whose value is related to another source, an entry's bytes or a
+sealed credential, is held once that relationship is checked: an entry
+hashes to the identifier or lists the authenticator's key, a credential
+opens inside the CYFR that sealed it. A field the model does not classify, or a classified
 field the object lacks, fails the comparison, and the proof keeps going so
 one run reports every mismatch. A list's rows are matched by what each
 holds (a nonce by its bytes, a log entry by its
@@ -136,8 +139,9 @@ each shown failing by a control: a copy of the object with that one field
 corrupted, which the comparison must refuse on that field.
 
 At the end every object is read again and held to what was read before,
-with the fields later steps move (a passkey's count, a person's
-`last_seen_at`, the registry's `read_at`) each held to its own source or
+with the fields later steps move (a person's `last_seen_at` and the
+namespace the sync recorded, a cached head's `verified_at`, the
+registry's `read_at`) each held to its own source or
 window. Every loop that ran is recorded by its row's identity (store,
 table and the row's own key, never its position) and the predicate it ran
 under; at this last read a field's loop is skipped only when the
@@ -159,64 +163,22 @@ row per field of each row of each step's objects:
 
 | object | field | class | value, source or bound |
 |---|---|---|---|
-| setup:a.passkeys[row] | id | captured | a new psk_ id |
-| setup:a.passkeys[row] | user_id | captured | a new usr_ id |
-| setup:a.passkeys[row] | credential_id | derived | the credential the browser's authenticator holds for a.test, base64url |
-| setup:a.passkeys[row] | rp_id | exact | `"a.test"` |
-| setup:a.passkeys[row] | relying_home | exact | `"https://a.test"` |
-| setup:a.passkeys[row] | public_key | derived | the authenticator's key, as the COSE map CYFR stores (term_to_binary) |
-| setup:a.passkeys[row] | sign_count | derived | the authenticator's count for that credential |
-| setup:a.passkeys[row] | identity_recovery_epoch | exact | `null` |
-| setup:a.passkeys[row] | state | exact | `"active"` |
-| setup:a.passkeys[row] | registration_digest | captured | the registration's digest: a new sha256: digest |
-| setup:a.passkeys[row] | possession_verified | exact | `1` |
-| setup:a.passkeys[row] | backup_eligible | exact | `0` |
-| setup:a.passkeys[row] | expires_at | exact | `null` |
-| setup:a.passkeys[row] | admin_confirmation_id | exact | `null` |
-| setup:a.passkeys[row] | activated_at | bound | a time inside setup at A |
-| setup:a.passkeys[row] | revoked_at | exact | `null` |
-| setup:a.passkeys[row] | inserted_at | bound | a time inside setup at A |
-| setup:a.passkeys[row] | updated_at | bound | a time inside setup at A |
-| setup:registry.directory.identity_log_entries[row] | id | captured | a new directory row id |
-| setup:registry.directory.identity_log_entries[row] | identifier | derived | the identifier the signer's genesis hashes to |
-| setup:registry.directory.identity_log_entries[row] | seq | exact | `0` |
-| setup:registry.directory.identity_log_entries[row] | kind | exact | `"genesis"` |
-| setup:registry.directory.identity_log_entries[row] | entry_hash | derived | the entry's bytes, hashed |
-| setup:registry.directory.identity_log_entries[row] | prev_hash | exact | `null` |
-| setup:registry.directory.identity_log_entries[row] | entry | derived | the genesis its signer sent, whose hash is the identifier |
-| setup:registry.directory.identity_log_entries[row] | request_id | exact | `null` |
-| setup:registry.directory.identity_log_entries[row] | request_digest | exact | `null` |
-| setup:registry.directory.identity_log_entries[row] | outcome | exact | `"accepted"` |
-| setup:registry.directory.identity_log_entries[row] | outcome_body | exact | `null` |
-| setup:registry.directory.identity_log_entries[row] | bytes | derived | the entry's length |
-| setup:registry.directory.identity_log_entries[row] | inserted_at | bound | a time inside the enrollment, to the recovery code shown |
-| setup:pre:a.identity_attempts[row] | id | captured | a new iat_ id |
-| setup:pre:a.identity_attempts[row] | kind | exact | `"enrollment"` |
-| setup:pre:a.identity_attempts[row] | request_id | captured | a new request id, req_ and 32 hexadecimal digits |
-| setup:pre:a.identity_attempts[row] | user_id | derived | A's passkey's person |
-| setup:pre:a.identity_attempts[row] | identifier | derived | the identifier the recovery code names, as the browser showed it |
-| setup:pre:a.identity_attempts[row] | directory_url | exact | `"https://registry.test"` |
-| setup:pre:a.identity_attempts[row] | name | exact | `"proof"`: the name typed on setup's first screen |
-| setup:pre:a.identity_attempts[row] | phase | exact | `"accepted"` |
-| setup:pre:a.identity_attempts[row] | genesis | derived | the directory's stored genesis |
-| setup:pre:a.identity_attempts[row] | entry | exact | `null` |
-| setup:pre:a.identity_attempts[row] | entry_hash | exact | `null` |
-| setup:pre:a.identity_attempts[row] | expected_head | exact | `null` |
-| setup:pre:a.identity_attempts[row] | expected_revision | exact | `null` |
-| setup:pre:a.identity_attempts[row] | request_digest | derived | the genesis's hash: an enrollment's request is its genesis |
-| setup:pre:a.identity_attempts[row] | token_digest | exact | `null` |
-| setup:pre:a.identity_attempts[row] | staged_live_public_key | exact | `null`: the accepted enrollment moved its staged keys onto the identity row |
-| setup:pre:a.identity_attempts[row] | staged_operational_public_key | exact | `null` |
-| setup:pre:a.identity_attempts[row] | staged_live_key_sealed | exact | `null` |
-| setup:pre:a.identity_attempts[row] | staged_operational_key_sealed | exact | `null` |
-| setup:pre:a.identity_attempts[row] | kit_seed_sealed | captured | the recovery code's secret, sealed until the code is saved: new sealed bytes |
-| setup:pre:a.identity_attempts[row] | kit_acknowledged_at | exact | `null` |
-| setup:pre:a.identity_attempts[row] | outcome | exact | `"accepted"` |
-| setup:pre:a.identity_attempts[row] | reproof_challenge_digest | exact | `null` |
-| setup:pre:a.identity_attempts[row] | reproof_expires_at | exact | `null` |
-| setup:pre:a.identity_attempts[row] | revision | exact | `3`: the attempt as its enrollment's acceptance leaves it |
-| setup:pre:a.identity_attempts[row] | inserted_at | bound | a time inside the enrollment, to the recovery code shown |
-| setup:pre:a.identity_attempts[row] | updated_at | bound | a time inside the enrollment, to the recovery code shown |
+| setup:registry.directory.entries[a][the genesis] | identifier | derived | the identifier the recovery code names |
+| setup:registry.directory.entries[a][the genesis] | seq | exact | `0` |
+| setup:registry.directory.entries[a][the genesis] | kind | exact | `"genesis"` |
+| setup:registry.directory.entries[a][the genesis] | entry_hash | derived | the identifier's digits: the genesis's hash |
+| setup:registry.directory.entries[a][the genesis] | prev_hash | exact | `null` |
+| setup:registry.directory.entries[a][the genesis] | entry | derived | the genesis the page signed: its bytes hash to the identifier, and it names registry.test |
+| setup:registry.directory.entries[a][the genesis] | bytes | derived | the entry's length |
+| setup:registry.directory.entries[a][the genesis] | inserted_at | bound | a time inside the account made at registry.test's pages |
+| setup:registry.directory.entries[a][the passkey's add_key] | identifier | derived | the identifier the recovery code names |
+| setup:registry.directory.entries[a][the passkey's add_key] | seq | exact | `1` |
+| setup:registry.directory.entries[a][the passkey's add_key] | kind | exact | `"add_key"` |
+| setup:registry.directory.entries[a][the passkey's add_key] | entry_hash | derived | the entry's bytes, hashed |
+| setup:registry.directory.entries[a][the passkey's add_key] | prev_hash | derived | the genesis's hash |
+| setup:registry.directory.entries[a][the passkey's add_key] | entry | derived | the passkey's add_key: after the genesis, listing the key and credential the browser's authenticator holds |
+| setup:registry.directory.entries[a][the passkey's add_key] | bytes | derived | the entry's length |
+| setup:registry.directory.entries[a][the passkey's add_key] | inserted_at | bound | a time inside the account made at registry.test's pages |
 | setup:registry.namespaces[proof][row] | slug | exact | `"proof"` |
 | setup:registry.namespaces[proof][row] | kind | exact | `"personal"` |
 | setup:registry.namespaces[proof][row] | reserved | exact | `false` |
@@ -227,84 +189,40 @@ row per field of each row of each step's objects:
 | setup:registry.namespaces[proof][row] | consecutive_failures | exact | `0` |
 | setup:registry.namespaces[proof][row] | display_name | exact | `null` |
 | setup:registry.namespaces[proof][row] | expires_at | exact | `null` |
-| setup:registry.namespaces[proof][row] | created_at | bound | a time inside the enrollment, to the recovery code shown |
-| setup:registry.namespaces[proof][row] | updated_at | bound | a time inside the enrollment, to the recovery code shown |
+| setup:registry.namespaces[proof][row] | created_at | bound | a time inside the account made at registry.test's pages |
+| setup:registry.namespaces[proof][row] | updated_at | bound | a time inside the account made at registry.test's pages |
 | setup:registry.namespaces[proof][row] | owner_identifier | derived | the identifier the recovery code names |
 | setup:registry.namespaces[proof][row] | reserved_reason | exact | `null` |
-| setup:registry.identity_heads[a][row] | identifier | derived | the identity's genesis, hashed |
-| setup:registry.identity_heads[a][row] | head | derived | the genesis's hash: one entry, so the head (`Prima.Identity`) |
-| setup:registry.identity_heads[a][row] | entries | exact | `1` |
-| setup:registry.identity_heads[a][row] | recovery_epoch | derived | a genesis's own hash (`Prima.Identity`, identity.ex:1150) |
-| setup:registry.identity_heads[a][row] | key_epoch | derived | a genesis's own hash (`Prima.Identity`, identity.ex:1150) |
-| setup:registry.identity_heads[a][row] | read_at | bound | a time inside the enrollment, to the recovery code shown |
+| setup:registry.identity_heads[a][row] | identifier | derived | the identifier the recovery code names |
+| setup:registry.identity_heads[a][row] | head | derived | the add_key's hash: the head of the log the claim was verified against |
+| setup:registry.identity_heads[a][row] | entries | exact | `2` |
+| setup:registry.identity_heads[a][row] | recovery_epoch | derived | the genesis's hash: no recover entry since |
+| setup:registry.identity_heads[a][row] | read_at | bound | a time inside the account made at registry.test's pages |
 | setup:registry.policy_acceptances[a][row] | id | captured | an acceptance id: a new UUID, not the nil UUID |
 | setup:registry.policy_acceptances[a][row] | policy_version | derived | the registry's GET /v1/legal/version |
-| setup:registry.policy_acceptances[a][row] | accepted_at | bound | a time inside the enrollment, to the recovery code shown |
-| setup:registry.policy_acceptances[a][row] | ip_address | exact | `"::ffff:127.0.0.1"`: the front's forwarded loopback address, as PostgreSQL's inet stores it |
-| setup:registry.policy_acceptances[a][row] | user_agent | derived | the signer's HTTP client: Req's default for a CYFR (req 0.7.5, mix.lock) |
+| setup:registry.policy_acceptances[a][row] | accepted_at | bound | a time inside the account made at registry.test's pages |
 | setup:registry.policy_acceptances[a][row] | identifier | derived | the signer's identifier |
 | setup:registry.policy_acceptances[a][row] | former_identity | exact | `null` |
 | setup:registry.request_nonces[a][row 1] | identifier | derived | the signer's identifier |
 | setup:registry.request_nonces[a][row 1] | nonce | captured | 16 new bytes |
-| setup:registry.request_nonces[a][row 1] | expires_at | bound | a time inside the enrollment, to the recovery code shown, plus the 120 s a signed request lives |
+| setup:registry.request_nonces[a][row 1] | expires_at | bound | a time inside the account made at registry.test's pages, plus the 120 s a signed request lives |
 | setup:registry.request_nonces[a][row 2] | identifier | derived | the signer's identifier |
 | setup:registry.request_nonces[a][row 2] | nonce | captured | 16 new bytes |
-| setup:registry.request_nonces[a][row 2] | expires_at | bound | a time inside the enrollment, to the recovery code shown, plus the 120 s a signed request lives |
+| setup:registry.request_nonces[a][row 2] | expires_at | bound | a time inside the account made at registry.test's pages, plus the 120 s a signed request lives |
 | setup:handle_answer[proof] | status | exact | `200` |
 | setup:handle_answer[proof] | protocol | exact | `"cyfr-handle/v1"` |
 | setup:handle_answer[proof] | registry | exact | `"registry.test"` |
 | setup:handle_answer[proof] | handle | exact | `"proof"` |
 | setup:handle_answer[proof] | identifier | derived | the owner's genesis, hashed |
 | setup:handle_answer[proof] | directory | exact | `"https://registry.test"` |
-| setup:a.identity_attempts[row] | directory_url | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | entry | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | entry_hash | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | expected_head | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | expected_revision | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | genesis | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | id | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | identifier | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | inserted_at | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | kind | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | kit_acknowledged_at | bound | a time inside saving the recovery code, to CYFR |
-| setup:a.identity_attempts[row] | kit_seed_sealed | exact | `null`: the recovery code's secret is dropped once the code is saved |
-| setup:a.identity_attempts[row] | name | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | outcome | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | phase | exact | `"completed"` |
-| setup:a.identity_attempts[row] | reproof_challenge_digest | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | reproof_expires_at | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | request_digest | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | request_id | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | revision | exact | the revision read before the code was saved, plus one |
-| setup:a.identity_attempts[row] | staged_live_key_sealed | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | staged_live_public_key | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | staged_operational_key_sealed | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | staged_operational_public_key | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | token_digest | exact | as read before the recovery code was saved |
-| setup:a.identity_attempts[row] | updated_at | bound | a time inside saving the recovery code, to CYFR |
-| setup:a.identity_attempts[row] | user_id | exact | as read before the recovery code was saved |
-| setup:a.athanors[row] | id | captured | a new ath_ id |
-| setup:a.athanors[row] | name | exact | `"Me"` |
-| setup:a.athanors[row] | slug | exact | `"me"` |
-| setup:a.athanors[row] | owner_user_id | derived | A's person |
-| setup:a.athanors[row] | status | exact | `"active"` |
-| setup:a.athanors[row] | archived_at | exact | `null` |
-| setup:a.athanors[row] | created_by | derived | A's person |
-| setup:a.athanors[row] | settings | exact | `null` |
-| setup:a.athanors[row] | provisioned_at | bound | a time inside setup at A up to setup:a.athanors's read |
-| setup:a.athanors[row] | provisioning_failed_at | exact | `null` |
-| setup:a.athanors[row] | provisioning_failure | exact | `null` |
-| setup:a.athanors[row] | security_generation | exact | `1` |
-| setup:a.athanors[row] | created_at | bound | a time inside setup at A |
-| setup:a.athanors[row] | updated_at | bound | a time inside setup at A up to setup:a.athanors's read |
-| setup:a.users[row] | id | derived | the user A's passkey names |
+| setup:a.users[row] | id | captured | a new usr_ id |
 | setup:a.users[row] | email | exact | `null` |
 | setup:a.users[row] | email_verified | exact | `null` |
 | setup:a.users[row] | admission | exact | `"setup"` |
 | setup:a.users[row] | display_name | exact | `null` |
-| setup:a.users[row] | namespace | exact | `"proof"` |
+| setup:a.users[row] | namespace | exact | `null` |
 | setup:a.users[row] | status | exact | `"active"` |
-| setup:a.users[row] | prefs | exact | `"{}"`: Newcomer's empty document (newcomer.ex:264), the cleared handle_wanted removed |
+| setup:a.users[row] | prefs | exact | `"{}"` |
 | setup:a.users[row] | first_seen_at | bound | a time inside setup at A |
 | setup:a.users[row] | last_seen_at | bound | a time inside setup at A up to setup:a.users's read |
 | setup:a.users[row] | denied_at | exact | `null` |
@@ -312,109 +230,123 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | security_generation | exact | `1` |
 | setup:a.users[row] | created_at | bound | a time inside setup at A |
 | setup:a.users[row] | updated_at | bound | a time inside setup at A up to setup:a.users's read |
+| setup:a.athanors[row] | id | captured | a new ath_ id |
+| setup:a.athanors[row] | name | exact | `"Me"` |
+| setup:a.athanors[row] | slug | exact | `"me"` |
+| setup:a.athanors[row] | owner_user_id | derived | its person |
+| setup:a.athanors[row] | status | exact | `"active"` |
+| setup:a.athanors[row] | archived_at | exact | `null` |
+| setup:a.athanors[row] | created_by | derived | its person |
+| setup:a.athanors[row] | settings | exact | `null` |
+| setup:a.athanors[row] | provisioned_at | bound | null, or a time inside setup at A up to setup:a.athanors's read |
+| setup:a.athanors[row] | provisioning_failed_at | exact | `null` |
+| setup:a.athanors[row] | provisioning_failure | exact | `null` |
+| setup:a.athanors[row] | security_generation | exact | `1` |
+| setup:a.athanors[row] | created_at | bound | a time inside setup at A |
+| setup:a.athanors[row] | updated_at | bound | a time inside setup at A up to setup:a.athanors's read |
 | setup:a.person_identities[row] | id | captured | a new pid_ id |
-| setup:a.person_identities[row] | user_id | derived | A's passkey's person |
-| setup:a.person_identities[row] | identifier | derived | the identifier the recovery code names |
-| setup:a.person_identities[row] | provenance | exact | `"local"` |
-| setup:a.person_identities[row] | enrollment | exact | `"enrolled"` |
-| setup:a.person_identities[row] | live_public_key | derived | the directory's genesis's live key |
-| setup:a.person_identities[row] | operational_public_key | derived | the directory's genesis's operational key |
-| setup:a.person_identities[row] | live_key_sealed | derived | opens, in A, to the genesis's live key |
-| setup:a.person_identities[row] | operational_key_sealed | derived | opens, in A, to the genesis's operational key |
-| setup:a.person_identities[row] | genesis_hash | derived | the directory's genesis, hashed |
-| setup:a.person_identities[row] | head_hash | derived | the directory's one entry |
+| setup:a.person_identities[row] | user_id | derived | its person |
+| setup:a.person_identities[row] | identifier | derived | the account's identifier |
+| setup:a.person_identities[row] | head_hash | derived | the head of the account's log when it was admitted |
 | setup:a.person_identities[row] | directory_url | exact | `"https://registry.test"` |
-| setup:a.person_identities[row] | first_method_at | bound | a time inside setup at A |
-| setup:a.person_identities[row] | revision | exact | `4`: 1 at insertion, then first_method! (person_identities.ex:233), enrolling! (:145) and enrolled! (:174), each one step (:259) |
+| setup:a.person_identities[row] | revision | exact | `1` |
 | setup:a.person_identities[row] | inserted_at | bound | a time inside setup at A |
-| setup:a.person_identities[row] | updated_at | bound | a time inside the enrollment, to the recovery code shown |
-| allow:b.passkeys[row] | id | captured | a new psk_ id |
-| allow:b.passkeys[row] | user_id | captured | a new usr_ id |
-| allow:b.passkeys[row] | credential_id | derived | the credential the administrator's authenticator holds for b.test, base64url |
-| allow:b.passkeys[row] | rp_id | exact | `"b.test"` |
-| allow:b.passkeys[row] | relying_home | exact | `"https://b.test"` |
-| allow:b.passkeys[row] | public_key | derived | the administrator's authenticator's key, as the COSE map CYFR stores |
-| allow:b.passkeys[row] | sign_count | derived | the authenticator's count for that credential |
-| allow:b.passkeys[row] | identity_recovery_epoch | exact | `null` |
-| allow:b.passkeys[row] | state | exact | `"active"` |
-| allow:b.passkeys[row] | registration_digest | captured | the registration's digest: a new sha256: digest |
-| allow:b.passkeys[row] | possession_verified | exact | `1` |
-| allow:b.passkeys[row] | backup_eligible | exact | `0` |
-| allow:b.passkeys[row] | expires_at | exact | `null` |
-| allow:b.passkeys[row] | admin_confirmation_id | exact | `null` |
-| allow:b.passkeys[row] | activated_at | bound | a time inside setup at B |
-| allow:b.passkeys[row] | revoked_at | exact | `null` |
-| allow:b.passkeys[row] | inserted_at | bound | a time inside setup at B |
-| allow:b.passkeys[row] | updated_at | bound | a time inside setup at B |
-| allow:b.athanors[row] | id | captured | a new ath_ id |
-| allow:b.athanors[row] | name | exact | `"Me"` |
-| allow:b.athanors[row] | slug | exact | `"me"` |
-| allow:b.athanors[row] | owner_user_id | derived | B's administrator |
-| allow:b.athanors[row] | status | exact | `"active"` |
-| allow:b.athanors[row] | archived_at | exact | `null` |
-| allow:b.athanors[row] | created_by | derived | B's administrator |
-| allow:b.athanors[row] | settings | exact | `null` |
-| allow:b.athanors[row] | provisioned_at | bound | a time inside setup at B up to allow:b.athanors's read |
-| allow:b.athanors[row] | provisioning_failed_at | exact | `null` |
-| allow:b.athanors[row] | provisioning_failure | exact | `null` |
-| allow:b.athanors[row] | security_generation | exact | `1` |
-| allow:b.athanors[row] | created_at | bound | a time inside setup at B |
-| allow:b.athanors[row] | updated_at | bound | a time inside setup at B up to allow:b.athanors's read |
-| allow:b.users[row] | id | derived | the user B's administrator's passkey names |
+| setup:a.person_identities[row] | updated_at | bound | a time inside setup at A |
+| setup:a.directory_heads[row] | identifier | derived | the account's identifier |
+| setup:a.directory_heads[row] | genesis | derived | the genesis the directory stores, as its JCS text |
+| setup:a.directory_heads[row] | directory_url | exact | `"https://registry.test"` |
+| setup:a.directory_heads[row] | head_hash | derived | the head of the account's log as the directory serves it |
+| setup:a.directory_heads[row] | state | captured | the verified state the head leaves, as JSON text |
+| setup:a.directory_heads[row] | verified_at | bound | a time inside setup at A up to setup:a.directory_heads's read |
+| setup:a.directory_heads[row] | gone_at | exact | `null` |
+| setup:a.directory_heads[row] | revision | captured | the cached head's revision |
+| setup:a.directory_heads[row] | inserted_at | bound | a time inside setup at A |
+| setup:a.directory_heads[row] | updated_at | bound | a time inside setup at A up to setup:a.directory_heads's read |
+| setup:a.paired_clients[row] | id | captured | a new pcl_ id |
+| setup:a.paired_clients[row] | athanor_id | derived | the person's own athanor here |
+| setup:a.paired_clients[row] | user_id | derived | its person |
+| setup:a.paired_clients[row] | source_kind | exact | `"passkey"` |
+| setup:a.paired_clients[row] | source_id | derived | the client's own id |
+| setup:a.paired_clients[row] | device_public_key | exact | `null` |
+| setup:a.paired_clients[row] | standing | exact | `"active"` |
+| setup:a.paired_clients[row] | holder_kind | exact | `null` |
+| setup:a.paired_clients[row] | display_name | exact | `null` |
+| setup:a.paired_clients[row] | kid | derived | the kid of the key the browser's authenticator holds |
+| setup:a.paired_clients[row] | head | derived | the head it signed in under |
+| setup:a.paired_clients[row] | inserted_at | bound | a time inside setup at A |
+| setup:a.paired_clients[row] | updated_at | bound | a time inside setup at A |
+| allow:b.users[row] | id | captured | a new usr_ id |
 | allow:b.users[row] | email | exact | `null` |
 | allow:b.users[row] | email_verified | exact | `null` |
 | allow:b.users[row] | admission | exact | `"setup"` |
 | allow:b.users[row] | display_name | exact | `null` |
-| allow:b.users[row] | namespace | exact | `"proof-b"`: the name typed on B's first screen |
+| allow:b.users[row] | namespace | exact | `null` |
 | allow:b.users[row] | status | exact | `"active"` |
-| allow:b.users[row] | prefs | exact | `"{}"`: Newcomer's empty document (newcomer.ex:264), the cleared handle_wanted removed |
-| allow:b.users[row] | first_seen_at | bound | a time inside setup at B |
-| allow:b.users[row] | last_seen_at | bound | a time inside setup at B up to allow:b.users's read |
+| allow:b.users[row] | prefs | exact | `"{}"` |
+| allow:b.users[row] | first_seen_at | bound | a time inside B's administrator's account and setup at B |
+| allow:b.users[row] | last_seen_at | bound | a time inside B's administrator's account and setup at B up to allow:b.users's read |
 | allow:b.users[row] | denied_at | exact | `null` |
-| allow:b.users[row] | platform_admin_at | bound | a time inside setup at B |
+| allow:b.users[row] | platform_admin_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.users[row] | security_generation | exact | `1` |
-| allow:b.users[row] | created_at | bound | a time inside setup at B |
-| allow:b.users[row] | updated_at | bound | a time inside setup at B up to allow:b.users's read |
-| allow:b.server_allowlist[row] | id | captured | a new door_ id |
-| allow:b.server_allowlist[row] | kind | exact | `"identifier"` |
-| allow:b.server_allowlist[row] | value | derived | the identifier @proof names at the registry (A's recovery code's) |
-| allow:b.server_allowlist[row] | effect | exact | `"allow"` |
-| allow:b.server_allowlist[row] | status | exact | `"allowed"` |
-| allow:b.server_allowlist[row] | requested_by | exact | `null` |
-| allow:b.server_allowlist[row] | added_by | derived | B's administrator |
-| allow:b.server_allowlist[row] | note | exact | `null` |
-| allow:b.server_allowlist[row] | label | exact | `"proof"` |
-| allow:b.server_allowlist[row] | created_at | bound | a time inside the allow |
-| allow:b.server_allowlist[row] | updated_at | bound | a time inside the allow |
-| sign_in:b.person_identities[the administrator's] | id | captured | a new pid_ id |
-| sign_in:b.person_identities[the administrator's] | user_id | derived | B's administrator |
-| sign_in:b.person_identities[the administrator's] | identifier | captured | B's administrator's identifier, per_ and 64 hexadecimal digits |
-| sign_in:b.person_identities[the administrator's] | provenance | exact | `"local"` |
-| sign_in:b.person_identities[the administrator's] | enrollment | exact | `"enrolled"` |
-| sign_in:b.person_identities[the administrator's] | live_public_key | derived | the public half of the sealed live key, opened in B |
-| sign_in:b.person_identities[the administrator's] | live_key_sealed | derived | opens, in B, to the live public key beside it |
-| sign_in:b.person_identities[the administrator's] | operational_public_key | derived | the public half of the sealed operational key, opened in B |
-| sign_in:b.person_identities[the administrator's] | operational_key_sealed | derived | opens, in B, to the operational public key beside it |
-| sign_in:b.person_identities[the administrator's] | genesis_hash | derived | the identifier's 64 hexadecimal digits: the genesis's hash |
-| sign_in:b.person_identities[the administrator's] | head_hash | derived | the genesis: the administrator's log holds one entry |
-| sign_in:b.person_identities[the administrator's] | directory_url | exact | `"https://registry.test"` |
-| sign_in:b.person_identities[the administrator's] | first_method_at | bound | a time inside setup at B |
-| sign_in:b.person_identities[the administrator's] | revision | exact | `4`: 1 at insertion, then first_method! (person_identities.ex:233), enrolling! (:145) and enrolled! (:174), each one step (:259) |
-| sign_in:b.person_identities[the administrator's] | inserted_at | bound | a time inside setup at B |
-| sign_in:b.person_identities[the administrator's] | updated_at | bound | a time inside setup at B |
+| allow:b.users[row] | created_at | bound | a time inside B's administrator's account and setup at B |
+| allow:b.users[row] | updated_at | bound | a time inside B's administrator's account and setup at B up to allow:b.users's read |
+| allow:b.athanors[row] | id | captured | a new ath_ id |
+| allow:b.athanors[row] | name | exact | `"Me"` |
+| allow:b.athanors[row] | slug | exact | `"me"` |
+| allow:b.athanors[row] | owner_user_id | derived | its person |
+| allow:b.athanors[row] | status | exact | `"active"` |
+| allow:b.athanors[row] | archived_at | exact | `null` |
+| allow:b.athanors[row] | created_by | derived | its person |
+| allow:b.athanors[row] | settings | exact | `null` |
+| allow:b.athanors[row] | provisioned_at | bound | null, or a time inside B's administrator's account and setup at B up to allow:b.athanors's read |
+| allow:b.athanors[row] | provisioning_failed_at | exact | `null` |
+| allow:b.athanors[row] | provisioning_failure | exact | `null` |
+| allow:b.athanors[row] | security_generation | exact | `1` |
+| allow:b.athanors[row] | created_at | bound | a time inside B's administrator's account and setup at B |
+| allow:b.athanors[row] | updated_at | bound | a time inside B's administrator's account and setup at B up to allow:b.athanors's read |
+| allow:b.person_identities[row] | id | captured | a new pid_ id |
+| allow:b.person_identities[row] | user_id | derived | its person |
+| allow:b.person_identities[row] | identifier | captured | the administrator's identifier, per_ and 64 hexadecimal digits |
+| allow:b.person_identities[row] | head_hash | captured | the head of the administrator's log |
+| allow:b.person_identities[row] | directory_url | exact | `"https://registry.test"` |
+| allow:b.person_identities[row] | revision | exact | `1` |
+| allow:b.person_identities[row] | inserted_at | bound | a time inside B's administrator's account and setup at B |
+| allow:b.person_identities[row] | updated_at | bound | a time inside B's administrator's account and setup at B |
+| allow:b.server_allowlist[setup's allow of the administrator] | id | captured | a new door_ id |
+| allow:b.server_allowlist[setup's allow of the administrator] | kind | exact | `"identifier"` |
+| allow:b.server_allowlist[setup's allow of the administrator] | value | derived | the administrator's identifier |
+| allow:b.server_allowlist[setup's allow of the administrator] | effect | exact | `"allow"` |
+| allow:b.server_allowlist[setup's allow of the administrator] | status | exact | `"allowed"` |
+| allow:b.server_allowlist[setup's allow of the administrator] | requested_by | exact | `null` |
+| allow:b.server_allowlist[setup's allow of the administrator] | added_by | derived | B's administrator |
+| allow:b.server_allowlist[setup's allow of the administrator] | note | exact | `"setup"` |
+| allow:b.server_allowlist[setup's allow of the administrator] | label | exact | `null` |
+| allow:b.server_allowlist[setup's allow of the administrator] | created_at | bound | a time inside B's administrator's account and setup at B |
+| allow:b.server_allowlist[setup's allow of the administrator] | updated_at | bound | a time inside B's administrator's account and setup at B |
+| allow:b.server_allowlist[the allow of @proof] | id | captured | a new door_ id |
+| allow:b.server_allowlist[the allow of @proof] | kind | exact | `"identifier"` |
+| allow:b.server_allowlist[the allow of @proof] | value | derived | the identifier @proof names at the registry |
+| allow:b.server_allowlist[the allow of @proof] | effect | exact | `"allow"` |
+| allow:b.server_allowlist[the allow of @proof] | status | exact | `"allowed"` |
+| allow:b.server_allowlist[the allow of @proof] | requested_by | exact | `null` |
+| allow:b.server_allowlist[the allow of @proof] | added_by | derived | B's administrator |
+| allow:b.server_allowlist[the allow of @proof] | note | exact | `null` |
+| allow:b.server_allowlist[the allow of @proof] | label | exact | `"proof"` |
+| allow:b.server_allowlist[the allow of @proof] | created_at | bound | a time inside the allow |
+| allow:b.server_allowlist[the allow of @proof] | updated_at | bound | a time inside the allow |
+| sign_in:b.person_identities[the administrator's] | directory_url | exact | as read at allow |
+| sign_in:b.person_identities[the administrator's] | head_hash | exact | as read at allow |
+| sign_in:b.person_identities[the administrator's] | id | exact | as read at allow |
+| sign_in:b.person_identities[the administrator's] | identifier | exact | as read at allow |
+| sign_in:b.person_identities[the administrator's] | inserted_at | exact | as read at allow |
+| sign_in:b.person_identities[the administrator's] | revision | exact | as read at allow |
+| sign_in:b.person_identities[the administrator's] | updated_at | exact | as read at allow |
+| sign_in:b.person_identities[the administrator's] | user_id | exact | as read at allow |
 | sign_in:b.person_identities[the person's] | id | captured | a new pid_ id |
-| sign_in:b.person_identities[the person's] | user_id | captured | a new usr_ id |
-| sign_in:b.person_identities[the person's] | identifier | derived | the identifier A's recovery code names |
-| sign_in:b.person_identities[the person's] | provenance | exact | `"remote"` |
-| sign_in:b.person_identities[the person's] | enrollment | exact | `"enrolled"` |
-| sign_in:b.person_identities[the person's] | live_public_key | exact | `null`: B keeps no copy of a remote person's keys; it reads them at the directory |
-| sign_in:b.person_identities[the person's] | operational_public_key | exact | `null` |
-| sign_in:b.person_identities[the person's] | live_key_sealed | exact | `null` |
-| sign_in:b.person_identities[the person's] | operational_key_sealed | exact | `null` |
-| sign_in:b.person_identities[the person's] | genesis_hash | derived | the directory's genesis, hashed |
-| sign_in:b.person_identities[the person's] | head_hash | derived | the directory's one entry |
+| sign_in:b.person_identities[the person's] | user_id | derived | its person |
+| sign_in:b.person_identities[the person's] | identifier | derived | the account's identifier |
+| sign_in:b.person_identities[the person's] | head_hash | derived | the head of the account's log when it was admitted |
 | sign_in:b.person_identities[the person's] | directory_url | exact | `"https://registry.test"` |
-| sign_in:b.person_identities[the person's] | first_method_at | exact | `null` |
 | sign_in:b.person_identities[the person's] | revision | exact | `1` |
 | sign_in:b.person_identities[the person's] | inserted_at | bound | a time inside the sign-in at B |
 | sign_in:b.person_identities[the person's] | updated_at | bound | a time inside the sign-in at B |
@@ -424,21 +356,21 @@ row per field of each row of each step's objects:
 | sign_in:b.athanors[the administrator's] | id | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | name | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | owner_user_id | exact | as read at allow |
-| sign_in:b.athanors[the administrator's] | provisioned_at | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | provisioned_at | bound | as read at allow, or a time inside the sign-in at B |
 | sign_in:b.athanors[the administrator's] | provisioning_failed_at | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | provisioning_failure | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | security_generation | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | settings | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | slug | exact | as read at allow |
 | sign_in:b.athanors[the administrator's] | status | exact | as read at allow |
-| sign_in:b.athanors[the administrator's] | updated_at | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | updated_at | bound | as read at allow, or a time inside the sign-in at B |
 | sign_in:b.athanors[the person's] | id | captured | a new ath_ id |
 | sign_in:b.athanors[the person's] | name | exact | `"Me"` |
-| sign_in:b.athanors[the person's] | slug | exact | `"me-2"`: the next free slug for "Me", the administrator's athanor holding `me` |
-| sign_in:b.athanors[the person's] | owner_user_id | derived | B's identity row for A's identifier |
+| sign_in:b.athanors[the person's] | slug | exact | `"me-2"` |
+| sign_in:b.athanors[the person's] | owner_user_id | derived | its person |
 | sign_in:b.athanors[the person's] | status | exact | `"active"` |
 | sign_in:b.athanors[the person's] | archived_at | exact | `null` |
-| sign_in:b.athanors[the person's] | created_by | derived | B's identity row for A's identifier |
+| sign_in:b.athanors[the person's] | created_by | derived | its person |
 | sign_in:b.athanors[the person's] | settings | exact | `null` |
 | sign_in:b.athanors[the person's] | provisioned_at | bound | null, or a time inside the sign-in at B up to sign_in:b.athanors's read |
 | sign_in:b.athanors[the person's] | provisioning_failed_at | exact | `null` |
@@ -464,11 +396,11 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | id | derived | B's identity row for A's identifier |
 | sign_in:b.users[the person's] | email | exact | `null` |
 | sign_in:b.users[the person's] | email_verified | exact | `null` |
-| sign_in:b.users[the person's] | admission | exact | `"remote"` |
+| sign_in:b.users[the person's] | admission | exact | `"open"` |
 | sign_in:b.users[the person's] | display_name | exact | `null` |
 | sign_in:b.users[the person's] | namespace | exact | `null` |
 | sign_in:b.users[the person's] | status | exact | `"active"` |
-| sign_in:b.users[the person's] | prefs | exact | `"{}"`: Newcomer's empty document (newcomer.ex:264) |
+| sign_in:b.users[the person's] | prefs | exact | `"{}"` |
 | sign_in:b.users[the person's] | first_seen_at | bound | a time inside the sign-in at B |
 | sign_in:b.users[the person's] | last_seen_at | bound | a time inside the sign-in at B up to sign_in:b.users's read |
 | sign_in:b.users[the person's] | denied_at | exact | `null` |
@@ -476,48 +408,85 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | security_generation | exact | `1` |
 | sign_in:b.users[the person's] | created_at | bound | a time inside the sign-in at B |
 | sign_in:b.users[the person's] | updated_at | bound | a time inside the sign-in at B up to sign_in:b.users's read |
-| sign_in:b.sessions[proof][row] | id | captured | a new ses_ id |
-| sign_in:b.sessions[proof][row] | token_hash | derived | the SHA-256 of the session token the browser's cookie carries |
-| sign_in:b.sessions[proof][row] | token_prefix | derived | the first 8 characters of that token |
-| sign_in:b.sessions[proof][row] | user_id | derived | B's identity row for A's identifier |
-| sign_in:b.sessions[proof][row] | email | exact | `null` |
-| sign_in:b.sessions[proof][row] | provider | exact | `"cyfr"`: the CYFR identity kind, as `CyfrDoor.context/1` mints it (cyfr_door.ex:509) |
-| sign_in:b.sessions[proof][row] | expires_at | derived | inserted_at plus session_ttl_hours (Sanctum.Session) |
-| sign_in:b.sessions[proof][row] | athanor_id | derived | the person's own athanor at B |
-| sign_in:b.sessions[proof][row] | identity_key_epoch | derived | a genesis's key epoch, its own hash |
-| sign_in:b.sessions[proof][row] | client_id | exact | `null` |
-| sign_in:b.sessions[proof][row] | inserted_at | bound | a time inside the sign-in at B |
+| sign_in:b.directory_heads[the administrator's] | identifier | derived | the account's identifier |
+| sign_in:b.directory_heads[the administrator's] | genesis | captured | the administrator's genesis |
+| sign_in:b.directory_heads[the administrator's] | directory_url | exact | `"https://registry.test"` |
+| sign_in:b.directory_heads[the administrator's] | head_hash | derived | the head of the account's log as the directory serves it |
+| sign_in:b.directory_heads[the administrator's] | state | captured | the verified state the head leaves, as JSON text |
+| sign_in:b.directory_heads[the administrator's] | verified_at | bound | a time inside B's administrator's account and setup at B up to sign_in:b.directory_heads's read |
+| sign_in:b.directory_heads[the administrator's] | gone_at | exact | `null` |
+| sign_in:b.directory_heads[the administrator's] | revision | captured | the cached head's revision |
+| sign_in:b.directory_heads[the administrator's] | inserted_at | bound | a time inside B's administrator's account and setup at B |
+| sign_in:b.directory_heads[the administrator's] | updated_at | bound | a time inside B's administrator's account and setup at B up to sign_in:b.directory_heads's read |
+| sign_in:b.directory_heads[the person's, read at the allow] | identifier | derived | the account's identifier |
+| sign_in:b.directory_heads[the person's, read at the allow] | genesis | derived | the genesis the directory stores, as its JCS text |
+| sign_in:b.directory_heads[the person's, read at the allow] | directory_url | exact | `"https://registry.test"` |
+| sign_in:b.directory_heads[the person's, read at the allow] | head_hash | derived | the head of the account's log as the directory serves it |
+| sign_in:b.directory_heads[the person's, read at the allow] | state | captured | the verified state the head leaves, as JSON text |
+| sign_in:b.directory_heads[the person's, read at the allow] | verified_at | bound | a time inside the allow up to sign_in:b.directory_heads's read |
+| sign_in:b.directory_heads[the person's, read at the allow] | gone_at | exact | `null` |
+| sign_in:b.directory_heads[the person's, read at the allow] | revision | captured | the cached head's revision |
+| sign_in:b.directory_heads[the person's, read at the allow] | inserted_at | bound | a time inside the allow |
+| sign_in:b.directory_heads[the person's, read at the allow] | updated_at | bound | a time inside the allow up to sign_in:b.directory_heads's read |
+| sign_in:b.paired_clients[the administrator's] | id | captured | a new pcl_ id |
+| sign_in:b.paired_clients[the administrator's] | athanor_id | derived | the person's own athanor here |
+| sign_in:b.paired_clients[the administrator's] | user_id | derived | its person |
+| sign_in:b.paired_clients[the administrator's] | source_kind | exact | `"passkey"` |
+| sign_in:b.paired_clients[the administrator's] | source_id | derived | the client's own id |
+| sign_in:b.paired_clients[the administrator's] | device_public_key | exact | `null` |
+| sign_in:b.paired_clients[the administrator's] | standing | exact | `"active"` |
+| sign_in:b.paired_clients[the administrator's] | holder_kind | exact | `null` |
+| sign_in:b.paired_clients[the administrator's] | display_name | exact | `null` |
+| sign_in:b.paired_clients[the administrator's] | kid | derived | the kid of the key the administrator's authenticator holds |
+| sign_in:b.paired_clients[the administrator's] | head | derived | the head it signed in under |
+| sign_in:b.paired_clients[the administrator's] | inserted_at | bound | a time inside B's administrator's account and setup at B |
+| sign_in:b.paired_clients[the administrator's] | updated_at | bound | a time inside B's administrator's account and setup at B |
+| sign_in:b.paired_clients[the person's] | id | captured | a new pcl_ id |
+| sign_in:b.paired_clients[the person's] | athanor_id | derived | the person's own athanor here |
+| sign_in:b.paired_clients[the person's] | user_id | derived | its person |
+| sign_in:b.paired_clients[the person's] | source_kind | exact | `"passkey"` |
+| sign_in:b.paired_clients[the person's] | source_id | derived | the client's own id |
+| sign_in:b.paired_clients[the person's] | device_public_key | exact | `null` |
+| sign_in:b.paired_clients[the person's] | standing | exact | `"active"` |
+| sign_in:b.paired_clients[the person's] | holder_kind | exact | `null` |
+| sign_in:b.paired_clients[the person's] | display_name | exact | `null` |
+| sign_in:b.paired_clients[the person's] | kid | derived | the kid of the key the browser's authenticator holds |
+| sign_in:b.paired_clients[the person's] | head | derived | the head it signed in under |
+| sign_in:b.paired_clients[the person's] | inserted_at | bound | a time inside the sign-in at B |
+| sign_in:b.paired_clients[the person's] | updated_at | bound | a time inside the sign-in at B |
 | sign_in:b.sessions[the administrator's] | id | captured | a new ses_ id |
-| sign_in:b.sessions[the administrator's] | token_hash | derived | the SHA-256 of the session token the administrator's cookie carries |
+| sign_in:b.sessions[the administrator's] | token_hash | derived | the SHA-256 of the session token the browser's cookie carries |
 | sign_in:b.sessions[the administrator's] | token_prefix | derived | the first 8 characters of that token |
-| sign_in:b.sessions[the administrator's] | user_id | derived | B's administrator |
+| sign_in:b.sessions[the administrator's] | user_id | derived | its person |
 | sign_in:b.sessions[the administrator's] | email | exact | `null` |
 | sign_in:b.sessions[the administrator's] | provider | exact | `"passkey"` |
 | sign_in:b.sessions[the administrator's] | expires_at | derived | inserted_at plus session_ttl_hours (Sanctum.Session) |
-| sign_in:b.sessions[the administrator's] | athanor_id | derived | B's one athanor |
-| sign_in:b.sessions[the administrator's] | identity_key_epoch | exact | `null` |
-| sign_in:b.sessions[the administrator's] | client_id | exact | `null` |
-| sign_in:b.sessions[the administrator's] | inserted_at | bound | a time inside setup at B |
-| sign_in:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | client_id | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | email | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | expires_at | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | id | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | identity_key_epoch | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | inserted_at | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | provider | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | token_hash | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | token_prefix | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | user_id | exact | as read at sign_in |
+| sign_in:b.sessions[the administrator's] | athanor_id | derived | the person's own athanor here |
+| sign_in:b.sessions[the administrator's] | kid | derived | the kid of the key the browser's authenticator holds |
+| sign_in:b.sessions[the administrator's] | head | derived | the head it signed in under |
+| sign_in:b.sessions[the administrator's] | client_id | derived | the passkey's paired client here |
+| sign_in:b.sessions[the administrator's] | inserted_at | bound | a time inside B's administrator's account and setup at B |
+| sign_in:b.sessions[the person's] | id | captured | a new ses_ id |
+| sign_in:b.sessions[the person's] | token_hash | derived | the SHA-256 of the session token the browser's cookie carries |
+| sign_in:b.sessions[the person's] | token_prefix | derived | the first 8 characters of that token |
+| sign_in:b.sessions[the person's] | user_id | derived | its person |
+| sign_in:b.sessions[the person's] | email | exact | `null` |
+| sign_in:b.sessions[the person's] | provider | exact | `"passkey"` |
+| sign_in:b.sessions[the person's] | expires_at | derived | inserted_at plus session_ttl_hours (Sanctum.Session) |
+| sign_in:b.sessions[the person's] | athanor_id | derived | the person's own athanor here |
+| sign_in:b.sessions[the person's] | kid | derived | the kid of the key the browser's authenticator holds |
+| sign_in:b.sessions[the person's] | head | derived | the head it signed in under |
+| sign_in:b.sessions[the person's] | client_id | derived | the passkey's paired client here |
+| sign_in:b.sessions[the person's] | inserted_at | bound | a time inside the sign-in at B |
 | sync:registry.push_tokens[proof][row] | id | captured | a token id: a new UUID, not the nil UUID |
 | sync:registry.push_tokens[proof][row] | token_hash | derived | the digest of the token A sealed |
 | sync:registry.push_tokens[proof][row] | namespace_slug | exact | `"proof"` |
 | sync:registry.push_tokens[proof][row] | label | derived | the label A sealed with the token |
 | sync:registry.push_tokens[proof][row] | created_at | bound | a time inside the sync |
-| sync:registry.push_tokens[proof][row] | last_used_at | bound | a time inside the sync |
+| sync:registry.push_tokens[proof][row] | last_used_at | exact | `null` |
 | sync:registry.push_tokens[proof][row] | revoked_at | exact | `null` |
 | sync:registry.push_tokens[proof][row] | created_by | derived | A's identifier |
-| sync:registry.push_tokens[proof][row] | recovery_epoch | derived | a genesis's recovery epoch, its own hash |
+| sync:registry.push_tokens[proof][row] | recovery_epoch | derived | the genesis's hash: no recover entry since |
 | sync:a.registry_tokens[row] | id | captured | a new rtk_ id |
 | sync:a.registry_tokens[row] | user_id | derived | A's person |
 | sync:a.registry_tokens[row] | registry | exact | `"registry.registry.test"`: the OCI host, registry. before CYFR_REGISTRY_URL |
@@ -529,12 +498,12 @@ row per field of each row of each step's objects:
 | sync:a.registry_tokens.credential | type | exact | `"push_token"` |
 | sync:a.registry_tokens.credential | token | derived | the registry's token_hash for the one @proof token |
 | sync:a.registry_tokens.credential | namespace | exact | `"proof"` |
-| sync:a.registry_tokens.credential | role | exact | `"personal"`: a personal namespace's role, in `Sanctum.RegistryCredentials`' stored shape (registry_credentials.ex:28) |
+| sync:a.registry_tokens.credential | role | exact | `"personal"`: a personal namespace's role, in `Sanctum.RegistryCredentials`' stored shape |
 | sync:a.registry_tokens.credential | issued_at | derived | the row's issued_at |
 | sync:a.registry_tokens.credential | label | derived | the registry's label for that token |
 | sync:registry.request_nonces[a][a new nonce] | identifier | derived | the signer's identifier |
 | sync:registry.request_nonces[a][a new nonce] | nonce | captured | 16 new bytes |
-| sync:registry.request_nonces[a][a new nonce] | expires_at | bound | a time inside the sync, plus the 120 s a signed request lives |
+| sync:registry.request_nonces[a][a new nonce] | expires_at | bound | a time inside the sync, plus the 300 s a request a CYFR mints for a passkey lives |
 | sync:registry.request_nonces[a][a nonce read at setup 1] | identifier | exact | as read at setup |
 | sync:registry.request_nonces[a][a nonce read at setup 1] | nonce | exact | as read at setup |
 | sync:registry.request_nonces[a][a nonce read at setup 1] | expires_at | exact | as read at setup |
@@ -545,7 +514,6 @@ row per field of each row of each step's objects:
 | sync:registry.identity_heads[a][row] | head | exact | as read at setup |
 | sync:registry.identity_heads[a][row] | entries | exact | as read at setup |
 | sync:registry.identity_heads[a][row] | recovery_epoch | exact | as read at setup |
-| sync:registry.identity_heads[a][row] | key_epoch | exact | as read at setup |
 | sync:registry.identity_heads[a][row] | read_at | bound | as read at setup, or a time inside the sync |
 | ban:registry.banned_identities[row] | id | captured | a ban id: a new UUID, not the nil UUID |
 | ban:registry.banned_identities[row] | banned_at | bound | a time inside the ban |
@@ -568,7 +536,7 @@ row per field of each row of each step's objects:
 | ban:registry.push_tokens[proof][row] | recovery_epoch | exact | as read at sync |
 | ban:token_refused | status | exact | `401` |
 | ban:token_refused | body | exact | `{"errors":[{"code":"UNAUTHORIZED","message":"token revoked"}]}` |
-| ban:a.sync_refused | shown | exact | `"Sync failed: The registry has banned this identity."` |
+| ban:a.sync_refused | shown | exact | `"That did not go through: The registry has banned this identity."` |
 | ban:a.sync_refused | shared_with | exact | `[]` |
 | ban:registry.request_nonces[a][a nonce read at sync 1] | identifier | exact | as read at sync |
 | ban:registry.request_nonces[a][a nonce read at sync 1] | nonce | exact | as read at sync |
@@ -579,24 +547,6 @@ row per field of each row of each step's objects:
 | ban:registry.request_nonces[a][a nonce read at sync 3] | identifier | exact | as read at sync |
 | ban:registry.request_nonces[a][a nonce read at sync 3] | nonce | exact | as read at sync |
 | ban:registry.request_nonces[a][a nonce read at sync 3] | expires_at | exact | as read at sync |
-| held:a.passkeys[row] | activated_at | exact | as read at setup |
-| held:a.passkeys[row] | admin_confirmation_id | exact | as read at setup |
-| held:a.passkeys[row] | backup_eligible | exact | as read at setup |
-| held:a.passkeys[row] | credential_id | exact | as read at setup |
-| held:a.passkeys[row] | expires_at | exact | as read at setup |
-| held:a.passkeys[row] | id | exact | as read at setup |
-| held:a.passkeys[row] | identity_recovery_epoch | exact | as read at setup |
-| held:a.passkeys[row] | inserted_at | exact | as read at setup |
-| held:a.passkeys[row] | possession_verified | exact | as read at setup |
-| held:a.passkeys[row] | public_key | exact | as read at setup |
-| held:a.passkeys[row] | registration_digest | exact | as read at setup |
-| held:a.passkeys[row] | relying_home | exact | as read at setup |
-| held:a.passkeys[row] | revoked_at | exact | as read at setup |
-| held:a.passkeys[row] | rp_id | exact | as read at setup |
-| held:a.passkeys[row] | sign_count | derived | the authenticator's count for that credential now |
-| held:a.passkeys[row] | state | exact | as read at setup |
-| held:a.passkeys[row] | updated_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
-| held:a.passkeys[row] | user_id | exact | as read at setup |
 | held:a.users[row] | admission | exact | as read at setup |
 | held:a.users[row] | created_at | exact | as read at setup |
 | held:a.users[row] | denied_at | exact | as read at setup |
@@ -605,26 +555,18 @@ row per field of each row of each step's objects:
 | held:a.users[row] | email_verified | exact | as read at setup |
 | held:a.users[row] | first_seen_at | exact | as read at setup |
 | held:a.users[row] | id | exact | as read at setup |
-| held:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the run from ack's end to the last read |
-| held:a.users[row] | namespace | exact | as read at setup |
+| held:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
+| held:a.users[row] | namespace | exact | `"proof"`: the personal namespace the sync recorded (`Sanctum.SignIn.record_namespace/2`) |
 | held:a.users[row] | platform_admin_at | exact | as read at setup |
 | held:a.users[row] | prefs | exact | as read at setup |
 | held:a.users[row] | security_generation | exact | as read at setup |
 | held:a.users[row] | status | exact | as read at setup |
-| held:a.users[row] | updated_at | bound | as read at setup, or a time inside the run from ack's end to the last read |
+| held:a.users[row] | updated_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
 | held:a.person_identities[row] | directory_url | exact | as read at setup |
-| held:a.person_identities[row] | enrollment | exact | as read at setup |
-| held:a.person_identities[row] | first_method_at | exact | as read at setup |
-| held:a.person_identities[row] | genesis_hash | exact | as read at setup |
 | held:a.person_identities[row] | head_hash | exact | as read at setup |
 | held:a.person_identities[row] | id | exact | as read at setup |
 | held:a.person_identities[row] | identifier | exact | as read at setup |
 | held:a.person_identities[row] | inserted_at | exact | as read at setup |
-| held:a.person_identities[row] | live_key_sealed | exact | as read at setup |
-| held:a.person_identities[row] | live_public_key | exact | as read at setup |
-| held:a.person_identities[row] | operational_key_sealed | exact | as read at setup |
-| held:a.person_identities[row] | operational_public_key | exact | as read at setup |
-| held:a.person_identities[row] | provenance | exact | as read at setup |
 | held:a.person_identities[row] | revision | exact | as read at setup |
 | held:a.person_identities[row] | updated_at | exact | as read at setup |
 | held:a.person_identities[row] | user_id | exact | as read at setup |
@@ -634,41 +576,37 @@ row per field of each row of each step's objects:
 | held:a.athanors[row] | id | exact | as read at setup |
 | held:a.athanors[row] | name | exact | as read at setup |
 | held:a.athanors[row] | owner_user_id | exact | as read at setup |
-| held:a.athanors[row] | provisioned_at | exact | as read at setup |
+| held:a.athanors[row] | provisioned_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
 | held:a.athanors[row] | provisioning_failed_at | exact | as read at setup |
 | held:a.athanors[row] | provisioning_failure | exact | as read at setup |
 | held:a.athanors[row] | security_generation | exact | as read at setup |
 | held:a.athanors[row] | settings | exact | as read at setup |
 | held:a.athanors[row] | slug | exact | as read at setup |
 | held:a.athanors[row] | status | exact | as read at setup |
-| held:a.athanors[row] | updated_at | exact | as read at setup |
-| held:a.identity_attempts[row] | directory_url | exact | as read at setup |
-| held:a.identity_attempts[row] | entry | exact | as read at setup |
-| held:a.identity_attempts[row] | entry_hash | exact | as read at setup |
-| held:a.identity_attempts[row] | expected_head | exact | as read at setup |
-| held:a.identity_attempts[row] | expected_revision | exact | as read at setup |
-| held:a.identity_attempts[row] | genesis | exact | as read at setup |
-| held:a.identity_attempts[row] | id | exact | as read at setup |
-| held:a.identity_attempts[row] | identifier | exact | as read at setup |
-| held:a.identity_attempts[row] | inserted_at | exact | as read at setup |
-| held:a.identity_attempts[row] | kind | exact | as read at setup |
-| held:a.identity_attempts[row] | kit_acknowledged_at | exact | as read at setup |
-| held:a.identity_attempts[row] | kit_seed_sealed | exact | as read at setup |
-| held:a.identity_attempts[row] | name | exact | as read at setup |
-| held:a.identity_attempts[row] | outcome | exact | as read at setup |
-| held:a.identity_attempts[row] | phase | exact | as read at setup |
-| held:a.identity_attempts[row] | reproof_challenge_digest | exact | as read at setup |
-| held:a.identity_attempts[row] | reproof_expires_at | exact | as read at setup |
-| held:a.identity_attempts[row] | request_digest | exact | as read at setup |
-| held:a.identity_attempts[row] | request_id | exact | as read at setup |
-| held:a.identity_attempts[row] | revision | exact | as read at setup |
-| held:a.identity_attempts[row] | staged_live_key_sealed | exact | as read at setup |
-| held:a.identity_attempts[row] | staged_live_public_key | exact | as read at setup |
-| held:a.identity_attempts[row] | staged_operational_key_sealed | exact | as read at setup |
-| held:a.identity_attempts[row] | staged_operational_public_key | exact | as read at setup |
-| held:a.identity_attempts[row] | token_digest | exact | as read at setup |
-| held:a.identity_attempts[row] | updated_at | exact | as read at setup |
-| held:a.identity_attempts[row] | user_id | exact | as read at setup |
+| held:a.athanors[row] | updated_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
+| held:a.directory_heads[row] | directory_url | exact | as read at setup |
+| held:a.directory_heads[row] | genesis | exact | as read at setup |
+| held:a.directory_heads[row] | gone_at | exact | as read at setup |
+| held:a.directory_heads[row] | head_hash | exact | as read at setup |
+| held:a.directory_heads[row] | identifier | exact | as read at setup |
+| held:a.directory_heads[row] | inserted_at | exact | as read at setup |
+| held:a.directory_heads[row] | revision | captured | the cached head's revision, moved by each read since |
+| held:a.directory_heads[row] | state | exact | as read at setup |
+| held:a.directory_heads[row] | updated_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
+| held:a.directory_heads[row] | verified_at | bound | as read at setup, or a time inside the run from setup's end to the last read |
+| held:a.paired_clients[row] | athanor_id | exact | as read at setup |
+| held:a.paired_clients[row] | device_public_key | exact | as read at setup |
+| held:a.paired_clients[row] | display_name | exact | as read at setup |
+| held:a.paired_clients[row] | head | exact | as read at setup |
+| held:a.paired_clients[row] | holder_kind | exact | as read at setup |
+| held:a.paired_clients[row] | id | exact | as read at setup |
+| held:a.paired_clients[row] | inserted_at | exact | as read at setup |
+| held:a.paired_clients[row] | kid | exact | as read at setup |
+| held:a.paired_clients[row] | source_id | exact | as read at setup |
+| held:a.paired_clients[row] | source_kind | exact | as read at setup |
+| held:a.paired_clients[row] | standing | exact | as read at setup |
+| held:a.paired_clients[row] | updated_at | exact | as read at setup |
+| held:a.paired_clients[row] | user_id | exact | as read at setup |
 | held:a.registry_tokens[row] | credential_ciphertext | exact | as read at sync |
 | held:a.registry_tokens[row] | id | exact | as read at sync |
 | held:a.registry_tokens[row] | inserted_at | exact | as read at sync |
@@ -677,19 +615,22 @@ row per field of each row of each step's objects:
 | held:a.registry_tokens[row] | registry | exact | as read at sync |
 | held:a.registry_tokens[row] | updated_at | exact | as read at sync |
 | held:a.registry_tokens[row] | user_id | exact | as read at sync |
-| held:registry.directory.identity_log_entries[row] | id | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | identifier | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | seq | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | kind | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | entry_hash | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | prev_hash | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | entry | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | request_id | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | request_digest | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | outcome | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | outcome_body | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | bytes | exact | as read at setup |
-| held:registry.directory.identity_log_entries[row] | inserted_at | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | identifier | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | seq | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | kind | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | entry_hash | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | prev_hash | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | entry | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | bytes | exact | as read at setup |
+| held:registry.directory.entries[a][the genesis] | inserted_at | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | identifier | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | seq | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | kind | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | entry_hash | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | prev_hash | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | entry | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | bytes | exact | as read at setup |
+| held:registry.directory.entries[a][the passkey's add_key] | inserted_at | exact | as read at setup |
 | held:registry.namespaces[proof][row] | slug | exact | as read at setup |
 | held:registry.namespaces[proof][row] | kind | exact | as read at setup |
 | held:registry.namespaces[proof][row] | reserved | exact | as read at setup |
@@ -708,13 +649,10 @@ row per field of each row of each step's objects:
 | held:registry.identity_heads[a][row] | head | exact | as read at setup |
 | held:registry.identity_heads[a][row] | entries | exact | as read at setup |
 | held:registry.identity_heads[a][row] | recovery_epoch | exact | as read at setup |
-| held:registry.identity_heads[a][row] | key_epoch | exact | as read at setup |
 | held:registry.identity_heads[a][row] | read_at | bound | as read at sync, or a time inside the run from sync's end to the last read |
 | held:registry.policy_acceptances[a][row] | id | exact | as read at setup |
 | held:registry.policy_acceptances[a][row] | policy_version | exact | as read at setup |
 | held:registry.policy_acceptances[a][row] | accepted_at | exact | as read at setup |
-| held:registry.policy_acceptances[a][row] | ip_address | exact | as read at setup |
-| held:registry.policy_acceptances[a][row] | user_agent | exact | as read at setup |
 | held:registry.policy_acceptances[a][row] | identifier | exact | as read at setup |
 | held:registry.policy_acceptances[a][row] | former_identity | exact | as read at setup |
 | held:registry.request_nonces[a][a nonce read at sync 1] | identifier | exact | as read at ban |
@@ -745,93 +683,86 @@ row per field of each row of each step's objects:
 | held:registry.banned_identities[row] | related_report_ids | exact | as read at ban |
 | held:registry.banned_identities[row] | identifier | exact | as read at ban |
 | held:registry.banned_identities[row] | former_identity | exact | as read at ban |
-| held:b.passkeys[row] | activated_at | exact | as read at allow |
-| held:b.passkeys[row] | admin_confirmation_id | exact | as read at allow |
-| held:b.passkeys[row] | backup_eligible | exact | as read at allow |
-| held:b.passkeys[row] | credential_id | exact | as read at allow |
-| held:b.passkeys[row] | expires_at | exact | as read at allow |
-| held:b.passkeys[row] | id | exact | as read at allow |
-| held:b.passkeys[row] | identity_recovery_epoch | exact | as read at allow |
-| held:b.passkeys[row] | inserted_at | exact | as read at allow |
-| held:b.passkeys[row] | possession_verified | exact | as read at allow |
-| held:b.passkeys[row] | public_key | exact | as read at allow |
-| held:b.passkeys[row] | registration_digest | exact | as read at allow |
-| held:b.passkeys[row] | relying_home | exact | as read at allow |
-| held:b.passkeys[row] | revoked_at | exact | as read at allow |
-| held:b.passkeys[row] | rp_id | exact | as read at allow |
-| held:b.passkeys[row] | sign_count | exact | as read at allow |
-| held:b.passkeys[row] | state | exact | as read at allow |
-| held:b.passkeys[row] | updated_at | exact | as read at allow |
-| held:b.passkeys[row] | user_id | exact | as read at allow |
-| held:b.users[row 1] | admission | exact | as read at sign_in |
-| held:b.users[row 1] | created_at | exact | as read at sign_in |
-| held:b.users[row 1] | denied_at | exact | as read at sign_in |
-| held:b.users[row 1] | display_name | exact | as read at sign_in |
-| held:b.users[row 1] | email | exact | as read at sign_in |
-| held:b.users[row 1] | email_verified | exact | as read at sign_in |
-| held:b.users[row 1] | first_seen_at | exact | as read at sign_in |
-| held:b.users[row 1] | id | exact | as read at sign_in |
-| held:b.users[row 1] | last_seen_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
-| held:b.users[row 1] | namespace | exact | as read at sign_in |
-| held:b.users[row 1] | platform_admin_at | exact | as read at sign_in |
-| held:b.users[row 1] | prefs | exact | as read at sign_in |
-| held:b.users[row 1] | security_generation | exact | as read at sign_in |
-| held:b.users[row 1] | status | exact | as read at sign_in |
-| held:b.users[row 1] | updated_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
-| held:b.users[row 2] | admission | exact | as read at sign_in |
-| held:b.users[row 2] | created_at | exact | as read at sign_in |
-| held:b.users[row 2] | denied_at | exact | as read at sign_in |
-| held:b.users[row 2] | display_name | exact | as read at sign_in |
-| held:b.users[row 2] | email | exact | as read at sign_in |
-| held:b.users[row 2] | email_verified | exact | as read at sign_in |
-| held:b.users[row 2] | first_seen_at | exact | as read at sign_in |
-| held:b.users[row 2] | id | exact | as read at sign_in |
-| held:b.users[row 2] | last_seen_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
-| held:b.users[row 2] | namespace | exact | as read at sign_in |
-| held:b.users[row 2] | platform_admin_at | exact | as read at sign_in |
-| held:b.users[row 2] | prefs | exact | as read at sign_in |
-| held:b.users[row 2] | security_generation | exact | as read at sign_in |
-| held:b.users[row 2] | status | exact | as read at sign_in |
-| held:b.users[row 2] | updated_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
+| held:b.users[the administrator's] | admission | exact | as read at sign_in |
+| held:b.users[the administrator's] | created_at | exact | as read at sign_in |
+| held:b.users[the administrator's] | denied_at | exact | as read at sign_in |
+| held:b.users[the administrator's] | display_name | exact | as read at sign_in |
+| held:b.users[the administrator's] | email | exact | as read at sign_in |
+| held:b.users[the administrator's] | email_verified | exact | as read at sign_in |
+| held:b.users[the administrator's] | first_seen_at | exact | as read at sign_in |
+| held:b.users[the administrator's] | id | exact | as read at sign_in |
+| held:b.users[the administrator's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.users[the administrator's] | namespace | exact | as read at sign_in |
+| held:b.users[the administrator's] | platform_admin_at | exact | as read at sign_in |
+| held:b.users[the administrator's] | prefs | exact | as read at sign_in |
+| held:b.users[the administrator's] | security_generation | exact | as read at sign_in |
+| held:b.users[the administrator's] | status | exact | as read at sign_in |
+| held:b.users[the administrator's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.users[the person's] | admission | exact | as read at sign_in |
+| held:b.users[the person's] | created_at | exact | as read at sign_in |
+| held:b.users[the person's] | denied_at | exact | as read at sign_in |
+| held:b.users[the person's] | display_name | exact | as read at sign_in |
+| held:b.users[the person's] | email | exact | as read at sign_in |
+| held:b.users[the person's] | email_verified | exact | as read at sign_in |
+| held:b.users[the person's] | first_seen_at | exact | as read at sign_in |
+| held:b.users[the person's] | id | exact | as read at sign_in |
+| held:b.users[the person's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.users[the person's] | namespace | exact | as read at sign_in |
+| held:b.users[the person's] | platform_admin_at | exact | as read at sign_in |
+| held:b.users[the person's] | prefs | exact | as read at sign_in |
+| held:b.users[the person's] | security_generation | exact | as read at sign_in |
+| held:b.users[the person's] | status | exact | as read at sign_in |
+| held:b.users[the person's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
 | held:b.person_identities[the administrator's] | directory_url | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | enrollment | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | first_method_at | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | genesis_hash | exact | as read at sign_in |
 | held:b.person_identities[the administrator's] | head_hash | exact | as read at sign_in |
 | held:b.person_identities[the administrator's] | id | exact | as read at sign_in |
 | held:b.person_identities[the administrator's] | identifier | exact | as read at sign_in |
 | held:b.person_identities[the administrator's] | inserted_at | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | live_key_sealed | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | live_public_key | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | operational_key_sealed | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | operational_public_key | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | provenance | exact | as read at sign_in |
 | held:b.person_identities[the administrator's] | revision | exact | as read at sign_in |
 | held:b.person_identities[the administrator's] | updated_at | exact | as read at sign_in |
 | held:b.person_identities[the administrator's] | user_id | exact | as read at sign_in |
 | held:b.person_identities[the person's] | directory_url | exact | as read at sign_in |
-| held:b.person_identities[the person's] | enrollment | exact | as read at sign_in |
-| held:b.person_identities[the person's] | first_method_at | exact | as read at sign_in |
-| held:b.person_identities[the person's] | genesis_hash | exact | as read at sign_in |
 | held:b.person_identities[the person's] | head_hash | exact | as read at sign_in |
 | held:b.person_identities[the person's] | id | exact | as read at sign_in |
 | held:b.person_identities[the person's] | identifier | exact | as read at sign_in |
 | held:b.person_identities[the person's] | inserted_at | exact | as read at sign_in |
-| held:b.person_identities[the person's] | live_key_sealed | exact | as read at sign_in |
-| held:b.person_identities[the person's] | live_public_key | exact | as read at sign_in |
-| held:b.person_identities[the person's] | operational_key_sealed | exact | as read at sign_in |
-| held:b.person_identities[the person's] | operational_public_key | exact | as read at sign_in |
-| held:b.person_identities[the person's] | provenance | exact | as read at sign_in |
 | held:b.person_identities[the person's] | revision | exact | as read at sign_in |
 | held:b.person_identities[the person's] | updated_at | exact | as read at sign_in |
 | held:b.person_identities[the person's] | user_id | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | athanor_id | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | device_public_key | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | display_name | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | head | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | holder_kind | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | id | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | inserted_at | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | kid | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | source_id | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | source_kind | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | standing | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | updated_at | exact | as read at sign_in |
+| held:b.paired_clients[the administrator's] | user_id | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | athanor_id | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | device_public_key | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | display_name | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | head | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | holder_kind | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | id | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | inserted_at | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | kid | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | source_id | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | source_kind | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | standing | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | updated_at | exact | as read at sign_in |
+| held:b.paired_clients[the person's] | user_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | athanor_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | email | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | expires_at | exact | as read at sign_in |
+| held:b.sessions[the administrator's] | head | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | id | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | identity_key_epoch | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | inserted_at | exact | as read at sign_in |
+| held:b.sessions[the administrator's] | kid | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | provider | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | token_hash | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | token_prefix | exact | as read at sign_in |
@@ -840,49 +771,61 @@ row per field of each row of each step's objects:
 | held:b.sessions[the person's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | email | exact | as read at sign_in |
 | held:b.sessions[the person's] | expires_at | exact | as read at sign_in |
+| held:b.sessions[the person's] | head | exact | as read at sign_in |
 | held:b.sessions[the person's] | id | exact | as read at sign_in |
-| held:b.sessions[the person's] | identity_key_epoch | exact | as read at sign_in |
 | held:b.sessions[the person's] | inserted_at | exact | as read at sign_in |
+| held:b.sessions[the person's] | kid | exact | as read at sign_in |
 | held:b.sessions[the person's] | provider | exact | as read at sign_in |
 | held:b.sessions[the person's] | token_hash | exact | as read at sign_in |
 | held:b.sessions[the person's] | token_prefix | exact | as read at sign_in |
 | held:b.sessions[the person's] | user_id | exact | as read at sign_in |
-| held:b.athanors[row 1] | archived_at | exact | as read at sign_in |
-| held:b.athanors[row 1] | created_at | exact | as read at sign_in |
-| held:b.athanors[row 1] | created_by | exact | as read at sign_in |
-| held:b.athanors[row 1] | id | exact | as read at sign_in |
-| held:b.athanors[row 1] | name | exact | as read at sign_in |
-| held:b.athanors[row 1] | owner_user_id | exact | as read at sign_in |
-| held:b.athanors[row 1] | provisioned_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
-| held:b.athanors[row 1] | provisioning_failed_at | exact | as read at sign_in |
-| held:b.athanors[row 1] | provisioning_failure | exact | as read at sign_in |
-| held:b.athanors[row 1] | security_generation | exact | as read at sign_in |
-| held:b.athanors[row 1] | settings | exact | as read at sign_in |
-| held:b.athanors[row 1] | slug | exact | as read at sign_in |
-| held:b.athanors[row 1] | status | exact | as read at sign_in |
-| held:b.athanors[row 1] | updated_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
-| held:b.athanors[row 2] | archived_at | exact | as read at sign_in |
-| held:b.athanors[row 2] | created_at | exact | as read at sign_in |
-| held:b.athanors[row 2] | created_by | exact | as read at sign_in |
-| held:b.athanors[row 2] | id | exact | as read at sign_in |
-| held:b.athanors[row 2] | name | exact | as read at sign_in |
-| held:b.athanors[row 2] | owner_user_id | exact | as read at sign_in |
-| held:b.athanors[row 2] | provisioned_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
-| held:b.athanors[row 2] | provisioning_failed_at | exact | as read at sign_in |
-| held:b.athanors[row 2] | provisioning_failure | exact | as read at sign_in |
-| held:b.athanors[row 2] | security_generation | exact | as read at sign_in |
-| held:b.athanors[row 2] | settings | exact | as read at sign_in |
-| held:b.athanors[row 2] | slug | exact | as read at sign_in |
-| held:b.athanors[row 2] | status | exact | as read at sign_in |
-| held:b.athanors[row 2] | updated_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
-| held:b.server_allowlist[row] | added_by | exact | as read at allow |
-| held:b.server_allowlist[row] | created_at | exact | as read at allow |
-| held:b.server_allowlist[row] | effect | exact | as read at allow |
-| held:b.server_allowlist[row] | id | exact | as read at allow |
-| held:b.server_allowlist[row] | kind | exact | as read at allow |
-| held:b.server_allowlist[row] | label | exact | as read at allow |
-| held:b.server_allowlist[row] | note | exact | as read at allow |
-| held:b.server_allowlist[row] | requested_by | exact | as read at allow |
-| held:b.server_allowlist[row] | status | exact | as read at allow |
-| held:b.server_allowlist[row] | updated_at | exact | as read at allow |
-| held:b.server_allowlist[row] | value | exact | as read at allow |
+| held:b.athanors[the administrator's] | archived_at | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | created_at | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | created_by | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | id | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | name | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | owner_user_id | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | provisioned_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.athanors[the administrator's] | provisioning_failed_at | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | provisioning_failure | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | security_generation | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | settings | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | slug | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | status | exact | as read at sign_in |
+| held:b.athanors[the administrator's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.athanors[the person's] | archived_at | exact | as read at sign_in |
+| held:b.athanors[the person's] | created_at | exact | as read at sign_in |
+| held:b.athanors[the person's] | created_by | exact | as read at sign_in |
+| held:b.athanors[the person's] | id | exact | as read at sign_in |
+| held:b.athanors[the person's] | name | exact | as read at sign_in |
+| held:b.athanors[the person's] | owner_user_id | exact | as read at sign_in |
+| held:b.athanors[the person's] | provisioned_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.athanors[the person's] | provisioning_failed_at | exact | as read at sign_in |
+| held:b.athanors[the person's] | provisioning_failure | exact | as read at sign_in |
+| held:b.athanors[the person's] | security_generation | exact | as read at sign_in |
+| held:b.athanors[the person's] | settings | exact | as read at sign_in |
+| held:b.athanors[the person's] | slug | exact | as read at sign_in |
+| held:b.athanors[the person's] | status | exact | as read at sign_in |
+| held:b.athanors[the person's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.server_allowlist[setup's allow of the administrator] | added_by | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | created_at | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | effect | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | id | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | kind | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | label | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | note | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | requested_by | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | status | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | updated_at | exact | as read at allow |
+| held:b.server_allowlist[setup's allow of the administrator] | value | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | added_by | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | created_at | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | effect | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | id | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | kind | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | label | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | note | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | requested_by | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | status | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | updated_at | exact | as read at allow |
+| held:b.server_allowlist[the allow of @proof] | value | exact | as read at allow |

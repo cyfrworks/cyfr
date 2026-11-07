@@ -187,16 +187,19 @@ function relay(req, res, account, errors, options, peer, answered = () => {}) {
 //
 // `homes` and `unsigned` are `readHomes`'s; the proxy is returned once
 // every home answers on its hostname, and otherwise throws naming each cell
-// that does not. With `receiver` (`startReceiver`), every request for
+// that does not. `routed` are names that are no home, each with the
+// certificate the run's authority issued for it and the listener it goes
+// to, routed as a home is but asked no readiness check: a service a
+// proof starts beside its cells, such as a registry. With `receiver` (`startReceiver`), every request for
 // `attacker.test` over plain HTTP goes to it, and with `attacker` too
 // (`readHomes`), every one over HTTPS. `proxy.refusals` lists each TLS
 // handshake a browser broke off, with the name it asked for. `proxy.errors`
 // records socket errors, including whether a request or WebSocket was
 // active; a failed forwarded request also carries `error` in `proxy.seen`.
 export async function startProxy({
-  receiver = null, answer = () => null, bodies = false, homes = [], unsigned = [], attacker = null,
+  receiver = null, answer = () => null, bodies = false, homes = [], unsigned = [], attacker = null, routed = [],
 } = {}) {
-  const routes = new Map([...homes, ...unsigned].map((route) => [route.host, route]));
+  const routes = new Map([...homes, ...unsigned, ...routed].map((route) => [route.host, route]));
   if (attacker && receiver) routes.set(attacker.host, { ...attacker, receiver });
   const tunnels = new Set();
   const cuts = new Set();
