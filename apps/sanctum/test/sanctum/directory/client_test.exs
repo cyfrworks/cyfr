@@ -422,6 +422,106 @@ defmodule Sanctum.Directory.ClientTest do
     end
   end
 
+  # ---- a log this node serves -------------------------------------------------
+
+  # This node serves the account service at the origin of a scripted
+  # directory, which would answer, and tell the test, any request sent to
+  # it: so a read that sends none shows it was made where the log is kept.
+  describe "a log this node serves" do
+    setup ctx do
+      dir = DirectoryServer.start!(ctx.tls)
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, dir.url)
+      Sanctum.Test.Settings.put("directory_serve", "writer")
+
+      # The account as this node's own directory holds it, and the
+      # scripted one at the same origin serving the same log.
+      alice = DirectoryServer.account!(dir.dir, dir.url)
+      [genesis, added] = alice.log
+      source = "203.0.113.7"
+
+      assert {:ok, %{result: :created}} =
+               Sanctum.Directory.register(%{genesis: Entry.encode(genesis), source: source})
+
+      assert {:ok, %{result: :accepted}} =
+               Sanctum.Directory.append(alice.identifier, %{
+                 entry: Entry.encode(added),
+                 source: source
+               })
+
+      %{dir: dir, alice: alice}
+    end
+
+    test "is read where it is kept, its log and a suffix, and no request is sent", ctx do
+      %{dir: dir, alice: alice} = ctx
+
+      assert {:ok, %{entries: entries, head: head, length: 2}} =
+               Client.log(alice.identifier, dir.url, opts(ctx))
+
+      assert entries == Enum.map(alice.log, &Entry.encode/1)
+      assert head == DirectoryServer.head(alice)
+
+      # This node's origin is compared in the one spelling a genesis names
+      # its directory in, however it is configured.
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, String.upcase(dir.url, :ascii))
+      assert {:ok, %{length: 2}} = Client.log(alice.identifier, dir.url, opts(ctx))
+
+      at = Identity.hash(genesis(alice))
+
+      assert {:ok, %{entries: [added], head: ^head, length: 2}} =
+               Client.entries_after(alice.identifier, dir.url, at, 0, opts(ctx))
+
+      assert added == Entry.encode(last(alice))
+
+      assert {:ok, %{entries: [], head: ^head}} =
+               Client.entries_after(alice.identifier, dir.url, head, 1, opts(ctx))
+
+      unknown = Prima.Digest.sha256("not in the log")
+
+      assert {:error, :not_found} =
+               Client.entries_after(alice.identifier, dir.url, unknown, 1, opts(ctx))
+
+      assert requests() == []
+      refute_received {:resolved, _}
+    end
+
+    test "a tombstoned account is gone, as the wire would answer it", ctx do
+      %{dir: dir, alice: alice} = ctx
+      assert :ok = Sanctum.Directory.tombstone(alice.identifier)
+
+      assert {:error, :gone} = Client.log(alice.identifier, dir.url, opts(ctx))
+
+      assert {:error, :gone} =
+               Client.entries_after(
+                 alice.identifier,
+                 dir.url,
+                 DirectoryServer.head(alice),
+                 1,
+                 opts(ctx)
+               )
+
+      assert requests() == []
+      refute_received {:resolved, _}
+    end
+
+    test "a node that does not serve the account service reads its own origin over the wire",
+         ctx do
+      %{dir: dir, alice: alice} = ctx
+
+      for mode <- ["mirror", "off"] do
+        Sanctum.Test.Settings.put("directory_serve", mode)
+        assert {:ok, %{length: 2}} = Client.log(alice.identifier, dir.url, opts(ctx)), mode
+        assert [%{target: "/directory/v1/" <> _}] = requests(), mode
+      end
+    end
+
+    test "another directory is read over the wire", ctx do
+      %{dir: other, account: bob} = serving(ctx)
+      assert {:ok, %{length: 2}} = Client.log(bob.identifier, other.url, opts(ctx))
+      assert [%{target: target}] = requests()
+      assert target =~ "/directory/v1/#{bob.identifier}"
+    end
+  end
+
   # ---- the directory's answers -------------------------------------------------
 
   describe "the directory's answers" do

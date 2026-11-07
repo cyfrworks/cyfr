@@ -613,7 +613,8 @@ defmodule Emissary.Web.DirectoryControllerTest do
       assert {:ok, %{keys: []}} = Sanctum.IdentityFreshness.state(moved)
     end
 
-    test "two people on two directories each read at their own", %{port: port, opts: opts} do
+    test "two people on two directories each read at their own, and this node's own where it is kept",
+         %{port: port, opts: opts} do
       alice = account("https://dir-a.test:#{port}")
       bob = account("https://dir-b.test:#{port}")
 
@@ -623,20 +624,28 @@ defmodule Emissary.Web.DirectoryControllerTest do
       for someone <- [alice, bob] do
         serve_at(someone.directory)
         assert {:ok, _} = Client.register(someone.genesis, opts)
-        assert {:ok, %{length: 1}} = Client.log(someone.identifier, someone.directory, opts)
       end
 
-      reads = fronted()
+      _registered = fronted()
 
-      hosts = fn identifier ->
+      hosts = fn reads, identifier ->
         for {"GET", "/directory/v1/" <> rest, host} <- reads,
             String.starts_with?(rest, identifier),
             uniq: true,
             do: host
       end
 
-      assert hosts.(alice.identifier) == ["dir-a.test"]
-      assert hosts.(bob.identifier) == ["dir-b.test"]
+      # While this node serves one of the two directories, its own log is
+      # read where it is kept, with no request, and the other at its own.
+      for {here, there, host} <- [{alice, bob, "dir-b.test"}, {bob, alice, "dir-a.test"}] do
+        serve_at(here.directory)
+        assert {:ok, %{length: 1}} = Client.log(here.identifier, here.directory, opts)
+        assert {:ok, %{length: 1}} = Client.log(there.identifier, there.directory, opts)
+
+        reads = fronted()
+        assert hosts.(reads, here.identifier) == []
+        assert hosts.(reads, there.identifier) == [host]
+      end
     end
   end
 

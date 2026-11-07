@@ -18,6 +18,19 @@ defmodule Sanctum.Directory.Client do
   `/directory/v1/…`, follow it. A CYFR serving one serves it at its origin
   alone (`Sanctum.Directory`).
 
+  A log whose directory is this node's own, where this node serves the
+  account service (`directory_serve` `writer`, `Sanctum.Directory.writer?/0`),
+  is read where it is kept (`Sanctum.Directory.read/2`), never over HTTP to
+  this node: its listener need not answer on the address its origin names,
+  as in the shipped stack, where it binds the edge network's address. The
+  directory URL and this node's origin are compared in the one spelling a
+  genesis names its directory in (`Sanctum.Directory.served/0`). The pages
+  are the ones `GET /directory/v1/…` answers, `:gone` and every other
+  refusal as the wire would carry it, so a caller reads the same answers
+  either way; the per-source windows that bound callers over the network
+  are not spent. Every other directory, a node that serves none, or one
+  that mirrors, is read over the wire. Writes always go over the wire.
+
   The client verifies no chain: its reads answer the entries, each page
   linked to the one before it (its first position, its `next`, its size),
   with the head and length the last page named, and the caller verifies
@@ -156,8 +169,8 @@ defmodule Sanctum.Directory.Client do
   @doc "Every entry of `identifier`'s log at `directory`, from its genesis."
   @spec log(String.t(), String.t(), opts()) :: {:ok, log()} | {:error, reason()}
   def log(identifier, directory, opts \\ []) do
-    with {:ok, ctx} <- context(identifier, directory, opts),
-         {:ok, body} <- call(ctx, :get, "/#{identifier}?after=-1", nil),
+    with {:ok, ctx} <- read_context(identifier, directory, opts),
+         {:ok, body} <- fetch(ctx, {:after, -1}),
          {:ok, page} <- page(body, identifier, -1) do
       read_on(ctx, page, [page.entries], 1)
     end
@@ -175,8 +188,8 @@ defmodule Sanctum.Directory.Client do
   def entries_after(identifier, directory, hash, seq, opts)
       when is_binary(hash) and is_integer(seq) and seq >= 0 do
     with :ok <- locator(Encoding.digest?(hash)),
-         {:ok, ctx} <- context(identifier, directory, opts),
-         {:ok, body} <- call(ctx, :get, "/#{identifier}/from/#{hash}", nil),
+         {:ok, ctx} <- read_context(identifier, directory, opts),
+         {:ok, body} <- fetch(ctx, {:from, hash}),
          {:ok, page} <- page(body, identifier, seq) do
       read_on(ctx, page, [page.entries], 1)
     end
@@ -208,6 +221,27 @@ defmodule Sanctum.Directory.Client do
   defp locator(true), do: :ok
   defp locator(false), do: {:error, :invalid_locator}
 
+  # A read of a log this node serves as its account service's is made where
+  # it is kept (the module doc); any other, over the wire.
+  defp read_context(identifier, directory, opts) do
+    options!(opts)
+
+    with :ok <- locator(Encoding.identifier?(identifier) and Encoding.directory_url?(directory)) do
+      if served_here?(directory),
+        do: {:ok, %{identifier: identifier, local: true}},
+        else: context(identifier, directory, opts)
+    end
+  end
+
+  defp served_here?(directory) do
+    with {:ok, spelled} <- Encoding.canonical_home(directory),
+         {:ok, ^spelled} <- Sanctum.Directory.served() do
+      Sanctum.Directory.writer?()
+    else
+      _elsewhere -> false
+    end
+  end
+
   defp context(identifier, directory, opts) do
     opts = options!(opts)
 
@@ -216,6 +250,7 @@ defmodule Sanctum.Directory.Client do
       {:ok,
        %{
          identifier: identifier,
+         local: false,
          base: base,
          origin: origin,
          transport: transport(opts),
@@ -278,6 +313,57 @@ defmodule Sanctum.Directory.Client do
       do: Keyword.put(base, :transport_opts, cacerts: opts[:cacerts]),
       else: base
   end
+
+  # ---- one page ----------------------------------------------------------------
+
+  # One page of a log, from this node's own directory where it is kept, or
+  # over the wire.
+  defp fetch(%{local: true, identifier: identifier}, at) do
+    case Sanctum.Directory.read(identifier, at) do
+      {:ok, page} -> served_page(page)
+      {:error, reason} -> {:error, served_refusal(reason)}
+    end
+  end
+
+  defp fetch(ctx, {:after, after_seq}),
+    do: call(ctx, :get, "/#{ctx.identifier}?after=#{after_seq}", nil)
+
+  defp fetch(ctx, {:from, hash}), do: call(ctx, :get, "/#{ctx.identifier}/from/#{hash}", nil)
+
+  # The page as the directory's route sends it, its stored entries decoded
+  # as a response body's are, so the reader checks it as it checks one
+  # that came over the wire.
+  defp served_page(page) do
+    decoded = Enum.map(page.entries, &Jason.decode/1)
+
+    if Enum.all?(decoded, &match?({:ok, %{}}, &1)) do
+      {:ok,
+       %{
+         "identifier" => page.identifier,
+         "from" => page.from,
+         "entries" => Enum.map(decoded, &elem(&1, 1)),
+         "next" => page.next,
+         "head" => page.head,
+         "length" => page.length
+       }}
+    else
+      {:error, :invalid_response}
+    end
+  end
+
+  # A refusal as the directory's route would carry it and `refusal/3` read
+  # it back (`Emissary.Web.DirectoryController`'s codes).
+  defp served_refusal(reason) when reason in [:not_served, :not_found, :gone, :corrupt],
+    do: reason
+
+  defp served_refusal({:invalid, {tag, _field}}) when is_atom(tag),
+    do: {:refused, :invalid, Atom.to_string(tag)}
+
+  defp served_refusal({:invalid, reason}) when is_atom(reason),
+    do: {:refused, :invalid, Atom.to_string(reason)}
+
+  defp served_refusal({:capacity, _which}), do: {:capacity, 60}
+  defp served_refusal(_unavailable), do: {:unavailable, 1}
 
   # ---- one request -------------------------------------------------------------
 
@@ -447,7 +533,7 @@ defmodule Sanctum.Directory.Client do
   end
 
   defp read_on(ctx, %{next: next}, pages, count) do
-    with {:ok, body} <- call(ctx, :get, "/#{ctx.identifier}?after=#{next}", nil),
+    with {:ok, body} <- fetch(ctx, {:after, next}),
          {:ok, page} <- page(body, ctx.identifier, next) do
       read_on(ctx, page, [page.entries | pages], count + 1)
     end

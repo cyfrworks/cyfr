@@ -13,7 +13,9 @@ defmodule Sanctum.Directory do
   Emissary's directory routes are the only caller of the reads and writes
   (`Emissary.Web.DirectoryController`). Each function takes the caller's
   address as `source`, the key of its per-source limits; nothing here
-  reads a session, because every write is self-authenticating.
+  reads a session, because every write is self-authenticating. This
+  node's own client reads a log this node serves where it is kept
+  (`read/2`, from `Sanctum.Directory.Client`), never over HTTP to itself.
 
   ## Serving
 
@@ -252,12 +254,11 @@ defmodule Sanctum.Directory do
           {:ok, page()} | {:error, reason()}
   def resolve(%{identifier: identifier, after: after_seq, source: source})
       when is_binary(identifier) and is_binary(source) do
-    with :ok <- serving(:read),
-         :ok <- known(identifier),
-         :ok <- position(after_seq),
-         :ok <- admit(every_request(source)) do
-      page_after(identifier, after_seq)
-    end
+    at = {:after, after_seq}
+
+    with :ok <- readable(identifier, at),
+         :ok <- admit(every_request(source)),
+         do: page_at(identifier, at)
   end
 
   @doc """
@@ -269,13 +270,39 @@ defmodule Sanctum.Directory do
           {:ok, page()} | {:error, reason()}
   def from(%{identifier: identifier, hash: hash, source: source})
       when is_binary(identifier) and is_binary(hash) and is_binary(source) do
-    with :ok <- serving(:read),
-         :ok <- known(identifier),
-         :ok <- digest(hash),
+    at = {:from, hash}
+
+    with :ok <- readable(identifier, at),
          :ok <- admit(every_request(source)),
-         {:ok, seq} <- position_of(identifier, hash) do
-      page_after(identifier, seq)
-    end
+         do: page_at(identifier, at)
+  end
+
+  @doc """
+  This node's own read of a log it serves, for its own client
+  (`Sanctum.Directory.Client`): the page `resolve/1` answers for
+  `{:after, position}` and `from/1` for `{:from, hash}`, with their
+  refusals, `:gone` among them, and without the per-source and
+  per-installation windows that bound a caller over the network.
+  """
+  @spec read(String.t(), {:after, integer()} | {:from, String.t()}) ::
+          {:ok, page()} | {:error, reason()}
+  def read(identifier, at) when is_binary(identifier) do
+    with :ok <- readable(identifier, at), do: page_at(identifier, at)
+  end
+
+  # Served, an identifier, and a position or hash the store can name, each
+  # refused before any rate claim or query.
+  defp readable(identifier, at) do
+    with :ok <- serving(:read), :ok <- known(identifier), do: locatable(at)
+  end
+
+  defp locatable({:after, after_seq}), do: position(after_seq)
+  defp locatable({:from, hash}), do: digest(hash)
+
+  defp page_at(identifier, {:after, after_seq}), do: page_after(identifier, after_seq)
+
+  defp page_at(identifier, {:from, hash}) do
+    with {:ok, seq} <- position_of(identifier, hash), do: page_after(identifier, seq)
   end
 
   defp page_after(identifier, after_seq) do
