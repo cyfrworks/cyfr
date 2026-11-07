@@ -25,6 +25,7 @@
 package shell
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -137,6 +138,26 @@ func writeJSON(path string, v any) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// createJSON writes path only where nothing is: a private temporary file in
+// the same directory, linked at path, which fails (fs.ErrExist) when path
+// exists, so the first writer wins whole.
+func createJSON(path string, v any) error {
+	raw, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(raw)
+	if err = errors.Join(err, tmp.Sync(), tmp.Close()); err != nil {
+		return err
+	}
+	return os.Link(tmp.Name(), path)
+}
+
 // PendingConfirm is a confirmation the shell drew: the CYFR's record, as
 // fetched over the channel, and when it was drawn.
 type PendingConfirm struct {
@@ -238,21 +259,92 @@ func New(cfg Config) (*Shell, error) {
 	if s.here, err = cfg.Clients.Load(); err != nil {
 		return nil, fmt.Errorf("this %s's standing at %s cannot be read (%v)", cfg.Noun, cfg.Address, err)
 	}
-	var a account.Attempt
-	switch raw, err := os.ReadFile(s.attemptPath()); {
-	case err == nil && json.Unmarshal(raw, &a) == nil && a.Identifier != "":
-		s.unfinished = &a
-	case err != nil && !errors.Is(err, fs.ErrNotExist):
+	if s.unfinished, err = s.readAttempt(); err != nil {
 		return nil, fmt.Errorf("the account this %s was making cannot be read (%v)", cfg.Noun, err)
 	}
 	return s, nil
+}
+
+// readAttempt is the account being made that is kept beside the key, or
+// nil for none.
+func (s *Shell) readAttempt() (*account.Attempt, error) {
+	var a account.Attempt
+	raw, err := os.ReadFile(s.attemptPath())
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case json.Unmarshal(raw, &a) != nil || a.Identifier == "":
+		return nil, errors.New("it is not an account being made")
+	}
+	return &a, nil
+}
+
+// refresh reads the key record and the account being made again before a
+// first-use action, so a shell acts on what this machine keeps now:
+// another first use (a second cyfr login, a restarted screen) may have
+// made the key, listed it in an account or begun an account since this
+// shell read them. A key it did not make is the one it uses from here,
+// and what it held for another key (a key held open, an account it was
+// making) is dropped. A shell whose channel stands acts on its own key.
+func (s *Shell) refresh() {
+	if s.ch != nil {
+		return
+	}
+	rec, err := holder.Load(s.cfg.Record)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if rec == nil || s.rec == nil || !bytes.Equal(rec.PublicKey, s.rec.PublicKey) {
+		if s.key != nil {
+			s.key.Erase()
+			s.key = nil
+		}
+		if s.making != nil {
+			clear(s.making.key)
+			s.making = nil
+		}
+	}
+	s.rec = rec
+	if s.making == nil {
+		if a, err := s.readAttempt(); err == nil {
+			s.unfinished = a
+		}
+	}
+}
+
+// madeElsewhere says this shell uses the key another first use made.
+func (s *Shell) madeElsewhere() {
+	s.say("Another %s on this machine made its key first, and this one uses that key: unlock it with that one's PIN or passphrase.", s.cfg.Noun)
 }
 
 func (s *Shell) attemptPath() string {
 	return filepath.Join(filepath.Dir(s.cfg.Record), "attempt.json")
 }
 
+// errOtherAttempt is an account another first use on this machine began
+// making with the same key first.
+var errOtherAttempt = errors.New("another account is being made with this key")
+
+// saveAttempt keeps the account being made: its first save only where no
+// attempt is kept, so two first uses never make two accounts for one key,
+// and every later save over its own.
 func (s *Shell) saveAttempt(a account.Attempt) error {
+	if s.unfinished == nil || s.unfinished.Identifier != a.Identifier {
+		err := createJSON(s.attemptPath(), a)
+		if errors.Is(err, fs.ErrExist) {
+			if held, _ := s.readAttempt(); held == nil || held.Identifier != a.Identifier {
+				return errOtherAttempt
+			}
+			err = writeJSON(s.attemptPath(), a)
+		}
+		if err != nil {
+			return err
+		}
+		s.unfinished = &a
+		return nil
+	}
 	if err := writeJSON(s.attemptPath(), a); err != nil {
 		return err
 	}
@@ -484,9 +576,12 @@ func (s *Shell) Make(secret, again []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret, again)
-	if s.rec == nil {
-		_, _ = s.newRecord(secret, again)
+	s.refresh()
+	if s.rec != nil {
+		s.madeElsewhere()
+		return
 	}
+	_, _ = s.newRecord(secret, again)
 }
 
 func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
@@ -509,7 +604,13 @@ func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 		s.say("This %s could not make its key: %v.", s.cfg.Noun, err)
 		return nil, err
 	}
-	if err := rec.Save(s.cfg.Record); err != nil {
+	err = rec.Create(s.cfg.Record)
+	if errors.Is(err, holder.ErrKeyExists) {
+		s.refresh()
+		s.madeElsewhere()
+		return nil, err
+	}
+	if err != nil {
 		s.say("This %s could not save its key (%v). Nothing was sent anywhere.", s.cfg.Noun, err)
 		return nil, err
 	}
@@ -527,7 +628,9 @@ func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret, again)
+	s.refresh()
 	if s.rec != nil {
+		s.madeElsewhere()
 		return
 	}
 	c, ok := s.checkNew(ctx, name, accepted)
@@ -552,6 +655,7 @@ func (s *Shell) Setup(ctx context.Context, name, accepted string, secret, again 
 func (s *Shell) Create(ctx context.Context, name, accepted string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refresh()
 	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {
 		return
 	}
@@ -637,12 +741,21 @@ func (s *Shell) begin(c account.Config, name, accepted string) {
 func (s *Shell) Saved(ctx context.Context, accepted string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refresh()
 	m := s.making
-	if m == nil || m.taken {
+	if m == nil || m.taken || s.listedElsewhere(m) {
 		return
 	}
 	if !m.saved {
-		if err := s.saveAttempt(m.attempt); err != nil {
+		err := s.saveAttempt(m.attempt)
+		if errors.Is(err, errOtherAttempt) {
+			clear(m.key)
+			s.making = nil
+			s.refresh()
+			s.say("Another %s on this machine began an account with this key first: finish it with its recovery code. Nothing was sent for the one shown here.", s.cfg.Noun)
+			return
+		}
+		if err != nil {
 			s.say("This %s could not keep the account it is making (%v). Nothing was sent.", s.cfg.Noun, err)
 			return
 		}
@@ -659,6 +772,7 @@ func (s *Shell) Saved(ctx context.Context, accepted string) {
 func (s *Shell) Resume(ctx context.Context, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refresh()
 	if s.unfinished == nil || s.making != nil || s.rec == nil || s.rec.Identifier != "" {
 		return
 	}
@@ -685,8 +799,9 @@ func (s *Shell) Resume(ctx context.Context, code string) {
 func (s *Shell) Rename(ctx context.Context, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refresh()
 	m := s.making
-	if m == nil || !m.taken {
+	if m == nil || !m.taken || s.listedElsewhere(m) {
 		return
 	}
 	name = strings.TrimPrefix(strings.TrimSpace(name), "@")
@@ -696,6 +811,19 @@ func (s *Shell) Rename(ctx context.Context, name string) {
 	}
 	m.attempt.Name, m.taken = name, false
 	s.submit(ctx)
+}
+
+// listedElsewhere is whether the key is listed in another account than
+// the one m makes, which another first use finished meanwhile: m is
+// dropped, and nothing more of it is sent.
+func (s *Shell) listedElsewhere(m *making) bool {
+	if s.rec == nil || s.rec.Identifier == "" || s.rec.Identifier == m.attempt.Identifier {
+		return false
+	}
+	clear(m.key)
+	s.making = nil
+	s.say("This machine's key is on an account already, made or added by another %s here: unlock it with its PIN or passphrase.", s.cfg.Noun)
+	return true
 }
 
 func (s *Shell) submit(ctx context.Context) {
@@ -755,6 +883,7 @@ var pollEvery = 2 * time.Second
 func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refresh()
 	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {
 		return
 	}
@@ -801,6 +930,18 @@ func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 		case <-time.After(pollEvery):
 		}
 	}
+	pub := s.rec.PublicKey
+	s.refresh()
+	switch {
+	case s.rec == nil || !bytes.Equal(s.rec.PublicKey, pub):
+		return
+	case s.rec.Identifier == found.Identifier:
+		s.firstConnection(ctx)
+		return
+	case s.rec.Identifier != "":
+		s.say("This machine's key is on another account already, added by another %s here.", s.cfg.Noun)
+		return
+	}
 	s.rec.Identifier, s.rec.Directory = found.Identifier, found.Directory
 	if err := s.rec.Save(s.cfg.Record); err != nil {
 		s.say("This %s could not save its account (%v). Try again.", s.cfg.Noun, err)
@@ -815,6 +956,7 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret)
+	s.refresh()
 	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil {
 		return
 	}
