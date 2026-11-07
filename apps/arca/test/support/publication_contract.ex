@@ -343,7 +343,9 @@ defmodule Arca.PublicationContract do
       # announcement runs in the writer's process, after the pointer moved
       # and before the draft is given back. Killed outright there — an exit
       # raised inside a telemetry handler is caught and detached by
-      # telemetry, and the writer would go on.
+      # telemetry, and the writer would go on. It returns once the dead
+      # writer's node-local lock is free too, so the draft alone holds the
+      # unit.
       defp dies_after_commit(actor, unit, tag) do
         {root, key} = UnitLocator.unit_key(unit)
         handler = {__MODULE__, make_ref()}
@@ -368,7 +370,9 @@ defmodule Arca.PublicationContract do
             nil
           )
 
-        writer_dies(fn -> commit(actor, unit, tag) end)
+        reason = writer_dies(fn -> commit(actor, unit, tag) end)
+        Arca.Test.LockWait.await_unit_lock_free!(actor, unit)
+        reason
       end
 
       # A writer parked at the operation `fault` waits on.

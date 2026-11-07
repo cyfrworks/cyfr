@@ -6,6 +6,9 @@ defmodule Arca.Test.LockWaitTest do
   `Arca.Test.LockWait.await_lock_wait!/3` answers once a backend waits on
   a lock in the statement named, and on the lock event named when one is,
   and fails the test within its timeout when none does.
+  `await_unit_lock_free!/3` fails within its timeout while a live writer
+  holds the unit's node-local lock, the one `Arca.Overlay` takes, and
+  answers once the writer is gone.
   """
 
   # Its connections are outside the sandbox and lock a table of their own.
@@ -248,6 +251,66 @@ defmodule Arca.Test.LockWaitTest do
 
     test "refuses: only PostgreSQL waits on a lock this way" do
       assert_raise ArgumentError, ~r/only PostgreSQL/, fn -> LockWait.await_lock_wait!(1) end
+    end
+  end
+
+  describe "a unit's node-local lock" do
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+      base = Path.join(System.tmp_dir!(), "lock_wait_unit_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(base, "seed/components"))
+      on_exit(fn -> File.rm_rf!(base) end)
+      Prima.Test.Env.put_app_env(:arca, :base_path, Path.join(base, "data"))
+      Prima.Test.Env.put_app_env(:arca, :seed_path, Path.join(base, "seed"))
+      name = "lock-wait-#{System.unique_integer([:positive])}"
+      %{actor: Arca.Test.Actor.local(), unit: ["components", "catalysts", "local", name, "1.0.0"]}
+    end
+
+    # The writer is parked at its commit's announcement, inside its
+    # publication, so the lock the wait must see is the one Arca.Overlay
+    # takes: a wait probing another name answers at once, and fails here.
+    test "is waited for while a live writer holds it, and is free once the writer is killed",
+         %{actor: actor, unit: unit} do
+      {root, _key} = Arca.Storage.UnitLocator.unit_key(unit)
+      handler = {__MODULE__, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          Arca.StorageProjectionChanges.event(),
+          fn _event, _measurements, metadata, _config ->
+            if metadata.athanor_id == actor.athanor_id and metadata.root == root and
+                 not metadata.ready and self() != test_pid do
+              :telemetry.detach(handler)
+              send(test_pid, {:parked, self()})
+              receive do: (:never -> :ok)
+            end
+          end,
+          nil
+        )
+
+      files = [{["cyfr-manifest.json"], ~s({"revision":"one"})}]
+
+      {pid, ref} =
+        spawn_monitor(fn ->
+          Arca.Overlay.commit_unit(actor, unit, {:files, files}, cap: :exempt)
+        end)
+
+      on_exit(fn -> Process.exit(pid, :kill) end)
+      assert_receive {:parked, ^pid}, 30_000
+
+      error =
+        assert_raise ExUnit.AssertionError, fn ->
+          LockWait.await_unit_lock_free!(actor, unit, 200)
+        end
+
+      assert error.message =~ "node-local lock on #{Enum.join(unit, "/")}"
+
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+      assert :ok = LockWait.await_unit_lock_free!(actor, unit)
     end
   end
 end
