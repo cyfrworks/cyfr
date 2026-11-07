@@ -16,8 +16,10 @@ defmodule Sanctum.Providers.Door do
   label beside the identifier.
 
   `allow` writes an allow of an identifier or `*`, by which the door
-  admits a person the CYFR sign-in presents; a local person is admitted
-  unless denied, so a person is never allowed.
+  admits an account at sign-in. Every person here is an account's, and the
+  door admits a person only by their account's identifier: one with no
+  identity row names no account and is refused (`Sanctum.Door`), so an
+  allow never names a person's own id.
   `deny` writes a sticky exclusion of a person or an identifier, ejects
   the person when they are already known
   (`Sanctum.Tenancy.Users.deny/1`) and withdraws the invitations the
@@ -115,7 +117,7 @@ defmodule Sanctum.Providers.Door do
         )
       ],
       description:
-        "Who may sign in to this server — platform admins only. A person made here signs in unless denied; a person whose keys another CYFR holds signs in when `*` or an allow names their identifier. A deny names a person or an identifier, is sticky and ejects the person; an allow or a deny by handle (@name) writes the identifier the handle names. Requests are identifiers members invited or whose sign-in the allowlist refused.",
+        "Who may sign in to this server — platform admins only. An account signs in when `*` or an allow names its identifier, and a deny wins over both; setup and a redeemed invitation write the allow of the account they admit. A deny names a person or an identifier, stays until it is removed and ejects the person; an allow or a deny by handle (@name) writes the identifier the handle names. Requests are identifiers members invited or whose sign-in the allowlist refused.",
       title: "Server Allowlist"
     )
   end
@@ -348,8 +350,8 @@ defmodule Sanctum.Providers.Door do
 
   defp refused_kind("person", "allow"),
     do:
-      "A person made here signs in unless denied; allow names a person identifier or *, and " <>
-        "removing a deny lets a person back in"
+      "An allow names an account by its identifier (per_…) or name (@name), or *, never a " <>
+        "person's own id (usr_…); removing a deny lets a person back in"
 
   defp refused_kind("wildcard", "deny"),
     do: "Remove the * entry instead of denying it"
