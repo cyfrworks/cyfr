@@ -251,7 +251,7 @@ proof's own README holds how to run it and its steps.
 | pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium | c; Chromium |
 | multi-home smoke | `tests/multi-home-smoke/` | two homes, `alpha.test` and `beta.test` | Chromium, Firefox and WebKit; the passkey in Chromium | d; all three |
 | identity | `tests/identity-proof/` | the directory `dir.test` and the home `a.test` | Chromium | b; Chromium |
-| join | `tests/join-proof/` | the homes `a.test`, `a2.test` and `h.test`, and the directories `dir.test` and `dir2.test` | Chromium; the sign-in at the hub, the carry and a second browser profile in Firefox and WebKit as well (`JOIN_PROOF_BROWSERS`) | b; Chromium |
+| join | `tests/join-proof/` | the directory `dir.test` and the home `h.test` | Chromium | b; Chromium |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium | d; Chromium |
 | shares | `tests/share-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 | d; Chromium, both viewports |
 | approvals | `tests/approval-proof/` | one home, `home.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |

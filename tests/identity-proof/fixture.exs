@@ -9,9 +9,9 @@
 #
 #   people
 #       The people this CYFR holds: each one's id, identifier, admission
-#       and status, the sessions bound to them (each by the kid and head it
-#       was bound to) and their paired clients (each by kid, kind and
-#       standing).
+#       and status, the route segment of their own athanor, the sessions
+#       bound to them (each by the kid and head it was bound to) and their
+#       paired clients (each by kid, kind and standing).
 #
 #   head IDENTIFIER
 #       The account's head cached here (`Arca.DirectoryHeads`): its hash,
@@ -70,7 +70,13 @@ fn args ->
               )
             )
 
-          Map.merge(person, %{sessions: sessions, clients: clients})
+          segment =
+            case Sanctum.Tenancy.Athanors.get_by_owner(person.user_id) do
+              {:ok, athanor} -> "@" <> athanor.slug
+              _none -> nil
+            end
+
+          Map.merge(person, %{segment: segment, sessions: sessions, clients: clients})
         end)
 
       answer.(%{people: people})
