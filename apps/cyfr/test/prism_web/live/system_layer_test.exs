@@ -5687,7 +5687,7 @@ defmodule PrismWeb.SystemLayerTest do
            }, "Offer this key to everyone on this CYFR or to one of your threads"},
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :pairing_revocation, subject: %{}},
-           "Revoke a device you paired"},
+           "Sign a device out of this CYFR"},
         confirmation: {confirmation, "A client of yours asked for a change"}
       }
     end
@@ -5707,6 +5707,43 @@ defmodule PrismWeb.SystemLayerTest do
 
         assert open_prompt(view) == nil, inspect(kind)
       end
+    end
+  end
+
+  describe "the Devices list" do
+    # This CYFR owns only its own bindings: each row signs its client out
+    # here, and the list says the key stays on the account until it is
+    # removed there.
+    test "names each row's sign-out by its kind and says removing the key ends it everywhere" do
+      device = %{
+        client_id: "pcl_device",
+        source: "device_cert",
+        display_name: "cyfr on mira-laptop",
+        paired_at: "2026-11-07T09:00:00Z"
+      }
+
+      passkey = %{client_id: "pcl_passkey", source: "passkey", paired_at: "2026-11-07T09:00:00Z"}
+
+      html =
+        render_component(&PrismWeb.SystemLayer.Pairing.devices/1,
+          prompt_id: "pairing-1",
+          pairing: %{clients: {:ok, [device, passkey]}},
+          myself: nil,
+          button_class: ""
+        )
+
+      rows = html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-test="pairing-revoke"]))
+
+      assert Enum.map(rows, &String.trim(LazyHTML.text(&1))) == [
+               "Sign out this device",
+               "Sign out this passkey"
+             ]
+
+      assert String.replace(html, ~r/\s+/, " ") =~
+               "Removing its key from your account ends it everywhere."
+
+      refute html =~ "Revoke"
+      PrismWeb.Vocabulary.refute_vocabulary(html)
     end
   end
 end

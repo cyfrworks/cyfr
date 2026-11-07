@@ -2924,7 +2924,9 @@ defmodule PrismWeb.SystemLayer do
         "their own apps, and confirming it here is a fresh confirmation."
 
   defp description(%{kind: :pairing}),
-    do: "Revoke a device you paired. Revoking needs a fresh confirmation."
+    do:
+      "Sign a device out of this CYFR, which needs a fresh confirmation. Its key stays on " <>
+        "your account: removing it there ends the device everywhere."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:

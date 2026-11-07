@@ -395,8 +395,21 @@ defmodule PrismWeb.SettingsLiveTest do
       assert view |> element(passkey) |> render() =~ String.slice(hex, 0, 16)
       refute has_element?(view, ~s([data-test="device"][data-id="#{client.id}"]))
 
+      # This CYFR signs the passkey out of itself alone: the key is the
+      # account's, and only removing it there ends it everywhere.
+      assert view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render() =~
+               "Sign out this passkey"
+
+      scope = view |> element(~s([data-test="devices-scope"])) |> render()
+
+      assert String.replace(scope, ~r/\s+/, " ") =~
+               "Removing its key from your account ends it everywhere."
+
+      PrismWeb.Vocabulary.refute_vocabulary(scope)
+
       view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render_click()
       refute has_element?(view, passkey)
+      assert render(view) =~ "Passkey signed out of this CYFR."
     end
   end
 
