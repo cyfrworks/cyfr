@@ -58,7 +58,7 @@ var contextListCmd = &cobra.Command{
 var contextSetCmd = &cobra.Command{
 	Use:     "set <name>",
 	Short:   "Switch active context",
-	Long:    "Set the named context as the active server connection for all subsequent commands.",
+	Long:    "Set the named context as the active server connection for commands outside a cyfr login shell.\nInside one, a command acts at the CYFR the shell unlocked unless --url or --context names another.",
 	Example: "  cyfr context set production",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
