@@ -305,6 +305,47 @@ defmodule PrismWeb.SettingsLiveTest do
     end
   end
 
+  describe "finishing your name" do
+    test "a person with no name here types theirs, and it is recorded once cyfr.run says it is theirs",
+         %{conn: conn} do
+      person = test_user()
+      %{account: account, dir: dir} = Sanctum.Test.DirectoryServer.member!(person.user_id)
+      stranger = Sanctum.Test.DirectoryServer.account!(dir.dir, dir.url)
+
+      RegistryStub.handles!(
+        %{"mira" => account.identifier, "taken" => stranger.identifier},
+        dir.url
+      )
+
+      {view, _html} = conn |> log_in_user(person, claim: false) |> mount_athanor("/settings")
+      refute has_element?(view, ~s([data-test="identity-name"]))
+      card = view |> element(~s([data-test="identity"])) |> render()
+      assert card =~ "Finish your name"
+      PrismWeb.Vocabulary.refute_vocabulary(card)
+
+      for {typed, sentence} <- [
+            {"taken", "@taken is another account&#39;s name, not yours"},
+            {"unheld", "No account holds @unheld at cyfr.run"}
+          ] do
+        view
+        |> element(~s([data-test="identity-name-form"]))
+        |> render_submit(%{"name" => typed})
+
+        error = view |> element(~s([data-test="identity-name-error"])) |> render()
+        assert error =~ sentence
+        PrismWeb.Vocabulary.refute_vocabulary(error)
+      end
+
+      view
+      |> element(~s([data-test="identity-name-form"]))
+      |> render_submit(%{"name" => "@mira"})
+
+      assert view |> element(~s([data-test="identity-name"])) |> render() =~ "@mira"
+      refute has_element?(view, ~s([data-test="identity-name-form"]))
+      assert {:ok, %{namespace: "mira"}} = Sanctum.Tenancy.Users.get(person.user_id)
+    end
+  end
+
   describe "devices connected here" do
     test "lists the passkeys that signed in here by their key's short code, and signs one out",
          %{conn: conn} do
