@@ -313,7 +313,7 @@ defmodule Compendium.ProviderTest do
       host = "127.0.0.1:#{port}"
       on_exit(fn -> Arca.Cache.invalidate({:registry_health, host}) end)
       Prima.Test.Env.put_app_env(:cyfr, :oci_registry_url, host)
-      Application.put_env(:cyfr, :registry_health_probe, true)
+      Prima.Test.Env.put_app_env(:cyfr, :registry_health_probe, true)
 
       test_pid = self()
 
