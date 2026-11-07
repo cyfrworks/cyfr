@@ -226,6 +226,21 @@ defmodule Sanctum.SignInTest do
       assert length(sessions(user.id)) == before
     end
 
+    test "to a request this CYFR minted for another audience signs no one in", %{
+      account: account
+    } do
+      user = first!(account)
+      {request, _url} = minted(:sign_in, @browser)
+      before = length(sessions(user.id))
+
+      # The same request held, while this CYFR now answers at another origin:
+      # the request's audience is no longer this CYFR's.
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://another.example")
+
+      assert {:error, :answer_refused} = SignIn.answer(answer(request, account), @browser)
+      assert length(sessions(user.id)) == before
+    end
+
     test "as the fragment the account pages return, in its one spelling", %{account: account} do
       _first = first!(account)
       {request, _url} = minted(:sign_in, @browser)
