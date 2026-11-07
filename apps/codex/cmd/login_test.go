@@ -285,6 +285,37 @@ func TestLoginDriver_ARefusedChipOffersThePassphrase(t *testing.T) {
 	}
 }
 
+// The terms are asked once a run: a chip that cannot keep the PIN shows
+// the setup page again with the passphrase, and the account it makes
+// keeps the acceptance given before the PIN.
+func TestLoginDriver_TheChipsFallbackKeepsTheTermsAccepted(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageSetup, Chip: true}, nil)
+	dev.next = func(call string, d *fakeDevice) {
+		switch {
+		case call == "setup" && string(d.secrets["setup"]) == "123456":
+			d.set(shell.View{Page: shell.PageSetup, Chip: true, Passphrase: passphrase,
+				Notice: "This machine's chip cannot keep your PIN safely (lockout). Use the passphrase below instead."})
+		case call == "setup":
+			d.set(shell.View{Page: shell.PageRecovery, RecoveryCode: "CYFR-RECOVERY-CODE", Name: "mira"})
+		case call == "saved":
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	}
+	dev.terms = &account.Policy{Version: "2026-10", URL: "https://cyfr.run/terms"}
+	c, out := typed("yes", "123456", "123456", passphrase, passphrase, "")
+	d := &loginDriver{sh: dev, c: c, mode: "setup", name: "mira", home: "https://alice.example"}
+	if err := d.run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"setup", "setup", "saved"}) || dev.given["setup"] != "mira|2026-10" ||
+		string(dev.secrets["setup"]) != passphrase {
+		t.Fatalf("calls %v, given %v, made with %q", dev.calls, dev.given, dev.secrets["setup"])
+	}
+	if n := strings.Count(out.String(), "Accept them?"); n != 1 {
+		t.Errorf("the terms were asked %d times:\n%s", n, out)
+	}
+}
+
 // --setup and --join make the account here: the terms the account service
 // names are accepted first, then the name and the secret go to the
 // device, the recovery code is shown, as a QR code and as text, until
@@ -442,6 +473,48 @@ func TestClientAt_TheShellsSessionGoesToItsHomeAlone(t *testing.T) {
 	t.Setenv("CYFR_TOKEN", "cyfr_key")
 	if got := clientAt("https://alice.example").SessionID; got != "cyfr_key" {
 		t.Errorf("CYFR_TOKEN did not come first: %q", got)
+	}
+}
+
+// A command run in the shell cyfr login started acts at that shell's CYFR,
+// with its session, wherever the current context points: the shell of
+// cyfr login --url names a CYFR no context is current for. --url and
+// --context still name another, and the session is not sent there.
+func TestShell_ACommandActsAtTheShellsCYFR(t *testing.T) {
+	recording := func() (*httptest.Server, func() []string) {
+		var mu sync.Mutex
+		var auth []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			auth = append(auth, r.Header.Get("Authorization"))
+			mu.Unlock()
+			http.Error(w, "no", http.StatusUnauthorized)
+		}))
+		t.Cleanup(srv.Close)
+		return srv, func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(auth) }
+	}
+	shellHome, shellAuth := recording()
+	current, currentAuth := recording()
+	withContexts(t, "local", map[string]*config.Context{"local": {URL: current.URL}})
+	t.Setenv(sessionEnv, "TOKEN-1")
+	t.Setenv(sessionHomeEnv, shellHome.URL)
+
+	_, _ = runCommand(t, t.Context(), "whoami")
+	if got := shellAuth(); len(got) == 0 || !strings.Contains(got[0], "TOKEN-1") {
+		t.Errorf("the shell's CYFR was asked with %q", got)
+	}
+	if got := currentAuth(); len(got) != 0 {
+		t.Errorf("the current context's CYFR was asked %q", got)
+	}
+
+	asked := len(shellAuth())
+	_, _ = runCommand(t, t.Context(), "whoami", "--context", "local")
+	_, _ = runCommand(t, t.Context(), "whoami", "--url", current.URL)
+	if got := currentAuth(); len(got) == 0 || slices.ContainsFunc(got, func(a string) bool { return strings.Contains(a, "TOKEN-1") }) {
+		t.Errorf("--context and --url asked the CYFR they name with %q", got)
+	}
+	if len(shellAuth()) != asked {
+		t.Errorf("--context and --url asked the shell's CYFR")
 	}
 }
 

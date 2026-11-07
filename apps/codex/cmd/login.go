@@ -81,7 +81,8 @@ first: once the key is removed from it, cyfr login says so and shows the
 same key's code again, to be added the same way.
 
 Unlocked, cyfr login starts your shell ($SHELL) with the session in its
-environment. Every cyfr command run in it acts as you, and the session
+environment. Every cyfr command run in it acts as you at the CYFR it
+unlocked, unless --url or --context names another, and the session
 lives only while this command line keeps reporting to CYFR: exiting the
 shell, closing the terminal, cyfr logout or a lost connection ends it.
 cyfr open in that shell opens CYFR in your browser through this unlock. A
@@ -207,6 +208,11 @@ type loginDriver struct {
 	// held is the PIN or passphrase chosen for a key made in this run,
 	// kept from its making to its first unlock, then erased.
 	held []byte
+	// accepted is the version of the terms accepted in this run, kept
+	// for every page that makes the account: a chip that cannot keep the
+	// PIN shows the setup page again, and the same terms are not asked
+	// twice.
+	accepted string
 }
 
 // enrollWait is how long cyfr login waits for the account's log to list
@@ -307,7 +313,8 @@ func (d *loginDriver) setup(ctx context.Context, v shell.View) error {
 }
 
 // accept asks the person to accept the account service's terms, where it
-// names any, and answers the version accepted.
+// names any and this run has not accepted them yet, and answers the
+// version accepted.
 func (d *loginDriver) accept(ctx context.Context) (string, error) {
 	policy, err := d.sh.Terms(ctx)
 	if err != nil {
@@ -315,6 +322,9 @@ func (d *loginDriver) accept(ctx context.Context) (string, error) {
 	}
 	if policy == nil {
 		return "", nil
+	}
+	if policy.Version == d.accepted {
+		return d.accepted, nil
 	}
 	fmt.Fprintf(d.c.out, "Making your account accepts the terms at %s\n", policy.URL)
 	answer, err := d.c.line(ctx, "Accept them? (yes/no) ")
@@ -324,6 +334,7 @@ func (d *loginDriver) accept(ctx context.Context) (string, error) {
 	if a := strings.ToLower(strings.TrimSpace(string(answer))); a != "yes" && a != "y" {
 		return "", errors.New("Nothing was made: your account needs the terms accepted.")
 	}
+	d.accepted = policy.Version
 	return policy.Version, nil
 }
 

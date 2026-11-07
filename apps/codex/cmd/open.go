@@ -28,7 +28,8 @@ var openCmd = &cobra.Command{
 	Short:   "Open Aqua in your browser",
 	GroupID: "identity",
 	Long: `Open Aqua in your default browser, at CYFR's address: the --url, the
---context's address, or the current context's.
+--context's address, the CYFR of the shell cyfr login started, or the
+current context's.
 
 In the shell cyfr login started for that CYFR, it opens this command
 line's own page, where Open CYFR signs the browser in through this

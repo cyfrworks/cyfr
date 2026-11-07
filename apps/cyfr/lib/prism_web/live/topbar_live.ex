@@ -81,12 +81,16 @@ defmodule PrismWeb.TopbarLive do
 
     surface = PrismWeb.Surface.read(session["surface"])
     page = if connected?(socket), do: kept_page(token, surface, session["page"])
+    # Named as people are named (`Sanctum.Tenancy.Users.display_name/1`),
+    # never by their id.
+    person = if connected?(socket), do: Sanctum.Tenancy.Users.display_name(ctx.user_id)
 
     # Use cheap defaults for the disconnected render. Defer database reads,
     # cache writes and tool calls to the connected mount.
     {:ok,
      socket
      |> assign(:personal_namespace_slug, ctx.namespace)
+     |> assign(:person, person)
      |> assign(:authenticated, true)
      |> assign(:ui_mode, ui_mode)
      |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
@@ -829,7 +833,7 @@ defmodule PrismWeb.TopbarLive do
           :if={@context}
           name="user"
           open={@open_popover == "user"}
-          label={@personal_namespace_slug || @context.email || @context.user_id}
+          label={@person}
           icon="user"
         >
           <:popover>

@@ -4,8 +4,8 @@
 defmodule CyfrWeb.Telemetry do
   @moduledoc """
   The host's telemetry metrics, reported by the Prometheus reporter, whose
-  scrape `CyfrWeb.MetricsPlug` serves, and the console reporter, each when
-  it is enabled.
+  scrape `CyfrWeb.MetricsPlug` serves, and the console reporter
+  (`CyfrWeb.Telemetry.Console`), each when it is enabled.
 
   ## MCP Metrics
 
@@ -52,7 +52,7 @@ defmodule CyfrWeb.Telemetry do
 
   defp maybe_console_reporter do
     if Application.get_env(:cyfr, :telemetry_console_enabled, false) do
-      [{Telemetry.Metrics.ConsoleReporter, metrics: metrics()}]
+      [{CyfrWeb.Telemetry.Console, metrics: metrics()}]
     else
       []
     end

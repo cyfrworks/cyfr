@@ -43,6 +43,21 @@ defmodule PrismWeb.TopbarLiveTest do
     refute has_element?(bar, ~s([phx-value-name="athanors"]))
   end
 
+  test "the bar names the person as people are named, never by their id", %{conn: conn} do
+    # No name, no email and no name at cyfr.run yet.
+    unnamed = test_user(email: nil)
+    {view, _html} = conn |> log_in_user(unnamed, claim: false) |> mount_athanor("")
+    bar = topbar(view)
+
+    assert has_element?(bar, ~s(button[phx-value-name="user"]), "someone")
+    refute render(bar) =~ unnamed.user_id
+
+    named = test_user(name: "Mira Ito")
+    {view, _html} = build_conn() |> log_in_user(named) |> mount_athanor("")
+
+    assert has_element?(topbar(view), ~s(button[phx-value-name="user"]), "Mira Ito")
+  end
+
   test "an operator sees how many wait at the door; the chip follows the door", %{conn: conn} do
     ops = test_user()
     conn = log_in_user(conn, ops)
