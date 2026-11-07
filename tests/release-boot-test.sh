@@ -814,6 +814,6 @@ pass "the headless case's helper runs cyfr login on a terminal of its own, as a 
 
 python3 -I "$root/tests/release-boot/credential-evidence-test.py" --root "$root" ||
   fail "the headless case's credential checks accept a leftover session or an echoed passphrase"
-pass "the headless case's credential checks refuse a session while the name waits and a passphrase echoed anywhere"
+pass "the headless case's credential checks refuse a session or a device after a setup that made nothing, and a passphrase echoed anywhere"
 
 echo "release-boot-test: all checks passed"

@@ -20,25 +20,20 @@ SOURCE = (ROOT / "tests/release-boot/boot.sh").read_text()
 
 
 class CredentialEvidence(unittest.TestCase):
-    def test_silent_admission_refuses_a_leftover_session(self):
+    def test_silent_setup_refuses_a_leftover_session(self):
         check = re.search(r"silent=\"\$\(python3 .*?<<'PY'\n(.*?)\nPY\n", SOURCE, re.S).group(1)
-        person = "person-1"
-        state = {
-            "people": [{"id": person, "admission": "setup", "name": None, "admin": True}],
-            "sessions": 0,
-            "devices": [{"user_id": person, "holder_kind": "software", "standing": "active"}],
-            "identities": [{"user_id": person, "identifier": None, "enrollment": "pending"}],
-            "attempts": [{"user_id": person, "kind": "enrollment", "phase": "submitted", "name": "proof",
-                          "identifier": "per_" + "ab" * 32, "directory": "https://directory.invalid"}],
-        }
+        state = {"people": [], "sessions": 0, "devices": [], "certificates": [], "identities": []}
 
         def run():
             return subprocess.run([sys.executable, "-I", "-c", check, json.dumps(state)],
                                   capture_output=True, text=True, timeout=10)
 
-        self.assertEqual(run().returncode, 0, "the valid waiting admission must pass")
+        self.assertEqual(run().returncode, 0, "a cell the silent setup left as it booted must pass")
         state["sessions"] = 1
-        self.assertNotEqual(run().returncode, 0, "the boot accepted an authority-bearing session while the name waits")
+        self.assertNotEqual(run().returncode, 0, "the boot accepted an authority-bearing session after a setup that made nothing")
+        state["sessions"] = 0
+        state["devices"] = [{"id": "pcl_1", "user_id": "usr_1", "holder_kind": "software", "standing": "active", "kid": None}]
+        self.assertNotEqual(run().returncode, 0, "the boot accepted a device admitted after a setup that made nothing")
 
     def test_first_unlock_rejects_echoed_passphrase_input(self):
         check = re.search(r'(?ms)^\[ -s "\$HEADLESS/passphrase".*?(?=^# CYFR holds)', SOURCE).group(0)
