@@ -8,7 +8,8 @@ defmodule Cyfr.ReleaseFixtureTest do
   makes the installation's first person by the setup admission of an
   account built with no network, their setup device paired in it and
   their name recorded, and every later one by the open admission, held to
-  its caps; a setup device's record already kept where it runs is the
+  its caps; a person made before is signed in again under the key their
+  admission listed; a setup device's record already kept where it runs is the
   device a first person made again is paired with; and `device_confirm`
   confirms a record by that device's answer to this CYFR's request, and
   refuses one made wrong on purpose.
@@ -78,6 +79,20 @@ defmodule Cyfr.ReleaseFixtureTest do
     # Signed in again, the identity names the person made first.
     assert person!(fixture, "second@example.com", "fixture-second")["user_id"] ==
              second["user_id"]
+  end
+
+  test "the first person signs in again under their setup device's key, in a new session",
+       %{fixture: fixture} do
+    first = person!(fixture, "first@example.com", "fixture-first")
+    again = person!(fixture, "first@example.com", "fixture-first")
+
+    assert again["user_id"] == first["user_id"]
+    refute again["token"] == first["token"]
+
+    for person <- [first, again] do
+      assert {:ok, %{user_id: user_id}} = Sanctum.Caller.establish({:session, person["token"]})
+      assert user_id == first["user_id"]
+    end
   end
 
   test "a first person made again where the setup device's record is kept is enrolled with that device; a record of another home refuses",

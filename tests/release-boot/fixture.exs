@@ -17,7 +17,9 @@
 #       genesis signed by a recovery key SUB derives, at this deployment's
 #       directory (`Sanctum.directory_url/0`), and one device key added,
 #       its head cached as a first read leaves it; the same SUB is the same
-#       account, so a person made once is signed in again. An
+#       account, so a person made once is signed in again, under the
+#       device key their admission listed, the one this CYFR's cached head
+#       of the account lists. An
 #       installation's first person is made by the setup admission
 #       (`Sanctum.Newcomer.admit/3` under a setup token the fixture puts
 #       for the call and takes away after), and so is its platform
@@ -299,10 +301,12 @@ fn args ->
   end
 
   # The person of the account SUB names, made the first time (the `person`
-  # command above), and the account. The setup admission makes the
-  # installation's first person (`Arca.InstallationClaims.setup/1` says
-  # whether this is it), and the open admission every later one, past a
-  # door whose `*` admits.
+  # command above), and the account's identifier, head and device key. The
+  # setup admission makes the installation's first person
+  # (`Arca.InstallationClaims.setup/1` says whether this is it), and the
+  # open admission every later one, past a door whose `*` admits. A person
+  # made before is the account as this CYFR caches it, and the one device
+  # key it lists: the setup device's, or the key SUB derives.
   admitted = fn sub ->
     system = Prima.Actor.system()
 
@@ -313,7 +317,10 @@ fn args ->
 
     case Sanctum.Tenancy.Users.get_by_identifier(known.identifier) do
       {:ok, person} ->
-        {person, known}
+        {:ok, head} = Arca.DirectoryHeads.get(system, known.identifier)
+        {:ok, state} = head.state |> Jason.decode!() |> Prima.Identity.State.decode()
+        [key] = Enum.filter(state.keys, &(&1.kind == :device))
+        {person, %{identifier: known.identifier, head_hash: head.head_hash, key: key}}
 
       {:error, :not_found} ->
         case Arca.InstallationClaims.setup(system) do
