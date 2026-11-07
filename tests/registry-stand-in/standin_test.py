@@ -6,7 +6,8 @@
 # own on 127.0.0.1, every resource in one temporary directory removed on
 # exit:
 #   - the registry: tests/fixtures/registry_wire.json's claim and resolve, a
-#     taken name, an unknown name and a malformed body; a stand-in started
+#     taken name, an unknown name and a malformed body, and the account
+#     service's configuration (/account/config.json); a stand-in started
 #     without --directory names its own directory routes, one started with
 #     --directory names that URL;
 #   - the directory: every scenario of tests/fixtures/directory_wire.json but
@@ -128,6 +129,12 @@ def registry_checks():
     version = json.loads(text)["policy_version"] if status == 200 else None
     check(status == 200 and isinstance(version, str), "the registry answers its policy version", text)
 
+    status, text, _ = own.request("GET", "/account/config.json")
+    want = jcs({"directory": base, "registry": base, "policy": {"version": version, "url": base + "/v1/legal/version"}})
+    check(status == 200 and text == want,
+          "the account service's configuration names its own directory, itself as the registry and its policy",
+          (status, text, want))
+
     claim = request_of("handle_claim")
     status, text, _ = own.request("POST", "/v1/namespaces/personal/claim", claim)
     check(status == 412 and code_of(text) == "POLICY_ACCEPTANCE_REQUIRED",
@@ -167,6 +174,10 @@ def registry_checks():
     own.stop()
 
     pinned = StandIn("registry-pinned", "--directory", "https://dir.test")
+    status, text, _ = pinned.request("GET", "/account/config.json")
+    check(status == 200 and json.loads(text).get("directory") == "https://dir.test"
+          and json.loads(text).get("registry") == "http://127.0.0.1:%d" % pinned.port,
+          "a stand-in started with --directory names that directory, and itself as the registry", (status, text))
     pinned.request("POST", "/v1/legal/accept", request_of("policy_accept", policy_version=version))
     status, text, _ = pinned.request("POST", "/v1/namespaces/personal/claim", claim)
     check(status == 201 and json.loads(text).get("directory") == "https://dir.test",

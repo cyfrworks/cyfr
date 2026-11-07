@@ -24,6 +24,11 @@
 #   POST /v1/legal/accept              a signed policy.accept
 #   POST /v1/namespaces/personal/claim a signed handle.claim; a name another
 #                                      identifier holds is SLUG_TAKEN
+#   GET  /account/config.json          the account service's configuration
+#                                      (CYFR plan user-system §7): its
+#                                      directory, itself as the registry,
+#                                      and its policy, which a first claim
+#                                      needs accepted
 # A signed request carries no directory, so, as the real registry reads
 # every identity at its one configured directory, every handle answer names
 # the stand-in's one directory: --directory URL, else its own directory
@@ -152,8 +157,16 @@ class State:
 
 
 class StandIn:
-    def __init__(self, state, address, directory, upstream):
+    def __init__(self, state, address, directory, upstream, origin):
         self.state, self.address, self.directory, self.upstream = state, address, directory, upstream
+        self.origin = origin
+
+    def config(self):
+        return 200, jcs({
+            "directory": self.directory,
+            "registry": self.origin,
+            "policy": {"version": POLICY_VERSION, "url": self.origin + "/v1/legal/version"},
+        })
 
     # ---- the registry -------------------------------------------------------
 
@@ -378,6 +391,7 @@ class StandIn:
         not take."""
         parts = path.split("/")[1:]
         routes = {
+            ("account", "config.json"): ("GET", self.config),
             ("v1", "legal", "version"): ("GET", lambda: (200, jcs({"policies": [], "policy_version": POLICY_VERSION}))),
             ("v1", "legal", "accept"): ("POST", lambda: self.accept(read_body())),
             ("v1", "namespaces", "personal", "claim"): ("POST", lambda: self.claim(read_body())),
@@ -493,9 +507,10 @@ def main(argv):
     server = http.server.ThreadingHTTPServer((args.address, args.port), Handler)
     server.daemon_threads = True
     port = server.server_address[1]
-    directory = args.directory or "http://%s:%d" % (args.address, port)
+    origin = "http://%s:%d" % (args.address, port)
+    directory = args.directory or origin
     state = State(args.state, directory)
-    server.stand_in = StandIn(state, args.address, directory, args.upstream)
+    server.stand_in = StandIn(state, args.address, directory, args.upstream, origin)
 
     def stop(_signum, _frame):
         raise SystemExit(0)
