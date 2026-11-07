@@ -304,6 +304,32 @@ defmodule Compendium.ProviderTest do
       assert System.monotonic_time(:millisecond) - started < 5_000
     end
 
+    test "a registry at an address the operator's private-egress targets name is dialled" do
+      # The suite's targets name loopback (`config/test.exs`). The listener
+      # speaks no TLS, so the answer is unreachable either way: what is
+      # asserted is that the probe reached it, as the registry client does.
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+      {:ok, {_, port}} = :inet.sockname(listener)
+      host = "127.0.0.1:#{port}"
+      on_exit(fn -> Arca.Cache.invalidate({:registry_health, host}) end)
+      Prima.Test.Env.put_app_env(:cyfr, :oci_registry_url, host)
+      Application.put_env(:cyfr, :registry_health_probe, true)
+
+      test_pid = self()
+
+      acceptor =
+        Task.async(fn ->
+          with {:ok, socket} <- :gen_tcp.accept(listener, 5_000) do
+            send(test_pid, :dialled)
+            :gen_tcp.close(socket)
+          end
+        end)
+
+      assert Provider.status() == %{"registry" => "unreachable"}
+      assert_receive :dialled, 5_000
+      Task.await(acceptor, 6_000)
+    end
+
     test "the probe's answer is memoized per registry", %{key: key} do
       Application.put_env(:cyfr, :registry_health_probe, true)
 
