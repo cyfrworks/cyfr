@@ -511,7 +511,7 @@
         const response = credential.response;
         const spki = bytes(response.getPublicKey());
         const p256 = response.getPublicKeyAlgorithm() === ES256 && spki?.length === P256_SPKI.length + 65 && P256_SPKI.every((byte, i) => spki[i] === byte);
-        if (!p256) throw new Error("the passkey is not a P-256 key");
+        if (!p256) refuse("no_public_key");
         return { credentialId: bytes(credential.rawId), pub: spki.subarray(P256_SPKI.length) };
       }
     };
@@ -836,7 +836,9 @@
     other_code: "That recovery code is for another account.",
     stale_head: "Your account changed while this page was open. Start again.",
     duplicate_key: "That is already on your account.",
-    cancelled: "The passkey was not used. Try again when you are ready."
+    cancelled: "The passkey was not used. Try again when you are ready.",
+    no_public_key: "This browser made a passkey but did not hand over its key. Use Safari, Chrome or Firefox.",
+    rate_limited: "Too many requests from your network just now. Wait a minute and try again."
   };
   function words(error) {
     if (error instanceof Unreachable) return WORDS.unreachable;
@@ -1300,30 +1302,43 @@
       if (found.answer) refuse("name_taken");
       if (found.error !== "handle_not_found") refuse(found.error);
     }
-    /** Draw the recovery secret, sign the genesis with its key, and resolve to the code to show. */
+    /**
+     * "Create your account": draw the recovery secret, sign the genesis with
+     * its key, create the passkey and sign its `add_key` and the two registry
+     * requests, all held in memory, and resolve to the code to show. A
+     * passkey the browser cannot make, or hands over without its key, rejects
+     * here, before the code exists on screen, and leaves nothing behind.
+     */
     async begin(name) {
       const { secret, key } = await drawRecovery(this.env.random);
-      const first = await signWith(genesis({ directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer }), key);
-      const identifier2 = await identifier(first);
-      this.key = key;
-      const accepted = this.config.policy?.version ?? null;
-      this.attempt = { identifier: identifier2, name, accepted, genesis: first, step: "passkey", created_at: this.env.now() };
-      const code = await codeFor(identifier2, secret);
-      secret.fill(0);
-      return code;
+      try {
+        const first = await signWith(genesis({ directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer }), key);
+        const identifier2 = await identifier(first);
+        const accepted = this.config.policy?.version ?? null;
+        const { credentialId, pub } = await this.env.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: this.env.random(32) });
+        const { state } = await walk([first]);
+        const entry = next(state, "add_key", { key: await keyOf({ pub, credentialId }) }, { at: this.env.now(), signer: key.signer });
+        this.key = key;
+        this.attempt = { identifier: identifier2, name, accepted, genesis: first, created_at: this.env.now() };
+        this.attempt = {
+          ...this.attempt,
+          add_key: await signWith(entry, key),
+          accept: accepted === null ? null : await this.signed("policy.accept", { policy_version: accepted }),
+          claim: await this.signed("handle.claim", { handle: name }),
+          step: "register"
+        };
+        return await codeFor(identifier2, secret);
+      } catch (error) {
+        this.key = null;
+        this.attempt = null;
+        throw error;
+      } finally {
+        secret.fill(0);
+      }
     }
-    /** "I saved it": create the passkey, sign its `add_key` and the two registry requests, and keep them all. */
-    async savedCode() {
-      const { identifier: identifier2, name, accepted, genesis: first } = this.attempt;
-      const { credentialId, pub } = await this.env.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: this.env.random(32) });
-      const { state } = await walk([first]);
-      const entry = next(state, "add_key", { key: await keyOf({ pub, credentialId }) }, { at: this.env.now(), signer: this.key.signer });
-      this.keep({
-        add_key: await signWith(entry, this.key),
-        accept: accepted === null ? null : await this.signed("policy.accept", { policy_version: accepted }),
-        claim: await this.signed("handle.claim", { handle: name }),
-        step: "register"
-      });
+    /** "I saved it": keep the attempt in this browser; it is sent next. */
+    savedCode() {
+      this.attempts.save(this.attempt);
     }
     /** Continue an attempt kept in this browser with the code the person typed. */
     async resume(kept, text2) {

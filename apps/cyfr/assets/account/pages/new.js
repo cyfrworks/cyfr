@@ -5,12 +5,14 @@
 //
 // The order: the name is checked at the registry and the policy, when the
 // registry names one, accepted by a checkbox; "Create your account" draws
-// the recovery secret and signs the genesis with its key, and the code is
-// shown; "I saved it" creates the passkey and signs, with the recovery
-// key, its `add_key`, the `policy.accept` of the version the person
-// accepted and the `handle.claim`, keeps all four in localStorage
-// (`attempts.js`) before anything is sent, and submits in order: register,
-// append, then the name. Register and append resend the same bytes after
+// the recovery secret, signs the genesis with its key, creates the passkey
+// and signs, with the recovery key, its `add_key`, the `policy.accept` of
+// the version the person accepted and the `handle.claim`, holding all four
+// in page memory, and then the code is shown; "I saved it" keeps them in
+// localStorage (`attempts.js`) before anything is sent, and submits in
+// order: register, append, then the name. The passkey comes before the
+// code, so a browser that cannot make a usable one fails before the person
+// has saved anything. Register and append resend the same bytes after
 // a lost response, and the directory's `exists` is success. A registry
 // request is sent at most once, since its nonce is spent once: one sent
 // before, or past its expiry, is signed again with the same body, so a
@@ -20,7 +22,8 @@
 // done, another's asks for a new name, free signs a fresh claim. The recovery key stays in page memory until the name is
 // reconciled; a resume in a new tab asks for the code to re-derive it.
 // The account never depends on the name. A tab closed before "I saved it"
-// made nothing.
+// sent nothing and kept nothing; the passkey it made stays in the
+// browser's passkey store, on no account.
 
 import {Refusal, refuse} from "../encoding.js"
 import {genesis, identifier as identifierOf, keyOf, next, signWith, userId, walk} from "../identity.js"
@@ -57,31 +60,44 @@ export class Creation {
     if (found.error !== "handle_not_found") refuse(found.error)
   }
 
-  /** Draw the recovery secret, sign the genesis with its key, and resolve to the code to show. */
+  /**
+   * "Create your account": draw the recovery secret, sign the genesis with
+   * its key, create the passkey and sign its `add_key` and the two registry
+   * requests, all held in memory, and resolve to the code to show. A
+   * passkey the browser cannot make, or hands over without its key, rejects
+   * here, before the code exists on screen, and leaves nothing behind.
+   */
   async begin(name) {
     const {secret, key} = await drawRecovery(this.env.random)
-    const first = await signWith(genesis({directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer}), key)
-    const identifier = await identifierOf(first)
-    this.key = key
-    const accepted = this.config.policy?.version ?? null
-    this.attempt = {identifier, name, accepted, genesis: first, step: "passkey", created_at: this.env.now()}
-    const code = await codeFor(identifier, secret)
-    secret.fill(0)
-    return code
+    try {
+      const first = await signWith(genesis({directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer}), key)
+      const identifier = await identifierOf(first)
+      const accepted = this.config.policy?.version ?? null
+      const {credentialId, pub} = await this.env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: this.env.random(32)})
+      const {state} = await walk([first])
+      const entry = next(state, "add_key", {key: await keyOf({pub, credentialId})}, {at: this.env.now(), signer: key.signer})
+      this.key = key
+      this.attempt = {identifier, name, accepted, genesis: first, created_at: this.env.now()}
+      this.attempt = {
+        ...this.attempt,
+        add_key: await signWith(entry, key),
+        accept: accepted === null ? null : await this.signed("policy.accept", {policy_version: accepted}),
+        claim: await this.signed("handle.claim", {handle: name}),
+        step: "register"
+      }
+      return await codeFor(identifier, secret)
+    } catch (error) {
+      this.key = null
+      this.attempt = null
+      throw error
+    } finally {
+      secret.fill(0)
+    }
   }
 
-  /** "I saved it": create the passkey, sign its `add_key` and the two registry requests, and keep them all. */
-  async savedCode() {
-    const {identifier, name, accepted, genesis: first} = this.attempt
-    const {credentialId, pub} = await this.env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: this.env.random(32)})
-    const {state} = await walk([first])
-    const entry = next(state, "add_key", {key: await keyOf({pub, credentialId})}, {at: this.env.now(), signer: this.key.signer})
-    this.keep({
-      add_key: await signWith(entry, this.key),
-      accept: accepted === null ? null : await this.signed("policy.accept", {policy_version: accepted}),
-      claim: await this.signed("handle.claim", {handle: name}),
-      step: "register"
-    })
+  /** "I saved it": keep the attempt in this browser; it is sent next. */
+  savedCode() {
+    this.attempts.save(this.attempt)
   }
 
   /** Continue an attempt kept in this browser with the code the person typed. */

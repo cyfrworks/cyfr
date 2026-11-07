@@ -137,8 +137,8 @@ async function openAfresh(page, url) {
 // An account made at `/account/new`: at `directory`'s page with `name`
 // in its fragment, or, with no directory, on the page the browser was sent
 // to (a CYFR's "Create your account", whose request the page answers
-// after). `name` typed, "Create your account", the code read
-// (`readShownCode`), "I saved it", which makes the passkey and submits.
+// after). `name` typed, "Create your account", which makes the passkey,
+// the code read (`readShownCode`), "I saved it", which submits.
 // Answers the code, the section the page ends on (`done`, or `done-return`
 // when a CYFR's request waits) and any error it says.
 export async function createAccount(page, keys, { directory = null, name, secrets, timeoutMs = STEP_MS }) {
