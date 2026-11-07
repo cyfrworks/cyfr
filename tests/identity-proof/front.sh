@@ -86,8 +86,7 @@ identity_front_start() {
   fail "the front of $host did not answer on $control${health:+: another front answers there}"
 }
 
-# Break directory `$1` on purpose (front.mjs): `$2` is none, down,
-# drop-recover or block-reads-after-recover.
+# Break directory `$1` on purpose (front.mjs): `$2` is none or down.
 identity_front_fault() {
   local host="$1" mode="$2" answer
   answer="$(curl -fsS -m 5 -X POST -H 'content-type: application/json' \
