@@ -42,7 +42,7 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join("data", "cyfr.db"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s.addressChanges = []string{"Passkeys at the old address stop working.", "Pair every device again."}
+	s.addressChanges = []string{"Every browser signs in again.", "Update your OAuth apps."}
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("yes\n")
 	var out bytes.Buffer
@@ -52,14 +52,15 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	text := out.String()
 	preview := "CYFR will be reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
 		"  Certificate email: none → ops@example.com\n" +
-		"The address changes, so:\n  1. Passkeys at the old address stop working.\n  2. Pair every device again.\nYour CYFR identity does not change.\n" +
+		"The address changes, so:\n  1. Every browser signs in again.\n  2. Update your OAuth apps.\n" +
+		"Accounts and their passkeys do not change: they live at the account service, not at CYFR's address. A CYFR that serves the account service itself must keep its address.\n" +
 		"Make this change? (yes/no) [no]: "
-	// After the change, the setup link at the new address lets the
-	// administrator back in.
-	passkeys := "Done. CYFR is reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n" +
-		"Passkeys made at the old address no longer sign anyone in. Open https://cyfr.example.com/setup#" + setupTokenOf(t) + " to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n"
-	if text != preview+passkeys {
-		t.Errorf("cyfr access printed:\n%s\nwant:\n%s", text, preview+passkeys)
+	// After the change nothing more is said: the preview listed what
+	// changes, and the setup link opens nothing on a CYFR someone is set
+	// up on.
+	done := "Done. CYFR is reached by anyone on the internet, who still has to sign in, at https://cyfr.example.com, through ports 80 and 443 on this machine.\n"
+	if text != preview+done {
+		t.Errorf("cyfr access printed:\n%s\nwant:\n%s", text, preview+done)
 	}
 	if len(s.switches) != 1 || s.locks != 1 {
 		t.Fatalf("%d switches under %d locks, want one under the lock", len(s.switches), s.locks)
@@ -77,12 +78,12 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	}
 }
 
-// On a CYFR that never booted, no one can lose a passkey or a paired
-// device to the new address: the preview lists none of it, and after the
-// change the next step is cyfr up and the setup link at the new address.
+// On a CYFR that never booted, no one is signed in or connected at the old
+// address: the preview lists nothing of it, and after the change the next
+// step is cyfr up and the setup link at the new address.
 func TestAccessListsNoConsequenceWhenNoOneIsSetUp(t *testing.T) {
 	s := newAccessProject(t)
-	s.addressChanges = []string{"Passkeys at the old address stop working.", "Pair every device again."}
+	s.addressChanges = []string{"Every browser signs in again.", "Update your OAuth apps."}
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("yes\n")
 	var out bytes.Buffer
@@ -125,8 +126,8 @@ func TestAccessChangesNothingUnconfirmed(t *testing.T) {
 		t.Errorf("--yes did not make the change: %v", err)
 	}
 	// The fake engine's preview names no change of address here.
-	if strings.Contains(out.String(), "Passkeys made at the old address") {
-		t.Errorf("a change the preview says keeps the address spoke of passkeys:\n%s", out.String())
+	if strings.Contains(out.String(), "The address changes") {
+		t.Errorf("a change the preview says keeps the address listed what changes with it:\n%s", out.String())
 	}
 }
 
@@ -561,7 +562,7 @@ func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
 	// where, and nothing that stays as it was.
 	local := access.Head{Mode: access.ModeLocal, Host: "localhost", PublicURL: "http://localhost:4000", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile}}
 	var out bytes.Buffer
-	printPreview(&out, access.Preview{Old: local, New: tailnet, OldWords: access.Describe(local), NewWords: access.Describe(tailnet), AddressChanges: []string{"Pair every device again."}}, false)
+	printPreview(&out, access.Preview{Old: local, New: tailnet, OldWords: access.Describe(local), NewWords: access.Describe(tailnet), AddressChanges: []string{"Every browser signs in again."}}, false)
 	if want := "CYFR will be reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n"; out.String() != want {
 		t.Errorf("the preview of a first join on a CYFR no one is set up on is\n%s\nwant\n%s", out.String(), want)
 	}
@@ -882,29 +883,28 @@ func TestNoOpenIsAnAccessFlag(t *testing.T) {
 // On a running CYFR, cyfr's log since its start decides the list: the
 // boot's not-set-up line with no set-up line after it leaves the list out,
 // and after the change the setup link at the new address is the next
-// step; a set-up line after it, or neither line, keeps the list and the
-// passkeys line, as a log that cannot be read does.
+// step; a set-up line after it, or neither line, keeps the list and says
+// nothing after the change, as a log that cannot be read does.
 func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
 	const startedAt = "2026-10-28T00:01:02.123456789Z"
 	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
 	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
 	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
-	list := "The address changes, so:\n  1. Pair every device again.\nYour CYFR identity does not change.\n"
+	list := "The address changes, so:\n  1. Every browser signs in again.\n" + access.AccountsUnchanged + "\n"
 	done := "Done. CYFR is reached from this computer at http://localhost:4000.\n"
-	passkeys := "Passkeys made at the old address no longer sign anyone in. Open http://localhost:4000/setup#" + token + " to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n"
 	for _, c := range []struct {
 		name, log, exit, want string
 	}{
 		{"no one set up", "booting\n" + notSetUp, "0", lead + done + "Open http://localhost:4000/setup#" + token + " to set up its first person, or run cyfr login --setup here.\n"},
-		{"set up since the boot", notSetUp + setUp, "0", lead + list + done + passkeys},
-		{"set up at the boot", "booting\n", "0", lead + list + done + passkeys},
-		{"a log unread", notSetUp, "1", lead + list + done + passkeys},
+		{"set up since the boot", notSetUp + setUp, "0", lead + list + done},
+		{"set up at the boot", "booting\n", "0", lead + list + done},
+		{"a log unread", notSetUp, "1", lead + list + done},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
 			s.edit(".env", scenarioEnv+"CYFR_SETUP_TOKEN="+token+"\n")
-			s.engine.addressChanges = []string{"Pair every device again."}
+			s.engine.addressChanges = []string{"Every browser signs in again."}
 			s.answer("ps.out", "c0ffee\n")
 			s.answer("inspect.out", startedAt+"\n")
 			s.answer("logs.out", c.log)
@@ -928,7 +928,7 @@ func TestAccessPreviewWithoutATerminalKeepsTheListUnlessNeverBooted(t *testing.T
 	const startedAt = "2026-10-28T00:01:02.123456789Z"
 	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
 	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
-	list := "The address changes, so:\n  1. Pair every device again.\nYour CYFR identity does not change.\n"
+	list := "The address changes, so:\n  1. Every browser signs in again.\n" + access.AccountsUnchanged + "\n"
 	for _, c := range []struct {
 		name, log string
 		booted    bool
@@ -946,7 +946,7 @@ func TestAccessPreviewWithoutATerminalKeepsTheListUnlessNeverBooted(t *testing.T
 					t.Fatal(err)
 				}
 			}
-			s.engine.addressChanges = []string{"Pair every device again."}
+			s.engine.addressChanges = []string{"Every browser signs in again."}
 			s.answer("ps.out", "c0ffee\n")
 			s.answer("inspect.out", startedAt+"\n")
 			s.answer("logs.out", c.log)

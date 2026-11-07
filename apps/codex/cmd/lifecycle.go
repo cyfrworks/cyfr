@@ -414,7 +414,7 @@ On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init f
 
 The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with a passkey, and after a change of address it lets the administrator back in. 'cyfr login --setup' in this directory sets up the first person at this terminal instead, with this command line as their device; a headless CYFR (CYFR_HEADLESS=on) serves no page, so there it is the only way. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. 'cyfr login --setup' in this directory sets up the first person at this terminal instead, with this command line as their device; a headless CYFR (CYFR_HEADLESS=on) serves no page, so there it is the only way. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
 	Example: `  cyfr init
@@ -491,11 +491,11 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 
 // initEnding is init's last word on the new CYFR in the working directory,
 // reached from this machine: its address, the offer to reach it from the
-// person's other devices, made before anyone is set up since passkeys
-// belong to the address, and the next step, which on screen is the reboot
-// that shows setup there, and otherwise the setup link or cyfr login
-// --setup at this terminal (sshTunnel's line beside them on a machine
-// with no display). A headless CYFR serves no setup page.
+// person's other devices, made before anyone is set up, while a new
+// address signs no one out, and the next step, which on screen is the
+// reboot that shows setup there, and otherwise the setup link or cyfr
+// login --setup at this terminal (sshTunnel's line beside them on a
+// machine with no display). A headless CYFR serves no setup page.
 func initEnding(out io.Writer, screen bool) {
 	values, _ := access.ReadEnvValues(".env")
 	port := existingSelection(".env").port

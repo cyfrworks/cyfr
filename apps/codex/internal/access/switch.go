@@ -13,16 +13,16 @@ import (
 	"strings"
 )
 
-// IdentityUnchanged closes the list of what changes with the address.
-const IdentityUnchanged = "Your CYFR identity does not change."
+// AccountsUnchanged closes the list of what changes with the address.
+const AccountsUnchanged = "Accounts and their passkeys do not change: they live at the account service, not at CYFR's address. A CYFR that serves the account service itself must keep its address."
 
-// addressChanges is what stops working when the home's address changes,
-// shown before the change is made.
+// addressChanges is what changes when the home's address changes, shown
+// before the change is made.
 var addressChanges = []string{
-	"Passkeys made at the old address no longer sign anyone in. Open the setup link at the new address to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.",
-	"Pair every device again.",
-	"Update the redirect address in OAuth apps you registered (vault credentials, an OIDC issuer), the URL your webhook senders call, CLI contexts and MCP clients.",
-	"Every other CYFR and device that saved the old address needs the new one.",
+	"Every browser signs in again at the new address, with the same passkey.",
+	"A command line connects there with cyfr login --url and the new address, with the same key; nothing is approved.",
+	"Update the redirect address in OAuth apps you registered (vault credentials, a company's sign-in issuer), the URL your webhook senders call, CLI contexts and MCP clients.",
+	"Every device that saved the old address needs the new one.",
 }
 
 // envState is .env as an operation reads it: the head it holds, or the

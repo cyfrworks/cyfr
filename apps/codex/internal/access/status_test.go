@@ -93,7 +93,9 @@ func mapsEqual(a, b map[string]string) bool {
 }
 
 // The preview shows both complete heads, their digests and words, and
-// lists what stops working only when the address changes.
+// lists what changes with the address only when it changes: browsers sign
+// in again with the same passkey, and no passkey or device is made or
+// approved again.
 func TestPreviewShowsBothHeadsAndTheAddressChange(t *testing.T) {
 	h := newHome(t)
 	p := h.preview(publicTarget, "")
@@ -103,8 +105,13 @@ func TestPreviewShowsBothHeadsAndTheAddressChange(t *testing.T) {
 	if p.OldWords.Who != "only this computer" || p.NewWords.Ports != "80 and 443" || p.NewWords.Address != "https://home.example.com" {
 		t.Errorf("words %+v → %+v", p.OldWords, p.NewWords)
 	}
-	if len(p.AddressChanges) != 4 || !strings.HasPrefix(p.AddressChanges[0], "Passkeys made at the old address no longer sign anyone in") {
+	if len(p.AddressChanges) != 4 || p.AddressChanges[0] != "Every browser signs in again at the new address, with the same passkey." {
 		t.Errorf("address changes %v", p.AddressChanges)
+	}
+	for _, change := range p.AddressChanges {
+		if lower := strings.ToLower(change); strings.Contains(lower, "register the") || strings.Contains(lower, "registers") || strings.Contains(lower, "pair") {
+			t.Errorf("an address change asks for a passkey or a device again: %q", change)
+		}
 	}
 	if _, err := h.e.Switch(bg, h.request(id(1), publicTarget, "")); err != nil {
 		t.Fatal(err)

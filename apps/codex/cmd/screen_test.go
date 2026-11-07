@@ -380,7 +380,7 @@ func TestAccessRewritesTheScreensFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Chdir(dir)
-		s.addressChanges = []string{"Passkeys made at the old address no longer sign anyone in."}
+		s.addressChanges = []string{"Every browser signs in again."}
 		if screen {
 			if err := writeScreenFiles(dir, "alice"); err != nil {
 				t.Fatal(err)
