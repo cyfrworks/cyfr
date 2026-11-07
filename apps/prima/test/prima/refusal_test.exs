@@ -186,7 +186,6 @@ defmodule Prima.RefusalTest do
     {:invalid_component_type, :invalid_argument},
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
-    {:not_enrolled, :setup_required},
     {:no_registry, :setup_required},
     {:registry_unavailable, :unavailable},
     {:registry_token_missing, :unauthenticated},
@@ -210,9 +209,6 @@ defmodule Prima.RefusalTest do
     {:unknown_identity, :not_found},
     {:directory_unavailable, :unavailable},
     {:name_taken, :conflict},
-    {:name_reserved, :invalid_argument},
-    {:directory_refused, :forbidden},
-    {:no_attempt, :not_found},
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
@@ -651,18 +647,17 @@ defmodule Prima.RefusalTest do
                "Accept the registry's current policy first."
     end
 
-    test "the registration's refusals read as the sentences a person is shown" do
-      assert Refusal.message(:directory_unavailable) == "cyfr.run did not answer. Try again."
+    test "a refusal about an account says account, never cyfr.run or directory" do
+      assert Refusal.message(:directory_unavailable) ==
+               "The registry could not read your account just now. Try again shortly."
+
+      assert Refusal.message(:wrong_directory) ==
+               "This account was made with another registry, so this one does not accept it."
+
       assert Refusal.message(:name_taken) == "Someone holds that name. Choose another."
 
-      assert Refusal.message(:name_reserved) ==
-               "cyfr.run keeps that name for itself. Choose another."
-
-      assert Refusal.message(:directory_refused) ==
-               "cyfr.run refused this identity. Ask whoever runs this CYFR."
-
-      assert Refusal.message(:no_attempt) ==
-               "There is no unfinished name and recovery code to finish here."
+      for reason <- [:not_enrolled, :name_reserved, :directory_refused, :no_attempt],
+          do: refute(Refusal.reason?(reason), "#{reason} has a row")
     end
 
     test "an account the registry does not know, a closed one among them, is named as an account" do

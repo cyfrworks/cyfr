@@ -411,11 +411,7 @@ defmodule Prima.Refusal do
        "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
 
   # A registry operation the person signs (`Prima.RegistryRequest`), refused
-  # before it is sent: the person has no identifier to sign under, or this
-  # deployment names no registry.
-  defp row(:not_enrolled),
-    do: {:setup_required, "This needs your identity: enroll it in Settings, then try again."}
-
+  # before it is sent: this deployment names no registry.
   defp row(:no_registry),
     do: {:setup_required, "No registry is configured on this server (CYFR_REGISTRY_URL=none)."}
 
@@ -433,7 +429,7 @@ defmodule Prima.Refusal do
 
   # The registry's own refusals of a signed request that CYFR passes on
   # (`Prima.RegistryRequest.refusals/0` names each one's code); the last
-  # two are the directory's too, as a recovery meets them.
+  # three answer for the account the request names.
   defp row(:malformed_answer),
     do: {:unavailable, "The registry's answer could not be read; try again shortly."}
 
@@ -479,26 +475,15 @@ defmodule Prima.Refusal do
 
   defp row(:wrong_directory),
     do:
-      {:forbidden,
-       "The registry accepts only identities its own directory orders; this one names another."}
+      {:forbidden, "This account was made with another registry, so this one does not accept it."}
 
   defp row(:unknown_identity), do: {:not_found, "This account is not registered."}
 
-  defp row(:directory_unavailable), do: {:unavailable, "cyfr.run did not answer. Try again."}
+  defp row(:directory_unavailable),
+    do: {:unavailable, "The registry could not read your account just now. Try again shortly."}
 
-  # The registration of a person's name and identity at cyfr.run
-  # (`registry.register`): the registry's refusals of the name, the
-  # directory's of the identity, and a person with nothing to register.
+  # A name another holds: a vault entry's, or a handle's at the registry.
   defp row(:name_taken), do: {:conflict, "Someone holds that name. Choose another."}
-
-  defp row(:name_reserved),
-    do: {:invalid_argument, "cyfr.run keeps that name for itself. Choose another."}
-
-  defp row(:directory_refused),
-    do: {:forbidden, "cyfr.run refused this identity. Ask whoever runs this CYFR."}
-
-  defp row(:no_attempt),
-    do: {:not_found, "There is no unfinished name and recovery code to finish here."}
 
   # Stored bytes that no longer match the digest their row recorded: an
   # integrity refusal, not an outage — a retry will not help, and the
