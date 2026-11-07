@@ -15,10 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
-	"slices"
-	"strings"
 
 	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/holder"
@@ -487,6 +484,31 @@ var registrySigner = func(ctx context.Context, address string, asked any) (any, 
 	return signRegistryRequest(ctx, c, rec, deviceHome(address), asked)
 }
 
+// registryWords is a registry request in words, as the account pages say
+// it, naming every field of the body it signs and never the operation's
+// name; ReadToSign holds the request to exactly these operations and
+// bodies.
+func registryWords(req map[string]any) string {
+	body, _ := req["body"].(map[string]any)
+	f := func(k string) string { v, _ := body[k].(string); return v }
+	at, _ := req["registry"].(string)
+	switch req["operation"] {
+	case "handle.claim":
+		return fmt.Sprintf("Claim the name @%s at %s", f("handle"), at)
+	case "policy.accept":
+		return fmt.Sprintf("Accept the terms (version %s) at %s", f("policy_version"), at)
+	case "tokens.mint":
+		return fmt.Sprintf("Create a publishing token named “%s” at %s", f("label"), at)
+	case "appeal.file":
+		return fmt.Sprintf("Appeal the %s %s at %s, saying: “%s”", f("action_type"), f("action_ref"), at, f("argument"))
+	case "publisher.claim":
+		return fmt.Sprintf("Claim the publisher name %s at %s", f("slug"), at)
+	case "publisher.verify":
+		return fmt.Sprintf("Confirm the publisher name %s at %s, with a publishing token named “%s”", f("slug"), at, f("label"))
+	}
+	return "Sign a request of the registry at " + at
+}
+
 // signRegistryRequest signs the registry request a CYFR's request of
 // purpose registry carries, for the account rec's key is listed in: only a
 // request this CYFR (home) minted for that account, shown before the
@@ -499,15 +521,7 @@ func signRegistryRequest(ctx context.Context, c *console, rec *holder.Record, ho
 		return nil, errors.New("CYFR asked this command line to sign something other than a registry request for your account here, so nothing was signed.")
 	}
 	req := r.RegistryRequest
-	fmt.Fprintf(c.out, "The registry %s asks your signature for %s", req["registry"], req["operation"])
-	if body, ok := req["body"].(map[string]any); ok && len(body) > 0 {
-		var parts []string
-		for _, k := range slices.Sorted(maps.Keys(body)) {
-			parts = append(parts, fmt.Sprintf("%s: %v", k, body[k]))
-		}
-		fmt.Fprintf(c.out, " (%s)", strings.Join(parts, "; "))
-	}
-	fmt.Fprintln(c.out, ".")
+	fmt.Fprintf(c.out, "%s, signed by your account.\n", registryWords(req))
 	question := "Sign it with this command line's passphrase: "
 	if rec.Kind == holder.KindChip {
 		question = "Sign it with this command line's PIN: "

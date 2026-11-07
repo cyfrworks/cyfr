@@ -77,9 +77,9 @@ func TestSignRegistryRequest_AsksTheUnlockForEachSignature(t *testing.T) {
 		t.Fatal("the signature does not verify under this key")
 	}
 	printed := out.String()
-	if strings.Index(printed, "handle.claim") < 0 || strings.Index(printed, "handle.claim") > strings.Index(printed, "passphrase: ") ||
-		!strings.Contains(printed, "handle: alice") {
-		t.Fatalf("what is signed was not shown before the secret was asked:\n%s", printed)
+	words := strings.Index(printed, "Claim the name @alice at cyfr.run, signed by your account.")
+	if words < 0 || words > strings.Index(printed, "passphrase: ") || strings.Contains(printed, "handle.claim") {
+		t.Fatalf("what is signed was not said in words before the secret was asked:\n%s", printed)
 	}
 
 	if _, err := signRegistryRequest(t.Context(), c, rec, home, asked); !errors.Is(err, errInputEnded) {
@@ -153,6 +153,30 @@ func TestSignedRegistry_AnswersTheRequestInASecondCall(t *testing.T) {
 	})
 	if err != nil || calls != 1 || result["slug"] != "acme.com" || len(signedFor) != 1 {
 		t.Fatalf("an answer with no request: %v %v, %d calls", result, err, calls)
+	}
+}
+
+// Each registry operation is said in the account pages' words, naming
+// every field of its body and never the operation's name.
+func TestRegistryWords_SayEachOperationAsTheAccountPagesDo(t *testing.T) {
+	for _, c := range []struct {
+		operation string
+		body      map[string]any
+		want      string
+	}{
+		{"handle.claim", map[string]any{"handle": "mira"}, "Claim the name @mira at cyfr.run"},
+		{"policy.accept", map[string]any{"policy_version": "2026-10"}, "Accept the terms (version 2026-10) at cyfr.run"},
+		{"tokens.mint", map[string]any{"label": "laptop"}, "Create a publishing token named “laptop” at cyfr.run"},
+		{"appeal.file", map[string]any{"action_type": "takedown", "action_ref": "act_1", "argument": "It is mine."},
+			"Appeal the takedown act_1 at cyfr.run, saying: “It is mine.”"},
+		{"publisher.claim", map[string]any{"slug": "acme.com"}, "Claim the publisher name acme.com at cyfr.run"},
+		{"publisher.verify", map[string]any{"slug": "acme.com", "label": "ci"},
+			"Confirm the publisher name acme.com at cyfr.run, with a publishing token named “ci”"},
+	} {
+		got := registryWords(map[string]any{"registry": "cyfr.run", "operation": c.operation, "body": c.body})
+		if got != c.want || strings.Contains(got, c.operation) {
+			t.Errorf("%s: %q, want %q", c.operation, got, c.want)
+		}
 	}
 }
 
