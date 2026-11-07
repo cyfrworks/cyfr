@@ -17,8 +17,7 @@
 # tree's cyfr and server image; per guest cyfr_run_guard, which keeps it
 # from cyfr.run, candidate_server_load, account_settings and
 # account_service, the box's own account service. On the screen:
-# guest_chord, screen_find and screen_open drive its Chrome as a keyboard
-# does, and
+# guest_chord and screen_find drive its Chrome as a keyboard does, and
 # profile_cookie, screen_cookie and cookie_answer read the session cookie
 # Chrome holds and ask the home what it opens.
 #
@@ -762,15 +761,6 @@ screen_find() {
     printf '%s' "$1" | guest_keys && sleep 2 &&
     { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
     guest_chord esc && sleep 1
-}
-
-# screen_open URL: the screen's running Chrome opens URL in a window of its
-# own, as a link opened there would: a second Chrome on the same profile
-# hands it over and exits.
-screen_open() {
-  printf '%s' "$1" | guest_ssh_in 'url=$(cat); run=/run/user/$(id -u); way=$(cd "$run" && ls -d wayland-? | head -n 1)
-    XDG_RUNTIME_DIR=$run WAYLAND_DISPLAY=$way timeout 30 google-chrome-stable --ozone-platform=wayland \
-      --user-data-dir="$HOME/cyfr/.cyfr/screen/chrome" "$url" >/dev/null 2>&1'
 }
 
 # The boot's journal and apt's history, read once nothing else is to be

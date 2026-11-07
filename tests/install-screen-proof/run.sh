@@ -378,15 +378,10 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
 # confirms it, after which the key is made. The home's record of the
 # confirmation (its database, read as root) says which client gave it.
 screen_confirms() {
-  local address athanor ref client
+  local ref client
   step "a sensitive change confirmed on this screen: an API key made in Prism"
-  # The box is reached from this machine (local access), at the address
-  # its screen's Chrome holds Prism under; the person's athanor is the one
-  # the box's certificate names.
-  address="http://localhost:4000"
-  athanor=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"certificate\"][\"athanor\"])' ~/cyfr/.cyfr/screen/client.json")
-  check "the box's certificate names the person's athanor ($athanor)" sh -c 'case "$1" in ath_*) ;; *) exit 1 ;; esac' sh "$athanor"
-  screen_open "$address/a/$athanor/api-keys" || fail "the screen's Chrome did not take the API keys page"
+  # The person's way there: Prism's sidebar link, from the page in front.
+  screen_find 'api keys' && printf '\n' | guest_keys || fail "QMP did not press API Keys"
   sleep 8
   check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
   # Create Key opens the form; Tab reaches its name, and Enter there
