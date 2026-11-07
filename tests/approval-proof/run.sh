@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The approval proof (README.md): a `cyfr` release started as the browser
-# harness starts a home (tests/browser/harness.sh), home.test behind the
-# harness's HTTPS front, one person signed in. In Chromium (proof.mjs) the
-# person grants the tincture approval-probe on the Components page: a
+# The approval proof (README.md): `cyfr` releases started as the browser
+# harness starts homes (tests/browser/harness.sh), home.test and the
+# directory dir.test behind the harness's HTTPS front, home.test reaching
+# the directory through the identity proof's front
+# (tests/identity-proof/front.sh and cells.sh). In Chromium (proof.mjs)
+# one person makes her account at the directory's pages and sets home.test
+# up by signing in with it, then grants the tincture approval-probe on the
+# Components page: a
 # dependency's need its publisher provides takes no key, two entries of one
 # provider are chosen per edge, each binding is committed with its own
 # lifetime, a once binding is used up and an until binding expires, a
@@ -13,8 +17,10 @@
 # the next use.
 #
 # The proof asks the server for its part through the output directory
-# (`ask-N.json`), and this script answers each (`answer-N.json`) through
-# the proof's fixture (tests/approval-proof/fixture.exs), which reads a
+# (`ask-N.json`), and this script answers each (`answer-N.json`): the
+# setup token, her session read from her browser's cookie (harness.sh
+# `browser_session`), and the rest through the proof's fixture
+# (tests/approval-proof/fixture.exs), which reads a
 # question's own file by path and answers bounded facts, never material.
 # The tincture the proof describes is written here into the scratch
 # directory and installed through the release's own path.
@@ -60,13 +66,18 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../release-boot/release.sh"
 # shellcheck source=../browser/harness.sh
 source "$ROOT/tests/browser/harness.sh"
+# shellcheck source=../identity-proof/front.sh
+source "$ROOT/tests/identity-proof/front.sh"
+# shellcheck source=../identity-proof/cells.sh
+source "$ROOT/tests/identity-proof/cells.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 NAME=approval-probe
 APP="tincture:local.$NAME"
 
-# The scratch directory holds the run's authority key, the cell's keys
-# and its database, and the person's session token, so it goes even when
+# The scratch directory holds the run's authority key, the cells' keys
+# and their databases, the setup token and the person's session token, so
+# it goes even when
 # a stop fails. `server_stop` ends in `fail`, an `exit`, when a listener
 # outlives its stop, and an exit inside this trap would end it before the
 # removal, so the stop runs in a subshell, whose exit ends only that
@@ -78,6 +89,7 @@ cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
+  identity_front_stop
   rm -f "$OUT"/ask-* "$OUT"/answer-*
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
@@ -116,22 +128,28 @@ with open(sys.argv[2] + '/index.html', 'w') as out:
 
 release_build
 
-step "the run's authority and the home home.test"
+step "the run's authority, the home home.test and the directory dir.test"
 browser_authority
 CELL="$WORK/home"
+DIR="$WORK/dir"
 browser_home "$CELL" home.test
+browser_home "$DIR" dir.test
+openssl rand -hex 32 | tr -d '\n' >"$WORK/setup-token"
+identity_directory dir.test 127.77.0.1
+identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
+identity_reaches_directory "$CELL" dir.test
+identity_env "$CELL" CYFR_REGISTRY_URL dir.test
+identity_env "$CELL" CYFR_SETUP_TOKEN "$(cat "$WORK/setup-token")"
 
-step "starting home.test on a fresh SQLite cell"
-server_start "$CELL"
+step "starting the directory, its front, and home.test on fresh SQLite cells"
+server_start "$DIR"
+identity_front_start "$DIR"
+identity_start "$CELL"
 
-step "one person, signed in"
-person="$(server_fixture "$CELL" person operator@example.com approval-proof)"
-[ -n "$person" ] || fail "the fixture signed nobody in"
-user_id="$(field "$person" user_id)"
-athanor_id="$(field "$person" athanor_id)"
-segment="$(field "$person" segment)"
-token="$(field "$person" token)"
-cookie="$(browser_cookie "$CELL" "$token")"
+# The person, once she signed in in the browser (`signed_in`).
+user_id=""
+athanor_id=""
+token=""
 
 # Each step the proof asks for (harness.sh `answer_asks`, which removes an
 # ask once answered, before its answer appears: a state ask carries the
@@ -141,12 +159,23 @@ answer_ask() {
   local ask="$1" op
   op="$(asked "$ask" op)"
   case "$op" in
+    setup_token)
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$WORK/setup-token")"
+      ;;
+    signed_in)
+      (umask 077 && python3 -c "import json, sys; open(sys.argv[2], 'w').write(json.load(open(sys.argv[1]))['cookie'])" "$ask" "$WORK/cookie")
+      session="$(browser_session "$CELL" "$WORK/cookie")"
+      rm -f "$WORK/cookie"
+      token="$(field "$session" token)"
+      user_id="$(field "$session" user_id)"
+      athanor_id="$(field "$session" athanor_id)"
+      ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id'], 'segment': p['segment']}))" "$session")"
+      ;;
     person)
       ANSWER="$(python3 -c "import json, sys; print(json.dumps({'user_id': sys.argv[1], 'athanor_id': sys.argv[2]}))" \
         "$user_id" "$athanor_id")"
       ;;
     clock) ANSWER="$(approval_fixture clock)" ;;
-    device_confirm) ANSWER="$(device_confirmed "$CELL" "$ask")" ;;
     publish) ANSWER="$(publish "$ask")" ;;
     state) ANSWER="$(approval_fixture state "$token" "$APP" "$ask")" ;;
     requested) ANSWER="$(approval_fixture requested "$token" "$ask")" ;;
@@ -165,7 +194,7 @@ answer_ask() {
 step "the approval proof in Chromium at $VIEWPORT, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run approval-proof proof.mjs /authority/homes.json "$segment" "$cookie" /out "$VIEWPORT" &
+playwright_run approval-proof proof.mjs /authority/homes.json /out "$VIEWPORT" &
 PROOF_PID=$!
 proof_await answer_ask
 

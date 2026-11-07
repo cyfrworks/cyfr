@@ -2,15 +2,20 @@
 // Copyright 2026 CYFR Works Inc.
 //
 // The share proof, run in the official Playwright image by run.sh
-// against a `cyfr` release behind the harness's HTTPS front (README.md).
-// The platform administrator, in Chromium, makes two keys on the Vault page
+// against `cyfr` releases behind the harness's HTTPS front (README.md):
+// home.test and the directory dir.test, whose account pages hold the
+// administrator's passkey (../browser/account.mjs). The platform
+// administrator, in Chromium, makes their account there and sets home.test
+// up by signing in with it, then makes two keys on the Vault page
 // and shares each with everyone through the system layer's sharing sheet;
 // Ana, a member who signs in after, is offered them in her vault and her
 // first sign-in binds the model key's share; Bea signs in once and is
 // denied. Each step is one row of the record; the proof fails when a row
 // does not hold, and stops at the first row a later one rests on.
 //
-//   share_key        Company AI (openai.com, a person cap of 3) and Company
+//   share_key        the administrator's account made at dir.test's pages
+//                    sets home.test up; Company AI (openai.com, a person
+//                    cap of 3) and Company
 //                    Mail are made on the Vault page, each key typed in its
 //                    form alone and its credential_entry confirmation proven
 //                    with the administrator's passkey; each is shared with
@@ -52,16 +57,17 @@
 // answered `answer-N.json`) and done by fixture.exs, which returns bounded
 // facts and never material.
 //
-// Usage: node proof.mjs HOMES_FILE ADMIN_SEGMENT ADMIN_COOKIE OUT_DIR VIEWPORT
+// Usage: node proof.mjs HOMES_FILE OUT_DIR VIEWPORT
 
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ask as askRunSh, firstPasskey, launchBrowser, readHomes, startProxy } from "../browser/lib.mjs";
+import { confirmInTab, createAccount, passkeys, sessionCookie, setUp } from "../browser/account.mjs";
+import { ask as askRunSh, homeOf, launchBrowser, readHomes, startProxy } from "../browser/lib.mjs";
 
-const [homesFile, adminSegment, adminCookie, outDir, viewportName] = process.argv.slice(2);
-if (!homesFile || !adminSegment || !adminCookie || !outDir || !viewportName) {
-  console.error("usage: node proof.mjs HOMES_FILE ADMIN_SEGMENT ADMIN_COOKIE OUT_DIR VIEWPORT");
+const [homesFile, outDir, viewportName] = process.argv.slice(2);
+if (!homesFile || !outDir || !viewportName) {
+  console.error("usage: node proof.mjs HOMES_FILE OUT_DIR VIEWPORT");
   process.exit(64);
 }
 
@@ -76,7 +82,14 @@ mkdirSync(outDir, { recursive: true });
 
 const STEPS = ["share_key", "first_sign_in", "claim_cap", "narrow_audience", "revoke", "deny_person", "admin_focus"];
 const { homes } = readHomes(homesFile);
-const base = homes[0].origin;
+const HOME = homeOf(homes, "home.test");
+const DIR = homeOf(homes, "dir.test");
+const base = HOME.origin;
+// The administrator's passkeys, held by the proof as their platform keeps
+// them, and their recovery code, which no record holds.
+const adminKeys = passkeys();
+const codes = [];
+let adminSegment = null;
 const layer = "#system-layer-dialog";
 const rows = [];
 const record = { viewport: { name: viewportName, ...viewport } };
@@ -115,9 +128,9 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const typedDigest = (spec) => sha256(JSON.stringify(canonical({ v: 3, fields: { [FIELD]: spec.key } })));
 // The field the key is typed under in the Vault page's form.
 const FIELD = "API_KEY";
-// The administrator's name as others read it: the release fixture's person
-// (tests/release-boot/fixture.exs `person`), as Bea's row below holds it.
-const OWNER = "Release proof";
+// The administrator's name as others read it: the name their account
+// holds, `@share-admin`, which they chose at the account pages.
+const OWNER = "@share-admin";
 // What the sharing sheet says of its caps, and of a share to everyone with
 // none, to the platform administrator.
 const CAPS_MEANING = "An empty cap is no limit. 0 admits no use. A number is the most requests that day; " +
@@ -549,23 +562,34 @@ async function entryIds(page, vault, count) {
   return Object.fromEntries(shown);
 }
 
-// The administrator's first passkey, made by the virtual authenticator and
-// registered from the Settings page through the system layer's ceremony:
-// setup made them with a protected device, so the registration waits on a
-// fresh confirmation the setup device gives (`firstPasskey`).
-async function registerPasskey(page, settings) {
-  await open(page, settings);
-  return firstPasskey(page, { ask, layer });
+// The administrator: their account made at dir.test's pages, home.test
+// set up with it through its setup link, and the session their browser
+// then holds handed to run.sh (`admin_session`), which reads it from the
+// cookie: their person, athanor and route segment.
+async function signUpAdmin(page) {
+  const made = await createAccount(page, adminKeys, { directory: DIR, name: "share-admin", secrets: codes });
+  const { token } = await ask({ op: "setup_token" }, { secret: true });
+  const setup = made.section === "done" ? await setUp(page, adminKeys, HOME, token) : { landed: false };
+  const cookie = setup.landed ? await sessionCookie(page, HOME) : null;
+  const session = cookie ? await ask({ op: "admin_session", cookie }, { secret: true }) : {};
+  adminSegment = session.segment || null;
+  return { made: made.section, setup, ok: setup.landed && !!adminSegment };
 }
 
-// The page's own request waiting on its record, proven with the passkey.
+// The page's own request waiting on its record, proven with the passkey at
+// the account pages in the tab the system layer opens: the panel's words,
+// what the sign page asked, and whether the tab came back to home.test.
 async function proveOwn(page) {
   const panel = `${layer} [data-test="confirmation"][data-own="true"]`;
   const confirmation = await page.waitForSelector(panel, { timeout: 30_000 })
     .then((el) => el.innerText()).catch(() => "");
-  await page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 });
-  return words(confirmation).slice(0, 300);
+  const tab = await confirmInTab(page, adminKeys, HOME,
+    () => page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 }));
+  return { panel: words(confirmation).slice(0, 300), what: tab.what, landed: tab.landed, error: tab.error || null };
 }
+
+const provenHere = (confirmation) =>
+  confirmation.landed && confirmation.what === `Confirm a change at ${base}`;
 
 // A key made on the Vault page: its name, kind, label and destination and
 // its one field typed in the create form, which the browser keeps and
@@ -640,13 +664,15 @@ async function main() {
   const proxy = await startProxy(readHomes(homesFile));
   const browser = await launchBrowser("chromium", proxy);
   record.browser = browser.version();
-  const admin = await (await signedIn(browser, adminCookie)).newPage();
+  const adminContext = await browser.newContext({ viewport });
+  adminContext.on("page", (page) => page.on("dialog", (dialog) => dialog.accept()));
+  const admin = await adminContext.newPage();
   const frames = [];
   admin.on("websocket", (ws) => {
     ws.on("framesent", (f) => frames.push(String(f.payload).slice(0, 2000)));
   });
-  const settings = pagePath(adminSegment, "/settings");
-  const vault = pagePath(adminSegment, "/vault");
+  let settings;
+  let vault;
   let ai;
   let mail;
   let ana;
@@ -734,8 +760,10 @@ async function main() {
     // -----------------------------------------------------------------------
     // share_key
     // -----------------------------------------------------------------------
-    const passkey = await registerPasskey(admin, settings);
+    const passkey = await signUpAdmin(admin);
     record.share_key = { passkey };
+    settings = pagePath(adminSegment, "/settings");
+    vault = pagePath(adminSegment, "/vault");
     const madeAi = await createKey(admin, vault, AI);
     record.share_key.ai = madeAi;
     const madeMail = await createKey(admin, vault, MAIL);
@@ -781,7 +809,8 @@ async function main() {
       state: made.compared,
     };
     if (!row("share_key",
-      passkey.ok && madeAi.created && madeMail.created && !madeAi.disclosed && !madeMail.disclosed &&
+      passkey.ok && [madeAi, madeMail, sharedAi, sharedMail].every((m) => provenHere(m.confirmation)) &&
+        madeAi.created && madeMail.created && !madeAi.disclosed && !madeMail.disclosed &&
         !madeAi.key_on_page && !madeMail.key_on_page && Object.keys(shownIds).length === 2 &&
         sheetOpened(sharedAi) && sheetOpened(sharedMail) && sharedAi.shared && sharedMail.shared &&
         !sharedAi.key_on_page && !sharedMail.key_on_page && same(madeShares, linesMade) && made.held,

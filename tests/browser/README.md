@@ -148,7 +148,6 @@ helpers:
 | `framedRequest(page, proxy, parent, target, path)` | a page of one home framing a path of another, as the front saw the request |
 | `crossedCookies(seen, scripted)` | every request to one host that carried a cookie another host set |
 | `virtualAuthenticator(page)` | Chromium's virtual WebAuthn authenticator: resident keys, user verification, presence simulated; `add` gives it a credential another one listed, as a synced passkey reaches another device; Firefox and WebKit offer none to Playwright, so a passkey ceremony is Chromium's |
-| `firstPasskey(page, { ask })` | a device-first person's first passkey from the Settings page `page` is on: the registration's own request is read, seen waiting, confirmed by the setup device through run.sh (`device_confirmed` in `harness.sh`, the release fixture's `device_confirm`, which alone reads the device's seed from the cell), and repeated; with `refusals`, the device's proof over another digest, another ref and by another key is refused first |
 
 `account.mjs` drives the account pages a directory serves
 (`/account/*`) and the CYFR pages that send the browser there, in
@@ -253,8 +252,8 @@ proof's own README holds how to run it and its steps.
 | identity | `tests/identity-proof/` | the directory `dir.test` and the home `a.test` | Chromium | b; Chromium |
 | join | `tests/join-proof/` | the directory `dir.test` and the home `h.test` | Chromium | b; Chromium |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium | d; Chromium |
-| shares | `tests/share-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 | d; Chromium, both viewports |
-| approvals | `tests/approval-proof/` | one home, `home.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |
+| shares | `tests/share-proof/` | the home `home.test` and the directory `dir.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 | d; Chromium, both viewports |
+| approvals | `tests/approval-proof/` | the home `home.test` and the directory `dir.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |
 | file offers | `tests/file-offer-proof/` | one home, `home.test`; offers, recipient acceptance and actual snapshot readback | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |
 | canvas | `tests/canvas-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 | d; all three, both viewports |
 

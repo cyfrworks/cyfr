@@ -573,47 +573,6 @@ export async function virtualAuthenticator(page, options = {}) {
   };
 }
 
-// A device-first person's first passkey (the release fixture's `person`:
-// setup made them with a protected device, which stands): made by the
-// virtual authenticator and registered from the Settings page `page` is
-// on through the system layer's ceremony. The registration waits on a
-// fresh confirmation, the page's own request: its panel's ref is read, the
-// registration is seen still waiting, and the setup device confirms that
-// ref through run.sh (`device_confirmed`, the fixture's `device_confirm`,
-// asked with `ask`); the system layer then repeats the registration. With
-// `refusals`, the device's proof is first made over another digest, over
-// another ref and by another key, each of which the home must refuse with
-// the passkey still waiting. `authenticator` is the page's virtual one when
-// the proof made it already. Answers what each step saw.
-export async function firstPasskey(page, { ask, layer = "#system-layer-dialog", refusals = false, authenticator = null }) {
-  authenticator = authenticator || (await virtualAuthenticator(page));
-  const active = '[data-test="passkey"][data-state="active"]';
-  const own = `${layer} [data-test="confirmation"][data-own="true"]`;
-  await page.locator('[data-test="passkey-register"]').click({ timeout: 30_000 });
-  const panel = await page.waitForSelector(own, { timeout: 30_000 });
-  const ref = await panel.getAttribute("data-ref");
-  const preview = (await page.locator(`${own} [data-test="confirmation-preview"]`).first().innerText().catch(() => "")).slice(0, 300);
-  const activeNow = () => page.locator(active).count();
-  await sleep(2_000);
-  const waiting = (await activeNow()) === 0;
-  const refused = {};
-  if (refusals) {
-    for (const tamper of ["digest", "ref", "key"]) {
-      const answer = await ask({ op: "device_confirm", ref, tamper });
-      refused[tamper] = { refused: !!answer.error && !answer.ok, error: answer.error || null, still_waiting: (await activeNow()) === 0 };
-    }
-  }
-  const device = await ask({ op: "device_confirm", ref });
-  const registered = await page.waitForSelector(active, { timeout: 30_000 }).then(() => true).catch(() => false);
-  const held = (await authenticator.credentials()).length;
-  return {
-    ref, preview, waiting, refused, registered, held,
-    device: { operation: device.operation, preview: device.preview, confirmed: !!device.ok, error: device.error || null },
-    ok: !!ref && waiting && registered && held === 1 && !!device.ok && device.operation === "passkey.register" &&
-      Object.values(refused).every((r) => r.refused && r.still_waiting),
-  };
-}
-
 // What makes the page a secure context whose WebCrypto works: its
 // protocol, `isSecureContext`, `crypto.subtle`, and a digest made with it.
 export function secureContext(page) {
