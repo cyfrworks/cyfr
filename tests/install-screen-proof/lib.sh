@@ -15,9 +15,10 @@
 # proof_guest_stop (cleanup.sh). check records each verdict. Around the
 # stack: candidate_build and candidate_server_use once per run, this
 # tree's cyfr and server image; per guest cyfr_run_guard, which keeps it
-# from cyfr.run, candidate_server_load, standin_settings and
-# standin_start, the cyfr.run stand-in. On the screen: guest_chord and
-# screen_find drive its Chrome as a keyboard does, and
+# from cyfr.run, candidate_server_load, account_settings and
+# account_service, the box's own account service. On the screen:
+# guest_chord, screen_find and screen_open drive its Chrome as a keyboard
+# does, and
 # profile_cookie, screen_cookie and cookie_answer read the session cookie
 # Chrome holds and ask the home what it opens.
 #
@@ -567,51 +568,52 @@ candidate_server_load() {
     sh -c '[ "$(grep -c "^>" "$1")" = 1 ] && grep -qx ">.*image: $2" "$1" && grep -q "^<.*image: ghcr.io/cyfrworks/cyfr:" "$1"' sh "$GUEST_DIR/compose-candidate.diff" "$APP_IMAGE"
 }
 
-# The cyfr.run stand-in (tests/registry-stand-in/standin.py) answers for
-# cyfr.run's registry and directory on the loopback of cyfr's own
-# container, the one place the server takes a directory over plain http
-# (CYFR_DIRECTORY_URL, configuration-guide.md).
-STANDIN_PORT=4790
+# The box serves its own account service (CYFR_DIRECTORY_SERVE=writer):
+# the directory an account's log lives at, the handle registry beside it
+# and /account/config.json, which names both and no policy. Its address is
+# the box's own, http://localhost:4000, one string the screen on the guest
+# and the server in its container both reach: the guest through the port
+# Docker publishes on its loopback, the container at its own listener on
+# that port. It is the address the box's CYFR names itself by, the one a
+# genesis made there names as its directory.
+ACCOUNT_SERVICE=http://localhost:4000
 
-# standin_settings: .env names the stand-in as the registry and the
-# directory, and lets the server's calls reach it, before cyfr up, so the
-# server never starts naming cyfr.run. The stand-in's script goes to
-# ~/standin with them.
-standin_settings() {
-  guest_ssh 'mkdir -p ~/standin' && guest_copy_in "$ROOT/tests/registry-stand-in/standin.py" standin/standin.py ||
-    fail "the cyfr.run stand-in was not copied into the guest"
-  printf '%s\n' "CYFR_REGISTRY_URL=127.0.0.1:$STANDIN_PORT" "CYFR_DIRECTORY_URL=http://127.0.0.1:$STANDIN_PORT" \
+# account_settings: before cyfr up, .env makes the box its own account
+# service and names it as the directory and the registry, and lets the
+# server's calls reach its loopback, so the server never starts naming
+# cyfr.run.
+account_settings() {
+  printf '%s\n' "CYFR_DIRECTORY_SERVE=writer" "CYFR_DIRECTORY_URL=$ACCOUNT_SERVICE" "CYFR_REGISTRY_URL=${ACCOUNT_SERVICE#http://}" \
     "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1" |
-    guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=/d" .env &&
-    { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not given the cyfr.run stand-in"
-  guest_ssh "grep -E '^(CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-standin.txt" 2>&1
-  check ".env names the stand-in as cyfr.run's registry and directory" \
-    grep -qx "CYFR_DIRECTORY_URL=http://127.0.0.1:$STANDIN_PORT" "$GUEST_DIR/env-standin.txt"
+    guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=/d" .env &&
+    { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not made the box's own account service"
+  guest_ssh "grep -E '^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-account.txt" 2>&1
+  check ".env makes the box its own account service, its directory and registry at $ACCOUNT_SERVICE" \
+    sh -c 'grep -qx CYFR_DIRECTORY_SERVE=writer "$1" && grep -qx "CYFR_DIRECTORY_URL=$2" "$1"' sh "$GUEST_DIR/env-account.txt" "$ACCOUNT_SERVICE"
 }
 
-# standin_start WHEN: the stand-in, in cyfr's container's network
-# namespace, which is new at each start of the container: the guest's
-# python3 as the test account, in a transient unit of the harness's
-# (cyfr-proof-standin), its state ~/standin/state.json outliving each
-# start.
-standin_start() {
+# account_service WHEN: the box's account service answers one
+# configuration at one address from the guest, where the screen asks it,
+# and from cyfr's container's network namespace, where the server asks
+# it: its directory and its registry that address, and no policy. It
+# waits, within the case's budget, for the server to answer after a boot.
+account_service() {
   local closes
-  guest_root "pid=\$(docker inspect -f '{{.State.Pid}}' cyfr) && [ \"\$pid\" -gt 0 ] || exit 1
-    systemctl stop cyfr-proof-standin 2>/dev/null; systemctl reset-failed cyfr-proof-standin 2>/dev/null
-    rm -f /home/proof/standin/ready
-    systemd-run --unit=cyfr-proof-standin --collect nsenter -t \"\$pid\" -n \
-      setpriv --reuid=proof --regid=proof --init-groups -- python3 -I /home/proof/standin/standin.py \
-      --address 127.0.0.1 --port $STANDIN_PORT --state /home/proof/standin/state.json --ready-file /home/proof/standin/ready" ||
-    fail "the cyfr.run stand-in was not started ($GUEST_DIR/root.txt)"
-  budget 30 || fail "the case's deadline came before the stand-in started"
+  budget 120 || fail "the case's deadline came before the account service answered"
   closes=$((SECONDS + BUDGET))
-  until guest_ssh 'test -s ~/standin/ready'; do
+  until guest_ssh "curl -sf --max-time 5 $ACCOUNT_SERVICE/account/config.json >/dev/null"; do
     [ "$SECONDS" -lt "$closes" ] || break
-    sleep 1
+    sleep 2
   done
-  guest_root_out "nsenter -t \$(docker inspect -f '{{.State.Pid}}' cyfr) -n curl -s --max-time 5 http://127.0.0.1:$STANDIN_PORT/v1/legal/version" \
-    >"$GUEST_DIR/standin-$1.txt"
-  check "the cyfr.run stand-in answers on the loopback of cyfr's container ($1)" grep -q policy_version "$GUEST_DIR/standin-$1.txt"
+  guest_ssh "curl -s --max-time 5 $ACCOUNT_SERVICE/account/config.json" >"$GUEST_DIR/account-config-guest-$1.json" 2>&1
+  guest_root_out "nsenter -t \$(docker inspect -f '{{.State.Pid}}' cyfr) -n curl -s --max-time 5 $ACCOUNT_SERVICE/account/config.json" \
+    >"$GUEST_DIR/account-config-container-$1.json"
+  check "the box answers its account service at $ACCOUNT_SERVICE alike from the guest and from cyfr's container ($1)" \
+    python3 -I -c '
+import json, sys
+want = {"directory": sys.argv[3], "registry": sys.argv[3], "policy": None}
+sys.exit(0 if all(json.load(open(f)) == want for f in sys.argv[1:3]) else 1)' \
+    "$GUEST_DIR/account-config-guest-$1.json" "$GUEST_DIR/account-config-container-$1.json" "$ACCOUNT_SERVICE"
 }
 
 # Nothing in the run reaches cyfr.run: before the install script, the
@@ -754,6 +756,15 @@ screen_find() {
     printf '%s' "$1" | guest_keys && sleep 2 &&
     { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
     guest_chord esc && sleep 1
+}
+
+# screen_open URL: the screen's running Chrome opens URL in a window of its
+# own, as a link opened there would: a second Chrome on the same profile
+# hands it over and exits.
+screen_open() {
+  printf '%s' "$1" | guest_ssh_in 'url=$(cat); run=/run/user/$(id -u); way=$(cd "$run" && ls -d wayland-? | head -n 1)
+    XDG_RUNTIME_DIR=$run WAYLAND_DISPLAY=$way timeout 30 google-chrome-stable --ozone-platform=wayland \
+      --user-data-dir="$HOME/cyfr/.cyfr/screen/chrome" "$url" >/dev/null 2>&1'
 }
 
 # The boot's journal and apt's history, read once nothing else is to be

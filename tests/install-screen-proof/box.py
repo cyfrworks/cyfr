@@ -11,6 +11,9 @@
 #   box.py visits PROFILE SINCE TEXT
 #       prints each page the profile's history visited after SINCE (Unix
 #       seconds) whose address holds TEXT, one per line
+#   box.py confirmation DATABASE REF
+#       prints, as JSON, the state and confirming client of the pending
+#       confirmation REF in CYFR's SQLite database DATABASE
 # Chrome keeps its profile's databases locked while it runs, so each is
 # read from a copy, as anyone who copies the profile reads it. Chrome on
 # Linux without a keyring (the screen's labwc session has none) encrypts a
@@ -19,6 +22,7 @@
 # host. A cookie that is absent, or that decrypts under neither key, exits
 # 1 with the reason on stderr.
 import hashlib
+import json
 import os
 import shutil
 import sqlite3
@@ -97,14 +101,27 @@ def visits(profile, since, text):
     return [url for (url,) in rows]
 
 
+def confirmation(database, ref):
+    db = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    row = db.execute(
+        "SELECT state, confirmed_client_id, proof FROM pending_confirmations WHERE ref = ?", (ref,)
+    ).fetchone()
+    if row is None:
+        return {"ref": ref, "state": None}
+    return {"ref": ref, "state": row[0], "confirmed_client_id": row[1], "proof": row[2]}
+
+
 def main(argv):
     if len(argv) == 5 and argv[1] == "cookie":
         print(cookie(argv[2], argv[3], argv[4]))
     elif len(argv) == 5 and argv[1] == "visits":
         for url in visits(argv[2], int(argv[3]), argv[4]):
             print(url)
+    elif len(argv) == 4 and argv[1] == "confirmation":
+        print(json.dumps(confirmation(argv[2], argv[3])))
     else:
-        print("usage: box.py cookie PROFILE HOST NAME | visits PROFILE SINCE TEXT", file=sys.stderr)
+        print("usage: box.py cookie PROFILE HOST NAME | visits PROFILE SINCE TEXT | confirmation DATABASE REF",
+              file=sys.stderr)
         return 64
     return 0
 
