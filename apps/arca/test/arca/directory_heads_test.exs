@@ -625,12 +625,12 @@ end
 
 defmodule Arca.DirectoryHeadsRaceTest do
   @moduledoc """
-  A session binding an account's key racing the walk that removes it, on
-  two real connections outside the sandbox. The advance locks the
-  account's people first, and a session holds its person's lock and reads
-  the cached head under it, so the two serialize in either order: an
-  advance waiting behind a session retires it, and a session waiting
-  behind an advance reads the new head and is refused. On
+  A session or a device certificate binding an account's key racing the
+  walk that removes it, on two real connections outside the sandbox. The
+  advance locks the account's people first, and a binding holds its
+  person's lock and reads the cached head under it, so the two serialize
+  in either order: an advance waiting behind a binding retires it, and a
+  binding waiting behind an advance reads the new head and is refused. On
   PostgreSQL the waiter blocks on the person's row; on SQLite at the lock
   its transaction takes at entry. A sweep waiting behind a refresh of a
   head it chose keeps the refreshed head.
@@ -641,8 +641,19 @@ defmodule Arca.DirectoryHeadsRaceTest do
   import Ecto.Query
   import Arca.Test.Adapter, only: [postgres?: 0]
 
-  alias Arca.{ControlPlane, DirectoryHeads, PersonIdentities, SessionStorage}
-  alias Arca.Schemas.{CellLease, DirectoryHead, PersonIdentity, Session, User}
+  alias Arca.{ControlPlane, DeviceCertificates, DirectoryHeads, PairedClients}
+  alias Arca.{PersonIdentities, SessionStorage}
+
+  alias Arca.Schemas.{
+    CellLease,
+    DeviceCertificate,
+    DirectoryHead,
+    PairedClient,
+    PersonIdentity,
+    Session,
+    User
+  }
+
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -670,6 +681,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
+        Arca.Repo.delete_all(where(DeviceCertificate, user_id: ^user_id))
+        Arca.Repo.delete_all(where(PairedClient, user_id: ^user_id))
         Arca.Repo.delete_all(where(PersonIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(DirectoryHead, identifier: ^identifier))
@@ -746,8 +759,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
   end
 
   # A trigger that holds a connection which set `arca_test.gate` before
-  # `table`'s next UPDATE statement, until the test opens the gate.
-  defp install_gate!(table) do
+  # `table`'s next `event` statement, until the test opens the gate.
+  defp install_gate!(table, event \\ "UPDATE") do
     unboxed(fn ->
       Arca.Repo.query!("""
       CREATE OR REPLACE FUNCTION arca_test_gate() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -762,7 +775,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       """)
 
       Arca.Repo.query!(
-        "CREATE TRIGGER arca_test_gate BEFORE UPDATE ON #{table} " <>
+        "CREATE TRIGGER arca_test_gate BEFORE #{event} ON #{table} " <>
           "FOR EACH STATEMENT EXECUTE FUNCTION arca_test_gate()"
       )
     end)
@@ -827,6 +840,45 @@ defmodule Arca.DirectoryHeadsRaceTest do
       },
       Arca.Test.Actor.issuance(user_id) ++ opts
     )
+  end
+
+  # A device key's client of the person, paired under `head` in an athanor
+  # of the case's own, and a certificate for it bound to the same head, as
+  # `DeviceCertificates.record/2` takes one: the athanor's actor and the
+  # certificate's attributes.
+  defp certificate(user_id, identifier, head) do
+    actor = Prima.Actor.in_athanor("ath_race_#{System.unique_integer([:positive])}")
+    device_key = :crypto.strong_rand_bytes(32)
+    kid = Prima.Identity.Key.kid(device_key)
+    now = DateTime.utc_now()
+
+    {:ok, client} =
+      unboxed(fn ->
+        PairedClients.record(actor, %{
+          user_id: user_id,
+          source_kind: "device_cert",
+          source_id: Prima.Digest.sha256(device_key),
+          device_public_key: device_key,
+          kid: kid,
+          head: head
+        })
+      end)
+
+    {actor,
+     %{
+       paired_client_id: client.id,
+       user_id: user_id,
+       identifier: identifier,
+       kid: kid,
+       head: head,
+       device_public_key: device_key,
+       issuing_home: "https://home.example",
+       audience_home: "https://home.example",
+       not_before: DateTime.add(now, -60, :second),
+       expires_at: DateTime.add(now, 3600, :second),
+       certificate: "cert-#{System.unique_integer()}",
+       digest: digest("cert")
+     }}
   end
 
   defp advance(identifier, old, new, kid) do
@@ -930,6 +982,93 @@ defmodule Arca.DirectoryHeadsRaceTest do
     assert {:ok, %{retired: %{session_hashes: []}}} = Task.await(advancer, 25_000)
     assert {:error, :stale_head} = Task.await(issuer, 25_000)
     refute unboxed(fn -> Arca.Repo.exists?(where(Session, token_hash: ^hash)) end)
+  end
+
+  # The record has no pause point but a PostgreSQL trigger, nor has the
+  # advance; SQLite's write lock orders them.
+  @tag :postgres
+  test "an advance waiting behind a certificate binding the removed key revokes it", %{
+    user_id: user_id,
+    identifier: identifier,
+    old: old
+  } do
+    test = self()
+    {actor, attrs} = certificate(user_id, identifier, old)
+    install_gate!("device_certificates", "INSERT")
+    gate = close_gate!()
+
+    issuer =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:issuer, backend()})
+          gated(fn -> DeviceCertificates.record(actor, attrs) end)
+        end)
+      end)
+
+    assert_receive {:issuer, issuing}, 5_000
+    LockWait.await_lock_wait!(issuing, [~s(INSERT INTO "device_certificates")], event: "advisory")
+    new = digest("new")
+
+    advancer =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:advancer, backend()})
+          advance(identifier, old, new, attrs.kid)
+        end)
+      end)
+
+    assert_receive {:advancer, advancing}, 5_000
+    LockWait.await_lock_wait!(advancing, [~s("users"), "FOR UPDATE"])
+    refute Task.yield(advancer, 300), "the advance retired while a certificate bound the old head"
+
+    open_gate!(gate)
+    assert {:ok, %{id: id}} = Task.await(issuer, 25_000)
+    assert {:ok, %{retired: %{certificate_ids: [^id]}}} = Task.await(advancer, 25_000)
+    assert {:ok, %{status: "revoked"}} = unboxed(fn -> DeviceCertificates.get(actor, id) end)
+  end
+
+  @tag :postgres
+  test "a certificate waiting behind the advance reads the new head and is refused", %{
+    user_id: user_id,
+    identifier: identifier,
+    old: old
+  } do
+    test = self()
+    {actor, attrs} = certificate(user_id, identifier, old)
+    new = digest("new")
+    install_gate!("directory_heads")
+    gate = close_gate!()
+
+    advancer =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:advancer, backend()})
+          gated(fn -> advance(identifier, old, new, attrs.kid) end)
+        end)
+      end)
+
+    assert_receive {:advancer, advancing}, 5_000
+    LockWait.await_lock_wait!(advancing, [~s(UPDATE "directory_heads")], event: "advisory")
+
+    issuer =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:issuer, backend()})
+          DeviceCertificates.record(actor, attrs)
+        end)
+      end)
+
+    assert_receive {:issuer, issuing}, 5_000
+    LockWait.await_lock_wait!(issuing, [~s("users"), "FOR UPDATE"])
+    refute Task.yield(issuer, 300), "the certificate bound a head the advance was moving"
+
+    open_gate!(gate)
+    assert {:ok, %{retired: %{certificate_ids: []}}} = Task.await(advancer, 25_000)
+    assert {:error, :stale_head} = Task.await(issuer, 25_000)
+
+    refute unboxed(fn ->
+             Arca.Repo.exists?(where(DeviceCertificate, digest: ^attrs.digest))
+           end)
   end
 
   test "a sweep waiting behind a refresh of the head it chose keeps the refreshed head" do
