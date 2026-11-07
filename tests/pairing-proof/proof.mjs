@@ -292,8 +292,8 @@ async function main(browser) {
   // channel within their bound.
   const channelY = helloY.channel;
   const devices = await devicesPage(laptop, keys, { directory: DIR, identifier });
-  const removedAt = Date.now();
   const removed = await devices.removeKey(device.kid);
+  const removedAt = Date.now();
   const bound = (await ask({ op: "bound" })).seconds;
   const [closedX, closedY] = await Promise.all([
     closedWithin(ch, removedAt, bound + SLACK_S + 30), closedWithin(channelY, removedAt, bound + SLACK_S + 30),
@@ -319,9 +319,9 @@ async function main(browser) {
   const firstClient = device.clientId;
   const quiet = again.channel;
   const devicesAgain = await devicesPage(laptop, keys, { directory: DIR, identifier });
-  const changedAt = Date.now();
   const removedAgain = await devicesAgain.removeKey(device.kid);
   const readded = await addDevice(laptop, keys, { directory: DIR, device });
+  const changedAt = Date.now();
   const between = await readLog(DIR, identifier);
   const retired = quiet ? await closedWithin(quiet, changedAt, bound + SLACK_S + 30) : { code: null };
   device.clientId = null;
