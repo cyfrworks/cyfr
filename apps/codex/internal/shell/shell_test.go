@@ -42,12 +42,13 @@ func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	b.now.Store(time.Now().UnixNano())
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
-		Directory: home.accounts.URL(),
-		Tokens:    func() string { return home.setupToken },
-		Restart:   func() { b.restarts.Add(1) },
-		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
-		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
-		Chip:      func() bool { return false },
+		Directory:     home.accounts.URL(),
+		Tokens:        func() string { return home.setupToken },
+		SetupFromPage: true,
+		Restart:       func() { b.restarts.Add(1) },
+		Detect:        func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
+		Now:           func() time.Time { return time.Unix(0, b.now.Load()) },
+		Chip:          func() bool { return false },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +255,9 @@ func TestSetup_ARestartedBoxFinishesWithTheRecoveryCode(t *testing.T) {
 		t.Fatalf("the finished account does not ask the passphrase:\n%s", again.page())
 	}
 	ticketOf(t, again.post("/unlock", url.Values{"secret": {p}}), home)
+	if hellos := home.hellosSeen(); len(hellos) != 1 || hellos[0]["admission"].(map[string]any)["setup"] != home.setupToken {
+		t.Fatalf("the restarted box's hello brought no setup token: %v", hellos)
+	}
 	identifier, _, _ := account.DecodeRecoveryCode(code)
 	if home.accounts.Holder("alice") != identifier {
 		t.Fatal("the resumed account does not hold its name")
@@ -313,10 +317,14 @@ func TestSetup_TheTermsAreAcceptedFirst(t *testing.T) {
 // A box added to an account of the person's: its key made under the
 // passphrase, its code and the address that adds it shown, and once a
 // device of theirs approved it, the account's name typed finds it listed;
-// its first unlock says hello under the setup token.
+// its first unlock says hello with no capability, though .env holds the
+// setup token, and the CYFR's door decides.
 func TestSetup_AnAccountOfYoursAddsThisBox(t *testing.T) {
 	home := newFakeHome(t)
 	identifier, dev, _ := home.account(t, "mira")
+	home.mu.Lock()
+	home.members[identifier] = true
+	home.mu.Unlock()
 	b := newBox(t, home, t.TempDir())
 	p := b.shown()
 	b.post("/make", url.Values{"secret": {p}, "again": {p}})
@@ -340,8 +348,14 @@ func TestSetup_AnAccountOfYoursAddsThisBox(t *testing.T) {
 		t.Fatalf("the approved box does not ask its passphrase:\n%s", b.page())
 	}
 	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
-	if hellos := home.hellosSeen(); len(hellos) != 1 || hellos[0]["identifier"] != identifier || hellos[0]["admission"] == nil {
+	if hellos := home.hellosSeen(); len(hellos) != 1 || hellos[0]["identifier"] != identifier || hellos[0]["admission"] != nil {
 		t.Fatalf("hellos %v", hellos)
+	}
+	home.mu.Lock()
+	used := home.setupUsed
+	home.mu.Unlock()
+	if used {
+		t.Fatal("the setup token was spent by a box added to an existing account")
 	}
 }
 

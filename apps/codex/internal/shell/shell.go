@@ -66,6 +66,11 @@ type Config struct {
 	// Tokens reads the setup token a first hello brings, when there is
 	// one, so it never travels in an argument.
 	Tokens func() (setup string)
+	// SetupFromPage brings the setup token only with the hello that
+	// follows an account this device made (a box's screen, whose .env
+	// always holds the token): a device added to an account the person
+	// has brings none, and the CYFR's door decides.
+	SetupFromPage bool
 	// Invitation is the invitation's code a first hello brings, when
 	// there is one.
 	Invitation string
@@ -87,10 +92,13 @@ type Config struct {
 }
 
 // ClientRecord is the client a CYFR admitted this device's key as and the
-// certificate it connects under there.
+// certificate it connects under there; before the first admission,
+// Admission is "setup" when this device made its account here, which a
+// SetupFromPage device's first hello brings the setup token for.
 type ClientRecord struct {
 	ClientID    string          `json:"client_id,omitempty"`
 	Certificate json.RawMessage `json:"certificate,omitempty"`
+	Admission   string          `json:"admission,omitempty"`
 }
 
 // ClientStore keeps this device's ClientRecord at one CYFR.
@@ -856,6 +864,13 @@ func (s *Shell) submit(ctx context.Context) {
 	clear(m.key)
 	s.making, s.unfinished = nil, nil
 	_ = os.Remove(s.attemptPath())
+	if s.here.ClientID == "" {
+		s.here.Admission = "setup"
+		if err := s.cfg.Clients.Save(s.here); err != nil {
+			s.say("This %s could not keep that it made your account here (%v). Try again.", s.cfg.Noun, err)
+			return
+		}
+	}
 	s.firstConnection(ctx)
 }
 
@@ -1003,13 +1018,14 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 }
 
 // admission is the capability a first hello brings: none once this CYFR
-// admitted this device (the door decides), else the setup token, else the
+// admitted this device (the door decides), else the setup token (for a
+// SetupFromPage device, only after it made its account here), else the
 // invitation's code.
 func (s *Shell) admission() map[string]any {
 	if s.here.ClientID != "" {
 		return nil
 	}
-	if t := s.cfg.Tokens(); t != "" {
+	if t := s.cfg.Tokens(); t != "" && (!s.cfg.SetupFromPage || s.here.Admission == "setup") {
 		return map[string]any{"setup": t}
 	}
 	if s.cfg.Invitation != "" {
