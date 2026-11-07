@@ -148,7 +148,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_COMPANY_LOGIN_DAYS",
      "How many days a company sign-in stands with `CYFR_COMPANY_LOGIN=renew`, a positive whole number with no ceiling; required with `renew`, and set with any other mode it refuses the boot."},
     {"CYFR_CORS_ALLOWED_ORIGINS",
-     "The browser CORS allowlist, comma-separated origins. Empty or unset (`cyfr init` writes it empty), it admits no cross-origin caller, which the shipped stack never needs. A release with sign-in configured refuses to boot on a wildcard."},
+     "The browser CORS allowlist, comma-separated origins. Empty or unset (`cyfr init` writes it empty), it admits no cross-origin caller, which the shipped stack never needs. A release refuses to boot on a wildcard."},
     {"CYFR_COSIGN_IDENTITY",
      "Keyless OCI signature verification: the regular expression the signing certificate's identity must match, with `CYFR_COSIGN_ISSUER`; a missing keyless constraint refuses verification."},
     {"CYFR_COSIGN_ISSUER",
@@ -156,7 +156,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_COSIGN_KEY",
      "Key-based OCI signature verification: the path of a file holding the cosign public key, readable by the server; a value that names no readable file (a KMS URI among them) refuses verification as `unreadable_key`."},
     {"CYFR_CRYPTO_KEYRING",
-     "The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens, and each person's online keys and pending recovery material), as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`. Losing it loses every person's online keys at this CYFR: a person brings their identity back from their recovery code on an empty installation."},
+     "The keyring sealing secrets at rest (vault entries, OAuth tokens, webhook secrets and registry tokens), from whose primary key this CYFR derives the key it signs its device certificates with, as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`; under a new primary key each device renews its certificate over its channel. Losing it loses every secret it sealed; it holds no key of anyone's account."},
     {"CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT",
      "The primary-key fingerprint the boot's refusal reports, set for one boot to accept a deliberate key change; re-seal, then unset it. It recovers nothing sealed with a key that is gone."},
     {"CYFR_DATABASE",
@@ -169,7 +169,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_DB_POOL_SIZE", "The database connection pool's size (default 20)."},
     {"CYFR_DB_SSL", "TLS to the PostgreSQL server (default off)."},
     {"CYFR_DIRECTORY_URL",
-     "The identity directory this deployment registers its local people at, an `https` URL, or an `http` one on this machine's loopback (`localhost`, `127.0.0.0/8` or `::1`), since loopback has no network path for TLS to protect and a directory is trusted only to order signed entries; the address is still reached only when `CYFR_PRIVATE_EGRESS_TARGETS` lists it, and identities made there cannot be checked by any other CYFR. Default `https://cyfr.run`, the directory cyfr.run hosts, whose registry accepts only identities it orders; in development, unset means none, so a dev boot makes no person at cyfr.run (`scripts/dev-stack.sh` names its own stand-in). Choosing another is a choice about how long an identity lasts. A malformed value, `http` on any other host, or one longer than 1,024 bytes refuses the boot."},
+     "The account service this deployment's people sign in through, whose account pages a browser is sent to and whose accounts this CYFR reads: an `https` URL, or an `http` one on this machine's loopback (`localhost`, `127.0.0.0/8` or `::1`), since loopback has no network path for TLS to protect and an account service is trusted only to order signed entries; the address is still reached only when `CYFR_PRIVATE_EGRESS_TARGETS` lists it, and accounts made there sign in at no CYFR on another machine. Default `https://cyfr.run`, the account service cyfr.run hosts, whose registry takes requests only from the accounts it keeps; in development, unset means none, so a dev boot reads no account at cyfr.run (`scripts/dev-stack.sh` names its own stand-in). Choosing another is a choice about how long an account lasts. A malformed value, `http` on any other host, or one longer than 1,024 bytes refuses the boot."},
     {"CYFR_HEADLESS",
      "CYFR with Codex access only (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_OIDC_ISSUER`."},
     {"CYFR_HOST",
@@ -224,7 +224,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_ACCESS",
      "How CYFR is reached: `local` (this computer alone, at `http://localhost:<CYFR_PORT>`), `tailnet` (your devices on Tailscale, through Tailscale Serve) or `public` (anyone on the internet, through Caddy). `cyfr init` and `cyfr access <mode>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `local`."},
     {"CYFR_REGISTRY_URL",
-     "The component registry host (default `cyfr.run`; in development, unset means `none`, so a dev boot makes no person at cyfr.run, and `scripts/dev-stack.sh` names its own stand-in), which a person's registry requests are signed for and names resolve at; `none` is an appliance without a registry, whose pulls, publishes and registry requests refuse."},
+     "The component registry host (default `cyfr.run`; in development, unset means `none`, so a dev boot asks nothing of cyfr.run, and `scripts/dev-stack.sh` names its own stand-in), which a person's registry requests are signed for and names resolve at; `none` is an appliance without a registry, whose pulls, publishes and registry requests refuse."},
     {"CYFR_REQUIRE_SIGNED_PULLS",
      "Refuse a component pull whose OCI signature cannot be verified (default off: the component is stored as unverified)."},
     {"CYFR_S3_ACCESS_KEY_ID", "The object store's access key ID, with `CYFR_STORAGE=s3`."},
@@ -245,7 +245,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_SESSION_SALT",
      "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_SETUP_TOKEN",
-     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and `cyfr setup` write into `.env` and nothing removes. It admits the installation's first person, its administrator, under the name they type, through the setup link (`/setup#<token>`), `cyfr login --setup` or the box's own screen, and signs that person in again until they hold a passkey or a device at this CYFR's current address, or a linked sign-in method; unset, setup opens nothing. It also lets the box's screen or the command line recover a lost enrollment answer by proving the key it enrolled. A malformed value refuses the boot, which never prints it."},
+     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and `cyfr setup` write into `.env` and nothing removes. It admits the installation's first person, its administrator, with their account, through the setup link (`/setup#<token>`), `cyfr login --setup` or the box's own screen, binding the installation to that account, and from then on it opens nothing; unset, setup opens nothing. A malformed value refuses the boot, which never prints it."},
     {"CYFR_STORAGE",
      "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
     {"CYFR_STORAGE_RESERVE_BYTES",
@@ -263,7 +263,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_WORKOS_API_KEY",
      "The WorkOS API key, set in `.env` alone and never in a tracked file: the secret CYFR's server sends with a company sign-in's code to WorkOS's token endpoint. With `CYFR_WORKOS_CLIENT_ID` and `CYFR_WORKOS_ORGANIZATION`, all three or none."},
     {"CYFR_WORKOS_CLIENT_ID",
-     "The WorkOS client ID, with `CYFR_WORKOS_API_KEY` and `CYFR_WORKOS_ORGANIZATION`: set together, WorkOS's single sign-on is the company issuer `CYFR_COMPANY_LOGIN` requires, and an OIDC issuer configured beside it is a linked sign-in method only. WorkOS lists `<origin>/auth/company/callback` as its redirect URI. Set while `CYFR_COMPANY_LOGIN` is `off`, set in part, or on a headless CYFR, it refuses the boot."},
+     "The WorkOS client ID, with `CYFR_WORKOS_API_KEY` and `CYFR_WORKOS_ORGANIZATION`: set together, WorkOS's single sign-on is the company issuer `CYFR_COMPANY_LOGIN` requires, and an OIDC issuer configured beside it goes unused. WorkOS lists `<origin>/auth/company/callback` as its redirect URI. Set while `CYFR_COMPANY_LOGIN` is `off`, set in part, or on a headless CYFR, it refuses the boot."},
     {"CYFR_WORKOS_ORGANIZATION",
      "The WorkOS organization ID (`org_…`) every company sign-in must come from, with `CYFR_WORKOS_CLIENT_ID` and `CYFR_WORKOS_API_KEY`; a sign-in WorkOS answers for another organization is refused. Changing it makes every person sign in with their company again."},
     {"OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -382,17 +382,17 @@ defmodule Cyfr.Platform.Settings.Roster do
     "frame_invocation_max" => "The invocations one tincture frame may make per window.",
     "frame_invocation_window_ms" => "The frame invocation limit's window, in milliseconds.",
     "directory_serve" =>
-      "Whether this CYFR serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write).",
+      "Whether this CYFR serves an account service: `off`, `writer` (the one writer of the accounts it keeps, with their names and account pages) or `mirror` (their history, accepting no write).",
     "directory_max_identities" =>
-      "Identifiers a directory this CYFR serves registers; at capacity a new genesis is refused, while existing registrations and recovery stay available.",
+      "Accounts an account service this CYFR serves keeps; at capacity a new account is refused, while existing accounts and their recovery stay available.",
     "directory_log_bytes" =>
-      "Bytes a directory this CYFR serves keeps across its logs; existing history is never deleted to meet a lowered quota.",
+      "Bytes an account service this CYFR serves keeps across its accounts' logs; existing history is never deleted to meet a lowered quota.",
     "directory_recovery_reserve_bytes" =>
-      "Bytes of `directory_log_bytes` kept for recovery entries and their recorded outcomes, which rotations cannot use; below `directory_log_bytes`.",
+      "Bytes of `directory_log_bytes` kept for the changes a recovery code signs to an existing account, which a new account and a change signed by a passkey or device never spend; below `directory_log_bytes`.",
     "identity_freshness_seconds" =>
-      "How long this CYFR trusts a remote person's verified identity head before reading their directory again, in seconds: how long a retired key can still act here.",
+      "How long this CYFR acts on the keys it last read of an account before reading them again at its account service, in seconds: how long a removed key can still act here. Past it, with the account service unreachable, a public CYFR pauses that person's work and a local or tailnet one keeps the keys it last read.",
     "device_cert_seconds" =>
-      "How long a device certificate this CYFR issues lives, in seconds; a paired device renews at half of it. A remote device's six-digit PIN (the devices guide) has no setting: CYFR counts every try, waits a second after a wrong one and doubles the wait to an hour, and the PIN opens nothing while this CYFR cannot be reached; a backup restore suspends the device until recovery re-enables it and counts its tries from where the backup left off.",
+      "How long a device certificate this CYFR issues lives, in seconds; a device renews at half of it over its channel.",
     "clock_skew_seconds" =>
       "How far a certificate's not-before or a signed message's time may sit from this CYFR's clock, in seconds; it never extends a certificate's expiry.",
     "confirmation_seconds" =>
