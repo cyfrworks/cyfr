@@ -241,7 +241,6 @@ class CyfrStack(Stack):
                 "CYFR_LOCUS_BUILDS_KEY=",
                 "CYFR_CORS_ALLOWED_ORIGINS=",
                 "CYFR_AUTO_MIGRATE=on",
-                "CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm",
                 "",
             ]))
         self.cyfr = None

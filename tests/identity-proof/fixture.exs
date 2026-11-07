@@ -4,298 +4,111 @@
 # What the identity proof asks of a running server, evaluated inside it by
 # `bin/cyfr rpc` (`identity_fixture` in cells.sh). The file evaluates to a
 # function of the argument list; each command prints nothing and answers
-# one line, `FIXTURE=` and a JSON object. An argument spelled `@PATH` is
-# read from that file, so a credential never rides a command line. No
-# command answers a seed, a recovery code, a token or a private key.
-#
-#   setup
-#       The installation's setup admission (`Sanctum.Newcomer.admit/2`),
-#       the one admission besides a restore that makes a first person,
-#       under a setup token put for the call and taken away after, with a
-#       protected device's enrollment and the identity a device draws,
-#       named `identity-proof`, which opens their registration:
-#       `{admitted: user_id}` or `{refused:
-#       reason}`. On a restore-reserved installation it is refused.
-#
-#   genesis USER_ID
-#       The person's identifier and the genesis their identity rests on
-#       (`Arca.IdentityAttempts.genesis/2`), as the JSON map a relying home
-#       is handed.
-#
-#   head USER_ID
-#       The person's identity row: provenance, identifier, enrollment, head
-#       and live public key (unpadded base64url).
-#
-#   resolve IDENTIFIER @GENESIS_FILE
-#       This home reads the identity's head live at the directory its
-#       genesis names and caches it (`Sanctum.IdentityFreshness.fresh!/2`):
-#       what a relying home holds of a person, and nothing else.
-#
-#   fresh IDENTIFIER
-#       The head this home trusts now (`fresh?/2`): the cached one within
-#       `identity_freshness_seconds`, else read again; `{refused:
-#       "identity_stale"}` past the bound with the directory unreachable.
-#
-#   thief_rotate USER_ID
-#       What a thief holding a copy of the person's home does with it: a
-#       rotation signed with the operational key the copy holds, extending
-#       the head the copy names, sent to the directory. `{accepted: hash,
-#       live_key}` or `{refused: reason, live_key}`.
-#
-#   log IDENTIFIER
-#       The directory's log of the identity, at the cell that serves it:
-#       its length, head and the kind of each entry.
-#
-#   restores
-#       This installation's restore attempts: phase, outcome, request id
-#       and the entry hash an acceptance recorded.
-#
-#   replay_recover
-#       The recovery this installation's restore submitted, sent to the
-#       directory again unchanged: the directory's answer, its recorded
-#       outcome.
+# one line, `FIXTURE=` and a JSON object. No command answers a token, a
+# recovery code or a key.
 #
 #   people
-#       The person rows this installation holds, and for each its paired
-#       devices (its clients but the platform holders its passkeys are) and
-#       its passkeys.
+#       The people this CYFR holds: each one's id, identifier, admission
+#       and status, the route segment of their own athanor, the sessions
+#       bound to them (each by the kid and head it was bound to) and their
+#       paired clients (each by kid, kind and standing).
 #
-#   segment USER_ID
-#       The route segment of the person's own athanor.
+#   head IDENTIFIER
+#       The account's head cached here (`Arca.DirectoryHeads`): its hash,
+#       whether it is marked gone, and the keys its verified state lists.
 #
-#   link_ticket @COOKIE_FILE KEY
-#       The browser session the cookie in COOKIE_FILE holds, given a link
-#       ticket for the GitHub identity KEY as a completed sign-in with that
-#       door leaves one (`Sanctum.SignIn.link_ticket/2`), in its cookie
-#       session under the key the settings page reads
-#       (`PrismWeb.AuthController.link_ticket_key/0`): `{cookie}`, the new
-#       cookie value.
+#   resolve IDENTIFIER
+#       The account's log read live at this CYFR's directory and cached
+#       (`Sanctum.IdentityFreshness.fresh!/2`): `{head}`, or `{refused}`.
+#
+#   fresh IDENTIFIER
+#       The head this CYFR trusts now (`Sanctum.IdentityFreshness.fresh?/2`):
+#       the cached one within `identity_freshness_seconds`, else read again;
+#       `{head}`, or `{refused}` (`identity_stale`, `identity_gone`).
+#
+#   tombstone IDENTIFIER
+#       The operator's tombstone at the directory this CYFR serves
+#       (`Sanctum.Directory.tombstone/1`, the path the operation
+#       `directory.tombstone` takes): `{tombstoned}` or `{refused}`.
 
 fn args ->
+  import Ecto.Query, only: [from: 2]
+
   answer = fn map -> "FIXTURE=" <> Jason.encode!(map) end
-  system = Prima.Actor.system()
-  b64 = &Prima.Identity.Encoding.b64/1
 
-  read = fn
-    "@" <> path -> File.read!(path) |> String.trim()
-    value -> value
+  head_answer = fn
+    {:ok, head} -> %{head: head.head_hash}
+    {:refused, reason} -> %{refused: reason}
+    {:error, reason} -> %{refused: inspect(reason)}
   end
 
-  refusal = fn
-    reason when is_atom(reason) -> Atom.to_string(reason)
-    {reason, _detail} when is_atom(reason) -> Atom.to_string(reason)
-    reason -> inspect(reason)
-  end
-
-  key_epoch = fn
-    %{key_epoch: epoch} -> epoch
-    head -> inspect(head)
-  end
-
-  case Enum.map(args, read) do
-    ["setup"] ->
-      token = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
-      configured = Application.fetch_env(:sanctum, :setup_token)
-      Application.put_env(:sanctum, :setup_token, token)
-
-      identity = %{
-        name: "identity-proof",
-        recovery_secret: :crypto.strong_rand_bytes(32),
-        request_id: "req_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-      }
-
-      # A protected device's enrollment as `Sanctum.DeviceUnlock` hands it
-      # to the admission once its proof verified.
-      device = fn identity ->
-        %{
-          athanor_id: Prima.UUID7.generate_id("ath"),
-          client_id: Prima.UUID7.generate_id("pcl"),
-          device_key: :crypto.strong_rand_bytes(32),
-          request_id: identity.request_id,
-          holder_kind: "software",
-          display_name: "identity-proof",
-          user_id: nil
-        }
-      end
-
-      admitted =
-        try do
-          Sanctum.Newcomer.admit({:setup, token}, {:device, device.(identity), identity})
-        after
-          case configured do
-            {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
-            :error -> Application.delete_env(:sanctum, :setup_token)
-          end
-        end
-
-      case admitted do
-        {:ok, %{person: person}} -> answer.(%{admitted: person.id})
-        {:error, reason} -> answer.(%{refused: refusal.(reason)})
-      end
-
-    ["genesis", user_id] ->
-      {:ok, %{genesis: genesis, identifier: identifier, directory_url: url}} =
-        Arca.IdentityAttempts.genesis(system, user_id)
-
-      answer.(%{identifier: identifier, directory_url: url, genesis: Jason.decode!(genesis)})
-
-    ["head", user_id] ->
-      {:ok, row} = Arca.PersonIdentities.get(system, user_id)
-
-      answer.(%{
-        provenance: row.provenance,
-        identifier: row.identifier,
-        enrollment: row.enrollment,
-        head: row.head_hash,
-        live_key: row.live_public_key && b64.(row.live_public_key)
-      })
-
-    ["resolve", identifier, genesis] ->
-      case Sanctum.IdentityFreshness.fresh!(identifier, genesis: Jason.decode!(genesis)) do
-        {:ok, head} -> answer.(%{key_epoch: key_epoch.(head)})
-        {:refused, reason} -> answer.(%{refused: refusal.(reason)})
-        {:error, reason} -> answer.(%{error: refusal.(reason)})
-      end
-
-    ["fresh", identifier] ->
-      case Sanctum.IdentityFreshness.fresh?(identifier) do
-        {:ok, head} -> answer.(%{key_epoch: key_epoch.(head)})
-        {:refused, reason} -> answer.(%{refused: refusal.(reason)})
-        {:error, reason} -> answer.(%{error: refusal.(reason)})
-      end
-
-    ["thief_rotate", user_id] ->
-      {:ok, row} = Arca.PersonIdentities.get(system, user_id)
-      {:ok, %{genesis: genesis}} = Arca.IdentityAttempts.genesis(system, user_id)
-
-      case Sanctum.Person.sign_rotate(user_id, row.head_hash) do
-        {:ok, %{entry: entry, staged_live_public_key: live}} ->
-          case Sanctum.Directory.Client.append(row.identifier, genesis, entry) do
-            {:ok, %{entry_hash: hash}} -> answer.(%{accepted: hash, live_key: b64.(live)})
-            {:error, reason} -> answer.(%{refused: refusal.(reason), live_key: b64.(live)})
-          end
-
-        {:error, reason} ->
-          answer.(%{refused: refusal.(reason)})
-      end
-
-    ["log", identifier] ->
-      case Sanctum.Directory.resolve(%{identifier: identifier, after: -1, source: "127.0.0.1"}) do
-        {:ok, page} ->
-          kinds =
-            for entry <- Map.get(page, :entries, []) do
-              case Jason.decode(entry) do
-                {:ok, %{"kind" => kind}} -> kind
-                _other -> "unknown"
-              end
-            end
-
-          answer.(%{length: Map.get(page, :length), head: Map.get(page, :head), kinds: kinds})
-
-        {:error, reason} ->
-          answer.(%{error: refusal.(reason)})
-      end
-
-    ["restores"] ->
-      import Ecto.Query, only: [from: 2]
-
-      rows =
-        Arca.Repo.all(
-          from(a in Arca.Schemas.IdentityAttempt,
-            where: a.kind == "restore",
-            order_by: a.inserted_at,
-            select: %{
-              phase: a.phase,
-              outcome: a.outcome,
-              request_id: a.request_id,
-              entry_hash: a.entry_hash,
-              staged: not is_nil(a.staged_live_key_sealed)
-            }
-          )
-        )
-
-      answer.(%{restores: rows})
-
-    ["replay_recover"] ->
-      import Ecto.Query, only: [from: 2]
-
-      [attempt | _] =
-        Arca.Repo.all(
-          from(a in Arca.Schemas.IdentityAttempt,
-            where: a.kind == "restore",
-            order_by: [desc: a.inserted_at]
-          )
-        )
-
-      request = Jason.decode!(attempt.entry)
-
-      case Sanctum.Directory.Client.recover(attempt.identifier, attempt.genesis, request) do
-        {:ok, %{entry_hash: hash}} ->
-          answer.(%{entry_hash: hash, recorded: attempt.entry_hash})
-
-        {:error, reason} ->
-          answer.(%{refused: refusal.(reason), recorded: attempt.entry_hash})
-      end
-
+  case args do
     ["people"] ->
-      import Ecto.Query, only: [from: 2]
-      {:ok, users} = Arca.Users.list(system, limit: 100)
-
       people =
-        for user <- users do
-          # A passkey is an entry of the one Devices list, a platform
-          # holder; the devices are the clients that hold a key of their own.
-          clients =
-            Arca.Repo.aggregate(
-              from(c in Arca.Schemas.PairedClient,
-                where:
-                  c.user_id == ^user.id and
-                    (is_nil(c.holder_kind) or c.holder_kind != "platform")
-              ),
-              :count
+        Arca.Repo.all(
+          from(u in Arca.Schemas.User,
+            left_join: i in Arca.Schemas.PersonIdentity,
+            on: i.user_id == u.id,
+            order_by: u.created_at,
+            select: %{user_id: u.id, identifier: i.identifier, admission: u.admission, status: u.status}
+          )
+        )
+        |> Enum.map(fn person ->
+          sessions =
+            Arca.Repo.all(
+              from(s in Arca.Schemas.Session,
+                where: s.user_id == ^person.user_id,
+                select: %{kid: s.kid, head: s.head, client_id: s.client_id}
+              )
             )
 
-          {:ok, passkeys} = Arca.Passkeys.list(system, user.id, state: :all)
+          clients =
+            Arca.Repo.all(
+              from(c in Arca.Schemas.PairedClient,
+                where: c.user_id == ^person.user_id,
+                select: %{kid: c.kid, kind: c.source_kind, standing: c.standing}
+              )
+            )
 
-          %{
-            user_id: user.id,
-            admission: user.admission,
-            paired_clients: clients,
-            passkeys: Enum.map(passkeys, & &1.state)
-          }
-        end
+          segment =
+            case Sanctum.Tenancy.Athanors.get_by_owner(person.user_id) do
+              {:ok, athanor} -> "@" <> athanor.slug
+              _none -> nil
+            end
+
+          Map.merge(person, %{segment: segment, sessions: sessions, clients: clients})
+        end)
 
       answer.(%{people: people})
 
-    ["segment", user_id] ->
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
-      answer.(%{segment: "@" <> athanor.slug})
+    ["head", identifier] ->
+      case Arca.DirectoryHeads.get(Prima.Actor.system(), identifier) do
+        {:ok, head} ->
+          keys =
+            case Sanctum.IdentityFreshness.state(head) do
+              {:ok, state} -> Enum.map(state.keys, &%{kid: &1.kid, kind: &1.kind})
+              {:error, reason} -> inspect(reason)
+            end
 
-    ["link_ticket", cookie, key] ->
-      opts = Plug.Session.init(CyfrWeb.Endpoint.session_options())
-      session_key = CyfrWeb.SignInResponse.session_key()
+          answer.(%{head: head.head_hash, gone: not is_nil(head.gone_at), keys: keys})
 
-      held =
-        Plug.Test.conn(:get, "/")
-        |> Map.put(:secret_key_base, CyfrWeb.Endpoint.config(:secret_key_base))
-        |> Plug.Test.put_req_cookie("_cyfr_key", cookie)
-        |> Plug.Session.call(opts)
-        |> Plug.Conn.fetch_session()
+        {:error, reason} ->
+          answer.(%{refused: inspect(reason)})
+      end
 
-      {:ok, ctx} = Sanctum.Caller.establish(Plug.Conn.get_session(held, session_key))
+    ["resolve", identifier] ->
+      identifier
+      |> Sanctum.IdentityFreshness.fresh!(directory: Sanctum.directory_url())
+      |> head_answer.()
+      |> answer.()
 
-      {:ok, ticket} =
-        Sanctum.SignIn.link_ticket(ctx, %{key: key, provider: "github", email: nil})
+    ["fresh", identifier] ->
+      identifier |> Sanctum.IdentityFreshness.fresh?() |> head_answer.() |> answer.()
 
-      conn =
-        held
-        |> Plug.Conn.put_session(PrismWeb.AuthController.link_ticket_key(), %{
-          "provider" => "github",
-          "ticket" => ticket
-        })
-        |> Plug.Conn.send_resp(200, "")
-
-      %{value: value} = Map.fetch!(conn.resp_cookies, "_cyfr_key")
-      answer.(%{cookie: value})
+    ["tombstone", identifier] ->
+      case Sanctum.Directory.tombstone(identifier) do
+        :ok -> answer.(%{tombstoned: identifier})
+        {:error, reason} -> answer.(%{refused: inspect(reason)})
+      end
   end
 end

@@ -233,9 +233,9 @@ fn args ->
       reason = String.to_existing_atom(reason)
 
       others =
-        ~w(wrong_destination identity_stale unavailable invalid_carry no_request not_allowed
-           banned registry_unavailable not_enrolled no_registry registry_token_missing
-           unknown_identity directory_unavailable wrong_directory policy_required)a -- [reason]
+        ~w(identity_stale unavailable banned registry_unavailable no_registry
+           registry_token_missing unknown_identity directory_unavailable wrong_directory
+           policy_required)a -- [reason]
 
       sentence = Prima.Refusal.message(reason)
 

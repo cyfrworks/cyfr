@@ -1556,7 +1556,7 @@ tests/markdown-proof/run.sh |skip=unset browsers= join= db= case_image=
 tests/tincture-proof/run.sh NS/cyfr-locus:tincture-proof|skip=1 browsers=chromium join= db= case_image=
 tests/hostile-frame-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/identity-proof/run.sh |skip= browsers= join= db= case_image=
-tests/join-proof/run.sh |skip=1 browsers= join=chromium db= case_image=
+tests/join-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/pairing-proof/run.sh |skip= browsers= join= db= case_image=
 tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=

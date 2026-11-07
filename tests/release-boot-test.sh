@@ -596,14 +596,6 @@ case "$1" in
     unique_ports "$WORK/cell"
     server_start "$WORK/cell"
     ;;
-  thief-first-override|thief-last-override)
-    source "$DRIVE_CHECKOUT/tests/identity-proof/cells.sh"
-    browser_authority
-    source "$DRIVE_SCRATCH/identity-homes.sh"
-    identity_preserved "$A" "$THIEF" thief.test "$THIEF_PORT"
-    unique_ports "$DIR" "$A" "$B" "$C" "$C2" "$C3" "$THIEF"
-    for cell in "$DIR" "$A" "$B" "$C" "$C2" "$C3" "$THIEF"; do server_start "$cell"; done
-    ;;
   browser|override)
     browser_authority
     browser_home "$WORK/a" a.test
@@ -622,9 +614,6 @@ esac
 SH
 sed -n '/^cell_hostname "\$ADDRESS" /p' "$root/tests/release-boot/boot.sh" >"$scratch/address-call.sh"
 [ "$(wc -l <"$scratch/address-call.sh")" = 1 ] || fail "boot.sh names no single address-cell port call"
-awk '/^DIR="\$WORK\/dir"/ { copying = 1 } /^for cell in c c2 c3; do/ { copying = 0 } copying' \
-  "$root/tests/identity-proof/run.sh" >"$scratch/identity-homes.sh"
-grep -q '^cell_pick_port THIEF_PORT$' "$scratch/identity-homes.sh" || fail "identity's homes name no thief port pick"
 mkdir "$scratch/force-bin"
 cat >"$scratch/force-bin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -639,21 +628,18 @@ fi
 SH
 printf 'exec %q "$@"\n' "$(command -v python3)" >>"$scratch/force-bin/python3"
 chmod +x "$scratch/force-bin/python3"
-override_base=$(free_port_range 18)
+override_base=$(free_port_range 1)
 override_failures=0
-for scenario in host-api-override host-api-leading-zero-override cell-host-api-override thief-first-override thief-last-override; do
+for scenario in host-api-override host-api-leading-zero-override cell-host-api-override; do
   forced=$override_base
   release_port=10001
   release_host_api=10002
-  browser_port=$override_base
   case "$scenario" in
-    host-api-override) release_port=""; release_host_api=$forced; browser_port="" ;;
-    host-api-leading-zero-override) release_port=""; release_host_api="0$forced"; browser_port="" ;;
-    cell-host-api-override) browser_port="" ;;
-    thief-last-override) forced=$((override_base + 17)) ;;
+    host-api-override) release_port=""; release_host_api=$forced ;;
+    host-api-leading-zero-override) release_port=""; release_host_api="0$forced" ;;
   esac
   status=$(status_of env RELEASE_BOOT_PORT="$release_port" RELEASE_BOOT_HOST_API_PORT="$release_host_api" \
-    BROWSER_HOMES_PORT="$browser_port" FORCE_PORT="$forced" FORCE_PORT_STATE="$scratch/forced-$scenario" \
+    BROWSER_HOMES_PORT="" FORCE_PORT="$forced" FORCE_PORT_STATE="$scratch/forced-$scenario" \
     PATH="$scratch/force-bin:$PATH" DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$scenario")
   [ -f "$scratch/forced-$scenario" ] || fail "$scenario did not force an automatic port choice"
   if [ "$status" != 0 ]; then
