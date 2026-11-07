@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,6 +61,12 @@ var (
 	// ErrSecretShape means the secret is not a six-digit PIN or not a
 	// six-word passphrase, whichever the holder needs.
 	ErrSecretShape = errors.New("the PIN or passphrase has the wrong shape")
+	// ErrKeyExists means a first key was made where this machine keeps
+	// one already: another first use made it first.
+	ErrKeyExists = errors.New("this machine keeps a key there already")
+	// ErrOtherKey means a save found a record of another key at its path,
+	// which it never replaces.
+	ErrOtherKey = errors.New("the key record there holds another key")
 )
 
 // ChipRefusedError means a TPM is present but the chip holder cannot rely on
@@ -174,33 +181,71 @@ func Load(path string) (*Record, error) {
 	return &r, nil
 }
 
-// Save replaces the record at path in one step: it writes a private (0600)
-// temporary file in the same directory, flushes it, renames it over path and
-// flushes the directory, so a crash leaves either the old record or the new
-// one.
-func (r *Record) Save(path string) error {
-	if err := r.check(); err != nil {
+// Create writes the record at path only where no record is: the first
+// key a machine makes is the one it keeps, however many first uses race.
+// It writes a private (0600) temporary file in the same directory, flushes
+// it, and links it at path, which fails when path exists: the first writer
+// wins whole, and a later one is answered ErrKeyExists, its file removed.
+func (r *Record) Create(path string) error {
+	tmp, err := r.temp(path)
+	if err != nil {
 		return err
+	}
+	defer os.Remove(tmp)
+	if err := os.Link(tmp, path); errors.Is(err, fs.ErrExist) {
+		return ErrKeyExists
+	} else if err != nil {
+		return fmt.Errorf("make the key record %s: %w", path, err)
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+// Save replaces the record at path in one step, keeping its key: a record
+// of another key there is never replaced (ErrOtherKey), and neither is a
+// file that is no record this package reads. It writes a private (0600)
+// temporary file in the same directory, flushes it, renames it over path
+// and flushes the directory, so a crash leaves either the old record or
+// the new one.
+func (r *Record) Save(path string) error {
+	held, err := Load(path)
+	switch {
+	case err == nil && !bytes.Equal(held.PublicKey, r.PublicKey):
+		return ErrOtherKey
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("save the key record %s over what is there: %w", path, err)
+	}
+	tmp, err := r.temp(path)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("save the key record %s: %w", path, err)
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+// temp writes the record to a private, flushed temporary file beside path
+// and answers its name.
+func (r *Record) temp(path string) (string, error) {
+	if err := r.check(); err != nil {
+		return "", err
 	}
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	dir := filepath.Dir(path)
 	// CreateTemp makes the file 0600.
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
-		return fmt.Errorf("save the key record %s: %w", path, err)
+		return "", fmt.Errorf("save the key record %s: %w", path, err)
 	}
-	defer os.Remove(tmp.Name())
 	_, err = tmp.Write(data)
 	if err = errors.Join(err, tmp.Sync(), tmp.Close()); err != nil {
-		return fmt.Errorf("save the key record %s: %w", path, err)
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("save the key record %s: %w", path, err)
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("save the key record %s: %w", path, err)
-	}
-	return syncDir(dir)
+	return tmp.Name(), nil
 }
 
 // syncDir makes a rename in dir durable. Windows cannot flush a directory

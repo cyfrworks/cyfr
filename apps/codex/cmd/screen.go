@@ -309,7 +309,10 @@ func screenShellConfig(dir, address string, client *http.Client, host string, re
 		Directory: directoryURL(),
 		DataDir:   filepath.Join(dir, "data"),
 		Tokens:    screenTokens,
-		Restart:   restart,
+		// .env keeps the setup token after setup: the box brings it only
+		// for an account it made on its setup page.
+		SetupFromPage: true,
+		Restart:       restart,
 	}
 }
 

@@ -16,8 +16,8 @@
 # stack: candidate_build and candidate_server_use once per run, this
 # tree's cyfr and server image; per guest cyfr_run_guard, which keeps it
 # from cyfr.run, candidate_server_load, standin_settings and
-# standin_start, the cyfr.run stand-in. On the screen: guest_chord,
-# screen_find and screen_open drive its Chrome as a keyboard does, and
+# standin_start, the cyfr.run stand-in. On the screen: guest_chord and
+# screen_find drive its Chrome as a keyboard does, and
 # profile_cookie, screen_cookie and cookie_answer read the session cookie
 # Chrome holds and ask the home what it opens.
 #
@@ -573,19 +573,16 @@ candidate_server_load() {
 # (CYFR_DIRECTORY_URL, configuration-guide.md).
 STANDIN_PORT=4790
 
-# standin_settings [RESTORE_TOKEN]: .env names the stand-in as the
-# registry and the directory, and lets the server's calls reach it, before
-# cyfr up, so the server never starts naming cyfr.run; for a replacement
-# box, the restore token too, passed on standard input. The stand-in's
-# script goes to ~/standin with them.
+# standin_settings: .env names the stand-in as the registry and the
+# directory, and lets the server's calls reach it, before cyfr up, so the
+# server never starts naming cyfr.run. The stand-in's script goes to
+# ~/standin with them.
 standin_settings() {
   guest_ssh 'mkdir -p ~/standin' && guest_copy_in "$ROOT/tests/registry-stand-in/standin.py" standin/standin.py ||
     fail "the cyfr.run stand-in was not copied into the guest"
-  {
-    printf '%s\n' "CYFR_REGISTRY_URL=127.0.0.1:$STANDIN_PORT" "CYFR_DIRECTORY_URL=http://127.0.0.1:$STANDIN_PORT" \
-      "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1"
-    [ -z "${1:-}" ] || printf 'CYFR_RESTORE_TOKEN=%s\n' "$1"
-  } | guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_RESTORE_TOKEN)=/d" .env &&
+  printf '%s\n' "CYFR_REGISTRY_URL=127.0.0.1:$STANDIN_PORT" "CYFR_DIRECTORY_URL=http://127.0.0.1:$STANDIN_PORT" \
+    "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1" |
+    guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=/d" .env &&
     { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not given the cyfr.run stand-in"
   guest_ssh "grep -E '^(CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-standin.txt" 2>&1
   check ".env names the stand-in as cyfr.run's registry and directory" \
@@ -596,13 +593,9 @@ standin_settings() {
 # namespace, which is new at each start of the container: the guest's
 # python3 as the test account, in a transient unit of the harness's
 # (cyfr-proof-standin), its state ~/standin/state.json outliving each
-# start. A replacement box starts from the first box's state
-# (WORK/standin-state.json), as both name the one directory.
+# start.
 standin_start() {
   local closes
-  if [ -s "$WORK/standin-state.json" ] && ! guest_ssh 'test -e ~/standin/state.json'; then
-    guest_copy_in "$WORK/standin-state.json" standin/state.json || fail "the first box's stand-in state was not copied in"
-  fi
   guest_root "pid=\$(docker inspect -f '{{.State.Pid}}' cyfr) && [ \"\$pid\" -gt 0 ] || exit 1
     systemctl stop cyfr-proof-standin 2>/dev/null; systemctl reset-failed cyfr-proof-standin 2>/dev/null
     rm -f /home/proof/standin/ready
@@ -761,15 +754,6 @@ screen_find() {
     printf '%s' "$1" | guest_keys && sleep 2 &&
     { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
     guest_chord esc && sleep 1
-}
-
-# screen_open URL: the screen's running Chrome opens URL in a window of its
-# own, as a link opened there would: a second Chrome on the same profile
-# hands it over and exits.
-screen_open() {
-  printf '%s' "$1" | guest_ssh_in 'url=$(cat); run=/run/user/$(id -u); way=$(cd "$run" && ls -d wayland-? | head -n 1)
-    XDG_RUNTIME_DIR=$run WAYLAND_DISPLAY=$way timeout 30 google-chrome-stable --ozone-platform=wayland \
-      --user-data-dir="$HOME/cyfr/.cyfr/screen/chrome" "$url" >/dev/null 2>&1'
 }
 
 # The boot's journal and apt's history, read once nothing else is to be

@@ -264,10 +264,7 @@ func TestSaveLoad(t *testing.T) {
 	r, _ := softwareRecord(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "key.json")
-	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Save(path); err != nil {
+	if err := r.Create(path); err != nil {
 		t.Fatal(err)
 	}
 	r.Identifier, r.Directory = "per_"+strings.Repeat("cd", 32), "https://cyfr.run"
@@ -346,5 +343,54 @@ func TestLoadRefuses(t *testing.T) {
 				t.Fatalf("Load accepted %s: %+v", data, got)
 			}
 		})
+	}
+}
+
+// The first key a machine makes is the one it keeps: a second Create at
+// the same path, of another key, answers ErrKeyExists and leaves the
+// first whole, and no save replaces a record of another key, or a file
+// that is no record; a save of the same key replaces it.
+func TestCreateAndSaveKeepTheFirstKey(t *testing.T) {
+	first, _ := softwareRecord(t)
+	pass, err := GeneratePassphrase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewSoftware([]byte(pass))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "key.json")
+	if err := first.Create(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Create(path); !errors.Is(err, ErrKeyExists) {
+		t.Fatalf("a second Create = %v; want ErrKeyExists", err)
+	}
+	if err := second.Save(path); !errors.Is(err, ErrOtherKey) {
+		t.Fatalf("a Save of another key = %v; want ErrOtherKey", err)
+	}
+	held, err := Load(path)
+	if err != nil || !bytes.Equal(held.PublicKey, first.PublicKey) {
+		t.Fatalf("the record holds %v (%v), not the first key", held, err)
+	}
+	first.Identifier = "per_" + strings.Repeat("e", 64)
+	if err := first.Save(path); err != nil {
+		t.Fatalf("a Save of the same key = %v", err)
+	}
+	if held, _ := Load(path); held.Identifier != first.Identifier {
+		t.Fatal("the same key's save was not kept")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("the directory holds %v, want only key.json", entries)
+	}
+	other := filepath.Join(dir, "other.json")
+	if err := os.WriteFile(other, []byte("not a record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Save(other); err == nil {
+		t.Fatal("a Save replaced a file that is no record")
 	}
 }
