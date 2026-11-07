@@ -22,8 +22,8 @@ defmodule Sanctum.CompanyLogin do
   every path that reads a person's standing (a session's, an API key's
   creator's and a paired device's person's, at establishment and at each
   revalidation), so a passkey's session, a device's and an API key all
-  pass it alike. With the mode `:off` it reads nothing;
-  otherwise it reads the person's row by its primary key
+  pass it alike. With the mode `:off` it reads nothing; otherwise it
+  reads the person's row by its primary key
   (`Arca.CompanyAuthorizations`). A row stands only under the current
   configuration: its OpenID Connect issuer and client id are the
   configured ones, or its WorkOS organization is the configured one. Then
