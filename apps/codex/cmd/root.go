@@ -220,10 +220,16 @@ func contextName(cfg *config.Config) string {
 }
 
 // serverURL is the home's address a command talks to: --url, else the
-// --context's address, else the current context's.
+// --context's address, else the home of the shell cyfr login started,
+// else the current context's.
 func serverURL(cfg *config.Config) string {
 	if flagURL != "" {
 		return flagURL
+	}
+	if flagContext == "" {
+		if home := os.Getenv(sessionHomeEnv); home != "" {
+			return home
+		}
 	}
 	if stored := cfg.Contexts[contextName(cfg)]; stored != nil {
 		return stored.URL

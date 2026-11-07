@@ -81,7 +81,8 @@ first: once the key is removed from it, cyfr login says so and shows the
 same key's code again, to be added the same way.
 
 Unlocked, cyfr login starts your shell ($SHELL) with the session in its
-environment. Every cyfr command run in it acts as you, and the session
+environment. Every cyfr command run in it acts as you at the CYFR it
+unlocked, unless --url or --context names another, and the session
 lives only while this command line keeps reporting to CYFR: exiting the
 shell, closing the terminal, cyfr logout or a lost connection ends it.
 cyfr open in that shell opens CYFR in your browser through this unlock. A

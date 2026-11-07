@@ -476,6 +476,48 @@ func TestClientAt_TheShellsSessionGoesToItsHomeAlone(t *testing.T) {
 	}
 }
 
+// A command run in the shell cyfr login started acts at that shell's CYFR,
+// with its session, wherever the current context points: the shell of
+// cyfr login --url names a CYFR no context is current for. --url and
+// --context still name another, and the session is not sent there.
+func TestShell_ACommandActsAtTheShellsCYFR(t *testing.T) {
+	recording := func() (*httptest.Server, func() []string) {
+		var mu sync.Mutex
+		var auth []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			auth = append(auth, r.Header.Get("Authorization"))
+			mu.Unlock()
+			http.Error(w, "no", http.StatusUnauthorized)
+		}))
+		t.Cleanup(srv.Close)
+		return srv, func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(auth) }
+	}
+	shellHome, shellAuth := recording()
+	current, currentAuth := recording()
+	withContexts(t, "local", map[string]*config.Context{"local": {URL: current.URL}})
+	t.Setenv(sessionEnv, "TOKEN-1")
+	t.Setenv(sessionHomeEnv, shellHome.URL)
+
+	_, _ = runCommand(t, t.Context(), "whoami")
+	if got := shellAuth(); len(got) == 0 || !strings.Contains(got[0], "TOKEN-1") {
+		t.Errorf("the shell's CYFR was asked with %q", got)
+	}
+	if got := currentAuth(); len(got) != 0 {
+		t.Errorf("the current context's CYFR was asked %q", got)
+	}
+
+	asked := len(shellAuth())
+	_, _ = runCommand(t, t.Context(), "whoami", "--context", "local")
+	_, _ = runCommand(t, t.Context(), "whoami", "--url", current.URL)
+	if got := currentAuth(); len(got) == 0 || slices.ContainsFunc(got, func(a string) bool { return strings.Contains(a, "TOKEN-1") }) {
+		t.Errorf("--context and --url asked the CYFR they name with %q", got)
+	}
+	if len(shellAuth()) != asked {
+		t.Errorf("--context and --url asked the shell's CYFR")
+	}
+}
+
 // A sign-in an earlier command line saved under a context is deleted from
 // the config at the first command that reads it, which says once to run
 // cyfr login; it is never sent to the home.
