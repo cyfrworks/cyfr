@@ -17,7 +17,7 @@ The account service keeps your account's log: every change to its keys, in one o
 
 ### The account pages
 
-Every change to your account happens on its pages at the account service:
+Every change to your account happens on its pages at the account service, `https://cyfr.run/account/…` unless your CYFR names another:
 
 | Page | What you do there |
 |---|---|
@@ -27,7 +27,7 @@ Every change to your account happens on its pages at the account service:
 | `/account/devices` | See the passkeys and devices on your account, and remove one |
 | `/account/recover` | With your recovery code: add a passkey, remove a key, add another recovery code, or replace everything |
 
-A CYFR sends your browser to these pages with what they need in the address's fragment, which no server receives, and they send you back only to the CYFR that asked. For a sign-in or a confirmation the page tells the account service nothing: it never learns where you sign in. Your browser keeps the pages from your first visit, so they still open while the account service cannot be reached (see [When the Account Service Cannot Be Reached](#when-the-account-service-cannot-be-reached)).
+A CYFR sends your browser to `/account/sign` and `/account/new` with its request in the address's fragment, which no server receives, and they send you back only to the CYFR that asked. For a sign-in or a confirmation the page tells the account service nothing: it never learns where you sign in. Your browser keeps the pages from your first visit, so they still open while the account service cannot be reached (see [When the Account Service Cannot Be Reached](#when-the-account-service-cannot-be-reached)).
 
 ### Which account service
 
