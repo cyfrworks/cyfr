@@ -174,7 +174,6 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_DEVICE_CERT_SECONDS` | `device_cert_seconds` | `duration_s` | `3600` | `devices` | live | refuse | How long a device certificate this CYFR issues lives, in seconds; a paired device renews at half of it. A remote device's six-digit PIN (the devices guide) has no setting: CYFR counts every try, waits a second after a wrong one and doubles the wait to an hour, and the PIN opens nothing while this CYFR cannot be reached; a backup restore suspends the device until recovery re-enables it and counts its tries from where the backup left off. |
 | `CYFR_CLOCK_SKEW_SECONDS` | `clock_skew_seconds` | `duration_s` | `60` | `devices` | live | refuse | How far a certificate's not-before or a signed message's time may sit from this CYFR's clock, in seconds; it never extends a certificate's expiry. |
 | `CYFR_CONFIRMATION_SECONDS` | `confirmation_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How long a pending confirmation of a sensitive change stays open, in seconds. |
-| `CYFR_REAUTH_SECONDS` | `reauth_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How recently a local person must have signed in through a linked method to register their first passkey with no fresh method, in seconds. |
 
 ## Compose-only variables
 
