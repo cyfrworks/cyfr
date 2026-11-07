@@ -14,6 +14,8 @@ defmodule PrismWeb.SetupLiveTest do
 
   import PrismWeb.Vocabulary, only: [refute_vocabulary: 1]
 
+  alias Sanctum.Test.DirectoryServer
+
   @token String.duplicate("5e", 32)
 
   setup do
@@ -40,6 +42,45 @@ defmodule PrismWeb.SetupLiveTest do
     view |> element(~s([data-test="setup-create"])) |> render_click()
     assert_push_event(view, "account:hop", %{url: new})
     assert String.starts_with?(new, "https://dir.example/account/new#name=&request=")
+  end
+
+  test "Create your account offers no name, so the first person's answer records none and asks the registry nothing",
+       %{conn: conn} do
+    tls = DirectoryServer.tls()
+    DirectoryServer.listen!()
+    DirectoryServer.seam!(tls)
+    dir = DirectoryServer.start!(tls)
+    Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
+    Sanctum.Test.RegistryStub.handles!(%{}, dir.url)
+
+    # One browser across the setup page and the sign-in page: the forgery
+    # token its session holds binds the request to it.
+    conn =
+      Plug.Test.init_test_session(conn, %{
+        "_csrf_token" => Base.url_encode64(:crypto.strong_rand_bytes(18))
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/setup")
+    render_hook(view, "account_token", %{"token" => @token})
+    view |> element(~s([data-test="setup-create"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    assert [_page, fragment] = String.split(url, "#name=&request=", parts: 2)
+
+    account = DirectoryServer.add_passkey!(dir.dir, DirectoryServer.account!(dir.dir, dir.url))
+    {:ok, map} = Prima.SignIn.parse_fragment(fragment)
+    {:ok, request} = Prima.SignIn.decode(map)
+
+    answer =
+      request
+      |> DirectoryServer.passkey_answer(account, hd(account.passkeys))
+      |> Prima.SignIn.fragment()
+
+    {:ok, login, _html} = live(conn, ~p"/login")
+    render_hook(login, "account_answer", %{"answer" => answer})
+    assert {"/auth/passkey/complete/" <> _ticket, _flash} = assert_redirect(login)
+
+    assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get_by_identifier(account.identifier)
+    refute_received {:registry_request, _}
   end
 
   test "a token that is not this CYFR's goes to /", %{conn: conn} do

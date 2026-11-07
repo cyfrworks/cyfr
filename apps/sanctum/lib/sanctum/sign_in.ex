@@ -34,7 +34,8 @@ defmodule Sanctum.SignIn do
       admitted only as the door admits their identifier. A channel's
       sign-in is a device's hello (`Sanctum.DeviceUnlock.hello/2`): it
       holds the `kid` the hello named, the one key that may answer it, and
-      the holder and name the device is paired with.
+      the holder and name the device is paired with. A browser sent to the
+      new page with a name (`{:new, name}`) holds that name.
     * `:confirm` — the pending confirmation `ref` of the asking context's
       own person in its athanor, still pending; the request's `subject` is
       the record's digest, which the system layer previewed before the
@@ -91,7 +92,11 @@ defmodule Sanctum.SignIn do
          it signed in here before), and mints a session on that client,
          bound to the same key and head, each under the issuance fence
          (`Sanctum.Session.create/2`, `:stale_head` when the head moved
-         meanwhile). A device's answer
+         meanwhile). A request that offered a name at the new page then
+         records it as the person's name, once the registry says the
+         answering account holds it (`record_name/2`); a registry that
+         does not, or does not answer, records nothing and the sign-in
+         stands. A device's answer
          to its hello, by the key the hello named, pairs the device
          instead (`Sanctum.DeviceUnlock.pair/4`): in the new person's
          admission, or right after the door admitted a person this CYFR
@@ -129,7 +134,8 @@ defmodule Sanctum.SignIn do
   `record_namespace/2`: the namespace lands on the `users` row the moment
   the registry's answer to a token mint names it, before, and regardless
   of, the push tokens. That row is what every request reads
-  (`Sanctum.Namespace`).
+  (`Sanctum.Namespace`). `record_name/2` records a name the person says is
+  theirs, once the registry's answer for that name names their account.
   """
 
   require Logger
@@ -299,7 +305,8 @@ defmodule Sanctum.SignIn do
          identifier: opts[:identifier],
          kid: opts[:kid],
          holder_kind: opts[:holder_kind],
-         display_name: opts[:display_name]
+         display_name: opts[:display_name],
+         name: offered(opts[:page])
        }}
     else
       {:error, {:invalid_argument, "A sign-in comes in under the setup token or an invitation"}}
@@ -337,6 +344,10 @@ defmodule Sanctum.SignIn do
 
   defp held(_purpose, _opts),
     do: {:error, {:invalid_argument, "A request is for sign_in, confirm or registry"}}
+
+  # The name the new page was offered, which the answer may record.
+  defp offered({:new, name}) when is_binary(name) and name != "", do: name
+  defp offered(_page), do: nil
 
   # The registry request a `:registry` request carries, which expires with
   # it: the registry allows an expiry this far ahead
@@ -754,7 +765,7 @@ defmodule Sanctum.SignIn do
   defp done(%{request: %{purpose: :sign_in}} = held, _answer, identifier, key, head) do
     with {:ok, user} <- signed_in(identifier, held.admission, head, nil),
          {:ok, token} <- session(user, key, head) do
-      {:ok, %{purpose: :sign_in, user: user, session_token: token}}
+      {:ok, %{purpose: :sign_in, user: named(user, held[:name]), session_token: token}}
     end
   end
 
@@ -794,6 +805,26 @@ defmodule Sanctum.SignIn do
         {:ok, signed} -> {:ok, registry_outcome(held, signed)}
         {:error, reason} -> refused(reason)
       end
+    end
+  end
+
+  # The name the new page was offered, recorded once the registry says the
+  # account that answered holds it. Nothing it meets refuses the sign-in,
+  # which is made already: the person names themselves in Settings.
+  defp named(user, nil), do: user
+
+  defp named(user, name) do
+    case record_name(user.id, name) do
+      {:ok, named} ->
+        named
+
+      {:error, reason} ->
+        Logger.info(
+          "[Sanctum.SignIn] the name offered at sign-in was not recorded: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+
+        user
     end
   end
 
@@ -980,6 +1011,49 @@ defmodule Sanctum.SignIn do
   end
 
   # ---- registry answers --------------------------------------------------------
+
+  @doc """
+  Record `name` as the person `user_id`'s name here (`record_namespace/2`)
+  once the registry says their account holds it: its answer for that name
+  (`Sanctum.Handle.resolve/1`, which also reads the account it names at
+  its directory) names the person's own identifier. The registry holds a
+  name for life and has no lookup from an account to its name, so the
+  person says which name is theirs and the registry confirms it.
+
+  Refusals: `:invalid_name` (not a name's spelling, before any request),
+  `:name_not_theirs` (the registry names another account by it),
+  `:name_unheld` (no account holds it, or the one that did is closed),
+  `:no_registry`, `:registry_unavailable` (no usable answer),
+  `:unauthenticated` (a person here with no account), `:unavailable`, and
+  `record_namespace/2`'s own.
+  """
+  @spec record_name(String.t(), String.t()) ::
+          {:ok, Sanctum.Tenancy.Users.user()}
+          | {:error,
+             :invalid_name
+             | :name_not_theirs
+             | :name_unheld
+             | :no_registry
+             | :registry_unavailable
+             | :unauthenticated
+             | :unavailable
+             | term()}
+  def record_name(user_id, name) when is_binary(user_id) and is_binary(name) do
+    with {:ok, identifier} <- account_of(user_id),
+         :ok <- holds(identifier, name),
+         do: record_namespace(user_id, name)
+  end
+
+  defp holds(identifier, name) do
+    case Sanctum.Handle.resolve(name) do
+      {:ok, %Prima.HandleAnswer{identifier: ^identifier}} -> :ok
+      {:ok, %Prima.HandleAnswer{}} -> {:error, :name_not_theirs}
+      {:error, :invalid_handle} -> {:error, :invalid_name}
+      {:error, :not_found} -> {:error, :name_unheld}
+      {:error, :no_registry} -> {:error, :no_registry}
+      {:error, _unanswered} -> {:error, :registry_unavailable}
+    end
+  end
 
   @doc """
   Record the person's cyfr.run namespace, as a registry answer names it:

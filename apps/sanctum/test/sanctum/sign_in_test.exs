@@ -26,7 +26,7 @@ defmodule Sanctum.SignInTest do
   alias Prima.SignIn.DeviceAnswer
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.Users
-  alias Sanctum.Test.DirectoryServer
+  alias Sanctum.Test.{DirectoryServer, RegistryStub}
 
   @token String.duplicate("5e", 32)
   @origin "https://cyfr.example"
@@ -186,6 +186,60 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser, admission: {:setup, @token})
 
       assert {:error, :setup_closed} = SignIn.answer(answer(request, stranger), @browser)
+    end
+  end
+
+  # Create your account on the setup and invitation pages sends the browser
+  # to the new page offered a name; the answer records it as the person's
+  # name only once the registry names the answering account by it.
+  describe "a name offered at the new page" do
+    test "is recorded once the registry names the account that answered by it", %{
+      account: account,
+      dir: dir
+    } do
+      RegistryStub.handles!(%{"mira" => account.identifier}, dir.url)
+
+      {request, url} =
+        minted(:sign_in, @browser, admission: {:setup, @token}, page: {:new, "mira"})
+
+      assert url =~ "/account/new#name=mira&request="
+
+      assert {:ok, %{purpose: :sign_in, user: %{id: id, namespace: "mira"}}} =
+               SignIn.answer(answer(request, account), @browser)
+
+      assert {:ok, %{namespace: "mira"}} = Users.get(id)
+      assert_received {:registry_request, %{path: "/v1/handles/mira"}}
+    end
+
+    test "records nothing when the registry names another account, none, or does not answer; the sign-in stands",
+         %{account: account, dir: dir} do
+      first = first!(account)
+      {:ok, _entry} = Sanctum.Door.Store.allow("wildcard", "*", first.id)
+      stranger = DirectoryServer.account!(dir.dir, dir.url)
+      RegistryStub.handles!(%{"taken" => stranger.identifier, "lost" => :close}, dir.url)
+
+      for name <- ["taken", "unheld", "lost"] do
+        newcomer = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
+        {request, _url} = minted(:sign_in, @browser, page: {:new, name})
+
+        assert {:ok, %{purpose: :sign_in, user: user, session_token: token}} =
+                 SignIn.answer(answer(request, newcomer), @browser),
+               name
+
+        assert is_binary(token)
+        assert {:ok, %{namespace: nil}} = Users.get(user.id), name
+      end
+    end
+
+    test "a sign-in that offered none asks the registry nothing", %{account: account, dir: dir} do
+      RegistryStub.handles!(%{}, dir.url)
+      {request, url} = minted(:sign_in, @browser, admission: {:setup, @token}, page: {:new, nil})
+      assert url =~ "/account/new#name=&request="
+
+      assert {:ok, %{user: %{namespace: nil}}} =
+               SignIn.answer(answer(request, account), @browser)
+
+      refute_received {:registry_request, _}
     end
   end
 

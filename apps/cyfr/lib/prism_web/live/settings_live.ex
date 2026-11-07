@@ -13,7 +13,9 @@ defmodule PrismWeb.SettingsLive do
   (`PrismWeb.SystemLayer.call/5`) and made again once confirmed.
 
     * **Your name** — the identity card (`PrismWeb.IdentityCard`): the
-      person's name and their account's identifier. The account itself,
+      person's name and their account's identifier. A person with no name
+      recorded here types the name their account holds, which is recorded
+      once cyfr.run says it is theirs (`session.name`). The account itself,
       its keys and its recovery code, are the account pages'.
     * **Devices connected here** — the person's paired clients
       (`pairing.list`), each revoked through `pairing.revoke`, and the
@@ -78,6 +80,8 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:mode, Prism.Labels.default(socket.assigns.context))
       |> assign(:loading, true)
       |> assign(:identifier, nil)
+      |> assign(:name, socket.assigns.context.namespace)
+      |> assign(:name_error, nil)
       |> assign(:devices, nil)
       |> assign(:passkeys, nil)
       |> assign(:devices_error, nil)
@@ -117,6 +121,17 @@ defmodule PrismWeb.SettingsLive do
 
   def handle_event("door_resolve", %{"id" => id, "decision" => decision}, socket) do
     door_call(socket, "door/resolve", %{"id" => id, "decision" => decision}, "Request resolved.")
+  end
+
+  # The name the person's account holds, recorded once cyfr.run says so.
+  def handle_event("identity_name", %{"name" => name}, socket) when is_binary(name) do
+    case call_tool(socket, "session/name", %{"name" => name}) do
+      {:ok, %{name: recorded}} ->
+        {:noreply, socket |> assign(:name, recorded) |> assign(:name_error, nil)}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :name_error, error_message(reason))}
+    end
   end
 
   # An invitation to this CYFR, naming no thread: the administrator's.
@@ -506,7 +521,7 @@ defmodule PrismWeb.SettingsLive do
 
       <div :if={!@loading} class="space-y-6">
         <.card>
-          <IdentityCard.card name={@context.namespace} identifier={@identifier} />
+          <IdentityCard.card name={@name} identifier={@identifier} error={@name_error} />
         </.card>
 
         <.devices_card devices={@devices} passkeys={@passkeys} error={@devices_error} />

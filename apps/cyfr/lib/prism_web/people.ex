@@ -6,17 +6,16 @@ defmodule PrismWeb.People do
   How a person is named on the console, once.
 
   A person row (a shared thread's people, atom-keyed) reads as its display
-  name, else its email, else a shortened id; a bare user id reads the same
-  way from the `users` row. The person looking reads as "You", the way the
+  name, else its email, else as the `users` row names them
+  (`Sanctum.Tenancy.Users.display_name/1`), never by their id; a bare user
+  id reads the same way from the `users` row. The person looking reads as "You", the way the
   console already names their own athanor — pass `nil` for `ctx` where no
   one in particular is looking (a log column, a table of who did what).
   """
 
-  import PrismWeb.DisplayHelpers, only: [f: 2, truncate: 2]
+  import PrismWeb.DisplayHelpers, only: [f: 2]
 
   alias Sanctum.Tenancy.Users
-
-  @id_width 24
 
   @doc "The label for a member row or a user id, to the person `ctx` names."
   @spec label(map() | String.t() | nil, Sanctum.Context.t() | nil) :: String.t()
@@ -48,10 +47,10 @@ defmodule PrismWeb.People do
   defp viewer?(id, %{user_id: user_id}) when is_binary(id), do: id == user_id
   defp viewer?(_id, _ctx), do: false
 
-  # Nothing to call the person by but their id — shortened — or, with no
-  # id at all, the one word the tenancy uses for nobody in particular.
+  # Nothing on the row to call the person by: the name the tenancy gives
+  # them, which is never their id.
   @spec fallback(term()) :: String.t()
-  defp fallback(id) when is_binary(id), do: truncate(id, @id_width)
+  defp fallback(id) when is_binary(id), do: Users.display_name(id)
   defp fallback(_id), do: Users.display_name(nil)
 
   # The first non-empty string, matched rather than tested for truth, so

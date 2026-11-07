@@ -228,6 +228,7 @@ const (
 	ScheduleUpdate          = "update"
 	SessionLock             = "lock"
 	SessionLogout           = "logout"
+	SessionName             = "name"
 	SessionReadResource     = "read_resource"
 	SessionUnlock           = "unlock"
 	SessionWhoami           = "whoami"
@@ -329,7 +330,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"lock", "logout", "read_resource", "unlock", "whoami"},
+	"session":             {"lock", "logout", "name", "read_resource", "unlock", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
@@ -4051,6 +4052,21 @@ func (args SessionLogoutArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionLogout, fields: fields(args)})
+}
+
+// SessionNameArgs carries arguments for session.name.
+type SessionNameArgs struct {
+	// name: the name your account holds at cyfr.run, with or without its @
+	Name string `json:"name"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionNameArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionNameArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionName, fields: fields(args)})
 }
 
 // SessionReadResourceArgs carries arguments for session.read_resource.

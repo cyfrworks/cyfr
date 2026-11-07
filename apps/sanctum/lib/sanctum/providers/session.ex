@@ -4,7 +4,7 @@
 defmodule Sanctum.Providers.Session do
   @moduledoc """
   Session tool handlers for the Sanctum MCP provider — logout, whoami,
-  a protected device's unlock and lock,
+  the person's name here, a protected device's unlock and lock,
   and the caller's self-description resources. A command line signs in as
   a protected device does (`Sanctum.DeviceUnlock`): its shell unlocks on
   its device channel and spends the ticket at `POST /device/session`.
@@ -17,6 +17,13 @@ defmodule Sanctum.Providers.Session do
   command line, redeems for its session (`Sanctum.DeviceUnlock`); `lock` with the `lock` proof the
   device signed for that session retires it, `locked: true` even when it
   is already gone. A browser's session, or any other context, is refused.
+
+  `name` records the name the person's account holds at cyfr.run as their
+  name here (`Sanctum.SignIn.record_name/2`): the person types it, with or
+  without its `@`, and the registry's answer for it must name their own
+  account. A name another account holds, or none, is refused in a sentence
+  the person reads, and nothing is recorded. A name already recorded is
+  kept; the answer is the name recorded.
 
   `read_resource` admits an MCP `resources/read` of `sanctum://identity`
   or `sanctum://permissions`. It is `auth: :anonymous` and needs no
@@ -49,6 +56,20 @@ defmodule Sanctum.Providers.Session do
           auth: :anonymous,
           kind: :read,
           planes: [:external]
+        ),
+        Operation.new(
+          "session",
+          "name",
+          "Record your account's name here",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "name: the name your account holds at cyfr.run, with or without its @"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
         ),
         Operation.new(
           "session",
@@ -186,6 +207,23 @@ defmodule Sanctum.Providers.Session do
     end
   end
 
+  def handle(%Context{user_id: user_id} = ctx, %{"action" => "name", "name" => name})
+      when is_binary(user_id) and is_binary(name) do
+    typed = name |> String.trim() |> String.trim_leading("@") |> String.downcase()
+
+    if ctx.authenticated and Prima.PersonId.person?(user_id) do
+      case Sanctum.SignIn.record_name(user_id, typed) do
+        {:ok, user} -> {:ok, %{name: user.namespace}}
+        {:error, reason} -> {:error, name_refusal(reason, typed)}
+      end
+    else
+      {:error, :unauthenticated}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "name"}),
+    do: {:error, {:invalid_argument, "Missing required argument: name"}}
+
   # The terminal clause answers both shapes the dispatcher already
   # distinguishes: no `action` at all, and one this tool does not know.
   def handle(_ctx, args) do
@@ -194,6 +232,55 @@ defmodule Sanctum.Providers.Session do
       _ -> {:error, :action_missing}
     end
   end
+
+  # A name's refusals, each with the sentence its person reads; the stores'
+  # own reasons pass as they are.
+  defp name_refusal(:invalid_name, _name),
+    do:
+      refused(
+        :invalid_argument,
+        :invalid_name,
+        "A name is lowercase letters, digits and single hyphens, at most 39 characters"
+      )
+
+  defp name_refusal(:name_not_theirs, name),
+    do: refused(:forbidden, :name_not_theirs, "@#{name} is another account's name, not yours")
+
+  defp name_refusal(:name_unheld, name),
+    do:
+      refused(
+        :not_found,
+        :name_unheld,
+        "No account holds @#{name} at cyfr.run: type the name you chose when you made your account"
+      )
+
+  defp name_refusal(:registry_unavailable, _name),
+    do:
+      refused(
+        :unavailable,
+        :registry_unavailable,
+        "cyfr.run could not check that name just now; try again shortly"
+      )
+
+  defp name_refusal(:no_registry, _name),
+    do:
+      refused(
+        :setup_required,
+        :no_registry,
+        "This CYFR is set up without cyfr.run, so it cannot check a name"
+      )
+
+  defp name_refusal(:namespace_owned_by_another_identity, name),
+    do:
+      refused(
+        :conflict,
+        :namespace_owned_by_another_identity,
+        "Another person on this CYFR holds @#{name}: ask whoever runs this CYFR"
+      )
+
+  defp name_refusal(:not_owner, _name), do: {:unavailable, "Storage"}
+  defp name_refusal(:database_error, _name), do: {:unavailable, "Storage"}
+  defp name_refusal(reason, _name), do: reason
 
   # A protected device's unlock and lock refusals, each with the sentence
   # its person reads; the stores' own reasons pass as they are.

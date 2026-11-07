@@ -63,7 +63,9 @@ defmodule Sanctum.Tenancy.Users do
 
   @doc """
   How a person is named to other people: their display name, else their
-  email, else the raw id.
+  email, else `@` and the name their account holds at cyfr.run once this
+  CYFR recorded it (`users.namespace`), else "someone". A person's id is
+  never shown: a row that cannot be read is "someone" too.
 
   Here rather than beside a caller because it is a fact about the `users`
   row, read by domains that must not depend on each other: the agent
@@ -75,11 +77,15 @@ defmodule Sanctum.Tenancy.Users do
 
   def display_name(user_id) when is_binary(user_id) do
     case get(user_id) do
-      {:ok, %{display_name: name}} when is_binary(name) and name != "" -> name
-      {:ok, %{email: email}} when is_binary(email) and email != "" -> email
-      _ -> user_id
+      {:ok, user} -> named(user)
+      {:error, _unread} -> "someone"
     end
   end
+
+  defp named(%{display_name: name}) when is_binary(name) and name != "", do: name
+  defp named(%{email: email}) when is_binary(email) and email != "", do: email
+  defp named(%{namespace: name}) when is_binary(name) and name != "", do: "@" <> name
+  defp named(_row), do: "someone"
 
   @doc """
   Whether `athanor_id` is this person's own athanor: the athanor row's
