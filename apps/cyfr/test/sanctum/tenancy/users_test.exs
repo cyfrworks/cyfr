@@ -50,6 +50,38 @@ defmodule Sanctum.Tenancy.UsersTest do
     user
   end
 
+  # How a person is named to other people: their display name, else their
+  # email, else @ and their recorded name, else someone; their id never,
+  # not even for a row that cannot be read.
+  describe "display_name/1" do
+    defp named!(user, name) do
+      {:ok, _user} = Users.set_namespace(user, name)
+      user.id
+    end
+
+    test "a display name comes first, then an email, then the recorded name, then someone" do
+      n = System.unique_integer([:positive])
+
+      everything = person(n, %{name: "Mira"})
+      assert Users.display_name(named!(everything, "mira-#{n}")) == "Mira"
+
+      email = person(n + 1, %{name: nil})
+      assert Users.display_name(named!(email, "only-#{n}")) == "p#{n + 1}@example.com"
+
+      name_only = person(n + 2, %{name: nil, email: nil})
+      assert Users.display_name(named!(name_only, "plain-#{n}")) == "@plain-#{n}"
+
+      nothing = person(n + 3, %{name: nil, email: nil})
+      assert Users.display_name(nothing.id) == "someone"
+      refute Users.display_name(nothing.id) =~ nothing.id
+    end
+
+    test "no person, or one that cannot be read, is someone and never their id" do
+      assert Users.display_name(nil) == "someone"
+      assert Users.display_name("usr_" <> String.duplicate("0", 26)) == "someone"
+    end
+  end
+
   test "email is stored lowercased and is not unique — two people may share one" do
     a = person(1, %{email: "Same@Example.com"})
     b = person(2, %{id: "google|https://accounts.google.com|2", email: "same@example.com"})
