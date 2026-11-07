@@ -2415,7 +2415,7 @@ defmodule Cyfr.DocsDriftTest do
     assert Enum.all?(rows, &(length(&1) == 3)), "a loss row does not have three cells"
 
     [lost, works, back] = List.last(rows)
-    assert lost =~ "every recovery code" and lost =~ "online keys"
+    assert lost =~ "every recovery code" and lost =~ "every device"
     assert works =~ "Nothing"
     assert back =~ "new person" and back =~ "new name"
   end

@@ -27,7 +27,7 @@ POST /mcp  ──────────────────>  Authenticate
 
 Every CLI command that talks to a server (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
-The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, canvas pages under `/_c`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`), inbound webhooks (`/hooks`), and the `/directory/v1`, `/certify/v1` and `/restore` routes; and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
+The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, canvas pages under `/_c`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`), inbound webhooks (`/hooks`), a device's channel and session (`/device`), and the account service's routes, `/directory/v1`, `/v1/handles`, `/v1/namespaces/personal/claim` and `/account`, which answer where this CYFR serves its own account service; and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
 
 ---
 
@@ -48,19 +48,19 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead; each registry request among them is signed by the person's live key. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. Of the registry's, claiming a name or a publisher namespace, verifying a publisher namespace, minting push tokens, accepting the registry's policies and filing an appeal are requests a key of the person's account signs; the registry's other requests, for a namespace's tokens, members and components and for reports, go under the person's stored push token. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
 ### Session Tokens
 
-Session tokens are for human developers using the CLI. `cyfr login` makes the command line one of its person's devices, as the box's own screen is ([devices-guide.md](devices-guide.md)):
+Session tokens are for human developers using the CLI. `cyfr login` makes the command line a device of its person's account, as the box's own screen is ([devices-guide.md](devices-guide.md)):
 
-1. The first time, it makes the device's key, protected by a PIN in the machine's TPM or a generated passphrase, and pairs it from another device of the person's, or enrolls it as a new person's first device under setup, an invitation or the open admission (`POST /device/enrollment/*`)
+1. The first time, it makes the device's key, protected by a PIN in the machine's chip or a generated passphrase, and the person adds the key to their account at the account pages or with `cyfr device approve` on another terminal of theirs, or makes their account with it (`--setup`, `--join`); its first connection to each CYFR introduces it on the device channel (`/device`), admitted under setup, an invitation or that CYFR's allowlist
 2. Each time, it unlocks the key and proves it on its device channel (`session.unlock`), and spends the one-time ticket it is answered at `POST /device/session` (`{ticket}` → `{session_token, expires_at}`) for a session bound to that device
 3. It starts the person's shell with the session, which it holds in memory and never writes to disk; the session lives while the shell's device channel keeps it, ends within a minute of the channel's end, and ends at once on `session.lock` or the device's revocation
 
-No other device approves a command line, and no provider signs one in. `CYFR_SESSION_TTL_HOURS` (30 days by default) bounds a browser's sessions, never a device's. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
+No CYFR approves a command line, and no provider signs one in. `CYFR_SESSION_TTL_HOURS` (30 days by default) bounds a browser's sessions, never a device's. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
 
 ```bash
 cyfr login                    # Unlock this command line's key and start a shell
@@ -428,7 +428,7 @@ one annotation. It is short:
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `session` | `logout`, `whoami`, `read_resource` | `logout` ends only the caller's own session and `whoami` answers an anonymous caller its empty identity; `read_resource` tells a caller only its own identity and permissions. A protected device enrolls and spends its unlock's ticket through its own HTTP entries, never through these ([devices-guide.md](devices-guide.md)) |
+| `session` | `logout`, `whoami`, `read_resource` | `logout` ends only the caller's own session and `whoami` answers an anonymous caller its empty identity; `read_resource` tells a caller only its own identity and permissions. A protected device introduces itself on its own channel and spends its unlock's ticket at its own HTTP entry, never through these ([devices-guide.md](devices-guide.md)) |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace`, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 
@@ -854,7 +854,7 @@ cyfr log get <call_id>                     # Full details for a specific log ent
 cyfr log correlate <request_id>            # Find related log entries and decisions
 ```
 
-Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. The entries that decide for themselves without the gate, the identity directory, restore and the recovery code, the OAuth callback, and the browser's sign-in, re-authentication and policy acceptance, record each refusal they make, and nothing for a request they admit. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands. An athanor's decisions are its person's; a platform admin reads the host's own, the ones made before any athanor was resolved, with `--global`, and never an athanor's:
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. The entries that decide for themselves without the gate, the browser's sign-in, a device's own entries, the account service where this CYFR serves one, and the OAuth callback, record each refusal they make, and nothing for a request they admit. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands. An athanor's decisions are its person's; a platform admin reads the host's own, the ones made before any athanor was resolved, with `--global`, and never an athanor's:
 
 ```bash
 cyfr decision list --admission refused     # Recent refusals
@@ -1228,11 +1228,11 @@ themselves.
 
 ### Platform admins
 
-CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
-Postgres / a custom registry.
+CYFR is one product: deploy it as-is (sqlite, local FS) or configure a
+company sign-in / Postgres / a custom registry.
 
-The installation's first person, made by its setup (or by a restore onto it
-empty), is its platform administrator, a mark on their person that no other
+The installation's first person, made by its setup, is its platform
+administrator, a mark on their person that no other
 path writes: minted
 their own athanor past the server caps, never denied by the allowlist, and able
 to run the operator verbs (`door.*`, `execution.force_release`).
@@ -1241,32 +1241,28 @@ own athanor like everyone else and enters no other — opening another person's 
 refused like anyone's — and there is no cross-athanor reach. They hold no seat in
 a shared thread by the capability, and read one only where they sit. The **server allowlist** (`cyfr admin allow
 <@name|identifier|*>`, `cyfr admin deny <person|identifier|@name>`, or the Settings
-page, which takes a name or `*`) judges people: a person made here signs in unless a
-deny names them, and a person whose keys another CYFR holds signs in when `*` or an
-allow naming their identifier (`per_…`) admits them. An entry given a name keeps the
-identifier cyfr.run answers for it, with the name beside it. `*` also lets anyone
-make a person here with a passkey. An invitation that someone with a CYFR name
-redeems by signing in from their CYFR writes an allow of their identifier, unless a
-deny names it, and a deny always outranks an allow. Threads never widen the allowlist
-otherwise: adding an unknown identifier to a shared thread leaves an invitation that
-activates on that person's admitted CYFR sign-in and, when the allowlist would
-refuse them, a request for the operator.
+page, which takes a name or `*`) judges accounts: one its setup or an invitation
+admitted signs in by the allow of its identifier (`per_…`) that admission wrote, and
+any other when `*` or an allow naming its identifier admits it, unless a deny names it.
+An entry given a name keeps the identifier the registry answers for it, with the name
+beside it. `*` also admits, as a new person here, any account of the account service
+this CYFR names. An invitation's redemption writes an allow of the account's
+identifier, unless a deny names it, and a deny always outranks an allow. Threads never
+widen the allowlist otherwise: adding an unknown identifier to a shared thread leaves
+an invitation that activates at that account's first admitted sign-in and, when the
+allowlist would refuse it, a request for the operator.
 
 ### Invitations (`invitation` tool)
 
-An invitation is to this CYFR: its link makes a new person here, with their own
-athanor, or admits someone who signs in from their CYFR. It works once and expires
+An invitation is to this CYFR: its link admits the account that redeems it, making
+the person here, with their own athanor, when this CYFR does not hold them yet. It works once and expires
 after seven days, and its code is shown only when it is made.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `create` | optional `thread_id`, `name` | Make an invitation. With `thread_id`, a shared thread you sit in while it is active (never a pair), it seats its newcomer there; without, it names no thread, and only the platform administrator makes one (Settings, **Invite to this CYFR**). `name` fills the newcomer's name in. Answers the invitation and `invitation_url`, once |
+| `create` | optional `thread_id`, `name` | Make an invitation. With `thread_id`, a shared thread you sit in while it is active (never a pair), it seats its newcomer there; without, it names no thread, and only the platform administrator makes one (Settings, **Invite to this CYFR**). `name` is the name the new account page fills in. Answers the invitation and `invitation_url`, once |
 | `list` | — | The invitations you made, or every one for the platform administrator, newest first: each with its `state` (`pending`, `redeemed`, `revoked`, `expired`), its expiry, and the `thread_id` and, to a viewer seated there, `thread_title` it names |
 | `revoke` | `invitation_id` | Close a pending invitation, as its issuer or the platform administrator |
-
-A thread whose people include someone still recovering from a declared restore admits
-no one new, by an addition, an invitation's redemption or an invited row's activation,
-until each of them has recovered.
 
 An operator keeps their keys in their own vault, as everyone does, and offers one to the people here by sharing it with everyone: such a share is what a new person's first sign-in binds when it fits ([Shares](#shares-share-tool)). The people it is offered to grant it through the same consent walk as their own entries; no share bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
 
@@ -1277,13 +1273,13 @@ running work is cancelled, and its storage tree (`data/athanors/<id>/`) and
 rows stay in place, so allowing the person on the allowlist again reopens it
 intact.
 
-### OIDC (federated identity)
+### OIDC (a company's sign-in)
 
 Setting `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`
-offers a generic OIDC issuer as a sign-in method a person links; it unlocks the
-person who linked it and never makes one. Any of the three set without the others
-refuses the boot rather than silently offering no OIDC sign-in. The issuer must
-not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
+names the issuer of the company sign-in a CYFR may require of every person there
+([When a CYFR Requires a Company Sign-in](#when-a-cyfr-requires-a-company-sign-in)),
+where WorkOS is not configured; it never signs anyone in and never makes a person.
+Any of the three set without the others refuses the boot.
 
 ### Several servers on one database (a cluster)
 
