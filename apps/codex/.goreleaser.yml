@@ -36,11 +36,14 @@ checksum:
     - glob: cyfr-scaffold.tar.gz
 
 signs:
-  - cmd: cosign
+  # Repeated up to three times, as release.yml signs release.json, and for
+  # its reason. The path is from the workdir, apps/codex.
+  - cmd: ../../scripts/ci/retry.sh
     signature: "${artifact}.sigstore.json"
     # The protobuf bundle (media type v0.3) sigstore-go reads: `cyfr init`
     # and `cyfr update` verify checksums.txt with it.
     args:
+      - "cosign"
       - "sign-blob"
       - "--new-bundle-format"
       - "--bundle=${signature}"

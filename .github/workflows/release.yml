@@ -310,7 +310,9 @@ jobs:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
 
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # Its default, cosign v3.1.4, reads the log entry back when Rekor
+      # answers 409 to the retry of a write whose answer was lost.
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
       # By exact name: cyfr is a prefix of cyfr-locus. Outside the
       # checkout, so GoReleaser finds the tree as the tag left it.
@@ -363,8 +365,12 @@ jobs:
       - name: Validate the release manifest
         run: python3 -I tests/ci-release-graph.py --manifest "$RUNNER_TEMP/release/release.json" --version "$GITHUB_REF_NAME" --scaffold apps/codex/cyfr-scaffold.tar.gz
 
+      # A keyless signing is safe to repeat: each run signs with a new key
+      # and certificate, so it writes a new log entry and a bundle that
+      # verifies without the others. A transparency log too slow to answer
+      # then fails one run, not the release.
       - name: Sign the release manifest
-        run: cosign sign-blob --yes --new-bundle-format --bundle "$RUNNER_TEMP/release/release.json.sigstore.json" "$RUNNER_TEMP/release/release.json"
+        run: scripts/ci/retry.sh cosign sign-blob --yes --new-bundle-format --bundle "$RUNNER_TEMP/release/release.json.sigstore.json" "$RUNNER_TEMP/release/release.json"
 
       - name: Run GoReleaser
         id: goreleaser
