@@ -517,6 +517,7 @@ CI_RUNS = {
     ("test.yml", "static", "The configuration guide is the roster's"): ["confguide"],
     ("test.yml", "static", "The dev stack's compose override"): ["devstack"],
     ("test.yml", "static", "The built SDK is its source's"): ["sdk_bundle"],
+    ("test.yml", "static", "The built account pages are their source's"): ["account_bundle"],
     ("test.yml", "static", "Every test WASM fixture is its source's build"): ["test_wasm"],
     ("test.yml", "static", "The image suites' shared plumbing"): ["imagesuite_checks"],
     ("test.yml", "static", "The runtime suite's signing reproduces the worker protocol vectors"): ["worker_auth_check"],
@@ -2327,7 +2328,7 @@ framed a "$a" 1
 has_line '^prima=0$' "$scratch/a.log/islands.summary" || fail 'the prima island did not pass beside the stalled one'
 has_line '^sanctum=0$' "$scratch/a.log/islands.summary" || fail 'the sanctum island did not pass beside the stalled one'
 has_line '^==> islands.arca stopped at its deadline$' "$scratch/a.err" || fail 'the stalled island was not reported'
-for s in compile_sqlite_test compile_sqlite_dev devstack js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check registry_stand_in dialyzer boundary_plants sqlite_suite; do
+for s in compile_sqlite_test compile_sqlite_dev devstack js_suite eslint wasm_tools test_wasm sdk_bundle account_bundle seed_canvas canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check registry_stand_in dialyzer boundary_plants sqlite_suite; do
   has_line "^$s=0$" "$scratch/a.log/static.summary" || fail "the static step $s did not pass: $(tr '\n' ' ' < "$scratch/a.log/static.summary")"
 done
 has_line '^compile_pg_dev=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL dev compile did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"

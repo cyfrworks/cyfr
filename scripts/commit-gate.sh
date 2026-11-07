@@ -318,7 +318,7 @@ deadline_for() {
   # A step of a CI job (run_job) takes the job's own timeout.
   if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|registry_stand_in|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|account_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|registry_stand_in|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -338,7 +338,7 @@ deadline_for() {
 PG_SERVER=postgres://cyfr:cyfr@localhost:5432
 
 # The steps of a leg, for the deadline of a leg that waits on it.
-STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide devstack js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check registry_stand_in dialyzer boundary_plants sqlite_suite'
+STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide devstack js_suite eslint wasm_tools test_wasm sdk_bundle account_bundle seed_canvas boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check registry_stand_in dialyzer boundary_plants sqlite_suite'
 steps_of() {
   case "$1" in
     static) echo "$STATIC_STEPS" ;;
@@ -420,6 +420,13 @@ leg_static() {
     return 1
   fi
   step static sdk_bundle env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test bash "$sdk" || return
+  # The account pages likewise, as CI's test job rebuilds them.
+  local account="$LOGDIR/static.account_bundle.sh"
+  if ! ci_step "The built account pages are their source's" > "$account"; then
+    echo "ci_steps=1" >> "$LOGDIR/static.summary"
+    return 1
+  fi
+  step static account_bundle env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test bash "$account" || return
   # The shipped canvas is built in a temporary copy, so the checkout is
   # left as it was.
   step static seed_canvas scripts/check-seed-canvas.sh || return
