@@ -5,11 +5,13 @@ defmodule Cyfr.ReleaseFixtureTest do
   @moduledoc """
   The release proofs' fixture (`tests/release-boot/fixture.exs`), evaluated
   as `bin/cyfr rpc` evaluates it inside a release: its `person` command
-  makes the installation's first person by the setup admission, their
-  enrollment finished with no network and their name recorded, and every
-  later one with the rows an open admission writes, held to the open
-  admission's caps; a setup device's record already kept where it runs is
-  the device a first person made again is enrolled with.
+  makes the installation's first person by the setup admission of an
+  account built with no network, their setup device paired in it and
+  their name recorded, and every later one by the open admission, held to
+  its caps; a setup device's record already kept where it runs is the
+  device a first person made again is paired with; and `device_confirm`
+  confirms a record by that device's answer to this CYFR's request, and
+  refuses one made wrong on purpose.
   """
 
   # The setup token the fixture puts for its call, the pinned directory,
@@ -110,10 +112,14 @@ defmodule Cyfr.ReleaseFixtureTest do
     # the client as they were.
     written = path |> File.read!() |> Jason.decode!()
 
-    assert Map.take(written, ~w(seed client_id athanor_id home)) ==
-             Map.delete(kept, "certificate")
+    assert Map.take(written, ~w(seed client_id home)) ==
+             Map.take(kept, ~w(seed client_id home))
 
     assert written["certificate"]["client_id"] == client_id
+
+    # The athanor is the one the admission made now.
+    assert {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(first["user_id"])
+    assert written["athanor_id"] == athanor_id
 
     Arca.Repo.delete_all(User)
     File.write!(path, Jason.encode!(%{kept | "home" => "https://another.example"}))
@@ -121,6 +127,39 @@ defmodule Cyfr.ReleaseFixtureTest do
     assert_raise RuntimeError, ~r/names no device of this home's setup/, fn ->
       fixture.(["person", "again@example.com", "fixture-again"])
     end
+  end
+
+  test "device_confirm confirms a record by the setup device's answer, and refuses one made wrong",
+       %{fixture: fixture} do
+    first = person!(fixture, "first@example.com", "fixture-first")
+    {:ok, ctx} = Sanctum.Caller.establish({:session, first["token"]})
+
+    asked = fn ->
+      {:error, {:confirmation_required, %{id: id}}} =
+        Sanctum.Consent.Authz.check(ctx, :credential_entry, %{
+          operation: "vault.create",
+          arguments: %{"name" => "fixture"},
+          resource: "fixture"
+        })
+
+      Prima.Confirmation.ref(id)
+    end
+
+    for tamper <- ["digest", "ref", "key"] do
+      ref = asked.()
+      "FIXTURE=" <> json = fixture.(["device_confirm", ref, tamper])
+      assert %{"error" => _refused, "operation" => "vault.create"} = Jason.decode!(json), tamper
+
+      assert {:ok, %{state: "pending"}} =
+               Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), ref)
+    end
+
+    ref = asked.()
+    "FIXTURE=" <> json = fixture.(["device_confirm", ref])
+    assert %{"ok" => %{"state" => "confirmed"}, "digest" => digest} = Jason.decode!(json)
+
+    assert {:ok, %{digest: ^digest}} =
+             Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), ref)
   end
 
   test "a later person is held to the open admission's cap, and none is made past it",
