@@ -1,6 +1,6 @@
 # Identity and Recovery
 
-How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed only on its account pages. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
+How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from a device of yours: `cyfr login --setup` or `--join` and the box's **Set up CYFR** make one, and `cyfr device approve` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
 
 ---
 
@@ -17,7 +17,7 @@ The account service keeps your account's log: every change to its keys, in one o
 
 ### The account pages
 
-Every change to your account happens on its pages at the account service, `https://cyfr.run/account/…` unless your CYFR names another:
+The account service serves these pages, `https://cyfr.run/account/…` unless your CYFR names another. A terminal or the box's screen also makes an account ([Creating Your Account](#creating-your-account)), and a terminal adds another device to one with `cyfr device approve` ([devices-guide.md](devices-guide.md)):
 
 | Page | What you do there |
 |---|---|
@@ -137,12 +137,14 @@ When the account service cannot be reached past that bound, what a CYFR does fol
 
 ## When a CYFR Is Restored from a Backup
 
-Putting a backup back is the operator's `cyfr restore`, which declares it, and the CYFR retires the authority the backup carried before it admits anything. A restore touches no account: no CYFR holds a key of yours, so your passkeys and devices still sign you in. When you next open it:
+Putting a backup back is the operator's `cyfr restore`, which declares it, and the CYFR retires the authority the backup carried before it admits anything. No CYFR holds a key of yours, so your passkeys and devices still sign you in, unless the restored CYFR serves your account service (below). When you next open it:
 
 - **You sign in again.** Every session there ended.
 - **Your devices connect again.** Every device connected there was suspended and its certificate revoked; each comes back by connecting as it did the first time, with the same key, and nothing needs approving.
 - **Re-enable your API keys and webhooks** from the restore checklist on your pages, each under a fresh confirmation.
 - **Consent again, and rotate.** Every component's grant asks for consent again from the checklist, and every stored credential needs rotating where it came from and entering again, since the backup's copy may be known. The restore revokes every key you shared: share it again once you have rotated it. Every invitation link still open was revoked. A run open at the backup ended uncertain and is never resumed; start it again.
+
+A CYFR that serves its own account service keeps its people's account logs in its database, which the snapshot holds, so a restore puts each log back as the snapshot held it. A change made after the snapshot (a key added or removed, a recovery code added, everything replaced, an account made) is gone from that service until its person makes it again: a key removed since is listed again until then, and a CYFR that read the later log pauses that person's work there, since the restored log does not hold what it read. Your devices keeping their keys does not keep the log.
 
 ---
 
@@ -161,6 +163,6 @@ The address of each CYFR you use, saved as a tab, a bookmark or a command line's
 | Every passkey and device | Your account and your name, through your recovery code | At `/account/recover`: add a passkey, and remove the lost keys. |
 | A recovery code, with another one | Everything | Add a new code with the one you hold. The lost code stays valid until you replace everything with a code you hold: until then, whoever finds it can take your account. |
 | Your only recovery code | Your passkeys and devices | Nothing adds a code without one. Your account stands on its passkeys and devices alone: keep more than one, on more than one machine. |
-| A CYFR you use | Your account, your name and every other CYFR | Your account was never there. The CYFR's own data comes back only from its backup; a CYFR made anew admits you again by its setup or an invitation, with a new athanor. |
+| A CYFR you use | Your account, your name and every other CYFR | Your account was never there, unless that CYFR serves your account service (next row). The CYFR's own data comes back only from its backup; a CYFR made anew admits you again by its setup or an invitation, with a new athanor. |
 | The account service, for good | A local or tailnet CYFR's work, on the keys it last read | No key can be added, removed or recovered, and a public CYFR pauses your work. Make a new account at another account service, and be admitted again by each CYFR. |
 | Every passkey, every device and every recovery code at once | Nothing of the account | Start again as a new person, with a new name: a new account, admitted again by each CYFR. |

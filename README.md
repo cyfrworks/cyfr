@@ -1073,8 +1073,16 @@ for consent again; standing approvals, unused once-bindings and pending
 confirmations are dropped; every invitation link still open and every
 share are revoked; every stored credential is unusable until it is rotated
 where it came from and entered again; and runs open at the backup end
-uncertain and none resumes. No account is touched: no CYFR holds an
-account's keys, so people sign in again with their passkeys and devices.
+uncertain and none resumes. No CYFR holds an account's keys, so people
+sign in again with their passkeys and devices. A CYFR that serves its own
+account service (`CYFR_DIRECTORY_SERVE=writer`) keeps its people's account
+logs in the database the snapshot holds, so the restore puts each log back
+as the snapshot held it: a change made after the snapshot (a key added or
+removed, a recovery code added, everything replaced, an account made) is
+gone from that service until its person makes it again, a key removed since
+is listed again until then, and a CYFR that read the later log pauses that
+person's work, since the restored log does not hold what it read; devices
+keeping their keys does not keep the log.
 [identity-guide.md](identity-guide.md) has the person's side. The
 registry push tokens stay as the backup restored them. An object store (`CYFR_STORAGE=s3`) is
 outside the snapshot: objects written since it stay in the bucket.
@@ -1094,9 +1102,9 @@ cannot tell it was restored: sessions, keys and grants the backup holds
 still work, and a revocation made after the backup was taken is not seen.
 Declare every restore.
 
-A backup restores the server, never an account: an account lives at its
-account service, and the person recovers it with their recovery code at
-`/account/recover`. A CYFR lost with no backup to put back is set up anew,
+A backup restores the server, and an account only where the server serves
+its account service: an account lives at its account service, and the
+person recovers it with their recovery code at `/account/recover`. A CYFR lost with no backup to put back is set up anew,
 and its people, admitted again by its setup and its invitations, sign in
 with the accounts they have, with new athanors there; their athanors and
 thread seats at every other CYFR stand. [identity-guide.md](identity-guide.md)
@@ -1222,7 +1230,7 @@ Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive pro
 
 ### Non-interactive credentials (CI)
 
-`cyfr` normally reads its credential from `~/.cyfr/config.json` (written by `cyfr login`). A CI job or container passes one directly instead: `--token <cyfr_...>` on any command, or `CYFR_TOKEN` in the environment — a `cyfr_` API key minted with `cyfr key create`, or a session token. The flag wins over the environment, which wins over the stored config.
+`cyfr` sends the credential `--token` names, else `CYFR_TOKEN`'s, else the session of the shell `cyfr login` started for that CYFR's address, which lives in that shell alone. A CI job or container passes one directly: `--token <cyfr_...>` on any command, or `CYFR_TOKEN` in the environment — a `cyfr_` API key minted with `cyfr key create`, or a session token. `~/.cyfr/config.json` keeps each context's address and the client id and certificate a CYFR gave this command line, never a session or any other credential.
 
 CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (no prompts), `CYFR_NO_UPDATE_CHECK=1` (no release check — air-gapped installs).
 
