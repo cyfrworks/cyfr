@@ -310,9 +310,9 @@ func screenShellConfig(dir, address string, client *http.Client, host string, re
 		DataDir:   filepath.Join(dir, "data"),
 		Tokens:    screenTokens,
 		// .env keeps the setup token after setup: the box brings it only
-		// for an account it made on its setup page.
-		SetupFromPage: true,
-		Restart:       restart,
+		// while no one is set up.
+		SetupOpen: screenSetupOpen,
+		Restart:   restart,
 	}
 }
 
@@ -465,6 +465,29 @@ func (c *screenChrome) restart() {
 	if c.proc != nil {
 		_ = c.proc.Signal(syscall.SIGTERM)
 	}
+}
+
+// screenSetupOpen is whether no one is set up on the CYFR in the working
+// directory yet, as cyfr's log since its start says, read under the
+// stack's lock as cyfr setup reads it (readSetUp). The lock is taken
+// without waiting: held by a command changing the stack, or with a log
+// that cannot be read, setup is taken as closed, so the door decides and
+// the next unlock asks again.
+func screenSetupOpen(ctx context.Context) bool {
+	e, err := openEngine(".")
+	if err != nil {
+		return false
+	}
+	unlock, err := e.Lock("screen")
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	head, err := e.Head()
+	if err != nil {
+		return false
+	}
+	return readSetUp(ctx, e, head) == setUpNone
 }
 
 // screenTokens reads .env's setup token as the server reads it, each time

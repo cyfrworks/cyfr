@@ -48,7 +48,9 @@ func TestAdminHelpNamesAName(t *testing.T) {
 		t.Errorf("admin help does not name a name: %q", adminCmd.Long)
 	}
 	help := strings.ToLower(adminCmd.Long + adminAllowCmd.Use + adminAllowCmd.Short + adminDenyCmd.Use + adminDenyCmd.Short)
-	for _, word := range []string{"handle", "registry"} {
+	// Every person here is an account's: none is made here or comes from
+	// elsewhere.
+	for _, word := range []string{"handle", "registry", "made here", "elsewhere", "identity here"} {
 		if strings.Contains(help, word) {
 			t.Errorf("admin help says %q", word)
 		}

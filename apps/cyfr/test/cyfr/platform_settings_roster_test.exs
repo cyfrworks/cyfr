@@ -63,7 +63,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
              webhook_max_skew_seconds webhook_idempotency_ttl_seconds
              directory_serve directory_max_identities directory_log_bytes
              directory_recovery_reserve_bytes identity_freshness_seconds device_cert_seconds
-             clock_skew_seconds confirmation_seconds reauth_seconds)
+             clock_skew_seconds confirmation_seconds)
 
   defp stale_violations(entries) do
     for %Entry{key: key, stale: stale} <- entries,
@@ -310,7 +310,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  frame_invocation_max frame_invocation_window_ms
                  directory_serve directory_max_identities directory_log_bytes
                  directory_recovery_reserve_bytes identity_freshness_seconds
-                 device_cert_seconds clock_skew_seconds confirmation_seconds reauth_seconds
+                 device_cert_seconds clock_skew_seconds confirmation_seconds
                ))
 
       for key <- ~w(asset_credential_window_s frame_credential_deadline_s) do
@@ -334,8 +334,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         "identity_freshness_seconds" => {:duration_s, 300},
         "device_cert_seconds" => {:duration_s, 3_600},
         "clock_skew_seconds" => {:duration_s, 60},
-        "confirmation_seconds" => {:duration_s, 300},
-        "reauth_seconds" => {:duration_s, 300}
+        "confirmation_seconds" => {:duration_s, 300}
       }
 
       for {key, {type, default}} <- expected do
@@ -397,7 +396,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     test "zero, a negative and a malformed value are refused; the directory mode is a closed set" do
       for key <- ~w(directory_max_identities directory_log_bytes directory_recovery_reserve_bytes
                     identity_freshness_seconds device_cert_seconds clock_skew_seconds
-                    confirmation_seconds reauth_seconds) do
+                    confirmation_seconds) do
         {:ok, entry} = Roster.fetch(key)
 
         for bad <- ["0", "-1", "ten", "1.5", "", 0, -5, :x] do

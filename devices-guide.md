@@ -45,7 +45,7 @@ Nothing is approved at a CYFR. A device's first connection to each CYFR introduc
 
 A CYFR box with its own screen (`cyfr screen on`) sets itself up and signs you in there, with no phone or security key, through a key of its own under its local unlock.
 
-1. **Setup.** The screen says when the box's system disk or CYFR's data volume is not encrypted, or when that cannot be told. **Set up CYFR** makes your account with the box as its first device, under the setup token, and shows your recovery code as a QR code to scan or print; keep it off the box. **Add this box to my account** adds the box to an account you already have instead (above).
+1. **Setup.** The screen says when the box's system disk or CYFR's data volume is not encrypted, or when that cannot be told. **Set up CYFR** makes your account with the box as its first device and shows your recovery code as a QR code to scan or print; keep it off the box. **Add this box to my account** adds the box to an account you already have instead (above). Either way, on a CYFR nobody has set up yet the box brings the setup token with it, so that account becomes the installation's first person; on one already set up it brings nothing, and the CYFR's allowlist decides.
 2. **Unlocking.** The screen starts locked, whatever its browser kept. Unlocking proves the box's key to CYFR on the box's own channel, which answers a one-time ticket; the browser spends it once for a session (`/auth/device/complete`). The session lasts one minute at a time and only the box's channel extends it, never past its certificate, so a copied cookie, a reboot, a dead shell or a lost connection ends it within a minute.
 3. **Locking.** The **Lock** control, five minutes without local input, suspend, and the browser or the shell exiting lock the screen: the session ends at once and the screen asks for the PIN or passphrase again. A lock is final for that session; unlocking makes a new one.
 4. **Confirming on this device.** A change that needs a fresh confirmation offers **Confirm on this device**. The screen's own page shows the change as CYFR stored it, not as the asking page described it, and asks for your PIN or passphrase again before it signs; cancelling signs nothing.
@@ -62,10 +62,10 @@ A device certificate is one CYFR's own word that a device of your account is adm
 - **Expiry is strict** on that CYFR's clock. `clock_skew_seconds` (60 by default) applies only to a certificate's not-before time and never extends its life. The channel closes at the instant the certificate expires unrenewed.
 - **Sleep.** A device that wakes, or reconnects, with an expired certificate renews by proving its key before it sends anything else.
 - **Streams.** When a CYFR cannot check the device's standing in time to pass on a change, or the device falls behind, the stream ends and the device opens it again and reads what is waiting.
-- **Your account's keys.** Every request the device makes is checked against your account's keys as that CYFR last read them, within `identity_freshness_seconds` (five minutes by default). Removing the device's key from your account ends its certificates and sessions at each CYFR once that CYFR reads the removal, and replacing everything with your recovery code ends all of them.
-- **Revoking it at one CYFR.** **Revoke** under **Settings → Devices connected here**, or under **Devices** in Prism's shell, needs a fresh confirmation. The device's channel there closes within 30 seconds, ending its streams and its session. Its key stays on your account, so its next unlock introduces it to that CYFR again: to end a device everywhere, remove its key from your account.
+- **Your account's keys.** Every request the device makes is checked against your account's keys as that CYFR last read them, within `identity_freshness_seconds` (five minutes by default). Removing the device's key from your account ends its certificates and sessions at each CYFR once that CYFR reads the removal, and replacing everything with your recovery code ends all of them. A command line or box whose key was removed says so at its next unlock and shows the same key's code, QR code and `cyfr device approve` command again; approving it adds that same key back, and no new key is made.
+- **Signing it out of one CYFR.** **Sign out this device** under **Settings → Devices connected here**, or under **Devices** in Prism's shell, needs a fresh confirmation. The device's channel there closes within 30 seconds, ending its streams and its session. Its key stays on your account, so its next unlock introduces it to that CYFR again: to end a device everywhere, remove its key from your account.
 
-Revocation erases nothing already shown on the device. Until its key is removed, what the device shows and what its unlocked key signs are the exposure of a lost device.
+Signing out erases nothing already shown on the device. Until its key is removed, what the device shows and what its unlocked key signs are the exposure of a lost device.
 
 ---
 
@@ -73,7 +73,7 @@ Revocation erases nothing already shown on the device. Until its key is removed,
 
 A passkey lives at the account service, whose address is its relying party, so one passkey signs you in and confirms your changes at every CYFR that uses that account service. Your phone or computer keeps it under its own screen lock, and your platform may sync it to your other phones and computers through your Apple, Google or password manager account.
 
-**Settings → Devices connected here** lists each passkey of your account that signed in at that CYFR, by its short code, beside your devices. **Revoke** there signs it out of that CYFR, ending the sessions it signed in; it stays a passkey of your account, and signing in with it again brings it back. Removing it from your account is `/account/devices`, with another passkey, or `/account/recover`, with your recovery code, and that ends it at every CYFR. A session a passkey signed in lasts as any browser sign-in's does, since no CYFR can see when the phone or computer locks.
+**Settings → Devices connected here** lists each passkey of your account that signed in at that CYFR, by its short code, beside your devices. **Sign out this passkey** there signs it out of that CYFR, ending the sessions it signed in; it stays a passkey of your account, and signing in with it again brings it back. Removing it from your account is `/account/devices`, with another passkey, or `/account/recover`, with your recovery code, and that ends it at every CYFR. A session a passkey signed in lasts as any browser sign-in's does, since no CYFR can see when the phone or computer locks.
 
 ---
 
@@ -112,7 +112,7 @@ A sign-in, however recent, proves nothing by itself, and neither does a company 
 CYFR's address is its tailnet name, its domain, or `localhost` when only its own computer reaches it, and it changes when `cyfr access` moves CYFR to another mode or name. Your account and its passkeys do not change: they live at the account service, not at CYFR's address.
 
 1. **Sessions.** Every browser signs in again at the new address, with the same passkey.
-2. **Devices.** A command line keeps one context per address: `cyfr login --url <new address>` introduces it there with the same key, and nothing is approved.
+2. **Devices.** A command line keeps one context per address: `cyfr login --url <new address>` introduces it there with the same key, and nothing is approved. The box's screen drops the certificate it held for the old address at its next unlock and introduces itself at the new one the same way.
 3. **Clients and callbacks.** Update the redirect address in OAuth apps you registered (vault credentials, a company's sign-in issuer), the URL your webhook senders call, CLI contexts and MCP clients.
 4. **Saved addresses.** Every device that saved the old address needs the new one.
 

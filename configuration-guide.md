@@ -174,7 +174,6 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_DEVICE_CERT_SECONDS` | `device_cert_seconds` | `duration_s` | `3600` | `devices` | live | refuse | How long a device certificate this CYFR issues lives, in seconds; a device renews at half of it over its channel. |
 | `CYFR_CLOCK_SKEW_SECONDS` | `clock_skew_seconds` | `duration_s` | `60` | `devices` | live | refuse | How far a certificate's not-before or a signed message's time may sit from this CYFR's clock, in seconds; it never extends a certificate's expiry. |
 | `CYFR_CONFIRMATION_SECONDS` | `confirmation_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How long a pending confirmation of a sensitive change stays open, in seconds. |
-| `CYFR_REAUTH_SECONDS` | `reauth_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | No sign-in or change reads it: a value set here changes nothing. |
 
 ## Compose-only variables
 

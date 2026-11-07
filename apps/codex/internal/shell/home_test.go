@@ -108,6 +108,14 @@ func newFakeHome(t *testing.T) *fakeHome {
 
 func (h *fakeHome) address() string { return h.srv.URL }
 
+// setupOpen is whether no one is set up here yet, as a box's screen reads
+// it: no setup was spent and no one is a member.
+func (h *fakeHome) setupOpen(context.Context) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !h.setupUsed && len(h.members) == 0
+}
+
 func reply(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -225,7 +233,9 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 	}
 	var challenge map[string]any
 	if code == 0 {
-		challenge = h.issue(map[string]any{"purpose": purpose, "athanor": c.athanor, "client_id": c.id, "device_key": b64(c.pub)})
+		// As the CYFR binds it: to the home the certificate names.
+		challenge = h.issue(map[string]any{"purpose": purpose, "home": stringOf(cert, "audience"), "athanor": c.athanor,
+			"client_id": c.id, "device_key": b64(c.pub)})
 	}
 	h.mu.Unlock()
 	if code != 0 {

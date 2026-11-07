@@ -165,6 +165,7 @@ type device interface {
 	Create(ctx context.Context, name, accepted string)
 	Terms(ctx context.Context) (*account.Policy, error)
 	Enroll(ctx context.Context, name string, wait time.Duration)
+	CheckListed(ctx context.Context)
 	Saved(ctx context.Context, accepted string)
 	Resume(ctx context.Context, code string)
 	Rename(ctx context.Context, name string)

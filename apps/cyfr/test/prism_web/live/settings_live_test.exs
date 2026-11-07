@@ -27,6 +27,14 @@ defmodule PrismWeb.SettingsLiveTest do
     {admin_view, admin_html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
     assert admin_html =~ "Server allowlist"
 
+    # Every person here is an account's, admitted by an allow, `*` or an
+    # invitation: none is made here or holds keys at another CYFR.
+    door = admin_view |> element("#allowlist > p") |> render()
+    assert door =~ "An account signs in when"
+    refute door =~ "made here"
+    refute door =~ "another CYFR"
+    PrismWeb.Vocabulary.refute_vocabulary(door)
+
     identifier = "per_" <> Prima.Digest.sha256_hex("letin-#{System.unique_integer([:positive])}")
 
     # The entry typed is what the Allow button carries; the click adds
@@ -387,8 +395,21 @@ defmodule PrismWeb.SettingsLiveTest do
       assert view |> element(passkey) |> render() =~ String.slice(hex, 0, 16)
       refute has_element?(view, ~s([data-test="device"][data-id="#{client.id}"]))
 
+      # This CYFR signs the passkey out of itself alone: the key is the
+      # account's, and only removing it there ends it everywhere.
+      assert view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render() =~
+               "Sign out this passkey"
+
+      scope = view |> element(~s([data-test="devices-scope"])) |> render()
+
+      assert String.replace(scope, ~r/\s+/, " ") =~
+               "Removing its key from your account ends it everywhere."
+
+      PrismWeb.Vocabulary.refute_vocabulary(scope)
+
       view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render_click()
       refute has_element?(view, passkey)
+      assert render(view) =~ "Passkey signed out of this CYFR."
     end
   end
 

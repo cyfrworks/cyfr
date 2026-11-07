@@ -40,7 +40,7 @@ the browser, and the ticket is in no address this program hands on.
 Anywhere else it opens the address and nothing more: sign in there as you
 always do. The loopback address cyfr init saves for this machine
 (http://127.0.0.1:<port>) opens as http://localhost:<port>, the address
-CYFR on this computer serves itself under, where a passkey works.`,
+CYFR on this computer serves itself under.`,
 	Example: `  cyfr open
   cyfr open --context work`,
 	Args: cobra.NoArgs,
@@ -161,8 +161,8 @@ func hyperlinkFor(address string, terminal bool, goos string, getenv func(string
 
 // browserAddress is the address as a browser should open it: a loopback
 // IP spelled localhost, the host a home on this computer serves itself
-// under and the one a passkey can be registered for, which an IP address
-// never is.
+// under, and the one the passkeys of an account service it serves itself
+// are registered for, which an IP address never is.
 func browserAddress(u *url.URL) string {
 	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLoopback() {
 		opened := *u

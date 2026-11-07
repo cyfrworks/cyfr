@@ -76,7 +76,9 @@ device where you use your passkey, check that it shows the same code and
 add this command line to your account there; or run the command it shows
 on a terminal of yours that is unlocked. Then type your name: cyfr login
 waits until your account lists the key. The first unlock at each CYFR
-introduces this command line to it.
+introduces this command line to it. Each later run reads your account
+first: once the key is removed from it, cyfr login says so and shows the
+same key's code again, to be added the same way.
 
 Unlocked, cyfr login starts your shell ($SHELL) with the session in its
 environment. Every cyfr command run in it acts as you, and the session
@@ -376,7 +378,7 @@ func (d *loginDriver) enroll(ctx context.Context, v shell.View) error {
 		return nil
 	}
 	out := d.c.out
-	fmt.Fprintf(out, "\nThis command line is not a device of your account yet. Its code is %s.\n\n", v.Code)
+	fmt.Fprintf(out, "\nThis command line is not a device of your account. Its code is %s.\n\n", v.Code)
 	if qr, err := setup.QRText(v.AddURL); err == nil {
 		fmt.Fprintln(out, qr)
 	}
@@ -392,11 +394,17 @@ func (d *loginDriver) enroll(ctx context.Context, v shell.View) error {
 }
 
 // unlock opens this command line with its secret: the one chosen in this
-// run, or the one asked.
+// run, or the one asked once the account's log, read first, still lists
+// the key. A log that no longer lists it shows the code again (enroll),
+// and nothing is asked.
 func (d *loginDriver) unlock(ctx context.Context, v shell.View) error {
 	secret := d.held
 	d.held = nil
 	if secret == nil {
+		d.sh.CheckListed(ctx)
+		if after := d.sh.View(); after.Page != shell.PageLocked || after.Notice != "" {
+			return nil
+		}
 		var err error
 		if secret, err = d.askSecret(ctx, v, "Unlock this command line with its"); err != nil {
 			return err

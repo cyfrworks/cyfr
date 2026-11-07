@@ -66,11 +66,15 @@ type Config struct {
 	// Tokens reads the setup token a first hello brings, when there is
 	// one, so it never travels in an argument.
 	Tokens func() (setup string)
-	// SetupFromPage brings the setup token only with the hello that
-	// follows an account this device made (a box's screen, whose .env
-	// always holds the token): a device added to an account the person
-	// has brings none, and the CYFR's door decides.
-	SetupFromPage bool
+	// SetupOpen is set for a device whose .env holds the setup token
+	// whether or not anyone is set up (a box's screen), and says whether
+	// no one is set up on this CYFR yet. Such a device's first hello
+	// brings the token only then, whether it made its account here or was
+	// added to one, since the installation's first person binds it
+	// whoever they are; on a CYFR someone is set up on it brings none, and
+	// the CYFR's door decides. Unset, a first hello brings whatever token
+	// Tokens reads (cyfr login --setup).
+	SetupOpen func(context.Context) bool
 	// Invitation is the invitation's code a first hello brings, when
 	// there is one.
 	Invitation string
@@ -92,13 +96,10 @@ type Config struct {
 }
 
 // ClientRecord is the client a CYFR admitted this device's key as and the
-// certificate it connects under there; before the first admission,
-// Admission is "setup" when this device made its account here, which a
-// SetupFromPage device's first hello brings the setup token for.
+// certificate it connects under there.
 type ClientRecord struct {
 	ClientID    string          `json:"client_id,omitempty"`
 	Certificate json.RawMessage `json:"certificate,omitempty"`
-	Admission   string          `json:"admission,omitempty"`
 }
 
 // ClientStore keeps this device's ClientRecord at one CYFR.
@@ -362,6 +363,7 @@ func (s *Shell) saveAttempt(a account.Attempt) error {
 
 // issued is what this CYFR's certificate says of this device's client.
 type issued struct {
+	Audience   string `json:"audience"`
 	Kid        string `json:"kid"`
 	Identifier string `json:"identifier"`
 	Athanor    string `json:"athanor"`
@@ -376,13 +378,15 @@ func readIssued(cert json.RawMessage) issued {
 	return i
 }
 
-// certified is whether the certificate held here is for this key and
-// account: one held for a key this machine no longer keeps is not used,
-// and the device says hello again.
+// certified is whether the certificate held here is for this CYFR's
+// address, this key and this account: one issued under the address CYFR
+// had before a change of address, or for a key this machine no longer
+// keeps, is not used, and the device says hello again.
 func (s *Shell) certified() bool {
 	i := readIssued(s.here.Certificate)
-	return len(s.here.Certificate) > 0 && i.Kid == account.Kid(s.rec.PublicKey) &&
-		i.Identifier == s.rec.Identifier && i.ClientID == s.here.ClientID
+	return len(s.here.Certificate) > 0 && i.Audience == s.cfg.Address &&
+		i.Kid == account.Kid(s.rec.PublicKey) && i.Identifier == s.rec.Identifier &&
+		i.ClientID == s.here.ClientID
 }
 
 func (s *Shell) binding() Binding {
@@ -872,13 +876,6 @@ func (s *Shell) submit(ctx context.Context) {
 	clear(m.key)
 	s.making, s.unfinished = nil, nil
 	_ = os.Remove(s.attemptPath())
-	if s.here.ClientID == "" {
-		s.here.Admission = "setup"
-		if err := s.cfg.Clients.Save(s.here); err != nil {
-			s.say("This %s could not keep that it made your account here (%v). Try again.", s.cfg.Noun, err)
-			return
-		}
-	}
 	s.firstConnection(ctx)
 }
 
@@ -973,6 +970,45 @@ func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 	s.firstConnection(ctx)
 }
 
+// CheckListed reads the log of the account the key's record names, before
+// an unlock asks for the PIN, as Enroll reads it. A log that no longer
+// lists the key (removed from the account, or replaced along with every
+// other key by a recovery) makes the record name no account and drops
+// the certificate held here, which that removal retired at this CYFR: the device shows its code again and waits to be approved as a
+// first enrollment does, with the same key, and says hello once listed.
+// A log that cannot be read, or an account that is gone, changes nothing:
+// the unlock goes on and the CYFR decides.
+func (s *Shell) CheckListed(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh()
+	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil || s.making != nil {
+		return
+	}
+	directory := s.rec.Directory
+	if directory == "" {
+		directory = s.cfg.Directory
+	}
+	state, err := account.Directory{URL: directory, Client: s.cfg.Client}.Read(ctx, s.rec.Identifier)
+	if err != nil {
+		return
+	}
+	if _, listed := state.Key(account.Kid(s.rec.PublicKey)); listed {
+		return
+	}
+	unlisted := *s.rec
+	unlisted.Identifier, unlisted.Directory = "", ""
+	if err := unlisted.Save(s.cfg.Record); err != nil {
+		s.say("Your account no longer lists this %s's key, and this %s could not keep that (%v). Try again.", s.cfg.Noun, s.cfg.Noun, err)
+		return
+	}
+	s.rec = &unlisted
+	if len(s.here.Certificate) > 0 {
+		s.forget()
+	}
+	s.say("Your account no longer lists this %s's key. Add the same key to your account again to go on.", s.cfg.Noun)
+}
+
 // Unlock opens the key with the PIN (or passphrase) and opens the channel.
 // A wrong PIN is said and never retried.
 func (s *Shell) Unlock(ctx context.Context, secret []byte) {
@@ -1000,8 +1036,9 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 
 // connect opens the channel under key and holds both: the device is
 // unlocked from here until a lock. A device this CYFR has not certified
-// says hello first; one whose standing ended here keeps no certificate, so
-// its next unlock says hello again.
+// says hello first, dropping a certificate it holds that it will not
+// present; one whose standing ended here keeps no certificate, so its
+// next unlock says hello again.
 func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	d := Dialer{Address: s.cfg.Address, Client: s.cfg.Client}
 	var ch *Channel
@@ -1009,8 +1046,11 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	if s.certified() {
 		ch, err = d.Open(ctx, Device{Binding: s.binding(), Certificate: s.here.Certificate}, key, s.report, s.renewed)
 	} else {
+		if len(s.here.Certificate) > 0 {
+			s.forget()
+		}
 		h := Hello{Key: s.rec.PublicKey, Identifier: s.rec.Identifier, HolderKind: string(s.rec.Kind),
-			DisplayName: s.cfg.DisplayName, Admission: s.admission()}
+			DisplayName: s.cfg.DisplayName, Admission: s.admission(ctx)}
 		ch, err = d.Hello(ctx, h, key, s.admitted, s.report, s.renewed)
 	}
 	if errors.Is(err, ErrRevoked) {
@@ -1027,13 +1067,13 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 
 // admission is the capability a first hello brings: none once this CYFR
 // admitted this device (the door decides), else the setup token (for a
-// SetupFromPage device, only after it made its account here), else the
+// device with SetupOpen, only while no one is set up), else the
 // invitation's code.
-func (s *Shell) admission() map[string]any {
+func (s *Shell) admission(ctx context.Context) map[string]any {
 	if s.here.ClientID != "" {
 		return nil
 	}
-	if t := s.cfg.Tokens(); t != "" && (!s.cfg.SetupFromPage || s.here.Admission == "setup") {
+	if t := s.cfg.Tokens(); t != "" && (s.cfg.SetupOpen == nil || s.cfg.SetupOpen(ctx)) {
 		return map[string]any{"setup": t}
 	}
 	if s.cfg.Invitation != "" {

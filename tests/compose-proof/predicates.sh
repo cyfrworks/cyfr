@@ -121,10 +121,10 @@ PY
 # port on this computer, the builds service; access.go changedRows), and,
 # as the address changes, the engine's address-change steps
 # (apps/codex/internal/access/switch.go addressChanges) and the line on
-# the CYFR identity; then one line, the command's refusal that it made no
-# change: the complete sentence apps/codex/cmd/access.go showUnconfirmed
-# returns, as the command line prints an error ("Error: ",
-# apps/codex/cmd/root.go).
+# accounts after them (AccountsUnchanged there); then one line, the
+# command's refusal that it made no change: the complete sentence
+# apps/codex/cmd/access.go showUnconfirmed returns, as the command line
+# prints an error ("Error: ", apps/codex/cmd/root.go).
 preview_holds() {
   python3 -I - "$ROOT/tests/fixtures/access_modes.json" "$ROOT/apps/codex/internal/access/switch.go" \
     "$ROOT/apps/codex/cmd/access.go" "$@" <<'PY'
@@ -166,10 +166,13 @@ listed = re.search(r"var addressChanges = \[\]string\{(.*?)\n\}", source, re.S)
 if not listed:
     sys.exit(print("switch.go holds no addressChanges list") or 1)
 changes = [json.loads(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"', listed.group(1))]
+accounts = re.search(r'^const AccountsUnchanged = ("(?:[^"\\]|\\.)*")$', source, re.M)
+if not accounts:
+    sys.exit(print("switch.go holds no AccountsUnchanged line") or 1)
 if was["address"] != now["address"]:
     block.append("The address changes, so:")
     block += [f"  {i}. {c}" for i, c in enumerate(changes, 1)]
-    block.append("Your CYFR identity does not change.")
+    block.append(json.loads(accounts.group(1)))
 GO_STRING = r'"(?:[^"\\]|\\.)*"'
 unconfirmed = re.search(r"^func showUnconfirmed\(.*?^\}$", open(access_go).read(), re.S | re.M)
 again = unconfirmed and re.search(r"^\tconst again = (" + GO_STRING + r")$", unconfirmed.group(0), re.M)

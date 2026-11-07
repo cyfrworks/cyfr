@@ -80,6 +80,7 @@ func (d *fakeDevice) Terms(context.Context) (*account.Policy, error) { return d.
 func (d *fakeDevice) Enroll(_ context.Context, name string, _ time.Duration) {
 	d.did("enroll", nil, name)
 }
+func (d *fakeDevice) CheckListed(context.Context)              { d.did("check", nil) }
 func (d *fakeDevice) Saved(_ context.Context, accepted string) { d.did("saved", nil, accepted) }
 func (d *fakeDevice) Resume(_ context.Context, code string)    { d.did("resume", []byte(code)) }
 func (d *fakeDevice) Unlock(_ context.Context, secret []byte)  { d.did("unlock", secret); clear(secret) }
@@ -178,7 +179,7 @@ func TestLoginDriver_ALaterRunAddsTheKeyAndAsksThePIN(t *testing.T) {
 	if err := (&loginDriver{sh: dev, c: c, mode: "login"}).run(t.Context()); err != nil {
 		t.Fatalf("run: %v\n%s", err, out)
 	}
-	if !slices.Equal(dev.calls, []string{"enroll", "unlock"}) || string(dev.secrets["unlock"]) != "123456" || !strings.Contains(out.String(), "PIN: ") {
+	if !slices.Equal(dev.calls, []string{"enroll", "check", "unlock"}) || string(dev.secrets["unlock"]) != "123456" || !strings.Contains(out.String(), "PIN: ") {
 		t.Fatalf("calls %v, secret %q\n%s", dev.calls, dev.secrets["unlock"], out)
 	}
 
@@ -191,6 +192,63 @@ func TestLoginDriver_ALaterRunAddsTheKeyAndAsksThePIN(t *testing.T) {
 	err := (&loginDriver{sh: waits, c: c, mode: "login"}).run(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "not on @mira's account yet") || !strings.Contains(err.Error(), "Run cyfr login to go on") || waits.locks != 1 {
 		t.Fatalf("an unapproved key: %v, locks %d", err, waits.locks)
+	}
+}
+
+// A key the account's log no longer lists is said so before any PIN is
+// asked: the same key's code, the QR code of the account page that adds
+// it, that address and the command that adds it from a terminal are shown
+// again, the name asked and the log waited on as a first enrollment does;
+// once listed, the log is read again and the PIN unlocks it.
+func TestLoginDriver_AKeyTheLogNoLongerListsIsAddedAgain(t *testing.T) {
+	const addURL = "https://cyfr.run/account/add#key=KEY&alg=ed25519&kind=device&code=0123456789abcdef"
+	checks := 0
+	dev := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, func(call string, d *fakeDevice) {
+		switch {
+		case call == "check" && checks == 0:
+			checks++
+			d.set(shell.View{Page: shell.PageEnroll, Code: "0123456789abcdef", AddURL: addURL, Key: "KEY", Kind: holder.KindChip,
+				Notice: "Your account no longer lists this command line's key. Add the same key to your account again to go on."})
+		case call == "enroll":
+			d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip})
+		case call == "unlock":
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	})
+	c, out := typed("@mira", "123456")
+	if err := (&loginDriver{sh: dev, c: c, mode: "login"}).run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"check", "enroll", "check", "unlock"}) || dev.given["enroll"] != "mira" || string(dev.secrets["unlock"]) != "123456" {
+		t.Fatalf("calls %v, enrolled %q, unlocked with %q", dev.calls, dev.given["enroll"], dev.secrets["unlock"])
+	}
+	printed := out.String()
+	said := strings.Index(printed, "Your account no longer lists this command line's key.")
+	code := strings.Index(printed, "Its code is 0123456789abcdef.")
+	if said < 0 || code < said || strings.Index(printed, "PIN: ") < code {
+		t.Errorf("the sentence, then the code, then the PIN, not:\n%s", printed)
+	}
+	for _, want := range []string{addURL, "cyfr device approve KEY", "▀", "Your name: @", "Waiting until your account lists"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("the output lacks %q:\n%s", want, printed)
+		}
+	}
+}
+
+// A key the account's log still lists goes straight to the PIN: no code,
+// no name, no wait.
+func TestLoginDriver_AListedKeyGoesStraightToThePIN(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, func(call string, d *fakeDevice) {
+		if call == "unlock" {
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	})
+	c, out := typed("123456")
+	if err := (&loginDriver{sh: dev, c: c, mode: "login"}).run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"check", "unlock"}) || strings.Contains(out.String(), "code is") || strings.Contains(out.String(), "Your name") {
+		t.Fatalf("calls %v\n%s", dev.calls, out)
 	}
 }
 
@@ -286,7 +344,7 @@ func TestLoginDriver_AnExistingKeyMakesTheAccountOrFinishesIt(t *testing.T) {
 	if err := (&loginDriver{sh: dev, c: c, mode: "setup", name: "mira"}).run(t.Context()); err != nil {
 		t.Fatalf("run: %v\n%s", err, out)
 	}
-	if !slices.Equal(dev.calls, []string{"create", "saved", "unlock"}) || dev.given["create"] != "mira|" {
+	if !slices.Equal(dev.calls, []string{"create", "saved", "check", "unlock"}) || dev.given["create"] != "mira|" {
 		t.Fatalf("calls %v, given %v", dev.calls, dev.given)
 	}
 
@@ -309,18 +367,20 @@ func TestLoginDriver_AnExistingKeyMakesTheAccountOrFinishesIt(t *testing.T) {
 // by itself; input that ends before an answer ends the run too.
 func TestLoginDriver_AFailureEndsWithItsSentenceAndLocks(t *testing.T) {
 	dev := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, func(call string, d *fakeDevice) {
-		d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip, Notice: "That is not this command line's PIN or passphrase. Nothing was sent anywhere."})
+		if call == "unlock" {
+			d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip, Notice: "That is not this command line's PIN or passphrase. Nothing was sent anywhere."})
+		}
 	})
 	c, _ := typed("000000", "123456")
 	d := &loginDriver{sh: dev, c: c, mode: "login", home: "https://alice.example"}
 	err := d.run(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "not this command line's PIN") || len(dev.calls) != 1 || dev.locks != 1 {
+	if err == nil || !strings.Contains(err.Error(), "not this command line's PIN") || !slices.Equal(dev.calls, []string{"check", "unlock"}) || dev.locks != 1 {
 		t.Fatalf("run: %v, calls %v, locks %d", err, dev.calls, dev.locks)
 	}
 
 	ended := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, nil)
 	c, _ = typed()
-	if err := (&loginDriver{sh: ended, c: c, mode: "login"}).run(t.Context()); !errors.Is(err, errInputEnded) || len(ended.calls) != 0 {
+	if err := (&loginDriver{sh: ended, c: c, mode: "login"}).run(t.Context()); !errors.Is(err, errInputEnded) || !slices.Equal(ended.calls, []string{"check"}) {
 		t.Fatalf("ended input: %v, calls %v", err, ended.calls)
 	}
 }

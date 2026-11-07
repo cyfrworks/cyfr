@@ -6,7 +6,9 @@ defmodule Sanctum.Providers.Pairing do
   The `pairing` tool: a person's paired clients in the athanor in focus,
   the devices of their account a hello paired here (`Sanctum.DeviceUnlock`)
   and the passkeys that signed in here: renew a paired device's
-  certificate; revoke one (`pairing_revocation`); and list them. Every
+  certificate; sign one out of this CYFR (`pairing_revocation`), which
+  ends its client here and leaves its key on the account, since only
+  removing a key from the account ends it everywhere; and list them. Every
   action is a person's, through an interactive surface (`consent:
   :interactive`); a proof is the field `proof`, which the redaction
   vocabulary (`Prima.Sanitizer`) keeps out of every log.
@@ -56,7 +58,7 @@ defmodule Sanctum.Providers.Pairing do
           planes: [:external],
           consent: :interactive
         ),
-        Operation.new("pairing", "revoke", "Revoke a paired device", [client_id()],
+        Operation.new("pairing", "revoke", "Sign a device out of this CYFR", [client_id()],
           reduces_authority: true,
           kind: :destructive,
           planes: [:external],
@@ -69,7 +71,7 @@ defmodule Sanctum.Providers.Pairing do
         )
       ],
       description:
-        "Your paired devices in the athanor in focus: renew or revoke a paired device, and list them.",
+        "Your paired devices in the athanor in focus: renew a device's certificate, sign one out of this CYFR, and list them.",
       title: "Paired Devices"
     )
   end

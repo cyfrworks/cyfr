@@ -4,6 +4,9 @@
 package shell
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/json"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -42,13 +45,13 @@ func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	b.now.Store(time.Now().UnixNano())
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
-		Directory:     home.accounts.URL(),
-		Tokens:        func() string { return home.setupToken },
-		SetupFromPage: true,
-		Restart:       func() { b.restarts.Add(1) },
-		Detect:        func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
-		Now:           func() time.Time { return time.Unix(0, b.now.Load()) },
-		Chip:          func() bool { return false },
+		Directory: home.accounts.URL(),
+		Tokens:    func() string { return home.setupToken },
+		SetupOpen: home.setupOpen,
+		Restart:   func() { b.restarts.Add(1) },
+		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
+		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
+		Chip:      func() bool { return false },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -361,6 +364,175 @@ func TestSetup_AnAccountOfYoursAddsThisBox(t *testing.T) {
 	}
 }
 
+// addedBox makes a box's key, adds it to identifier's account by dev, a
+// device the account lists, and answers the box with its passphrase and
+// key record, locked and never connected.
+func addedBox(t *testing.T, home *fakeHome, identifier string, dev ed25519.PrivateKey) (*box, string, *holder.Record) {
+	t.Helper()
+	b := newBox(t, home, t.TempDir())
+	p := b.shown()
+	b.post("/make", url.Values{"secret": {p}, "again": {p}})
+	rec, err := holder.Load(b.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home.approve(t, identifier, dev, rec.PublicKey)
+	b.post("/enroll", url.Values{"name": {"mira"}})
+	if !strings.Contains(b.page(), "CYFR is locked") {
+		t.Fatalf("the approved box is not locked:\n%s", b.page())
+	}
+	return b, p, rec
+}
+
+// removeKey removes pub from identifier's account, signed by dev, another
+// device the account lists, as the account pages remove a key.
+func removeKey(t *testing.T, home *fakeHome, identifier string, dev ed25519.PrivateKey, pub []byte) {
+	t.Helper()
+	state := home.accounts.State(t, identifier)
+	signer := dev.Public().(ed25519.PublicKey)
+	entry, err := account.Sign(account.Next(state, "remove_key", map[string]any{"kid": account.Kid(pub)},
+		time.Now().UnixMilli(), account.Kid(signer)), dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home.accounts.Append(t, identifier, entry)
+}
+
+// A key the account's log still lists unlocks as before: the screen reads
+// the log first, shows no code, keeps the record's account and goes
+// straight to the hello.
+func TestCheckListed_AListedKeyGoesStraightToTheHello(t *testing.T) {
+	home := newFakeHome(t)
+	identifier, dev, _ := home.account(t, "mira")
+	home.mu.Lock()
+	home.members[identifier] = true
+	home.mu.Unlock()
+	b, p, rec := addedBox(t, home, identifier, dev)
+
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	if after, _ := holder.Load(b.record); after.Identifier != identifier {
+		t.Fatalf("the record names %q after the unlock", after.Identifier)
+	}
+	if hellos := home.hellosSeen(); len(hellos) != 1 || hellos[0]["identifier"] != identifier || hellos[0]["kid"] != account.Kid(rec.PublicKey) {
+		t.Fatalf("hellos %v", hellos)
+	}
+}
+
+// A key removed from the account is said so at the screen's unlock,
+// before the key is opened: the record names no account, the certificate
+// the removal retired at this CYFR is dropped, nothing reaches CYFR, and
+// the same key's code, the address that adds it and the command are shown
+// again. Approved again and its name typed, the same key is listed, and
+// the unlock says hello and connects.
+func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
+	home := newFakeHome(t)
+	identifier, dev, _ := home.account(t, "mira")
+	home.mu.Lock()
+	home.members[identifier] = true
+	home.mu.Unlock()
+	b, p, rec := addedBox(t, home, identifier, dev)
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	b.post("/lock", nil)
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) == 0 {
+		t.Fatalf("the first hello left %+v", c)
+	}
+
+	// Another device of the person's removes the key, and the CYFR, once
+	// it reads the removal, retires the client.
+	removeKey(t, home, identifier, dev, rec.PublicKey)
+	home.revoke()
+
+	ops := len(home.opsSeen())
+	b.post("/unlock", url.Values{"secret": {p}})
+	code := account.ShortCode(account.Kid(rec.PublicKey))
+	page := b.page()
+	if !strings.Contains(page, "Your account no longer lists this screen's key.") || !strings.Contains(page, code) ||
+		!strings.Contains(page, "cyfr device approve "+b64(rec.PublicKey)) || !strings.Contains(page, "<svg") {
+		t.Fatalf("the removed key's page:\n%s", page)
+	}
+	if after, _ := holder.Load(b.record); after.Identifier != "" || after.Directory != "" || !bytes.Equal(after.PublicKey, rec.PublicKey) {
+		t.Fatalf("the record after the removal: %+v", after)
+	}
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
+		t.Fatalf("the client after the removal: %+v", c)
+	}
+	if len(home.hellosSeen()) != 1 || len(home.opsSeen()) != ops || b.shell.Unlocked() {
+		t.Fatal("the removed key reached CYFR")
+	}
+
+	home.approve(t, identifier, dev, rec.PublicKey)
+	b.post("/enroll", url.Values{"name": {"mira"}})
+	if page := b.page(); !strings.Contains(page, "CYFR is locked") {
+		t.Fatalf("the key added again:\n%s", page)
+	}
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	hellos := home.hellosSeen()
+	if len(hellos) != 2 || hellos[1]["identifier"] != identifier || hellos[1]["kid"] != account.Kid(rec.PublicKey) || hellos[1]["admission"] != nil {
+		t.Fatalf("hellos %v", hellos)
+	}
+	if after, _ := holder.Load(b.record); !bytes.Equal(after.PublicKey, rec.PublicKey) {
+		t.Fatal("the key was made again")
+	}
+}
+
+// A box added to an account of the person's says its first hello with
+// the setup token while no one is set up on the CYFR, since its first
+// person binds the installation whoever they are; on a CYFR someone is set
+// up on it brings nothing, and the door decides.
+func TestSetup_AnAddedBoxBringsTheTokenOnlyWhileNoOneIsSetUp(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		home := newFakeHome(t)
+		identifier, dev, _ := home.account(t, "mira")
+		if !open {
+			home.mu.Lock()
+			home.members[identifier] = true
+			home.mu.Unlock()
+		}
+		b := newBox(t, home, t.TempDir())
+		p := b.shown()
+		b.post("/make", url.Values{"secret": {p}, "again": {p}})
+		rec, _ := holder.Load(b.record)
+		home.approve(t, identifier, dev, rec.PublicKey)
+		b.post("/enroll", url.Values{"name": {"mira"}})
+		ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+		hellos := home.hellosSeen()
+		home.mu.Lock()
+		used := home.setupUsed
+		home.mu.Unlock()
+		admission, _ := hellos[0]["admission"].(map[string]any)
+		switch {
+		case len(hellos) != 1:
+			t.Fatalf("open %v: hellos %v", open, hellos)
+		case open && (admission["setup"] != home.setupToken || !used):
+			t.Fatalf("no one set up: the hello brought %v", hellos[0]["admission"])
+		case !open && (hellos[0]["admission"] != nil || used):
+			t.Fatalf("set up: the hello brought %v", hellos[0]["admission"])
+		}
+	}
+}
+
+// A box that makes its account on its setup page, on a CYFR someone is
+// set up on and whose door is open, says its first hello with no
+// capability: the setup token goes only while no one is set up, on every
+// path, and the door admits the new person.
+func TestSetup_ANewAccountOnASetUpCyfrBringsNoToken(t *testing.T) {
+	home := newFakeHome(t)
+	owner, _, _ := home.account(t, "owner")
+	home.mu.Lock()
+	home.members[owner] = true
+	home.setupUsed = true
+	home.openDoor = true
+	home.mu.Unlock()
+	b := newBox(t, home, t.TempDir())
+	b.setUp("alice")
+	answer := b.post("/saved", nil)
+	hellos := home.hellosSeen()
+	if len(hellos) != 1 || hellos[0]["admission"] != nil {
+		t.Fatalf("hellos %v", hellos)
+	}
+	ticketOf(t, answer, home)
+}
+
 // setUpAndOpen sets a box up through to Prism and answers its passphrase.
 func setUpAndOpen(t *testing.T, home *fakeHome, b *box) string {
 	t.Helper()
@@ -438,6 +610,54 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 		t.Fatalf("hellos %v", hellos)
 	}
 	_ = websocket.StatusNormalClosure
+}
+
+// A change of CYFR's address leaves the box a certificate for its old
+// address. The box does not present it, which the CYFR would answer with a
+// challenge for that address, but drops it and says hello again with no
+// capability, so the door admits it as it admits a terminal: refused, the
+// certificate stays dropped; admitted, the box holds one for the address
+// CYFR has now.
+func TestChannel_ACertificateForAnotherAddressIsDroppedForAHello(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	p := setUpAndOpen(t, home, b)
+	b.post("/lock", nil)
+	held := b.client()
+	var cert map[string]any
+	if err := json.Unmarshal(held.Certificate, &cert); err != nil {
+		t.Fatal(err)
+	}
+	cert["audience"] = "https://cyfr-old.example"
+	raw, _ := json.Marshal(cert)
+	if err := ClientFile(filepath.Join(b.dir, "client.json")).Save(ClientRecord{ClientID: held.ClientID, Certificate: raw}); err != nil {
+		t.Fatal(err)
+	}
+	home.mu.Lock()
+	home.clients[held.ClientID].cert = cert
+	identifier := home.clients[held.ClientID].identifier
+	home.members = map[string]bool{}
+	home.mu.Unlock()
+
+	// The screen starts again after the change of address.
+	b = newBox(t, home, b.dir)
+	b.post("/unlock", url.Values{"secret": {p}})
+	if c := b.client(); b.shell.Unlocked() || c.ClientID != held.ClientID || len(c.Certificate) != 0 {
+		t.Fatalf("a box the door refuses: unlocked %v, client %+v", b.shell.Unlocked(), c)
+	}
+
+	home.mu.Lock()
+	home.members[identifier] = true
+	home.mu.Unlock()
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	hellos := home.hellosSeen()
+	if len(hellos) != 3 || hellos[1]["admission"] != nil || hellos[2]["admission"] != nil {
+		t.Fatalf("hellos %v", hellos)
+	}
+	var now map[string]any
+	if err := json.Unmarshal(b.client().Certificate, &now); err != nil || now["audience"] != home.address() {
+		t.Fatalf("the box holds %v (%v)", now, err)
+	}
 }
 
 // A connection the network silently drops, the home still standing, locks

@@ -540,10 +540,10 @@ func answerResent(c access.RequestContent, id string, out io.Writer) (sent bool,
 
 // printPreview prints a change before it is made: who will reach CYFR and
 // where (reachedBy), each other setting that changes as before → after
-// (changedRows), and, when the address changes and someone may hold a
-// passkey or a paired device at the old one (consequences), what the
-// person must do. A reopen, the tailnet head .env holds already with Serve
-// closed, is the home served on the tailnet again.
+// (changedRows), and, when the address changes and someone may be set up
+// at the old one (consequences), what changes with it. A reopen, the
+// tailnet head .env holds already with Serve closed, is the home served on
+// the tailnet again.
 func printPreview(out io.Writer, p access.Preview, consequences bool) {
 	if p.Reopen {
 		// The head is .env's already: what changes is that the home is
@@ -560,7 +560,7 @@ func printPreview(out io.Writer, p access.Preview, consequences bool) {
 		for i, change := range p.AddressChanges {
 			fmt.Fprintf(out, "  %d. %s\n", i+1, change)
 		}
-		fmt.Fprintln(out, "Your CYFR identity does not change.")
+		fmt.Fprintln(out, access.AccountsUnchanged)
 	}
 }
 
@@ -643,7 +643,7 @@ var accessCmd = &cobra.Command{
   tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
   public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
 
-It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes for passkeys, paired devices and clients, unless no one is set up on CYFR yet. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
+It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes with it for browsers, command lines, OAuth apps, webhook senders and saved addresses, unless no one is set up on CYFR yet; accounts and their passkeys do not change. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
 When CYFR has tailnet access and its Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), 'cyfr access tailnet' serves it on the tailnet again: it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
 
@@ -739,10 +739,10 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	if err != nil {
 		return err
 	}
-	// Whether anyone can lose a passkey or a paired device to a new
-	// address: no one can on a CYFR that never booted, nor on one whose
-	// log says no one is set up (readSetUp). Read before the switch
-	// restarts cyfr; anything else keeps the list.
+	// Whether anyone can be signed in or connected at the old address: no
+	// one can on a CYFR that never booted, nor on one whose log says no
+	// one is set up (readSetUp). Read before the switch restarts cyfr;
+	// anything else keeps the list.
 	fresh, read := neverBooted(), setUpUnknown
 	if len(p.AddressChanges) > 0 && !fresh {
 		if head, herr := e.Head(); herr == nil {
@@ -786,19 +786,17 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 		}
 	}
 	// .env holds the new head now, CYFR started as it says or on this
-	// machine only: the screen follows it, and setup and the passkeys of a
-	// new address begin at its setup link.
+	// machine only: the screen follows it, and a CYFR no one is set up on
+	// is set up at the new address. One someone is set up on needs nothing
+	// more said: the preview listed what changes.
 	screenErr := followScreen()
 	if len(p.AddressChanges) > 0 {
 		values, _ := access.ReadEnvValues(".env")
-		link := hyperlink(out, setupLink(p.NewWords.Address, values))
 		switch {
 		case fresh:
-			fmt.Fprintln(out, upThenSetup(values, link))
+			fmt.Fprintln(out, upThenSetup(values, hyperlink(out, setupLink(p.NewWords.Address, values))))
 		case read == setUpNone:
 			setupNext(out, p.New)
-		case !headless(values):
-			fmt.Fprintf(out, "Passkeys made at the old address no longer sign anyone in. Open %s to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n", link)
 		}
 	}
 	return errors.Join(err, screenErr)

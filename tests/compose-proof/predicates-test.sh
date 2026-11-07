@@ -164,16 +164,17 @@ a='{"mode":"tailnet","host":"cyfr.proof.ts.net","port":4000,"public_url":"https:
 b='{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"nB","profiles":["tailnet"]}'
 changes="$(python3 -I -c '
 import json, re, sys
-m = re.search(r"var addressChanges = \[\]string\{(.*?)\n\}", open(sys.argv[1]).read(), re.S)
+source = open(sys.argv[1]).read()
+m = re.search(r"var addressChanges = \[\]string\{(.*?)\n\}", source, re.S)
 for i, s in enumerate(re.findall(r"\"(?:[^\"\\\\]|\\\\.)*\"", m.group(1)), 1):
-    print(f"  {i}. {json.loads(s)}")' "$ROOT/apps/codex/internal/access/switch.go")"
+    print(f"  {i}. {json.loads(s)}")
+print(json.loads(re.search(r"^const AccountsUnchanged = (\".*\")$", source, re.M).group(1)))' "$ROOT/apps/codex/internal/access/switch.go")"
 cat >"$scratch/preview" <<LOG
 \$ cyfr access tailnet
 CYFR will be reached by your devices on Tailscale at https://cyfr-1.proof.ts.net.
   Tailnet machine: cyfr.proof.ts.net → a new machine, cyfr-1.proof.ts.net
 The address changes, so:
 $changes
-Your CYFR identity does not change.
 Error: Nothing changed: there is no terminal to confirm the change on. Run it again with --yes to make the change, or at a terminal
 LOG
 expect pass "the complete preview of A to B" preview_holds "$scratch/preview" "$a" "$b"
@@ -189,7 +190,8 @@ mutate_preview '/  Tailnet machine:/d' no-machine "the tailnet machine's change 
 mutate_preview 's|a new machine, cyfr-1.proof.ts.net$|a new machine, cyfr-1.proof.ts.net (nB)|' node-id "the new node id shown"
 mutate_preview 's|by your devices on Tailscale|by anyone|' who "another audience shown"
 mutate_preview '/^  2\. /d' step "an address-change step dropped"
-mutate_preview '/^Your CYFR identity/a\  5. An extra step.' extra "a line added to the preview"
+mutate_preview '/^Accounts and their passkeys/a\  5. An extra step.' extra "a line added to the preview"
+mutate_preview '/^Accounts and their passkeys/d' accounts "the line on accounts dropped"
 # shellcheck disable=SC2016
 mutate_preview '$d' refusal "the refusal after it missing"
 # shellcheck disable=SC2016

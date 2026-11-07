@@ -396,8 +396,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "clock_skew_seconds" =>
       "How far a certificate's not-before or a signed message's time may sit from this CYFR's clock, in seconds; it never extends a certificate's expiry.",
     "confirmation_seconds" =>
-      "How long a pending confirmation of a sensitive change stays open, in seconds.",
-    "reauth_seconds" => "No sign-in or change reads it: a value set here changes nothing."
+      "How long a pending confirmation of a sensitive change stays open, in seconds."
   }
 
   @doc "Every platform setting, in the order the boot reads them."
@@ -736,8 +735,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         300,
         whole(1..3_600, "seconds"),
         :confirmation
-      ),
-      identity(:reauth_seconds, :duration_s, 300, whole(1..3_600, "seconds"), :confirmation)
+      )
     ]
     |> Enum.map(&%{&1 | doc: Map.fetch!(@setting_docs, &1.key)})
   end

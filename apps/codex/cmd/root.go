@@ -59,8 +59,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagContext, "context", "", "Use specific context")
 	rootCmd.PersistentFlags().BoolVar(&flagNoInteractive, "no-interactive", false, "Disable interactive prompts")
 	rootCmd.PersistentFlags().StringVar(&flagToken, "token", "",
-		"Bearer credential for this invocation (a cyfr_ API key or session token); "+
-			"overrides the stored one. CYFR_TOKEN works too — the non-interactive path for CI.")
+		"Bearer credential for this invocation, a cyfr_ API key; "+
+			"overrides the session of the shell cyfr login started. CYFR_TOKEN works too — the non-interactive path for CI.")
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "server", Title: "Server:"},
