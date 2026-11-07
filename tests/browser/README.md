@@ -150,6 +150,22 @@ helpers:
 | `virtualAuthenticator(page)` | Chromium's virtual WebAuthn authenticator: resident keys, user verification, presence simulated; `add` gives it a credential another one listed, as a synced passkey reaches another device; Firefox and WebKit offer none to Playwright, so a passkey ceremony is Chromium's |
 | `firstPasskey(page, { ask })` | a device-first person's first passkey from the Settings page `page` is on: the registration's own request is read, seen waiting, confirmed by the setup device through run.sh (`device_confirmed` in `harness.sh`, the release fixture's `device_confirm`, which alone reads the device's seed from the cell), and repeated; with `refusals`, the device's proof over another digest, another ref and by another key is refused first |
 
+`account.mjs` drives the account pages a directory serves
+(`/account/*`) and the CYFR pages that send the browser there, in
+Chromium with its virtual authenticator: `passkeys()` holds one person's
+passkeys and gives them to each page a ceremony runs in; `createAccount`
+makes an account at `/account/new` and reads the recovery code it shows
+(`readShownCode`, decoded by the bundle's own reader), and
+`continueToCyfr` answers the request a CYFR's "Create your account" sent
+along; `usePasskey` signs the request the sign page holds; `signIn` is a
+CYFR's sign-in, `confirmInTab` a confirmation the system layer opens in a
+new tab, and `landing` where a CYFR's page leaves the browser; `addDevice`
+adds a device at `/account/add` from its key and short code;
+`recoveryPage` and `devicesPage` change the account with a recovery code
+or a passkey, each step settling once the directory's log changed; and
+`readLog` reads an account's log as any reader does. Every proof that
+makes an account, signs in or confirms uses it.
+
 `device.mjs` is a test device: a client of a home's device channel a proof
 drives frame by frame, its key made in the proof's process and never sent
 anywhere. `newDevice()` makes the key and shows its `pub` and `kid`, which
@@ -158,9 +174,10 @@ with its hello, answers the sign-in request and connects under the
 certificate it is admitted with; `connectDevice()` and `channel()` open the
 channel (renewing a certificate the home will not take), whose `intent()`
 sends one intent, and whose log holds every frame by type and each close
-with its code. A proof uses it where the channel
-itself is what a step proves; a person's own command line is the real
-`cyfr` binary.
+with its code; `answer()` signs a request of the purpose it expects, a
+confirmation's among them. A proof uses it where the channel itself is
+what a step proves; a person's own command line is the real `cyfr`
+binary.
 
 The front answers the harness's own pages under `/__harness/` on every
 home, and no cell serves them: `page`, an empty document under no policy,
@@ -233,7 +250,7 @@ proof's own README holds how to run it and its steps.
 | containment (the hostile frame) | `tests/hostile-frame-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test` | Chromium, Firefox and WebKit; the pointer-lock attempt in Chromium alone | a; all three |
 | pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium | c; Chromium |
 | multi-home smoke | `tests/multi-home-smoke/` | two homes, `alpha.test` and `beta.test` | Chromium, Firefox and WebKit; the passkey in Chromium | d; all three |
-| identity | `tests/identity-proof/` | the homes `a.test`, `b.test`, `c.test`, `c2.test` and `c3.test`, and the directory `dir.test` | Chromium | b; Chromium |
+| identity | `tests/identity-proof/` | the directory `dir.test` and the home `a.test` | Chromium | b; Chromium |
 | join | `tests/join-proof/` | the homes `a.test`, `a2.test` and `h.test`, and the directories `dir.test` and `dir2.test` | Chromium; the sign-in at the hub, the carry and a second browser profile in Firefox and WebKit as well (`JOIN_PROOF_BROWSERS`) | b; Chromium |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium | d; Chromium |
 | shares | `tests/share-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 | d; Chromium, both viewports |

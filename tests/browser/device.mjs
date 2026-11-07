@@ -130,12 +130,13 @@ export function prove(device, challenge, expect) {
   return { ...challenge, sig: b64url(sig) };
 }
 
-// The device's answer to the CYFR's sign-in request `request`, held to
-// what this device asked for: Ed25519 over SHA-256 of the request's JCS
-// bytes, by this device's key, named by its kid.
-export function answer(device, request, { home }) {
-  if (request.purpose !== "sign_in") throw new Error(`the CYFR asked a ${request.purpose} request of a hello`);
-  if (request.audience !== home) throw new Error("the CYFR's sign-in request names another audience");
+// The device's answer to the CYFR's request `request` of the purpose it
+// expects (`sign_in` for a hello, `confirm` for a confirmation it was
+// asked to give), held to what this device asked for: Ed25519 over SHA-256
+// of the request's JCS bytes, by this device's key, named by its kid.
+export function answer(device, request, { home, purpose = "sign_in" }) {
+  if (request.purpose !== purpose) throw new Error(`the CYFR asked a ${request.purpose} request, not ${purpose}`);
+  if (request.audience !== home) throw new Error(`the CYFR's ${purpose} request names another audience`);
   const digest = createHash("sha256").update(canonical(request)).digest();
   return { challenge: request.challenge, kid: device.kid, sig: b64url(edSign(null, digest, device.privateKey)) };
 }
