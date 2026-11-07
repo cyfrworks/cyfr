@@ -814,9 +814,9 @@ every CYFR, as on any server; no key of theirs is held there, and nothing
 of theirs elsewhere moves:
 
 - **Letting them in.** The platform admin allows their name (`cyfr admin
-  allow @name`), anyone in a shared thread adds them to it the same way
-  (the thread's header, or `cyfr thread add`), or someone sends them an
-  invitation link; each keeps the identifier the name belongs to. The
+  allow @name`), and anyone in a shared thread adds them to it the same way
+  (the thread's header, or `cyfr thread add`), each keeping the identifier
+  the name belongs to; an invitation link from a thread does both at once. The
   command line also takes their person identifier, `per_…`, which their
   **Settings → Your name** shows. An identifier this CYFR has not admitted
   yet holds the seat until their first sign-in, and leaves a request for
