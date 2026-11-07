@@ -18,13 +18,13 @@ defmodule Arca.Schemas.PendingConfirmation do
   @type t :: %__MODULE__{}
 
   @states ~w(pending confirmed consumed cancelled voided expired)
-  @proofs ~w(passkey oidc_reauth email_code device home)
+  @proofs ~w(passkey device)
 
   @doc "The states a confirmation moves through; all but the first two are terminal."
   @spec states() :: [String.t()]
   def states, do: @states
 
-  @doc "The proofs a confirmation may be confirmed with."
+  @doc "The proofs a confirmation may be confirmed with: a key of the person's account."
   @spec proofs() :: [String.t()]
   def proofs, do: @proofs
 
@@ -46,9 +46,6 @@ defmodule Arca.Schemas.PendingConfirmation do
     field :state, :string, default: "pending"
     field :proof, :string
     field :confirmed_client_id, :string
-    field :reauth_nonce, :string
-    field :email_code_hash, :string, redact: true
-    field :email_code_failures, :integer, default: 0
     field :opened_at, :utc_datetime_usec
     field :expires_at, :utc_datetime_usec
     field :confirmed_at, :utc_datetime_usec

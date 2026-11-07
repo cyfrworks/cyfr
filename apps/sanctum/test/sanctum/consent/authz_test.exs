@@ -1499,17 +1499,10 @@ defmodule Sanctum.Consent.AuthzRaceTest do
   defp usec(%DateTime{microsecond: {us, _precision}} = at), do: %{at | microsecond: {us, 6}}
 
   # The device's context naming a record of its change, opened under it
-  # and proven: the person confirmed it with a code mailed to them.
+  # and proven: the person confirmed it with a passkey of their account.
   defp confirmed!(ctx) do
     {:error, {:confirmation_required, %{id: id}}} = Authz.check(ctx, :credential_entry, @change)
-
-    {:ok, %{state: "confirmed"}} =
-      Arca.PendingConfirmations.confirm(
-        Prima.Actor.in_athanor(ctx.athanor_id),
-        Prima.Confirmation.ref(id),
-        %{proof: "email_code"}
-      )
-
+    %{state: "confirmed"} = Sanctum.TestContext.prove!(ctx, id)
     %{ctx | confirmation_id: id}
   end
 

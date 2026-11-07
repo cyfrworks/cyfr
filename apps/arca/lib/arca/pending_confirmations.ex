@@ -16,7 +16,7 @@ defmodule Arca.PendingConfirmations do
   the deciding site builds it (`Prima.Confirmation.ref/1` of the secret
   its `confirmation_required` signal answered to the asking request). The
   secret is never stored and never an argument here but one: proving,
-  cancelling, holding a challenge and reading take the `ref`, which any
+  cancelling and reading take the `ref`, which any
   client of the person may know; consuming and checking take the secret,
   whose `ref` the store computes and looks the record up by. A `ref`
   presented as a secret names another record, so a client that learned a
@@ -49,8 +49,9 @@ defmodule Arca.PendingConfirmations do
       The count is read in the open's own transaction, so two opens racing
       on PostgreSQL may each find room: the bound is soft under concurrent
       opens, and the next open restores it.
-    * `confirm/3` records the proof (`passkey`, `oidc_reauth`,
-      `email_code`, `device` or `home`) and the paired client that gave
+    * `confirm/3` records the proof, a key of the person's account
+      answering the record's request (`passkey` or `device`), with that
+      key, the head it was verified under and the paired client that gave
       it, only while that client still stands, so a revocation that
       commits first leaves nothing to confirm with. It locks the client,
       then the record: the standing order (`Arca.SecurityTransitions`), so
@@ -65,17 +66,16 @@ defmodule Arca.PendingConfirmations do
       client confirmed, inside the transaction of the standing transition
       or the revocation that revokes it.
 
-  A record a key confirmed carries that key's `kid` and the account head
-  it was verified under (`head`), which must be the cached head of the
-  person's account when it is confirmed (`Arca.DirectoryHeads.fence!/2`,
+  A confirmed record carries the `kid` of the key that confirmed it and
+  the account head it was verified under (`head`), which must be the
+  cached head of the person's account when it is confirmed (`Arca.DirectoryHeads.fence!/2`,
   under the person's lock, the first of the standing order); the cached
   head's walk voids the open records a removed key confirmed, and a
   recovery every open record a key confirmed (`void_bound!/2`).
 
   Every function takes the actor first, and the athanor comes from the
-  actor. Confirming and holding a challenge prove first that this member
-  still owns its slot (`:not_owner`); consuming, cancelling and voiding
-  only narrow.
+  actor. Confirming proves first that this member still owns its slot
+  (`:not_owner`); consuming, cancelling and voiding only narrow.
   """
 
   import Ecto.Query
@@ -85,9 +85,8 @@ defmodule Arca.PendingConfirmations do
   alias Prima.Confirmation
   alias Prima.Confirmation.Preview
 
-  # Confirming, and holding the challenge a proof answers, widen what the
-  # record lets a change do, so their transaction first proves this member
-  # still owns its slot on the database's clock
+  # Confirming widens what the record lets a change do, so its transaction
+  # first proves this member still owns its slot on the database's clock
   # (`Arca.Repo.owned/2`): a stale owner confirms nothing.
 
   @open ~w(pending confirmed)
@@ -163,20 +162,15 @@ defmodule Arca.PendingConfirmations do
 
   @doc """
   Mark the pending record `ref` confirmed with `proof`: `:proof` is
-  `"passkey"`, `"oidc_reauth"`, `"email_code"`, `"device"` (a protected
-  device's signature over the record's digest, which names the client) or
-  `"home"` (a remote person's own home certifying their confirmation there,
-  `Prima.ConfirmationAssertion`, which names nothing here), and
-  `:client_id` names the paired client that gave it, which must still
-  stand. A key's proof (`passkey` or `device`) may name the account key
-  that signed, `:kid`, and the account head it was verified under,
-  `:head`, both or neither: the head must be the cached head of the
-  person's account (`:stale_head` otherwise). A passkey's proof names its
-  key and head. Succeeds once, before the record's expiry. Refusals:
-  `:not_pending`, `:expired`, `:not_found`, `:revoked` (the client no
-  longer stands),
-  `:stale_head`, `{:invalid, errors}`, `:not_owner`, `:no_athanor`,
-  `:database_error`.
+  `"passkey"` or `"device"` (a protected device's signature over the
+  record's request, which names the client), `:kid` the account key that
+  signed and `:head` the account head it was verified under, both
+  required, the head the cached head of the person's account
+  (`:stale_head` otherwise), and `:client_id` the paired client that gave
+  it, which must still stand. Succeeds once, before the record's expiry.
+  Refusals: `:not_pending`, `:expired`, `:not_found`, `:revoked` (the
+  client no longer stands), `:stale_head`, `{:invalid, errors}`,
+  `:not_owner`, `:no_athanor`, `:database_error`.
   """
   @spec confirm(Prima.Actor.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
   def confirm(%Prima.Actor{athanor_id: athanor_id} = actor, ref, proof)
@@ -296,84 +290,6 @@ defmodule Arca.PendingConfirmations do
   def list_open(%Prima.Actor{}, _user_id), do: {:error, :no_athanor}
 
   @doc """
-  Hold a re-authentication's nonce, or an email code's hash, on the
-  pending record `ref`, replacing any earlier one and resetting the code's
-  failure count; the record's expiry does not move. A held challenge is
-  what a proof answers, so this member first proves it still owns its
-  slot (`:not_owner`).
-  """
-  @spec put_challenge(Prima.Actor.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
-  def put_challenge(%Prima.Actor{athanor_id: athanor_id} = actor, ref, challenge)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(ref) and is_map(challenge) do
-    set =
-      case challenge do
-        %{reauth_nonce: nonce} when is_binary(nonce) and nonce != "" ->
-          [reauth_nonce: nonce]
-
-        %{email_code_hash: hash} when is_binary(hash) and hash != "" ->
-          [email_code_hash: hash, email_code_failures: 0]
-
-        _ ->
-          nil
-      end
-
-    if set do
-      Arca.Repo.owned("Arca.PendingConfirmations.put_challenge", fn ->
-        now = Arca.ServerMetaStorage.now!()
-
-        PendingConfirmation
-        |> QueryHelpers.where_tenant(actor)
-        |> where([c], c.ref == ^ref and c.state == "pending" and c.expires_at > ^now)
-        |> Arca.Repo.update_all(set: Keyword.put(set, :updated_at, now))
-        |> case do
-          {1, _} -> {:ok, Arca.Repo.get!(PendingConfirmation, ref)}
-          {0, _} -> {:error, :not_pending}
-        end
-      end)
-    else
-      {:error, {:invalid, %{challenge: ["is a reauth_nonce or an email_code_hash"]}}}
-    end
-  end
-
-  def put_challenge(%Prima.Actor{}, _ref, _challenge), do: {:error, :no_athanor}
-
-  @doc """
-  Count a wrong email code against the pending record `ref`: at `limit`
-  failures the record is cancelled. Answers the record as it stands after.
-  """
-  @spec count_code_failure(Prima.Actor.t(), String.t(), pos_integer()) ::
-          {:ok, row()} | {:error, term()}
-  def count_code_failure(%Prima.Actor{athanor_id: athanor_id} = actor, ref, limit)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(ref) and is_integer(limit) and
-             limit > 0 do
-    Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.count_code_failure", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        now = Arca.ServerMetaStorage.now!()
-
-        mine =
-          PendingConfirmation
-          |> QueryHelpers.where_tenant(actor)
-          |> where([c], c.ref == ^ref and c.state == "pending")
-
-        {_count, _} =
-          Arca.Repo.update_all(mine, inc: [email_code_failures: 1], set: [updated_at: now])
-
-        mine
-        |> where([c], c.email_code_failures >= ^limit)
-        |> Arca.Repo.update_all(set: [state: "cancelled", ended_at: now, updated_at: now])
-
-        case Arca.Repo.get(PendingConfirmation, ref) do
-          %PendingConfirmation{athanor_id: ^athanor_id} = row -> row
-          _ -> Arca.Repo.rollback(:not_found)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def count_code_failure(%Prima.Actor{}, _ref, _limit), do: {:error, :no_athanor}
-
-  @doc """
   The `Prima.Confirmation` a stored row records, rebuilt from its columns
   (its `id` the row's `ref`): the record whose digest the proof covers.
   """
@@ -479,7 +395,6 @@ defmodule Arca.PendingConfirmations do
       opener: opener,
       asker: asker,
       state: "pending",
-      email_code_failures: 0,
       opened_at: now,
       expires_at: DateTime.from_unix!(record.expires_at * 1000, :microsecond),
       inserted_at: now,
@@ -568,11 +483,8 @@ defmodule Arca.PendingConfirmations do
     end
   end
 
-  # A key's proof names the head it was verified under, read under the
-  # person's lock, the first of the standing order; a proof no key gave
-  # binds nothing.
-  defp fenced(_person, %{kid: nil}), do: :ok
-
+  # The proof names the head its key was verified under, read under the
+  # person's lock, the first of the standing order.
   defp fenced(person, %{head: head}) do
     with {:ok, _identifier} <- Arca.DirectoryHeads.fence!(person.user_id, head), do: :ok
   end
@@ -715,24 +627,19 @@ defmodule Arca.PendingConfirmations do
     if DateTime.compare(expires_at, now) == :gt, do: :ok, else: {:error, :expired}
   end
 
-  defp proof(%{proof: kind} = proof)
-       when kind in ~w(passkey oidc_reauth email_code device home) do
+  # Every proof is a key of the person's account: it names the key and the
+  # head it was verified under, which the fence holds to the cached head.
+  defp proof(%{proof: kind} = proof) when kind in ~w(passkey device) do
     client_id = Map.get(proof, :client_id)
     kid = Map.get(proof, :kid)
     head = Map.get(proof, :head)
 
     cond do
-      not key_binding?(kind, kid, head) ->
-        {:error, {:invalid, %{kid: ["a key's proof names its key and head, both or neither"]}}}
-
-      kind == "passkey" and is_nil(kid) ->
-        {:error, {:invalid, %{kid: ["a passkey's proof names its key and head"]}}}
+      not (Prima.Identity.Encoding.digest?(kid) and Prima.Identity.Encoding.digest?(head)) ->
+        {:error, {:invalid, %{kid: ["names the key that signed and the head, both"]}}}
 
       kind == "device" and not (is_binary(client_id) and client_id != "") ->
         {:error, {:invalid, %{client_id: ["names the device that signed"]}}}
-
-      kind == "home" and not is_nil(client_id) ->
-        {:error, {:invalid, %{client_id: ["a home's assertion names no client here"]}}}
 
       not (is_nil(client_id) or (is_binary(client_id) and client_id != "")) ->
         {:error, {:invalid, %{client_id: ["is malformed"]}}}
@@ -742,15 +649,7 @@ defmodule Arca.PendingConfirmations do
     end
   end
 
-  defp proof(_proof),
-    do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth, email_code, device or home"]}}}
-
-  defp key_binding?(_kind, nil, nil), do: true
-
-  defp key_binding?(kind, kid, head) when kind in ~w(passkey device),
-    do: Prima.Identity.Encoding.digest?(kid) and Prima.Identity.Encoding.digest?(head)
-
-  defp key_binding?(_kind, _kid, _head), do: false
+  defp proof(_proof), do: {:error, {:invalid, %{proof: ["is passkey or device"]}}}
 
   defp opener?(opener),
     do: is_binary(opener) and byte_size(opener) > 0 and byte_size(opener) <= 255
