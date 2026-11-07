@@ -401,3 +401,54 @@ func TestAccessRewritesTheScreensFiles(t *testing.T) {
 		}
 	}
 }
+
+// The box's screen reads whether no one is set up from cyfr's log since
+// its start, under the stack's lock as cyfr setup does, and brings the
+// setup token on an added box's first hello only then: the boot's
+// not-set-up line with no set-up line after it is open; a set-up line
+// after it, a log with neither, one that cannot be read, or a lock another
+// command holds is not.
+func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
+	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
+	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
+	for _, c := range []struct {
+		name, log, exit string
+		want            bool
+	}{
+		{"no one set up", "booting\n" + notSetUp, "0", true},
+		{"set up since the boot", notSetUp + setUp, "0", false},
+		{"set up at the boot", "booting\n", "0", false},
+		{"a log unread", notSetUp, "1", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.answer("ps.out", "c0ffee\n")
+			s.answer("inspect.out", "2026-10-28T00:01:02.123456789Z\n")
+			s.answer("logs.out", c.log)
+			s.answer("logs.exit", c.exit)
+			if got := screenSetupOpen(t.Context()); got != c.want {
+				t.Errorf("setup open %v, want %v", got, c.want)
+			}
+		})
+	}
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.answer("ps.out", "c0ffee\n")
+	s.answer("inspect.out", "2026-10-28T00:01:02.123456789Z\n")
+	s.answer("logs.out", "booting\n"+notSetUp)
+	s.answer("logs.exit", "0")
+	e, err := openEngine(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := e.Lock("access tailnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if screenSetupOpen(t.Context()) {
+		t.Error("setup read as open under a lock another command holds")
+	}
+	unlock()
+	if screenShellConfig(t.TempDir(), "http://localhost:4000", nil, "box", func() {}).SetupOpen == nil {
+		t.Error("the screen's shell does not read whether setup is open")
+	}
+}

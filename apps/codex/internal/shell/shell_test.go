@@ -5,6 +5,7 @@ package shell
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"html"
@@ -37,6 +38,9 @@ type box struct {
 	record   string
 	restarts atomic.Int32
 	now      atomic.Int64
+	// setupOpen is whether no one is set up on the CYFR yet, as the
+	// screen reads it; false unless a test says otherwise.
+	setupOpen atomic.Bool
 }
 
 func newBox(t *testing.T, home *fakeHome, dir string) *box {
@@ -45,13 +49,13 @@ func newBox(t *testing.T, home *fakeHome, dir string) *box {
 	b.now.Store(time.Now().UnixNano())
 	sh, err := New(Config{
 		Address: home.address(), Client: home.srv.Client(), Record: b.record, DataDir: dir,
-		Directory:     home.accounts.URL(),
-		Tokens:        func() string { return home.setupToken },
-		SetupFromPage: true,
-		Restart:       func() { b.restarts.Add(1) },
-		Detect:        func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
-		Now:           func() time.Time { return time.Unix(0, b.now.Load()) },
-		Chip:          func() bool { return false },
+		Directory: home.accounts.URL(),
+		Tokens:    func() string { return home.setupToken },
+		SetupOpen: func(context.Context) bool { return b.setupOpen.Load() },
+		Restart:   func() { b.restarts.Add(1) },
+		Detect:    func(string) disk.Report { return disk.Report{Root: disk.Encrypted, Data: disk.Unencrypted} },
+		Now:       func() time.Time { return time.Unix(0, b.now.Load()) },
+		Chip:      func() bool { return false },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -472,6 +476,43 @@ func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
 	}
 	if after, _ := holder.Load(b.record); !bytes.Equal(after.PublicKey, rec.PublicKey) {
 		t.Fatal("the key was made again")
+	}
+}
+
+// A box added to an account of the person's says its first hello with
+// the setup token while no one is set up on the CYFR, since its first
+// person binds the installation whoever they are; on a CYFR someone is set
+// up on it brings nothing, and the door decides.
+func TestSetup_AnAddedBoxBringsTheTokenOnlyWhileNoOneIsSetUp(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		home := newFakeHome(t)
+		identifier, dev, _ := home.account(t, "mira")
+		if !open {
+			home.mu.Lock()
+			home.members[identifier] = true
+			home.mu.Unlock()
+		}
+		b := newBox(t, home, t.TempDir())
+		b.setupOpen.Store(open)
+		p := b.shown()
+		b.post("/make", url.Values{"secret": {p}, "again": {p}})
+		rec, _ := holder.Load(b.record)
+		home.approve(t, identifier, dev, rec.PublicKey)
+		b.post("/enroll", url.Values{"name": {"mira"}})
+		ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+		hellos := home.hellosSeen()
+		home.mu.Lock()
+		used := home.setupUsed
+		home.mu.Unlock()
+		admission, _ := hellos[0]["admission"].(map[string]any)
+		switch {
+		case len(hellos) != 1:
+			t.Fatalf("open %v: hellos %v", open, hellos)
+		case open && (admission["setup"] != home.setupToken || !used):
+			t.Fatalf("no one set up: the hello brought %v", hellos[0]["admission"])
+		case !open && (hellos[0]["admission"] != nil || used):
+			t.Fatalf("set up: the hello brought %v", hellos[0]["admission"])
+		}
 	}
 }
 
