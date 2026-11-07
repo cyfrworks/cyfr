@@ -58,7 +58,7 @@ The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what cha
 3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Write the release's scaffold files and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of either puts the scaffold files back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
+6. Write the release's scaffold files, remove from .env each setting the release this CYFR ran shipped in its .env.example that this release's .env.example no longer declares (read from both releases' verified scaffolds, the names said; a setting the old .env.example never shipped is yours and stays), and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
 
 The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
@@ -302,6 +302,7 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 type scaffoldRelease interface {
 	Managed() []string
 	Write(overwriteManaged bool) error
+	File(name string) ([]byte, bool)
 }
 
 // updater carries one update's state from step to step.
@@ -331,6 +332,11 @@ type updater struct {
 	// scaffold is the release's scaffold, written only after the snapshot
 	// holds every file of it that it manages.
 	scaffold scaffoldRelease
+	// retired are the settings .env loses at the switch (planEnv), and
+	// envChanged whether the switch removed them, so a revert puts .env
+	// back from the snapshot.
+	retired    []string
+	envChanged bool
 	// offlineEnv are the settings each offline eval sets in its one-off
 	// container: a restore's lifts its own bar (restoreBarrier).
 	offlineEnv []string
@@ -386,6 +392,9 @@ func (u *updater) run() error {
 	}
 	if u.ctx.Err() != nil {
 		return u.restartOld(errors.New("cyfr update was interrupted during the offline roster read"))
+	}
+	if err := u.planEnv(); err != nil {
+		return u.restartOld(err)
 	}
 	if err := u.takeSnapshot(); err != nil {
 		where := "no snapshot directory was made"
@@ -1377,12 +1386,69 @@ func (u *updater) fetchScaffold() error {
 	return nil
 }
 
-// writeScaffold writes the release's scaffold files over the project's.
+// writeScaffold writes the release's scaffold files over the project's,
+// then removes from .env the settings the release retired (planEnv).
 func (u *updater) writeScaffold() error {
 	if err := u.scaffold.Write(true); err != nil {
 		return fmt.Errorf("Writing the scaffold files failed (%v)", err)
 	}
 	fmt.Fprintf(u.out, "Scaffold files updated (%s, wit/, aqua/).\n", strings.Join(scaffold.Guides, ", "))
+	if len(u.retired) == 0 {
+		return nil
+	}
+	u.envChanged = true
+	if err := access.EditEnvFile(".env", nil, u.retired); err != nil {
+		return fmt.Errorf("Removing the settings release %s no longer reads from .env failed (%v)", u.version, err)
+	}
+	fmt.Fprintf(u.out, "Removed from .env the settings release %s shipped and release %s no longer reads: %s.\n",
+		u.oldRelease, u.version, strings.Join(u.retired, ", "))
+	return nil
+}
+
+// envName is a setting's name as a .env.example declares it, set or
+// commented out: a person may set a commented one.
+var envName = regexp.MustCompile(`(?m)^[ \t]*#?[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=`)
+
+func envNames(example []byte) map[string]bool {
+	names := map[string]bool{}
+	for _, m := range envName.FindAllSubmatch(example, -1) {
+		names[string(m[1])] = true
+	}
+	return names
+}
+
+// planEnv names the settings .env loses at the switch: each one the
+// release this CYFR runs shipped in its .env.example that the new
+// release's .env.example no longer declares, set or commented, since the
+// new server refuses to boot on a name it does not read. A name the old
+// .env.example never shipped is the person's, kept whatever its value. Both
+// .env.example files are read from the releases' scaffolds, which their
+// signed checksums verify; a CYFR on no release version, or on this one,
+// loses nothing.
+func (u *updater) planEnv() error {
+	if !release.IsVersion(u.oldRelease) || u.oldRelease == u.version {
+		return nil
+	}
+	shipped, err := fetchScaffold(u.oldRelease)
+	if err != nil {
+		return fmt.Errorf("cyfr update could not fetch the scaffold files of release %s, which name the settings it shipped in .env.example (%v)", u.oldRelease, err)
+	}
+	old, oldOK := shipped.File(".env.example")
+	now, nowOK := u.scaffold.File(".env.example")
+	if !oldOK || !nowOK {
+		return nil
+	}
+	held, err := access.ReadEnvValues(".env")
+	if err != nil {
+		return fmt.Errorf("cyfr update could not read .env (%v)", err)
+	}
+	declared := envNames(now)
+	for name := range envNames(old) {
+		if _, set := held[name]; set && !declared[name] {
+			u.retired = append(u.retired, name)
+		}
+	}
+	slices.Sort(u.retired)
 	return nil
 }
 
@@ -1391,6 +1457,15 @@ func (u *updater) writeScaffold() error {
 // scaffold files it cannot put back leave the stack stopped, since the old
 // stack must not start under the new release's files.
 func (u *updater) revertScaffold(reason error) error {
+	if u.envChanged {
+		data, err := os.ReadFile(filepath.Join(u.snapshot, ".env"))
+		if err == nil {
+			err = writeFileAtomic(".env", data, 0600)
+		}
+		if err != nil {
+			return fmt.Errorf("%v.\n.env could not be put back from the snapshot (%v), so the stack is left stopped; restore the snapshot with:\n  cyfr restore %s", u.redactor().Text(reason.Error()), err, u.snapshot)
+		}
+	}
 	if err := putScaffoldBack(u.snapshot, u.scaffold.Managed()); err != nil {
 		return fmt.Errorf("%v.\nThe scaffold files could not be put back from the snapshot (%v), so the stack is left stopped; restore the snapshot with:\n  cyfr restore %s", u.redactor().Text(reason.Error()), err, u.snapshot)
 	}

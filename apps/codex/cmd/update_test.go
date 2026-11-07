@@ -406,6 +406,9 @@ type updateScenario struct {
 	// scaffoldFail names the scaffold file whose write fails, the files
 	// before it written.
 	scaffoldFail string
+	// examples are the .env.example each release's scaffold ships, by
+	// version; a release with none ships none.
+	examples map[string]string
 }
 
 // The scaffold files the scenarios' release manages: two the project
@@ -422,9 +425,21 @@ var (
 	}
 )
 
-// fakeScaffold is the scenarios' release scaffold: Write writes
-// newScaffold into the project for real, logging SCAFFOLD WRITE.
-type fakeScaffold struct{ s *updateScenario }
+// fakeScaffold is the scenarios' scaffold of release v: Write writes
+// newScaffold into the project for real, logging SCAFFOLD WRITE, and File
+// answers the .env.example the scenario gives v.
+type fakeScaffold struct {
+	s *updateScenario
+	v string
+}
+
+func (f fakeScaffold) File(name string) ([]byte, bool) {
+	example, ok := f.s.examples[f.v]
+	if name != ".env.example" || !ok {
+		return nil, false
+	}
+	return []byte(example), true
+}
 
 func (f fakeScaffold) Managed() []string {
 	var names []string
@@ -544,7 +559,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	fetchScaffold = func(v string) (scaffoldRelease, error) {
 		s.scaffold++
 		s.logLine("SCAFFOLD FETCH " + v)
-		return fakeScaffold{s}, nil
+		return fakeScaffold{s, v}, nil
 	}
 	updateNow = func() time.Time { return takenAt }
 	liveSlotsWindow, liveSlotsPoll = 400*time.Millisecond, 20*time.Millisecond
@@ -769,6 +784,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles + "stop",
 		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
 		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
+		"SCAFFOLD FETCH 0.8.0",
 		"SCAFFOLD WRITE",
 		"ENGINE start update",
 		profiles + "up -d",
@@ -1889,6 +1905,67 @@ func TestUpdateSnapshotsNestedMountsInAnyOrder(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(s.snapshotDir(), "storage", rel)); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("storage/%s, a covered file, is in the snapshot (%v)", rel, err)
 		}
+	}
+}
+
+// The settings the release this CYFR runs shipped in its .env.example, set
+// or commented, that the new release's .env.example no longer declares
+// leave .env at the switch, named and never shown with their values: the
+// new server refuses to boot on a name it does not read. A setting both
+// releases declare stays, a commented one too, and so does every name the
+// old .env.example never shipped, the person's own. The snapshot keeps .env
+// as it stood, and a switch that fails puts it back.
+func TestUpdateRemovesTheSettingsTheReleaseRetired(t *testing.T) {
+	examples := map[string]string{
+		"0.8.0": "# Shipped.\nCYFR_KEPT=\nCYFR_RETIRED=\n# CYFR_RETIRED_COMMENTED=postgres\nCYFR_NOW_COMMENTED=\n",
+		"0.9.0": "CYFR_KEPT=\n# CYFR_NOW_COMMENTED=\nCYFR_ADDED=\n",
+	}
+	env := scenarioEnv + "CYFR_KEPT=1\nCYFR_RETIRED=secret-value\nCYFR_RETIRED_COMMENTED=2\nCYFR_NOW_COMMENTED=3\nCYFR_MINE=4\n"
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.examples = examples
+	s.edit(".env", env)
+	out, err := s.run(context.Background())
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	got, err := access.ReadEnvValues(filepath.Join(s.project, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"CYFR_RETIRED", "CYFR_RETIRED_COMMENTED"} {
+		if _, held := got[name]; held {
+			t.Errorf("%s, retired by 0.9.0, is still in .env", name)
+		}
+	}
+	for name, value := range map[string]string{"CYFR_KEPT": "1", "CYFR_NOW_COMMENTED": "3", "CYFR_MINE": "4", "CYFR_ACCESS": "public"} {
+		if got[name] != value {
+			t.Errorf("%s is %q, want %q kept", name, got[name], value)
+		}
+	}
+	if !strings.Contains(out, "Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_RETIRED, CYFR_RETIRED_COMMENTED.") ||
+		strings.Contains(out, "secret-value") {
+		t.Errorf("the update did not say what it removed, or showed a value:\n%s", out)
+	}
+	if kept := read(t, filepath.Join(s.snapshotDir(), ".env")); kept != env {
+		t.Errorf("the snapshot's .env is %q, not .env as it stood", kept)
+	}
+
+	failed := newUpdateScenario(t, shippedCompose(t), nil)
+	failed.examples = examples
+	failed.edit(".env", env)
+	failed.answer("stop-cyfr.edit", "# edited while the update ran\n")
+	if _, err := failed.run(context.Background()); err == nil {
+		t.Fatal("a switch over an edited compose file did not fail")
+	}
+	if back := read(t, filepath.Join(failed.project, ".env")); back != env {
+		t.Errorf("a failed switch left .env as %q, not put back", back)
+	}
+
+	same := newUpdateScenario(t, shippedCompose(t), nil)
+	same.examples = map[string]string{"0.8.0": examples["0.9.0"], "0.9.0": examples["0.9.0"]}
+	same.edit(".env", env)
+	if out, err := same.run(context.Background()); err != nil || strings.Contains(out, "Removed from .env") {
+		t.Fatalf("releases that ship the same names removed something: %v\n%s", err, out)
 	}
 }
 
