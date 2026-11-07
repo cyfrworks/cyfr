@@ -973,6 +973,45 @@ func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
 	s.firstConnection(ctx)
 }
 
+// CheckListed reads the log of the account the key's record names, before
+// an unlock asks for the PIN, as Enroll reads it. A log that no longer
+// lists the key (removed from the account, or replaced along with every
+// other key by a recovery) makes the record name no account and drops
+// the certificate held here, which that removal retired at this CYFR: the device shows its code again and waits to be approved as a
+// first enrollment does, with the same key, and says hello once listed.
+// A log that cannot be read, or an account that is gone, changes nothing:
+// the unlock goes on and the CYFR decides.
+func (s *Shell) CheckListed(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh()
+	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil || s.making != nil {
+		return
+	}
+	directory := s.rec.Directory
+	if directory == "" {
+		directory = s.cfg.Directory
+	}
+	state, err := account.Directory{URL: directory, Client: s.cfg.Client}.Read(ctx, s.rec.Identifier)
+	if err != nil {
+		return
+	}
+	if _, listed := state.Key(account.Kid(s.rec.PublicKey)); listed {
+		return
+	}
+	unlisted := *s.rec
+	unlisted.Identifier, unlisted.Directory = "", ""
+	if err := unlisted.Save(s.cfg.Record); err != nil {
+		s.say("Your account no longer lists this %s's key, and this %s could not keep that (%v). Try again.", s.cfg.Noun, s.cfg.Noun, err)
+		return
+	}
+	s.rec = &unlisted
+	if len(s.here.Certificate) > 0 {
+		s.forget()
+	}
+	s.say("Your account no longer lists this %s's key. Add the same key to your account again to go on.", s.cfg.Noun)
+}
+
 // Unlock opens the key with the PIN (or passphrase) and opens the channel.
 // A wrong PIN is said and never retried.
 func (s *Shell) Unlock(ctx context.Context, secret []byte) {

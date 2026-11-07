@@ -4,6 +4,8 @@
 package shell
 
 import (
+	"bytes"
+	"crypto/ed25519"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -358,6 +360,117 @@ func TestSetup_AnAccountOfYoursAddsThisBox(t *testing.T) {
 	home.mu.Unlock()
 	if used {
 		t.Fatal("the setup token was spent by a box added to an existing account")
+	}
+}
+
+// addedBox makes a box's key, adds it to identifier's account by dev, a
+// device the account lists, and answers the box with its passphrase and
+// key record, locked and never connected.
+func addedBox(t *testing.T, home *fakeHome, identifier string, dev ed25519.PrivateKey) (*box, string, *holder.Record) {
+	t.Helper()
+	b := newBox(t, home, t.TempDir())
+	p := b.shown()
+	b.post("/make", url.Values{"secret": {p}, "again": {p}})
+	rec, err := holder.Load(b.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home.approve(t, identifier, dev, rec.PublicKey)
+	b.post("/enroll", url.Values{"name": {"mira"}})
+	if !strings.Contains(b.page(), "CYFR is locked") {
+		t.Fatalf("the approved box is not locked:\n%s", b.page())
+	}
+	return b, p, rec
+}
+
+// removeKey removes pub from identifier's account, signed by dev, another
+// device the account lists, as the account pages remove a key.
+func removeKey(t *testing.T, home *fakeHome, identifier string, dev ed25519.PrivateKey, pub []byte) {
+	t.Helper()
+	state := home.accounts.State(t, identifier)
+	signer := dev.Public().(ed25519.PublicKey)
+	entry, err := account.Sign(account.Next(state, "remove_key", map[string]any{"kid": account.Kid(pub)},
+		time.Now().UnixMilli(), account.Kid(signer)), dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home.accounts.Append(t, identifier, entry)
+}
+
+// A key the account's log still lists is left as it is before an unlock:
+// no code is shown, the record keeps its account, and the unlock goes
+// straight to the hello.
+func TestCheckListed_AListedKeyGoesStraightToTheHello(t *testing.T) {
+	home := newFakeHome(t)
+	identifier, dev, _ := home.account(t, "mira")
+	home.mu.Lock()
+	home.members[identifier] = true
+	home.mu.Unlock()
+	b, p, rec := addedBox(t, home, identifier, dev)
+
+	b.shell.CheckListed(t.Context())
+	if page := b.page(); !strings.Contains(page, "CYFR is locked") || strings.Contains(page, "no longer lists") {
+		t.Fatalf("a listed key's page:\n%s", page)
+	}
+	if after, _ := holder.Load(b.record); after.Identifier != identifier {
+		t.Fatalf("the record names %q after the check", after.Identifier)
+	}
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	if hellos := home.hellosSeen(); len(hellos) != 1 || hellos[0]["identifier"] != identifier || hellos[0]["kid"] != account.Kid(rec.PublicKey) {
+		t.Fatalf("hellos %v", hellos)
+	}
+}
+
+// A key removed from the account is said so before any PIN is asked: the
+// record names no account, the certificate the removal retired at this
+// CYFR is dropped, and the same key's code, the address that adds it and
+// the command are shown again. Approved again and its name typed, the
+// same key is listed, and the unlock says hello and connects.
+func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
+	home := newFakeHome(t)
+	identifier, dev, _ := home.account(t, "mira")
+	home.mu.Lock()
+	home.members[identifier] = true
+	home.mu.Unlock()
+	b, p, rec := addedBox(t, home, identifier, dev)
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	b.post("/lock", nil)
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) == 0 {
+		t.Fatalf("the first hello left %+v", c)
+	}
+
+	// Another device of the person's removes the key, and the CYFR, once
+	// it reads the removal, retires the client.
+	removeKey(t, home, identifier, dev, rec.PublicKey)
+	home.revoke()
+
+	b.shell.CheckListed(t.Context())
+	code := account.ShortCode(account.Kid(rec.PublicKey))
+	page := b.page()
+	if !strings.Contains(page, "Your account no longer lists this screen's key.") || !strings.Contains(page, code) ||
+		!strings.Contains(page, "cyfr device approve "+b64(rec.PublicKey)) || !strings.Contains(page, "<svg") {
+		t.Fatalf("the removed key's page:\n%s", page)
+	}
+	if after, _ := holder.Load(b.record); after.Identifier != "" || after.Directory != "" || !bytes.Equal(after.PublicKey, rec.PublicKey) {
+		t.Fatalf("the record after the removal: %+v", after)
+	}
+	if c := b.client(); c.ClientID != "pcl_1" || len(c.Certificate) != 0 {
+		t.Fatalf("the client after the removal: %+v", c)
+	}
+
+	home.approve(t, identifier, dev, rec.PublicKey)
+	b.post("/enroll", url.Values{"name": {"mira"}})
+	b.shell.CheckListed(t.Context())
+	if page := b.page(); !strings.Contains(page, "CYFR is locked") || strings.Contains(page, "no longer lists") {
+		t.Fatalf("the key added again:\n%s", page)
+	}
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	hellos := home.hellosSeen()
+	if len(hellos) != 2 || hellos[1]["identifier"] != identifier || hellos[1]["kid"] != account.Kid(rec.PublicKey) || hellos[1]["admission"] != nil {
+		t.Fatalf("hellos %v", hellos)
+	}
+	if !b.shell.Unlocked() {
+		t.Fatal("the key added again did not connect")
 	}
 }
 
