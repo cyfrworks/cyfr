@@ -20,7 +20,7 @@
 #            running cell's one slot under this release, and none once the
 #            cell has stopped. Then a public home `cyfr access public
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
-#            (`Sanctum.Person.home()`), with nothing written for it but the
+#            (`Sanctum.origin()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
 #
 #   headless a headless cell (`CYFR_HEADLESS=on`) whose deployment file
@@ -94,12 +94,14 @@
 #            in that container (the host's own `/usr` and this checkout's
 #            release, so the same binaries), and the host reads and fills
 #            the tmpfs through the container's root (`/proc/<pid>/root`).
-#            The cell boots holding its reserve file, a person pairs a
-#            device, and the filesystem is filled below the mark: the cell
-#            latches `depleted` and frees the file, a note write is
-#            refused, and the device's revocation is opened, read by its
-#            request, proven and committed through the gate, and is still
-#            there once the cell, still depleted, has restarted.
+#            The cell boots holding its reserve file, its first person is
+#            set up with a paired device (the release fixture's `person`),
+#            and the filesystem is filled below the mark: the cell latches
+#            `depleted` and frees the file, a note write is refused, and the
+#            device's revocation is opened, listed, confirmed by that
+#            device's answer to the CYFR's request and committed through
+#            the gate, and is still there once the cell, still depleted,
+#            has restarted.
 #
 # Nothing else boots a release: the suite starts the application under its
 # test configuration, which migrates nothing and reads no `.env`, so a boot
@@ -464,10 +466,10 @@ fi
 cell_new "$ADDRESS" "$ADDRESS_URL"
 cell_hostname "$ADDRESS" cyfr.example.com
 server_start "$ADDRESS"
-home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.Person.home())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
+home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.origin())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
 [ "$home" = "https://cyfr.example.com" ] ||
   fail "the home given cyfr.example.com answers as '$home', not https://cyfr.example.com"
-echo "Sanctum.Person.home() -> $home"
+echo "Sanctum.origin() -> $home"
 # The listener its TLS front forwards to, as a front forwards.
 proxied="$(curl -sS -m 10 -o "$ADDRESS/proxied.json" -w '%{http_code}' \
   -H 'host: cyfr.example.com' -H 'x-forwarded-proto: https' -H 'x-forwarded-for: 127.0.0.1' \
@@ -1198,80 +1200,36 @@ reserve_holder() {
 }
 
 # What the reserve case asks of the running cell, evaluated in it by
-# `bin/cyfr rpc` (`cell_fixture`): the software passkey and the pairing
-# ceremony are the suite's own (`Sanctum.TestContext`, loaded from the
-# checkout), every change goes through the gate, and each command answers
-# one `RESERVE=` line.
+# `bin/cyfr rpc` (`cell_fixture`): every change goes through the gate,
+# a fresh confirmation is given by the setup device the release fixture
+# paired with the person (its `device_confirm`, which alone reads that
+# device's seed from this cell and answers the CYFR's `confirm` request
+# with its key), and each command answers one `RESERVE=` line.
 RESERVE_FIXTURE="$WORK/reserve.exs"
 cat >"$RESERVE_FIXTURE" <<'ELIXIR'
 fn args ->
+  import Ecto.Query, only: [from: 2]
+
   answer = fn map -> "RESERVE=" <> Jason.encode!(map) end
   call = fn ctx, tool, args -> Sanctum.Gate.call_external(tool, ctx, args) end
 
-  # The session's person and their software passkey.
-  person = fn root, token ->
-    Code.require_file(Path.join(root, "apps/sanctum/test/support/test_context.ex"))
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
-    {ctx, Sanctum.TestContext.Authenticator.for_person(ctx.user_id)}
-  end
-
   case args do
-    ["pair", root, token] ->
-      {ctx, authenticator} = person.(root, token)
+    ["device", token] ->
+      # The device the person's setup admission paired with them.
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
 
-      # Their first passkey, as Settings registers one: setup made them
-      # with a protected device, which stands, so the registration waits on
-      # a fresh confirmation that device gives (the release fixture's
-      # `device_confirm`, which alone reads its seed from this cell), and
-      # is then repeated under it.
-      {:ok, options} = Sanctum.Passkeys.register(ctx, %{})
-      credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
-
-      {:error, {:confirmation_required, %{id: id}}} =
-        Sanctum.Passkeys.register(ctx, %{credential: credential})
-
-      {release_fixture, _binding} =
-        Code.eval_file(Path.join(root, "tests/release-boot/fixture.exs"))
-
-      "FIXTURE=" <> confirmed =
-        release_fixture.(["device_confirm", Prima.Confirmation.ref(id)])
-
-      %{"ok" => %{"state" => "confirmed"}} = Jason.decode!(confirmed)
-
-      {:ok, %{status: "active"}} =
-        Sanctum.Passkeys.register(%{ctx | confirmation_id: id}, %{credential: credential})
-
-      {public, private} = :crypto.generate_key(:eddsa, :ed25519)
-      digest = Prima.Device.key_digest(public)
-
-      {:ok, %{invitation_secret: secret}} =
-        Sanctum.TestContext.confirming(
-          ctx,
-          &call.(&1, "pairing", %{"action" => "begin", "key_digest" => digest})
+      [client_id] =
+        Arca.Repo.all(
+          from(c in Arca.Schemas.PairedClient,
+            where: c.user_id == ^ctx.user_id and c.source_kind == "device_cert" and c.standing == "active",
+            select: c.id
+          )
         )
-
-      glass = Sanctum.Context.build(%{authenticated: false, client_ip: "198.51.100.47"})
-
-      submission = %{
-        "action" => "complete",
-        "invitation_secret" => secret,
-        "device_key" => Prima.Identity.Encoding.b64(public),
-        "key_digest" => digest,
-        "holder_kind" => "software",
-        "display_name" => "Reserve case"
-      }
-
-      {:ok, %{challenge: challenge}} = call.(glass, "pairing", submission)
-      {:ok, challenge} = Prima.DeviceCert.Challenge.decode(challenge)
-      proof = Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
-
-      {:ok, %{client_id: client_id}} =
-        call.(glass, "pairing", Map.put(submission, "proof", proof))
 
       answer.(%{client_id: client_id})
 
     ["revoke", root, token, client_id] ->
-      {ctx, authenticator} = person.(root, token)
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
       revoke = %{"action" => "revoke", "client_id" => client_id}
 
       {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", revoke)
@@ -1281,14 +1239,11 @@ fn args ->
       {:ok, %{confirmations: [%{ref: ^ref}]}} =
         call.(ctx, "confirmation", %{"action" => "pending"})
 
-      {:ok, %{confirmations: [entry]}} =
-        call.(ctx, "confirmation", %{"action" => "pending", "request" => ref})
+      {release_fixture, _binding} =
+        Code.eval_file(Path.join(root, "tests/release-boot/fixture.exs"))
 
-      {:ok, digest} = Prima.Identity.Encoding.unb64(entry.webauthn["challenge"], 32)
-      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
-
-      {:ok, %{state: "confirmed"}} =
-        call.(ctx, "confirmation", %{"action" => "confirm", "ref" => ref, "assertion" => assertion})
+      "FIXTURE=" <> confirmed = release_fixture.(["device_confirm", ref])
+      %{"ok" => %{"state" => "confirmed"}} = Jason.decode!(confirmed)
 
       {:ok, %{standing: standing}} = call.(%{ctx | confirmation_id: id}, "pairing", revoke)
       answer.(%{standing: standing})
@@ -1404,9 +1359,9 @@ reserve_person="$(server_fixture "$RESERVE" person operator@example.com release-
 [ -n "$reserve_person" ] || fail "the fixture signed nobody in"
 reserve_token="$(field "$reserve_person" token)"
 LOG_SECRETS+=("$reserve_token")
-client_id="$(field "$(reserve pair "$ROOT" "$reserve_token")" client_id)" ||
-  fail "the person paired no device"
-echo "the person paired $client_id"
+client_id="$(field "$(reserve device "$reserve_token")" client_id)" ||
+  fail "the person's setup paired no device"
+echo "the person's setup paired $client_id"
 
 step "the filesystem filled below the mark: the cell latches depleted and frees its reserve"
 free="$(free_bytes "$LIMITED")"
@@ -1427,7 +1382,7 @@ standing="$(field "$(reserve revoke "$ROOT" "$reserve_token" "$client_id")" stan
   fail "the device's revocation did not complete while depleted"
 [ "$standing" = revoked ] || fail "the revocation answered $standing"
 after="$(free_bytes "$LIMITED")"
-echo "pairing.revoke, confirmed by its request -> $standing; it spent $((before - after)) bytes of the reserve"
+echo "pairing.revoke, confirmed by the device's answer to its request -> $standing; it spent $((before - after)) bytes of the reserve"
 
 step "the depleted cell restarted: still depleted, the revocation still there"
 reserve_stop
