@@ -12,11 +12,17 @@
 #       asked about the person, the verified EMAIL and the name NAME,
 #       default "Release proof", recorded on their row, their athanor's
 #       fill started, and a session bound to the account's device key and
-#       the head this CYFR caches. The account is built here with no
-#       network, as the account pages or `cyfr login --setup` make one: a
-#       genesis signed by a recovery key SUB derives, at this deployment's
-#       directory (`Sanctum.directory_url/0`), and one device key added,
-#       its head cached as a first read leaves it; the same SUB is the same
+#       the head this CYFR caches. The account is built here, as the
+#       account pages or `cyfr login --setup` make one: a genesis signed by
+#       a recovery key SUB derives, at this deployment's directory
+#       (`Sanctum.directory_url/0`), and one device key added, published
+#       there as they publish one (the genesis registered and the key
+#       appended, `Sanctum.Directory.Client`), and its head cached as a
+#       first read leaves it, so the account refreshes from its directory
+#       as any other does once the freshness bound has passed. Nothing is
+#       written to cyfr.run, which holds real people's accounts: where the
+#       deployment reads it, the account is cached alone, and its person
+#       pauses past the bound on a public home. The same SUB is the same
 #       account, so a person made once is signed in again, under the
 #       device key their admission listed, the one this CYFR's cached head
 #       of the account lists. An
@@ -244,7 +250,8 @@ fn args ->
         key: key
       )
 
-    {:ok, state} = Identity.verify_chain([genesis, Identity.sign(added, recovery)])
+    added = Identity.sign(added, recovery)
+    {:ok, state} = Identity.verify_chain([genesis, added])
 
     %{
       identifier: state.identifier,
@@ -252,8 +259,24 @@ fn args ->
       head_hash: state.head,
       key: key,
       genesis: Identity.canonical(genesis),
+      added: Identity.canonical(added),
       state: state |> Identity.State.encode() |> Jason.encode!()
     }
+  end
+
+  # The account published at its directory, as the account pages publish
+  # one: the genesis registered, then the key appended after it. Each
+  # answers `:exists` for an entry already there, so an account published
+  # once is found as written. Never at cyfr.run (the `person` command).
+  published = fn account ->
+    alias Sanctum.Directory.Client
+
+    unless URI.parse(account.directory_url).host == "cyfr.run" do
+      {:ok, _registered} = Client.register(account.genesis)
+      {:ok, _appended} = Client.append(account.identifier, account.directory_url, account.added)
+    end
+
+    account
   end
 
   # The account's head cached here as a first read leaves it, before it is
@@ -281,7 +304,7 @@ fn args ->
     seed = if kept, do: kept.seed, else: :crypto.strong_rand_bytes(32)
     {device_pub, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
     client_id = if kept, do: kept.client_id, else: Prima.UUID7.generate_id("pcl")
-    account = account.(sub, device_pub)
+    account = published.(account.(sub, device_pub))
     device = %{client_id: client_id, holder_kind: "software", display_name: name}
 
     try do
@@ -333,7 +356,7 @@ fn args ->
             unless Sanctum.Door.Store.wildcard() == {:ok, true},
               do: raise("the door's * admits no newcomer: allow * before a second person")
 
-            {:ok, %{person: person}} = Sanctum.Newcomer.admit(:open, cached.(known))
+            {:ok, %{person: person}} = Sanctum.Newcomer.admit(:open, cached.(published.(known)))
 
             {person, known}
         end

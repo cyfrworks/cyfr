@@ -6,27 +6,43 @@ defmodule Cyfr.ReleaseFixtureTest do
   The release proofs' fixture (`tests/release-boot/fixture.exs`), evaluated
   as `bin/cyfr rpc` evaluates it inside a release: its `person` command
   makes the installation's first person by the setup admission of an
-  account built with no network, their setup device paired in it and
-  their name recorded, and every later one by the open admission, held to
-  its caps; a person made before is signed in again under the key their
-  admission listed; a setup device's record already kept where it runs is the
-  device a first person made again is paired with; and `device_confirm`
-  confirms a record by that device's answer to this CYFR's request, and
-  refuses one made wrong on purpose.
+  account published at the deployment's directory, their setup device
+  paired in it and their name recorded, and every later one by the open
+  admission, held to its caps; a person made before is signed in again
+  under the key their admission listed, and every person's session stands
+  past the freshness bound on a public home; a setup device's record
+  already kept where it runs is the device a first person made again is
+  paired with; and `device_confirm` confirms a record by that device's
+  answer to this CYFR's request, and refuses one made wrong on purpose.
   """
 
   # The setup token the fixture puts for its call, the pinned directory,
-  # the door, the caps and the working directory the fixture keeps its
-  # setup device's record in are process-wide.
+  # the directory client's seam, the door, the caps, the access mode and
+  # the working directory the fixture keeps its setup device's record in
+  # are process-wide.
   use ExUnit.Case, async: false
 
-  alias Arca.Schemas.{PersonIdentity, User}
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.Schemas.{DirectoryHead, PersonIdentity, User}
+  alias Prima.Identity.Entry
+  alias Sanctum.Test.DirectoryServer
 
   @fixture Path.expand("../../../../tests/release-boot/fixture.exs", __DIR__)
 
-  setup tags do
+  setup_all do
+    %{tls: DirectoryServer.tls()}
+  end
+
+  setup %{tls: tls} = tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    Sanctum.Test.Newcomers.directory!()
+
+    # The deployment's directory, a scripted one the fixture publishes
+    # each account at.
+    DirectoryServer.listen!()
+    DirectoryServer.seam!(tls)
+    directory = DirectoryServer.start!(tls)
+    Sanctum.Test.Newcomers.directory!(directory.url)
 
     # The installation holds no person inside this test's transaction,
     # whatever the suite committed: the fixture's first person is setup's.
@@ -46,7 +62,7 @@ defmodule Cyfr.ReleaseFixtureTest do
     File.cd!(dir)
 
     {fixture, _bindings} = Code.eval_file(@fixture)
-    %{fixture: fixture, dir: dir}
+    %{fixture: fixture, dir: dir, directory: directory}
   end
 
   defp person!(fixture, email, sub) do
@@ -92,6 +108,34 @@ defmodule Cyfr.ReleaseFixtureTest do
     for person <- [first, again] do
       assert {:ok, %{user_id: user_id}} = Sanctum.Caller.establish({:session, person["token"]})
       assert user_id == first["user_id"]
+    end
+  end
+
+  test "each account is published at the deployment's directory, and its person's session stands past the freshness bound on a public home",
+       %{fixture: fixture, directory: directory} do
+    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    first = person!(fixture, "first@example.com", "fixture-first")
+    {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
+    second = person!(fixture, "second@example.com", "fixture-second")
+
+    for person <- [first, second] do
+      identifier = Arca.Repo.get_by!(PersonIdentity, user_id: person["user_id"]).identifier
+
+      assert [%Entry{kind: :genesis}, %Entry{kind: :add_key}] =
+               DirectoryServer.log(directory.dir, identifier)
+
+      # The cached head an hour old, far past the bound: the session
+      # stands on the head read again from the directory.
+      assert {1, _} =
+               Arca.Repo.update_all(from(h in DirectoryHead, where: h.identifier == ^identifier),
+                 set: [verified_at: DateTime.add(Arca.ServerMetaStorage.now!(), -3600, :second)]
+               )
+
+      assert {:ok, %{user_id: user_id}} = Sanctum.Caller.establish({:session, person["token"]})
+      assert user_id == person["user_id"]
+
+      assert {:ok, %{fresh: true}} =
+               Arca.DirectoryHeads.fresh(Prima.Actor.system(), identifier, 300)
     end
   end
 
