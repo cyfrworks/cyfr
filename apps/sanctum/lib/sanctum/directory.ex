@@ -554,16 +554,17 @@ defmodule Sanctum.Directory do
          true <- hash == head.entry_hash do
       {:ok, state}
     else
-      _ -> corrupt(identifier, :state)
+      _ -> corrupt(:state)
     end
   end
 
   defp encode_state(state), do: state |> State.encode() |> Jason.encode!()
 
-  defp corrupt(identifier, why) do
+  # The account is not named: the directory keeps no record of who was
+  # asked about.
+  defp corrupt(why) do
     Logger.error(
-      "[Sanctum.Directory] the stored log of #{identifier} does not verify " <>
-        "(#{inspect(why)}); refusing to extend it"
+      "[Sanctum.Directory] a stored log does not verify (#{inspect(why)}); refusing to extend it"
     )
 
     {:error, :corrupt}

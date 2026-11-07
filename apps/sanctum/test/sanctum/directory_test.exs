@@ -564,6 +564,7 @@ defmodule Sanctum.DirectoryTest do
         end)
 
       assert log =~ "does not verify"
+      refute log =~ alice.identifier
       assert length(log(alice.identifier)) == 2
     end
   end
