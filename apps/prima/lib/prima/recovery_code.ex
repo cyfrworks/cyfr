@@ -11,10 +11,12 @@ defmodule Prima.RecoveryCode do
   SHA-256 over `"cyfr-recovery-code/v1"`, a zero byte, the digest and the
   secret.
 
-  `encode/2` composes the canonical text; the server composes every code
-  a page shows. `decode/1` reads a code as a person copied it, the same
-  way the browser's reader does
-  (`apps/cyfr/assets/js/system_layer/recovery_code.js`); both are held to
+  `encode/2` composes the canonical text and `decode/1` reads a code as a
+  person copied it. No CYFR composes or reads one: the code is composed
+  where its secret is drawn and read where it is typed, by the account
+  pages (`apps/cyfr/assets/account/recovery_code.js`) and by the command
+  line and the box's screen (`apps/codex/internal/account/recovery.go`),
+  the same way as here, and all three are held to
   `tests/fixtures/recovery_code.json`. Reading:
 
   1. Every space, tab, line feed, carriage return and hyphen-minus is

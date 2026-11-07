@@ -10,18 +10,19 @@ defmodule Sanctum.CompanyLogin do
   binding made once, and `:renew` one made again every
   `CYFR_COMPANY_LOGIN_DAYS` days. The company's issuer is WorkOS when its
   three settings are set (`Sanctum.Auth.WorkOS`), and the configured
-  OpenID Connect issuer otherwise (`Sanctum.Auth.OIDC`), which beside
-  WorkOS is a linked sign-in method only. A company sign-in is not a
-  sign-in method: it never creates or unlocks a person, it is never
-  linked, and it never counts as a fresh confirmation.
+  OpenID Connect issuer otherwise (`Sanctum.Auth.OIDC`); beside WorkOS an
+  OpenID Connect issuer goes unused. A company sign-in is a condition on
+  a person, never a way to sign in: a person signs in with their account
+  (`Sanctum.SignIn`), and a company sign-in never creates or unlocks a
+  person and never counts as a fresh confirmation.
 
   ## Standing
 
   `standing/1` is the condition, which `Sanctum.Caller` checks last on
   every path that reads a person's standing (a session's, an API key's
   creator's and a paired device's person's, at establishment and at each
-  revalidation), so a passkey, a paired device, the CYFR sign-in and an
-  API key all pass it alike. With the mode `:off` it reads nothing;
+  revalidation), so a passkey's session, a device's and an API key all
+  pass it alike. With the mode `:off` it reads nothing;
   otherwise it reads the person's row by its primary key
   (`Arca.CompanyAuthorizations`). A row stands only under the current
   configuration: its OpenID Connect issuer and client id are the

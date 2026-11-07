@@ -27,6 +27,14 @@ defmodule PrismWeb.SettingsLiveTest do
     {admin_view, admin_html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
     assert admin_html =~ "Server allowlist"
 
+    # Every person here is an account's, admitted by an allow, `*` or an
+    # invitation: none is made here or holds keys at another CYFR.
+    door = admin_view |> element("#allowlist > p") |> render()
+    assert door =~ "An account signs in when"
+    refute door =~ "made here"
+    refute door =~ "another CYFR"
+    PrismWeb.Vocabulary.refute_vocabulary(door)
+
     identifier = "per_" <> Prima.Digest.sha256_hex("letin-#{System.unique_integer([:positive])}")
 
     # The entry typed is what the Allow button carries; the click adds

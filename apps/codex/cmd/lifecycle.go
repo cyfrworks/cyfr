@@ -509,7 +509,7 @@ func initEnding(out io.Writer, screen bool) {
 	}
 	if screen {
 		fmt.Fprintln(out, "Next: cyfr up, then sudo reboot.")
-		fmt.Fprintln(out, "At power-on this screen opens CYFR's setup page, which sets up its first person with a passkey.")
+		fmt.Fprintln(out, "At power-on this screen opens CYFR's setup page, which makes its first person's account with this box as its first device.")
 		return
 	}
 	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person, or run cyfr login --setup here.\n", hyperlink(out, setupLink(address, values)))
@@ -520,7 +520,7 @@ func initEnding(out io.Writer, screen bool) {
 
 // sshTunnel is the line that brings this machine's loopback port, where a
 // local CYFR answers, to another computer, whose browser then opens the
-// link at the same localhost address, the one its passkeys belong to.
+// link at the same localhost address, the one CYFR serves itself under.
 func sshTunnel(port int) string {
 	account := ""
 	if u, err := user.Current(); err == nil {

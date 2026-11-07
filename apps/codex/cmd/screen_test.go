@@ -284,7 +284,7 @@ func TestInitAsksForTheScreenBeforeWriting(t *testing.T) {
 			}
 			ending := "\n\n" + localEnding("http://localhost:4000")
 			if c.screen {
-				ending += "Next: cyfr up, then sudo reboot.\nAt power-on this screen opens CYFR's setup page, which sets up its first person with a passkey.\n"
+				ending += "Next: cyfr up, then sudo reboot.\nAt power-on this screen opens CYFR's setup page, which makes its first person's account with this box as its first device.\n"
 			} else {
 				ending += setupLinkLine(t, "http://localhost:4000")
 			}

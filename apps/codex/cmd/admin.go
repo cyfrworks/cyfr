@@ -31,13 +31,13 @@ var adminCmd = &cobra.Command{
 	Use:     "admin",
 	Short:   "The sign-in allowlist: who may sign in to this server (platform admins)",
 	GroupID: "admin",
-	Long: "The server allowlist says who may sign in. A person made here signs in unless " +
-		"a deny names them. A person who signs in with their CYFR identity from elsewhere " +
-		"is let in by an allow naming their person identifier (per_…), or by `*`, which " +
-		"lets anyone in, and lets anyone create an identity here. A deny names a person " +
-		"here by their id (usr_…) or a person identifier; it is sticky and ejects the " +
-		"person. An allow or a deny may give a name (@name) instead: cyfr.run is " +
-		"asked which identifier the name belongs to, and the entry keeps the identifier " +
+	Long: "The server allowlist says who may sign in. An account signs in when an allow " +
+		"names its identifier (per_…) or `*` is allowed, which lets every account in, one " +
+		"new here included; a deny wins over both. Setting CYFR up and redeeming an " +
+		"invitation allow the account they admit. A deny names a person here by their " +
+		"id (usr_…) or an identifier; it stays until it is removed and ejects the " +
+		"person. An allow or a deny may give a name (@name) instead: the account service " +
+		"is asked which identifier the name belongs to, and the entry keeps the identifier " +
 		"the name named when the entry was written, with the name shown beside it. " +
 		"Requests are identifiers people invited into a thread that the allowlist " +
 		"does not know, and sign-ins it refused. Only platform admins may edit the list, and " +
@@ -58,7 +58,7 @@ var adminListCmd = &cobra.Command{
 		}
 		entries, _ := result["entries"].([]any)
 		if len(entries) == 0 {
-			fmt.Println("The allowlist is empty: the people made here sign in, and no one from elsewhere.")
+			fmt.Println("The allowlist is empty: no account signs in here but by an invitation.")
 			return nil
 		}
 		for _, raw := range entries {
@@ -103,7 +103,7 @@ var adminRequestsCmd = &cobra.Command{
 
 var adminAllowCmd = &cobra.Command{
 	Use:   "allow <identifier|@name|*>",
-	Short: "Let a person from elsewhere sign in, by person identifier (per_…) or name (@name), or * for anyone",
+	Short: "Let an account sign in, by its identifier (per_…) or name (@name), or * for every account",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")

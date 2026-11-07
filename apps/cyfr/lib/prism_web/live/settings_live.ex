@@ -594,11 +594,12 @@ defmodule PrismWeb.SettingsLive do
           <section id="allowlist">
             <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
             <p class="text-xs text-gray-500 mb-4">
-              Who may sign in here. A person made here signs in unless denied. A person
-              whose keys another CYFR holds signs in when <code>*</code>
-              or an allow names them. Allow or deny someone by their name (<code>@name</code>):
-              the entry keeps the identifier that name stands for now. A deny is sticky and
-              ejects the person.
+              Who may sign in here. An account signs in when <code>*</code>
+              or an allow names it, and a deny wins over both. Setting CYFR up and redeeming
+              an invitation allow the account they admit. Allow or deny someone by their name
+              (<code>@name</code>): the entry keeps the identifier that name stands for now.
+              A deny stays until it is removed and ejects the person: their sessions and API
+              keys here end, and their athanor is archived.
             </p>
 
             <div :if={@door_requests != []} class="mb-4">
@@ -630,7 +631,7 @@ defmodule PrismWeb.SettingsLive do
             </div>
 
             <div :if={@door_entries == []} class="py-4">
-              <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
+              <.empty_state message="No entries: no account signs in here but by an invitation" />
             </div>
             <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
               <:col :let={e} label="Entry">{e.value}</:col>
@@ -679,7 +680,7 @@ defmodule PrismWeb.SettingsLive do
                   phx-click="door_deny"
                   phx-value-door={@door_value}
                   phx-value-note={@door_note}
-                  data-confirm="Deny this person? Their sessions and keys are revoked."
+                  data-confirm="Deny this person? Their sessions and API keys here are revoked, and their athanor archived."
                 >
                   Deny
                 </.button>
