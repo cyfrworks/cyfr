@@ -388,11 +388,14 @@ defmodule Arca.OverlayPublicationFenceTest do
 
   describe "a writer that dies holding the unit" do
     # Killed outright at the announcement: an exit raised inside a
-    # telemetry handler is caught and detached by telemetry.
+    # telemetry handler is caught and detached by telemetry. It returns
+    # once the dead writer's node-local lock is free too, so the draft
+    # alone holds the unit.
     defp dies_after_commit(actor) do
       on_commit(actor, fn -> Process.exit(self(), :kill) end)
       {pid, ref} = spawn_monitor(fn -> commit(actor, 1) end)
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+      Arca.Test.LockWait.await_unit_lock_free!(actor, @unit)
     end
 
     test "between its commit and its release: the revision is read already, the unit is held " <>

@@ -226,7 +226,9 @@ defmodule Arca.StorageGCTest do
 
   # A writer of `unit` that dies at the commit's announcement — after the
   # pointer moved, before the draft is given back. Killed outright there:
-  # an exit raised inside a telemetry handler is caught by telemetry.
+  # an exit raised inside a telemetry handler is caught by telemetry. It
+  # returns once the dead writer's node-local lock is free too, so the
+  # draft alone holds the unit.
   defp dies_unreleased(actor, unit, commit) do
     {root, key} = UnitLocator.unit_key(unit)
     handler = {__MODULE__, make_ref()}
@@ -253,6 +255,7 @@ defmodule Arca.StorageGCTest do
 
     {pid, ref} = spawn_monitor(commit)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+    Arca.Test.LockWait.await_unit_lock_free!(actor, unit)
   end
 
   # The unit's draft, aged past its lifetime.
