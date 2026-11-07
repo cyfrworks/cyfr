@@ -37,6 +37,10 @@ Any CYFR can serve its own account service (`CYFR_DIRECTORY_SERVE=writer`, the [
 
 The account service is trusted to keep each log in one order and to answer honestly. Signatures stop it forging a change, but a dishonest service could withhold a change or keep answering an old log as current, and nothing detects that.
 
+### Updating a CYFR
+
+`cyfr update` removes from `.env` each setting the release the CYFR leaves shipped in its `.env.example` that the new release's `.env.example` does not declare, and names them. A `CYFR_` setting added to `.env` by hand that the new release does not read refuses the boot, which names it: remove it.
+
 ---
 
 ## Creating Your Account
@@ -105,7 +109,7 @@ An invitation link admits someone to a CYFR without opening it to everyone. The 
 
 The page names who invited you, and to which thread. **Sign in with your account** signs you in with the account you have; **Create your account** makes one first, with any name the invitation offers filled in, which you may change. Either redeems the invitation: it makes you a person there, with your own athanor, if you are not one yet, seats you in the thread, and lets your identifier in from then on, so you sign in later without the link. That entry shows in the CYFR's allowlist, where its administrator can remove it. A deny always wins: an account the CYFR denies is refused, and the invitation stays unspent. At a terminal, `cyfr login --join --invitation CODE`, with the code after the link's `#`, redeems it with the command line.
 
-A link that has expired, been used or been revoked, whose issuer has since left the thread or been denied, or that was made before the CYFR was restored from a backup, says it can no longer be used.
+A link that has expired, been used or been revoked, whose issuer has since left the thread or been denied, or that was made before the CYFR was restored from a backup, says "This invitation can no longer be used."
 
 - **Leaving a shared thread**, or being removed from it, ends that seat and nothing else. Your athanor there and its sessions and devices are untouched.
 - **A new browser or device** starts with no saved addresses: you open each CYFR by its address or an invitation, and sign in there with the same account.
