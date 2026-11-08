@@ -753,7 +753,7 @@ defmodule Sanctum.SignIn do
       pair = &Sanctum.DeviceUnlock.pair(&1, device, key, head.head_hash)
 
       with {:ok, user} <- signed_in(identifier, held.admission, head, pair),
-           do: {:ok, %{purpose: :sign_in, user: user, kid: kid}}
+           do: {:ok, %{purpose: :sign_in, user: learned(user), kid: kid}}
     else
       refused(:wrong_key)
     end
@@ -809,9 +809,11 @@ defmodule Sanctum.SignIn do
   end
 
   # The name the new page was offered, recorded once the registry says the
-  # account that answered holds it. Nothing it meets refuses the sign-in,
-  # which is made already: the person names themselves in Settings.
-  defp named(user, nil), do: user
+  # account that answered holds it; with none offered, the name the registry
+  # records for the account, asked by its identifier while this CYFR has no
+  # name for the person. Nothing either meets refuses the sign-in, which is
+  # made already: the person can still name themselves in Settings.
+  defp named(user, nil), do: learned(user)
 
   defp named(user, name) do
     case record_name(user.id, name) do
@@ -827,6 +829,24 @@ defmodule Sanctum.SignIn do
         user
     end
   end
+
+  defp learned(%{namespace: nil} = user) do
+    with {:ok, identifier} <- account_of(user.id),
+         {:ok, %Prima.HandleAnswer{handle: name}} <- Sanctum.Handle.name_of(identifier),
+         {:ok, named} <- record_namespace(user.id, name) do
+      named
+    else
+      {:error, reason} ->
+        Logger.info(
+          "[Sanctum.SignIn] the account's name was not learned at sign-in: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+
+        user
+    end
+  end
+
+  defp learned(user), do: user
 
   defp registry_outcome(held, signed) do
     %{
@@ -1016,9 +1036,11 @@ defmodule Sanctum.SignIn do
   Record `name` as the person `user_id`'s name here (`record_namespace/2`)
   once the registry says their account holds it: its answer for that name
   (`Sanctum.Handle.resolve/1`, which also reads the account it names at
-  its directory) names the person's own identifier. The registry holds a
-  name for life and has no lookup from an account to its name, so the
-  person says which name is theirs and the registry confirms it.
+  its directory) names the person's own identifier. A sign-in asks the
+  registry for the account's name by its identifier
+  (`Sanctum.Handle.name_of/1`); this is the way the person names
+  themselves when that could not be answered, and the registry confirms
+  it.
 
   Refusals: `:invalid_name` (not a name's spelling, before any request),
   `:name_not_theirs` (the registry names another account by it),

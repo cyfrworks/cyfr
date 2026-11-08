@@ -165,6 +165,11 @@ def registry_checks():
     status, text, _ = own.request("GET", "/v1/handles/bob")
     check(status == 404 and code_of(text) == "HANDLE_NOT_FOUND", "an unknown name is not found", (status, text))
 
+    status, text, _ = own.request("GET", "/v1/identities/%s/handle" % claim["identifier"])
+    check(status == 200 and text == want, "the identifier's name is answered as the name's own answer", (status, text))
+    status, text, _ = own.request("GET", "/v1/identities/%s/handle" % other["identifier"])
+    check(status == 404 and code_of(text) == "HANDLE_NOT_FOUND", "an identifier holding no name is not found", (status, text))
+
     for body in ["not json", "[]", jcs(dict(claim, extra=1)), jcs(dict(claim, body={"handle": "alice", "x": 1}))]:
         status, text, _ = own.request("POST", "/v1/namespaces/personal/claim", body)
         check(status == 400 and code_of(text) == "REQUEST_MALFORMED", "a malformed claim is refused: %s" % body[:40], (status, text))

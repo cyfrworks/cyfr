@@ -18,7 +18,11 @@ defmodule Sanctum.Handle do
 
   `resolve/1` asks `GET /v1/handles/{handle}` of the registry this
   deployment names (`Sanctum.registry_host/0`), for that one exact handle:
-  there is no listing or search. The request goes through
+  there is no listing or search. `name_of/1` asks the reverse,
+  `GET /v1/identities/{identifier}/handle`, for the one name an identifier
+  holds, so a sign-in learns the account's name without the person typing
+  it; it reads no log, since its caller has just verified the account's
+  keys. The request goes through
   `Sanctum.Egress.pinned_request/5` under `private_policy: :operator`, is
   bounded to 10 seconds and 16 KiB, follows no redirect, sends no
   credential, and the answer is not cached.
@@ -58,6 +62,28 @@ defmodule Sanctum.Handle do
   end
 
   def resolve(_handle), do: {:error, :invalid_handle}
+
+  @doc """
+  The name `identifier` holds at this deployment's registry (the module
+  doc): `cyfr-handle/v1` for that identifier, or `:not_found` when it holds
+  none. Refusals: `:invalid_identifier` (before any request),
+  `:no_registry`, `:not_found`, `:registry_unavailable` and
+  `:malformed_answer` (an answer for another identifier or registry, or
+  outside its grammar).
+  """
+  @spec name_of(String.t()) :: {:ok, HandleAnswer.t()} | {:error, reason() | :invalid_identifier}
+  def name_of(identifier) when is_binary(identifier) do
+    with :ok <- identifier_spelled(identifier),
+         {:ok, registry} <- Sanctum.registry_host() do
+      url =
+        Sanctum.registry_base_url(Sanctum.registry_url()) <>
+          "/v1/identities/" <> identifier <> "/handle"
+
+      url |> fetch() |> name_answer(identifier, registry)
+    end
+  end
+
+  def name_of(_identifier), do: {:error, :invalid_identifier}
 
   @doc """
   The identifier `handle` names, for a write that keeps the identifier and
@@ -117,6 +143,12 @@ defmodule Sanctum.Handle do
     end
   end
 
+  defp identifier_spelled(identifier) do
+    if Prima.Identity.Encoding.identifier?(identifier),
+      do: :ok,
+      else: {:error, :invalid_identifier}
+  end
+
   defp spelled(handle) do
     if Prima.ComponentRef.valid_personal_slug?(handle),
       do: :ok,
@@ -172,4 +204,29 @@ defmodule Sanctum.Handle do
 
     {:error, :registry_unavailable}
   end
+
+  # The reverse answer names the handle itself; it is parsed as the answer
+  # for that handle and must name the identifier asked.
+  defp name_answer({:ok, 200, _headers, body}, identifier, registry) do
+    case Prima.Json.decode(body) do
+      {:ok, %{"handle" => handle} = map} when is_binary(handle) ->
+        case HandleAnswer.parse(map, handle, registry) do
+          {:ok, %HandleAnswer{identifier: ^identifier} = answer} -> {:ok, answer}
+          {:ok, %HandleAnswer{}} -> {:error, :malformed_answer}
+          {:error, :handle_not_found} -> {:error, :not_found}
+          {:error, _malformed} -> {:error, :malformed_answer}
+        end
+
+      {:ok, %{"errors" => _} = envelope} ->
+        case HandleAnswer.parse(envelope, "", registry) do
+          {:error, :handle_not_found} -> {:error, :not_found}
+          _ -> {:error, :malformed_answer}
+        end
+
+      _ ->
+        {:error, :malformed_answer}
+    end
+  end
+
+  defp name_answer(other, _identifier, registry), do: answer(other, nil, registry)
 end

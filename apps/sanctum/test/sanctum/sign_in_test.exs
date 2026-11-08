@@ -19,6 +19,7 @@ defmodule Sanctum.SignInTest do
   # The directory seam, the setup token, the public URL and the directory
   # setting are process-wide.
   use ExUnit.Case, async: false
+  import ExUnit.CaptureLog
 
   import Ecto.Query, only: [from: 2]
 
@@ -231,15 +232,47 @@ defmodule Sanctum.SignInTest do
       end
     end
 
-    test "a sign-in that offered none asks the registry nothing", %{account: account, dir: dir} do
-      RegistryStub.handles!(%{}, dir.url)
+    test "a sign-in that offered none learns the account's name from the registry, by its identifier",
+         %{account: account, dir: dir} do
+      RegistryStub.handles!(%{"mira" => account.identifier}, dir.url)
       {request, url} = minted(:sign_in, @browser, admission: {:setup, @token}, page: {:new, nil})
       assert url =~ "/account/new#name=&request="
 
-      assert {:ok, %{user: %{namespace: nil}}} =
+      assert {:ok, %{purpose: :sign_in, user: %{id: id, namespace: "mira"}}} =
                SignIn.answer(answer(request, account), @browser)
 
+      assert {:ok, %{namespace: "mira"}} = Users.get(id)
+      assert_received {:registry_request, %{path: "/v1/identities/" <> rest}}
+      assert rest == account.identifier <> "/handle"
+      refute_received {:registry_request, %{path: "/v1/handles/" <> _}}
+
+      # Recorded once: the next sign-in asks nothing.
+      {again, _url} = minted(:sign_in, @browser)
+
+      assert {:ok, %{user: %{namespace: "mira"}}} =
+               SignIn.answer(answer(again, account), @browser)
+
       refute_received {:registry_request, _}
+    end
+
+    test "an account holding no name, or a registry that does not answer, records nothing; the sign-in stands",
+         %{account: account, dir: dir} do
+      RegistryStub.handles!(%{}, dir.url)
+      {request, _url} = minted(:sign_in, @browser, admission: {:setup, @token}, page: {:new, nil})
+
+      assert {:ok, %{purpose: :sign_in, user: user, session_token: token}} =
+               SignIn.answer(answer(request, account), @browser)
+
+      assert is_binary(token)
+      assert {:ok, %{namespace: nil}} = Users.get(user.id)
+      assert_received {:registry_request, %{path: "/v1/identities/" <> _}}
+
+      RegistryStub.start!(fn _ -> :close end)
+      {again, _url} = minted(:sign_in, @browser)
+
+      capture_log(fn ->
+        assert {:ok, %{user: %{namespace: nil}}} = SignIn.answer(answer(again, account), @browser)
+      end)
     end
   end
 
