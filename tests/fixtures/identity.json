@@ -1131,6 +1131,19 @@
         "reason": "wrong_signer"
       },
       "name": "add key by a recovery key the recovery replaced"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_with_a_maker_with_a_trailing_lf"
+      ],
+      "error": {
+        "field": "aaguid",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key with a maker with a trailing LF"
     }
   ],
   "comment": "The vectors pinning Prima.Identity (cyfr-identity/v2), read by CYFR, by cyfr.run and by the account pages. Every side derives each Ed25519 public key from its seed and each P-256 point from its private scalar, and each kid as sha256:<hex> over the public key's bytes; re-signs every entry whose signer is an Ed25519 key and reproduces its sig byte for byte over the JCS bytes of the entry without sig (a passkey's signature is randomised, so an es256 signer's entries are verified, never re-signed); reproduces every hash and identifier as SHA-256 over the entry's JCS bytes; maps each identifier to its 32 user_id bytes (a passkey's WebAuthn user.id) and back; walks every chain to its state, or to the index and reason of the first entry refused; and checks every webauthn case's assertion over its challenge at its origin and relying party, reaching ok or a refusal named by the check that fails first, in the order type, challenge, origin, crossOrigin, authenticator data, rpIdHash, user presence, user verification, signature. In a chain every WebAuthn refusal is wrong_signer, and a refusal that names a field or a kind carries it as field or kind, as each side's typed result does. A signer of null was altered after signing or is not signed by any key the vectors hold.",
@@ -1809,6 +1822,27 @@
         "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
       },
       "hash": "sha256:950c55a4731bd64a262fe39671810e7fc2242274c85fa15a7243bb35653140bd",
+      "signer": "device_1"
+    },
+    "add_key_with_a_maker_with_a_trailing_lf": {
+      "entry": {
+        "aaguid": "fbfc3007-154e-4ecc-8c0b-6e020557d7bd\n",
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+          "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+          "kind": "passkey",
+          "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "sBIXlEQzAfwyhlRoqBLj5KRouQklvJRJPzdsTnqpErfu4VSvBAHwcXH45dYtcN7XswKwuqwZaQmRzX5OySt5CA",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:e7ff447f1e21b0d1e5ec224da4250d21d70e8ca5722ce55bd42553656a433a21",
       "signer": "device_1"
     },
     "add_recovery_by_a_device": {
