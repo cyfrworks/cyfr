@@ -731,6 +731,12 @@
   function isPolicy(policy) {
     return isObject(policy) && typeof policy.version === "string" && policy.version !== "" && typeof policy.url === "string" && /^https?:\/\//.test(policy.url);
   }
+  async function readTerms(url, fetchFn) {
+    const { status, json } = await call(fetchFn, url);
+    const valid = status === 200 && isObject(json) && typeof json.title === "string" && json.title.trim() !== "" && typeof json.content_markdown === "string";
+    if (!valid) refuse("bad_terms");
+    return { title: json.title.trim(), markdown: json.content_markdown };
+  }
   function directory(url, fetchFn) {
     const base = `${url}/directory/v1`;
     async function write2(path, entry) {
@@ -872,9 +878,9 @@
     for (const section of doc.querySelectorAll("main > section")) section.hidden = section.id !== id;
   }
   function say(doc, id, text2) {
-    const element = $(doc, id);
-    element.textContent = text2;
-    element.hidden = text2 === "";
+    const element2 = $(doc, id);
+    element2.textContent = text2;
+    element2.hidden = text2 === "";
   }
   async function attempt(doc, button, errorId, action) {
     button.disabled = true;
@@ -1300,8 +1306,122 @@
     );
   }
 
+  // account/markdown.js
+  var HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+  var QUOTE = /^ {0,3}> ?/;
+  var ITEM = /^ {0,3}(?:[-*+]|(\d{1,9})[.)])[ \t]+(.*)$/;
+  var LINK_TARGET = /^(?:https?:\/\/|mailto:)/i;
+  var ESCAPED = /\\([!-/:-@[-`{-~])/y;
+  var LINKED = /\[([^[\]\n]*)\]\(([^()\s]*)\)/y;
+  var STRONG = /(\*\*|__)(?=\S)([\s\S]*?\S)\1/y;
+  var EMPHASIS = /([*_])(?=\S)([\s\S]*?\S)\1/y;
+  var MAX_DEPTH = 8;
+  function markdown(doc, text2) {
+    return blocks(doc, String(text2).split(/\r\n|\r|\n/), 0);
+  }
+  var starts = (line, depth) => HEADING.test(line) || depth < MAX_DEPTH && QUOTE.test(line) || ITEM.test(line);
+  function blocks(doc, lines, depth) {
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const heading = HEADING.exec(line);
+      const item = ITEM.exec(line);
+      if (line.trim() === "") {
+        i++;
+      } else if (heading) {
+        out.push(element(doc, `h${Math.min(heading[1].length + 1, 6)}`, inline(doc, heading[2], 0, true)));
+        i++;
+      } else if (depth < MAX_DEPTH && QUOTE.test(line)) {
+        const quoted = [];
+        while (i < lines.length && QUOTE.test(lines[i])) quoted.push(lines[i++].replace(QUOTE, ""));
+        out.push(element(doc, "blockquote", blocks(doc, quoted, depth + 1)));
+      } else if (item) {
+        const ordered = item[1] !== void 0;
+        const items = [];
+        while (i < lines.length) {
+          const next2 = ITEM.exec(lines[i]);
+          if (next2 && next2[1] !== void 0 === ordered) items.push([next2[2]]);
+          else if (!next2 && /^[ \t]+\S/.test(lines[i])) items.at(-1).push(lines[i].trim());
+          else break;
+          i++;
+        }
+        out.push(element(doc, ordered ? "ol" : "ul", items.map((parts) => element(doc, "li", inline(doc, parts.join(" "), 0, true)))));
+      } else {
+        const words2 = [];
+        while (i < lines.length && lines[i].trim() !== "" && !starts(lines[i], depth)) words2.push(lines[i++].trim());
+        out.push(element(doc, "p", inline(doc, words2.join(" "), 0, true)));
+      }
+    }
+    return out;
+  }
+  function inline(doc, text2, depth, links) {
+    const nodes = [];
+    let plain = "";
+    const flush = () => {
+      if (plain) nodes.push(doc.createTextNode(plain));
+      plain = "";
+    };
+    let at = 0;
+    while (at < text2.length) {
+      const char = text2[at];
+      const intraword = char === "_" && at > 0 && /[\p{L}\p{N}]/u.test(text2[at - 1]);
+      const match = char === "\\" ? sticky(ESCAPED, text2, at) : char === "[" && links ? sticky(LINKED, text2, at) : (char === "*" || char === "_") && !intraword && depth < MAX_DEPTH ? sticky(STRONG, text2, at) ?? sticky(EMPHASIS, text2, at) : null;
+      if (!match) {
+        plain += char;
+        at++;
+        continue;
+      }
+      at += match[0].length;
+      if (char === "\\") {
+        plain += match[1];
+        continue;
+      }
+      flush();
+      if (char === "[") nodes.push(...link(doc, match[1], match[2], depth));
+      else nodes.push(element(doc, match[1].length === 2 ? "strong" : "em", inline(doc, match[2], depth + 1, links)));
+    }
+    flush();
+    return nodes;
+  }
+  function link(doc, label, target, depth) {
+    const text2 = inline(doc, label, depth + 1, false);
+    if (!LINK_TARGET.test(target)) return text2;
+    const a = element(doc, "a", text2);
+    a.setAttribute("href", target);
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+    return [a];
+  }
+  function sticky(pattern, text2, at) {
+    pattern.lastIndex = at;
+    return pattern.exec(text2);
+  }
+  function element(doc, tag, children) {
+    const made = doc.createElement(tag);
+    made.append(...children);
+    return made;
+  }
+
   // account/pages/new.js
   var STEPS = ["register", "append", "name", "done"];
+  var TERMS = { box: "terms", link: "policy-link", version: "policy-version" };
+  var TERMS_AGAIN = { box: "terms-again", link: "policy-again-link", version: "policy-again-version" };
+  async function showTerms(doc, env2, policy, ids) {
+    const link2 = $(doc, ids.link);
+    const box = $(doc, ids.box);
+    link2.href = policy.url;
+    $(doc, ids.version).textContent = `, version ${policy.version}`;
+    box.hidden = true;
+    try {
+      const { title, markdown: text2 } = await readTerms(policy.url, env2.fetch);
+      box.replaceChildren(...markdown(doc, text2));
+      box.hidden = false;
+      link2.textContent = title;
+      link2.removeAttribute("href");
+    } catch (_error) {
+    }
+  }
   var Creation = class _Creation {
     /** A creation at this page's directory. */
     static async open(env2) {
@@ -1458,7 +1578,7 @@
     nameInput.value = params.get("name") ?? "";
     const { policy } = creation.config;
     const accept = $(doc, "accept");
-    if (policy) $(doc, "policy-link").href = policy.url;
+    if (policy) showTerms(doc, env2, policy, TERMS);
     else $(doc, "acceptance").hidden = true;
     const create = $(doc, "create");
     const ready = () => create.disabled = !((accept.checked || !policy) && nameInput.value.trim());
@@ -1484,7 +1604,7 @@
           return;
         }
         if (error instanceof Refusal && error.reason === "policy_changed" && creation.config.policy) {
-          $(doc, "policy-again-link").href = creation.config.policy.url;
+          showTerms(doc, env2, creation.config.policy, TERMS_AGAIN);
           $(doc, "accept-again").checked = false;
           only(doc, "policy-again");
           return;

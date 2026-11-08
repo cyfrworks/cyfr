@@ -33,7 +33,8 @@
 <label for="name">Your name</label>
 <div class="name"><span>@</span><input id="name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="39"></div>
 <p class="hint">Your name is yours for life. Lowercase letters, digits and hyphens.</p>
-<p class="check" id="acceptance"><input type="checkbox" id="accept"> <label for="accept">I accept the <a id="policy-link" target="_blank" rel="noopener noreferrer">terms</a></label></p>
+<div class="terms" id="terms" tabindex="0" role="region" aria-label="The terms" hidden></div>
+<p class="check" id="acceptance"><input type="checkbox" id="accept"> <label for="accept">I accept the <a id="policy-link" target="_blank" rel="noopener noreferrer">terms</a><span id="policy-version"></span></label></p>
 <div class="actions"><button type="button" class="primary" id="create">Create your account</button></div>
 <p class="hint">Your browser will ask where to keep your passkey.</p>
 <p class="error" id="choose-error" role="alert" hidden></p>
@@ -66,7 +67,8 @@
 <section id="policy-again" hidden>
 <h1>The terms changed</h1>
 <p>Your account is made. Accept the new terms to finish claiming your name.</p>
-<p class="check"><input type="checkbox" id="accept-again"> <label for="accept-again">I accept the <a id="policy-again-link" target="_blank" rel="noopener noreferrer">terms</a></label></p>
+<div class="terms" id="terms-again" tabindex="0" role="region" aria-label="The new terms" hidden></div>
+<p class="check"><input type="checkbox" id="accept-again"> <label for="accept-again">I accept the <a id="policy-again-link" target="_blank" rel="noopener noreferrer">terms</a><span id="policy-again-version"></span></label></p>
 <div class="actions"><button type="button" class="primary" id="policy-again-submit">Continue</button></div>
 <p class="error" id="policy-again-error" role="alert" hidden></p>
 </section>
