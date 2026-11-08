@@ -51,6 +51,57 @@ defmodule Cyfr.Bus.Payload do
     %{class: class, message: message}
   end
 
+  # The causes a refusal reads as where a canvas reads it, by its class:
+  # every class reads as exactly one cause, and no sentence travels. The
+  # payloads that carry a cause (`Cyfr.Bus.Execution`,
+  # `Cyfr.Bus.ScheduleRun`) each give every cause its own readable sentence.
+  @causes [
+    failed: [:internal, :corrupt, :conflict],
+    cancelled: [:cancelled],
+    timed_out: [:timeout],
+    refused: [:unauthenticated, :forbidden, :not_owner],
+    needs_setup: [:setup_required, :consent_required],
+    waits_for_you: [:confirmation_required],
+    rate_limited: [:rate_limited],
+    unavailable: [:unavailable],
+    bad_input: [:invalid_argument],
+    not_found: [:not_found],
+    uncertain: [:uncertain]
+  ]
+
+  @cause_of for {cause, classes} <- @causes, class <- classes, into: %{}, do: {class, cause}
+
+  @doc false
+  # Every cause, in the table's order.
+  @spec causes() :: [atom()]
+  def causes, do: Keyword.keys(@causes)
+
+  @doc false
+  # The cause a refusal class reads as.
+  @spec cause(Prima.Refusal.class()) :: atom()
+  def cause(class), do: Map.fetch!(@cause_of, class)
+
+  @doc false
+  # A refusal fit for a payload a canvas reads: its class and its cause
+  # (`cause/1`), never its sentence, which may carry a component's own
+  # words. No refusal is `nil`.
+  @spec caused(term()) :: %{class: Prima.Refusal.class(), cause: atom()} | nil
+  def caused(nil), do: nil
+
+  def caused(reason) do
+    %Prima.Refusal{class: class} = Prima.Refusal.classify(reason)
+    %{class: class, cause: cause(class)}
+  end
+
+  @doc false
+  # `caused/1` over the named fields of `fields` that are present.
+  @spec caused(map(), [atom()]) :: map()
+  def caused(fields, keys) do
+    Enum.reduce(keys, fields, fn key, acc ->
+      if Map.has_key?(acc, key), do: Map.update!(acc, key, &caused/1), else: acc
+    end)
+  end
+
   @doc false
   # `refusal/1` over the named fields of `fields` that are present.
   @spec refusals(map(), [atom()]) :: map()

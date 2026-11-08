@@ -87,6 +87,14 @@ defmodule Opus.Schedules.StreamsTest do
                ~w(kind schedule_id occurrence_id execution_id scheduled_for reason)
 
       assert runs.shape["fields"]["kind"]["values"] == ["fired", "failed"]
+
+      # A reason is a class and its cause, every cause listed with what it says.
+      reason = runs.shape["fields"]["reason"]
+      assert Map.keys(reason["fields"]) |> Enum.sort() == ["class", "cause"]
+      assert Enum.sort(reason["required"]) == ["class", "cause"]
+
+      assert reason["fields"]["cause"]["labels"] ==
+               Map.new(ScheduleRun.causes(), fn {c, s} -> {Atom.to_string(c), s} end)
     end
   end
 
@@ -268,8 +276,12 @@ defmodule Opus.Schedules.StreamsTest do
       assert %{"scheduled_for" => "2026-10-27T09:00:00.000000Z", "occurrence_id" => "occ_live"} =
                read_as(fired)
 
-      assert %{"occurrence_id" => nil, "scheduled_for" => nil, "reason" => %{"class" => _}} =
+      assert %{"occurrence_id" => nil, "scheduled_for" => nil, "reason" => reason} =
                read_as(failed)
+
+      # A class and its cause, never the reason's sentence.
+      assert Map.keys(reason) |> Enum.sort() == ["class", "cause"]
+      assert reason["cause"] in Enum.map(ScheduleRun.causes(), &Atom.to_string(elem(&1, 0)))
 
       refute_received %FeedRun{}
     end

@@ -223,7 +223,8 @@ defmodule Opus.Providers.Feed do
   newest runs, read as the runs page reads them (`Opus.Record.list/2`,
   scoped to the athanor), oldest first, each as the change it last made,
   built as the live payload is (`Cyfr.Bus.Execution`): its error is the
-  stored sentence classified and cut as a live failure's is. A running or
+  stored sentence classified and read as its cause as a live failure's is,
+  and the sentence itself is never handed on. A running or
   paused run reads as `started`. The subject is none.
   """
   @spec recent_runs(Context.t(), nil) :: {:ok, [Cyfr.Bus.Execution.t()]} | {:error, term()}
@@ -262,7 +263,7 @@ defmodule Opus.Providers.Feed do
 
   # The executions topic's payload of a record: the live failure's error
   # is the sentence the record stores, so the same constructor classifies
-  # and cuts both.
+  # both and reads each as its cause.
   defp run_change(actor, %Opus.Record{status: status} = record) do
     Cyfr.Bus.Execution.new(actor, change_kind(status),
       execution_id: record.id,
@@ -322,9 +323,9 @@ defmodule Opus.Providers.Feed do
               "type" => "enum",
               "values" => Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
             },
-            "message" => %{"type" => "string"}
+            "cause" => cause_shape(Cyfr.Bus.Execution.causes())
           },
-          "required" => ["class", "message"]
+          "required" => ["class", "cause"]
         }
       },
       "required" => [
@@ -337,6 +338,16 @@ defmodule Opus.Providers.Feed do
         "error"
       ]
     })
+  end
+
+  # A cause's enum lists every cause with its readable sentence, so the
+  # catalog a canvas reads names what each one says.
+  defp cause_shape(causes) do
+    %{
+      "type" => "enum",
+      "values" => Enum.map(causes, fn {cause, _sentence} -> Atom.to_string(cause) end),
+      "labels" => Map.new(causes, fn {cause, sentence} -> {Atom.to_string(cause), sentence} end)
+    }
   end
 
   # Declared in the normalized form the stream table keeps

@@ -690,7 +690,7 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
 | `integer` | — (a float, `1.0` included, is refused) |
 | `boolean` | — |
 | `time` | — (an ISO 8601 time with its offset) |
-| `enum` | `values`, 1 to 64 distinct strings |
+| `enum` | `values`, 1 to 64 distinct strings; optionally `labels`, an object naming every value and no other, each with its readable sentence of 1 to 256 characters |
 | `list` | `of`, a shape, and `max` elements, 1 to 1000 (default 100) |
 | `object` | `fields`, up to 64 names each mapped to a shape, and `required`, the names that must be present (default none); a key `fields` does not name is refused |
 | `json` | — (any JSON value) |

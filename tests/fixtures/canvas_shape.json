@@ -72,6 +72,12 @@
         "fixture": "up"
       },
       {
+        "why": "an enum's labels name every value with its readable sentence, and normalize as written",
+        "shape": {"type": "enum", "values": ["timed_out", "failed"], "labels": {"failed": "The run failed.", "timed_out": "The run ran out of time."}},
+        "normalized": {"type": "enum", "nullable": false, "values": ["timed_out", "failed"], "labels": {"failed": "The run failed.", "timed_out": "The run ran out of time."}},
+        "fixture": "timed_out"
+      },
+      {
         "why": "a list takes its default max of 100, and its fixture is one element",
         "shape": {"type": "list", "of": {"type": "integer"}},
         "normalized": {"type": "list", "nullable": false, "max": 100, "of": {"type": "integer", "nullable": false}},
@@ -215,6 +221,36 @@
         "why": "an enum's value is a string",
         "shape": {"type": "enum", "values": ["a", 1]},
         "path": "/values/1",
+        "reason": "type"
+      },
+      {
+        "why": "an enum's labels are an object",
+        "shape": {"type": "enum", "values": ["a"], "labels": ["A."]},
+        "path": "/labels",
+        "reason": "type"
+      },
+      {
+        "why": "an enum's labels name none but its values",
+        "shape": {"type": "enum", "values": ["a"], "labels": {"a": "A.", "b": "B."}},
+        "path": "/labels/b",
+        "reason": "enum"
+      },
+      {
+        "why": "an enum's labels name every value",
+        "shape": {"type": "enum", "values": ["a", "b"], "labels": {"a": "A."}},
+        "path": "/labels/b",
+        "reason": "required"
+      },
+      {
+        "why": "an enum's label is at least one code point",
+        "shape": {"type": "enum", "values": ["a"], "labels": {"a": ""}},
+        "path": "/labels/a",
+        "reason": "range"
+      },
+      {
+        "why": "an enum's label is a string",
+        "shape": {"type": "enum", "values": ["a"], "labels": {"a": 1}},
+        "path": "/labels/a",
         "reason": "type"
       },
       {

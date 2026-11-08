@@ -282,8 +282,12 @@ defmodule Cyfr.BusPayloadTest do
               do: :reason,
               else: :error
 
-          assert Map.fetch!(payload, field) ==
-                   %{class: :internal, message: "The outcome could not be confirmed."}
+          expected =
+            if is_struct(payload, Execution) or is_struct(payload, ScheduleRun),
+              do: %{class: :internal, cause: :failed},
+              else: %{class: :internal, message: "The outcome could not be confirmed."}
+
+          assert Map.fetch!(payload, field) == expected
         end
 
         assert %Notify{payload: %{reason: %{class: :internal}}} =
@@ -297,11 +301,38 @@ defmodule Cyfr.BusPayloadTest do
       refusal = %Prima.Refusal{class: :forbidden, reason: :x, message: "Not yours"}
 
       assert Execution.new(@actor, :failed, error: refusal).error ==
-               %{class: :forbidden, message: "Not yours"}
+               %{class: :forbidden, cause: :refused}
 
       assert Execution.new(@actor, :completed).error == nil
-      assert %{class: :internal, message: cut} = Execution.new(@actor, :failed, error: long).error
-      assert byte_size(cut) <= 200 and String.valid?(cut)
+
+      assert Execution.new(@actor, :failed, error: long).error == %{
+               class: :internal,
+               cause: :failed
+             }
+    end
+
+    test "a run's and a schedule run's refusal is a class and its cause, every class one cause" do
+      for module <- [Execution, ScheduleRun] do
+        causes = Enum.map(module.causes(), &elem(&1, 0))
+        assert causes == Cyfr.Bus.Payload.causes(), inspect(module)
+
+        for {_code, sentence} <- module.causes(),
+            do: assert(is_binary(sentence) and sentence != "")
+      end
+
+      for class <- Prima.Refusal.classes() do
+        refusal = %Prima.Refusal{class: class, reason: :x, message: "a component's own words"}
+        cause = Cyfr.Bus.Payload.cause(class)
+        assert cause in Cyfr.Bus.Payload.causes()
+
+        assert Execution.new(@actor, :failed, error: refusal).error == %{
+                 class: class,
+                 cause: cause
+               }
+
+        assert ScheduleRun.new(@actor, :failed, reason: refusal).reason ==
+                 %{class: class, cause: cause}
+      end
     end
 
     test "a tenant payload refuses an actor that names no athanor, and a field it does not declare" do
