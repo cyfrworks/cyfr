@@ -5,17 +5,16 @@ go 1.27.3
 require (
 	charm.land/huh/v2 v2.0.3
 	github.com/boombuler/barcode v1.1.0
-	github.com/cloudflare/circl v1.6.5
 	github.com/coder/websocket v1.8.15
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/google/certificate-transparency-go v1.4.0
 	github.com/google/go-tpm v0.9.8
 	github.com/sigstore/protobuf-specs v0.5.2
 	github.com/sigstore/rekor v1.5.5
-	github.com/sigstore/sigstore v1.11.2
+	github.com/sigstore/sigstore v1.11.3
 	github.com/sigstore/sigstore-go v1.4.0
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/theupdateframework/go-tuf/v2 v2.4.2
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
@@ -30,7 +29,6 @@ require (
 	charm.land/lipgloss/v2 v2.0.6 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
-	github.com/bwesterb/go-ristretto v1.2.4 // indirect
 	github.com/catppuccin/go v0.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -44,6 +42,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/cloudflare/circl v1.6.5 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20260821105541-05f79448fa77 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
