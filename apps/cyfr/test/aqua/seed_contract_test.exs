@@ -82,7 +82,7 @@ defmodule Aqua.SeedContractTest do
     # so a key in a crew file refuses the file.
     crew = for agent <- seed_agents(), agent.name != Compendium.AquaPath.soul_name(), do: agent
 
-    assert Enum.map(crew, & &1.name) |> Enum.sort() == ~w(claude-code explorer)
+    assert Enum.map(crew, & &1.name) |> Enum.sort() == ~w(claude-code explorer openai-codex)
 
     for member <- crew do
       assert member.tool_policy == %{}, member.name

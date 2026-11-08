@@ -58,7 +58,7 @@ defmodule Compendium.AgentSourceTest do
     {:ok, rows} = AgentSource.rows(ctx)
     names = Enum.map(rows, & &1.name)
     assert hd(names) == "aqua"
-    assert Enum.sort(names) == Enum.sort(~w(aqua claude-code explorer))
+    assert Enum.sort(names) == Enum.sort(~w(aqua claude-code explorer openai-codex))
 
     soul = Enum.find(rows, &(&1.name == "aqua"))
     assert soul.component_type == "agent" and soul.publisher == "local"
