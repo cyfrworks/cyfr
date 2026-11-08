@@ -821,6 +821,74 @@ defmodule Arca.ConsentStorage do
   def head_profiles_referencing(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
 
   @doc """
+  The sources, by name-level ref and each once, whose **head** revision
+  binds the vault entry `vault_entry_id`: on a binding of its own, or by
+  selecting on an edge to a target the labelled profile of that target
+  whose head binds it, which a run resolves to that entry
+  (`Sanctum.Consent.Loader`'s selections). A profile of any status is
+  read, so one blocked when the entry changed is still named.
+  """
+  @spec head_sources_binding(Prima.Actor.t(), String.t()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def head_sources_binding(%Prima.Actor{athanor_id: athanor_id}, vault_entry_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(vault_entry_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_sources_binding", fn ->
+      heads =
+        from(r in ConsentVaultRef,
+          join: c in Consent,
+          on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+
+      lenders =
+        from([r, _c, p] in heads,
+          where: r.vault_entry_id == ^vault_entry_id,
+          distinct: true,
+          select: {p.source_ref, p.label}
+        )
+        |> Arca.Repo.all()
+        |> Enum.map(fn {source, label} -> {name_level(source), label} end)
+
+      labels = lenders |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+
+      borrowers =
+        from([r, _c, p] in heads,
+          where: r.via_label in ^labels,
+          select: {p.source_ref, r.binding_key, r.via_label}
+        )
+        |> Arca.Repo.all()
+        |> Enum.filter(fn {_source, key, label} -> {selected(key), label} in lenders end)
+
+      sources =
+        Enum.map(lenders, &elem(&1, 0)) ++ Enum.map(borrowers, &name_level(elem(&1, 0)))
+
+      {:ok, sources |> Enum.reject(&is_nil/1) |> Enum.uniq()}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def head_sources_binding(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
+
+  # The target a selection's binding key names its lender by.
+  defp selected(binding_key) do
+    with {:ok, {_node, edge_key, _slot}} <- Prima.Authority.Blob.parse_binding_key(binding_key),
+         {:ok, target} <- Prima.Authority.Blob.edge_target(edge_key) do
+      name_level(target)
+    else
+      _ingress_or_unparsed -> nil
+    end
+  end
+
+  defp name_level(ref) do
+    case Prima.ComponentRef.to_name_ref(ref) do
+      {:ok, name_ref} -> name_ref
+      {:error, _unparsed} -> nil
+    end
+  end
+
+  @doc """
   Block, for `actor`, every profile that depends on what a transaction is
   changing, in that transaction: the profiles of `entry`'s athanor whose head binds the
   entry (`{athanor_id, entry_id}`, or nil for none) and the profiles, in

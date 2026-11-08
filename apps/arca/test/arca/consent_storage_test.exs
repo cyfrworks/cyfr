@@ -1606,6 +1606,50 @@ defmodule Arca.ConsentStorageTest do
   rescue
     _refused in Arca.Repo.Errors.db_errors() -> :refused
   end
+
+  describe "head_sources_binding/2" do
+    # The member's edge into its brain selects the brain's profile `work`,
+    # which binds the entry; a head of its own binds it directly.
+    test "names a head binding the entry and a head selecting a lender that binds it",
+         %{athanor: athanor} do
+      entry = entry!(athanor)
+      other = entry!(athanor)
+      lend = fn source, edge -> "#{source}|#{edge}|default" end
+
+      using!(athanor, "prof_src_brain", "catalyst:local.brain", "work", [ref(entry.id)])
+      using!(athanor, "prof_src_other", "catalyst:local.other", "work", [ref(other.id)])
+      using!(athanor, "prof_src_direct", "agent:local.direct", "default", [ref(entry.id)])
+
+      for {id, source, edge} <- [
+            {"prof_src_member", "agent:local.member", "catalyst:local.brain|claude"},
+            # The same label of another target, which lends another entry.
+            {"prof_src_elsewhere", "agent:local.elsewhere", "catalyst:local.other"},
+            # Another label of the lender's target.
+            {"prof_src_unlent", "agent:local.unlent", "catalyst:local.brain"}
+          ] do
+        label = if id == "prof_src_unlent", do: "home", else: "work"
+
+        using!(athanor, id, source, "default", [
+          ref(nil, %{binding_key: lend.(source, edge), via_label: label, binding_digest: nil})
+        ])
+      end
+
+      # A head that no longer binds what an earlier revision did.
+      earlier = using!(athanor, "prof_src_moved", "agent:local.moved", "default", [ref(entry.id)])
+
+      {:ok, _} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, "prof_src_moved", 2),
+          [ref(other.id)],
+          earlier.id
+        )
+
+      assert {:ok, sources} = ConsentStorage.head_sources_binding(actor(athanor), entry.id)
+
+      assert Enum.sort(sources) ==
+               ["agent:local.direct", "agent:local.member", "catalyst:local.brain"]
+    end
+  end
 end
 
 defmodule Arca.ConsentStorageRaceTest do

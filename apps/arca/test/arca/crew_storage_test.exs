@@ -736,5 +736,33 @@ defmodule Arca.CrewStorageTest do
       assert {:error, :not_a_room} = Threads.crew_thread(actor, fresh.id, "web")
       assert Enum.map(Threads.list(actor, kind: "own"), & &1.id) == [room.id]
     end
+
+    test "forgetting the sessions of members forgets theirs alone, in the actor's athanor", %{
+      actor: actor,
+      room: room
+    } do
+      {:ok, planner} = Threads.crew_thread(actor, room.id, "planner")
+      {:ok, builder} = Threads.crew_thread(actor, room.id, "builder")
+
+      elsewhere = Prima.Actor.in_athanor("ath_other")
+      {:ok, theirs} = Threads.create(elsewhere)
+
+      # Another athanor's thread whose agent is planner as well.
+      for {thread, agent, session} <- [
+            {planner, "planner", "s-planner"},
+            {builder, "builder", "s-builder"},
+            {theirs, "planner", "s-x"}
+          ] do
+        {1, _} =
+          from(t in Arca.Schemas.Thread, where: t.id == ^thread.id)
+          |> Arca.Repo.update_all(set: [agent: agent, brain_session: session])
+      end
+
+      assert {:ok, 1} = Threads.forget_sessions(actor, ["planner"])
+      assert {:ok, %{brain_session: nil}} = Threads.get(actor, planner.id)
+      assert {:ok, %{brain_session: "s-builder"}} = Threads.get(actor, builder.id)
+      assert {:ok, %{brain_session: "s-x"}} = Threads.get(elsewhere, theirs.id)
+      assert {:ok, 0} = Threads.forget_sessions(actor, [])
+    end
   end
 end

@@ -35,10 +35,11 @@ defmodule Sanctum.Mount do
        consumes a `once` binding for this root, so a mount refused by any
        check above consumes nothing.
 
-  `login_entry/3`, `home_of/2` and `login_entries/1` are the reads the
-  programs controller and its surfaces make of the same entries: the
-  entry a person names for a program's sign-in or reset, the home a
-  deleted entry leaves behind, and the homes of an archived athanor.
+  `login_entry/3`, `home_of/2`, `login_entries/1` and `agents_mounting/2`
+  are the reads the programs controller and its surfaces make of the same
+  entries: the entry a person names for a program's sign-in or reset, the
+  home a deleted entry leaves behind, the homes of an archived athanor,
+  and the agents whose brain runs in a home it resets or retires.
   """
 
   alias Prima.Authority
@@ -288,6 +289,33 @@ defmodule Sanctum.Mount do
       {:ok, _another_kind} -> :none
       {:error, :not_found} -> :none
       {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  The names of the agents of `athanor_id` whose head consent binds the
+  login entry `entry_id`, the soul's included: on a binding of the agent's
+  own, or by selecting the profile of its brain that binds it
+  (`Arca.ConsentStorage.head_sources_binding/2`). `{:error, :unavailable}`
+  when the store cannot answer.
+  """
+  @spec agents_mounting(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, :unavailable}
+  def agents_mounting(athanor_id, entry_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(entry_id) do
+    agent = Prima.AgentRef.type()
+
+    case Arca.ConsentStorage.head_sources_binding(Prima.Actor.in_athanor(athanor_id), entry_id) do
+      {:ok, sources} ->
+        {:ok,
+         for(
+           ref <- sources,
+           {:ok, %Prima.ComponentRef{type: ^agent, name: name}} <-
+             [Prima.ComponentRef.parse(ref)],
+           do: name
+         )}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 
