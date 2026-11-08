@@ -26,7 +26,8 @@
 //   the answer; `first message` replies with the thread's first message;
 //   `sign out` removes the sign-in. Each reply streams as
 //   `item/agentMessage/delta`s, then the completed `agentMessage`, the
-//   turn's token usage and `turn/completed`.
+//   thread's token usage sent again unchanged (as a rate-limit update sends
+//   it) and then grown by the reply's, and `turn/completed`.
 // - It writes a canary to its stderr and to its folder, which the driver
 //   must never pass on.
 import crypto from 'node:crypto';
@@ -89,11 +90,14 @@ function reply(turnId, text) {
   }
   notify('item/completed', { ...base, item: { type: 'agentMessage', id: itemId, text, phase: null } });
   thread.history.push({ role: 'assistant', text });
+  // The thread's total grows by each model call's usage, and is sent again
+  // unchanged first, as a rate-limit update sends it.
+  const last = { totalTokens: 12 + text.length, inputTokens: 12, cachedInputTokens: 5, cacheWriteInputTokens: 2, outputTokens: text.length, reasoningOutputTokens: 0 };
+  const snapshot = () => notify('thread/tokenUsage/updated', { ...base, tokenUsage: { total: { ...thread.total }, last, modelContextWindow: 272000 } });
+  snapshot();
+  for (const key of Object.keys(last)) thread.total[key] += last[key];
   save();
-  notify('thread/tokenUsage/updated', { ...base, tokenUsage: {
-    total: { totalTokens: 999, inputTokens: 900, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 99, reasoningOutputTokens: 0 },
-    last: { totalTokens: 12 + text.length, inputTokens: 12, cachedInputTokens: 5, cacheWriteInputTokens: 2, outputTokens: text.length, reasoningOutputTokens: 0 },
-    modelContextWindow: 272000 } });
+  snapshot();
   notify('turn/completed', { threadId: thread.id, turn: { id: turnId, items: [], status: 'completed', error: null } });
 }
 
@@ -157,7 +161,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'thread/start': {
       const p = message.params;
       thread = { id: crypto.randomUUID(), dynamicTools: p.dynamicTools || [], approvalPolicy: p.approvalPolicy, sandbox: p.sandbox,
-        developerInstructions: p.developerInstructions || '', history: [] };
+        developerInstructions: p.developerInstructions || '', history: [],
+        total: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } };
       save();
       ok({ thread: { id: thread.id, status: { type: 'idle' }, turns: [] }, model: 'fake-codex', approvalPolicy: p.approvalPolicy });
       return notify('thread/started', { thread: { id: thread.id } });

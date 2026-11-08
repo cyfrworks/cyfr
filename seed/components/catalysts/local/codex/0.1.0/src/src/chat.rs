@@ -24,7 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::server::{self, Event};
+use crate::server::{self, Counts, Event};
 use crate::stream::{self, Deltas, Sink};
 
 pub const CONTRACT: &str = "model/chat@1";
@@ -33,11 +33,28 @@ const PROVIDER: &str = "codex";
 /// The `login` need the manifest declares for the program `codex`.
 pub const NEED: &str = "codex";
 
-/// What Codex's app-server does not list: a model's context window. Codex
-/// manages its own context and compacts it; 272,000 is the window its
-/// bundled catalog (`models-manager/models.json`, 0.167.0) gives the
-/// models it lists.
-const CONTEXT_WINDOW: u64 = 272_000;
+/// What Codex's app-server does not list: a model's context window, as
+/// the catalog Codex 0.167.0 ships (`codex-rs/models-manager/models.json`,
+/// each entry's `context_window`) gives it for every model it holds. A
+/// version bump reads them again.
+const CONTEXT_WINDOWS: &[(&str, u64)] = &[
+    ("gpt-6-astra", 272_000),
+    ("gpt-6.1-sol", 272_000),
+    ("gpt-6.1-terra", 500_000),
+    ("gpt-6-sol", 272_000),
+    ("gpt-6-luna", 272_000),
+    ("gpt-5.6-sol", 272_000),
+    ("gpt-5.6-terra", 272_000),
+    ("gpt-5.6-luna", 272_000),
+    ("gpt-daybreak-blue-latest", 272_000),
+    ("gpt-daybreak-red-latest", 372_000),
+    ("gpt-5.5", 272_000),
+    ("codex-auto-review", 272_000),
+];
+
+/// The window of a model the catalog does not hold (a model an account's
+/// own listing names): the smallest the catalog gives any model.
+const FALLBACK_CONTEXT_WINDOW: u64 = 272_000;
 
 /// The model option's value for the one Codex marks its default: no model
 /// is sent, and Codex runs its own.
@@ -218,11 +235,39 @@ pub enum Input {
     Answers(Vec<Answer>),
 }
 
-/// A session this catalyst answered: the pipe's key, and Codex's thread.
+/// A session this catalyst answered: the pipe's key, Codex's thread, and
+/// the thread's token usage as the run that answered last read it, which
+/// the next run counts its usage from.
 #[derive(Debug, PartialEq)]
 pub struct Session {
     pub key: String,
     pub thread: String,
+    pub total: Option<Counts>,
+}
+
+impl Session {
+    /// `<key>.<thread>`, and `.<input>-<output>-<cached>-<cache writes>`
+    /// once the thread's usage is known.
+    fn name(key: &str, thread: &str, total: Option<&Counts>) -> String {
+        match total {
+            Some([i, o, c, w]) => format!("{key}.{thread}.{i}-{o}-{c}-{w}"),
+            None => format!("{key}.{thread}"),
+        }
+    }
+
+    fn parse(answered: &str) -> Option<Session> {
+        let mut parts = answered.split('.');
+        let (key, thread) = (parts.next()?, parts.next()?);
+        let total = match parts.next() {
+            None => None,
+            Some(counts) => {
+                let counts: Vec<u64> = counts.split('-').map(|n| n.parse().ok()).collect::<Option<_>>()?;
+                Some(<Counts>::try_from(counts).ok()?)
+            }
+        };
+        (parts.next().is_none() && session_id(key) && session_id(thread))
+            .then(|| Session { key: key.into(), thread: thread.into(), total })
+    }
 }
 
 pub struct Request {
@@ -247,11 +292,9 @@ pub fn parse_request(params: &Value) -> Result<Request, String> {
     }
     let session = match params.get("session") {
         None => None,
-        Some(Value::String(answered)) => match answered.split_once('.') {
-            Some((key, thread)) if session_id(key) && session_id(thread) => {
-                Some(Session { key: key.into(), thread: thread.into() })
-            }
-            _ => return Err("'session' is not a session this brain answered".into()),
+        Some(Value::String(answered)) => match Session::parse(answered) {
+            Some(session) => Some(session),
+            None => return Err("'session' is not a session this brain answered".into()),
         },
         Some(_) => return Err("'session' is not a session this brain answered".into()),
     };
@@ -628,9 +671,25 @@ pub fn describe(model: Option<&str>, listing: Option<&[Value]>) -> Value {
     });
     if let Some(model) = model {
         described["model"] = json!(model);
-        described["context_window"] = json!(CONTEXT_WINDOW);
+        described["context_window"] = json!(context_window(model, listing));
     }
     described
+}
+
+/// A model's window from the catalog's table, `default` being the model
+/// Codex's listing marks its default.
+fn context_window(model: &str, listing: Option<&[Value]>) -> u64 {
+    let id = match model {
+        DEFAULT_MODEL => listing
+            .and_then(|models| models.iter().find(|m| m["isDefault"] == true))
+            .and_then(|m| m["id"].as_str())
+            .unwrap_or(model),
+        id => id,
+    };
+    CONTEXT_WINDOWS
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map_or(FALLBACK_CONTEXT_WINDOW, |(_, window)| *window)
 }
 
 /// `describe`'s envelope, from Codex's listing in a session of its own
@@ -898,6 +957,9 @@ fn converse<P: Pipe, S: Sink>(
     };
     let mut early = Vec::new();
     let mut model = request.run_model.clone();
+    // A new thread has used nothing; a known one has used what the session
+    // the request names last read.
+    let mut total = request.session.as_ref().and_then(|s| s.total);
     let thread = match (&request.session, resumed) {
         (Some(session), true) => session.thread.clone(),
         (known, false) => {
@@ -915,7 +977,10 @@ fn converse<P: Pipe, S: Sink>(
             let id = ids.of("thread");
             let line = match known {
                 Some(known) => server::thread_resume(&id, &known.thread, request.system.as_deref()),
-                None => server::thread_start(&id, request.system.as_deref(), tools.as_deref().unwrap_or(&[])),
+                None => {
+                    total = Some([0; 4]);
+                    server::thread_start(&id, request.system.as_deref(), tools.as_deref().unwrap_or(&[]))
+                }
             };
             send(pipe, line)?;
             let (started, others) = reader.answer(pipe, &id, deadline).map_err(|r| closing(pipe, r))?;
@@ -962,8 +1027,8 @@ fn converse<P: Pipe, S: Sink>(
         }
     };
     let model = model.unwrap_or_else(|| request.model.clone());
-    let session_name = format!("{key}.{thread}");
-    read_turn(pipe, deltas, reader, &Turn { id: &turn, model: &model, session: &session_name, answered: &answered }, early, deadline)
+    let turn = Turn { id: &turn, model: &model, key, thread: &thread, total, answered: &answered };
+    read_turn(pipe, deltas, reader, &turn, early, deadline)
 }
 
 /// CYFR's answers to calls a thread held when its program ended, as a
@@ -977,12 +1042,15 @@ fn restarted(answers: &[Answer]) -> String {
     text
 }
 
-/// The turn a run reads: its id, the model it runs on, the session the
-/// response names, and the requests this run has just answered.
+/// The turn a run reads: its id, the model it runs on, the session's key
+/// and thread, the thread's usage before this run (`None` when not
+/// known), and the requests this run has just answered.
 struct Turn<'a> {
     id: &'a str,
     model: &'a str,
-    session: &'a str,
+    key: &'a str,
+    thread: &'a str,
+    total: Option<Counts>,
     answered: &'a [Value],
 }
 
@@ -1001,14 +1069,19 @@ fn read_turn<P: Pipe, S: Sink>(
     let mut streamed: Vec<String> = Vec::new();
     let mut calls: Vec<Value> = Vec::new();
     let mut shown: u64 = 0;
-    let mut usage = server::no_usage();
-    let response = |text: &str, content: Vec<Value>, stop: &str, usage: &Value| {
+    // This run's usage is what the thread's total grew by past the total
+    // before it. With no total known, the first snapshot read is only the
+    // point the run counts from.
+    let mut used: Counts = [0; 4];
+    let mut total = turn.total;
+    let response = |text: &str, content: Vec<Value>, stop: &str, used: &Counts, total: Option<&Counts>| {
         let mut blocks = Vec::new();
         if !text.is_empty() {
             blocks.push(json!({"type": "text", "text": text}));
         }
         blocks.extend(content);
-        json!({"model": turn.model, "content": blocks, "stop_reason": stop, "usage": usage, "session": turn.session})
+        json!({"model": turn.model, "content": blocks, "stop_reason": stop, "usage": server::usage(used),
+               "session": Session::name(turn.key, turn.thread, total)})
     };
     // An agent message after another is set apart by a blank line, in the
     // stream as in the answer.
@@ -1042,7 +1115,7 @@ fn read_turn<P: Pipe, S: Sink>(
             deltas.flush();
             // The calls held, with none more arriving: the turn answers them.
             if !calls.is_empty() {
-                let answer = response(&text, std::mem::take(&mut calls), "tool_call", &usage);
+                let answer = response(&text, std::mem::take(&mut calls), "tool_call", &used, total.as_ref());
                 stream::close(deltas, &answer);
                 return Ok(answer);
             }
@@ -1102,12 +1175,17 @@ fn read_turn<P: Pipe, S: Sink>(
                     };
                     pipe.send(&reader.session, &[line]).map_err(|code| pipe_refusal(&code))?;
                 }
-                Event::Usage { turn: t, usage: last } if t == turn.id => server::add_usage(&mut usage, &last),
+                Event::Usage { turn: t, total: now } if t == turn.id => {
+                    if let Some(before) = &total {
+                        server::consumed(&mut used, before, &now);
+                    }
+                    total = Some(now);
+                }
                 // A turn ends only once every call it made is answered. The
                 // rest of the batch is still handled: the run releases it.
                 Event::TurnDone { turn: t, status, error } if t == turn.id && finished.is_none() => {
                     finished = Some(match status.as_str() {
-                        "completed" => Ok(response(&text, Vec::new(), "end_turn", &usage)),
+                        "completed" => Ok(response(&text, Vec::new(), "end_turn", &used, total.as_ref())),
                         "interrupted" => Err(Refusal::new(502, "provider_error", "Codex's turn was interrupted on its side.")),
                         _ => Err(turn_error(server::error_kind(&error))),
                     });
@@ -1355,9 +1433,11 @@ mod tests {
     fn ask(request: u64, method: &str) -> String {
         line(json!({"method": method, "id": request, "params": {"threadId": THREAD, "turnId": "{turn}", "itemId": "c9", "command": CANARY}}))
     }
+    /// A usage snapshot whose thread total is `input`, `cached` and `output`.
     fn usage(input: u64, cached: u64, output: u64) -> String {
+        let counts = json!({"totalTokens": input + output, "inputTokens": input, "cachedInputTokens": cached, "cacheWriteInputTokens": 0, "outputTokens": output, "reasoningOutputTokens": 0});
         line(json!({"method": "thread/tokenUsage/updated", "params": {"threadId": THREAD, "turnId": "{turn}", "tokenUsage": {
-            "total": {"inputTokens": 999}, "last": {"totalTokens": input + output, "inputTokens": input, "cachedInputTokens": cached, "cacheWriteInputTokens": 0, "outputTokens": output, "reasoningOutputTokens": 0}}}}))
+            "total": counts, "last": {"totalTokens": 1, "inputTokens": 1}}}}))
     }
     fn done() -> String {
         line(json!({"method": "turn/completed", "params": {"threadId": THREAD, "turn": {"id": "{turn}", "status": "completed", "error": null}}}))
@@ -1436,7 +1516,7 @@ mod tests {
             "content": [{"type": "text", "text": "Hello."}],
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 11, "output_tokens": 7, "cache_read_tokens": 3, "cache_write_tokens": 0},
-            "session": session()
+            "session": format!("{session}.11-7-3-0", session = session())
         }));
         assert_eq!(text_of(&events), "Hello.");
         assert_eq!(events.last().unwrap(), &json!({"type": "stop", "stop_reason": "end_turn"}));
@@ -1471,7 +1551,7 @@ mod tests {
         assert_eq!(pipe.answers().last().unwrap(), &json!({"id": 0, "result": {"contentItems": [{"type": "inputText", "text": "hi"}], "success": true}}));
         assert_eq!(answer["content"], json!([{"type": "text", "text": "The file says hi."}]));
         assert_eq!(answer["stop_reason"], "end_turn");
-        assert_eq!(answer["session"], session());
+        assert_eq!(answer["session"], format!("{}.0-0-0-0", session()), "a new thread has used nothing the run read");
         assert_eq!(text_of(&events), "The file says hi.");
     }
 
@@ -1602,7 +1682,7 @@ mod tests {
         ]));
         let started = request(json!({"model": "default", "tools": [files(), web], "messages": [{"role": "user", "content": "hi"}]}));
         let (answer, _) = run(&mut pipe, &started, far());
-        assert_eq!(answer.unwrap()["session"], session());
+        assert_eq!(answer.unwrap()["session"], format!("{}.0-0-0-0", session()));
         assert_eq!(pipe.codex.dynamic_tools.as_array().unwrap().len(), 2, "the thread starts with both tools");
 
         // A request narrowed to `files` goes on in the same thread: its
@@ -1747,7 +1827,7 @@ mod tests {
             {"name": "model", "kind": "enum", "values": ["default", "gpt-6.1-sol", "gpt-5.5"]},
             {"name": "effort", "kind": "enum", "values": ["low", "high", "ultra", "medium"]}
         ]));
-        assert_eq!(described["context_window"], CONTEXT_WINDOW);
+        assert_eq!(described["context_window"], 272_000);
         assert_eq!(models(&listed), json!({"models": [
             {"id": "default", "name": "Default (GPT-6.1-Sol)"},
             {"id": "gpt-6.1-sol", "name": "GPT-6.1-Sol"},
@@ -1762,6 +1842,49 @@ mod tests {
         lost.open_error = Some("lost".into());
         let answer: Value = serde_json::from_str(&describe_answer(&mut lost, "k", None, far())).unwrap();
         assert_eq!(answer["error"]["type"], "provider_error");
+    }
+
+    #[test]
+    fn describe_takes_each_model_s_window_from_the_pinned_catalog() {
+        let listed = vec![
+            json!({"id": "gpt-6.1-terra", "displayName": "GPT-6.1-Terra", "isDefault": true}),
+            json!({"id": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": false}),
+        ];
+        let window = |model: &str| describe(Some(model), Some(&listed))["context_window"].clone();
+        assert_eq!(window("gpt-6.1-terra"), 500_000);
+        assert_eq!(window("gpt-daybreak-red-latest"), 372_000);
+        assert_eq!(window("gpt-5.5"), 272_000);
+        assert_eq!(window("default"), 500_000, "the default is the model the listing marks it");
+        assert_eq!(window("gpt-9-unlisted"), FALLBACK_CONTEXT_WINDOW, "a model the catalog does not hold");
+        assert_eq!(describe(Some("default"), None)["context_window"], FALLBACK_CONTEXT_WINDOW);
+    }
+
+    #[test]
+    fn a_usage_snapshot_codex_sends_again_counts_once() {
+        let mut pipe = BoxPipe::new(Codex::new(vec![vec![vec![
+            message("m0", "Done."), usage(11, 3, 7), usage(11, 3, 7), done(),
+        ]]]));
+        let (answer, _) = run(&mut pipe, &first("hi"), far());
+        let answer = answer.unwrap();
+        assert_eq!(answer["usage"], json!({"input_tokens": 11, "output_tokens": 7, "cache_read_tokens": 3, "cache_write_tokens": 0}));
+        assert_eq!(answer["session"], format!("{KEY}.{THREAD}.11-7-3-0"), "the session carries the thread's total");
+    }
+
+    #[test]
+    fn a_run_counts_from_the_total_the_last_answer_carried() {
+        let mut pipe = BoxPipe::new(Codex::new(vec![vec![
+            vec![usage(11, 3, 7), call(0, "c1", "files", json!({}))],
+            // The next model call: its rate limits send the last total again
+            // first, then the call's own.
+            vec![usage(11, 3, 7), usage(20, 3, 9), message("m0", "Read."), done()],
+        ]]));
+        let (asked, _) = run(&mut pipe, &first("read"), far());
+        let asked = asked.unwrap();
+        assert_eq!(asked["usage"]["input_tokens"], 11);
+        let (answer, _) = run(&mut pipe, &answering(&asked, &[("c1", "A", false)]), far());
+        let answer = answer.unwrap();
+        assert_eq!(answer["usage"], json!({"input_tokens": 9, "output_tokens": 2, "cache_read_tokens": 0, "cache_write_tokens": 0}));
+        assert_eq!(answer["session"], format!("{KEY}.{THREAD}.20-9-3-0"));
     }
 
     #[test]
@@ -1803,6 +1926,11 @@ mod tests {
         assert!(parse_request(&with("session", json!("not-a-session"))).is_err());
         assert!(parse_request(&with("session", json!(KEY))).is_err(), "a session names its thread");
         assert!(parse_request(&with("session", json!(session()))).is_ok());
+        let carried = parse_request(&with("session", json!(format!("{}.11-7-3-0", session())))).unwrap();
+        assert_eq!(carried.session.unwrap().total, Some([11, 7, 3, 0]));
+        for broken in [".11-7", ".a-b-c-d", ".1-2-3-4.5"] {
+            assert!(parse_request(&with("session", json!(format!("{}{broken}", session())))).is_err(), "{broken}");
+        }
         assert!(parse_request(&with("provider_tools", json!(["web_search"]))).is_err());
         assert!(parse_request(&with("options", json!({"temperature": 1}))).is_err());
         assert!(parse_request(&with("options", json!({"model": "gpt-5.5", "effort": "high"}))).is_ok());

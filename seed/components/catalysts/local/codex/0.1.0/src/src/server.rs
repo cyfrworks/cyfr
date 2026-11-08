@@ -173,8 +173,8 @@ pub enum Event {
     /// Any other request of Codex's: an approval or one this catalyst
     /// refuses.
     Request { request: Value, method: String, params: Value },
-    /// The last model call's token usage in `turn`.
-    Usage { turn: String, usage: Value },
+    /// The thread's token usage so far, as `turn` reported it.
+    Usage { turn: String, total: Counts },
     /// `turn` ended: `completed`, `interrupted` or `failed`, with its error.
     TurnDone { turn: String, status: String, error: Value },
     /// Anything else: other notifications, other items.
@@ -231,7 +231,7 @@ pub fn read(line: &str) -> Event {
         }
         (Some("thread/tokenUsage/updated"), None) => Event::Usage {
             turn: turn(),
-            usage: params["tokenUsage"]["last"].clone(),
+            total: counts(&params["tokenUsage"]["total"]),
         },
         (Some("turn/completed"), None) => Event::TurnDone {
             turn: str_of(&params["turn"]["id"]),
@@ -246,24 +246,31 @@ fn str_of(value: &Value) -> String {
     value.as_str().unwrap_or("").to_string()
 }
 
-/// The contract's usage, adding one model call's (`TokenUsageBreakdown`) to
-/// `sum`. Input counts as Codex counts it, cached input among it, as the
-/// Responses API does.
-pub fn add_usage(sum: &mut Value, usage: &Value) {
-    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-    for (to, from) in [
-        ("input_tokens", "inputTokens"),
-        ("output_tokens", "outputTokens"),
-        ("cache_read_tokens", "cachedInputTokens"),
-        ("cache_write_tokens", "cacheWriteInputTokens"),
-    ] {
-        let had = sum.get(to).and_then(Value::as_u64).unwrap_or(0);
-        sum[to] = json!(had + count(from));
+/// The counts of a `TokenUsageBreakdown` this catalyst reads, in the
+/// contract's order: input (cached input among it, as the Responses API
+/// counts it), output, cached input, cache writes.
+pub type Counts = [u64; 4];
+
+pub fn counts(breakdown: &Value) -> Counts {
+    let count = |key: &str| breakdown.get(key).and_then(Value::as_u64).unwrap_or(0);
+    [count("inputTokens"), count("outputTokens"), count("cachedInputTokens"), count("cacheWriteInputTokens")]
+}
+
+/// What a usage snapshot adds to `sum`: its thread total past the total
+/// before it. Codex adds each model call's usage to the thread's total and
+/// sends the total again unchanged whenever its rate limits update
+/// (`Session::update_rate_limits`), so only the difference is new. A total
+/// lower than the one before (a compaction that refills the window resets
+/// it) adds nothing.
+pub fn consumed(sum: &mut Counts, before: &Counts, total: &Counts) {
+    for i in 0..4 {
+        sum[i] += total[i].saturating_sub(before[i]);
     }
 }
 
-pub fn no_usage() -> Value {
-    json!({"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0})
+/// The contract's usage from `sum`.
+pub fn usage(sum: &Counts) -> Value {
+    json!({"input_tokens": sum[0], "output_tokens": sum[1], "cache_read_tokens": sum[2], "cache_write_tokens": sum[3]})
 }
 
 /// The contract's refusal type for the error a turn failed with, by its
@@ -330,7 +337,7 @@ mod tests {
         );
         assert_eq!(
             read(r#"{"method":"thread/tokenUsage/updated","params":{"threadId":"th","turnId":"t1","tokenUsage":{"total":{"inputTokens":22},"last":{"totalTokens":18,"inputTokens":11,"cachedInputTokens":3,"cacheWriteInputTokens":0,"outputTokens":7,"reasoningOutputTokens":0}}}}"#),
-            Event::Usage { turn: "t1".into(), usage: json!({"totalTokens":18,"inputTokens":11,"cachedInputTokens":3,"cacheWriteInputTokens":0,"outputTokens":7,"reasoningOutputTokens":0}) }
+            Event::Usage { turn: "t1".into(), total: [22, 0, 0, 0] }
         );
         assert_eq!(
             read(r#"{"method":"turn/completed","params":{"threadId":"th","turn":{"id":"t1","status":"failed","error":{"message":"unexpected status 401","codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":401}}}}}}"#),
@@ -396,10 +403,14 @@ mod tests {
     }
 
     #[test]
-    fn usage_adds_each_model_call() {
-        let mut sum = no_usage();
-        add_usage(&mut sum, &json!({"inputTokens": 11, "cachedInputTokens": 3, "cacheWriteInputTokens": 1, "outputTokens": 7}));
-        add_usage(&mut sum, &json!({"inputTokens": 5, "outputTokens": 2}));
-        assert_eq!(sum, json!({"input_tokens": 16, "output_tokens": 9, "cache_read_tokens": 3, "cache_write_tokens": 1}));
+    fn usage_counts_what_each_total_adds_and_nothing_twice() {
+        let mut sum = [0; 4];
+        let first = counts(&json!({"inputTokens": 11, "cachedInputTokens": 3, "cacheWriteInputTokens": 1, "outputTokens": 7}));
+        consumed(&mut sum, &[0; 4], &first);
+        consumed(&mut sum, &first, &first);
+        let second = counts(&json!({"inputTokens": 16, "cachedInputTokens": 3, "cacheWriteInputTokens": 1, "outputTokens": 9}));
+        consumed(&mut sum, &first, &second);
+        consumed(&mut sum, &second, &[0, 0, 0, 0]);
+        assert_eq!(usage(&sum), json!({"input_tokens": 16, "output_tokens": 9, "cache_read_tokens": 3, "cache_write_tokens": 1}));
     }
 }

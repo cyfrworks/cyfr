@@ -25,17 +25,20 @@ fake-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
   asking off, and a turn with the request's model and effort; Codex's own
   command is shown as a `tool_call.start`/`end` pair by name only and its
   patch approval allowed; the reply streams as `text.delta` and answers
-  `end_turn` with usage and the session, `<key>.<thread>`.
+  `end_turn` with usage and the session, `<key>.<thread>` with the
+  thread's usage so far, which each next chat carries back as AQUA does.
 - A held call: a message that makes Codex call one of CYFR's tools answers
   a `tool_call` named as the request named the tool, carrying Codex's
   request and turn, and leaves the call held in the running program; the
   next chat, carrying the `tool_result`, attaches and sends only the
-  call's answer, which Codex's reply quotes.
+  call's answer, which Codex's reply quotes; its usage is the one model
+  call's, though Codex sent the thread's total twice.
 - An interruption: when the read after the next call's answer is answered
   unavailable, the chat answers provider_error (which the loop does not
   retry) saying the session was interrupted, closes the session with its
   program and sends nothing more; the next message resumes the thread
-  from the kept folder (`thread/resume`), sending no answer again.
+  from the kept folder (`thread/resume`), sending no answer again, and
+  counts the interrupted run's model call with its own.
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the program again and resumes the
   thread, which the kept folder holds.
@@ -189,6 +192,11 @@ def run_catalyst(rt, plane, wasm, operation, params, what):
     return output, events
 
 
+def identity(session):
+    """A session's key and thread, without the usage it carries."""
+    return ".".join(session.split(".")[:2])
+
+
 def text_of(events):
     return "".join(e["text"] for e in events if e.get("type") == "text.delta")
 
@@ -311,6 +319,10 @@ def main():
                "the next chat attaches to the running session and sends the call's answer alone", sent)
         expect(data["stop_reason"] == "end_turn" and data["content"] == [{"type": "text", "text": f"The file says: {body}"}],
                "Codex took CYFR's answer, which its reply quotes", data)
+        expect(data["usage"]["input_tokens"] == 12 and identity(data["session"]) == identity(session),
+               "the reply's one model call counts once, though Codex sent the thread's total twice", data)
+        session = data["session"]
+        ask = {**ask, "session": session}
 
         # ————— a pipe that fails after the answer interrupts the session —————
         output, events = run_catalyst(rt, plane, wasm, "chat", {**ask, "messages": history[:-1] + [
@@ -342,9 +354,14 @@ def main():
         expect(bridge.methods() == ["initialize", "initialized", "account/read", "thread/resume", "turn/start"]
                and resume[0]["params"]["threadId"] == thread
                and resume[0]["params"]["approvalPolicy"] == "never" and resume[0]["params"]["sandbox"] == "danger-full-access"
-               and output["data"]["session"] == session
+               and identity(output["data"]["session"]) == identity(session)
                and output["data"]["content"] == [{"type": "text", "text": "Your first message was: say hello"}],
                "the next message resumes the thread from the kept folder, and no answer is sent again", [sent, output])
+        expect(output["data"]["usage"]["input_tokens"] == 24,
+               "the run counts the interrupted run's model call with its own, from the total the last answer carried",
+               output["data"]["usage"])
+        session = output["data"]["session"]
+        resumed = {**resumed, "session": session}
 
         # ————— resume after retirement —————
         eventually(lambda: c.program(OWNER, PROGRAM["name"])["sessions"] == 0 and not fakes(backends),
@@ -354,8 +371,9 @@ def main():
         answers.append((output, events))
         expect("thread/resume" in bridge.methods() and "thread/start" not in bridge.methods()
                and output["data"]["content"] == [{"type": "text", "text": "Your first message was: say hello"}]
-               and output["data"]["session"] == session,
+               and identity(output["data"]["session"]) == identity(session),
                "the program starts again and resumes the thread its kept folder holds", [bridge.methods(), output])
+        resumed = {**resumed, "session": output["data"]["session"]}
 
         # ————— a refused sign-in —————
         output, events = run_catalyst(rt, plane, wasm, "chat", {**resumed, "messages": [
