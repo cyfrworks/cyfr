@@ -238,6 +238,13 @@ def main():
         bridge.install(plane)
         rt.up()
 
+        def retired():
+            # The owner's lease (30 s) is shorter than this test, and opening
+            # a session does not renew it: renew it as CYFR's host does while
+            # the program idles out, or the service releases the owner.
+            c.running(OWNER)
+            return c.program(OWNER, PROGRAM["name"])["sessions"] == 0 and not fakes(backends)
+
         # ————— describe: Codex's listing —————
         described, events = run_catalyst(rt, plane, wasm, "describe", {"model": "fake-mini"}, "describe")
         answers.append((described, events))
@@ -364,7 +371,7 @@ def main():
         resumed = {**resumed, "session": session}
 
         # ————— resume after retirement —————
-        eventually(lambda: c.program(OWNER, PROGRAM["name"])["sessions"] == 0 and not fakes(backends),
+        eventually(retired,
                    "the idle session's program to be retired", timeout_s=IDLE_MS / 1000 + 30)
         bridge.calls.clear()
         output, events = run_catalyst(rt, plane, wasm, "chat", resumed, "a chat after the program retired")
@@ -379,7 +386,7 @@ def main():
         output, events = run_catalyst(rt, plane, wasm, "chat", {**resumed, "messages": [
             {"role": "user", "content": "sign out"}]}, "a chat that removes Codex's sign-in")
         answers.append((output, events))
-        eventually(lambda: c.program(OWNER, PROGRAM["name"])["sessions"] == 0 and not fakes(backends),
+        eventually(retired,
                    "the signed-out program to be retired", timeout_s=IDLE_MS / 1000 + 30)
         bridge.calls.clear()
         output, events = run_catalyst(rt, plane, wasm, "chat", resumed, "a chat with no sign-in")
