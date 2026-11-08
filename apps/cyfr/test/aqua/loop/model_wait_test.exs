@@ -3,17 +3,20 @@
 
 defmodule Aqua.Loop.ModelWaitTest do
   @moduledoc """
-  The loop waits for a brain's answer until its run ends at the deadline
-  the brain's node is consented, which the worker service enforces and
-  reports, and keeps no clock of its own. The tests tell that apart from
+  The loop waits for a run it dispatched, a brain's answer or a hand's
+  tool step, until the run ends at the deadline its catalyst's node is
+  consented, which the worker service enforces and reports, and keeps no
+  clock of its own. The tests tell that apart from
   a loop that stops the waiter itself when the consent runs out: a brain
   consented five seconds that never answers ends its turn by the worker
   service's reported end, past the consent and its grace, with no kill
   asked by the host, where a loop clock stopped the run first with its
   own `:timeout`; that reported end leaves no unreaped note on the
   athanor's slot and its next root is admitted, where the loop's kill was
-  noted; and a turn on a brain consented thirty minutes lasts at least
-  that long, past the five its agent is consented.
+  noted; a hand's tool step that hangs to its consented deadline ends the
+  same way, where the loop's step clock killed it and noted the kill; and a
+  turn on a brain consented thirty minutes lasts at least that long, past
+  the five its agent is consented.
   """
   use ExUnit.Case, async: false
 
@@ -24,6 +27,7 @@ defmodule Aqua.Loop.ModelWaitTest do
 
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
+  @hand "catalyst:local.files"
   @consented_ms 5_000
 
   setup tags do
@@ -43,10 +47,13 @@ defmodule Aqua.Loop.ModelWaitTest do
     end)
 
     # A seed of this test's own, whose brain is consented the test's time
-    # for one answer: the shipped catalysts, with that one limit changed
-    # before anything reads them.
+    # for one answer and whose files hand the test's time for one run: the
+    # shipped catalysts, with those limits changed before anything reads
+    # them.
     seed = Cyfr.Test.SeedBundle.lay!(~w(claude files http))
-    consent_timeout!(seed, Map.get(tags, :consent, "#{div(@consented_ms, 1000)}s"))
+    consented = "#{div(@consented_ms, 1000)}s"
+    consent_timeout!(seed, "claude", Map.get(tags, :consent, consented))
+    consent_timeout!(seed, "files", Map.get(tags, :hand_consent, consented))
 
     # The loop's work stops before its tree is removed and the seed restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
@@ -109,6 +116,40 @@ defmodule Aqua.Loop.ModelWaitTest do
     assert :completed = Task.await(run(ctx, next), 30_000)
   end
 
+  test "a hand's tool step that hangs to its consented deadline leaves no unreaped note on the athanor's slot, and its next root is admitted",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "list my files")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, @hand],
+       script: [calls([{"c1", "files", %{"action" => "list", "path" => "data"}}]), :hang]}
+    )
+
+    # The hand's outcome is unknown once its run ended without answering:
+    # the turn stops on it, its root let go.
+    started = System.monotonic_time(:millisecond)
+    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
+    waited = System.monotonic_time(:millisecond) - started
+
+    # The worker service ended the hand's run at its consented deadline
+    # and its grace, and reported it; the loop asked for no kill.
+    assert waited >= @consented_ms
+    assert [hand_run] = ScriptedWorker.expired()
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert [%{child_execution_id: ^hand_run}] = Enum.filter(steps, &(&1.kind == "tool"))
+    :ok = ScriptedWorker.await_reports()
+    assert ScriptedWorker.kills() == []
+    assert Map.get(Prima.Slots.status(Opus.Slots).unreaped, ctx.athanor_id, 0) == 0
+
+    # The athanor's next root is admitted and runs, in a thread of its own
+    # beside the stopped turn's.
+    ScriptedWorker.script([reply("hi")])
+    {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
+    next = accept!(ctx, other, "again")
+    assert :completed = Task.await(run(ctx, next), 30_000)
+  end
+
   @tag consent: "30m"
   test "a turn on a brain consented longer than its agent lasts at least one answer of it",
        %{ctx: ctx, thread: thread} do
@@ -134,10 +175,21 @@ defmodule Aqua.Loop.ModelWaitTest do
       "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
     }
 
-  defp consent_timeout!(seed, timeout) do
+  defp calls(blocks) do
+    %{
+      "content" =>
+        Enum.map(blocks, fn {id, name, args} ->
+          %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}
+        end),
+      "stop_reason" => "tool_call",
+      "usage" => %{"input_tokens" => 20, "output_tokens" => 8}
+    }
+  end
+
+  defp consent_timeout!(seed, catalyst, timeout) do
     [path] =
       Path.wildcard(
-        Path.join([seed, "components", "catalysts", "local", "claude", "*", "cyfr-manifest.json"])
+        Path.join([seed, "components", "catalysts", "local", catalyst, "*", "cyfr-manifest.json"])
       )
 
     manifest = path |> File.read!() |> Jason.decode!()
