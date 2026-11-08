@@ -8,6 +8,7 @@ defmodule Emissary.External.ServerTest do
   # resolved by name, and its destination is not what these cases test.
   @destination %{"hosts" => ["api.example.com"]}
 
+  alias Cyfr.Test.HTTPStub
   alias Emissary.External.Server
 
   @registry Emissary.External.ServerRegistry
@@ -259,20 +260,19 @@ defmodule Emissary.External.ServerTest do
   describe "header vault resolution" do
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
-      bypass = Bypass.open()
+      stub = HTTPStub.open()
 
-      {:ok,
-       bypass: bypass, at: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}}
+      {:ok, stub: stub, at: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}}
     end
 
     @inside "https://api.example.com/mcp"
 
     # An upstream that lists no tools and tells the test the headers each
     # request carried.
-    defp listening(bypass, path \\ "/mcp") do
+    defp listening(stub, path \\ "/mcp") do
       test = self()
 
-      Bypass.stub(bypass, "POST", path, fn conn ->
+      HTTPStub.stub(stub, "POST", path, fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         send(test, {:upstream_headers, Map.new(conn.req_headers)})
 
@@ -303,11 +303,11 @@ defmodule Emissary.External.ServerTest do
 
     test "a scheme-prefixed reference resolves to the scheme and the entry's value", %{
       name: name,
-      bypass: bypass,
+      stub: stub,
       at: at
     } do
       ctx = Sanctum.TestContext.local()
-      listening(bypass)
+      listening(stub)
 
       {:ok, _} =
         Sanctum.TestContext.create_vault(ctx, %{
@@ -319,7 +319,7 @@ defmodule Emissary.External.ServerTest do
 
       pid =
         start_server(name, ctx.athanor_id,
-          url: "http://127.0.0.1:#{bypass.port}/mcp",
+          url: "http://127.0.0.1:#{stub.port}/mcp",
           headers: %{"authorization" => "Bearer vault:ext-bearer", "accept" => "text/plain"}
         )
 
@@ -333,11 +333,11 @@ defmodule Emissary.External.ServerTest do
 
     test "an entry whose destination does not cover the server's URL is refused unsealed", %{
       name: name,
-      bypass: bypass,
+      stub: stub,
       at: at
     } do
       ctx = Sanctum.TestContext.local()
-      listening(bypass, "/v1/mcp")
+      listening(stub, "/v1/mcp")
 
       {:ok, entry} =
         Sanctum.TestContext.create_vault(ctx, %{
@@ -351,8 +351,8 @@ defmodule Emissary.External.ServerTest do
 
       for {url, n} <-
             Enum.with_index([
-              "http://localhost:#{bypass.port}/v1/mcp",
-              "http://127.0.0.1:#{bypass.port}/v2/mcp",
+              "http://localhost:#{stub.port}/v1/mcp",
+              "http://127.0.0.1:#{stub.port}/v2/mcp",
               nil
             ]) do
         server = "#{name}-#{n}"
@@ -371,7 +371,7 @@ defmodule Emissary.External.ServerTest do
       # Inside the entry's host and paths, it is sent.
       pid =
         start_server(name, ctx.athanor_id,
-          url: "http://127.0.0.1:#{bypass.port}/v1/mcp",
+          url: "http://127.0.0.1:#{stub.port}/v1/mcp",
           headers: headers
         )
 
@@ -447,12 +447,12 @@ defmodule Emissary.External.ServerTest do
     # was sent.
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
-      bypass = Bypass.open()
-      {:ok, ctx: Sanctum.TestContext.local(), bypass: bypass}
+      stub = HTTPStub.open()
+      {:ok, ctx: Sanctum.TestContext.local(), stub: stub}
     end
 
-    defp call_answering(name, ctx, bypass, headers, text) do
-      Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+    defp call_answering(name, ctx, stub, headers, text) do
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         request = Jason.decode!(body)
 
@@ -472,7 +472,7 @@ defmodule Emissary.External.ServerTest do
 
       pid =
         start_server(name, ctx.athanor_id,
-          url: "http://127.0.0.1:#{bypass.port}/mcp",
+          url: "http://127.0.0.1:#{stub.port}/mcp",
           headers: headers
         )
 
@@ -485,21 +485,21 @@ defmodule Emissary.External.ServerTest do
     test "masks resolved secret header values, and the bare token after its scheme", %{
       name: name,
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
       {:ok, _} =
         Sanctum.TestContext.create_vault(ctx, %{
           name: "mask-token",
           kind: "api_key",
           fields: %{"token" => "sk-super-secret-token"},
-          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}
         })
 
       echo =
         call_answering(
           name,
           ctx,
-          bypass,
+          stub,
           %{"authorization" => "Bearer vault:mask-token"},
           fn headers ->
             [
@@ -515,13 +515,13 @@ defmodule Emissary.External.ServerTest do
     test "masks credential-shaped literal headers but not innocuous ones", %{
       name: name,
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
       echo =
         call_answering(
           name,
           ctx,
-          bypass,
+          stub,
           %{"x-custom-key" => "literal-credential-value", "x-trace" => "innocuous-value"},
           fn headers -> [headers["x-custom-key"], headers["x-trace"]] end
         )
@@ -532,13 +532,13 @@ defmodule Emissary.External.ServerTest do
     test "masks the literal value of every header Prima names a credential carrier", %{
       name: name,
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
       names = Prima.Network.credential_headers() ++ ["x-session-token", "x-client-secret"]
       values = Map.new(names, &{&1, "literal-value-of-#{&1}"})
 
       echo =
-        call_answering(name, ctx, bypass, values, fn headers ->
+        call_answering(name, ctx, stub, values, fn headers ->
           Enum.map(names, &headers[&1])
         end)
 
@@ -890,27 +890,27 @@ defmodule Emissary.External.ServerTest do
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
       ctx = Sanctum.TestContext.local()
-      bypass = Bypass.open()
+      stub = HTTPStub.open()
 
       {:ok, _} =
         Sanctum.TestContext.create_vault(ctx, %{
           name: "echo-key",
           kind: "api_key",
           fields: %{"token" => @echoed},
-          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}
         })
 
-      {:ok, ctx: ctx, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+      {:ok, ctx: ctx, stub: stub, url: "http://127.0.0.1:#{stub.port}/mcp"}
     end
 
     for era <- [:modern, :legacy] do
       test "answers its caller with the masked sentence it keeps (#{era} peer)", %{
         name: name,
         ctx: ctx,
-        bypass: bypass,
+        stub: stub,
         url: url
       } do
-        echo_upstream(bypass, unquote(era))
+        echo_upstream(stub, unquote(era))
 
         pid =
           start_server(name, ctx.athanor_id,
@@ -941,8 +941,8 @@ defmodule Emissary.External.ServerTest do
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
       ctx = Sanctum.TestContext.local()
-      bypass = Bypass.open()
-      destination = %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+      stub = HTTPStub.open()
+      destination = %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}
 
       for {name, token} <- [
             {"listed-key", @listed},
@@ -959,16 +959,16 @@ defmodule Emissary.External.ServerTest do
           })
       end
 
-      {:ok, ctx: ctx, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+      {:ok, ctx: ctx, stub: stub, url: "http://127.0.0.1:#{stub.port}/mcp"}
     end
 
     test "a tool listing quoting it is stored and answered masked", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         request = Jason.decode!(body)
         [auth] = Plug.Conn.get_req_header(conn, "authorization")
@@ -1015,12 +1015,12 @@ defmodule Emissary.External.ServerTest do
       test "a refusal quoting it is logged masked (#{key}, #{pad} bytes before it)", %{
         name: name,
         ctx: ctx,
-        bypass: bypass,
+        stub: stub,
         url: url
       } do
         pad = String.duplicate("x", unquote(pad))
 
-        Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+        HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           request = Jason.decode!(body)
           [auth] = Plug.Conn.get_req_header(conn, "authorization")
@@ -1068,12 +1068,12 @@ defmodule Emissary.External.ServerTest do
       test "a refusal quoting it in a #{shape} rendering is logged masked", %{
         name: name,
         ctx: ctx,
-        bypass: bypass,
+        stub: stub,
         url: url
       } do
         suffix = unquote(suffix)
 
-        answering(bypass, fn request, auth, _modern? ->
+        answering(stub, fn request, auth, _modern? ->
           {:json,
            %{
              "jsonrpc" => "2.0",
@@ -1093,10 +1093,10 @@ defmodule Emissary.External.ServerTest do
     test "a refusal of a megabyte is logged within the line's bounds", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, auth, _modern? ->
+      answering(stub, fn request, auth, _modern? ->
         message = String.duplicate("a", 1_000_000) <> <<1>> <> " rejected " <> auth
 
         {:json,
@@ -1115,10 +1115,10 @@ defmodule Emissary.External.ServerTest do
     test "a tools/list answer that is no listing is refused, not a crash", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, auth, _modern? ->
+      answering(stub, fn request, auth, _modern? ->
         {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => auth}}
       end)
 
@@ -1137,10 +1137,10 @@ defmodule Emissary.External.ServerTest do
     test "a legacy handshake answering no object is refused, not a crash", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, auth, modern? ->
+      answering(stub, fn request, auth, modern? ->
         case request["method"] do
           "tools/list" when modern? ->
             {:status, 400, "Bad Request"}
@@ -1171,10 +1171,10 @@ defmodule Emissary.External.ServerTest do
     test "a legacy peer's server info quoting it is stored and answered masked", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, auth, modern? ->
+      answering(stub, fn request, auth, modern? ->
         case request["method"] do
           "tools/list" when modern? ->
             {:status, 400, "Bad Request"}
@@ -1208,10 +1208,10 @@ defmodule Emissary.External.ServerTest do
     test "a crash carrying the state logs no header value", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, _auth, _modern? ->
+      answering(stub, fn request, _auth, _modern? ->
         {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => %{"tools" => []}}}
       end)
 
@@ -1244,10 +1244,10 @@ defmodule Emissary.External.ServerTest do
     test "a crash is logged by its frames' arity, never the message the server was handed", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, _auth, _modern? ->
+      answering(stub, fn request, _auth, _modern? ->
         {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => %{"tools" => []}}}
       end)
 
@@ -1281,10 +1281,10 @@ defmodule Emissary.External.ServerTest do
     test "a tool call answered with an object for jsonrpc logs no header value", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, auth, _modern? ->
+      answering(stub, fn request, auth, _modern? ->
         case request["method"] do
           "tools/list" ->
             {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => %{"tools" => []}}}
@@ -1309,10 +1309,10 @@ defmodule Emissary.External.ServerTest do
     test "a connect answered with an object for jsonrpc is refused, not a crash", %{
       name: name,
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
-      answering(bypass, fn request, auth, _modern? ->
+      answering(stub, fn request, auth, _modern? ->
         {:json, %{"jsonrpc" => %{"echo" => auth}, "id" => request["id"], "result" => %{}}}
       end)
 
@@ -1423,8 +1423,8 @@ defmodule Emissary.External.ServerTest do
   # An upstream answering each request through `fun`, which reads the
   # request, the Authorization header it was sent and whether the request
   # is the current era's probe (`params._meta`).
-  defp answering(bypass, fun) do
-    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+  defp answering(stub, fun) do
+    HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       request = Jason.decode!(body)
       [auth] = Plug.Conn.get_req_header(conn, "authorization")
@@ -1464,8 +1464,8 @@ defmodule Emissary.External.ServerTest do
   # Authorization header it was sent: at `tools/list` for a current peer,
   # and at `initialize` for one that answers the current probe as a legacy
   # peer does.
-  defp echo_upstream(bypass, era) do
-    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+  defp echo_upstream(stub, era) do
+    HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       request = Jason.decode!(body)
       [auth] = Plug.Conn.get_req_header(conn, "authorization")

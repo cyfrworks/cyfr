@@ -67,6 +67,8 @@ defmodule PrismWeb.LoginLive do
      # `connect_info` is readable only here, so the address a request is
      # charged to is captured at mount and carried.
      |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
+     # The browser and system the session it signs in records.
+     |> assign(:user_agent, if(connected?(socket), do: get_connect_info(socket, :user_agent)))
      |> assign(:page_title, "Sign in")
      |> assign(:set_up, set_up?())
      |> assign(:error, error_from_params(params)), layout: false}
@@ -93,7 +95,12 @@ defmodule PrismWeb.LoginLive do
 
   def handle_event("account_answer", %{"answer" => answer}, socket)
       when is_binary(answer) and answer != "" do
-    {:noreply, answered(socket, Sanctum.SignIn.answer(answer, socket.assigns.bindings))}
+    outcome =
+      Sanctum.SignIn.answer(answer, socket.assigns.bindings,
+        user_agent: socket.assigns.user_agent
+      )
+
+    {:noreply, answered(socket, outcome)}
   end
 
   def handle_event("account_answer", _params, socket), do: {:noreply, socket}

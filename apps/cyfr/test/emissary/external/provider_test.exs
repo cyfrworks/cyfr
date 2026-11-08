@@ -4,6 +4,7 @@
 defmodule Emissary.External.ProviderTest do
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.HTTPStub
   alias Emissary.External.Provider
 
   setup tags do
@@ -407,27 +408,27 @@ defmodule Emissary.External.ProviderTest do
     @echoed "sk-echo-provider-0123456789"
 
     setup %{ctx: ctx} do
-      bypass = Bypass.open()
+      stub = HTTPStub.open()
 
       {:ok, _} =
         Sanctum.TestContext.create_vault(ctx, %{
           name: "echo-key",
           kind: "api_key",
           fields: %{"token" => @echoed},
-          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}
         })
 
       on_exit(fn -> Emissary.External.ServerSupervisor.stop("echo", ctx.athanor_id) end)
-      {:ok, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+      {:ok, stub: stub, url: "http://127.0.0.1:#{stub.port}/mcp"}
     end
 
     for era <- [:modern, :legacy] do
       test "create, Test and Refresh answer the mask, never the value (#{era} peer)", %{
         ctx: ctx,
-        bypass: bypass,
+        stub: stub,
         url: url
       } do
-        echo_upstream(bypass, unquote(era))
+        echo_upstream(stub, unquote(era))
         masked = "rejected credential [REDACTED]"
 
         assert {:ok, %{name: "echo", status: "error", error: ^masked} = created} =
@@ -460,8 +461,8 @@ defmodule Emissary.External.ProviderTest do
     # Authorization header it was sent: at `tools/list` for a current peer,
     # and at `initialize` for one that answers the current probe as a
     # legacy peer does.
-    defp echo_upstream(bypass, era) do
-      Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+    defp echo_upstream(stub, era) do
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         request = Jason.decode!(body)
         [auth] = Plug.Conn.get_req_header(conn, "authorization")

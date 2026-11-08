@@ -13,6 +13,8 @@ defmodule PrismWeb.ProgramsLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  alias Cyfr.Test.HTTPStub
+
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -208,8 +210,8 @@ defmodule PrismWeb.ProgramsLiveTest do
   for era <- [:modern, :legacy] do
     test "an upstream echoing the header it was sent shows the mask in the flash (#{era} peer)",
          %{conn: conn, athanor: athanor, user: user} do
-      bypass = Bypass.open()
-      echo_upstream(bypass, unquote(era))
+      stub = HTTPStub.open()
+      echo_upstream(stub, unquote(era))
 
       ctx =
         Sanctum.Context.build(
@@ -226,7 +228,7 @@ defmodule PrismWeb.ProgramsLiveTest do
           name: "echo-key",
           kind: "api_key",
           fields: %{"token" => @echoed},
-          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => stub.port}
         })
 
       on_exit(fn -> Emissary.External.ServerSupervisor.stop("echo", athanor.id) end)
@@ -236,7 +238,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       config =
         Jason.encode!(%{
-          "url" => "http://127.0.0.1:#{bypass.port}/mcp",
+          "url" => "http://127.0.0.1:#{stub.port}/mcp",
           "headers" => %{"Authorization" => "vault:echo-key"}
         })
 
@@ -264,8 +266,8 @@ defmodule PrismWeb.ProgramsLiveTest do
   # Authorization header it was sent: at `tools/list` for a current peer,
   # and at `initialize` for one that answers the current probe as a legacy
   # peer does.
-  defp echo_upstream(bypass, era) do
-    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+  defp echo_upstream(stub, era) do
+    HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       request = Jason.decode!(body)
       [auth] = Plug.Conn.get_req_header(conn, "authorization")

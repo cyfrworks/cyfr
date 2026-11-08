@@ -22,12 +22,13 @@ defmodule Emissary.External.ServerSseTest do
 
   import Prima.Test.Wait, only: [wait_until: 2]
 
+  alias Cyfr.Test.HTTPStub
   alias Emissary.External.Server
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    bypass = Bypass.open()
-    {:ok, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+    stub = HTTPStub.open()
+    {:ok, stub: stub, url: "http://127.0.0.1:#{stub.port}/mcp"}
   end
 
   defp connect(url, name) do
@@ -52,8 +53,8 @@ defmodule Emissary.External.ServerSseTest do
 
   @tool %{"name" => "probe", "description" => "d", "inputSchema" => %{"type" => "object"}}
 
-  test "the result is taken from the last event, not the last line", %{bypass: bypass, url: url} do
-    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+  test "the result is taken from the last event, not the last line", %{stub: stub, url: url} do
+    HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       id = Jason.decode!(body)["id"]
 
@@ -67,8 +68,8 @@ defmodule Emissary.External.ServerSseTest do
     assert Enum.map(tools, & &1["name"]) == ["probe"]
   end
 
-  test "a payload folded across data: lines is rejoined", %{bypass: bypass, url: url} do
-    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+  test "a payload folded across data: lines is rejoined", %{stub: stub, url: url} do
+    HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       id = Jason.decode!(body)["id"]
 
@@ -86,13 +87,13 @@ defmodule Emissary.External.ServerSseTest do
     assert Enum.map(tools, & &1["name"]) == ["probe"]
   end
 
-  test "a caller gone mid-call takes its upstream round-trip with it", %{bypass: bypass, url: url} do
+  test "a caller gone mid-call takes its upstream round-trip with it", %{stub: stub, url: url} do
     test = self()
 
     # The upstream holds the tool call until the test lets it go, so the
     # round-trip is still in flight when its caller dies, however slowly
     # the machine runs.
-    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+    HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       request = Jason.decode!(body)
 
@@ -130,6 +131,6 @@ defmodule Emissary.External.ServerSseTest do
     assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 10_000
     wait_until(fn -> :sys.get_state(pid).in_flight == %{} end, 10_000)
     send(upstream, :release)
-    Bypass.pass(bypass)
+    HTTPStub.pass(stub)
   end
 end

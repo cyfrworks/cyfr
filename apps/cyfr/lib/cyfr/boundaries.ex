@@ -639,7 +639,8 @@ defmodule Cyfr.Boundaries do
           "opens setup now (`setup_open/1`), before it offers anything. " <>
           "`Sanctum.SignIn` is the sign-in, setup and invitation pages' request, bound to " <>
           "the browser, holding the setup token or an invitation's hash (`request/2,3`), " <>
-          "and the sign-in page's answer to it (`answer/2`), which decides for itself and " <>
+          "and the sign-in page's answer to it (`answer/3`, with the browser's user agent " <>
+          "the session records in words), which decides for itself and " <>
           "admits or signs in only under the door, the setup token or the invitation. " <>
           "`Sanctum.Invitations` is the invitation page's read of who invited and to which " <>
           "athanor, or that the code admits no one (`lookup/1`), which grants nothing, " <>
@@ -2211,7 +2212,6 @@ defmodule Cyfr.Boundaries do
       tail: 3
     ],
     "Sanctum.SignIn" => [
-      answer: 2,
       answer: 3,
       binding: 1,
       record_namespace: 2,

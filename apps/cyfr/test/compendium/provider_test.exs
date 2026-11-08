@@ -6,6 +6,7 @@ defmodule Compendium.ProviderTest do
 
   alias Compendium.Provider
   alias Compendium.Registry
+  alias Cyfr.Test.HTTPStub
   alias Sanctum.Context
 
   @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
@@ -2587,12 +2588,12 @@ defmodule Compendium.ProviderTest do
   end
 
   # Registry errors must be readable.
-  describe "registry MCP — error formatting (Bypass)" do
+  describe "registry MCP — error formatting (HTTP stub)" do
     setup do
-      bypass = Bypass.open()
+      stub = HTTPStub.open()
       original_url = Application.get_env(:cyfr, :registry_url)
 
-      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{stub.port}")
 
       on_exit(fn ->
         if original_url,
@@ -2600,12 +2601,12 @@ defmodule Compendium.ProviderTest do
           else: Application.delete_env(:cyfr, :registry_url)
       end)
 
-      {:ok, bypass: bypass}
+      {:ok, stub: stub}
     end
 
     test "registry.legal-version surfaces 503 errors as a readable refusal (no inspected struct)",
-         %{bypass: bypass, ctx: ctx} do
-      Bypass.expect(bypass, "GET", "/v1/legal/version", fn conn ->
+         %{stub: stub, ctx: ctx} do
+      HTTPStub.expect(stub, "GET", "/v1/legal/version", fn conn ->
         conn
         |> Plug.Conn.put_resp_header("content-type", "application/json")
         |> Plug.Conn.resp(503, ~s({"errors":[{"code":"UNAVAILABLE","message":"db down"}]}))

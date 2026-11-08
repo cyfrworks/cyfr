@@ -46,7 +46,8 @@
 # refusal the vectors name that needs no signature: stale_head,
 # duplicate_key (it lists each log's kids from its entries), broken_link,
 # an entry of the wrong kind for its route, wrong_directory (a genesis
-# naming another directory than its own), a body over 16 KiB (413),
+# naming another directory than its own), a passkey's maker (`aaguid`)
+# beside a device key or in another spelling, a body over 16 KiB (413),
 # not_found and gone. POST /stand-in/tombstone/{identifier} is its
 # operator's tombstone, the stand-in's alone: cyfr.run's is an
 # administrator's action, a CYFR's the operation directory.tombstone.
@@ -84,6 +85,8 @@ REQUEST_PROTOCOL = "cyfr-registry-request/v2"
 HANDLE_PROTOCOL = "cyfr-handle/v1"
 REDIRECTED = "cyfr.run answered with a redirect, which the stand-in does not follow."
 
+# Each grammar pattern is matched whole (fullmatch): a bare match lets `$`
+# match before a final newline.
 IDENTIFIER = re.compile(r"^per_[0-9a-f]{64}$")
 HANDLE = re.compile(r"^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -97,6 +100,8 @@ KINDS = {
     "recover": ["prev", "keys", "recovery"],
     "add_recovery": ["prev", "recovery"],
 }
+OPTIONAL = {"add_key": ["aaguid"]}
+AAGUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def jcs(value):
@@ -197,7 +202,7 @@ class StandIn:
         if request["operation"] != operation:
             raise registry_refusal(400, "UNKNOWN_OPERATION")
         body = request["body"]
-        if not isinstance(request["identifier"], str) or not IDENTIFIER.match(request["identifier"]):
+        if not isinstance(request["identifier"], str) or not IDENTIFIER.fullmatch(request["identifier"]):
             raise registry_refusal(400, "REQUEST_MALFORMED")
         if not isinstance(body, dict) or sorted(body) != sorted(body_keys):
             raise registry_refusal(400, "REQUEST_MALFORMED")
@@ -229,7 +234,7 @@ class StandIn:
     def claim(self, raw):
         identifier, body = self.signed(raw, "handle.claim", ["handle"])
         handle = body["handle"]
-        if not isinstance(handle, str) or not HANDLE.match(handle):
+        if not isinstance(handle, str) or not HANDLE.fullmatch(handle):
             raise registry_refusal(400, "INVALID_USERNAME")
         with self.state.lock:
             data = self.state.data
@@ -267,15 +272,19 @@ class StandIn:
             raise invalid("missing_field", "kind")
         if value["kind"] not in KINDS:
             raise invalid("unknown_kind")
-        fields(value, COMMON + KINDS[value["kind"]] + ["sig"])
+        fields(value, COMMON + KINDS[value["kind"]] + ["sig"], OPTIONAL.get(value["kind"], ()))
         if value["kind"] == "genesis" and not isinstance(value["directory"], str):
             raise invalid("invalid_field", "directory")
-        if value["kind"] != "genesis" and (not isinstance(value["prev"], str) or not DIGEST.match(value["prev"])):
+        if value["kind"] != "genesis" and (not isinstance(value["prev"], str) or not DIGEST.fullmatch(value["prev"])):
             raise invalid("invalid_field", "prev")
+        # A passkey's maker, in its one spelling; a device key has none.
+        if "aaguid" in value and not (isinstance(value["key"], dict) and value["key"].get("kind") == "passkey"
+                                      and isinstance(value["aaguid"], str) and AAGUID.fullmatch(value["aaguid"])):
+            raise invalid("invalid_field", "aaguid")
         return value
 
     def log(self, identifier):
-        if not IDENTIFIER.match(identifier):
+        if not IDENTIFIER.fullmatch(identifier):
             raise Refused(404, {"error": "not_found"})
         if identifier in self.state.data["gone"]:
             raise Refused(410, {"error": "gone"})
@@ -380,7 +389,7 @@ class StandIn:
 
     def page(self, identifier, query):
         after = query.get("after", ["-1"])
-        if len(after) != 1 or not POSITION.match(after[0]) or not -1 <= int(after[0]) <= MAX_POSITION:
+        if len(after) != 1 or not POSITION.fullmatch(after[0]) or not -1 <= int(after[0]) <= MAX_POSITION:
             raise invalid("invalid_field", "after")
         with self.state.lock:
             return self.page_after(identifier, int(after[0]))

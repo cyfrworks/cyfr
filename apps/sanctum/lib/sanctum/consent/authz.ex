@@ -910,7 +910,7 @@ defmodule Sanctum.Consent.Authz do
   # keeps its establishment contract. A session's and a key's rows are
   # locked in the standing order, inside a caller's transaction in it, so
   # a write that asks here commits only while they stand
-  # (`Sanctum.Passkeys`). A paired device's client and athanor are read, not
+  # (`Sanctum.Pairing`). A paired device's client and athanor are read, not
   # locked: a sensitive change's consumption holds the device in the
   # caller's transaction (`consume/2`), and a credential write holds it as
   # an issuance does (`Sanctum.Issuance.device_hold/1`).

@@ -11,7 +11,7 @@
 // and are dropped when the page closes.
 
 import {refuse} from "../encoding.js"
-import {keyOf, next, signWith, userId} from "../identity.js"
+import {next, passkeyAdded, signWith, userId} from "../identity.js"
 import {codeFor, drawRecovery, readCode} from "../recovery.js"
 import {isHandle} from "../registry.js"
 import {addedAt, appendOnce, here, keyLabel, shortCode} from "./common.js"
@@ -35,8 +35,8 @@ export class Recovery {
     if (!isHandle(name)) refuse("name_invalid")
     const found = await this.place.registry.handle(name)
     if (found.answer?.identifier !== this.identifier) refuse("name_elsewhere")
-    const {credentialId, pub} = await this.env.passkeys.create({userId: userId(this.identifier), name: `@${name}`, challenge: this.env.random(32)})
-    return this.submit(await this.sign("add_key", {key: await keyOf({pub, credentialId})}))
+    const {credentialId, pub, aaguid} = await this.env.passkeys.create({userId: userId(this.identifier), name: `@${name}`, challenge: this.env.random(32)})
+    return this.submit(await this.sign("add_key", await passkeyAdded({pub, credentialId, aaguid})))
   }
 
   removeKey(kid) {

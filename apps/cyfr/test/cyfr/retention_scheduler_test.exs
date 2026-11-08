@@ -472,6 +472,7 @@ defmodule Cyfr.RetentionSchedulerTest do
           directory_url: "https://dir.example",
           head_hash: epoch,
           state: "{}",
+          keys_added: "{}",
           verified_at: verified_at,
           revision: 1,
           inserted_at: now,

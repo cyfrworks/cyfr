@@ -12,7 +12,7 @@ import {Unreachable} from "../../account/network.js"
 import {readDevice, adding} from "../../account/pages/add.js"
 import {here} from "../../account/pages/common.js"
 import {listing, removal, run as devicesRun} from "../../account/pages/devices.js"
-import {Creation} from "../../account/pages/new.js"
+import {Creation, run as createdRun} from "../../account/pages/new.js"
 import {Recovery, run as recoveryRun} from "../../account/pages/recover.js"
 import {describe as describeRequest, readSigned, sign} from "../../account/pages/sign.js"
 import {digest, fragment, parseFragment} from "../../account/sign_in.js"
@@ -25,6 +25,13 @@ const identity = read("identity.json")
 const ORIGIN = signIn.directory
 const RP_ID = new URL(ORIGIN).hostname
 const DAY = 24 * 60 * 60 * 1000
+const APPLE = "fbfc3007-154e-4ecc-8c0b-6e020557d7bd"
+// The DER prefix of a P-256 public key's SubjectPublicKeyInfo, as a
+// browser's getPublicKey() answers it before the 65-byte point.
+const P256_SPKI = Uint8Array.from([
+  0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
+  0x03, 0x42, 0x00
+])
 
 // A passkey that answers with the canned assertion a vector holds, after
 // checking what the page asked of it.
@@ -48,8 +55,9 @@ function cannedPasskey(vector, expect) {
 }
 
 // An authenticator holding one of the vectors' P-256 passkeys: it makes
-// real assertions at ORIGIN, so the entries the pages sign verify.
-async function authenticator(passkey, identifier) {
+// real assertions at ORIGIN, so the entries the pages sign verify. Its
+// creation reports `aaguid` as its maker when given one.
+async function authenticator(passkey, identifier, aaguid) {
   const point = unb64(passkey.public, 65)
   const key = await crypto.subtle.importKey(
     "jwk",
@@ -65,7 +73,7 @@ async function authenticator(passkey, identifier) {
     identifier,
     async create(options) {
       calls.push({create: options})
-      return {credentialId, pub: point}
+      return aaguid ? {credentialId, pub: point, aaguid} : {credentialId, pub: point}
     },
     async assert({challenge, allow}) {
       calls.push({assert: {challenge, allow}})
@@ -199,8 +207,8 @@ function environment(passkeys, net, {storage = memoryStorage(), now = 1790000000
   }
 }
 
-async function accountWithPasskey(net, name = "alice") {
-  const passkey = await authenticator(identity.keys.passkey_1, null)
+async function accountWithPasskey(net, name = "alice", aaguid = undefined) {
+  const passkey = await authenticator(identity.keys.passkey_1, null, aaguid)
   const env = environment(passkey, net)
   const creation = await Creation.open(env)
   await creation.check(name)
@@ -301,6 +309,16 @@ describe("/account/new", () => {
       ["handle.claim"]
     )
     assert.equal(net.handles.get("alice"), identifier)
+  })
+
+  test("names the passkey's maker on its add_key when its creation reported one, and nothing when it did not", async () => {
+    const net = world()
+    const {identifier} = await accountWithPasskey(net, "alice", APPLE)
+    assert.equal(net.logs.get(identifier)[1].aaguid, APPLE)
+
+    const plain = world()
+    const made = await accountWithPasskey(plain)
+    assert.equal(Object.hasOwn(plain.logs.get(made.identifier)[1], "aaguid"), false)
   })
 
   test("creates the passkey for the account's digest bytes, named by its name", async () => {
@@ -411,6 +429,26 @@ describe("/account/new", () => {
     assert.equal(net.logs.size, 0)
   })
 
+  test("reads the passkey's maker from its authenticator data, and none from zeros or a browser that cannot say", async () => {
+    const point = unb64(identity.keys.passkey_1.public, 65)
+    const credentialId = new Uint8Array(16).fill(7)
+    const made = (aaguid, withData = true) => ({
+      async create() {
+        const authenticatorData = concat(await sha256(RP_ID), new Uint8Array([0x45, 0, 0, 0, 0]), aaguid, new Uint8Array([0, 16]), credentialId)
+        const response = {getPublicKey: () => concat(P256_SPKI, point).buffer, getPublicKeyAlgorithm: () => -7}
+        if (withData) response.getAuthenticatorData = () => authenticatorData.buffer
+        return {rawId: credentialId.buffer, response}
+      }
+    })
+    const create = (credentials) => passkeys(credentials, RP_ID).create({userId: new Uint8Array(32), name: "@alice", challenge: new Uint8Array(32)})
+    const apple = Uint8Array.from(Buffer.from(APPLE.replaceAll("-", ""), "hex"))
+
+    assert.equal((await create(made(apple))).aaguid, APPLE)
+    assert.equal((await create(made(new Uint8Array(16)))).aaguid, undefined)
+    assert.equal((await create(made(apple, false))).aaguid, undefined)
+    assert.deepEqual((await create(made(apple))).pub, point)
+  })
+
   test("a browser that withholds the passkey's key is refused before the code, and nothing is kept", async () => {
     const credentials = {
       async create() {
@@ -519,14 +557,31 @@ describe("/account/recover", () => {
     const {state} = await walk(net.logs.get(identifier))
     assert.equal(state.keys[0].credential_id, identity.keys.passkey_1.credential_id)
   })
+
+  test("names a passkey's maker on the add_key the code signs, when its creation reported one", async () => {
+    const net = world()
+    const {env, code, identifier} = await accountWithPasskey(net)
+    const second = await authenticator(identity.keys.passkey_2, identifier, APPLE)
+    const recovery = await Recovery.open({...env, passkeys: second}, await here(env), code)
+    await recovery.addPasskey("alice")
+    const added = net.logs.get(identifier).at(-1)
+    assert.equal(added.key.kid, identity.keys.passkey_2.kid)
+    assert.equal(added.aaguid, APPLE)
+  })
 })
 
 // The pages' DOM as their HTML declares it: every element with an id,
 // enough of each for `run` to wire it and a test to click it.
 function documentFor(page) {
   class Element {
-    constructor(id = "") {
-      Object.assign(this, {id, children: [], handlers: {}, hidden: false, disabled: false, checked: false, textContent: "", value: ""})
+    constructor(id = "", tag = undefined) {
+      Object.assign(this, {id, tag, children: [], handlers: {}, hidden: false, disabled: false, checked: false, textContent: "", value: ""})
+    }
+    setAttribute(name, value) {
+      this[name] = value
+    }
+    removeAttribute(name) {
+      delete this[name]
     }
     append(...children) {
       this.children.push(...children)
@@ -547,7 +602,7 @@ function documentFor(page) {
   return {
     getElementById: (id) => elements.get(id),
     querySelectorAll: () => sections,
-    createElement: () => new Element(),
+    createElement: (tag) => new Element("", tag),
     createTextNode: (textContent) => ({textContent})
   }
 }
@@ -690,5 +745,82 @@ describe("review regressions", () => {
     assert.equal(doc.getElementById("account-error").textContent, "")
     assert.equal(doc.getElementById("keys").children.length, 0)
     assert.equal(net.logs.get(identifier).length, 3)
+  })
+})
+
+// `env` whose policy URL, `${ORIGIN}/terms`, answers `answer()`; every
+// other request goes to the world.
+function servingTerms(env, answer) {
+  const world = env.fetch
+  env.terms = 0
+  env.fetch = async (url, init) => {
+    if (new URL(url).pathname !== "/terms") return world(url, init)
+    env.terms++
+    return answer()
+  }
+  return env
+}
+
+const TERMS = {name: "terms", title: "Terms of Service", content_markdown: "# Terms\n\n<script>alert(1)</script> [x](javascript:alert)"}
+const termsAnswer = () => ({status: 200, text: async () => JSON.stringify(TERMS)})
+const settled = () => new Promise((resolve) => setImmediate(resolve))
+const text = (node) => node.textContent || node.children.map(text).join("")
+const tags = (node) => (node.tag ? [node.tag, ...node.children.flatMap(tags)] : [])
+
+describe("/account/new terms", () => {
+  test("draws the terms policy.url serves beside the version accepted, and drops the link to them", async () => {
+    const doc = documentFor("new")
+    await createdRun(doc, servingTerms({...environment(null, world()), location: {hash: ""}}, termsAnswer))
+    await settled()
+    const box = doc.getElementById("terms")
+    assert.equal(box.hidden, false)
+    assert.deepEqual(box.children.flatMap(tags), ["h2", "p"])
+    assert.equal(text(box.children[1]), "<script>alert(1)</script> x")
+    assert.equal(doc.getElementById("policy-link").textContent, "Terms of Service")
+    assert.equal(doc.getElementById("policy-link").href, undefined)
+    assert.equal(doc.getElementById("policy-version").textContent, ", version v1")
+  })
+
+  test("keeps the link to policy.url when the terms cannot be read", async () => {
+    for (const answer of [() => ({status: 404, text: async () => "{}"}), () => ({status: 200, text: async () => "<html>"}), () => Promise.reject(new TypeError("network"))]) {
+      const doc = documentFor("new")
+      await createdRun(doc, servingTerms({...environment(null, world()), location: {hash: ""}}, answer))
+      await settled()
+      assert.equal(doc.getElementById("terms").hidden, true)
+      assert.deepEqual(doc.getElementById("terms").children, [])
+      assert.equal(doc.getElementById("policy-link").href, `${ORIGIN}/terms`)
+      assert.equal(doc.getElementById("policy-version").textContent, ", version v1")
+    }
+  })
+
+  test("asks for no terms when the registry names no policy", async () => {
+    const doc = documentFor("new")
+    const env = servingTerms({...environment(null, world({policy: null})), location: {hash: ""}}, termsAnswer)
+    await createdRun(doc, env)
+    await settled()
+    assert.equal(env.terms, 0)
+    assert.equal(doc.getElementById("acceptance").hidden, true)
+    assert.deepEqual(doc.getElementById("terms").children, [])
+  })
+
+  test("draws the terms again when the registry asks for them after they changed", async () => {
+    const doc = documentFor("new")
+    const passkey = await authenticator(identity.keys.passkey_1, null)
+    const env = servingTerms({...environment(passkey, world({required: "v2"})), location: {hash: ""}}, termsAnswer)
+    await createdRun(doc, env)
+    await settled()
+    doc.getElementById("name").value = "alice"
+    doc.getElementById("accept").checked = true
+    doc.getElementById("accept").handlers.change()
+    await doc.getElementById("create").click()
+    await doc.getElementById("saved").click()
+    await settled()
+    assert.equal(doc.getElementById("policy-again").hidden, false)
+    assert.equal(env.terms, 2)
+    const box = doc.getElementById("terms-again")
+    assert.equal(box.hidden, false)
+    assert.deepEqual(box.children.flatMap(tags), ["h2", "p"])
+    assert.equal(doc.getElementById("policy-again-link").textContent, "Terms of Service")
+    assert.equal(doc.getElementById("policy-again-version").textContent, ", version v1")
   })
 })

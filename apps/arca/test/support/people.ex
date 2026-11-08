@@ -68,7 +68,8 @@ defmodule Arca.Test.People do
         genesis: "genesis-bytes",
         directory_url: "https://dir.example",
         head_hash: head,
-        state: "{}"
+        state: "{}",
+        keys_added: "{}"
       })
 
     %{identifier: identifier, head: head}

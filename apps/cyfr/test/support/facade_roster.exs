@@ -27,7 +27,6 @@
     "Sanctum.Directory",
     "Sanctum.Gate",
     "Sanctum.Pairing",
-    "Sanctum.Passkeys",
     "Sanctum.RegistryCredentials",
     "Sanctum.RequestLog",
     "Sanctum.Resources",

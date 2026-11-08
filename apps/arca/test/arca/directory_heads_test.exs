@@ -82,7 +82,8 @@ defmodule Arca.DirectoryHeadsTest do
         genesis: "genesis-bytes",
         directory_url: "https://dir.example",
         head_hash: head,
-        state: ~s({"head":"#{head}"})
+        state: ~s({"head":"#{head}"}),
+        keys_added: "{}"
       })
 
     row
@@ -246,7 +247,8 @@ defmodule Arca.DirectoryHeadsTest do
         genesis: "genesis-bytes",
         directory_url: "https://dir.example",
         head_hash: to,
-        state: "{}"
+        state: "{}",
+        keys_added: "{}"
       },
       steps
     )
@@ -270,10 +272,11 @@ defmodule Arca.DirectoryHeadsTest do
                genesis: "genesis-bytes",
                directory_url: "https://dir.example",
                head_hash: head_hash,
-               state: "{}"
+               state: "{}",
+               keys_added: "{}"
              })
 
-    assert {:error, {:invalid, %{state: _}}} =
+    assert {:error, {:invalid, %{state: _, keys_added: _}}} =
              DirectoryHeads.put(server(), %{
                identifier: identifier(),
                genesis: "genesis-bytes",
@@ -304,7 +307,8 @@ defmodule Arca.DirectoryHeadsTest do
       genesis: "genesis-bytes",
       directory_url: "https://dir.example",
       head_hash: next,
-      state: "{}"
+      state: "{}",
+      keys_added: "{}"
     }
 
     assert {:error, :stale} = DirectoryHeads.advance(server(), id, digest("wrong"), attrs, [])
@@ -719,7 +723,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
           genesis: "genesis-bytes",
           directory_url: "https://dir.example",
           head_hash: old,
-          state: "{}"
+          state: "{}",
+          keys_added: "{}"
         })
     end)
 
@@ -890,7 +895,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
         genesis: "genesis-bytes",
         directory_url: "https://dir.example",
         head_hash: new,
-        state: "{}"
+        state: "{}",
+        keys_added: "{}"
       },
       [{:remove_key, kid}]
     )
@@ -1088,7 +1094,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
           genesis: "genesis-bytes",
           directory_url: "https://dir.example",
           head_hash: head,
-          state: "{}"
+          state: "{}",
+          keys_added: "{}"
         })
 
       {1, _} =

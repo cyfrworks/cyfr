@@ -392,6 +392,56 @@ defmodule Sanctum.IdentityFreshnessTest do
 
   # ---- gone --------------------------------------------------------------------
 
+  describe "the keys a log lists" do
+    # Apple Passwords' AAGUID.
+    @apple "fbfc3007-154e-4ecc-8c0b-6e020557d7bd"
+
+    test "keep when each was added and a passkey's maker, through a first read, a refresh and a recovery",
+         %{dir: dir, account: alice} do
+      first = DirectoryServer.cached!(alice)
+      [device] = alice.devices
+      device_added = Enum.at(alice.log, 1)
+
+      assert {:ok, [%{key: %{kid: kid}, added_at: added_at, aaguid: nil}]} =
+               IdentityFreshness.keys(first)
+
+      assert {kid, added_at} == {DirectoryServer.kid(device), device_added.at}
+
+      alice = DirectoryServer.add_passkey!(dir.dir, alice, aaguid: @apple)
+      alice = DirectoryServer.add_device!(dir.dir, alice)
+      alice = DirectoryServer.remove_key!(dir.dir, alice, kid)
+      aged!(alice.identifier)
+
+      assert {:ok, head} = IdentityFreshness.fresh?(alice.identifier)
+      [_genesis, _device, passkey_added, second_added, _removed] = alice.log
+      assert {:ok, keys} = IdentityFreshness.keys(head)
+
+      assert Enum.map(keys, &{&1.key.kid, &1.added_at, &1.aaguid}) == [
+               {passkey_added.key.kid, passkey_added.at, @apple},
+               {second_added.key.kid, second_added.at, nil}
+             ]
+
+      # A first read of the same log keeps the same.
+      Arca.Repo.delete_all(from(h in DirectoryHead, where: h.identifier == ^alice.identifier))
+      assert {:ok, reread} = IdentityFreshness.fresh!(alice.identifier, directory: dir.url)
+      assert IdentityFreshness.keys(reread) == {:ok, keys}
+
+      # A recovery lists its keys from its own time, their makers unknown.
+      alice = DirectoryServer.recover!(dir.dir, alice)
+      aged!(alice.identifier)
+      assert {:ok, recovered} = IdentityFreshness.fresh?(alice.identifier)
+      recover = List.last(alice.log)
+
+      assert {:ok, [%{key: %{kid: recovered_kid}, added_at: recovered_at, aaguid: nil}]} =
+               IdentityFreshness.keys(recovered)
+
+      assert {recovered_kid, recovered_at} == {hd(recover.keys).kid, recover.at}
+
+      # Notes that do not name the state's keys are no cache to answer from.
+      assert IdentityFreshness.keys(%{recovered | keys_added: "{}"}) == {:error, :corrupt}
+    end
+  end
+
   describe "an account gone at its directory" do
     test "retires every binding and is answered gone from then on, with no request", %{
       dir: dir,
