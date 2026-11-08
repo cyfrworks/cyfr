@@ -695,23 +695,24 @@ defmodule Sanctum.TestContext do
 
     added = Identity.sign(added, recovery_priv)
     {:ok, state} = Identity.verify_chain([genesis, added])
-    held!(user_id, state, Identity.canonical(genesis))
+    held!(user_id, state, [genesis, added])
     %{identifier: state.identifier, authenticator: authenticator, head: state.head}
   end
 
   # The account's head cached here and the person's identity row naming
   # it, unless both already stand.
-  defp held!(user_id, state, genesis) do
+  defp held!(user_id, state, [genesis | _] = entries) do
     import Ecto.Query, only: [from: 2]
 
     system = Prima.Actor.system()
 
     case Arca.DirectoryHeads.put(system, %{
            identifier: state.identifier,
-           genesis: genesis,
+           genesis: Prima.Identity.canonical(genesis),
            directory_url: @test_directory,
            head_hash: state.head,
-           state: state |> Prima.Identity.State.encode() |> Jason.encode!()
+           state: state |> Prima.Identity.State.encode() |> Jason.encode!(),
+           keys_added: Sanctum.IdentityFreshness.keys_added(entries)
          }) do
       {:ok, _head} -> :ok
       {:error, :exists} -> :ok

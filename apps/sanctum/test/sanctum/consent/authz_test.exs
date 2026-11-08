@@ -1137,7 +1137,8 @@ defmodule Sanctum.Consent.AuthzTest do
             genesis: cached.genesis,
             directory_url: cached.directory_url,
             head_hash: Prima.Digest.sha256("the head after the removal"),
-            state: cached.state
+            state: cached.state,
+            keys_added: cached.keys_added
           },
           [{:remove_key, kid}]
         )

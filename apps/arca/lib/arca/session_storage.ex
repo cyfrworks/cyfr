@@ -110,8 +110,11 @@ defmodule Arca.SessionStorage do
       kid: attrs[:kid],
       head: attrs[:head],
       client_id: attrs[:client_id],
+      browser: attrs[:browser],
+      system: attrs[:system],
       expires_at: attrs.expires_at,
-      inserted_at: Map.get(attrs, :inserted_at, now)
+      inserted_at: Map.get(attrs, :inserted_at, now),
+      last_seen_at: Map.get(attrs, :inserted_at, now)
     }
 
     with :ok <- bound(attrs.user_id, attrs) do
@@ -192,7 +195,8 @@ defmodule Arca.SessionStorage do
             :head,
             :client_id,
             :expires_at,
-            :inserted_at
+            :inserted_at,
+            :last_seen_at
           ]
         )
 
@@ -202,6 +206,80 @@ defmodule Arca.SessionStorage do
       end
     end)
     |> Arca.Data.project()
+  end
+
+  @doc """
+  Record that the session `token_hash` was used at `now`, unless it was
+  already seen after `since`: one write a minute at most however many
+  members serve its requests. Answers `:ok` whether it wrote or not.
+  """
+  @spec seen(binary(), DateTime.t(), DateTime.t()) :: :ok | {:error, :database_error}
+  # arca:unscoped-ok sessions are addressed by token hash: the credential is the scope.
+  def seen(token_hash, %DateTime{} = now, %DateTime{} = since) when is_binary(token_hash) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.seen", fn ->
+      from(s in Session,
+        where: s.token_hash == ^token_hash and (is_nil(s.last_seen_at) or s.last_seen_at < ^since)
+      )
+      |> Arca.Repo.update_all(set: [last_seen_at: now])
+
+      :ok
+    end)
+  end
+
+  @doc """
+  The person `user_id`'s sessions that stand, newest first: each its `id`,
+  the `kid` that signed for it, its `browser` and `system`, when it was
+  signed in (`inserted_at`) and last seen, and its `token_hash`, which
+  names the caller's own session and never leaves Sanctum. A protected
+  device's reservation, which no token loads yet, is none.
+  """
+  @spec list_live(String.t()) :: {:ok, [map()]} | {:error, :database_error}
+  # arca:unscoped-ok sessions are person-owned rows; the person is the scope.
+  def list_live(user_id) when is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.list_live", fn ->
+      now = DateTime.utc_now()
+
+      rows =
+        from(s in Session,
+          where: s.user_id == ^user_id and s.expires_at > ^now and s.provider != ^@reserved,
+          order_by: [desc: s.inserted_at, desc: s.id],
+          select: %{
+            id: s.id,
+            kid: s.kid,
+            browser: s.browser,
+            system: s.system,
+            inserted_at: s.inserted_at,
+            last_seen_at: s.last_seen_at,
+            token_hash: s.token_hash
+          }
+        )
+        |> Arca.Repo.all()
+
+      {:ok, rows}
+    end)
+  end
+
+  @doc """
+  End the session `id` of the person `user_id`, and nothing else: another
+  person's session, a reservation or an id this store does not hold is
+  `{:error, :not_found}`. Answers the ended session's token hash, for the
+  caller to retire after this returns.
+  """
+  @spec delete_own(String.t(), String.t()) ::
+          {:ok, binary()} | {:error, :not_found | :database_error}
+  # arca:unscoped-ok sessions are person-owned rows; the person and the id are the scope.
+  def delete_own(user_id, id) when is_binary(user_id) and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_own", fn ->
+      from(s in Session,
+        where: s.id == ^id and s.user_id == ^user_id and s.provider != ^@reserved,
+        select: s.token_hash
+      )
+      |> Arca.Repo.delete_all()
+      |> case do
+        {1, [hash]} -> {:ok, hash}
+        {0, _} -> {:error, :not_found}
+      end
+    end)
   end
 
   @doc """
@@ -348,7 +426,8 @@ defmodule Arca.SessionStorage do
                 kid: attrs[:kid],
                 head: attrs[:head],
                 expires_at: usec(attrs.expires_at),
-                inserted_at: now
+                inserted_at: now,
+                last_seen_at: now
               ]
             )
 

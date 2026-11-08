@@ -7,7 +7,9 @@ defmodule Arca.Schemas.Session do
   A session an account's key signed for records that key's `kid` and the
   account head it was verified under. A protected device's unlock
   records its paired `client_id`: that session's expiry is the device
-  channel's.
+  channel's. A browser's sign-in records its `browser` and `system` in
+  words, and `last_seen_at` moves at most once a minute while the session
+  is used.
   """
 
   use Ecto.Schema
@@ -31,6 +33,9 @@ defmodule Arca.Schemas.Session do
     # The protected device whose unlock created the session; nil for
     # every other session.
     field :client_id, :string
+    field :browser, :string
+    field :system, :string
+    field :last_seen_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 end

@@ -1,6 +1,6 @@
 # Identity and Recovery
 
-How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from a device of yours: `cyfr login --setup` or `--join` and the box's **Set up CYFR** make one, and `cyfr device approve` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
+How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from a device of yours: `cyfr login --setup` or `--join` and the box's **Set up CYFR** make one, and `cyfr device approve` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, **Settings → Keys on your account** lists your account's keys and your sessions at that CYFR, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
 
 ---
 

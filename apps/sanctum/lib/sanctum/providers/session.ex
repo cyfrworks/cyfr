@@ -4,8 +4,9 @@
 defmodule Sanctum.Providers.Session do
   @moduledoc """
   Session tool handlers for the Sanctum MCP provider — logout, whoami,
-  the person's name here, a protected device's unlock and lock,
-  and the caller's self-description resources. A command line signs in as
+  the person's name here, their account's keys and sessions here and one
+  session's end, a protected device's unlock and lock, and the caller's
+  self-description resources. A command line signs in as
   a protected device does (`Sanctum.DeviceUnlock`): its shell unlocks on
   its device channel and spends the ticket at `POST /device/session`.
 
@@ -24,6 +25,16 @@ defmodule Sanctum.Providers.Session do
   account. A name another account holds, or none, is refused in a sentence
   the person reads, and nothing is recorded. A name already recorded is
   kept; the answer is the name recorded.
+
+  `list` answers the keys of the person's account, every one its log
+  lists, with their sessions here under each, and the account page where
+  a key is removed (`Sanctum.AccountKeys`).
+  `end` signs one of those sessions out by its `session_id`, whichever
+  browser or device holds it, their own included, and nothing else
+  (`Sanctum.Session.end_own/2`): a sign-out is a session's, never a key's,
+  and removing a key is the account pages'. It takes authority away and
+  asks no confirmation. Both are the person's own, through an interactive
+  surface (`consent: :interactive`).
 
   `read_resource` admits an MCP `resources/read` of `sanctum://identity`
   or `sanctum://permissions`. It is `auth: :anonymous` and needs no
@@ -68,6 +79,30 @@ defmodule Sanctum.Providers.Session do
             )
           ],
           kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "session",
+          "list",
+          "List your account's keys and their sessions here",
+          [],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "session",
+          "end",
+          "Sign one of your sessions here out",
+          [
+            Arg.new("session_id", :string,
+              required: true,
+              description: "end: the session, by its session_id from session.list"
+            )
+          ],
+          reduces_authority: true,
+          kind: :destructive,
           planes: [:external],
           consent: :interactive
         ),
@@ -118,7 +153,7 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — logout, get local identity, or unlock and lock a protected device's session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, list your account's keys and sessions here and sign one out, or unlock and lock a protected device's session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
   end
@@ -224,6 +259,24 @@ defmodule Sanctum.Providers.Session do
   def handle(_ctx, %{"action" => "name"}),
     do: {:error, {:invalid_argument, "Missing required argument: name"}}
 
+  def handle(%Context{} = ctx, %{"action" => "list"}) do
+    case Sanctum.AccountKeys.list(ctx) do
+      {:ok, listing} -> {:ok, listing}
+      {:refused, why} -> {:error, why}
+      {:error, reason} -> {:error, keys_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "end", "session_id" => id}) when is_binary(id) do
+    case Sanctum.Session.end_own(ctx, id) do
+      :ok -> {:ok, %{ended: true}}
+      {:error, reason} -> {:error, keys_refusal(reason)}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "end"}),
+    do: {:error, {:invalid_argument, "Missing required argument: session_id"}}
+
   # The terminal clause answers both shapes the dispatcher already
   # distinguishes: no `action` at all, and one this tool does not know.
   def handle(_ctx, args) do
@@ -232,6 +285,24 @@ defmodule Sanctum.Providers.Session do
       _ -> {:error, :action_missing}
     end
   end
+
+  # The keys' and sessions' refusals in the one refusal shape every surface
+  # renders (`Prima.Refusal`); the vocabulary's own reasons pass as they are.
+  defp keys_refusal(:unauthenticated),
+    do: %Prima.Refusal{
+      class: :unauthenticated,
+      reason: :unauthenticated,
+      message: "Only a person signed in here sees their keys and sessions"
+    }
+
+  defp keys_refusal(:not_found),
+    do: %Prima.Refusal{
+      class: :not_found,
+      reason: :not_found,
+      message: "No session of yours here has that id"
+    }
+
+  defp keys_refusal(reason), do: reason
 
   # A name's refusals, each with the sentence its person reads; the stores'
   # own reasons pass as they are.
