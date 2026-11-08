@@ -699,14 +699,6 @@ defmodule Sanctum.TestContext do
     %{identifier: state.identifier, authenticator: authenticator, head: state.head}
   end
 
-  # When each key the entries list was added, as a first read caches it.
-  defp keys_added(entries) do
-    entries
-    |> Sanctum.IdentityFreshness.added()
-    |> Map.new(fn {kid, %{at: at}} -> {kid, %{"at" => at}} end)
-    |> Jason.encode!()
-  end
-
   # The account's head cached here and the person's identity row naming
   # it, unless both already stand.
   defp held!(user_id, state, [genesis | _] = entries) do
@@ -720,7 +712,7 @@ defmodule Sanctum.TestContext do
            directory_url: @test_directory,
            head_hash: state.head,
            state: state |> Prima.Identity.State.encode() |> Jason.encode!(),
-           keys_added: keys_added(entries)
+           keys_added: Sanctum.IdentityFreshness.keys_added(entries)
          }) do
       {:ok, _head} -> :ok
       {:error, :exists} -> :ok

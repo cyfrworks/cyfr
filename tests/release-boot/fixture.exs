@@ -260,7 +260,8 @@ fn args ->
       key: key,
       genesis: Identity.canonical(genesis),
       added: Identity.canonical(added),
-      state: state |> Identity.State.encode() |> Jason.encode!()
+      state: state |> Identity.State.encode() |> Jason.encode!(),
+      keys_added: Sanctum.IdentityFreshness.keys_added([genesis, added])
     }
   end
 
@@ -285,7 +286,7 @@ fn args ->
     {:ok, _head} =
       Arca.DirectoryHeads.put(
         Prima.Actor.system(),
-        Map.take(account, [:identifier, :genesis, :directory_url, :head_hash, :state])
+        Map.take(account, [:identifier, :genesis, :directory_url, :head_hash, :state, :keys_added])
       )
 
     Map.take(account, [:identifier, :directory_url, :head_hash])

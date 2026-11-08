@@ -290,6 +290,15 @@ defmodule Sanctum.IdentityFreshness do
       else: {:halt, :error}
   end
 
+  @doc """
+  The `keys_added` a cached head keeps for a log's `entries`, as JSON
+  text: `added/2` from nothing, each key's `at` and, for a passkey whose
+  `add_key` named one, its `aaguid`. What a first read caches beside the
+  state the same entries verify to (`Arca.DirectoryHeads.put/2`).
+  """
+  @spec keys_added([Entry.t()]) :: String.t()
+  def keys_added(entries) when is_list(entries), do: entries |> added() |> encode_added()
+
   defp encode_added(added) do
     added
     |> Map.new(fn
@@ -449,7 +458,7 @@ defmodule Sanctum.IdentityFreshness do
         directory_url: directory,
         head_hash: state.head,
         state: encode(state),
-        keys_added: encode_added(added(entries))
+        keys_added: keys_added(entries)
       }
 
       case Arca.DirectoryHeads.put(system(), attrs) do
