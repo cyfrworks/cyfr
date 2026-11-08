@@ -51,6 +51,11 @@ ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 # one through `Cyfr.Test.Settings.put/2`.
 Cyfr.Test.Settings.install!()
 
+# The HTTP stubs tests open run under a supervisor of the suite's, so a
+# sweep of a test's own processes leaves each up for the end-of-test check
+# that stops it (`Cyfr.Test.HTTPStub`).
+Cyfr.Test.HTTPStub.serve!()
+
 # The storage roots (with a copy of the shipped AQUA template in the
 # throwaway seed tree, so template reads stay real without the suite
 # touching the repo's own seed/), the schema check, the sandbox mode and

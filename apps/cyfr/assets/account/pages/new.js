@@ -4,7 +4,8 @@
 // /account/new#name=&request=: an account made in this browser (plan §7).
 //
 // The order: the name is checked at the registry and the policy, when the
-// registry names one, accepted by a checkbox; "Create your account" draws
+// registry names one, accepted by a checkbox beside its terms, drawn in the
+// page from `policy.url` (`showTerms`); "Create your account" draws
 // the recovery secret, signs the genesis with its key, creates the passkey
 // and signs, with the recovery key, its `add_key`, the `policy.accept` of
 // the version the person accepted and the `handle.claim`, holding all four
@@ -26,15 +27,45 @@
 // browser's passkey store, on no account.
 
 import {Refusal, refuse} from "../encoding.js"
-import {genesis, identifier as identifierOf, keyOf, next, signWith, userId, walk} from "../identity.js"
+import {genesis, identifier as identifierOf, next, passkeyAdded, signWith, userId, walk} from "../identity.js"
 import {attempts} from "../attempts.js"
 import {codeFor, drawRecovery, readCode} from "../recovery.js"
 import {compose, isHandle, signWith as signRequest} from "../registry.js"
 import {here} from "./common.js"
 import {readSigned, sign} from "./sign.js"
+import {markdown} from "../markdown.js"
+import {readTerms} from "../network.js"
 import {$, attempt, copyCode, drawCode, only, say, words} from "../view.js"
 
 const STEPS = ["register", "append", "name", "done"]
+
+// The two places the page asks for the terms: when the account is made,
+// and when the registry asks again after they changed.
+const TERMS = {box: "terms", link: "policy-link", version: "policy-version"}
+const TERMS_AGAIN = {box: "terms-again", link: "policy-again-link", version: "policy-again-version"}
+
+/**
+ * The terms `policy.url` serves drawn into the box `ids.box`, the link
+ * `ids.link` renamed to their title, and the version accepted, which is
+ * `policy.version`, beside them. Until they arrive, and if they never do,
+ * the link opens `policy.url`.
+ */
+async function showTerms(doc, env, policy, ids) {
+  const link = $(doc, ids.link)
+  const box = $(doc, ids.box)
+  link.href = policy.url
+  $(doc, ids.version).textContent = `, version ${policy.version}`
+  box.hidden = true
+  try {
+    const {title, markdown: text} = await readTerms(policy.url, env.fetch)
+    box.replaceChildren(...markdown(doc, text))
+    box.hidden = false
+    link.textContent = title
+    link.removeAttribute("href")
+  } catch (_error) {
+    // The link to policy.url stays.
+  }
+}
 
 export class Creation {
   /** A creation at this page's directory. */
@@ -73,9 +104,9 @@ export class Creation {
       const first = await signWith(genesis({directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer}), key)
       const identifier = await identifierOf(first)
       const accepted = this.config.policy?.version ?? null
-      const {credentialId, pub} = await this.env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: this.env.random(32)})
+      const {credentialId, pub, aaguid} = await this.env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: this.env.random(32)})
       const {state} = await walk([first])
-      const entry = next(state, "add_key", {key: await keyOf({pub, credentialId})}, {at: this.env.now(), signer: key.signer})
+      const entry = next(state, "add_key", await passkeyAdded({pub, credentialId, aaguid}), {at: this.env.now(), signer: key.signer})
       this.key = key
       this.attempt = {identifier, name, accepted, genesis: first, created_at: this.env.now()}
       this.attempt = {
@@ -208,7 +239,7 @@ export async function run(doc, env) {
   nameInput.value = params.get("name") ?? ""
   const {policy} = creation.config
   const accept = $(doc, "accept")
-  if (policy) $(doc, "policy-link").href = policy.url
+  if (policy) showTerms(doc, env, policy, TERMS)
   else $(doc, "acceptance").hidden = true
   const create = $(doc, "create")
   const ready = () => (create.disabled = !((accept.checked || !policy) && nameInput.value.trim()))
@@ -236,7 +267,7 @@ export async function run(doc, env) {
         return
       }
       if (error instanceof Refusal && error.reason === "policy_changed" && creation.config.policy) {
-        $(doc, "policy-again-link").href = creation.config.policy.url
+        showTerms(doc, env, creation.config.policy, TERMS_AGAIN)
         $(doc, "accept-again").checked = false
         only(doc, "policy-again")
         return

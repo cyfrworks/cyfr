@@ -33,9 +33,9 @@ defmodule Sanctum.ProviderTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 16 action-based tools" do
+    test "returns 15 action-based tools" do
       tools = Provider.tools()
-      assert length(tools) == 16
+      assert length(tools) == 15
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -57,6 +57,8 @@ defmodule Sanctum.ProviderTest do
       assert "invitation" in tool_names
       # Threads people talk in, which no athanor holds.
       assert "shared_thread" in tool_names
+      # A sign-out is a session's (session.end), never a key's.
+      refute "passkey" in tool_names
     end
 
     test "each tool has required schema fields" do
@@ -243,6 +245,36 @@ defmodule Sanctum.ProviderTest do
 
       # The whole point: the credential must not survive its own logout.
       assert {:error, _} = Sanctum.Session.load(session.token)
+    end
+
+    test "end signs one session of the caller's own out, and refuses an id that is none of theirs",
+         %{ctx: ctx} do
+      {person, user} = Sanctum.TestContext.person!(ctx)
+      own_athanor = Sanctum.Test.People.athanor!(user)
+      ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: own_athanor.id})
+      {:ok, own} = Sanctum.Session.create(ctx)
+      {:ok, other} = Sanctum.Session.create(ctx)
+      {:ok, rows} = Arca.SessionStorage.list_live(ctx.user_id)
+      hash = Sanctum.Session.token_hash(other.token)
+      other_id = Enum.find(rows, &(&1.token_hash == hash)).id
+
+      person = %{
+        ctx
+        | session_token_hash: Sanctum.Session.token_hash(own.token),
+          auth_method: :oidc
+      }
+
+      assert {:ok, %{ended: true}} =
+               Provider.handle("session", person, %{"action" => "end", "session_id" => other_id})
+
+      assert {:error, _} = Sanctum.Session.load(other.token)
+      assert {:ok, _} = Sanctum.Session.load(own.token)
+
+      assert {:error, %Prima.Refusal{class: :not_found}} =
+               Provider.handle("session", person, %{"action" => "end", "session_id" => other_id})
+
+      assert {:error, {:invalid_argument, "Missing required argument: session_id"}} =
+               Provider.handle("session", person, %{"action" => "end"})
     end
 
     test "logout refuses when an API key authenticated the call", %{ctx: ctx} do

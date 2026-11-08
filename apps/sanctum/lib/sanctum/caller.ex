@@ -629,11 +629,11 @@ defmodule Sanctum.Caller do
 
   defp do_establish(token, opts) do
     case Session.load_sliding(token) do
-      {:ok, %Context{} = ctx, slide_due?} ->
+      {:ok, %Context{} = ctx, due} ->
         with {:ok, established} <- establish_context(ctx, opts),
              :ok <- identity_current(established.user_id, established.session_token_hash),
              :ok <- company(established.user_id) do
-          if slide_due?, do: maybe_refresh(token, opts)
+          upkeep(token, due, opts)
           {:ok, validated(established)}
         end
 
@@ -1271,23 +1271,25 @@ defmodule Sanctum.Caller do
   defp ensure_namespace(%Context{} = ctx),
     do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
 
-  # Activity-based sliding refresh, fire-and-forget so the hot path never
-  # waits on the write. Started only when the row the load read is due one
-  # (`Session.load_sliding/1`); `Session.refresh_if_stale/1` checks again.
-  defp maybe_refresh(token, opts) do
-    if Keyword.get(opts, :refresh, true),
-      do: start_refresh(token),
-      else: :ok
+  # Activity-based upkeep, fire-and-forget so the hot path never waits on
+  # the write: the sliding refresh, unless the caller asked for none
+  # (`refresh: false`), and the session's sighting, which every use
+  # records. Started only when the row the load read is due one
+  # (`Session.load_sliding/1`); each write checks again.
+  defp upkeep(token, due, opts) do
+    due = if Keyword.get(opts, :refresh, true), do: due, else: List.delete(due, :slide)
+    if due != [], do: start_upkeep(token, due), else: :ok
   end
 
   # Best effort: a pool that does not answer (the node shutting down)
-  # costs the slide, never the establish.
-  defp start_refresh(token) do
+  # costs the upkeep, never the establish.
+  defp start_upkeep(token, due) do
     logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Sanctum.TaskSupervisor, fn ->
            Prima.LoggerContext.restore(logger_metadata)
-           slide(token)
+           if :slide in due, do: slide(token)
+           if :seen in due, do: sighted(token)
          end) do
       {:ok, _pid} ->
         :ok
@@ -1310,6 +1312,15 @@ defmodule Sanctum.Caller do
     :exit, reason ->
       Logger.debug(
         "[Sanctum.Caller] session refresh did not run: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
+  end
+
+  defp sighted(token) do
+    Session.seen(token)
+  catch
+    :exit, reason ->
+      Logger.debug(
+        "[Sanctum.Caller] session sighting did not run: #{Prima.LogFilter.inspect_reason(reason)}"
       )
   end
 end

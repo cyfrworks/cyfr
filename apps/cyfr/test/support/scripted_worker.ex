@@ -41,7 +41,12 @@ defmodule Cyfr.Test.ScriptedWorker do
   Its status counts its runners as every worker service does: `busy` while
   a run's process is alive, and `tainted` from a kill until the killed
   process has gone; it keeps no runner fresh or idle, bounds no runner's
-  memory and never refuses one. Its kill is idempotent as
+  memory and never refuses one. It ends a runner still running at its
+  assignment's deadline plus the runtime's default watchdog grace
+  (`watchdog_grace_ms:` sets another) and reports the exit, as the
+  runtime's worker service does (`Locus.Runtime.Runner`), so a run that
+  hangs to its deadline ends here as it ends there: no kill was asked of
+  it, and `expired/0` lists it. Its kill is idempotent as
   `c:Prima.WorkerAPI.kill/1` says: `:ok` for an execution a runner of this
   boot holds or already ended, whether by a kill or on its own, and
   `{:error, :not_found}` only for one no runner of this boot ever held,
@@ -106,6 +111,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @probe_wait_ms 5_000
   @attach_wait_ms 5_000
+  # How long past its deadline a runner is left before this worker service
+  # ends it: the runtime's default (`Locus.Runtime.Settings`'
+  # `watchdog_grace_ms`), so a test sees the order the runtime keeps.
+  @watchdog_grace_ms 5_000
   # A report's post is bounded by its callback's timeout; this is past it.
   @report_wait_ms HostAPI.request_timeout_ms(:runner_exited) + 5_000
   @service "wrk_scripted"
@@ -196,6 +205,9 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   @doc "Every execution id this worker service was asked to kill, oldest first."
   def kills, do: GenServer.call(__MODULE__, :kills)
+
+  @doc "Every execution id this worker service ended at its deadline, oldest first."
+  def expired, do: GenServer.call(__MODULE__, :expired)
 
   @doc """
   Answer once every runner exit this worker service is reporting has been
@@ -319,8 +331,10 @@ defmodule Cyfr.Test.ScriptedWorker do
        media_types: Keyword.get(opts, :media_types, ["image/png", "application/pdf"]),
        describe: Keyword.get(opts, :describe, :answer),
        lose_start_answer: Keyword.get(opts, :lose_start_answer, false) == true,
+       watchdog_grace_ms: Keyword.get(opts, :watchdog_grace_ms, @watchdog_grace_ms),
        calls: [],
        kills: [],
+       expired: [],
        runners: %{},
        # The reports in flight, by monitor, and who waits for none to be.
        reports: MapSet.new(),
@@ -357,6 +371,13 @@ defmodule Cyfr.Test.ScriptedWorker do
       }
 
       pid = spawn_link(fn -> run(runner) end)
+
+      # Ended at its deadline plus the grace, as the runtime's runner is.
+      Process.send_after(
+        self(),
+        {:expire, pid},
+        max(assignment.deadline + state.watchdog_grace_ms - System.system_time(:millisecond), 0)
+      )
 
       runners =
         Map.put(state.runners, pid, %{
@@ -423,6 +444,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   def handle_call({:script, items}, _from, state), do: {:reply, :ok, %{state | script: items}}
   def handle_call(:calls, _from, state), do: {:reply, Enum.reverse(state.calls), state}
   def handle_call(:kills, _from, state), do: {:reply, Enum.reverse(state.kills), state}
+  def handle_call(:expired, _from, state), do: {:reply, Enum.reverse(state.expired), state}
 
   def handle_call(:await_reports, from, state),
     do: {:noreply, reported(%{state | report_waiters: [from | state.report_waiters]})}
@@ -468,6 +490,20 @@ defmodule Cyfr.Test.ScriptedWorker do
     if MapSet.member?(state.reports, ref),
       do: {:noreply, reported(%{state | reports: MapSet.delete(state.reports, ref)})},
       else: {:noreply, state}
+  end
+
+  # A runner still running at its deadline plus the grace is ended, as the
+  # runtime's watchdog ends one; its exit is reported like any other that
+  # was not `:normal`. No kill was asked of it, so it is not tainted.
+  def handle_info({:expire, pid}, state) do
+    case Map.fetch(state.runners, pid) do
+      {:ok, runner} ->
+        Process.exit(pid, :kill)
+        {:noreply, %{state | expired: [runner.execution_id | state.expired]}}
+
+      :error ->
+        {:noreply, state}
+    end
   end
 
   def handle_info(msg, state) do

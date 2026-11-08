@@ -4,6 +4,7 @@
 defmodule Emissary.External.ProxyTest do
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.HTTPStub
   alias Emissary.External.Proxy
 
   setup tags do
@@ -483,8 +484,8 @@ defmodule Emissary.External.ProxyTest do
 
   describe "the request a backend receives" do
     setup do
-      bypass = Bypass.open()
-      {:ok, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+      stub = HTTPStub.open()
+      {:ok, stub: stub, url: "http://127.0.0.1:#{stub.port}/mcp"}
     end
 
     # The host stamps the chain's lineage into an in-chain call's arguments
@@ -492,7 +493,7 @@ defmodule Emissary.External.ProxyTest do
     # it, nor the action the gate routed on.
     test "carries the guest's arguments and nothing the host stamped", %{
       ctx: ctx,
-      bypass: bypass,
+      stub: stub,
       url: url
     } do
       {:ok, _} =
@@ -504,7 +505,7 @@ defmodule Emissary.External.ProxyTest do
 
       test = self()
 
-      Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         body = Jason.decode!(raw)
 

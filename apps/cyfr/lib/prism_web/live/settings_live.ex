@@ -3,27 +3,27 @@
 
 defmodule PrismWeb.SettingsLive do
   @moduledoc """
-  Settings: the person's name and identifier, the devices and passkeys of
-  their account connected here, their lite/dev preference, and, for a
-  platform admin, the door, the invitations to this CYFR and the platform
-  settings.
+  Settings: the person's name and identifier, the keys on their account
+  and their sessions here, their lite/dev preference, and, for a platform
+  admin, the door, the invitations to this CYFR and the platform settings.
 
-  Every change is an operation through the gate. A change that needs a
-  fresh confirmation is asked through the page's system layer
-  (`PrismWeb.SystemLayer.call/5`) and made again once confirmed.
+  Every change is an operation through the gate.
 
     * **Your name** — the identity card (`PrismWeb.IdentityCard`): the
       person's name and their account's identifier. A person with no name
       recorded here types the name their account holds, which is recorded
       once cyfr.run says it is theirs (`session.name`). The account itself,
       its keys and its recovery code, are the account pages'.
-    * **Devices connected here** — the person's paired clients
-      (`pairing.list`), each signed out of this CYFR through
-      `pairing.revoke`, and the passkeys of their account that signed in
-      here, by the short code of their key (`passkey.list`), each signed
-      out of this CYFR through `passkey.revoke`. This CYFR owns only its
-      own bindings: a device's key and a passkey are the account's, and
-      only removing one from the account ends it everywhere.
+    * **Keys on your account** — every key of the person's account, as
+      its log lists them (`session.list`): a passkey by its maker and the
+      date it was added ("Apple Passwords passkey, added 8 Nov 2026"), a
+      device by the name its terminal or box gave here, and under each
+      key the person's sessions here that it signed, by browser and
+      system, when signed in and last seen, each with one **Sign out**
+      that ends that session alone (`session.end`), the session this page
+      stands on included, which then leaves the page. A sign-out is a
+      session's, never a key's: removing a key is the account pages', and
+      the card links there.
     * **Invite to this CYFR** — the platform administrator's invitation
       links naming no thread (`invitation.create` with no `thread_id`): a
       link is shown once with a copy control, and every one naming no
@@ -34,9 +34,8 @@ defmodule PrismWeb.SettingsLive do
   sentence.
 
   The identity card's controls carry its own `data-test` names, and this
-  page's `devices`, `devices-scope`, `device` (with `data-id`),
-  `device-revoke`, `passkey` (with `data-kid`), `passkey-revoke`;
-  `invite-cyfr`, `invitation-create`, `invitation-new`, `invitation-link`,
+  page's `keys`, `keys-scope`, `keys-account`, `key` (with `data-kid`),
+  `session` (with `data-id`), `session-end`; `invite-cyfr`, `invitation-create`, `invitation-new`, `invitation-link`,
   `invitation-copy` and `invitation-revoke`.
   """
 
@@ -84,9 +83,9 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:identifier, nil)
       |> assign(:name, socket.assigns.context.namespace)
       |> assign(:name_error, nil)
-      |> assign(:devices, nil)
-      |> assign(:passkeys, nil)
-      |> assign(:devices_error, nil)
+      |> assign(:keys, nil)
+      |> assign(:account_page, nil)
+      |> assign(:keys_error, nil)
 
     {:ok, socket}
   end
@@ -171,10 +170,19 @@ defmodule PrismWeb.SettingsLive do
     setting_call(socket, "settings/reset", args, "#{key} reset to its default.")
   end
 
-  # ---- devices connected here --------------------------------------------------
+  # ---- keys on your account ----------------------------------------------------
 
-  def handle_event("device_revoke", %{"id" => id}, socket), do: revoke_device(socket, id)
-  def handle_event("passkey_revoke", %{"kid" => kid}, socket), do: revoke_passkey(socket, kid)
+  # One session of the person's own, signed out at once; the one this page
+  # stands on included, after which the page's guard lets it go.
+  def handle_event("session_end", %{"id" => id}, socket) do
+    case call_tool(socket, "session/end", %{"session_id" => id}) do
+      {:ok, _ended} ->
+        {:noreply, socket |> load_keys() |> put_flash(:info, "Signed out.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Sign out: #{error_message(reason)}")}
+    end
+  end
 
   def handle_event("set_mode", %{"mode" => mode}, socket) when mode in ["lite", "dev"] do
     case Sanctum.Tenancy.Users.get(socket.assigns.context.user_id) do
@@ -198,11 +206,6 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # A change this page asked for was confirmed: made again, once.
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_repeat({:device_revoke, id}, _tool, _args, socket),
-    do: revoke_device(socket, id)
-
   @impl true
   def handle_info(:load, socket) do
     {:noreply,
@@ -214,7 +217,7 @@ defmodule PrismWeb.SettingsLive do
      |> load_settings()
      |> load_prefs()
      |> load_identifier()
-     |> load_devices()
+     |> load_keys()
      |> assign(:loading, false)}
   end
 
@@ -411,56 +414,54 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # ---- devices connected here --------------------------------------------------
+  # ---- keys on your account ----------------------------------------------------
 
-  defp load_devices(socket) do
-    with {:ok, devices} <- call_tool(socket, "pairing/list", %{}),
-         {:ok, %{passkeys: passkeys}} <- call_tool(socket, "passkey/list", %{}) do
-      assign(socket, devices: listed_devices(devices), passkeys: passkeys, devices_error: nil)
-    else
-      {:error, reason} ->
-        assign(socket, devices: nil, passkeys: nil, devices_error: error_message(reason))
-    end
-  end
-
-  # The passkeys are listed by their key from `passkey.list`, beside the
-  # devices.
-  defp listed_devices(%{clients: clients}) when is_list(clients), do: listed_devices(clients)
-
-  defp listed_devices(clients) when is_list(clients),
-    do: Enum.reject(clients, &(&1[:source] == "passkey"))
-
-  defp listed_devices(_other), do: []
-
-  defp revoke_device(socket, id) do
-    case SystemLayer.call(socket, {:device_revoke, id}, "pairing/revoke", %{"client_id" => id}) do
-      {:ok, _revoked, socket} ->
-        {:noreply,
-         socket |> load_devices() |> put_flash(:info, "Device signed out of this CYFR.")}
-
-      {:asked, socket} ->
-        {:noreply, socket}
-
-      {:error, reason, socket} ->
-        {:noreply, put_flash(socket, :error, "Device: #{error_message(reason)}")}
-    end
-  end
-
-  defp revoke_passkey(socket, kid) do
-    case call_tool(socket, "passkey/revoke", %{"kid" => kid}) do
-      {:ok, _revoked} ->
-        {:noreply,
-         socket |> load_devices() |> put_flash(:info, "Passkey signed out of this CYFR.")}
+  defp load_keys(socket) do
+    case call_tool(socket, "session/list", %{}) do
+      {:ok, %{keys: keys, account_page: page}} ->
+        assign(socket, keys: keys, account_page: page, keys_error: nil)
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Passkey: #{error_message(reason)}")}
+        assign(socket, keys: nil, keys_error: error_message(reason))
     end
   end
 
-  # The short code of a key, as a device shows its own: the first 16
-  # hexadecimal digits of its kid.
-  defp short_code("sha256:" <> hex), do: String.slice(hex, 0, 16)
-  defp short_code(_kid), do: ""
+  # A key as the card reads it: a passkey by its maker, a device by the
+  # name it gave here, each with the date it was added.
+  defp key_title(%{kind: "passkey", maker: maker} = key) when is_binary(maker),
+    do: "#{maker} passkey, added #{day(key.added_at)}"
+
+  defp key_title(%{kind: "passkey"} = key), do: "Passkey, added #{day(key.added_at)}"
+
+  defp key_title(%{name: name} = key) when is_binary(name),
+    do: "#{name}, added #{day(key.added_at)}"
+
+  defp key_title(key), do: "Device, added #{day(key.added_at)}"
+
+  defp session_title(%{browser: browser, system: system})
+       when is_binary(browser) and is_binary(system),
+       do: "#{browser} on #{system}"
+
+  defp session_title(%{browser: browser}) when is_binary(browser), do: browser
+  defp session_title(%{system: system}) when is_binary(system), do: system
+  defp session_title(_session), do: "A session"
+
+  defp day(iso), do: stamp(iso, "%-d %b %Y")
+  defp minute(iso), do: stamp(iso, "%-d %b %Y, %H:%M UTC")
+
+  defp stamp(iso, format) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, at, _offset} -> Calendar.strftime(at, format)
+      _unreadable -> ""
+    end
+  end
+
+  defp seen(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, at, _offset} -> PrismWeb.DisplayHelpers.relative_time(at)
+      _unreadable -> ""
+    end
+  end
 
   defp services_map(nil), do: %{}
   defp services_map(services) when is_map(services), do: services
@@ -528,7 +529,7 @@ defmodule PrismWeb.SettingsLive do
           <IdentityCard.card name={@name} identifier={@identifier} error={@name_error} />
         </.card>
 
-        <.devices_card devices={@devices} passkeys={@passkeys} error={@devices_error} />
+        <.keys_card keys={@keys} error={@keys_error} account={@account_page} />
 
         <%!-- System Status --%>
         <.card>
@@ -862,61 +863,55 @@ defmodule PrismWeb.SettingsLive do
     """
   end
 
-  attr :devices, :list, default: nil
-  attr :passkeys, :list, default: nil
+  attr :keys, :list, default: nil
   attr :error, :string, default: nil
+  attr :account, :string, default: nil
 
-  # The devices and passkeys of the person's account connected here.
-  defp devices_card(assigns) do
+  # Every key of the person's account, with their sessions here under each.
+  defp keys_card(assigns) do
     ~H"""
     <.card>
-      <section data-test="devices" class="space-y-3">
-        <h3 class="text-sm font-medium text-gray-400">Devices connected here</h3>
-        <p class="text-xs text-gray-500" data-test="devices-scope">
-          Signing a device or passkey out ends its sessions at this CYFR alone: it stays on
-          your account and can sign in here again. Removing its key from your account ends it
-          everywhere.
+      <section data-test="keys" class="space-y-3">
+        <h3 class="text-sm font-medium text-gray-400">Keys on your account</h3>
+        <p class="text-xs text-gray-500" data-test="keys-scope">
+          Every key that can sign in as you, and where each is signed in at this CYFR.
+          Signing a session out ends it here alone.
+          <span :if={@account}>
+            To remove a key, use <a href={@account} class="underline" data-test="keys-account">your account page</a>.
+          </span>
         </p>
 
         <p :if={@error} role="alert" class="text-sm">{@error}</p>
 
         <ul class="divide-y divide-gray-800 text-sm">
-          <li
-            :for={device <- @devices || []}
-            class="flex items-center justify-between gap-2 py-2"
-            data-test="device"
-            data-id={device.client_id}
-          >
-            <span>
-              <span class="font-medium">{device.display_name || "Device"}</span>
-            </span>
-            <.button
-              variant="ghost"
-              phx-click="device_revoke"
-              phx-value-id={device.client_id}
-              data-test="device-revoke"
-            >
-              Sign out this device
-            </.button>
-          </li>
-          <li
-            :for={passkey <- @passkeys || []}
-            class="flex items-center justify-between gap-2 py-2"
-            data-test="passkey"
-            data-kid={passkey.kid}
-          >
-            <span>
-              <span class="font-medium">Passkey</span>
-              <span class="text-gray-400 font-mono">{short_code(passkey.kid)}</span>
-            </span>
-            <.button
-              variant="ghost"
-              phx-click="passkey_revoke"
-              phx-value-kid={passkey.kid}
-              data-test="passkey-revoke"
-            >
-              Sign out this passkey
-            </.button>
+          <li :for={key <- @keys || []} class="py-2 space-y-1" data-test="key" data-kid={key.kid}>
+            <p>
+              <span class="font-medium">{key_title(key)}</span>
+              <span class="text-gray-400 font-mono">{key.code}</span>
+            </p>
+            <p :if={key.sessions == []} class="text-xs text-gray-500">No sessions here</p>
+            <ul class="space-y-1">
+              <li
+                :for={session <- key.sessions}
+                class="flex items-center justify-between gap-2 text-xs text-gray-400"
+                data-test="session"
+                data-id={session.session_id}
+              >
+                <span>
+                  <span class="text-gray-200">{session_title(session)}</span>
+                  <span :if={session.current} class="text-gray-200">(this session)</span>
+                  · signed in {minute(session.signed_in_at)} · last seen {seen(session.last_seen_at)}
+                </span>
+                <.button
+                  variant="ghost"
+                  phx-click="session_end"
+                  phx-value-id={session.session_id}
+                  data-test="session-end"
+                >
+                  Sign out
+                </.button>
+              </li>
+            </ul>
           </li>
         </ul>
       </section>

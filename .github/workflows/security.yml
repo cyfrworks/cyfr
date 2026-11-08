@@ -84,7 +84,7 @@ jobs:
         run: scripts/ci/world-checks.sh
 
       - name: Check retired and vulnerable dependencies
-        # The audits and their one suppression live in the script, which
+        # The audits live in the script, which
         # scripts/release.sh runs again right before it tags.
         continue-on-error: ${{ steps.world.outputs.informational == 'true' }}
         run: scripts/dependency-audit.sh

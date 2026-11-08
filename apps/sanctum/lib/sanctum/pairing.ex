@@ -333,7 +333,7 @@ defmodule Sanctum.Pairing do
   @doc """
   The context person's active paired clients in the athanor in focus,
   oldest first, the passkeys of their account that signed in here among
-  them (`Sanctum.Passkeys`): each with its id, the credential it stands on
+  them (`Sanctum.SignIn` records them): each with its id, the credential it stands on
   (`device_cert` or `passkey`), when it was paired or first signed in
   here, when its current certificate expires (nil for none current, and
   always for a passkey), whether it is the client `ctx` itself came

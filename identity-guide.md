@@ -1,6 +1,6 @@
 # Identity and Recovery
 
-How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from a device of yours: `cyfr login --setup` or `--join` and the box's **Set up CYFR** make one, and `cyfr device approve` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
+How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from a device of yours: `cyfr login --setup` or `--join` and the box's **Set up CYFR** make one, and `cyfr device approve` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, **Settings → Keys on your account** lists your account's keys and your sessions at that CYFR, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
 
 ---
 
@@ -13,7 +13,7 @@ You have one account, and every CYFR you use admits that same account:
 - **Your keys** are the passkeys your phones and computers keep for you and the keys your devices hold under their own PIN or passphrase. They live only there: no CYFR holds a key of yours, and the account service holds only their public halves.
 - **Your recovery code** holds one more key, which replaces any of the others. You keep it, apart from your devices.
 
-The account service keeps your account's log: every change to its keys, in one order, each signed by a key the log already lists. It serves the account pages, where your passkeys live, and answers your name with your identifier. It stores nothing else: no address of any CYFR you use, no email, no session and no list of where you sign in. Each CYFR reads your keys there and decides for itself whether to let you in.
+The account service keeps your account's log: every change to its keys, in one order, each signed by a key the log already lists. The log is public. A key in it carries no name or address; a passkey added from the account pages also names its maker when your browser reports one, such as Apple Passwords or a YubiKey model, so a CYFR can show which passkey is which. It serves the account pages, where your passkeys live, and answers your name with your identifier. It stores nothing else: no address of any CYFR you use, no email, no session and no list of where you sign in. Each CYFR reads your keys there and decides for itself whether to let you in.
 
 ### The account pages
 

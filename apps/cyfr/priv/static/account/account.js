@@ -223,6 +223,8 @@
     recover: ["prev", "keys", "recovery"],
     add_recovery: ["prev", "recovery"]
   };
+  var OPTIONAL_FIELDS = { add_key: ["aaguid"] };
+  var AAGUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   var PKCS8_ED25519 = [48, 46, 2, 1, 0, 48, 5, 6, 3, 43, 101, 112, 4, 34, 4, 32];
   var kid = (pub) => digestOf(pub);
   var recoverySigner = async (pub) => "recovery:" + await kid(pub);
@@ -243,6 +245,10 @@
   }
   async function keyOf({ pub, credentialId }) {
     return credentialId ? { kid: await kid(pub), alg: "es256", kind: "passkey", pub: b64(pub), credential_id: b64(credentialId) } : { kid: await kid(pub), alg: "ed25519", kind: "device", pub: b64(pub) };
+  }
+  async function passkeyAdded({ pub, credentialId, aaguid }) {
+    const key = await keyOf({ pub, credentialId });
+    return aaguid ? { key, aaguid } : { key };
   }
   function genesis({ directory: directory2, recovery: recovery2, at, signer }) {
     return { protocol: PROTOCOL, kind: "genesis", seq: 0, at, signer, directory: directory2, recovery: recovery2 };
@@ -370,7 +376,7 @@
     if (!Object.hasOwn(map, "kind")) refuse("missing_field", { field: "kind" });
     if (!KINDS.includes(map.kind)) refuse("unknown_kind", { kind: map.kind });
     const kind = map.kind;
-    fields(map, [...COMMON, ...KIND_FIELDS[kind], "sig"]);
+    fields(map, [...COMMON, ...KIND_FIELDS[kind], "sig"], OPTIONAL_FIELDS[kind]);
     check(map, "seq", kind === "genesis" ? (seq) => seq === 0 : isMs);
     check(map, "at", isMs);
     check(map, "signer", (signer) => typeof signer === "string" && SIGNER.test(signer));
@@ -380,6 +386,7 @@
       recovery(map);
     } else if (kind === "add_key") {
       if (!await decodeKey(map.key)) invalid("key");
+      if (Object.hasOwn(map, "aaguid") && !(map.key.kind === "passkey" && typeof map.aaguid === "string" && AAGUID.test(map.aaguid))) invalid("aaguid");
     } else if (kind === "remove_key") {
       check(map, "kid", isDigest);
     } else if (kind === "recover") {
@@ -465,6 +472,17 @@
     66,
     0
   ];
+  var ATTESTED = 64;
+  var AAGUID_AT = 37;
+  var AAGUID_BYTES = 16;
+  function makerOf(response) {
+    const data = typeof response.getAuthenticatorData === "function" ? bytes(response.getAuthenticatorData()) : null;
+    if (!data || data.length < AAGUID_AT + AAGUID_BYTES || !(data[32] & ATTESTED)) return void 0;
+    const aaguid = data.subarray(AAGUID_AT, AAGUID_AT + AAGUID_BYTES);
+    if (aaguid.every((byte) => byte === 0)) return void 0;
+    const h = hex(aaguid);
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
   function bytes(buffer) {
     if (!buffer) return null;
     return buffer instanceof ArrayBuffer ? new Uint8Array(buffer.slice(0)) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength).slice();
@@ -495,7 +513,8 @@
       /**
        * A new discoverable passkey for the account whose identifier's digest
        * bytes are `userId`, shown as `name`. Resolves to its raw credential
-       * id and its 65-byte P-256 point; rejects for any other algorithm.
+       * id, its 65-byte P-256 point and, when the browser reports one, its
+       * maker's `aaguid`; rejects for any other algorithm.
        */
       async create({ userId: userId2, name, challenge: challenge2 }) {
         const credential = await credentials.create({
@@ -512,7 +531,9 @@
         const spki = bytes(response.getPublicKey());
         const p256 = response.getPublicKeyAlgorithm() === ES256 && spki?.length === P256_SPKI.length + 65 && P256_SPKI.every((byte, i) => spki[i] === byte);
         if (!p256) refuse("no_public_key");
-        return { credentialId: bytes(credential.rawId), pub: spki.subarray(P256_SPKI.length) };
+        const made = { credentialId: bytes(credential.rawId), pub: spki.subarray(P256_SPKI.length) };
+        const aaguid = makerOf(response);
+        return aaguid ? { ...made, aaguid } : made;
       }
     };
   }
@@ -710,6 +731,12 @@
   function isPolicy(policy) {
     return isObject(policy) && typeof policy.version === "string" && policy.version !== "" && typeof policy.url === "string" && /^https?:\/\//.test(policy.url);
   }
+  async function readTerms(url, fetchFn) {
+    const { status, json } = await call(fetchFn, url);
+    const valid = status === 200 && isObject(json) && typeof json.title === "string" && json.title.trim() !== "" && typeof json.content_markdown === "string";
+    if (!valid) refuse("bad_terms");
+    return { title: json.title.trim(), markdown: json.content_markdown };
+  }
   function directory(url, fetchFn) {
     const base = `${url}/directory/v1`;
     async function write2(path, entry) {
@@ -851,9 +878,9 @@
     for (const section of doc.querySelectorAll("main > section")) section.hidden = section.id !== id;
   }
   function say(doc, id, text2) {
-    const element = $(doc, id);
-    element.textContent = text2;
-    element.hidden = text2 === "";
+    const element2 = $(doc, id);
+    element2.textContent = text2;
+    element2.hidden = text2 === "";
   }
   async function attempt(doc, button, errorId, action) {
     button.disabled = true;
@@ -1279,8 +1306,122 @@
     );
   }
 
+  // account/markdown.js
+  var HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+  var QUOTE = /^ {0,3}> ?/;
+  var ITEM = /^ {0,3}(?:[-*+]|(\d{1,9})[.)])[ \t]+(.*)$/;
+  var LINK_TARGET = /^(?:https?:\/\/|mailto:)/i;
+  var ESCAPED = /\\([!-/:-@[-`{-~])/y;
+  var LINKED = /\[([^[\]\n]*)\]\(([^()\s]*)\)/y;
+  var STRONG = /(\*\*|__)(?=\S)([\s\S]*?\S)\1/y;
+  var EMPHASIS = /([*_])(?=\S)([\s\S]*?\S)\1/y;
+  var MAX_DEPTH = 8;
+  function markdown(doc, text2) {
+    return blocks(doc, String(text2).split(/\r\n|\r|\n/), 0);
+  }
+  var starts = (line, depth) => HEADING.test(line) || depth < MAX_DEPTH && QUOTE.test(line) || ITEM.test(line);
+  function blocks(doc, lines, depth) {
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const heading = HEADING.exec(line);
+      const item = ITEM.exec(line);
+      if (line.trim() === "") {
+        i++;
+      } else if (heading) {
+        out.push(element(doc, `h${Math.min(heading[1].length + 1, 6)}`, inline(doc, heading[2], 0, true)));
+        i++;
+      } else if (depth < MAX_DEPTH && QUOTE.test(line)) {
+        const quoted = [];
+        while (i < lines.length && QUOTE.test(lines[i])) quoted.push(lines[i++].replace(QUOTE, ""));
+        out.push(element(doc, "blockquote", blocks(doc, quoted, depth + 1)));
+      } else if (item) {
+        const ordered = item[1] !== void 0;
+        const items = [];
+        while (i < lines.length) {
+          const next2 = ITEM.exec(lines[i]);
+          if (next2 && next2[1] !== void 0 === ordered) items.push([next2[2]]);
+          else if (!next2 && /^[ \t]+\S/.test(lines[i])) items.at(-1).push(lines[i].trim());
+          else break;
+          i++;
+        }
+        out.push(element(doc, ordered ? "ol" : "ul", items.map((parts) => element(doc, "li", inline(doc, parts.join(" "), 0, true)))));
+      } else {
+        const words2 = [];
+        while (i < lines.length && lines[i].trim() !== "" && !starts(lines[i], depth)) words2.push(lines[i++].trim());
+        out.push(element(doc, "p", inline(doc, words2.join(" "), 0, true)));
+      }
+    }
+    return out;
+  }
+  function inline(doc, text2, depth, links) {
+    const nodes = [];
+    let plain = "";
+    const flush = () => {
+      if (plain) nodes.push(doc.createTextNode(plain));
+      plain = "";
+    };
+    let at = 0;
+    while (at < text2.length) {
+      const char = text2[at];
+      const intraword = char === "_" && at > 0 && /[\p{L}\p{N}]/u.test(text2[at - 1]);
+      const match = char === "\\" ? sticky(ESCAPED, text2, at) : char === "[" && links ? sticky(LINKED, text2, at) : (char === "*" || char === "_") && !intraword && depth < MAX_DEPTH ? sticky(STRONG, text2, at) ?? sticky(EMPHASIS, text2, at) : null;
+      if (!match) {
+        plain += char;
+        at++;
+        continue;
+      }
+      at += match[0].length;
+      if (char === "\\") {
+        plain += match[1];
+        continue;
+      }
+      flush();
+      if (char === "[") nodes.push(...link(doc, match[1], match[2], depth));
+      else nodes.push(element(doc, match[1].length === 2 ? "strong" : "em", inline(doc, match[2], depth + 1, links)));
+    }
+    flush();
+    return nodes;
+  }
+  function link(doc, label, target, depth) {
+    const text2 = inline(doc, label, depth + 1, false);
+    if (!LINK_TARGET.test(target)) return text2;
+    const a = element(doc, "a", text2);
+    a.setAttribute("href", target);
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+    return [a];
+  }
+  function sticky(pattern, text2, at) {
+    pattern.lastIndex = at;
+    return pattern.exec(text2);
+  }
+  function element(doc, tag, children) {
+    const made = doc.createElement(tag);
+    made.append(...children);
+    return made;
+  }
+
   // account/pages/new.js
   var STEPS = ["register", "append", "name", "done"];
+  var TERMS = { box: "terms", link: "policy-link", version: "policy-version" };
+  var TERMS_AGAIN = { box: "terms-again", link: "policy-again-link", version: "policy-again-version" };
+  async function showTerms(doc, env2, policy, ids) {
+    const link2 = $(doc, ids.link);
+    const box = $(doc, ids.box);
+    link2.href = policy.url;
+    $(doc, ids.version).textContent = `, version ${policy.version}`;
+    box.hidden = true;
+    try {
+      const { title, markdown: text2 } = await readTerms(policy.url, env2.fetch);
+      box.replaceChildren(...markdown(doc, text2));
+      box.hidden = false;
+      link2.textContent = title;
+      link2.removeAttribute("href");
+    } catch (_error) {
+    }
+  }
   var Creation = class _Creation {
     /** A creation at this page's directory. */
     static async open(env2) {
@@ -1315,9 +1456,9 @@
         const first = await signWith(genesis({ directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer }), key);
         const identifier2 = await identifier(first);
         const accepted = this.config.policy?.version ?? null;
-        const { credentialId, pub } = await this.env.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: this.env.random(32) });
+        const { credentialId, pub, aaguid } = await this.env.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: this.env.random(32) });
         const { state } = await walk([first]);
-        const entry = next(state, "add_key", { key: await keyOf({ pub, credentialId }) }, { at: this.env.now(), signer: key.signer });
+        const entry = next(state, "add_key", await passkeyAdded({ pub, credentialId, aaguid }), { at: this.env.now(), signer: key.signer });
         this.key = key;
         this.attempt = { identifier: identifier2, name, accepted, genesis: first, created_at: this.env.now() };
         this.attempt = {
@@ -1437,7 +1578,7 @@
     nameInput.value = params.get("name") ?? "";
     const { policy } = creation.config;
     const accept = $(doc, "accept");
-    if (policy) $(doc, "policy-link").href = policy.url;
+    if (policy) showTerms(doc, env2, policy, TERMS);
     else $(doc, "acceptance").hidden = true;
     const create = $(doc, "create");
     const ready = () => create.disabled = !((accept.checked || !policy) && nameInput.value.trim());
@@ -1463,7 +1604,7 @@
           return;
         }
         if (error instanceof Refusal && error.reason === "policy_changed" && creation.config.policy) {
-          $(doc, "policy-again-link").href = creation.config.policy.url;
+          showTerms(doc, env2, creation.config.policy, TERMS_AGAIN);
           $(doc, "accept-again").checked = false;
           only(doc, "policy-again");
           return;
@@ -1565,8 +1706,8 @@
       if (!isHandle(name)) refuse("name_invalid");
       const found = await this.place.registry.handle(name);
       if (found.answer?.identifier !== this.identifier) refuse("name_elsewhere");
-      const { credentialId, pub } = await this.env.passkeys.create({ userId: userId(this.identifier), name: `@${name}`, challenge: this.env.random(32) });
-      return this.submit(await this.sign("add_key", { key: await keyOf({ pub, credentialId }) }));
+      const { credentialId, pub, aaguid } = await this.env.passkeys.create({ userId: userId(this.identifier), name: `@${name}`, challenge: this.env.random(32) });
+      return this.submit(await this.sign("add_key", await passkeyAdded({ pub, credentialId, aaguid })));
     }
     removeKey(kid2) {
       return this.sign("remove_key", { kid: kid2 }).then((entry) => this.submit(entry));

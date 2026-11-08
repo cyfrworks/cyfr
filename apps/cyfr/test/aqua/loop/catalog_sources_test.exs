@@ -9,7 +9,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   whatever allow a thread holds for it.
 
   The loop, the gate, the cards and the standing rule are real; the model
-  is scripted and the registry is a Bypass server.
+  is scripted and the registry is an HTTP stub.
   """
 
   # The registry's address is global configuration, so the module runs
@@ -18,6 +18,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Test.HTTPStub
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Source
   alias Sanctum.Consent.Bootstrap
@@ -52,9 +53,9 @@ defmodule Aqua.Loop.CatalogSourcesTest do
     end)
 
     Application.put_env(:arca, :seed_path, @seed_root)
-    bypass = Bypass.open()
+    stub = HTTPStub.open()
     # A loopback registry is reached over http (`Compendium.RegistryHost.base_url/1`).
-    Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+    Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{stub.port}")
 
     # The loops' work stops before their tree is removed and the seed tree restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
@@ -68,7 +69,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    {:ok, ctx: ctx, thread: thread, bypass: bypass}
+    {:ok, ctx: ctx, thread: thread, stub: stub}
   end
 
   describe "the soul's own catalog reads" do
@@ -177,10 +178,10 @@ defmodule Aqua.Loop.CatalogSourcesTest do
 
   describe "a registry read" do
     test "is outside material on the turn before the next call is decided, so a thread's allow that names no outside source asks",
-         %{ctx: ctx, thread: thread, bypass: bypass} do
+         %{ctx: ctx, thread: thread, stub: stub} do
       soul_policy!(ctx, %{"registry.get_namespace" => "auto"})
 
-      Bypass.expect_once(bypass, "GET", "/v1/namespaces/acme", fn conn ->
+      HTTPStub.expect_once(stub, "GET", "/v1/namespaces/acme", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => "acme", "about" => "from the registry"}))

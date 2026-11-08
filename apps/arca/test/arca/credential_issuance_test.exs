@@ -1239,6 +1239,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
           directory_url: "https://directory.example",
           head_hash: head_hash,
           state: "{}",
+          keys_added: "{}",
           verified_at: now,
           revision: 1,
           inserted_at: now,

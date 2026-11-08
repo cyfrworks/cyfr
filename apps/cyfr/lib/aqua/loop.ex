@@ -71,7 +71,6 @@ defmodule Aqua.Loop do
   # A root turn's holder on this boot registers here (`holder/1`).
   @holders Aqua.RunnerRegistry
   @max_steps 30
-  @model_timeout_ms 10 * 60 * 1000
   @step_timeout_ms 5 * 60 * 1000
   @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
@@ -777,7 +776,15 @@ defmodule Aqua.Loop do
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
-  # worker's death. A chat step's text streams to the thread while it runs,
+  # worker's death. The worker is waited for until the run ends, and the
+  # loop keeps no clock of its own over it: the run's deadline is the one
+  # its brain's node is consented (`Opus.Admission`), which the worker
+  # service enforces and reports, so its expiry closes the run lost and
+  # costs the athanor nothing (`Opus.Attempt`), where a waiter stopped by
+  # a clock here would be a kill counted against it; a worker service
+  # that stops answering is lapsed (`Opus.WorkerWatch`), and a person's
+  # cancel stops the holder at once (`abort/4`). A chat
+  # step's text streams to the thread while it runs,
   # and is withdrawn when the step lands no text row; a flush or a
   # compaction streams nothing.
   #
@@ -812,7 +819,7 @@ defmodule Aqua.Loop do
               envelope: true
             )
           end,
-          @model_timeout_ms
+          :infinity
         )
       after
         Aqua.Loop.Stream.close(stream)
