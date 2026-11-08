@@ -73,7 +73,7 @@ defmodule Sanctum.Handle do
   """
   @spec name_of(String.t()) :: {:ok, HandleAnswer.t()} | {:error, reason() | :invalid_identifier}
   def name_of(identifier) when is_binary(identifier) do
-    with true <- Prima.Identity.Encoding.identifier?(identifier) || {:error, :invalid_identifier},
+    with :ok <- identifier_spelled(identifier),
          {:ok, registry} <- Sanctum.registry_host() do
       url =
         Sanctum.registry_base_url(Sanctum.registry_url()) <>
@@ -141,6 +141,12 @@ defmodule Sanctum.Handle do
       {:error, :unavailable} ->
         {:error, :registry_unavailable}
     end
+  end
+
+  defp identifier_spelled(identifier) do
+    if Prima.Identity.Encoding.identifier?(identifier),
+      do: :ok,
+      else: {:error, :invalid_identifier}
   end
 
   defp spelled(handle) do
