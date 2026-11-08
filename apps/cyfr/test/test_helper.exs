@@ -22,10 +22,13 @@ end
 # :boundary_plant is the Boundary compiler's planted violations
 # (`Cyfr.BoundariesTest.CompilerPlants`): each is a forced compile of a
 # copy of the tree, run once by the gate's static leg.
+# :long is a test that must outlast a clock of minutes to fail on it
+# (`Aqua.Loop.ModelWaitTest`'s hand consented past five minutes); the
+# nightly includes it (`.github/workflows/test.yml`).
 # The other adapter's tests are excluded too (`Arca.Test.Adapter`).
 ExUnit.configure(
   exclude:
-    [:cluster, :s3_integration, :public_dns, :benchmark, :boundary_plant] ++
+    [:cluster, :s3_integration, :public_dns, :benchmark, :boundary_plant, :long] ++
       toolchain_excludes ++ Arca.Test.Adapter.exclusions()
 )
 

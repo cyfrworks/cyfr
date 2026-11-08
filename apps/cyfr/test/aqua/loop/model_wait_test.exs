@@ -14,7 +14,8 @@ defmodule Aqua.Loop.ModelWaitTest do
   own `:timeout`; that reported end leaves no unreaped note on the
   athanor's slot and its next root is admitted, where the loop's kill was
   noted; a hand's tool step that hangs to its consented deadline ends the
-  same way, where the loop's step clock killed it and noted the kill; and a
+  same way, where the loop's step clock killed it and noted the kill (the
+  `:long` test consents its hand past that five-minute clock); and a
   turn on a brain consented thirty minutes lasts at least that long, past
   the five its agent is consented.
   """
@@ -32,7 +33,7 @@ defmodule Aqua.Loop.ModelWaitTest do
 
   setup tags do
     Arca.Cache.init()
-    Cyfr.Test.Sandbox.setup!()
+    Cyfr.Test.Sandbox.setup!(Map.take(tags, [:ownership_timeout]))
 
     ctx = person!()
     tree = own_tree!(ctx)
@@ -116,38 +117,23 @@ defmodule Aqua.Loop.ModelWaitTest do
     assert :completed = Task.await(run(ctx, next), 30_000)
   end
 
+  # A clock of the loop's at or under the hand's consented deadline fails
+  # this test. One longer than the test's consent, as the five minutes the
+  # loop once kept over every tool step, does not: the long test below
+  # consents its hand past those five minutes to fail on that one.
   test "a hand's tool step that hangs to its consented deadline leaves no unreaped note on the athanor's slot, and its next root is admitted",
        %{ctx: ctx, thread: thread} do
-    turn = accept!(ctx, thread, "list my files")
+    hangs_to_its_deadline!(ctx, thread, @consented_ms)
+  end
 
-    start_supervised!(
-      {ScriptedWorker,
-       ref: [@model, @hand],
-       script: [calls([{"c1", "files", %{"action" => "list", "path" => "data"}}]), :hang]}
-    )
-
-    # The hand's outcome is unknown once its run ended without answering:
-    # the turn stops on it, its root let go.
-    started = System.monotonic_time(:millisecond)
-    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
-    waited = System.monotonic_time(:millisecond) - started
-
-    # The worker service ended the hand's run at its consented deadline
-    # and its grace, and reported it; the loop asked for no kill.
-    assert waited >= @consented_ms
-    assert [hand_run] = ScriptedWorker.expired()
-    {:ok, steps} = Tape.steps(ctx, turn)
-    assert [%{child_execution_id: ^hand_run}] = Enum.filter(steps, &(&1.kind == "tool"))
-    :ok = ScriptedWorker.await_reports()
-    assert ScriptedWorker.kills() == []
-    assert Map.get(Prima.Slots.status(Opus.Slots).unreaped, ctx.athanor_id, 0) == 0
-
-    # The athanor's next root is admitted and runs, in a thread of its own
-    # beside the stopped turn's.
-    ScriptedWorker.script([reply("hi")])
-    {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
-    next = accept!(ctx, other, "again")
-    assert :completed = Task.await(run(ctx, next), 30_000)
+  @consented_long_ms 6 * 60_000
+  @tag :long
+  @tag hand_consent: "6m"
+  @tag timeout: 15 * 60_000
+  @tag ownership_timeout: 15 * 60_000
+  test "a hand's tool step consented longer than five minutes is waited for to its deadline, with no unreaped note",
+       %{ctx: ctx, thread: thread} do
+    hangs_to_its_deadline!(ctx, thread, @consented_long_ms)
   end
 
   @tag consent: "30m"
@@ -166,6 +152,41 @@ defmodule Aqua.Loop.ModelWaitTest do
     {:ok, own} = Prima.Limits.timeout_ms(Prima.Authority.limits(authority))
     assert own < 30 * 60_000
     assert spec.deadline_ms == 30 * 60_000
+  end
+
+  # A files hand consented `consented_ms` hangs: the worker service ends
+  # its run at that deadline and its grace and reports it, and the loop
+  # asked for no kill, so nothing is held against the athanor and its next
+  # root runs.
+  defp hangs_to_its_deadline!(ctx, thread, consented_ms) do
+    turn = accept!(ctx, thread, "list my files")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, @hand],
+       script: [calls([{"c1", "files", %{"action" => "list", "path" => "data"}}]), :hang]}
+    )
+
+    # The hand's outcome is unknown once its run ended without answering:
+    # the turn stops on it, its root let go.
+    started = System.monotonic_time(:millisecond)
+    assert {:paused, :uncertain} = Task.await(run(ctx, turn), consented_ms + 60_000)
+    waited = System.monotonic_time(:millisecond) - started
+
+    assert waited >= consented_ms
+    assert [hand_run] = ScriptedWorker.expired()
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert [%{child_execution_id: ^hand_run}] = Enum.filter(steps, &(&1.kind == "tool"))
+    :ok = ScriptedWorker.await_reports()
+    assert ScriptedWorker.kills() == []
+    assert Map.get(Prima.Slots.status(Opus.Slots).unreaped, ctx.athanor_id, 0) == 0
+
+    # The athanor's next root is admitted and runs, in a thread of its own
+    # beside the stopped turn's.
+    ScriptedWorker.script([reply("hi")])
+    {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
+    next = accept!(ctx, other, "again")
+    assert :completed = Task.await(run(ctx, next), 30_000)
   end
 
   defp reply(text),
