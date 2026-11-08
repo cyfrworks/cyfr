@@ -67,8 +67,14 @@ defmodule CyfrWeb.Endpoint do
   # which `CyfrWeb.Ingress` sets as a header for this reason. This socket
   # is handled here, before the router, so it passes no rate-limit plug and
   # a LiveView that starts an anonymous flow (sign-in, registry appeal) has
-  # to budget by IP itself.
-  @live_connect_info [:peer_data, :x_headers, session: {__MODULE__, :session_options, []}]
+  # to budget by IP itself. `:user_agent` is what a sign-in's session
+  # records its browser and system from (`Sanctum.UserAgent`).
+  @live_connect_info [
+    :peer_data,
+    :x_headers,
+    :user_agent,
+    session: {__MODULE__, :session_options, []}
+  ]
 
   # `/live`'s messages are bounded by the largest a LiveView sends
   # legitimately: the Files editor's save of a file it opens inline

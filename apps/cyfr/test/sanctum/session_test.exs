@@ -240,7 +240,7 @@ defmodule Sanctum.SessionTest do
       refresh = {Task.Supervisor, :start_child, 2}
 
       # A fresh session is not due: the load says so and no refresh starts.
-      assert {:ok, %Context{}, false} = Session.load_sliding(session.token)
+      assert {:ok, %Context{}, []} = Session.load_sliding(session.token)
 
       {_ok, calls} =
         traced([refresh], fn ->
@@ -255,7 +255,7 @@ defmodule Sanctum.SessionTest do
       from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: soon])
 
-      assert {:ok, %Context{}, true} = Session.load_sliding(session.token)
+      assert {:ok, %Context{}, [:slide]} = Session.load_sliding(session.token)
 
       {_ok, calls} =
         traced([refresh], fn ->
@@ -275,6 +275,71 @@ defmodule Sanctum.SessionTest do
       Cyfr.Test.Settings.put("session_ttl_hours", 0)
 
       assert :ok = Session.refresh_if_stale(session.token)
+    end
+  end
+
+  describe "where and when a session was seen" do
+    @safari "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15"
+
+    defp row(token) do
+      import Ecto.Query
+      hash = Session.token_hash(token)
+      Arca.Repo.one!(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+    end
+
+    defp seen_ago!(token, seconds) do
+      import Ecto.Query
+      hash = Session.token_hash(token)
+
+      at =
+        DateTime.utc_now() |> DateTime.add(-seconds, :second) |> DateTime.truncate(:microsecond)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash),
+          set: [last_seen_at: at]
+        )
+
+      at
+    end
+
+    test "a session records the browser and system its user agent names, never the user agent, and was last seen at its sign-in",
+         %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx, user_agent: @safari)
+      row = row(session.token)
+
+      assert {row.browser, row.system} == {"Safari", "macOS"}
+      assert row.last_seen_at == row.inserted_at
+      refute inspect(Map.from_struct(row)) =~ "Mozilla"
+
+      {:ok, unnamed} = Session.create(ctx)
+      assert {row(unnamed.token).browser, row(unnamed.token).system} == {nil, nil}
+    end
+
+    test "a sighting moves last seen once a minute at most" do
+      import Ecto.Query
+      {local, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+      own = Sanctum.Test.People.athanor!(user)
+      {:ok, session} = Session.create(Sanctum.TestContext.issuer!(%{local | athanor_id: own.id}))
+
+      # Seen within the minute: not due, and a sighting writes nothing.
+      recent = seen_ago!(session.token, 30)
+      assert {:ok, %Context{}, []} = Session.load_sliding(session.token)
+      assert :ok = Session.seen(session.token)
+      assert row(session.token).last_seen_at == recent
+
+      # Over a minute ago: due, and the establish that read it records it, once.
+      stale = seen_ago!(session.token, 120)
+      assert {:ok, %Context{}, [:seen]} = Session.load_sliding(session.token)
+      {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+
+      Prima.Test.Wait.wait_until(fn ->
+        DateTime.compare(row(session.token).last_seen_at, stale) == :gt
+      end)
+
+      seen = row(session.token).last_seen_at
+      assert DateTime.diff(DateTime.utc_now(), seen, :second) < 60
+      assert :ok = Session.seen(session.token)
+      assert row(session.token).last_seen_at == seen
     end
   end
 

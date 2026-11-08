@@ -330,6 +330,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       # session does (`Arca.PairedClients.record_passkey/2`). Null for every
       # other session.
       add :client_id, :string
+      # The browser and system a browser's sign-in named in its user agent,
+      # in words (`Sanctum.UserAgent`), never the user agent itself; null
+      # when it named none. `last_seen_at` moves at most once a minute
+      # while the session is used (`Sanctum.Session.seen/1`). No address
+      # is stored.
+      add :browser, :string
+      add :system, :string
+      add :last_seen_at, :utc_datetime_usec
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
     end

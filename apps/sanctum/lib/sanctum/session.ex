@@ -127,6 +127,15 @@ defmodule Sanctum.Session do
   refuses the session, or waits for it and then retires it with the key
   it removed. A session no key signed names neither.
 
+  ## Where and when
+
+  A browser's sign-in hands its user agent (`user_agent:`), and the
+  session records the browser and system it names in words
+  (`Sanctum.UserAgent`), never the user agent itself. A session is last
+  seen at its sign-in, and then at most once a minute while it is used:
+  a load that finds it seen over a minute ago says a sighting is due
+  (`load_sliding/1`), and its caller records one (`seen/1`).
+
   Returns a session map containing the token and identity fields.
   """
   @spec create(Context.t(), keyword()) :: {:ok, session()} | {:error, term()}
@@ -141,10 +150,16 @@ defmodule Sanctum.Session do
           token_prefix: String.slice(token, 0, 8),
           client_id: Keyword.get(opts, :client_id)
         })
+        |> Map.merge(where_from(Keyword.get(opts, :user_agent)))
 
       with {:ok, session} <- insert(ctx, expectation, minting),
            do: {:ok, Map.put(session, :token, token)}
     end
+  end
+
+  defp where_from(user_agent) do
+    {browser, system} = Sanctum.UserAgent.words(user_agent)
+    %{browser: browser, system: system}
   end
 
   # The key that signed for the session and the head it was verified
@@ -268,6 +283,8 @@ defmodule Sanctum.Session do
       kid: minting.kid,
       head: minting.head,
       client_id: minting.client_id,
+      browser: minting.browser,
+      system: minting.system,
       expires_at: expires_at,
       inserted_at: now
     }
@@ -316,22 +333,49 @@ defmodule Sanctum.Session do
   def load(token) when is_binary(token), do: load_by_hash(hash_token(token))
 
   @doc """
-  `load/1`, also saying whether the session is due its sliding refresh
-  (about a day, or half the TTL, since it was last extended), read off
-  the row the load already read — so the caller starts a refresh only
-  when one would write.
+  `load/1`, also saying what upkeep the session is due, read off the row
+  the load already read, so the caller starts a write only when one
+  would land: `:slide`, its sliding refresh (about a day, or half the
+  TTL, since it was last extended), and `:seen`, a sighting (last seen
+  over a minute ago, `seen/1`).
   """
   @spec load_sliding(String.t()) ::
-          {:ok, Context.t(), boolean()}
+          {:ok, Context.t(), [:slide | :seen]}
           | {:error, :invalid_session | :database_error | :namespace_unavailable}
   def load_sliding(token) when is_binary(token) do
     token_hash = hash_token(token)
 
     with {:ok, row} <- stored(token_hash),
          {:ok, ctx} <- row_to_context(row, token_hash) do
-      {:ok, ctx, row.slides and slide_due?(row.expires_at)}
+      due =
+        [slide: row.slides and slide_due?(row.expires_at), seen: seen_due?(row.last_seen_at)]
+        |> Enum.filter(&elem(&1, 1))
+        |> Enum.map(&elem(&1, 0))
+
+      {:ok, ctx, due}
     end
   end
+
+  @doc """
+  Record that the session `token` was used now, unless it was already
+  seen within the last minute: one write a minute at most, whichever
+  member serves it. A store that cannot answer costs the sighting alone.
+  """
+  @spec seen(String.t()) :: :ok
+  def seen(token) when is_binary(token) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    _written = Arca.SessionStorage.seen(hash_token(token), now, seen_since(now))
+    :ok
+  end
+
+  @seen_every_seconds 60
+
+  defp seen_due?(nil), do: true
+
+  defp seen_due?(%DateTime{} = last_seen_at),
+    do: DateTime.compare(last_seen_at, seen_since(DateTime.utc_now())) == :lt
+
+  defp seen_since(now), do: DateTime.add(now, -@seen_every_seconds, :second)
 
   @doc """
   Load a Context from a session's row key (`token_hash/1`) rather than its
