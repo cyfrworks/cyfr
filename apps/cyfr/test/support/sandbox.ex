@@ -40,7 +40,9 @@ defmodule Cyfr.Test.Sandbox do
   a `Task`, a task a supervisor above runs on the test's behalf — is
   killed and awaited, unless it is registered under a name, which makes it
   a service rather than the test's work, or the test started it before its
-  sandbox, which makes it scaffolding the test means to outlive it. A sync
+  sandbox, which makes it scaffolding the test means to outlive it. All of
+  them are suspended before the first is killed, so none answers another's
+  end with a write after a kill cut the shared connection mid-query. A sync
   test's sweep does this first and again on every pass; an async test's
   does only this, since the supervisors are its neighbours' too.
 
@@ -359,17 +361,53 @@ defmodule Cyfr.Test.Sandbox do
 
   # Killed, not asked: a process the test left behind has no one to answer
   # a shutdown to. Each kill is awaited, so the owner outlives them all.
+  #
+  # Every one is suspended before any is killed. A kill can land while its
+  # process holds the shared connection mid-query, and the pool then drops
+  # the connection and the owner's checkout with it; a sibling still free
+  # to run would answer that death by writing — a provisioning keeper
+  # releasing the claim of the attempt it watches — into no owner at all.
+  # Suspended, none of them runs again: a kill still ends each one.
   defp stop_descendants(test, spared) do
     sweeping(test)
 
-    for pid <- descendants(test, spared) do
-      ref = Process.monitor(pid)
-      Process.exit(pid, :kill)
+    watched =
+      for pid <- suspend_descendants(test, spared, MapSet.new()),
+          do: {Process.monitor(pid), pid}
 
+    for {_ref, pid} <- watched, do: Process.exit(pid, :kill)
+
+    for {ref, pid} <- watched do
       receive do
         {:DOWN, ^ref, :process, ^pid, _reason} -> pid
       end
     end
+  end
+
+  # Passes repeat until one finds no descendant left running: one started
+  # while the pass before suspended its starter is suspended on the next,
+  # and a suspended process starts nothing.
+  defp suspend_descendants(test, spared, suspended) do
+    found =
+      for pid <- descendants(test, spared),
+          not MapSet.member?(suspended, pid),
+          into: MapSet.new(),
+          do: pid
+
+    if MapSet.size(found) == 0 do
+      MapSet.to_list(suspended)
+    else
+      Enum.each(found, &suspend/1)
+      suspend_descendants(test, spared, MapSet.union(suspended, found))
+    end
+  end
+
+  # A process that ended since it was listed cannot be suspended; its
+  # monitor answers at once.
+  defp suspend(pid) do
+    :erlang.suspend_process(pid)
+  rescue
+    ArgumentError -> false
   end
 
   # ---------------------------------------------------------------------------

@@ -137,6 +137,49 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
+  describe "a sync test's descendants" do
+    setup do
+      collector = spawn(fn -> collect(%{}) end)
+
+      # Registered before the sandbox, so it runs after the sweep: the one
+      # scheduler is given back, and nothing the test left may have run
+      # once its sibling was killed.
+      schedulers = :erlang.system_info(:schedulers_online)
+
+      on_exit(fn ->
+        :erlang.system_flag(:schedulers_online, schedulers)
+        send(collector, {:reports, self()})
+        assert_receive {:reports, reports}, 5_000
+
+        assert reports == %{},
+               "a descendant ran after the sweep killed its sibling: #{inspect(reports)}"
+      end)
+
+      Sandbox.setup!()
+      {:ok, collector: collector}
+    end
+
+    # Each sibling watches the other and, told of its end, writes — the
+    # shape of a provisioning keeper releasing the claim of the attempt it
+    # watches (`Sanctum.Provisioning.keep/2`). One holds the shared
+    # connection as a query in flight does, so whichever is killed first,
+    # the kill either cuts the connection under the other's write or leaves
+    # one alive to make it. On one scheduler, with the siblings above the
+    # sweep's priority, a sibling free to run when the other ends always
+    # runs before the sweep's next kill: the sweep must leave none free.
+    test "are all held before any is killed, so none writes after a kill",
+         %{collector: collector} do
+      test = self()
+      holding = sibling(test, collector, :holding, true)
+      watching = sibling(test, collector, :watching, false)
+      send(holding, {:watch, watching})
+      send(watching, {:watch, holding})
+      assert_receive {:watching, ^holding}, 5_000
+      assert_receive {:watching, ^watching}, 5_000
+      :erlang.system_flag(:schedulers_online, 1)
+    end
+  end
+
   describe "a sync test's runners" do
     setup tags do
       # Unlinked, so it outlives the test process for the check below.
@@ -338,6 +381,36 @@ defmodule Cyfr.Test.SandboxTest do
            end
          ]}
     }
+  end
+
+  # A task of the test's, as the attempt and its keeper are: it watches the
+  # sibling it is told of and, once that one has ended, reports and makes
+  # one write, holding the connection meanwhile when `hold?`.
+  defp sibling(test, collector, name, hold?) do
+    {:ok, pid} =
+      Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fn ->
+        Process.flag(:priority, :high)
+
+        if hold?,
+          do: Arca.Repo.checkout(fn -> watch(test, collector, name) end),
+          else: watch(test, collector, name)
+      end)
+
+    pid
+  end
+
+  defp watch(test, collector, name) do
+    receive do
+      {:watch, other} ->
+        ref = Process.monitor(other)
+        send(test, {:watching, self()})
+
+        receive do
+          {:DOWN, ^ref, :process, ^other, _reason} ->
+            send(collector, {:report, name, :ran_after_its_sibling})
+            send(collector, {:report, {name, :write}, last_query()})
+        end
+    end
   end
 
   defp last_query do
