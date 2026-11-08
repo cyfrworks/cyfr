@@ -190,6 +190,7 @@ const aquaSoul = "aqua/aqua.md"
 
 var shippedCrew = map[string]bool{
 	"claude-code": true,
+	"codex":       true,
 	"explorer":    true,
 }
 

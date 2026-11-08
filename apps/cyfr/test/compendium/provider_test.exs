@@ -1575,9 +1575,9 @@ defmodule Compendium.ProviderTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "list"})
 
-      # the soul + 2 crew members + 3 doc guides = 6
-      assert result.count == 6
-      assert length(result.guides) == 6
+      # the soul + 3 crew members + 3 doc guides = 7
+      assert result.count == 7
+      assert length(result.guides) == 7
 
       names = Enum.map(result.guides, & &1.name)
       assert "component-guide" in names
@@ -1586,6 +1586,7 @@ defmodule Compendium.ProviderTest do
       assert "aqua" in names
       assert "explorer" in names
       assert "claude-code" in names
+      assert "codex" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1602,7 +1603,7 @@ defmodule Compendium.ProviderTest do
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "list"})
       crew = Enum.filter(result.guides, &(&1.type == "crew"))
 
-      assert length(crew) == 2
+      assert length(crew) == 3
       refute Enum.any?(crew, &Map.has_key?(&1, :parent))
     end
 

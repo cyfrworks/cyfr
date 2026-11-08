@@ -1,0 +1,66 @@
+# Codex Catalyst
+
+Codex as a brain of the `model/chat@1` contract. Codex runs as itself, with its own tools, its own prompt and the person's own sign-in, in the folder a login entry keeps for the program `codex`. This catalyst drives Codex's app-server over the program's pipe (`cyfr:process/pipe`) and gives it CYFR's tools as the thread's dynamic tools: Codex asks this catalyst to run each one, so every action of CYFR's still passes CYFR's gate. The catalyst holds no credential, no route and nothing between runs; CYFR ships nothing of OpenAI's.
+
+## The program
+
+The manifest declares one need, `codex`, of type `login` for the program `codex`, and no other. Its `install` block suggests the row: command `npx -y @openai/codex@0.167.0`, sign-in `npx -y @openai/codex@0.167.0 login --device-auth`. Device auth prints a URL and a one-time code that the person opens in their own browser; plain `codex login` would start a callback server on the box's loopback, which that browser cannot reach. The person installs it from the setup plan or the crew entry on the AQUA page, which defines the row, makes the login entry and opens the sign-in terminal; or places a binary and writes the row by hand. Codex keeps its sign-in and its threads under `~/.codex` in the kept folder.
+
+## The protocol it depends on
+
+Codex 0.167.0 (npm `latest` and GitHub's latest release, tag `rust-v0.167.0`, 2026-11-06), read from `codex-rs/app-server-protocol` at that tag and driven as a binary (below). The program runs `app-server`, which speaks JSON-RPC 2.0 without the `jsonrpc` member, one message per line on standard input and output. A version bump re-verifies each of these:
+
+- `initialize` with `capabilities.experimentalApi: true`, then the `initialized` notification. The opt-in is needed because `thread/start`'s `dynamicTools` is an experimental field (`#[experimental("thread/start.dynamicTools")]`).
+- `account/read` → `{account, requiresOpenaiAuth}`; `account: null` with `requiresOpenaiAuth: true` is a program with no sign-in.
+- `model/list` → `{data: [{id, displayName, supportedReasoningEfforts: [{reasoningEffort}], isDefault, ...}], nextCursor}`.
+- `thread/start {approvalPolicy, sandbox, developerInstructions, dynamicTools}` → `{thread: {id}, model}`; `thread/resume {threadId, approvalPolicy, sandbox, developerInstructions, excludeTurns}`. A thread's dynamic tools are saved with it (the rollout's `session_meta`) and restored on resume; app-server 0.167.0 offers no way to replace them.
+- `turn/start {threadId, input, model?, effort?}` → `{turn: {id}}`.
+- Notifications: `item/agentMessage/delta {turnId, itemId, delta}`, `item/started` and `item/completed {turnId, item: {type, id, ...}}`, `thread/tokenUsage/updated {turnId, tokenUsage: {last}}`, `turn/completed {turn: {id, status, error: {codexErrorInfo}}}`.
+- Codex's requests: `item/tool/call {turnId, callId, tool, arguments}`, answered `{contentItems: [{type: "inputText", text}], success}`; the approvals `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` (`{decision: "accept"}`), `item/permissions/requestApproval` (`{permissions, scope: "turn"}`), `mcpServer/elicitation/request` (`{action: "accept"}`), and `currentTime/read` (`{currentTimeAt}`). Any other request is refused with a JSON-RPC error.
+
+Codex runs a turn's dynamic tool calls in parallel (`DynamicToolHandler::supports_parallel_tool_calls` is true, and a turn's `parallel_tool_calls` is fixed true), so one turn can hold several calls at once.
+
+## The box, Codex's sandbox and its asks
+
+Every thread starts and resumes with `sandbox: "danger-full-access"` and `approvalPolicy: "never"`, so the keeper's box is the only boundary (the user's ruling D2). Codex's own sandbox would nest a second one, built from namespaces and Landlock, inside the box's, and those are not the box's to grant. With asking off, Codex's commands and patches run as the box lets them. They are shown as a `tool_call.start` and `tool_call.end` pair under the item's own type (`commandExecution`, `fileChange`, `mcpToolCall`, `webSearch`, `imageView`, `collabAgentToolCall`), by name only, since what Codex ran may hold what its folder holds. An approval request that still arrives is answered allow. Under `never`, Codex itself refuses an MCP tool of the person's own Codex configuration that requires approval; CYFR's tools are no MCP tools and are not affected.
+
+## How a turn runs
+
+`chat` opens the session the request names, or a new one. A session is `<key>.<thread>`: the pipe's key, which this catalyst chose, and the thread Codex named. A program started for the open is sent `initialize` and `account/read`. Without a sign-in, the turn is refused `authentication` before anything reaches a thread, and the program is closed. A request with no session then starts a thread, given the request's tools and its `system` as developer instructions beside Codex's own; a request with a session resumes the thread from the kept folder. A thread keeps the tools it started with for its life. A later request's tools are not compared with them, since CYFR's gate refuses a call outside the tools a turn may use. A tool added after a thread started is one Codex cannot see until a new thread; archiving the member's thread is the way to one. A new thread's tools are refused `invalid_request`, before anything is opened, when a name is not one Codex takes (`^[a-zA-Z0-9_-]+$`, at most 128 characters, never `mcp` or `mcp__…`), a name is given twice, or the list is past the 1 MiB one line carries.
+
+The newest user message starts a turn, with the request's `model` and `effort` options, which Codex takes per turn: `default` sends no model, and Codex runs its own default. The reply's text streams as `text.delta`, a later agent message set apart from an earlier one by a blank line. The turn answers on the first of:
+
+- calls of CYFR's tools: each a `tool_call` named as AQUA names the tool, with `provider_data: {request_id, turn_id}`, and `stop_reason: tool_call`. Once the turn holds a call, the run reads on until a quarter-second passes with nothing new, so calls Codex makes in parallel are answered together. Codex holds each call while CYFR runs it through its gate. The next `chat`, carrying the `tool_result`s, answers each held request with CYFR's answer, `success: false` for a refusal;
+- the turn's end: `end_turn`, with the usage of the model calls this run read, input counted as Codex counts it with cached input among it;
+- an error, typed by the contract's refusals.
+
+A run answers only once it has handled every line it read, and it releases them before it answers. The lines the session holds when the next run attaches are the ones no run has handled, such as a call Codex made after this run answered, which the next run answers as its own `tool_call`. A call of a turn other than the one a run reads is answered `success: false`, saying CYFR did not run it. A new message to a running program whose last answer ended on calls closes the program and starts it again, so no held call blocks the new turn; the resumed thread records those calls as cancelled. If the program that held calls has ended when their answers come, the resumed thread records them as cancelled (Codex writes "dynamic tool call was cancelled before receiving a response"), and CYFR's answers reach it as a message.
+
+A result is cut at 512 KiB as written into its line, with a note naming what was left out, so its answer fits the pipe's 1 MiB line; Codex then bounds what it keeps of a tool's output by its own rule.
+
+Once a run has sent anything, a failure of the pipe interrupts the session. That covers a read or a send the box could not answer, a line lost past the session's buffer while unread, the program ending mid-turn, and the run's time running out. What reached Codex is then unknown, and sending it again could make it act twice, so nothing is sent again and the session is closed. The turn answers `provider_error`, which the loop does not retry, saying the session was interrupted. The next message starts the program again and resumes the thread from the kept folder. A turn is bounded by the 30 minutes the manifest consents the catalyst (`caps.limits.timeout`), which is how long the assistant's loop waits for a model call: the catalyst stops at 29, closes a turn still running as interrupted, and its partial work stays in the folder and the thread.
+
+Before a run sends anything, what the pipe answers maps to the contract's refusals: `denied` and `setup_required` to `secret_denied`; `busy` and `unavailable` to `overloaded`, which the loop retries safely since nothing was sent; `lost` to `provider_error`; `invalid_request` and `too_large` to `invalid_request`. A turn that fails maps by its `codexErrorInfo`: an `unauthorized` or an HTTP 401 or 403 to `authentication`; a usage or rate limit (or 429) and an overload (or 503) to `provider_error` naming the reason and asking for the message again later; `modelNotFound` to `unknown_model`; `badRequest` and `contextWindowExceeded` to `invalid_request`. It ends a turn this run already sent to, so no answer of it is a type the loop retries; nothing is closed, and the next message goes on in the thread. No line of Codex's, none of its error text, nothing of its folder or its sign-in, reaches the answer.
+
+## What Codex answers, and the fallback
+
+`describe` and `models` start the program in a session of their own, send `initialize` and `model/list`, read every page and close the session. From the listing:
+
+- **model**: an enum of `default` and the listed `id`s. `models` answers the listing as `{id, name: displayName}`, Codex's default first as `default`.
+- **effort**: an enum of the levels any listed model takes (`reasoningEffort`), in the listing's order.
+- **context_window**: 272,000 for any model, on `describe` with a `model`. app-server lists no window; this is the one Codex's bundled catalog (`models-manager/models.json`, 0.167.0) gives the models it lists, and Codex manages and compacts its own context.
+
+`model/list` answers without a sign-in, from the catalog Codex ships. With no login entry granted yet (the pipe answers `denied`), `describe` answers deliberately with no options; any other failure to list keeps its contract error.
+
+## Verified against 0.167.0
+
+The binary (`npx -y @openai/codex@0.167.0 app-server`) was driven over stdio with a scratch `CODEX_HOME`:
+
+- signed out: `initialize`, `account/read` (`account: null`, `requiresOpenaiAuth: true`), `model/list`, and `thread/start` with a dynamic tool answered as above. The thread id is a lowercase UUID. A `turn/start` then retried the Responses API with `error` notifications (`willRetry: true`, HTTP 401) and ended `turn/completed` `failed` with `codexErrorInfo: {httpConnectionFailed: {httpStatusCode: 401}}`, which is why the sign-in is read before a turn. A new program's `thread/resume` of that thread answered it, and `turn/interrupt` with no active turn answered a JSON-RPC error.
+- against a scripted Responses endpoint (a model provider set with `-c model_provider=…`): a turn streamed `item/agentMessage/delta`s and completed its `agentMessage`. Two calls of a dynamic tool arrived as two `item/tool/call` requests while the first was still held, and the turn went on once both were answered (`success: false` showing as `failed`). A shell command ran as a `commandExecution` item with no approval request under `never`. Killing the program while two calls were held, then resuming the thread in a new program and starting a turn, delivered the model the calls marked cancelled and the new message. The thread's dynamic tools were in its rollout.
+
+Not verified without a Codex account: a real model's turn (its streaming, usage and errors), the device-auth sign-in, and Codex inside the backends image's box.
+
+## Building
+
+`scripts/build-seed-guest.sh seed/components/catalysts/local/codex/0.1.0` builds `catalyst.wasm` and writes `src/build.stamp`. `cargo test` in `src/` runs the contract and protocol tests on the host target, against a fake app-server scripted from the lines 0.167.0 wrote and against the shared vectors `tests/fixtures/model_chat.json`. `tests/locus-backends-image/codex.py` drives the built catalyst against a fake Codex in the backends image.

@@ -117,12 +117,12 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert Enum.find_index(minted, &(&1 == "catalyst:local.gemini")) <
              Enum.find_index(minted, &(&1 == "agent:local.explorer"))
 
-    # The harness's catalyst is not installed: its member has no consent,
-    # and the soul's is whole without it.
-    refute "agent:local.claude-code" in minted
-
-    assert {"agent:local.claude-code", {:activation_unresolvable, _}} =
-             List.keyfind(skipped, "agent:local.claude-code", 0)
+    # The harnesses' catalysts are not installed: their members have no
+    # consent, and the soul's is whole without them.
+    for member <- ~w(agent:local.claude-code agent:local.codex) do
+      refute member in minted
+      assert {^member, {:activation_unresolvable, _}} = List.keyfind(skipped, member, 0)
+    end
 
     refute Enum.any?(skipped, &match?({_, :not_vouched}, &1))
 

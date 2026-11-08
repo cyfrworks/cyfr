@@ -1529,6 +1529,16 @@ jobs:
       - name: The Claude Code catalyst over a program's pipe
         run: python3 tests/locus-backends-image/claude_code.py cyfr-locus:backends
 
+      # The Codex catalyst, run by the runtime under a scripted host,
+      # driving a fake app-server over the pipe in a kept folder: describe's
+      # options from its model listing, a chat round trip on a new thread
+      # with CYFR's tools as dynamic tools and Codex's own command shown by
+      # name, a held call of CYFR's tool answered by the next chat, an
+      # interruption and a retirement resuming the thread, a refused
+      # sign-in, a pipe refusal as the contract's.
+      - name: The Codex catalyst over a program's pipe
+        run: python3 tests/locus-backends-image/codex.py cyfr-locus:backends
+
       # A program's network list: a row's hosts admitted for its uid at the
       # guard, pooled or kept, its listed host reached and an unlisted
       # address refused on its own chain over IPv4 and IPv6, on every

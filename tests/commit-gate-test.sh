@@ -1540,6 +1540,7 @@ python3 tests/locus-backends-image/memory.py NS/cyfr-locus:backends|prefix=PREFI
 python3 tests/locus-backends-image/kept_home.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/claude_code.py NS/cyfr-locus:backends|prefix=PREFIX
+python3 tests/locus-backends-image/codex.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/egress.py NS/cyfr-locus:backends|prefix=PREFIX
 tests/compose-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=
 tests/compose-proof/predicates-test.sh |skip=unset browsers= join= db= case_image=

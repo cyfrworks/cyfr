@@ -47,6 +47,7 @@ func TestIsManaged(t *testing.T) {
 		"aqua/aqua.md",
 		"aqua/crew/explorer.md",
 		"aqua/crew/claude-code.md",
+		"aqua/crew/codex.md",
 		"aqua/skills/builder/SKILL.md",
 		"aqua/skills/canvas/SKILL.md",
 		"aqua/skills/capability-acquisition/SKILL.md",
