@@ -103,6 +103,15 @@ defmodule Prima.ModelTest do
     assert capture_log(fn -> refute Model.speaks_chat?("{not json") end) == ""
   end
 
+  test "a refusal's session survives the envelope and reads as a response's" do
+    error = %{"type" => "provider_error", "message" => "interrupted", "session" => "s-1"}
+
+    assert {:error, ^error} = Model.decode_envelope(%{"status" => 502, "error" => error})
+    assert Model.response_session(error) == {:ok, "s-1"}
+
+    assert Model.response_session(%{error | "session" => ""}) == {:error, {:invalid, "session"}}
+  end
+
   test "a 2xx envelope decodes to its data, from a run result, a map or JSON" do
     data = %{"models" => [%{"id" => "m"}]}
     envelope = %{"status" => 200, "data" => data}

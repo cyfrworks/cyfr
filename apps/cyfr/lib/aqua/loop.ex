@@ -737,9 +737,9 @@ defmodule Aqua.Loop do
       {:error, :superseded} ->
         {:halt, :cancelled, state}
 
-      {:error, %{"type" => type}}
+      {:error, %{"type" => type} = error}
       when type in @recoverable and retries < length(@retry_delays_ms) ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: type})
+        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(error, type))
         Process.sleep(Enum.at(@retry_delays_ms, retries))
 
         case open_model_step(state, "chat") do
@@ -748,7 +748,14 @@ defmodule Aqua.Loop do
         end
 
       {:error, %{"type" => type} = error} when type in @setup ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
+        _ =
+          Tape.close_step(
+            guest(state),
+            state.turn,
+            step,
+            "error",
+            refused(error, error["message"])
+          )
 
         announce(state, :consent_required, %{
           ref: state.spec.catalyst,
@@ -757,8 +764,8 @@ defmodule Aqua.Loop do
 
         {:halt, {:failed, :setup_required}, state}
 
-      {:error, %{"type" => _type, "message" => message}} ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: message})
+      {:error, %{"type" => _type, "message" => message} = error} ->
+        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(error, message))
         _ = system_row(state, "The model could not answer: #{message}")
         {:halt, {:failed, message}, state}
 
@@ -769,6 +776,17 @@ defmodule Aqua.Loop do
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: text})
         _ = system_row(state, "The model could not be reached: #{text}")
         {:halt, {:failed, reason}, state}
+    end
+  end
+
+  # A refused model step closes with the brain's session its refusal
+  # names, kept on the thread as a response's is (`Prima.Model`), so the
+  # next request continues it. A session off the contract is not kept,
+  # and the refusal ends the turn as it would.
+  defp refused(error, text) do
+    case Prima.Model.response_session(error) do
+      {:ok, session} -> %{error: text, session: session}
+      {:error, _invalid} -> %{error: text}
     end
   end
 

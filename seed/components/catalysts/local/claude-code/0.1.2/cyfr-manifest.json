@@ -1,7 +1,7 @@
 {
   "name": "claude-code",
   "type": "catalyst",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "local",
   "description": "Claude Code as a brain of the model/chat@1 contract: the harness runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
   "contracts": [

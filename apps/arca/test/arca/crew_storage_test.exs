@@ -676,6 +676,39 @@ defmodule Arca.CrewStorageTest do
 
       assert {:ok, %{brain_session: "brain-session-1"}} = Threads.get(actor, room.id)
     end
+
+    test "a refused model step's session is kept on the thread as a response's is", %{
+      actor: actor,
+      room: room
+    } do
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, room.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      turn = start!(actor, turn)
+      step = model_step!(actor, turn, "model:1")
+      {:ok, _} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
+
+      {:ok, _} =
+        TurnStorage.close_step(actor, step.id, "error", %{
+          fence: turn.fence,
+          error: "interrupted",
+          session: "brain-session-1"
+        })
+
+      assert {:ok, %{brain_session: "brain-session-1"}} = Threads.get(actor, room.id)
+
+      # A refusal naming no session leaves the kept one as it is.
+      again = model_step!(actor, turn, "model:2")
+      {:ok, _} = TurnStorage.dispatch_step(actor, again.id, %{fence: turn.fence})
+
+      {:ok, _} =
+        TurnStorage.close_step(actor, again.id, "error", %{fence: turn.fence, error: "x"})
+
+      assert {:ok, %{brain_session: "brain-session-1"}} = Threads.get(actor, room.id)
+    end
   end
 
   describe "child threads" do

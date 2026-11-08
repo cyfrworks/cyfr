@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/openai-codex/0.1.0/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.1/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
@@ -35,8 +35,9 @@ fake-openai-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
   call's, though Codex sent the thread's total twice.
 - An interruption: when the read after the next call's answer is answered
   unavailable, the chat answers provider_error (which the loop does not
-  retry) saying the session was interrupted, closes the session with its
-  program and sends nothing more; the next message resumes the thread
+  retry) saying the session was interrupted and carrying the session,
+  closes the session with its program and sends nothing more; the next
+  message, naming the session the refusal carried, resumes the thread
   from the kept folder (`thread/resume`), sending no answer again, and
   counts the interrupted run's model call with its own.
 - Resume after retirement: once the session's program is retired idle, the
@@ -70,8 +71,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.0")
-REF = "catalyst:local.openai-codex:0.1.0"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.1")
+REF = "catalyst:local.openai-codex:0.1.1"
 NEED = "openai-codex"
 OWNER = owner_of("openai-codex")
 HOME = "vlt_openai-codex"
@@ -349,11 +350,15 @@ def main():
                and "interrupted" in output["error"]["message"] and "next message" in output["error"]["message"],
                "a read the box could not answer after the answer answers provider_error, which the loop does not "
                "retry, saying the session was interrupted", output)
+        expect(output["error"].get("session") == session,
+               "the refusal carries the session with the total before the interrupted call, which the next "
+               "message names as AQUA keeps it", output)
         expect([op for op, _ in bridge.calls if op == "close"] == ["close"] and bridge.methods() == ["answer"],
                "the session is closed, the answer sent once and nothing else", bridge.calls)
         eventually(lambda: not fakes(backends), "the interrupted session's program to end with it")
         bridge.calls.clear()
-        resumed = {"model": "default", "session": session, "messages": [{"role": "user", "content": "what was my first message?"}]}
+        resumed = {"model": "default", "session": output["error"]["session"],
+                   "messages": [{"role": "user", "content": "what was my first message?"}]}
         output, events = run_catalyst(rt, plane, wasm, "chat", resumed, "the next message after the interruption")
         answers.append((output, events))
         sent = bridge.sent()

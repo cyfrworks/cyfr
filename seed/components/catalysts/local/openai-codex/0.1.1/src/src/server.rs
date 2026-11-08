@@ -156,6 +156,9 @@ pub enum Event {
     /// The answer to a request of this catalyst's: its result, or the
     /// error's message.
     Response { id: String, result: Result<Value, String> },
+    /// `turn` started. Codex writes its start to the thread's rollout,
+    /// durably, before it says so (`Session::send_event_raw`, 0.167.0).
+    TurnStarted { turn: String },
     /// A text fragment of an agent message of `turn`.
     Delta { turn: String, item: String, text: String },
     /// A whole agent message of `turn`.
@@ -233,12 +236,29 @@ pub fn read(line: &str) -> Event {
             turn: turn(),
             total: counts(&params["tokenUsage"]["total"]),
         },
+        (Some("turn/started"), None) => Event::TurnStarted { turn: str_of(&params["turn"]["id"]) },
         (Some("turn/completed"), None) => Event::TurnDone {
             turn: str_of(&params["turn"]["id"]),
             status: str_of(&params["turn"]["status"]),
             error: params["turn"]["error"].clone(),
         },
         _ => Event::Other,
+    }
+}
+
+impl Event {
+    /// The turn a notification of a turn names.
+    pub fn turn(&self) -> Option<&str> {
+        match self {
+            Event::TurnStarted { turn }
+            | Event::Delta { turn, .. }
+            | Event::Message { turn, .. }
+            | Event::OwnTool { turn, .. }
+            | Event::ToolCall { turn, .. }
+            | Event::Usage { turn, .. }
+            | Event::TurnDone { turn, .. } => Some(turn),
+            Event::Response { .. } | Event::Request { .. } | Event::Other => None,
+        }
     }
 }
 

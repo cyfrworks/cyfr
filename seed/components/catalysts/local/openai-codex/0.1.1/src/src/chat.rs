@@ -16,7 +16,8 @@
 //!
 //! The catalyst holds nothing between runs: the session is the program's,
 //! a held call's request id and turn ride on its `tool_call`
-//! (`provider_data`), and the session on the response. Nothing Codex
+//! (`provider_data`), and the session on the response, or on the refusal
+//! once the session exists (`Known::carried`). Nothing Codex
 //! writes but its reply's text and its tool calls reaches the answer: no
 //! line, no error text, no file of its home, no sign-in text.
 
@@ -126,23 +127,28 @@ pub trait Pipe {
 // Refusals
 // ---------------------------------------------------------------------------
 
-/// A typed refusal of the contract, and the pipe's code when the pipe
-/// answered it.
+/// A typed refusal of the contract, the pipe's code when the pipe
+/// answered it, and the session it carries (`Prima.Model`).
 #[derive(Debug, PartialEq)]
 pub struct Refusal {
     pub status: i64,
     pub kind: &'static str,
     pub message: String,
     pub code: Option<String>,
+    pub session: Option<String>,
 }
 
 impl Refusal {
     fn new(status: i64, kind: &'static str, message: impl Into<String>) -> Self {
-        Refusal { status, kind, message: message.into(), code: None }
+        Refusal { status, kind, message: message.into(), code: None, session: None }
     }
 
     pub fn envelope(&self) -> String {
-        json!({"status": self.status, "error": {"type": self.kind, "message": self.message}}).to_string()
+        let mut error = json!({"type": self.kind, "message": self.message});
+        if let Some(session) = &self.session {
+            error["session"] = json!(session);
+        }
+        json!({"status": self.status, "error": error}).to_string()
     }
 }
 
@@ -881,14 +887,61 @@ impl Ids {
     }
 }
 
-/// One `chat`: the contract response, or a refusal. `fresh` names a new
-/// session's key and this run's request ids.
+/// What a run knows of its session for a refusal to carry: the thread,
+/// once the request named it or a new one's rollout holds this run's turn
+/// (`read_turn`), the
+/// thread's usage as last read, and the usage this run read past it.
+struct Known {
+    thread: Option<String>,
+    total: Option<Counts>,
+    used: Counts,
+}
+
+impl Known {
+    /// The session a refusal carries, which the host keeps as a response's,
+    /// so a first chat interrupted at its budget is resumed by the next. A
+    /// new thread whose rollout is not known to hold the turn carries none:
+    /// Codex answers `turn/start` before it writes the rollout, a thread
+    /// with an empty rollout cannot be resumed, and the host would resume
+    /// it on every later message. Its usage is the thread's
+    /// total less what this run read, which no answer counted: the next
+    /// run counts it, across a reset of Codex's counts too.
+    fn carried(&self, key: &str) -> Option<String> {
+        let thread = self.thread.as_deref()?;
+        let total = self.total.map(|t| -> Counts { std::array::from_fn(|i| t[i].saturating_sub(self.used[i])) });
+        Some(Session::name(key, thread, total.as_ref()))
+    }
+}
+
+/// One `chat`: the contract response, or a refusal carrying the session it
+/// leaves (`Known::carried`). `fresh` names a new session's key and this
+/// run's request ids.
 pub fn chat<P: Pipe, S: Sink>(
     pipe: &mut P,
     deltas: &mut Deltas<S>,
     request: &Request,
     fresh: String,
     deadline: Instant,
+) -> Result<Value, Refusal> {
+    let key = request.session.as_ref().map_or(fresh.clone(), |s| s.key.clone());
+    let mut known = Known {
+        thread: request.session.as_ref().map(|s| s.thread.clone()),
+        total: request.session.as_ref().and_then(|s| s.total),
+        used: [0; 4],
+    };
+    run(pipe, deltas, request, &key, &fresh, deadline, &mut known)
+        .map_err(|refusal| Refusal { session: known.carried(&key), ..refusal })
+}
+
+/// Open the session and converse, keeping in `known` what a refusal carries.
+fn run<P: Pipe, S: Sink>(
+    pipe: &mut P,
+    deltas: &mut Deltas<S>,
+    request: &Request,
+    key: &str,
+    fresh: &str,
+    deadline: Instant,
+    known: &mut Known,
 ) -> Result<Value, Refusal> {
     // A new thread is given the request's tools; a resumed one keeps the
     // tools it was started with, and the request's are not compared: the
@@ -897,16 +950,15 @@ pub fn chat<P: Pipe, S: Sink>(
         None => Some(dynamic_tools(&request.tools)?),
         Some(_) => None,
     };
-    let key = request.session.as_ref().map_or(fresh.clone(), |s| s.key.clone());
     let argv: Vec<String> = server::ARGV.iter().map(|a| a.to_string()).collect();
-    let mut opened = pipe.open(NEED, &key, &argv).map_err(|code| pipe_refusal(&code))?;
+    let mut opened = pipe.open(NEED, key, &argv).map_err(|code| pipe_refusal(&code))?;
     // A running program whose newest turn ended on calls of CYFR's may
     // still hold them, and a new turn would wait behind them: the program
     // is closed and started again, and the thread resumed records them as
     // cancelled.
     if opened.resumed && matches!(request.input, Input::Message { held: true, .. }) {
         let _ = pipe.close(&opened.session);
-        opened = pipe.open(NEED, &key, &argv).map_err(|code| pipe_refusal(&code))?;
+        opened = pipe.open(NEED, key, &argv).map_err(|code| pipe_refusal(&code))?;
         if opened.resumed {
             return Err(Refusal::new(502, "provider_error", "OpenAI Codex's session could not be restarted."));
         }
@@ -917,7 +969,7 @@ pub fn chat<P: Pipe, S: Sink>(
     // Once this run sends anything, a failure of the pipe interrupts the
     // session: it is closed, nothing is sent again, and the next message
     // resumes it (`interrupted`).
-    match converse(pipe, deltas, &mut reader, request, &key, tools, opened.resumed, &ids, deadline) {
+    match converse(pipe, deltas, &mut reader, request, key, tools, opened.resumed, &ids, deadline, known) {
         Err(refusal) if refusal.code.is_some() => {
             let _ = pipe.close(&session);
             Err(interrupted())
@@ -943,6 +995,7 @@ fn converse<P: Pipe, S: Sink>(
     resumed: bool,
     ids: &Ids,
     deadline: Instant,
+    known: &mut Known,
 ) -> Result<Value, Refusal> {
     let session = reader.session.clone();
     let send = |pipe: &mut P, line: String| pipe.send(&session, &[line]).map_err(|code| pipe_refusal(&code));
@@ -958,11 +1011,10 @@ fn converse<P: Pipe, S: Sink>(
     let mut early = Vec::new();
     let mut model = request.run_model.clone();
     // A new thread has used nothing; a known one has used what the session
-    // the request names last read.
-    let mut total = request.session.as_ref().and_then(|s| s.total);
+    // the request names last read (`known.total`).
     let thread = match (&request.session, resumed) {
         (Some(session), true) => session.thread.clone(),
-        (known, false) => {
+        (named, false) => {
             send(pipe, server::initialize(&ids.of("initialize")))?;
             let (_, others) = reader.answer(pipe, &ids.of("initialize"), deadline)?;
             early.extend(others);
@@ -975,10 +1027,10 @@ fn converse<P: Pipe, S: Sink>(
                 return Err(not_signed_in());
             }
             let id = ids.of("thread");
-            let line = match known {
-                Some(known) => server::thread_resume(&id, &known.thread, request.system.as_deref()),
+            let line = match named {
+                Some(named) => server::thread_resume(&id, &named.thread, request.system.as_deref()),
                 None => {
-                    total = Some([0; 4]);
+                    known.total = Some([0; 4]);
                     server::thread_start(&id, request.system.as_deref(), tools.as_deref().unwrap_or(&[]))
                 }
             };
@@ -1027,8 +1079,8 @@ fn converse<P: Pipe, S: Sink>(
         }
     };
     let model = model.unwrap_or_else(|| request.model.clone());
-    let turn = Turn { id: &turn, model: &model, key, thread: &thread, total, answered: &answered };
-    read_turn(pipe, deltas, reader, &turn, early, deadline)
+    let turn = Turn { id: &turn, model: &model, key, thread: &thread, answered: &answered };
+    read_turn(pipe, deltas, reader, &turn, early, deadline, known)
 }
 
 /// CYFR's answers to calls a thread held when its program ended, as a
@@ -1043,19 +1095,18 @@ fn restarted(answers: &[Answer]) -> String {
 }
 
 /// The turn a run reads: its id, the model it runs on, the session's key
-/// and thread, the thread's usage before this run (`None` when not
-/// known), and the requests this run has just answered.
+/// and thread, and the requests this run has just answered.
 struct Turn<'a> {
     id: &'a str,
     model: &'a str,
     key: &'a str,
     thread: &'a str,
-    total: Option<Counts>,
     answered: &'a [Value],
 }
 
 /// Read the turn to its first answer: the lines read before the turn was
-/// known (`early`), then the session's.
+/// known (`early`), then the session's. `known` holds the thread's usage
+/// before this run (`None` when not known) and the usage this run reads.
 fn read_turn<P: Pipe, S: Sink>(
     pipe: &mut P,
     deltas: &mut Deltas<S>,
@@ -1063,17 +1114,16 @@ fn read_turn<P: Pipe, S: Sink>(
     turn: &Turn,
     early: Vec<String>,
     deadline: Instant,
+    known: &mut Known,
 ) -> Result<Value, Refusal> {
     let mut text = String::new();
     let mut messages: Vec<String> = Vec::new();
     let mut streamed: Vec<String> = Vec::new();
     let mut calls: Vec<Value> = Vec::new();
     let mut shown: u64 = 0;
-    // This run's usage is what the thread's total grew by past the total
-    // before it. With no total known, the first snapshot read is only the
-    // point the run counts from.
-    let mut used: Counts = [0; 4];
-    let mut total = turn.total;
+    // This run's usage (`known.used`) is what the thread's total grew by
+    // past the total before it. With no total known, the first snapshot
+    // read is only the point the run counts from.
     let response = |text: &str, content: Vec<Value>, stop: &str, used: &Counts, total: Option<&Counts>| {
         let mut blocks = Vec::new();
         if !text.is_empty() {
@@ -1115,14 +1165,21 @@ fn read_turn<P: Pipe, S: Sink>(
             deltas.flush();
             // The calls held, with none more arriving: the turn answers them.
             if !calls.is_empty() {
-                let answer = response(&text, std::mem::take(&mut calls), "tool_call", &used, total.as_ref());
+                let answer = response(&text, std::mem::take(&mut calls), "tool_call", &known.used, known.total.as_ref());
                 stream::close(deltas, &answer);
                 return Ok(answer);
             }
             continue;
         }
         for line in lines {
-            match server::read(&line) {
+            let event = server::read(&line);
+            // Codex writes a turn's start to the rollout before it says so,
+            // and says everything else of the turn after: any line of this
+            // turn means a new thread can be resumed.
+            if known.thread.is_none() && event.turn() == Some(turn.id) {
+                known.thread = Some(turn.thread.to_string());
+            }
+            match event {
                 Event::Delta { turn: t, item, text: delta } if t == turn.id => {
                     begin(&item, &mut messages, deltas);
                     deltas.text(&delta);
@@ -1176,16 +1233,16 @@ fn read_turn<P: Pipe, S: Sink>(
                     pipe.send(&reader.session, &[line]).map_err(|code| pipe_refusal(&code))?;
                 }
                 Event::Usage { turn: t, total: now } if t == turn.id => {
-                    if let Some(before) = &total {
-                        server::consumed(&mut used, before, &now);
+                    if let Some(before) = &known.total {
+                        server::consumed(&mut known.used, before, &now);
                     }
-                    total = Some(now);
+                    known.total = Some(now);
                 }
                 // A turn ends only once every call it made is answered. The
                 // rest of the batch is still handled: the run releases it.
                 Event::TurnDone { turn: t, status, error } if t == turn.id && finished.is_none() => {
                     finished = Some(match status.as_str() {
-                        "completed" => Ok(response(&text, Vec::new(), "end_turn", &used, total.as_ref())),
+                        "completed" => Ok(response(&text, Vec::new(), "end_turn", &known.used, known.total.as_ref())),
                         "interrupted" => Err(Refusal::new(502, "provider_error", "OpenAI Codex's turn was interrupted on its side.")),
                         _ => Err(turn_error(server::error_kind(&error))),
                     });
@@ -1217,8 +1274,11 @@ mod tests {
     /// the next turn of the script, whose segments are written one at a
     /// time: the first after the turn starts, each next once every call the
     /// turn holds is answered. `{turn}` in a line stands for the turn's id.
+    /// `silent` answers `turn/start` and writes nothing more: a program that
+    /// died before it started the turn.
     struct Codex {
         signed_in: bool,
+        silent: bool,
         turns: VecDeque<VecDeque<Vec<String>>>,
         current: VecDeque<Vec<String>>,
         started: u64,
@@ -1231,6 +1291,7 @@ mod tests {
         fn new(turns: Vec<Vec<Vec<String>>>) -> Self {
             Codex {
                 signed_in: true,
+                silent: false,
                 turns: turns.into_iter().map(VecDeque::from).collect(),
                 current: VecDeque::new(),
                 started: 0,
@@ -1290,10 +1351,11 @@ mod tests {
                     self.started += 1;
                     self.turn = format!("t{}", self.started);
                     self.current = self.turns.pop_front().unwrap_or_default();
-                    let mut out = vec![
-                        ok(json!({"turn": {"id": self.turn, "status": "inProgress", "items": []}})),
-                        json!({"method": "turn/started", "params": {"threadId": THREAD, "turn": {"id": self.turn}}}).to_string(),
-                    ];
+                    let mut out = vec![ok(json!({"turn": {"id": self.turn, "status": "inProgress", "items": []}}))];
+                    if self.silent {
+                        return out;
+                    }
+                    out.push(json!({"method": "turn/started", "params": {"threadId": THREAD, "turn": {"id": self.turn}}}).to_string());
                     out.extend(self.segment());
                     out
                 }
@@ -1631,6 +1693,26 @@ mod tests {
     }
 
     #[test]
+    fn a_new_thread_rides_on_a_refusal_only_once_codex_says_the_turn_started() {
+        // Codex 0.167.0 answers turn/start before it writes the thread's
+        // rollout: killed right after that answer and started again, it
+        // refuses to resume the thread ("rollout … is empty"). It writes the
+        // turn's start before it sends turn/started (README, "Verified
+        // against 0.167.0").
+        let mut codex = Codex::new(vec![vec![]]);
+        codex.silent = true;
+        let mut pipe = BoxPipe::new(codex);
+        let (refusal, _) = run(&mut pipe, &first("start"), Instant::now() + Duration::from_millis(300));
+        let refusal = refusal.unwrap_err();
+        assert!(pipe.sent_since(0).iter().any(|m| m == "turn/start"));
+        assert_eq!(refusal.session, None, "the turn/start answer alone does not make the thread resumable");
+
+        let mut pipe = BoxPipe::new(Codex::new(vec![vec![]]));
+        let (refusal, _) = run(&mut pipe, &first("start"), Instant::now() + Duration::from_millis(300));
+        assert_eq!(refusal.unwrap_err().session, Some(format!("{}.0-0-0-0", session())), "turn/started does");
+    }
+
+    #[test]
     fn the_budget_interrupts_the_session_and_the_next_message_resumes_it() {
         let mut pipe = BoxPipe::new(Codex::new(vec![
             vec![vec![delta("m0", "Working")]],
@@ -1641,11 +1723,19 @@ mod tests {
         assert_eq!(refusal.kind, "provider_error");
         assert!(refusal.message.contains("interrupted") && refusal.message.contains("next message"), "{}", refusal.message);
         assert_eq!(pipe.log.iter().filter(|l| l.starts_with("close")).count(), 1, "{:?}", pipe.log);
+        // The first chat's new thread rides on the refusal, as the host
+        // keeps a response's session.
+        let carried = format!("{}.0-0-0-0", session());
+        assert_eq!(refusal.session.as_deref(), Some(carried.as_str()));
+        let envelope: Value = serde_json::from_str(&refusal.envelope()).unwrap();
+        assert_eq!(envelope["error"]["session"], json!(carried));
 
         let from = pipe.sent.len();
-        let next = request(json!({"model": "default", "session": session(), "messages": [{"role": "user", "content": "go on"}]}));
+        let next = request(json!({"model": "default", "session": envelope["error"]["session"],
+                                  "messages": [{"role": "user", "content": "go on"}]}));
         let (answer, _) = run(&mut pipe, &next, far());
         assert_eq!(pipe.sent_since(from), ["initialize", "initialized", "account/read", "thread/resume", "turn/start"]);
+        assert_eq!(pipe.sent_with("thread/resume")["params"]["threadId"], THREAD, "the thread the first chat started");
         assert_eq!(answer.unwrap()["content"], json!([{"type": "text", "text": "Resumed."}]));
     }
 
@@ -1654,7 +1744,9 @@ mod tests {
         let mut pipe = BoxPipe::new(Codex::new(vec![]));
         let gone = request(json!({"model": "default", "session": format!("{KEY}.{KEY}"), "messages": [{"role": "user", "content": "hi"}]}));
         let (refusal, _) = run(&mut pipe, &gone, far());
-        assert_eq!(refusal.unwrap_err().kind, "provider_error");
+        let refusal = refusal.unwrap_err();
+        assert_eq!(refusal.kind, "provider_error");
+        assert_eq!(refusal.session, Some(format!("{KEY}.{KEY}")), "the session the request named, unchanged");
         assert_eq!(pipe.log.last().unwrap(), "close pipe-1");
         assert!(!pipe.running);
     }
@@ -1668,6 +1760,8 @@ mod tests {
         let refusal = refusal.unwrap_err();
         assert_eq!((refusal.status, refusal.kind), (401, "authentication"));
         assert!(refusal.message.contains("Programs page"), "{}", refusal.message);
+        assert_eq!(refusal.session, None, "no thread was reached");
+        assert!(!refusal.envelope().contains("session"), "{}", refusal.envelope());
         assert_eq!(pipe.sent_since(0), ["initialize", "initialized", "account/read"]);
         assert_eq!(pipe.log.last().unwrap(), "close pipe-1", "the program is not left running");
         assert!(events.is_empty());
@@ -1904,9 +1998,12 @@ mod tests {
         let next = request(json!({"model": "default", "session": first_answer.unwrap()["session"],
                                   "messages": [{"role": "user", "content": "continue"}]}));
         let (failed_answer, _) = run(&mut pipe, &next, far());
-        assert_eq!(failed_answer.unwrap_err().kind, "invalid_request");
-        // The failed run answered no session: the next carries the one
-        // before it, whose total is past the reset one.
+        let refusal = failed_answer.unwrap_err();
+        assert_eq!(refusal.kind, "invalid_request");
+        // The failed run's refusal carries the total it read, the reset one.
+        assert_eq!(refusal.session, Some(format!("{KEY}.{THREAD}.0-0-0-0")));
+        let next = request(json!({"model": "default", "session": refusal.session,
+                                  "messages": [{"role": "user", "content": "continue"}]}));
         let (answer, _) = run(&mut pipe, &next, far());
         let answer = answer.unwrap();
         assert_eq!(answer["usage"], json!({"input_tokens": 9, "output_tokens": 2, "cache_read_tokens": 1, "cache_write_tokens": 0}));
@@ -1923,13 +2020,17 @@ mod tests {
         let (first_answer, _) = run(&mut pipe, &first("start"), far());
         let next = request(json!({"model": "default", "session": first_answer.unwrap()["session"],
                                   "messages": [{"role": "user", "content": "continue"}]}));
-        assert!(run(&mut pipe, &next, far()).0.is_err());
+        // The refusal carries the total before the usage it read, which no
+        // answer counted.
+        let refusal = run(&mut pipe, &next, far()).0.unwrap_err();
+        assert_eq!(refusal.session, Some(format!("{KEY}.{THREAD}.11-7-3-0")));
+        let next = request(json!({"model": "default", "session": refusal.session,
+                                  "messages": [{"role": "user", "content": "continue"}]}));
         let (answer, _) = run(&mut pipe, &next, far());
         assert_eq!(answer.unwrap()["usage"], json!({"input_tokens": 18, "output_tokens": 4, "cache_read_tokens": 1, "cache_write_tokens": 0}));
     }
 
     #[test]
-    #[ignore = "needs the session on an error answer"]
     fn usage_after_a_reset_that_a_failed_run_saw_is_counted() {
         let reset = line(json!({"method": "thread/tokenUsage/updated", "params": {
             "threadId": THREAD, "turnId": "{turn}", "tokenUsage": {
@@ -1939,15 +2040,22 @@ mod tests {
             vec![vec![usage(11, 3, 7), message("m0", "First."), done()]],
             vec![vec![reset, failed(json!("contextWindowExceeded"))]],
             // The next turn sees the reset, makes model calls, and fails on
-            // the account's limit: its answer carries no session.
+            // the account's limit: no answer counts them.
             vec![vec![usage(0, 0, 0), usage(20, 4, 9), failed(json!("usageLimitExceeded"))]],
             vec![vec![usage(20, 4, 9), usage(29, 5, 11), message("m0", "Continued."), done()]],
         ]));
         let (first_answer, _) = run(&mut pipe, &first("start"), far());
-        let next = request(json!({"model": "default", "session": first_answer.unwrap()["session"],
+        // Each request names the session the last answer carried, a
+        // refusal's too, as the host keeps them.
+        let mut session = first_answer.unwrap()["session"].clone();
+        for _ in 0..2 {
+            let next = request(json!({"model": "default", "session": session,
+                                      "messages": [{"role": "user", "content": "continue"}]}));
+            session = json!(run(&mut pipe, &next, far()).0.unwrap_err().session.expect("the refusal's session"));
+        }
+        assert_eq!(session, json!(format!("{KEY}.{THREAD}.0-0-0-0")), "counted from the reset");
+        let next = request(json!({"model": "default", "session": session,
                                   "messages": [{"role": "user", "content": "continue"}]}));
-        assert!(run(&mut pipe, &next, far()).0.is_err());
-        assert!(run(&mut pipe, &next, far()).0.is_err());
         let (answer, _) = run(&mut pipe, &next, far());
         // Every token here came after the reset, and no answer counted any.
         assert_eq!(answer.unwrap()["usage"], json!({"input_tokens": 29, "output_tokens": 11, "cache_read_tokens": 5, "cache_write_tokens": 0}));
