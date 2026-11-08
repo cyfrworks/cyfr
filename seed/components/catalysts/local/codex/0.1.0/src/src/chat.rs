@@ -1888,6 +1888,47 @@ mod tests {
     }
 
     #[test]
+    fn a_run_after_codex_reset_its_counts_counts_from_zero() {
+        // A turn that fails on the context window sets the thread's usage
+        // full (`set_total_tokens_full`), zeroing its four counts.
+        let reset = line(json!({"method": "thread/tokenUsage/updated", "params": {
+            "threadId": THREAD, "turnId": "{turn}", "tokenUsage": {
+                "total": {"totalTokens": 272000, "inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0, "cacheWriteInputTokens": 0},
+                "last": {"totalTokens": 0, "inputTokens": 0, "outputTokens": 0}}}}));
+        let mut pipe = BoxPipe::new(Codex::new(vec![
+            vec![vec![usage(500_000, 30_000, 70_000), message("m0", "First."), done()]],
+            vec![vec![reset, failed(json!("contextWindowExceeded"))]],
+            vec![vec![usage(9, 1, 2), message("m0", "Continued."), done()]],
+        ]));
+        let (first_answer, _) = run(&mut pipe, &first("start"), far());
+        let next = request(json!({"model": "default", "session": first_answer.unwrap()["session"],
+                                  "messages": [{"role": "user", "content": "continue"}]}));
+        let (failed_answer, _) = run(&mut pipe, &next, far());
+        assert_eq!(failed_answer.unwrap_err().kind, "invalid_request");
+        // The failed run answered no session: the next carries the one
+        // before it, whose total is past the reset one.
+        let (answer, _) = run(&mut pipe, &next, far());
+        let answer = answer.unwrap();
+        assert_eq!(answer["usage"], json!({"input_tokens": 9, "output_tokens": 2, "cache_read_tokens": 1, "cache_write_tokens": 0}));
+        assert_eq!(answer["session"], format!("{KEY}.{THREAD}.9-2-1-0"));
+    }
+
+    #[test]
+    fn an_unanswered_run_s_usage_is_counted_by_the_next_run() {
+        let mut pipe = BoxPipe::new(Codex::new(vec![
+            vec![vec![usage(11, 3, 7), message("m0", "First."), done()]],
+            vec![vec![usage(20, 3, 9), failed(json!("usageLimitExceeded"))]],
+            vec![vec![usage(29, 4, 11), message("m0", "Continued."), done()]],
+        ]));
+        let (first_answer, _) = run(&mut pipe, &first("start"), far());
+        let next = request(json!({"model": "default", "session": first_answer.unwrap()["session"],
+                                  "messages": [{"role": "user", "content": "continue"}]}));
+        assert!(run(&mut pipe, &next, far()).0.is_err());
+        let (answer, _) = run(&mut pipe, &next, far());
+        assert_eq!(answer.unwrap()["usage"], json!({"input_tokens": 18, "output_tokens": 4, "cache_read_tokens": 1, "cache_write_tokens": 0}));
+    }
+
+    #[test]
     fn a_tool_list_codex_cannot_be_given_whole_is_refused_before_anything_opens() {
         let named = |name: &str| json!({"name": name, "parameters": {"type": "object"}});
         for tools in [

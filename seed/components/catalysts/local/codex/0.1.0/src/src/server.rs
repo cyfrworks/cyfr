@@ -259,12 +259,15 @@ pub fn counts(breakdown: &Value) -> Counts {
 /// What a usage snapshot adds to `sum`: its thread total past the total
 /// before it. Codex adds each model call's usage to the thread's total and
 /// sends the total again unchanged whenever its rate limits update
-/// (`Session::update_rate_limits`), so only the difference is new. A total
-/// lower than the one before (a compaction that refills the window resets
-/// it) adds nothing.
+/// (`Session::update_rate_limits`), so only the difference is new. Codex
+/// lowers no count except by resetting all four: a turn that fails on the
+/// context window sets the thread's usage full (`set_total_tokens_full`,
+/// which zeroes them). A total below the one before is that reset, and
+/// everything in it is new, counted from zero.
 pub fn consumed(sum: &mut Counts, before: &Counts, total: &Counts) {
+    let reset = total.iter().zip(before).any(|(now, was)| now < was);
     for i in 0..4 {
-        sum[i] += total[i].saturating_sub(before[i]);
+        sum[i] += if reset { total[i] } else { total[i] - before[i] };
     }
 }
 
@@ -412,5 +415,8 @@ mod tests {
         consumed(&mut sum, &first, &second);
         consumed(&mut sum, &second, &[0, 0, 0, 0]);
         assert_eq!(usage(&sum), json!({"input_tokens": 16, "output_tokens": 9, "cache_read_tokens": 3, "cache_write_tokens": 1}));
+        // Past a reset, the whole total is new.
+        consumed(&mut sum, &second, &[4, 1, 0, 0]);
+        assert_eq!(usage(&sum), json!({"input_tokens": 20, "output_tokens": 10, "cache_read_tokens": 3, "cache_write_tokens": 1}));
     }
 }
