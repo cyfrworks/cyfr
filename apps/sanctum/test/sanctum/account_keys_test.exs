@@ -202,5 +202,23 @@ defmodule Sanctum.AccountKeysTest do
     assert {:error, :unauthenticated} = Session.end_own(anonymous, "ses_any")
   end
 
+  test "a device keeps the name it gave here after its local client signs out", %{
+    person: person,
+    account: account
+  } do
+    [device] = account.devices
+    kid = DirectoryServer.kid(device)
+    paired!(person, account, device, "Moon's terminal")
+
+    {:ok, clients} =
+      Arca.PairedClients.list(Prima.Actor.system(), user_id: person.id, standing: :all)
+
+    client = Enum.find(clients, &(&1.kid == kid))
+    {:ok, _} = Arca.PairedClients.revoke(Prima.Actor.in_athanor(client.athanor_id), client.id)
+    assert {:ok, %{keys: keys}} = AccountKeys.list(ctx(person, nil))
+    row = Enum.find(keys, &(&1.kid == kid))
+    assert row.name == "Moon's terminal"
+  end
+
   defp iso(ms), do: ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
 end

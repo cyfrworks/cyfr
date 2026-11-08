@@ -15,7 +15,7 @@ defmodule Sanctum.AccountKeys do
   entry that listed it). A passkey whose `add_key` named its maker has
   its `maker`, a name from the table below; a device that said hello here
   has its `name`, the display name its newest client here was paired
-  with. A session is its `session_id`, the `browser` and `system` its
+  with, whether that client still stands or was signed out. A session is its `session_id`, the `browser` and `system` its
   sign-in named, when it was signed in and last seen, and whether it is
   the caller's own (`current`).
 
@@ -172,9 +172,11 @@ defmodule Sanctum.AccountKeys do
     end
   end
 
-  # Each device's name, as its newest client here was paired with it.
+  # Each device's name, as its newest client here was paired with it,
+  # whatever that client's standing: a client signed out here, or one a
+  # restore suspended, leaves its key on the account and its name known.
   defp names(user_id) do
-    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
+    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :all) do
       {:ok, clients} ->
         {:ok,
          clients
