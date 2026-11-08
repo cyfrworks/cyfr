@@ -31,7 +31,7 @@ defmodule Cyfr.DeclaredOperationsTest do
 
   describe "the declared operations" do
     test "are on the table as they are admitted: interactive, external, never replayed" do
-      for tool <- ~w(pairing passkey confirmation) do
+      for tool <- ~w(pairing confirmation) do
         {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
 
         for op <- meta.operations do
@@ -42,18 +42,27 @@ defmodule Cyfr.DeclaredOperationsTest do
         end
       end
 
+      for action <- ~w(list end) do
+        op = operation("session", action)
+        assert op.planes == [:external], "session.#{action}"
+        assert op.recovery == nil, "session.#{action}"
+        assert op.consent == :interactive, "session.#{action}"
+        assert op.auth == :required, "session.#{action}"
+      end
+
       for {tool, action} <- [
             {"pairing", "list"},
-            {"passkey", "list"},
+            {"session", "list"},
             {"confirmation", "pending"}
           ] do
         assert operation(tool, action).kind == :read, "#{tool}.#{action}"
       end
 
       refute Map.has_key?(Sanctum.Catalog.operations(), "person")
+      refute Map.has_key?(Sanctum.Catalog.operations(), "passkey")
 
       assert operation("pairing", "revoke").kind == :destructive
-      assert operation("passkey", "revoke").kind == :destructive
+      assert operation("session", "end").kind == :destructive
     end
 
     test "a recovery secret and a recovery code are fields the redaction vocabulary keeps out of every log" do

@@ -6,9 +6,9 @@ defmodule PrismWeb.SettingsLiveTest do
   Settings: the door and the platform settings are the operator's
   sections and nobody else's; the lite/dev preference is every person's
   own. The person's name and their account's identifier are shown, and
-  the devices and passkeys of their account connected here are listed: a
-  paired device revoked under a fresh confirmation through the page's
-  system layer, a passkey signed out here at once.
+  every key of their account is listed, a passkey by its maker and a
+  device by its name, with the person's sessions here under each, each
+  signed out on its own at once.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -291,7 +291,7 @@ defmodule PrismWeb.SettingsLiveTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The person's name and the devices connected here
+  # The person's name and the keys on their account
   # ---------------------------------------------------------------------------
 
   describe "your name" do
@@ -354,64 +354,131 @@ defmodule PrismWeb.SettingsLiveTest do
     end
   end
 
-  describe "devices connected here" do
-    test "lists the passkeys that signed in here by their key's short code, and signs one out",
-         %{conn: conn} do
-      person = test_user()
-      %{head: head} = Sanctum.TestContext.account!(person.user_id)
-      kid = Prima.Digest.sha256("phone-#{System.unique_integer()}")
-      "sha256:" <> hex = kid
+  describe "keys on your account" do
+    @apple "fbfc3007-154e-4ecc-8c0b-6e020557d7bd"
+    @safari "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15"
 
-      # The passkey's client and a session on it, as its sign-in here
-      # records them.
+    # A session the key `kid` signed for at the account's cached head, in
+    # the person's own athanor: its token and its row's id.
+    defp keyed_session!(person, kid, user_agent) do
+      token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      hash = Sanctum.Session.token_hash(token)
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(person.user_id)
-
-      {:ok, client} =
-        Arca.PairedClients.record_passkey(Prima.Actor.in_athanor(athanor.id), %{
-          user_id: person.user_id,
-          kid: kid,
-          head: head
-        })
+      {:ok, %{head_hash: head}} = Arca.PersonIdentities.get(Prima.Actor.system(), person.user_id)
+      {browser, system} = Sanctum.UserAgent.words(user_agent)
 
       :ok =
         Arca.SessionStorage.create_session(
-          :crypto.strong_rand_bytes(32),
+          hash,
           %{
             user_id: person.user_id,
+            email: person.email,
             provider: "passkey",
+            athanor_id: athanor.id,
             kid: kid,
             head: head,
-            client_id: client.id,
+            browser: browser,
+            system: system,
             expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
           },
           lock: %{user_id: person.user_id, athanor_id: nil, source: nil},
           verify: fn _rows -> :ok end
         )
 
-      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
-      passkey = ~s([data-test="passkey"][data-kid="#{kid}"])
+      {:ok, rows} = Arca.SessionStorage.list_live(person.user_id)
+      {token, Enum.find(rows, &(&1.token_hash == hash)).id}
+    end
 
-      # Listed once, as a passkey and not again among the devices.
-      assert view |> element(passkey) |> render() =~ String.slice(hex, 0, 16)
-      refute has_element?(view, ~s([data-test="device"][data-id="#{client.id}"]))
+    # The terminal's client here, named as its hello named it.
+    defp named_device!(person, {pub, _priv}, name) do
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(person.user_id)
+      {:ok, %{head_hash: head}} = Arca.PersonIdentities.get(Prima.Actor.system(), person.user_id)
 
-      # This CYFR signs the passkey out of itself alone: the key is the
-      # account's, and only removing it there ends it everywhere.
-      assert view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render() =~
-               "Sign out this passkey"
+      {:ok, _client} =
+        Arca.PairedClients.record(Prima.Actor.in_athanor(athanor.id), %{
+          user_id: person.user_id,
+          source_kind: "device_cert",
+          source_id: "req_#{System.unique_integer([:positive])}",
+          device_public_key: pub,
+          kid: Prima.Identity.Key.kid(pub),
+          head: head,
+          display_name: name
+        })
 
-      scope = view |> element(~s([data-test="devices-scope"])) |> render()
+      :ok
+    end
 
-      assert String.replace(scope, ~r/\s+/, " ") =~
-               "Removing its key from your account ends it everywhere."
+    defp signed_in_as(conn, token),
+      do: Plug.Test.init_test_session(conn, %{"sanctum_session_token" => token})
 
-      PrismWeb.Vocabulary.refute_vocabulary(scope)
+    defp text(view, selector),
+      do: view |> element(selector) |> render() |> String.replace(~r/\s+/, " ")
 
-      view |> element(passkey <> ~s( [data-test="passkey-revoke"])) |> render_click()
-      refute has_element?(view, passkey)
-      assert render(view) =~ "Passkey signed out of this CYFR."
+    test "lists every key of the account by its maker or name, with its sessions here, and links to the account pages for removal",
+         %{conn: conn} do
+      person = test_user()
+      %{account: account, dir: dir} = Sanctum.Test.DirectoryServer.member!(person.user_id)
+      account = Sanctum.Test.DirectoryServer.add_passkey!(dir.dir, account, aaguid: @apple)
+      _head = Sanctum.Test.DirectoryServer.cached!(account)
+      Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
+
+      [device] = account.devices
+      device_kid = Sanctum.Test.DirectoryServer.kid(device)
+      passkey_kid = Prima.Identity.Key.kid(hd(account.passkeys).pub)
+      [_genesis, device_added, passkey_added] = account.log
+
+      conn = log_in_user(conn, person)
+      named_device!(person, device, "Moon's terminal")
+      {own, _own_id} = keyed_session!(person, passkey_kid, @safari)
+      {_terminal, terminal_id} = keyed_session!(person, device_kid, nil)
+
+      {view, _html} = conn |> signed_in_as(own) |> mount_athanor("/settings")
+      card = text(view, ~s([data-test="keys"]))
+      assert card =~ "Keys on your account"
+      refute card =~ "Devices connected here"
+      refute card =~ "Sign out this passkey"
+      refute card =~ "Sign out this device"
+      PrismWeb.Vocabulary.refute_vocabulary(view |> element(~s([data-test="keys"])) |> render())
+
+      passkey_row = text(view, ~s([data-test="key"][data-kid="#{passkey_kid}"]))
+      assert passkey_row =~ "Apple Passwords passkey, added #{day(passkey_added.at)}"
+      assert passkey_row =~ "Safari on macOS"
+      assert passkey_row =~ "(this session)"
+
+      device_row = text(view, ~s([data-test="key"][data-kid="#{device_kid}"]))
+      assert device_row =~ "Moon&#39;s terminal, added #{day(device_added.at)}"
+      refute device_row =~ "(this session)"
+
+      assert view
+             |> element(~s([data-test="keys-account"]))
+             |> render() =~ ~s(href="#{dir.url}/account/devices")
+
+      # A session signs out alone: the terminal's goes, its key stays listed.
+      view
+      |> element(~s([data-test="session-end"][phx-value-id="#{terminal_id}"]))
+      |> render_click()
+
+      refute has_element?(view, ~s([data-test="session"][data-id="#{terminal_id}"]))
+      assert has_element?(view, ~s([data-test="key"][data-kid="#{device_kid}"]))
+      assert render(view) =~ "Signed out."
+    end
+
+    test "signing out the session the page stands on leaves the page", %{conn: conn} do
+      person = test_user()
+      %{account: account} = Sanctum.Test.DirectoryServer.member!(person.user_id)
+      device_kid = Sanctum.Test.DirectoryServer.kid(hd(account.devices))
+
+      conn = log_in_user(conn, person)
+      {own, own_id} = keyed_session!(person, device_kid, @safari)
+      {view, _html} = conn |> signed_in_as(own) |> mount_athanor("/settings")
+
+      view |> element(~s([data-test="session-end"][phx-value-id="#{own_id}"])) |> render_click()
+      assert_redirect(view, "/login")
+      assert {:error, :invalid_session} = Sanctum.Session.load(own)
     end
   end
+
+  defp day(ms), do: ms |> DateTime.from_unix!(:millisecond) |> Calendar.strftime("%-d %b %Y")
 
   # The registry: `handles` answers a handle's resolution by name (`:free`
   # for none, `:taken` for one held), the policy version is current, and

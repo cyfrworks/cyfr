@@ -639,6 +639,32 @@ defmodule Sanctum.Session do
   def token_hash(token) when is_binary(token), do: hash_token(token)
 
   @doc """
+  End the session `id` of the context's own person, and nothing else: the
+  person signs one session of theirs here out, whichever browser or
+  device holds it, their own included (`session.end`). The row goes, then
+  its memo, and the revocation is announced, so a page or stream under it
+  lets go (`announce_revoked/2`). Another person's session, a protected
+  device's reservation or an unknown id is `{:error, :not_found}`; no
+  person is `{:error, :unauthenticated}`.
+  """
+  @spec end_own(Context.t(), String.t()) ::
+          :ok | {:error, :not_found | :unauthenticated | :unavailable}
+  def end_own(%Context{plane: plane, authenticated: true, user_id: user_id}, id)
+      when plane != :guest and is_binary(user_id) and is_binary(id) do
+    if Prima.PersonId.person?(user_id) do
+      case Arca.SessionStorage.delete_own(user_id, id) do
+        {:ok, hash} -> announce_revoked(user_id, [hash])
+        {:error, :not_found} -> {:error, :not_found}
+        {:error, :database_error} -> {:error, :unavailable}
+      end
+    else
+      {:error, :unauthenticated}
+    end
+  end
+
+  def end_own(%Context{}, _id), do: {:error, :unauthenticated}
+
+  @doc """
   Destroy a session addressed by its row key rather than its token.
   """
   @spec destroy_by_hash(binary()) :: :ok | {:error, term()}
