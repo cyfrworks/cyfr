@@ -141,6 +141,36 @@ defmodule Aqua.LoopTest do
     assert is_integer(spec.request_cap) and spec.request_cap > 0
   end
 
+  test "a turn waits for its brain as long as the brain is consented, and lasts at least that long",
+       %{ctx: ctx, thread: thread} do
+    # The soul's brain is consented three minutes, under the agent's own
+    # time: the turn keeps the agent's.
+    turn = accept!(ctx, thread, "hello")
+    script!([reply("hi")])
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    {:ok, pinned} = Tape.turn(ctx, turn.id)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
+    {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
+    {:ok, own} = Prima.Limits.timeout_ms(Prima.Authority.limits(authority))
+    assert Aqua.Loop.Turn.brain_timeout_ms(spec) == 3 * 60_000
+    assert own > 3 * 60_000
+    assert spec.deadline_ms == own
+
+    # The harness's brain ships consented thirty minutes, past its member's
+    # own time: that is how long its member's loop waits for one answer
+    # (a turn of the member itself needs its sign-in, which no test holds;
+    # `Aqua.Loop.ModelWaitTest` runs a turn on a brain consented as long).
+    {:ok, authority} = Opus.authority_for(ctx, :default, "agent:local.claude-code")
+    {:ok, own} = Prima.Limits.timeout_ms(Prima.Authority.limits(authority))
+    assert own < 30 * 60_000
+
+    assert Aqua.Loop.Turn.brain_timeout_ms(%Aqua.Loop.Turn{
+             authority: authority,
+             catalyst: "catalyst:local.claude-code:0.1.1"
+           }) == 30 * 60_000
+  end
+
   test "a turn that pins no agent revision is refused, never run on the roster's entry", %{
     ctx: ctx,
     thread: thread

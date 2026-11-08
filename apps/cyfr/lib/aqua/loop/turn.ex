@@ -16,7 +16,8 @@ defmodule Aqua.Loop.Turn do
   sources it read, the tool surface (with the accounts its launches may name,
   read once here for every request the spec makes,
   `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
-  and the deadline the authority allows, and the admission decision the
+  the deadline the authority allows, never under one answer of its brain
+  (`brain_timeout_ms/1`), and the admission decision the
   turn's root execution was started under (`call_id`), which every call
   the turn makes names as its parent call.
 
@@ -122,7 +123,7 @@ defmodule Aqua.Loop.Turn do
             external: external_tools(policy),
             accounts: launch_accounts(ctx, policy)
           ),
-        deadline_ms: deadline_ms(authority),
+        deadline_ms: deadline_ms(authority, brain_timeout_ms(authority, catalyst)),
         approval_ttl_s: Aqua.Approvals.ttl_seconds(ctx),
         options: options,
         brain_options: brain_options,
@@ -306,6 +307,30 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
+  @doc """
+  How long the brain the spec runs on is consented to take over one
+  answer, in milliseconds: the `limits.timeout` of its catalyst's node in
+  the turn's authority, read by name as `request_cap` is. It is the
+  deadline admission gives a model call and the worker service enforces
+  (`Opus.Admission`), so it is how long the loop waits for the answer
+  (`Aqua.Loop`), and the turn's own deadline is never under it. Nil when
+  the graph holds no such node or its timeout does not parse: admission
+  refuses such a call before anything runs.
+  """
+  @spec brain_timeout_ms(t()) :: pos_integer() | nil
+  def brain_timeout_ms(%__MODULE__{authority: authority, catalyst: catalyst}),
+    do: brain_timeout_ms(authority, catalyst)
+
+  defp brain_timeout_ms(authority, catalyst) do
+    with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
+         {:ok, limits} <- Prima.Authority.node_limits(authority, name_ref),
+         {:ok, ms} when ms > 0 <- Prima.Limits.timeout_ms(limits) do
+      ms
+    else
+      _ -> nil
+    end
+  end
+
   defp speaks_chat(listing, catalyst) do
     row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
 
@@ -377,11 +402,18 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  defp deadline_ms(%Authority{} = authority) do
-    case Prima.Limits.timeout_ms(Authority.limits(authority)) do
-      {:ok, ms} when ms > 0 -> ms
-      _ -> @default_deadline_ms
-    end
+  # The turn's active time: the agent's own consented timeout (the node
+  # the authority's cursor stands on, `Authority.limits/1`), the default
+  # when it names none, and never under one answer of its brain, so a
+  # brain consented longer than its agent is not cut off by the agent's.
+  defp deadline_ms(%Authority{} = authority, brain_ms) do
+    own =
+      case Prima.Limits.timeout_ms(Authority.limits(authority)) do
+        {:ok, ms} when ms > 0 -> ms
+        _ -> @default_deadline_ms
+      end
+
+    max(own, brain_ms || 0)
   end
 
   # ---------------------------------------------------------------------------

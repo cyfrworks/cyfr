@@ -71,7 +71,6 @@ defmodule Aqua.Loop do
   # A root turn's holder on this boot registers here (`holder/1`).
   @holders Aqua.RunnerRegistry
   @max_steps 30
-  @model_timeout_ms 10 * 60 * 1000
   @step_timeout_ms 5 * 60 * 1000
   @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
@@ -777,7 +776,10 @@ defmodule Aqua.Loop do
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
-  # worker's death. A chat step's text streams to the thread while it runs,
+  # worker's death. The worker is waited for as long as the brain's node
+  # is consented to take over one answer (`model_wait_ms/1`), and one
+  # still running past that is stopped here, as a cancel stops it. A chat
+  # step's text streams to the thread while it runs,
   # and is withdrawn when the step lands no text row; a flush or a
   # compaction streams nothing.
   #
@@ -812,7 +814,7 @@ defmodule Aqua.Loop do
               envelope: true
             )
           end,
-          @model_timeout_ms
+          model_wait_ms(state)
         )
       after
         Aqua.Loop.Stream.close(stream)
@@ -833,6 +835,13 @@ defmodule Aqua.Loop do
   defp model_result({:ok, {:ok, output}}), do: Prima.Model.decode_envelope(output)
   defp model_result({:ok, {:error, reason}}), do: {:error, reason}
   defp model_result({:exit, reason}), do: {:exit, reason}
+
+  # How long a model call is waited for: the brain's consented timeout
+  # (`Turn.brain_timeout_ms/1`), the deadline admission gives the run and
+  # the worker service enforces, so the wait ends with the run. A brain
+  # the authority does not consent is refused at admission before
+  # anything runs; the turn's own deadline bounds that wait.
+  defp model_wait_ms(%State{spec: spec}), do: Turn.brain_timeout_ms(spec) || spec.deadline_ms
 
   # The ledger a model child's answer brings into its turn: what its
   # completion result carries, else its row's, read by the id the step
