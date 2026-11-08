@@ -1929,6 +1929,31 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs the session on an error answer"]
+    fn usage_after_a_reset_that_a_failed_run_saw_is_counted() {
+        let reset = line(json!({"method": "thread/tokenUsage/updated", "params": {
+            "threadId": THREAD, "turnId": "{turn}", "tokenUsage": {
+                "total": {"totalTokens": 272000, "inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0, "cacheWriteInputTokens": 0},
+                "last": {"totalTokens": 271982, "inputTokens": 0, "outputTokens": 0}}}}));
+        let mut pipe = BoxPipe::new(Codex::new(vec![
+            vec![vec![usage(11, 3, 7), message("m0", "First."), done()]],
+            vec![vec![reset, failed(json!("contextWindowExceeded"))]],
+            // The next turn sees the reset, makes model calls, and fails on
+            // the account's limit: its answer carries no session.
+            vec![vec![usage(0, 0, 0), usage(20, 4, 9), failed(json!("usageLimitExceeded"))]],
+            vec![vec![usage(20, 4, 9), usage(29, 5, 11), message("m0", "Continued."), done()]],
+        ]));
+        let (first_answer, _) = run(&mut pipe, &first("start"), far());
+        let next = request(json!({"model": "default", "session": first_answer.unwrap()["session"],
+                                  "messages": [{"role": "user", "content": "continue"}]}));
+        assert!(run(&mut pipe, &next, far()).0.is_err());
+        assert!(run(&mut pipe, &next, far()).0.is_err());
+        let (answer, _) = run(&mut pipe, &next, far());
+        // Every token here came after the reset, and no answer counted any.
+        assert_eq!(answer.unwrap()["usage"], json!({"input_tokens": 29, "output_tokens": 11, "cache_read_tokens": 5, "cache_write_tokens": 0}));
+    }
+
+    #[test]
     fn a_tool_list_codex_cannot_be_given_whole_is_refused_before_anything_opens() {
         let named = |name: &str| json!({"name": name, "parameters": {"type": "object"}});
         for tools in [
