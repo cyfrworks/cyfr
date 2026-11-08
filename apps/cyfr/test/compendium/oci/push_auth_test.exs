@@ -15,6 +15,7 @@ defmodule Compendium.OCI.PushAuthTest do
 
   alias Compendium.OCI.{Reference, Transport}
   alias Compendium.Registry.CredentialStore
+  alias Cyfr.Test.HTTPStub
   alias Sanctum.Context
 
   @user "oci_push_auth_test_user"
@@ -23,15 +24,15 @@ defmodule Compendium.OCI.PushAuthTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    bypass = Bypass.open()
+    stub = HTTPStub.open()
     # A loopback registry is reached over http (`Compendium.RegistryHost.base_url/1`),
-    # so Bypass answers it.
-    registry = "localhost:#{bypass.port}"
+    # so the stub answers it.
+    registry = "localhost:#{stub.port}"
     ref = %Reference{registry: registry, repository: "#{@namespace}/catalysts/foo", tag: "1.0.0"}
 
     # No manual cleanup: the shared SQL sandbox rolls back the stored
     # credential when the test ends.
-    {:ok, bypass: bypass, registry: registry, ref: ref}
+    {:ok, stub: stub, registry: registry, ref: ref}
   end
 
   defp ctx do
@@ -47,7 +48,7 @@ defmodule Compendium.OCI.PushAuthTest do
   end
 
   test "a write request carries Bearer <push_token> when ctx holds a credential", c do
-    %{bypass: bypass, registry: registry, ref: ref} = c
+    %{stub: stub, registry: registry, ref: ref} = c
 
     :ok =
       CredentialStore.put_push_token(ctx(), registry, @namespace, "cyfr_pt_push_test", "personal")
@@ -55,7 +56,7 @@ defmodule Compendium.OCI.PushAuthTest do
     test_pid = self()
     path = "/v2/#{ref.repository}/manifests/#{ref.tag}"
 
-    Bypass.expect_once(bypass, "PUT", path, fn conn ->
+    HTTPStub.expect_once(stub, "PUT", path, fn conn ->
       send(test_pid, {:auth, Plug.Conn.get_req_header(conn, "authorization")})
       Plug.Conn.resp(conn, 201, "")
     end)
@@ -74,11 +75,11 @@ defmodule Compendium.OCI.PushAuthTest do
   end
 
   test "a request with nil ctx carries no Authorization header (anonymous read)", c do
-    %{bypass: bypass, ref: ref} = c
+    %{stub: stub, ref: ref} = c
     test_pid = self()
     path = "/v2/#{ref.repository}/tags/list"
 
-    Bypass.expect_once(bypass, "GET", path, fn conn ->
+    HTTPStub.expect_once(stub, "GET", path, fn conn ->
       send(test_pid, {:auth, Plug.Conn.get_req_header(conn, "authorization")})
 
       conn

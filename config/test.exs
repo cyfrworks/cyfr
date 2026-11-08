@@ -148,7 +148,7 @@ end
 # Disable auto-migration in tests — mix aliases handle ecto.migrate
 config :arca, auto_migrate: false
 
-# The suite's fake servers (Bypass, a local registry) live on loopback; the
+# The suite's fake servers (`Cyfr.Test.HTTPStub`, a local registry) live on loopback; the
 # operator's private-egress allowlist names them, as it would name a real
 # internal host. Tests that exercise the refusal override this.
 config :sanctum, private_egress_targets: ["localhost", "127.0.0.1/8", "::1"]

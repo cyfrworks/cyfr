@@ -87,7 +87,7 @@ defmodule Cyfr.Test.ScriptedBackends do
     %{agent: agent, port: port, url: "http://127.0.0.1:#{port}"}
   end
 
-  # A plain listener, not Bypass: a request whose client goes away mid-way
+  # A plain listener, not `Cyfr.Test.HTTPStub`: a request whose client goes away mid-way
   # (a reader the server kills while its recv waits, as it may) ends with
   # its connection, and no end-of-test check counts it as a failure.
   @listener :scripted_backends_listener

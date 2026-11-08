@@ -77,6 +77,18 @@ function isPolicy(policy) {
   )
 }
 
+/**
+ * The terms the policy's `url` serves, `{title, markdown}`: the registry
+ * answers them as JSON (`{name, title, content_markdown}`) and this page
+ * draws them. Any other answer is `bad_terms`.
+ */
+export async function readTerms(url, fetchFn) {
+  const {status, json} = await call(fetchFn, url)
+  const valid = status === 200 && isObject(json) && typeof json.title === "string" && json.title.trim() !== "" && typeof json.content_markdown === "string"
+  if (!valid) refuse("bad_terms")
+  return {title: json.title.trim(), markdown: json.content_markdown}
+}
+
 /** The directory at `url` (a directory URL), over `fetchFn`. */
 export function directory(url, fetchFn) {
   const base = `${url}/directory/v1`
