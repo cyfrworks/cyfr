@@ -5,13 +5,15 @@ defmodule Aqua.Loop.ModelWaitTest do
   @moduledoc """
   The loop waits for a brain's answer until its run ends at the deadline
   the brain's node is consented, which the worker service enforces and
-  reports, and keeps no clock of its own: a brain consented five seconds
-  that never answers ends its turn once the worker service ends the run,
-  where the ten minutes the loop once gave every model call would hold the
-  turn past this test's own bound, and the reported end costs the athanor
-  no unreaped kill, where a waiter stopped by the loop's clock did; and a
-  turn on a brain consented thirty minutes lasts at least that long, past
-  the five its agent is consented.
+  reports, and keeps no clock of its own. The tests tell that apart from
+  a loop that stops the waiter itself when the consent runs out: a brain
+  consented five seconds that never answers ends its turn by the worker
+  service's reported end, past the consent and its grace, with no kill
+  asked by the host, where a loop clock stopped the run first with its
+  own `:timeout`; that reported end leaves no unreaped note on the
+  athanor's slot and its next root is admitted, where the loop's kill was
+  noted; and a turn on a brain consented thirty minutes lasts at least
+  that long, past the five its agent is consented.
   """
   use ExUnit.Case, async: false
 
