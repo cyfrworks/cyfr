@@ -626,8 +626,10 @@ defmodule Sanctum.Vault.OAuthGrant do
   # Plumbing
   # ---------------------------------------------------------------------------
 
-  defp broadcast(%{actor: actor}, entry_id, name, verb),
-    do: Sanctum.Telemetry.vault_entry_changed(actor.athanor_id, entry_id, verb, %{name: name})
+  defp broadcast(%{actor: actor}, entry_id, name, verb) do
+    meta = Map.put(Sanctum.Vault.standing(actor, entry_id), :name, name)
+    Sanctum.Telemetry.vault_entry_changed(actor.athanor_id, entry_id, verb, meta)
+  end
 
   @doc """
   The OAuth callback route, spelled once: the router mounts it, the

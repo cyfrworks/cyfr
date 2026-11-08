@@ -54,6 +54,7 @@ defmodule Cyfr.TelemetryBridge do
     ShareChanged,
     SharedThreadChanged,
     Tinctures,
+    VaultEntry,
     VaultEntryChanged,
     Webhooks
   }
@@ -291,6 +292,7 @@ defmodule Cyfr.TelemetryBridge do
     [
       tenant(meta, &Bus.vault_changed/1, build),
       tenant(meta, fn _actor -> Bus.vault_changed_global() end, build, :global)
+      | vault_entries(meta)
     ]
   end
 
@@ -367,6 +369,32 @@ defmodule Cyfr.TelemetryBridge do
       error: classify(meta[:error])
     }
   end
+
+  # The entry as a canvas reads it, from the standing the committed write
+  # left: a rename takes the old name away first, and an entry that no
+  # longer stands is removed by its name.
+  defp vault_entries(meta) do
+    entry = meta[:meta] || %{}
+
+    renamed =
+      if is_binary(entry[:old_name]) and entry[:old_name] != entry[:name],
+        do: [vault_entry(meta, :removed, %{name: entry[:old_name]})],
+        else: []
+
+    standing =
+      case entry do
+        %{status: status} when is_binary(status) ->
+          vault_entry(meta, :changed, Map.take(entry, [:name, :type, :status]))
+
+        _gone ->
+          vault_entry(meta, :removed, %{name: entry[:name]})
+      end
+
+    renamed ++ [standing]
+  end
+
+  defp vault_entry(meta, kind, fields),
+    do: tenant(meta, &Bus.vault_entries/1, &VaultEntry.new(&1, kind, fields))
 
   # A version as a registry event names it: its versionless reference, its
   # type, name and version. What only the listing reads (its icon, a newer

@@ -181,7 +181,9 @@ defmodule Sanctum.Telemetry do
   @doc """
   A vault entry of `athanor_id` changed. `meta` carries the entry's
   `name` for every verb — a deleted row can no longer be read for it —
-  and `old_name` too on a rename.
+  and `old_name` too on a rename, and its standing as the committed write
+  left it (`Sanctum.Vault.standing/2`: `type` and `status`, both nil for
+  an entry that no longer stands).
   """
   @spec vault_entry_changed(String.t(), String.t(), atom() | String.t(), map()) :: :ok
   def vault_entry_changed(athanor_id, entry_id, verb, meta) when is_map(meta) do
