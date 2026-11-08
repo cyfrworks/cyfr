@@ -8,6 +8,7 @@ defmodule Compendium.Providers.RegistryTest do
 
   alias Compendium.Providers.Registry, as: RegistryProvider
   alias Compendium.Registry.CredentialStore
+  alias Cyfr.Test.HTTPStub
   alias Sanctum.Refusals
   alias Sanctum.Test.{DirectoryServer, RegistryStub}
 
@@ -135,18 +136,18 @@ defmodule Compendium.Providers.RegistryTest do
 
   # A push token outlives the session that asks for it (`ARCHITECTURE.md`
   # §9.3): issuing one waits on a fresh confirmation, whose preview names
-  # what is issued and holds no secret. The registry is a Bypass server,
+  # what is issued and holds no secret. The registry is an HTTP stub,
   # which fails the test on any request it expects none of.
   describe "issuing another push token" do
     setup do
-      bypass = Bypass.open()
+      stub = HTTPStub.open()
       original_url = Application.get_env(:cyfr, :registry_url)
 
       on_exit(fn ->
         restore_env(:cyfr, :registry_url, original_url)
       end)
 
-      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{stub.port}")
 
       {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
       registry = Compendium.RegistryHost.canonical_host()
@@ -160,7 +161,7 @@ defmodule Compendium.Providers.RegistryTest do
           "personal"
         )
 
-      {:ok, bypass: bypass, person: person}
+      {:ok, stub: stub, person: person}
     end
 
     test "asks a fresh confirmation and reaches no registry until it is proven",
@@ -184,8 +185,8 @@ defmodule Compendium.Providers.RegistryTest do
       refute inspect(row) =~ "cyfr_pt_"
     end
 
-    test "issues the token once the person proves it", %{bypass: bypass, person: person} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/alice/tokens", fn conn ->
+    test "issues the token once the person proves it", %{stub: stub, person: person} do
+      HTTPStub.expect_once(stub, "POST", "/v1/namespaces/alice/tokens", fn conn ->
         assert Plug.Conn.get_req_header(conn, "authorization") == [
                  "Bearer cyfr_pt_held_bearer"
                ]
