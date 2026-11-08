@@ -9,9 +9,10 @@ defmodule Arca.DirectoryHeads do
   A row keeps the genesis the chain was verified from and the directory it
   names: both are immutable once cached, so a later refresh can never move
   an identifier to another directory or another genesis
-  (`:binding_changed`). The head and the verified state it leaves
+  (`:binding_changed`). The head, the verified state it leaves
   (`Prima.Identity.State`'s JSON: the listed keys and the recovery set)
-  move by compare-and-set on the head the caller last read (`advance/5`),
+  and `keys_added` (JSON: when each listed key was added, and a passkey's
+  maker) move together by compare-and-set on the head the caller last read (`advance/5`),
   and `verified_at` is written on the database's clock, which is also the
   clock `fresh/3` compares against. Arca verifies no signature: the
   caller verified the chain before it asks.
@@ -64,8 +65,8 @@ defmodule Arca.DirectoryHeads do
   ## Who writes
 
   The platform's own actor, for the home's identity freshness and its
-  housekeeping. Rows are plain maps (`Arca.Data`) with `state` as the JSON
-  the caller stored.
+  housekeeping. Rows are plain maps (`Arca.Data`) with `state` and
+  `keys_added` as the JSON the caller stored.
   """
 
   import Ecto.Query
@@ -137,7 +138,7 @@ defmodule Arca.DirectoryHeads do
   @doc """
   Cache a first verified head: `attrs` names the `:identifier`, the
   `:genesis` bytes, the `:directory_url` it names, the `:head_hash` and
-  the verified `:state` (JSON text). An identifier already cached is
+  the verified `:state` and its `:keys_added` (JSON text). An identifier already cached is
   `{:error, :exists}`, answered with nothing written: a later head moves
   through `advance/5`.
   """
@@ -145,7 +146,8 @@ defmodule Arca.DirectoryHeads do
   def put(%Prima.Actor{scope: :platform, system: true}, attrs) when is_map(attrs) do
     attrs = Map.new(attrs)
 
-    with :ok <- valid(attrs, [:identifier, :genesis, :directory_url, :head_hash, :state]) do
+    with :ok <-
+           valid(attrs, [:identifier, :genesis, :directory_url, :head_hash, :state, :keys_added]) do
       Arca.Repo.owned("Arca.DirectoryHeads.put", fn ->
         now = Arca.ServerMetaStorage.now!()
 
@@ -155,6 +157,7 @@ defmodule Arca.DirectoryHeads do
           directory_url: attrs.directory_url,
           head_hash: attrs.head_hash,
           state: attrs.state,
+          keys_added: attrs.keys_added,
           verified_at: now,
           gone_at: nil,
           revision: 1,
@@ -177,7 +180,7 @@ defmodule Arca.DirectoryHeads do
   one, walking `steps` (the retiring steps of the entries between them,
   in log order) in the same transaction: `attrs` names the `:genesis` and
   `:directory_url` the chain was verified from (which must be the cached
-  ones), the `:head_hash` and the `:state`. `verified_at` is the
+  ones), the `:head_hash`, the `:state` and its `:keys_added`. `verified_at` is the
   database's clock.
 
   Answers `{:ok, %{head: row, retired: retired}}`, or `{:error, :stale}`
@@ -199,7 +202,7 @@ defmodule Arca.DirectoryHeads do
              is_list(steps) do
     attrs = Map.new(attrs)
 
-    with :ok <- valid(attrs, [:genesis, :directory_url, :head_hash, :state]),
+    with :ok <- valid(attrs, [:genesis, :directory_url, :head_hash, :state, :keys_added]),
          :ok <- valid_steps(steps) do
       Arca.Repo.owned("Arca.DirectoryHeads.advance", fn ->
         advance_in(identifier, expected_head, attrs, steps)
@@ -366,7 +369,13 @@ defmodule Arca.DirectoryHeads do
           where: h.identifier == ^identifier and h.head_hash == ^expected_head
         )
         |> Arca.Repo.update_all(
-          set: [head_hash: attrs.head_hash, state: attrs.state, verified_at: now, updated_at: now],
+          set: [
+            head_hash: attrs.head_hash,
+            state: attrs.state,
+            keys_added: attrs.keys_added,
+            verified_at: now,
+            updated_at: now
+          ],
           inc: [revision: 1]
         )
 
@@ -480,4 +489,5 @@ defmodule Arca.DirectoryHeads do
   defp valid?(:directory_url, value), do: Prima.Identity.Encoding.directory_url?(value)
   defp valid?(:head_hash, value), do: Prima.Identity.Encoding.digest?(value)
   defp valid?(:state, value), do: is_binary(value) and value != ""
+  defp valid?(:keys_added, value), do: is_binary(value) and value != ""
 end

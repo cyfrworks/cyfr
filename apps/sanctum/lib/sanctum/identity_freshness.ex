@@ -9,8 +9,11 @@ defmodule Sanctum.IdentityFreshness do
 
   An account's head is cached here (`Arca.DirectoryHeads`) with the
   verified state it leaves (`Prima.Identity.State`: the listed keys and
-  the recovery set) and the instant it was verified on the database's
-  clock, so the next entries verify against it alone. `fresh?/2` answers
+  the recovery set), when each listed key was added (`added/2`) and the
+  instant it was verified on the database's clock, so the next entries
+  verify against it alone. `keys/1` answers the listed keys with when
+  each was added and a passkey's maker, which the person's own surfaces
+  show (`Sanctum.AccountKeys`). `fresh?/2` answers
   the cached head while it is within `identity_freshness_seconds` of that
   clock, and past the bound reads the directory the cached genesis names
   again. `fresh!/2` reads it whatever the cache says, for the paths that
@@ -95,10 +98,24 @@ defmodule Sanctum.IdentityFreshness do
 
   @typedoc """
   A cached head (`Arca.DirectoryHeads`), as a plain map: its `identifier`,
-  `head_hash`, `verified_at`, `genesis`, `directory_url`, `gone_at` and the
-  verified `state` as JSON text.
+  `head_hash`, `verified_at`, `genesis`, `directory_url`, `gone_at`, the
+  verified `state` and its `keys_added`, each as JSON text.
   """
   @type head :: map()
+
+  @typedoc """
+  When each listed key was added, by its `kid`: the `at` of the entry
+  that listed it last, and the `aaguid` its `add_key` named for a
+  passkey's maker, or nil.
+  """
+  @type added :: %{optional(String.t()) => %{at: non_neg_integer(), aaguid: String.t() | nil}}
+
+  @typedoc "A listed key with when it was added and its maker (`keys/1`)."
+  @type listed :: %{
+          key: Prima.Identity.Key.t(),
+          added_at: non_neg_integer(),
+          aaguid: String.t() | nil
+        }
 
   @typedoc "Why freshness refuses: the work pauses, or the account is gone."
   @type refusal :: {:refused, :identity_stale | :identity_gone}
@@ -199,6 +216,98 @@ defmodule Sanctum.IdentityFreshness do
 
   def state(_head), do: {:error, :corrupt}
 
+  @doc """
+  The keys a cached head lists, in the order they were added, each with
+  when it was added and, for a passkey whose `add_key` named one, its
+  maker's `aaguid`: `{:ok, listed}`, or `{:error, :corrupt}` for a row
+  whose state does not decode or whose `keys_added` does not name exactly
+  its keys.
+  """
+  @spec keys(head()) :: {:ok, [listed()]} | {:error, :corrupt}
+  def keys(head) do
+    with {:ok, state, added} <- stored(head) do
+      {:ok,
+       Enum.map(state.keys, fn key ->
+         %{key: key, added_at: added[key.kid].at, aaguid: added[key.kid].aaguid}
+       end)}
+    end
+  end
+
+  @doc """
+  When each key `entries` list was added, walked on from `added`: an
+  `add_key` notes its key at its `at` with its `aaguid`, a `remove_key`
+  drops its key, and a `recover` lists its keys at its own `at`, their
+  makers unknown; the account pages' `addedAt` reads a log the same way.
+  `entries` are a log's, verified, in order.
+  """
+  @spec added([Entry.t()], added()) :: added()
+  def added(entries, added \\ %{}) when is_list(entries) and is_map(added),
+    do: Enum.reduce(entries, added, &noted/2)
+
+  defp noted(%Entry{kind: :add_key, key: key, at: at, aaguid: aaguid}, added),
+    do: Map.put(added, key.kid, %{at: at, aaguid: aaguid})
+
+  defp noted(%Entry{kind: :remove_key, kid: kid}, added), do: Map.delete(added, kid)
+
+  defp noted(%Entry{kind: :recover, keys: keys, at: at}, _added),
+    do: Map.new(keys, &{&1.kid, %{at: at, aaguid: nil}})
+
+  defp noted(%Entry{}, added), do: added
+
+  # The state and its keys_added, held to each other: exactly the state's
+  # keys, each at a time, with a maker or none.
+  defp stored(%{keys_added: json} = head) when is_binary(json) do
+    with {:ok, state} <- state(head),
+         {:ok, %{} = map} <- Jason.decode(json),
+         {:ok, added} <- decoded_added(map),
+         true <- Enum.sort(Map.keys(added)) == Enum.sort(Enum.map(state.keys, & &1.kid)) do
+      {:ok, state, added}
+    else
+      _ -> {:error, :corrupt}
+    end
+  end
+
+  defp stored(_head), do: {:error, :corrupt}
+
+  defp decoded_added(map) do
+    Enum.reduce_while(map, {:ok, %{}}, fn {kid, note}, {:ok, acc} ->
+      case note do
+        %{"at" => at} = note when map_size(note) == 1 ->
+          noted_at(acc, kid, at, nil)
+
+        %{"at" => at, "aaguid" => aaguid} = note when map_size(note) == 2 and is_binary(aaguid) ->
+          noted_at(acc, kid, at, aaguid)
+
+        _other ->
+          {:halt, :error}
+      end
+    end)
+  end
+
+  defp noted_at(acc, kid, at, aaguid) do
+    if Prima.Identity.Encoding.ms?(at),
+      do: {:cont, {:ok, Map.put(acc, kid, %{at: at, aaguid: aaguid})}},
+      else: {:halt, :error}
+  end
+
+  @doc """
+  The `keys_added` a cached head keeps for a log's `entries`, as JSON
+  text: `added/2` from nothing, each key's `at` and, for a passkey whose
+  `add_key` named one, its `aaguid`. What a first read caches beside the
+  state the same entries verify to (`Arca.DirectoryHeads.put/2`).
+  """
+  @spec keys_added([Entry.t()]) :: String.t()
+  def keys_added(entries) when is_list(entries), do: entries |> added() |> encode_added()
+
+  defp encode_added(added) do
+    added
+    |> Map.new(fn
+      {kid, %{at: at, aaguid: nil}} -> {kid, %{"at" => at}}
+      {kid, %{at: at, aaguid: aaguid}} -> {kid, %{"at" => at, "aaguid" => aaguid}}
+    end)
+    |> Jason.encode!()
+  end
+
   # ---- reading the directory ---------------------------------------------------
 
   # Past the bound the directory is read again, unless this member found it
@@ -222,24 +331,24 @@ defmodule Sanctum.IdentityFreshness do
   # in the advance's transaction. A cache another refresh moved meanwhile
   # is read again.
   defp refresh(head, bound, client_opts, why, rounds) do
-    with {:ok, state} <- cached_state(head),
+    with {:ok, state, added} <- cached_state(head),
          {:ok, log} <- read_after(head, state, client_opts),
-         {:ok, next, steps} <- walked(state, log) do
-      settle(head, next, steps, bound, client_opts, why, rounds)
+         {:ok, next, steps, entries} <- walked(state, log) do
+      settle(head, {next, added(entries, added)}, steps, bound, client_opts, why, rounds)
     else
       {:error, reason} -> unrefreshed(head, bound, why, reason)
     end
   end
 
   defp cached_state(head) do
-    case state(head) do
-      {:ok, state} ->
-        {:ok, state}
+    case stored(head) do
+      {:ok, state, added} ->
+        {:ok, state, added}
 
       {:error, :corrupt} ->
         Logger.error(
           "[Sanctum.IdentityFreshness] the cached head of #{head.identifier} does not " <>
-            "decode to its state; refusing to extend it"
+            "decode to its state and the keys it lists; refusing to extend it"
         )
 
         {:error, :corrupt_cache}
@@ -257,22 +366,23 @@ defmodule Sanctum.IdentityFreshness do
   end
 
   # The entries verified one by one from the cached state, to exactly the
-  # head and length the directory named, with the steps they retire.
+  # head and length the directory named, with the steps they retire and
+  # the entries themselves, in order.
   defp walked(state, %{entries: entries, head: head, length: length}) do
     entries
-    |> Enum.reduce_while({:ok, state, []}, fn map, {:ok, state, steps} ->
+    |> Enum.reduce_while({:ok, state, [], []}, fn map, {:ok, state, steps, read} ->
       with {:ok, entry} <- Entry.decode(map),
            {:ok, next} <- Identity.extend(state, entry) do
-        {:cont, {:ok, next, step(entry, steps)}}
+        {:cont, {:ok, next, step(entry, steps), [entry | read]}}
       else
         {:error, reason} -> {:halt, {:error, {:unverified, reason}}}
       end
     end)
     |> case do
-      {:ok, %State{head: ^head, seq: seq} = next, steps} when seq + 1 == length ->
-        {:ok, next, Enum.reverse(steps)}
+      {:ok, %State{head: ^head, seq: seq} = next, steps, read} when seq + 1 == length ->
+        {:ok, next, Enum.reverse(steps), Enum.reverse(read)}
 
-      {:ok, %State{}, _steps} ->
+      {:ok, %State{}, _steps, _read} ->
         {:error, :truncated}
 
       {:error, _reason} = refused ->
@@ -284,7 +394,7 @@ defmodule Sanctum.IdentityFreshness do
   defp step(%Entry{kind: :recover}, steps), do: [:recover | steps]
   defp step(%Entry{}, steps), do: steps
 
-  defp settle(head, next, [], _bound, _client_opts, _why, _rounds)
+  defp settle(head, {next, _added}, [], _bound, _client_opts, _why, _rounds)
        when next.head == head.head_hash do
     case Arca.DirectoryHeads.touch(system(), head.identifier, head.head_hash) do
       {:ok, touched} -> reached(touched)
@@ -293,12 +403,13 @@ defmodule Sanctum.IdentityFreshness do
     end
   end
 
-  defp settle(head, next, steps, bound, client_opts, why, rounds) do
+  defp settle(head, {next, added}, steps, bound, client_opts, why, rounds) do
     attrs = %{
       genesis: head.genesis,
       directory_url: head.directory_url,
       head_hash: next.head,
-      state: encode(next)
+      state: encode(next),
+      keys_added: encode_added(added)
     }
 
     case Arca.DirectoryHeads.advance(system(), head.identifier, head.head_hash, attrs, steps) do
@@ -340,13 +451,14 @@ defmodule Sanctum.IdentityFreshness do
   # which must hash to it and name the directory it was read at.
   defp first_read(identifier, directory, bound, client_opts, opts) do
     with {:ok, log} <- Client.log(identifier, directory, client_opts),
-         {:ok, state, genesis} <- verified(identifier, directory, log) do
+         {:ok, state, entries} <- verified(identifier, directory, log) do
       attrs = %{
         identifier: identifier,
-        genesis: genesis,
+        genesis: Identity.canonical(hd(entries)),
         directory_url: directory,
         head_hash: state.head,
-        state: encode(state)
+        state: encode(state),
+        keys_added: keys_added(entries)
       }
 
       case Arca.DirectoryHeads.put(system(), attrs) do
@@ -360,12 +472,11 @@ defmodule Sanctum.IdentityFreshness do
     end
   end
 
-  defp verified(identifier, directory, %{entries: [genesis | _] = entries} = log) do
+  defp verified(identifier, directory, %{entries: [_genesis | _] = entries} = log) do
     case Identity.verify_chain(entries) do
       {:ok, %State{identifier: ^identifier, directory: ^directory} = state}
       when state.head == log.head and state.seq + 1 == log.length ->
-        {:ok, genesis_entry} = Entry.decode(genesis)
-        {:ok, state, Identity.canonical(genesis_entry)}
+        {:ok, state, Enum.map(entries, &verified_entry/1)}
 
       {:ok, %State{identifier: ^identifier, directory: ^directory}} ->
         {:error, :truncated}
@@ -379,6 +490,12 @@ defmodule Sanctum.IdentityFreshness do
   end
 
   defp verified(_identifier, _directory, _log), do: {:error, :invalid_page}
+
+  # An entry of a log that verified: it decodes.
+  defp verified_entry(map) do
+    {:ok, entry} = Entry.decode(map)
+    entry
+  end
 
   # Why a refresh did not reach a head: the account gone, a log that does
   # not hold the cached head, an outage the access mode decides on, or a

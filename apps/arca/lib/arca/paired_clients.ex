@@ -15,7 +15,7 @@ defmodule Arca.PairedClients do
   `passkey`), known by its key alone (`record_passkey/2`): it holds no
   device key and reports nothing.
   Sanctum is the one caller above this layer (`Sanctum.Pairing`,
-  `Sanctum.SignIn`, `Sanctum.Passkeys`); the rows are security rows no
+  `Sanctum.SignIn`); the rows are security rows no
   domain or surface names.
 
   ## The account key

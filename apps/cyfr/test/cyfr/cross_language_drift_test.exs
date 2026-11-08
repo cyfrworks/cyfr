@@ -527,7 +527,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "model_chat.json" => [
       {"apps/prima/test/prima/model_test.exs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
-      {"seed/components/catalysts/local/claude-code/0.1.0/src/src/chat.rs",
+      {"seed/components/catalysts/local/claude-code/0.1.1/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)}
     ],
     "access_modes.json" => [

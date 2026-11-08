@@ -161,6 +161,30 @@ defmodule Sanctum.SignInTest do
       assert is_binary(token)
     end
 
+    test "a browser's sign-in records the browser and system its user agent names", %{
+      dir: dir,
+      account: account
+    } do
+      user = first!(account)
+      account = passkey!(account, dir)
+      {request, _url} = minted(:sign_in, @browser)
+
+      safari =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 " <>
+          "(KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"
+
+      assert {:ok, %{purpose: :sign_in, session_token: token}} =
+               SignIn.answer(
+                 DirectoryServer.passkey_answer(request, account, List.last(account.passkeys)),
+                 @browser,
+                 user_agent: safari
+               )
+
+      hash = Sanctum.Session.token_hash(token)
+      [session] = Enum.filter(sessions(user.id), &(&1.token_hash == hash))
+      assert {session.browser, session.system} == {"Safari", "iOS"}
+    end
+
     test "a new account is admitted by the door's * alone, and refused without it", %{
       dir: dir,
       account: account

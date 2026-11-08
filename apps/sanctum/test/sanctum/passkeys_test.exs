@@ -7,11 +7,10 @@ defmodule Sanctum.PasskeysTest do
   scripted directory serving the account's log: a passkey's first
   sign-in records it as the person's paired client, in their own athanor,
   by its key and the head it was verified under, and every session it
-  signs in stands on that client and slides with use. Listed by its key
-  beside the person's devices, it holds no key to certify; revoked here,
-  it is signed out of this CYFR alone, its next sign-in recording it
-  anew. A declared restore suspends it, and a key removed from the
-  account ends it at the next refresh.
+  signs in stands on that client and slides with use. Listed beside the
+  person's devices, it holds no key to certify. A declared restore
+  suspends it, and a key removed from the account ends it at the next
+  refresh.
   """
 
   # The directory seam, the setup token, the public URL and the directory
@@ -22,7 +21,7 @@ defmodule Sanctum.PasskeysTest do
 
   alias Arca.Schemas.{PairedClient, Session, User}
   alias Prima.Identity.Key
-  alias Sanctum.{Context, Pairing, Passkeys, SignIn}
+  alias Sanctum.{Context, Pairing, SignIn}
   alias Sanctum.Test.DirectoryServer
 
   @token String.duplicate("7a", 32)
@@ -77,9 +76,6 @@ defmodule Sanctum.PasskeysTest do
   defp session_row(token),
     do: Arca.Repo.get_by!(Session, token_hash: Sanctum.Session.token_hash(token))
 
-  defp sessions(user_id),
-    do: Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
-
   # The person's own context, focused on their own athanor.
   defp ctx(user) do
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
@@ -127,9 +123,6 @@ defmodule Sanctum.PasskeysTest do
       {_user, _token} = signed_in!(account, second)
 
       assert Enum.map(clients(user.id), & &1.kid) == [kid(first), kid(second)]
-
-      assert {:ok, listed} = Passkeys.list(ctx(user))
-      assert Enum.sort(Enum.map(listed, & &1.kid)) == Enum.sort([kid(first), kid(second)])
     end
 
     test "is listed with the person's devices, holding no certificate and reporting nothing",
@@ -147,9 +140,7 @@ defmodule Sanctum.PasskeysTest do
              } = listed
 
       assert listed.client_id == client.id
-
-      assert {:ok, [%{kid: kid, client_id: client_id}]} = Passkeys.list(ctx(user))
-      assert {kid, client_id} == {kid(hd(account.passkeys)), client.id}
+      assert client.kid == kid(hd(account.passkeys))
     end
 
     test "has no key to certify: no certificate is recorded for its client", %{
@@ -194,76 +185,6 @@ defmodule Sanctum.PasskeysTest do
     end
   end
 
-  describe "revoking a passkey" do
-    test "signs it out of this CYFR alone, and its next sign-in records it anew", %{
-      dir: dir,
-      account: account,
-      user: user
-    } do
-      account = DirectoryServer.add_passkey!(dir.dir, account)
-      [first, second] = account.passkeys
-      {_user, ended} = signed_in!(account, first)
-      {_user, kept} = signed_in!(account, second)
-      [revoked, standing] = clients(user.id)
-      ended_hashes = for s <- sessions(user.id), session_row_client(s) == revoked.id, do: s
-
-      assert {:ok, %{kid: revoked_kid, sessions: count}} = Passkeys.revoke(ctx(user), kid(first))
-      assert {revoked_kid, count} == {kid(first), length(ended_hashes)}
-
-      assert Arca.Repo.get!(PairedClient, revoked.id).standing == "revoked"
-      assert Arca.Repo.get!(PairedClient, standing.id).standing == "active"
-      assert {:error, :invalid_session} = Sanctum.Session.load(ended)
-      assert {:ok, %Context{}} = Sanctum.Session.load(kept)
-      refute Enum.any?(ended_hashes, &(&1 in sessions(user.id)))
-
-      assert {:error, {:not_found, "passkey", _kid}} = Passkeys.revoke(ctx(user), kid(first))
-
-      # The key stays in the account: it signs in again, as a new client.
-      {_user, again} = signed_in!(account, first)
-      fresh = session_row(again).client_id
-      refute fresh == revoked.id
-      assert Arca.Repo.get!(PairedClient, fresh).standing == "active"
-    end
-
-    test "a revocation the store refuses ends nothing and announces nothing", %{
-      account: account,
-      user: user
-    } do
-      {_user, token} = signed_in!(account, hd(account.passkeys))
-      [client] = clients(user.id)
-      test = self()
-      handler = {__MODULE__, make_ref()}
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      :ok =
-        :telemetry.attach_many(
-          handler,
-          [[:cyfr, :sanctum, :sessions, :revoked], [:cyfr, :sanctum, :caller, :invalidated]],
-          fn event, _measurements, _metadata, _config -> send(test, {:announced, event}) end,
-          nil
-        )
-
-      # The store revokes the client and cannot delete its sessions, inside
-      # the case's own transaction.
-      fail_deletes!()
-      assert {:error, :unavailable} = Passkeys.revoke(ctx(user), kid(hd(account.passkeys)))
-      allow_deletes!()
-
-      refute_received {:announced, _event}
-      assert Arca.Repo.get!(PairedClient, client.id).standing == "active"
-      assert {:ok, %Context{}} = Sanctum.Session.load(token)
-    end
-
-    test "only a person signed in reads or revokes", %{account: account, user: user} do
-      anonymous = %{ctx(user) | authenticated: false}
-
-      assert {:error, :unauthenticated} = Passkeys.list(anonymous)
-
-      assert {:error, :unauthenticated} =
-               Passkeys.revoke(%{ctx(user) | plane: :guest}, kid(hd(account.passkeys)))
-    end
-  end
-
   test "a declared restore suspends its client, and a fresh sign-in records a new one", %{
     account: account,
     user: user
@@ -273,7 +194,7 @@ defmodule Sanctum.PasskeysTest do
     {:ok, _} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
     assert {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
     assert Arca.Repo.get!(PairedClient, client.id).standing == "suspended"
-    assert {:ok, []} = Passkeys.list(ctx(user))
+    assert {:ok, []} = Pairing.list(ctx(user))
 
     {_user, token} = signed_in!(account, hd(account.passkeys))
     fresh = session_row(token).client_id
@@ -295,35 +216,5 @@ defmodule Sanctum.PasskeysTest do
 
     assert Arca.Repo.get!(PairedClient, client.id).standing == "revoked"
     assert {:error, :invalid_session} = Sanctum.Session.load(token)
-  end
-
-  defp session_row_client(hash) do
-    Arca.Repo.one(from(s in Session, where: s.token_hash == ^hash, select: s.client_id))
-  end
-
-  # A delete from the sessions table refused by the store, per adapter.
-  defp fail_deletes! do
-    if Arca.Test.Adapter.sqlite?() do
-      Arca.Repo.query!(
-        "CREATE TRIGGER pk_fail_delete BEFORE DELETE ON sessions " <>
-          "BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END"
-      )
-    else
-      Arca.Repo.query!(
-        "CREATE FUNCTION pk_fail_delete() RETURNS trigger LANGUAGE plpgsql AS " <>
-          "$$ BEGIN RAISE EXCEPTION 'injected delete failure'; END $$"
-      )
-
-      Arca.Repo.query!(
-        "CREATE TRIGGER pk_fail_delete BEFORE DELETE ON sessions " <>
-          "FOR EACH ROW EXECUTE FUNCTION pk_fail_delete()"
-      )
-    end
-  end
-
-  defp allow_deletes! do
-    if Arca.Test.Adapter.sqlite?(),
-      do: Arca.Repo.query!("DROP TRIGGER pk_fail_delete"),
-      else: Arca.Repo.query!("DROP TRIGGER pk_fail_delete ON sessions")
   end
 end

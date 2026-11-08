@@ -14,8 +14,8 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   alias Prima.Operation
   alias Sanctum.Catalog
 
-  # Each takes authority away and gives none: signing out, a command line
-  # withdrawing its sign-in, revoking (a command line's session and a
+  # Each takes authority away and gives none: signing out, one session of
+  # one's own ended, a command line withdrawing its sign-in, revoking (a command line's session and a
   # shared key among them), withdrawing consent, leaving or removing
   # someone from a shared thread, withdrawing its invitation, denying
   # someone at a door and archiving a shared thread.
@@ -24,8 +24,8 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     invitation.revoke
     key.revoke
     pairing.revoke
-    passkey.revoke
     profile.revoke
+    session.end
     session.lock
     session.logout
     share.revoke

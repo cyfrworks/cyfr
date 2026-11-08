@@ -71,12 +71,14 @@ pub const MAX_LINE_BYTES: usize = 1_048_576;
 /// first start fetches the program.
 pub const LISTING_BUDGET: Duration = Duration::from_secs(150);
 
-/// How long a `chat` runs before it answers: inside the 10 minutes the
-/// loop gives a model call (`Aqua.Loop`'s `@model_timeout_ms`), with room
-/// to close the session and answer before the loop stops the run. Past
-/// it the session is interrupted (`interrupted`); its partial work stays in
-/// its folder and transcript, and the next message resumes it.
-pub const CHAT_BUDGET: Duration = Duration::from_secs(9 * 60);
+/// How long a `chat` runs before it answers: inside the 30 minutes the
+/// manifest consents this catalyst (`caps.limits.timeout`), which is how
+/// long the loop waits for a model call (`Aqua.Loop`) and the deadline the
+/// worker service enforces, with room to close the session and answer
+/// before either stops the run. Past it the session is interrupted
+/// (`interrupted`); its partial work stays in its folder and transcript,
+/// and the next message resumes it.
+pub const CHAT_BUDGET: Duration = Duration::from_secs(29 * 60);
 
 // ---------------------------------------------------------------------------
 // The pipe

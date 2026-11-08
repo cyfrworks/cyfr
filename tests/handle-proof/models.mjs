@@ -312,6 +312,19 @@ export const HANDLE = "proof";
 export const ADMIN_HANDLE = "proof-b";
 const NONE_TIME = { tamper: LONG_AGO };
 const nil = () => exact(null);
+// The words a session records for its browser and system (Sanctum.UserAgent).
+const BROWSERS = ["Chrome", "Safari", "Firefox", "Edge", "Opera", "Samsung Internet"];
+const SYSTEMS = ["macOS", "iOS", "iPadOS", "Android", "Windows", "ChromeOS", "Linux"];
+// A cached head's keys_added: at least one listed key, each at its time.
+const addedNotes = (v) => {
+  try {
+    const notes = JSON.parse(v);
+    const listed = notes && typeof notes === "object" && !Array.isArray(notes) ? Object.values(notes) : [];
+    return listed.length > 0 && listed.every((note) => Number.isInteger(note?.at));
+  } catch {
+    return false;
+  }
+};
 const noTime = () => exact(null, NONE_TIME);
 
 // A window from the proof's clock: `from` and `to` readings, named.
@@ -501,6 +514,7 @@ function models(S) {
     directory_url: exact(DIRECTORY),
     head_hash: derived(head, "the head of the account's log as the directory serves it"),
     state: captured("the verified state the head leaves, as JSON text", (v) => typeof v === "string" && v.includes(identifier), "{}"),
+    keys_added: captured("when each listed key was added, as JSON text", addedNotes, "{}"),
     verified_at: within(until(S, window, readKey)),
     gone_at: noTime(),
     revision: captured("the cached head's revision", (v) => Number.isInteger(v) && v >= 1, 0),
@@ -536,6 +550,9 @@ function models(S) {
     kid: derived(kid, "the kid of the key the browser's authenticator holds"),
     head: derived(head, "the head it signed in under"),
     client_id: derived(client, "the passkey's paired client here"),
+    browser: captured("the browser the sign-in's user agent names, in words", (v) => v === null || BROWSERS.includes(v), "Mosaic"),
+    system: captured("the system the sign-in's user agent names, in words", (v) => v === null || SYSTEMS.includes(v), "BeOS"),
+    last_seen_at: within(win(S, window)),
     inserted_at: within(win(S, window)),
   });
 
@@ -711,11 +728,12 @@ function models(S) {
   }));
   M["held:b.users"] = () => heldAll("sign_in:b.users", "sign_in", moving("b.users", "signin", ["last_seen_at", "updated_at"]));
   M["held:b.athanors"] = () => heldAll("sign_in:b.athanors", "sign_in", moving("b.athanors", "signin", ["provisioned_at", "updated_at"]));
+  M["held:b.sessions"] = () => heldAll("sign_in:b.sessions", "sign_in", moving("b.sessions", "signin", ["last_seen_at"]));
   for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.paired_clients", "setup"],
     ["sync:a.registry_tokens", "sync"], ["setup:registry.directory.entries[a]", "setup"],
     ["setup:registry.namespaces[proof]", "setup"], ["setup:registry.policy_acceptances[a]", "setup"],
     ["ban:registry.banned_identities", "ban"], ["allow:b.server_allowlist", "allow"],
-    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"], ["sign_in:b.paired_clients", "sign_in"]]) {
+    ["sign_in:b.person_identities", "sign_in"], ["sign_in:b.paired_clients", "sign_in"]]) {
     M[`held:${name.split(":").pop()}`] = () => heldAll(name, step);
   }
   M["held:registry.identity_heads[a]"] = () => heldAll("setup:registry.identity_heads[a]", "setup", () => ({

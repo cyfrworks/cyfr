@@ -508,7 +508,9 @@ defmodule Sanctum.SignIn do
   `:ref`, the confirmation the answer must be for, and `:operation` with
   `:body`, the registry operation and body it must be for, so an answer
   to any other request is refused before it does anything; `:now`, the
-  clock in milliseconds, the system's by default. A terminal's answer to
+  clock in milliseconds, the system's by default; `:user_agent`, the
+  user agent of the browser a sign-in's session is for, whose browser and
+  system the session records (`Sanctum.Session.create/2`). A terminal's answer to
   a `:registry` request is the `Prima.RegistryRequest` it signed (the
   module doc).
 
@@ -544,7 +546,7 @@ defmodule Sanctum.SignIn do
          :ok <- current(held.request, now),
          {:ok, identifier} <- answering(answer, held),
          {:ok, key, head} <- signed_by(answer, held.request, identifier, now) do
-      done(held, answer, identifier, key, head)
+      done(held, answer, identifier, key, head, opts)
     end
   end
 
@@ -741,7 +743,8 @@ defmodule Sanctum.SignIn do
          _answer,
          identifier,
          %Prima.Identity.Key{kind: :device, kid: kid} = key,
-         head
+         head,
+         _opts
        ) do
     if held[:kid] == kid do
       device = %{
@@ -759,17 +762,24 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp done(%{request: %{purpose: :sign_in}, binding: {:channel, _id}}, _answer, _id2, _k, _h),
-    do: refused(:wrong_key)
+  defp done(
+         %{request: %{purpose: :sign_in}, binding: {:channel, _id}},
+         _answer,
+         _id2,
+         _k,
+         _h,
+         _opts
+       ),
+       do: refused(:wrong_key)
 
-  defp done(%{request: %{purpose: :sign_in}} = held, _answer, identifier, key, head) do
+  defp done(%{request: %{purpose: :sign_in}} = held, _answer, identifier, key, head, opts) do
     with {:ok, user} <- signed_in(identifier, held.admission, head, nil),
-         {:ok, token} <- session(user, key, head) do
+         {:ok, token} <- session(user, key, head, opts[:user_agent]) do
       {:ok, %{purpose: :sign_in, user: named(user, held[:name]), session_token: token}}
     end
   end
 
-  defp done(%{request: %{purpose: :confirm}} = held, _answer, identifier, key, head) do
+  defp done(%{request: %{purpose: :confirm}} = held, _answer, identifier, key, head, _opts) do
     with :ok <- theirs(held.user_id, identifier) do
       proof =
         %{proof: proof(key), kid: key.kid, head: head.head_hash}
@@ -799,7 +809,14 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp done(%{request: %{purpose: :registry} = request} = held, answer, identifier, _key, _head) do
+  defp done(
+         %{request: %{purpose: :registry} = request} = held,
+         answer,
+         identifier,
+         _key,
+         _head,
+         _opts
+       ) do
     with :ok <- theirs(held.user_id, identifier) do
       case Prima.SignIn.registry_bytes(request, answer) do
         {:ok, signed} -> {:ok, registry_outcome(held, signed)}
@@ -976,8 +993,9 @@ defmodule Sanctum.SignIn do
   # and the head it was verified under: a head that moved since is refused
   # by the fence, the client's and the session's. The client is recorded
   # first, so a revocation of it that commits before the session leaves
-  # the session unminted (`Arca.SessionStorage.create_session/3`).
-  defp session(user, key, head) do
+  # the session unminted (`Arca.SessionStorage.create_session/3`). It
+  # records the browser and system the browser's user agent names.
+  defp session(user, key, head, user_agent) do
     ctx =
       Context.build(
         user_id: user.id,
@@ -991,7 +1009,12 @@ defmodule Sanctum.SignIn do
          {:ok, ctx} <-
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
          {:ok, session} <-
-           Sanctum.Session.create(ctx, kid: key.kid, head: head.head_hash, client_id: client.id) do
+           Sanctum.Session.create(ctx,
+             kid: key.kid,
+             head: head.head_hash,
+             client_id: client.id,
+             user_agent: user_agent
+           ) do
       Sanctum.Telemetry.auth_event(key.kind, :success)
       {:ok, session.token}
     else

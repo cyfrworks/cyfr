@@ -33,7 +33,6 @@ const (
 	Notes              = "notes"
 	Oauth              = "oauth"
 	Pairing            = "pairing"
-	Passkey            = "passkey"
 	PolicyLog          = "policy_log"
 	Profile            = "profile"
 	Record             = "record"
@@ -180,8 +179,6 @@ const (
 	PairingList             = "list"
 	PairingRenew            = "renew"
 	PairingRevoke           = "revoke"
-	PasskeyList             = "list"
-	PasskeyRevoke           = "revoke"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
@@ -226,6 +223,8 @@ const (
 	ScheduleReResolve       = "re_resolve"
 	ScheduleResume          = "resume"
 	ScheduleUpdate          = "update"
+	SessionEnd              = "end"
+	SessionList             = "list"
 	SessionLock             = "lock"
 	SessionLogout           = "logout"
 	SessionName             = "name"
@@ -322,7 +321,6 @@ var Actions = map[string][]string{
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"list", "renew", "revoke"},
-	"passkey":             {"list", "revoke"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -330,7 +328,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"lock", "logout", "name", "read_resource", "unlock", "whoami"},
+	"session":             {"end", "list", "lock", "logout", "name", "read_resource", "unlock", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
@@ -2635,34 +2633,6 @@ func (args PairingRevokeArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PairingRevoke, fields: fields(args)})
 }
 
-// PasskeyListArgs carries arguments for passkey.list.
-type PasskeyListArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyListArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyList, fields: fields(args)})
-}
-
-// PasskeyRevokeArgs carries arguments for passkey.revoke.
-type PasskeyRevokeArgs struct {
-	// revoke: the passkey, by the kid of its key in your account
-	Kid string `json:"kid"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
-	type fields PasskeyRevokeArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PasskeyRevoke, fields: fields(args)})
-}
-
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.
 type PolicyLogCorrelateArgs struct {
 	// Filter by request ID
@@ -4024,6 +3994,34 @@ func (args ScheduleUpdateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ScheduleUpdate, fields: fields(args)})
+}
+
+// SessionEndArgs carries arguments for session.end.
+type SessionEndArgs struct {
+	// end: the session, by its session_id from session.list
+	SessionId string `json:"session_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionEndArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionEndArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionEnd, fields: fields(args)})
+}
+
+// SessionListArgs carries arguments for session.list.
+type SessionListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionListArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionList, fields: fields(args)})
 }
 
 // SessionLockArgs carries arguments for session.lock.

@@ -10,7 +10,8 @@ defmodule Sanctum.Provider do
   Each tool's actions are declared once, in its definition (`Prima.Operation`);
   the catalog (`Sanctum.Catalog`) is their one roster.
 
-  - `session` - The caller's own session, its sign-ins and its athanor
+  - `session` - The caller's own session, its sign-ins and its athanor, and
+    their account's keys and sessions here, each session signed out on its own
   - `key` - API keys
   - `tincture_visibility` - Whether a tincture is public
   - `athanor` - The caller's own athanor
@@ -23,8 +24,6 @@ defmodule Sanctum.Provider do
   - `webhook` - Inbound webhooks
   - `pairing` - The devices and passkeys of the person's account paired or
     signed in at this CYFR: a device's certificate renewed, either revoked
-  - `passkey` - The passkeys of the person's account that signed in at this
-    CYFR, by their key, each signed out here
   - `confirmation` - Pending confirmations of sensitive changes
   - `share` - A person's own keys offered to a thread they sit in or to everyone
 
@@ -100,7 +99,6 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.Vault.definition(),
       Sanctum.Providers.Profile.definition(),
       Sanctum.Providers.Pairing.definition(),
-      Sanctum.Providers.Passkey.definition(),
       Sanctum.Providers.Confirmation.definition(),
       Sanctum.Providers.Share.definition()
     ]
@@ -134,7 +132,6 @@ defmodule Sanctum.Provider do
   def handle("vault", ctx, args), do: Sanctum.Providers.Vault.handle(ctx, args)
   def handle("profile", ctx, args), do: Sanctum.Providers.Profile.handle(ctx, args)
   def handle("pairing", ctx, args), do: Sanctum.Providers.Pairing.handle(ctx, args)
-  def handle("passkey", ctx, args), do: Sanctum.Providers.Passkey.handle(ctx, args)
   def handle("confirmation", ctx, args), do: Sanctum.Providers.Confirmation.handle(ctx, args)
   def handle("share", ctx, args), do: Sanctum.Providers.Share.handle(ctx, args)
 
