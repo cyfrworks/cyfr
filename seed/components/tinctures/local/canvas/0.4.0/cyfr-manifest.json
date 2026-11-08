@@ -1,0 +1,21 @@
+{
+  "name": "canvas",
+  "type": "tincture",
+  "version": "0.4.0",
+  "publisher": "local",
+  "description": "Your canvas: the day in one sentence, what needs your attention grouped by cause with a grant where one fixes it, your recent runs, your apps, and your schedules with the week ahead.",
+  "tags": ["canvas", "system"],
+  "category": "utility",
+  "tincture": {
+    "icon": "canvas",
+    "tagline": "Your day, your runs, your apps and schedules",
+    "entry": "dist/index.html",
+    "build": {
+      "tool": "vite"
+    },
+    "desktop": {
+      "data": ["runs.changes", "schedules.changes", "schedule_runs.changes"],
+      "chrome": "chrome.css"
+    }
+  }
+}
