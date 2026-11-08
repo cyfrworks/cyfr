@@ -44,7 +44,7 @@ defmodule PrismWeb.SetupLiveTest do
     assert String.starts_with?(new, "https://dir.example/account/new#name=&request=")
   end
 
-  test "Create your account offers no name, so the first person's answer records none and asks the registry nothing",
+  test "Create your account offers no name, so the first person's answer asks the registry for the account's name by its identifier and records none while it holds none",
        %{conn: conn} do
     tls = DirectoryServer.tls()
     DirectoryServer.listen!()
@@ -80,7 +80,9 @@ defmodule PrismWeb.SetupLiveTest do
     assert {"/auth/passkey/complete/" <> _ticket, _flash} = assert_redirect(login)
 
     assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get_by_identifier(account.identifier)
-    refute_received {:registry_request, _}
+    assert_received {:registry_request, %{path: "/v1/identities/" <> rest}}
+    assert rest == account.identifier <> "/handle"
+    refute_received {:registry_request, %{path: "/v1/handles/" <> _}}
   end
 
   test "a token that is not this CYFR's goes to /", %{conn: conn} do
