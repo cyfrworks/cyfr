@@ -413,6 +413,8 @@ defmodule Cyfr.BusPayloadTest do
             :thread -> Bus.thread(other, "thr")
             :layouts -> Bus.layouts(other, "usr_1")
             :confirmations -> Bus.confirmations(other, "usr_1")
+            :attention -> Bus.attention(other, "usr_1")
+            :threads -> Bus.threads(other, "usr_1")
             _ -> apply(Bus, key, [other])
           end
 

@@ -59,7 +59,7 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.executions(@actor), {Execution, %{kind: :completed, duration_ms: 3}}},
       {[:cyfr, :opus, :execute, :exception], Map.merge(tenant, %{error: "boom"}),
        Bus.executions(@actor),
-       {Execution, %{kind: :failed, error: %{class: :internal, message: "boom"}}}},
+       {Execution, %{kind: :failed, error: %{class: :internal, cause: :failed}}}},
       {[:cyfr, :emissary, :request], Map.put(tenant, :method, "tools/call"), Bus.requests(@actor),
        {Request, %{kind: :logged, method: "tools/call"}}},
       {[:cyfr, :sanctum, :policy, :decision], Map.put(tenant, :decision, "denied"),
@@ -438,7 +438,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       assert_receive %Execution{
         kind: :cancelled,
         execution_id: "exec_cancelled",
-        error: %{class: :internal, message: "cancelled"}
+        error: %{class: :internal, cause: :failed}
       }
 
       refute_receive %Notify{}, 100
@@ -546,7 +546,8 @@ defmodule Cyfr.TelemetryBridgeTest do
       })
 
       unconfirmed = %{class: :internal, message: "The outcome could not be confirmed."}
-      assert_receive %ScheduleRun{kind: :failed, reason: ^unconfirmed}
+      # A canvas's run payloads carry the class and its cause, no sentence.
+      assert_receive %ScheduleRun{kind: :failed, reason: %{class: :internal, cause: :failed}}
       assert_receive %Notify{kind: :schedule_failed, payload: %{reason: ^unconfirmed}}
 
       :telemetry.execute([:cyfr, :opus, :execute, :exception], %{}, %{
@@ -556,7 +557,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         error: secret
       })
 
-      assert_receive %Execution{kind: :failed, error: ^unconfirmed}
+      assert_receive %Execution{kind: :failed, error: %{class: :internal, cause: :failed}}
     end
 
     test "an authorization reason is classed by its own vocabulary" do
@@ -569,8 +570,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         reason: {:missing_permission, :execute}
       })
 
-      message = Sanctum.Unauthorized.message({:missing_permission, :execute})
-      assert_receive %ScheduleRun{kind: :failed, reason: %{class: :forbidden, message: ^message}}
+      assert_receive %ScheduleRun{kind: :failed, reason: %{class: :forbidden, cause: :refused}}
     end
 
     test "metadata a payload does not name is not carried" do
