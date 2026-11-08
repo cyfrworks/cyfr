@@ -12,7 +12,7 @@ import {Unreachable} from "../../account/network.js"
 import {readDevice, adding} from "../../account/pages/add.js"
 import {here} from "../../account/pages/common.js"
 import {listing, removal, run as devicesRun} from "../../account/pages/devices.js"
-import {Creation} from "../../account/pages/new.js"
+import {Creation, run as createdRun} from "../../account/pages/new.js"
 import {Recovery, run as recoveryRun} from "../../account/pages/recover.js"
 import {describe as describeRequest, readSigned, sign} from "../../account/pages/sign.js"
 import {digest, fragment, parseFragment} from "../../account/sign_in.js"
@@ -574,8 +574,14 @@ describe("/account/recover", () => {
 // enough of each for `run` to wire it and a test to click it.
 function documentFor(page) {
   class Element {
-    constructor(id = "") {
-      Object.assign(this, {id, children: [], handlers: {}, hidden: false, disabled: false, checked: false, textContent: "", value: ""})
+    constructor(id = "", tag = undefined) {
+      Object.assign(this, {id, tag, children: [], handlers: {}, hidden: false, disabled: false, checked: false, textContent: "", value: ""})
+    }
+    setAttribute(name, value) {
+      this[name] = value
+    }
+    removeAttribute(name) {
+      delete this[name]
     }
     append(...children) {
       this.children.push(...children)
@@ -596,7 +602,7 @@ function documentFor(page) {
   return {
     getElementById: (id) => elements.get(id),
     querySelectorAll: () => sections,
-    createElement: () => new Element(),
+    createElement: (tag) => new Element("", tag),
     createTextNode: (textContent) => ({textContent})
   }
 }
@@ -739,5 +745,82 @@ describe("review regressions", () => {
     assert.equal(doc.getElementById("account-error").textContent, "")
     assert.equal(doc.getElementById("keys").children.length, 0)
     assert.equal(net.logs.get(identifier).length, 3)
+  })
+})
+
+// `env` whose policy URL, `${ORIGIN}/terms`, answers `answer()`; every
+// other request goes to the world.
+function servingTerms(env, answer) {
+  const world = env.fetch
+  env.terms = 0
+  env.fetch = async (url, init) => {
+    if (new URL(url).pathname !== "/terms") return world(url, init)
+    env.terms++
+    return answer()
+  }
+  return env
+}
+
+const TERMS = {name: "terms", title: "Terms of Service", content_markdown: "# Terms\n\n<script>alert(1)</script> [x](javascript:alert)"}
+const termsAnswer = () => ({status: 200, text: async () => JSON.stringify(TERMS)})
+const settled = () => new Promise((resolve) => setImmediate(resolve))
+const text = (node) => node.textContent || node.children.map(text).join("")
+const tags = (node) => (node.tag ? [node.tag, ...node.children.flatMap(tags)] : [])
+
+describe("/account/new terms", () => {
+  test("draws the terms policy.url serves beside the version accepted, and drops the link to them", async () => {
+    const doc = documentFor("new")
+    await createdRun(doc, servingTerms({...environment(null, world()), location: {hash: ""}}, termsAnswer))
+    await settled()
+    const box = doc.getElementById("terms")
+    assert.equal(box.hidden, false)
+    assert.deepEqual(box.children.flatMap(tags), ["h2", "p"])
+    assert.equal(text(box.children[1]), "<script>alert(1)</script> x")
+    assert.equal(doc.getElementById("policy-link").textContent, "Terms of Service")
+    assert.equal(doc.getElementById("policy-link").href, undefined)
+    assert.equal(doc.getElementById("policy-version").textContent, ", version v1")
+  })
+
+  test("keeps the link to policy.url when the terms cannot be read", async () => {
+    for (const answer of [() => ({status: 404, text: async () => "{}"}), () => ({status: 200, text: async () => "<html>"}), () => Promise.reject(new TypeError("network"))]) {
+      const doc = documentFor("new")
+      await createdRun(doc, servingTerms({...environment(null, world()), location: {hash: ""}}, answer))
+      await settled()
+      assert.equal(doc.getElementById("terms").hidden, true)
+      assert.deepEqual(doc.getElementById("terms").children, [])
+      assert.equal(doc.getElementById("policy-link").href, `${ORIGIN}/terms`)
+      assert.equal(doc.getElementById("policy-version").textContent, ", version v1")
+    }
+  })
+
+  test("asks for no terms when the registry names no policy", async () => {
+    const doc = documentFor("new")
+    const env = servingTerms({...environment(null, world({policy: null})), location: {hash: ""}}, termsAnswer)
+    await createdRun(doc, env)
+    await settled()
+    assert.equal(env.terms, 0)
+    assert.equal(doc.getElementById("acceptance").hidden, true)
+    assert.deepEqual(doc.getElementById("terms").children, [])
+  })
+
+  test("draws the terms again when the registry asks for them after they changed", async () => {
+    const doc = documentFor("new")
+    const passkey = await authenticator(identity.keys.passkey_1, null)
+    const env = servingTerms({...environment(passkey, world({required: "v2"})), location: {hash: ""}}, termsAnswer)
+    await createdRun(doc, env)
+    await settled()
+    doc.getElementById("name").value = "alice"
+    doc.getElementById("accept").checked = true
+    doc.getElementById("accept").handlers.change()
+    await doc.getElementById("create").click()
+    await doc.getElementById("saved").click()
+    await settled()
+    assert.equal(doc.getElementById("policy-again").hidden, false)
+    assert.equal(env.terms, 2)
+    const box = doc.getElementById("terms-again")
+    assert.equal(box.hidden, false)
+    assert.deepEqual(box.children.flatMap(tags), ["h2", "p"])
+    assert.equal(doc.getElementById("policy-again-link").textContent, "Terms of Service")
+    assert.equal(doc.getElementById("policy-again-version").textContent, ", version v1")
   })
 })
