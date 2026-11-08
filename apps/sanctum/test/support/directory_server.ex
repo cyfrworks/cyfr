@@ -481,14 +481,15 @@ defmodule Sanctum.Test.DirectoryServer do
   @doc """
   A new passkey the account's recovery key adds, published in `dir`: a
   P-256 key pair and a credential id, kept in the account's `passkeys`
-  (`%{pub, priv, credential_id}`), newest last.
+  (`%{pub, priv, credential_id}`), newest last. `fields` adds to its
+  `add_key` (`aaguid:`, the passkey's maker).
   """
-  @spec add_passkey!(pid(), map()) :: map()
-  def add_passkey!(dir, account) do
+  @spec add_passkey!(pid(), map(), keyword()) :: map()
+  def add_passkey!(dir, account, fields \\ []) do
     {pub, priv} = :crypto.generate_key(:ecdh, :secp256r1)
     credential_id = :crypto.strong_rand_bytes(16)
     {:ok, key} = Key.new(alg: :es256, kind: :passkey, pub: pub, credential_id: credential_id)
-    account = extend!(account, kind: :add_key, key: key)
+    account = extend!(account, [kind: :add_key, key: key] ++ fields)
     publish(dir, account.identifier, account.log)
     passkey = %{pub: pub, priv: priv, credential_id: credential_id}
     Map.update(account, :passkeys, [passkey], &(&1 ++ [passkey]))
