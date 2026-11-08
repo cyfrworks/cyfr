@@ -13,7 +13,7 @@ You have one account, and every CYFR you use admits that same account:
 - **Your keys** are the passkeys your phones and computers keep for you and the keys your devices hold under their own PIN or passphrase. They live only there: no CYFR holds a key of yours, and the account service holds only their public halves.
 - **Your recovery code** holds one more key, which replaces any of the others. You keep it, apart from your devices.
 
-The account service keeps your account's log: every change to its keys, in one order, each signed by a key the log already lists. It serves the account pages, where your passkeys live, and answers your name with your identifier. It stores nothing else: no address of any CYFR you use, no email, no session and no list of where you sign in. Each CYFR reads your keys there and decides for itself whether to let you in.
+The account service keeps your account's log: every change to its keys, in one order, each signed by a key the log already lists. The log is public. A key in it carries no name or address; a passkey added from the account pages also names its maker when your browser reports one, such as Apple Passwords or a YubiKey model, so a CYFR can show which passkey is which. It serves the account pages, where your passkeys live, and answers your name with your identifier. It stores nothing else: no address of any CYFR you use, no email, no session and no list of where you sign in. Each CYFR reads your keys there and decides for itself whether to let you in.
 
 ### The account pages
 

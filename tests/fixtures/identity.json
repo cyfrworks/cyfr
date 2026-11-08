@@ -76,6 +76,38 @@
       "entries": [
         "alice_genesis",
         "alice_add_device_1",
+        "alice_add_passkey_1_with_its_maker"
+      ],
+      "name": "a passkey added with its maker",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:a321bdc18aac18bf6ca630dc140214ea0f436debda5dc781e86579d32614e059",
+        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
+        "keys": [
+          {
+            "alg": "ed25519",
+            "kid": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4",
+            "kind": "device",
+            "pub": "P3Flvi4pf67G8zPGXth8vUY2FhmOnILBbcr6mtLHD-U"
+          },
+          {
+            "alg": "es256",
+            "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+            "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+            "kind": "passkey",
+            "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+          }
+        ],
+        "recovery": [
+          "Bzg7XuOrzaXGs9_VyThVhQuqNAdDmKJVLFHvJNC2AbI"
+        ],
+        "seq": 2
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
         "alice_add_passkey_1",
         "alice_add_device_2_by_passkey"
       ],
@@ -686,6 +718,32 @@
       "entries": [
         "alice_genesis",
         "alice_add_device_1",
+        "add_key_of_a_device_with_a_maker"
+      ],
+      "error": {
+        "field": "aaguid",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key of a device with a maker"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_with_a_maker_in_another_spelling"
+      ],
+      "error": {
+        "field": "aaguid",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key with a maker in another spelling"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
         "alice_add_passkey_1",
         "a_passkey_signature_whose_client_data_carries_another_member"
       ],
@@ -922,6 +980,20 @@
         "alice_genesis",
         "alice_add_device_1",
         "alice_add_passkey_1",
+        "remove_key_with_a_maker"
+      ],
+      "error": {
+        "field": "aaguid",
+        "index": 3,
+        "reason": "unknown_field"
+      },
+      "name": "remove key with a maker"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "alice_add_passkey_1",
         "recover_by_a_device"
       ],
       "error": {
@@ -1059,6 +1131,19 @@
         "reason": "wrong_signer"
       },
       "name": "add key by a recovery key the recovery replaced"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_add_device_1",
+        "add_key_with_a_maker_with_a_trailing_lf"
+      ],
+      "error": {
+        "field": "aaguid",
+        "index": 2,
+        "reason": "invalid_field"
+      },
+      "name": "add key with a maker with a trailing LF"
     }
   ],
   "comment": "The vectors pinning Prima.Identity (cyfr-identity/v2), read by CYFR, by cyfr.run and by the account pages. Every side derives each Ed25519 public key from its seed and each P-256 point from its private scalar, and each kid as sha256:<hex> over the public key's bytes; re-signs every entry whose signer is an Ed25519 key and reproduces its sig byte for byte over the JCS bytes of the entry without sig (a passkey's signature is randomised, so an es256 signer's entries are verified, never re-signed); reproduces every hash and identifier as SHA-256 over the entry's JCS bytes; maps each identifier to its 32 user_id bytes (a passkey's WebAuthn user.id) and back; walks every chain to its state, or to the index and reason of the first entry refused; and checks every webauthn case's assertion over its challenge at its origin and relying party, reaching ok or a refusal named by the check that fails first, in the order type, challenge, origin, crossOrigin, authenticator data, rpIdHash, user presence, user verification, signature. In a chain every WebAuthn refusal is wrong_signer, and a refusal that names a field or a kind carries it as field or kind, as each side's typed result does. A signer of null was altered after signing or is not signed by any key the vectors hold.",
@@ -1542,6 +1627,26 @@
       "hash": "sha256:3422230fcec63a48cabbe51837e2026cba8255db48ba807adfb2d7aab0d2f96d",
       "signer": "device_1"
     },
+    "add_key_of_a_device_with_a_maker": {
+      "entry": {
+        "aaguid": "fbfc3007-154e-4ecc-8c0b-6e020557d7bd",
+        "at": 1790000002000,
+        "key": {
+          "alg": "ed25519",
+          "kid": "sha256:8e6ac8dc3d02066adc11da0e127a3d279c0b08bf0502607c1b7527ef575b96e4",
+          "kind": "device",
+          "pub": "VP3B-iiYDoaT7a03y1zBwzbVo5PlYYN-h4cW1ZuqaTI"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "rIXpYEtlV5Cmg2ekIdTgpkuG1CypiQOdxmx20AnudX9qohA_iSLSf80bNi-dW1Uq5y5Sy0ll-_ydo1U4ZpynBg",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:f35ab3231cfed3f322c1210ea98663b18e7daab37a835ff7fdfb7d1de1d97773",
+      "signer": "device_1"
+    },
     "add_key_of_a_key_already_listed": {
       "entry": {
         "at": 1790000002000,
@@ -1698,6 +1803,48 @@
       "hash": "sha256:13547f79017bc24ff67b0b0c5cd062c681b16743cd1448bcf3fd9b230bded80d",
       "signer": "device_1"
     },
+    "add_key_with_a_maker_in_another_spelling": {
+      "entry": {
+        "aaguid": "FBFC3007-154E-4ECC-8C0B-6E020557D7BD",
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+          "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+          "kind": "passkey",
+          "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "9Act0rlNrG-b0n4AJ8fpk4jbyeJ8poP9ZN41qkgLbAtpVKsRb2LP9t2-T6-6VnIsYmz9JQia2JaXRSqF-Zk3Bg",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:950c55a4731bd64a262fe39671810e7fc2242274c85fa15a7243bb35653140bd",
+      "signer": "device_1"
+    },
+    "add_key_with_a_maker_with_a_trailing_lf": {
+      "entry": {
+        "aaguid": "fbfc3007-154e-4ecc-8c0b-6e020557d7bd\n",
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+          "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+          "kind": "passkey",
+          "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "sBIXlEQzAfwyhlRoqBLj5KRouQklvJRJPzdsTnqpErfu4VSvBAHwcXH45dYtcN7XswKwuqwZaQmRzX5OySt5CA",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:e7ff447f1e21b0d1e5ec224da4250d21d70e8ca5722ce55bd42553656a433a21",
+      "signer": "device_1"
+    },
     "add_recovery_by_a_device": {
       "entry": {
         "at": 1790000003000,
@@ -1807,6 +1954,27 @@
         "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
       },
       "hash": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+      "signer": "device_1"
+    },
+    "alice_add_passkey_1_with_its_maker": {
+      "entry": {
+        "aaguid": "fbfc3007-154e-4ecc-8c0b-6e020557d7bd",
+        "at": 1790000002000,
+        "key": {
+          "alg": "es256",
+          "credential_id": "j89I16RLpc_eG-4YqTI4Lw",
+          "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+          "kind": "passkey",
+          "pub": "BDaEcT97OrQMNGvS739qVpOzmQZ6ZH-npE2Z3Hql4XXjS2Ytwm8dh9K3VubaweWRXiEnqpAC6niOAmNA7sn9keE"
+        },
+        "kind": "add_key",
+        "prev": "sha256:b6ad440c6fcc7066673b335db00c512e8d33ff3f36bd24d3cc6a062c658bcf18",
+        "protocol": "cyfr-identity/v2",
+        "seq": 2,
+        "sig": "A-ROLccuQ2RAEw_HKHPxyz2PkCYNu9ZB3XvOxmLXp949JMXvXCezxsB0HCer6d4PWPoic5F59mR_IhUYk7wsCw",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:a321bdc18aac18bf6ca630dc140214ea0f436debda5dc781e86579d32614e059",
       "signer": "device_1"
     },
     "alice_add_recovery": {
@@ -2689,6 +2857,21 @@
         "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
       },
       "hash": "sha256:a2161d4ccadf820a194a67731b643b3b8ff49727e7d3fa2ccf839bb41f577c10",
+      "signer": "device_1"
+    },
+    "remove_key_with_a_maker": {
+      "entry": {
+        "aaguid": "fbfc3007-154e-4ecc-8c0b-6e020557d7bd",
+        "at": 1790000003000,
+        "kid": "sha256:6254eb47e9f9cffac4bb961923d0a88a4cb85d64cd5262f527ba50c1082952e8",
+        "kind": "remove_key",
+        "prev": "sha256:96c5c6362a2676602c0597ab14a97d169d69ba92831b66a1c81e02d2c9df33e1",
+        "protocol": "cyfr-identity/v2",
+        "seq": 3,
+        "sig": "nvC9znljC2yzIBP9mI04GBy8IJWC_pOxdtAnU9Hz8Z9lA_fW0EgKnOfJ_MmSLHPmND4Q_3di16X8keNskZIgCg",
+        "signer": "sha256:96aad24ea69f89ca7c75682731165eae5043b7395109b6246f21c3a4a72d1fb4"
+      },
+      "hash": "sha256:46e25cfcd6bb9d95f704de44c9a7c76d54acc2c74555ef7c6e3b7cfbe1481fd8",
       "signer": "device_1"
     }
   },

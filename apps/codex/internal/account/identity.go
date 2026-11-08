@@ -226,7 +226,8 @@ var (
 		"recover":      {"prev", "keys", "recovery"},
 		"add_recovery": {"prev", "recovery"},
 	}
-	signerShape = func(v any) bool {
+	optionalFields = map[string][]string{"add_key": {"aaguid"}}
+	signerShape    = func(v any) bool {
 		s, ok := v.(string)
 		return ok && IsDigest(strings.TrimPrefix(s, "recovery:"))
 	}
@@ -279,7 +280,7 @@ func readEntry(v any) (*entry, *Refusal) {
 		return nil, &Refusal{Reason: "unknown_kind", Kind: string(k)}
 	}
 	required := append([]string{"protocol", "kind", "seq", "at", "signer"}, own...)
-	if r := fields(m, append(required, "sig"), nil); r != nil {
+	if r := fields(m, append(required, "sig"), optionalFields[kind]); r != nil {
 		return nil, r
 	}
 	e := &entry{m: m, kind: kind}
@@ -313,6 +314,9 @@ func readEntry(v any) (*entry, *Refusal) {
 	case "add_key":
 		if e.key, ok = readKey(m["key"]); !ok {
 			r = invalid("key")
+		} else if a, named := m["aaguid"]; named && !(e.key.Kind == "passkey" && isAAGUID(a)) {
+			// A passkey's maker, in its one spelling; a device key has none.
+			r = invalid("aaguid")
 		}
 	case "remove_key":
 		if !IsDigest(m["kid"]) {

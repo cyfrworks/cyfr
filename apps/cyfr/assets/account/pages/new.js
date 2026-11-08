@@ -26,7 +26,7 @@
 // browser's passkey store, on no account.
 
 import {Refusal, refuse} from "../encoding.js"
-import {genesis, identifier as identifierOf, keyOf, next, signWith, userId, walk} from "../identity.js"
+import {genesis, identifier as identifierOf, next, passkeyAdded, signWith, userId, walk} from "../identity.js"
 import {attempts} from "../attempts.js"
 import {codeFor, drawRecovery, readCode} from "../recovery.js"
 import {compose, isHandle, signWith as signRequest} from "../registry.js"
@@ -73,9 +73,9 @@ export class Creation {
       const first = await signWith(genesis({directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer}), key)
       const identifier = await identifierOf(first)
       const accepted = this.config.policy?.version ?? null
-      const {credentialId, pub} = await this.env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: this.env.random(32)})
+      const {credentialId, pub, aaguid} = await this.env.passkeys.create({userId: userId(identifier), name: `@${name}`, challenge: this.env.random(32)})
       const {state} = await walk([first])
-      const entry = next(state, "add_key", {key: await keyOf({pub, credentialId})}, {at: this.env.now(), signer: key.signer})
+      const entry = next(state, "add_key", await passkeyAdded({pub, credentialId, aaguid}), {at: this.env.now(), signer: key.signer})
       this.key = key
       this.attempt = {identifier, name, accepted, genesis: first, created_at: this.env.now()}
       this.attempt = {
