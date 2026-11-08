@@ -8,6 +8,7 @@
 // `userVerification: "required"`. A ceremony the person cancels, or the
 // browser refuses, rejects; the page says so and sends nothing.
 
+import {refuse} from "./encoding.js"
 import {identifierForUserId} from "./identity.js"
 
 const ES256 = -7
@@ -69,7 +70,7 @@ export function passkeys(credentials, rpId) {
       const response = credential.response
       const spki = bytes(response.getPublicKey())
       const p256 = response.getPublicKeyAlgorithm() === ES256 && spki?.length === P256_SPKI.length + 65 && P256_SPKI.every((byte, i) => spki[i] === byte)
-      if (!p256) throw new Error("the passkey is not a P-256 key")
+      if (!p256) refuse("no_public_key")
       return {credentialId: bytes(credential.rawId), pub: spki.subarray(P256_SPKI.length)}
     }
   }

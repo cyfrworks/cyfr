@@ -30,7 +30,9 @@ const WORDS = {
   other_code: "That recovery code is for another account.",
   stale_head: "Your account changed while this page was open. Start again.",
   duplicate_key: "That is already on your account.",
-  cancelled: "The passkey was not used. Try again when you are ready."
+  cancelled: "The passkey was not used. Try again when you are ready.",
+  no_public_key: "This browser made a passkey but did not hand over its key. Use Safari, Chrome or Firefox.",
+  rate_limited: "Too many requests from your network just now. Wait a minute and try again."
 }
 
 /** The plain words for what went wrong. */

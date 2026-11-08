@@ -5,7 +5,8 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {describe, test} from "node:test"
 
-import {b64, concat, jcs, sha256, unb64, utf8} from "../../account/encoding.js"
+import {passkeys} from "../../account/ceremony.js"
+import {Refusal, b64, concat, jcs, sha256, unb64, utf8} from "../../account/encoding.js"
 import {extend, walk} from "../../account/identity.js"
 import {Unreachable} from "../../account/network.js"
 import {readDevice, adding} from "../../account/pages/add.js"
@@ -15,6 +16,7 @@ import {Creation} from "../../account/pages/new.js"
 import {Recovery, run as recoveryRun} from "../../account/pages/recover.js"
 import {describe as describeRequest, readSigned, sign} from "../../account/pages/sign.js"
 import {digest, fragment, parseFragment} from "../../account/sign_in.js"
+import {words} from "../../account/view.js"
 
 const read = (name) => JSON.parse(readFileSync(new URL(`../../../../../tests/fixtures/${name}`, import.meta.url), "utf8"))
 const signIn = read("sign_in.json")
@@ -392,13 +394,40 @@ describe("/account/new", () => {
     assert.equal(creation.attempts.list().length, 0)
   })
 
-  test("a tab closed before I saved it made nothing", async () => {
+  test("makes the passkey before the code is shown, and sends and keeps nothing until I saved it", async () => {
     const net = world()
     const storage = memoryStorage()
-    const creation = await Creation.open(environment(await authenticator(identity.keys.passkey_1, null), net, {storage}))
-    await creation.begin("alice")
+    const passkey = await authenticator(identity.keys.passkey_1, null)
+    const creation = await Creation.open(environment(passkey, net, {storage}))
+    const code = await creation.begin("alice")
+    assert.match(code, /^CYFR(-[0-9A-HJKMNP-TV-Z]{8}){14}$/)
+    assert.equal(passkey.calls.filter((call) => call.create).length, 1)
+    assert.equal(creation.attempt.step, "register")
+    assert.equal(net.logs.size, 0)
+    assert.equal(net.sent.length, 0)
+    assert.equal(storage.length, 0)
+    creation.savedCode()
+    assert.equal(storage.length, 1)
+    assert.equal(net.logs.size, 0)
+  })
+
+  test("a browser that withholds the passkey's key is refused before the code, and nothing is kept", async () => {
+    const credentials = {
+      async create() {
+        return {rawId: new Uint8Array(16), response: {getPublicKey: () => null, getPublicKeyAlgorithm: () => -7}}
+      }
+    }
+    await assert.rejects(passkeys(credentials, RP_ID).create({userId: new Uint8Array(32), name: "@alice", challenge: new Uint8Array(32)}), {reason: "no_public_key"})
+
+    const net = world()
+    const storage = memoryStorage()
+    const creation = await Creation.open(environment(passkeys(credentials, RP_ID), net, {storage}))
+    await assert.rejects(creation.begin("alice"), {reason: "no_public_key"})
+    assert.equal(creation.attempt, null)
     assert.equal(net.logs.size, 0)
     assert.equal(storage.length, 0)
+    assert.notEqual(words(new Refusal("no_public_key")), words(new Error("other")))
+    assert.notEqual(words(new Refusal("rate_limited")), words(new Error("other")))
   })
 })
 

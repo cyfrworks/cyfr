@@ -133,7 +133,7 @@ async function main(browser, proxy) {
       passkeyKids(log).length === 1 && log.recovery === 1 && handle.status === 200 &&
       handleBody?.identifier === identifier && handleBody?.directory === DIR.origin && held.length === 1 &&
       held[0].rpId === DIR.host && record.account.user_handle_names_account && leaked === 0,
-    `@${NAME} made at ${DIR.host}'s pages: the code shown and saved before the passkey, the log a genesis and the passkey's add_key, ` +
+    `@${NAME} made at ${DIR.host}'s pages: the passkey made, then the code shown and saved, the log a genesis and the passkey's add_key, ` +
       "the name the account's, the passkey's user handle the identifier, and neither the code nor its secret in storage, an address or a request",
     record.account)) return;
   const p1 = passkeyKids(log)[0];

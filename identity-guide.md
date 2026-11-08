@@ -49,12 +49,12 @@ The account service is trusted to keep each log in one order and to answer hones
 
 A CYFR's setup link and its invitation links offer **Create your account** beside **Sign in with your account**. It opens `/account/new`, carrying that CYFR's sign-in request:
 
-1. **Your name.** Type it after the `@`, and accept the terms when the account service names them. **Create your account** checks the name there and says when it is taken.
+1. **Your name.** Type it after the `@`, and accept the terms when the account service names them. **Create your account** checks the name there and says when it is taken, then makes your passkey: your browser asks where to keep it. A browser that cannot make a usable passkey stops here, before you have saved anything, and says so.
 2. **Your recovery code.** The page draws your recovery secret in the browser and shows your code: one line, `CYFR-` followed by fourteen groups of eight letters and digits. It spells your identifier and your recovery secret, with a check that catches a typo. **Copy** it into your password manager, or **Print** it.
-3. **I saved it** makes your passkey: your browser asks where to keep it. Only then is anything sent: the page registers your account, adds the passkey to it and claims your name.
+3. **I saved it** sends everything: the page registers your account, adds the passkey to it and claims your name. Nothing is sent before it.
 4. **Continue to** the CYFR that sent you asks for your passkey once more, and takes you back there signed in.
 
-A tab closed before **I saved it** made nothing. One closed after it keeps what it signed in this browser for 24 hours: open the page again, and **Finish creating your account** asks for the recovery code you saved and goes on from where it stopped, without making anything twice. If someone took your name a moment before, the page says your account is made and asks for another name; if the terms changed meanwhile, it asks you to accept them again. Your account and your code never depend on the name.
+A tab closed before **I saved it** sent nothing and kept nothing; the passkey it made stays in your passkey manager on no account, and you can remove it there. One closed after it keeps what it signed in this browser for 24 hours: open the page again, and **Finish creating your account** asks for the recovery code you saved and goes on from where it stopped, without making anything twice. If someone took your name a moment before, the page says your account is made and asks for another name; if the terms changed meanwhile, it asks you to accept them again. Your account and your code never depend on the name.
 
 Your recovery code never passes through an address, a server or the browser's storage; the page holds it in memory until it is done and drops it.
 
