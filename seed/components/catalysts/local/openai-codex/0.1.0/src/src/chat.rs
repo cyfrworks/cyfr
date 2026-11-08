@@ -888,8 +888,8 @@ impl Ids {
 }
 
 /// What a run knows of its session for a refusal to carry: the thread,
-/// once the request named it or Codex started this run's turn on a new
-/// one, the
+/// once the request named it or a new one's rollout holds this run's turn
+/// (`read_turn`), the
 /// thread's usage as last read, and the usage this run read past it.
 struct Known {
     thread: Option<String>,
@@ -900,9 +900,10 @@ struct Known {
 impl Known {
     /// The session a refusal carries, which the host keeps as a response's,
     /// so a first chat interrupted at its budget is resumed by the next. A
-    /// new thread Codex started no turn on carries none: it may hold no
-    /// rollout to resume, and a thread that cannot be resumed would refuse
-    /// every later message. Its usage is the thread's
+    /// new thread whose rollout is not known to hold the turn carries none:
+    /// Codex answers `turn/start` before it writes the rollout, a thread
+    /// with an empty rollout cannot be resumed, and the host would resume
+    /// it on every later message. Its usage is the thread's
     /// total less what this run read, which no answer counted: the next
     /// run counts it, across a reset of Codex's counts too.
     fn carried(&self, key: &str) -> Option<String> {
@@ -1069,8 +1070,6 @@ fn converse<P: Pipe, S: Sink>(
             send(pipe, server::turn_start(&id, &thread, &items, request.run_model.as_deref(), request.effort.as_deref()))?;
             let (started, others) = reader.answer(pipe, &id, deadline).map_err(|r| closing(pipe, r))?;
             early.extend(others);
-            // The thread holds a turn now, and a refusal carries it.
-            known.thread = Some(thread.clone());
             started["turn"]
                 .get("id")
                 .and_then(Value::as_str)
@@ -1173,7 +1172,14 @@ fn read_turn<P: Pipe, S: Sink>(
             continue;
         }
         for line in lines {
-            match server::read(&line) {
+            let event = server::read(&line);
+            // Codex writes a turn's start to the rollout before it says so,
+            // and says everything else of the turn after: any line of this
+            // turn means a new thread can be resumed.
+            if known.thread.is_none() && event.turn() == Some(turn.id) {
+                known.thread = Some(turn.thread.to_string());
+            }
+            match event {
                 Event::Delta { turn: t, item, text: delta } if t == turn.id => {
                     begin(&item, &mut messages, deltas);
                     deltas.text(&delta);
@@ -1268,8 +1274,11 @@ mod tests {
     /// the next turn of the script, whose segments are written one at a
     /// time: the first after the turn starts, each next once every call the
     /// turn holds is answered. `{turn}` in a line stands for the turn's id.
+    /// `silent` answers `turn/start` and writes nothing more: a program that
+    /// died before it started the turn.
     struct Codex {
         signed_in: bool,
+        silent: bool,
         turns: VecDeque<VecDeque<Vec<String>>>,
         current: VecDeque<Vec<String>>,
         started: u64,
@@ -1282,6 +1291,7 @@ mod tests {
         fn new(turns: Vec<Vec<Vec<String>>>) -> Self {
             Codex {
                 signed_in: true,
+                silent: false,
                 turns: turns.into_iter().map(VecDeque::from).collect(),
                 current: VecDeque::new(),
                 started: 0,
@@ -1341,10 +1351,11 @@ mod tests {
                     self.started += 1;
                     self.turn = format!("t{}", self.started);
                     self.current = self.turns.pop_front().unwrap_or_default();
-                    let mut out = vec![
-                        ok(json!({"turn": {"id": self.turn, "status": "inProgress", "items": []}})),
-                        json!({"method": "turn/started", "params": {"threadId": THREAD, "turn": {"id": self.turn}}}).to_string(),
-                    ];
+                    let mut out = vec![ok(json!({"turn": {"id": self.turn, "status": "inProgress", "items": []}}))];
+                    if self.silent {
+                        return out;
+                    }
+                    out.push(json!({"method": "turn/started", "params": {"threadId": THREAD, "turn": {"id": self.turn}}}).to_string());
                     out.extend(self.segment());
                     out
                 }
@@ -1679,6 +1690,26 @@ mod tests {
         assert_eq!((turn["params"]["model"].as_str(), turn["params"]["effort"].as_str()), (Some("gpt-5.5"), Some("high")));
         assert_eq!(answer["session"], session());
         assert_eq!(answer["model"], "gpt-5.5");
+    }
+
+    #[test]
+    fn a_new_thread_rides_on_a_refusal_only_once_codex_says_the_turn_started() {
+        // Codex 0.167.0 answers turn/start before it writes the thread's
+        // rollout: killed right after that answer and started again, it
+        // refuses to resume the thread ("rollout … is empty"). It writes the
+        // turn's start before it sends turn/started (README, "Verified
+        // against 0.167.0").
+        let mut codex = Codex::new(vec![vec![]]);
+        codex.silent = true;
+        let mut pipe = BoxPipe::new(codex);
+        let (refusal, _) = run(&mut pipe, &first("start"), Instant::now() + Duration::from_millis(300));
+        let refusal = refusal.unwrap_err();
+        assert!(pipe.sent_since(0).iter().any(|m| m == "turn/start"));
+        assert_eq!(refusal.session, None, "the turn/start answer alone does not make the thread resumable");
+
+        let mut pipe = BoxPipe::new(Codex::new(vec![vec![]]));
+        let (refusal, _) = run(&mut pipe, &first("start"), Instant::now() + Duration::from_millis(300));
+        assert_eq!(refusal.unwrap_err().session, Some(format!("{}.0-0-0-0", session())), "turn/started does");
     }
 
     #[test]
