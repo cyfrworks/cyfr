@@ -46,8 +46,10 @@ defmodule Cyfr.Bus do
     BoundedDispatcher,
     Build,
     CallerInvalidated,
+    Attention,
     Components,
     Confirmation,
+    CrewActivity,
     CrewPending,
     Execution,
     ExecutionEvent,
@@ -71,7 +73,9 @@ defmodule Cyfr.Bus do
     ShareChanged,
     SharedThreadChanged,
     ThreadEvent,
+    ThreadListed,
     Tinctures,
+    VaultEntry,
     VaultEntryChanged,
     Webhooks
   }
@@ -121,9 +125,12 @@ defmodule Cyfr.Bus do
         "PrismWeb.ComponentsLive",
         "PrismWeb.ComponentDetailLive",
         "PrismWeb.RegistryLive",
-        "PrismWeb.SchedulesLive"
+        "PrismWeb.SchedulesLive",
+        "stream:components.changes"
       ],
-      reason: "the athanor's component registry changed after the change committed"
+      reason:
+        "the athanor's component registry changed after the change committed, for its " <>
+          "dashboards and canvases"
     },
     %{
       key: :builds,
@@ -243,6 +250,30 @@ defmodule Cyfr.Bus do
       reason: "a vault entry of the athanor changed; no material travels"
     },
     %{
+      key: :vault_entries,
+      scope: :tenant,
+      struct: VaultEntry,
+      match: {:exact, "bus:vault_entries"},
+      template: "tenant:<athanor_id>:bus:vault_entries",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["stream:vault.changes"],
+      reason:
+        "a vault entry of the athanor as a committed write left it, for its canvases: its " <>
+          "name, credential kind and standing, never material, fields or a last use"
+    },
+    %{
+      key: :crew_activity,
+      scope: :tenant,
+      struct: CrewActivity,
+      match: {:exact, "bus:crew_activity"},
+      template: "tenant:<athanor_id>:bus:crew_activity",
+      producers: ["Aqua.Tape"],
+      consumers: ["stream:activity.changes"],
+      reason:
+        "a crew member's job began or ended in the athanor, for its canvases; never the " <>
+          "task's text"
+    },
+    %{
       key: :notify,
       scope: :tenant,
       struct: Notify,
@@ -321,6 +352,30 @@ defmodule Cyfr.Bus do
           "member learns of their sensitive changes; it carries the ref, what happened to " <>
           "the record (its kind), the operation and the expiry, and a client reads the " <>
           "preview under its own session"
+    },
+    %{
+      key: :attention,
+      scope: :tenant,
+      struct: Attention,
+      match: {:prefix, "bus:attention:"},
+      template: "tenant:<athanor_id>:bus:attention:<user_id>",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["stream:attention.changes"],
+      reason:
+        "what waits for one person, on that person's own topic, so no other member learns " <>
+          "of it: a reference to a record its owner keeps, never a second record"
+    },
+    %{
+      key: :threads,
+      scope: :tenant,
+      struct: ThreadListed,
+      match: {:prefix, "bus:threads:"},
+      template: "tenant:<athanor_id>:bus:threads:<user_id>",
+      producers: ["Aqua.ThreadList"],
+      consumers: ["stream:threads.changes"],
+      reason:
+        "one person's list of threads moved, on that person's own topic: a shared thread is " <>
+          "told to each of its people in their own athanor, never a message"
     },
     # --- global: unscoped on purpose ---
     %{
@@ -653,6 +708,14 @@ defmodule Cyfr.Bus do
   @spec vault_changed(Actor.t()) :: String.t()
   def vault_changed(actor), do: prefix(actor) <> "bus:vault_changed"
 
+  @doc "The athanor's vault entries as a canvas reads them (`Cyfr.Bus.VaultEntry`)."
+  @spec vault_entries(Actor.t()) :: String.t()
+  def vault_entries(actor), do: prefix(actor) <> "bus:vault_entries"
+
+  @doc "The athanor's crew jobs beginning and ending (`Cyfr.Bus.CrewActivity`)."
+  @spec crew_activity(Actor.t()) :: String.t()
+  def crew_activity(actor), do: prefix(actor) <> "bus:crew_activity"
+
   @doc "The athanor's tray fan-in (`Cyfr.Bus.Notify`)."
   @spec notify(Actor.t()) :: String.t()
   def notify(actor), do: prefix(actor) <> "notify"
@@ -692,6 +755,22 @@ defmodule Cyfr.Bus do
   @spec confirmations(Actor.t(), String.t()) :: String.t()
   def confirmations(actor, user_id) when is_binary(user_id) and user_id != "",
     do: prefix(actor) <> "bus:confirmations:" <> user_id
+
+  @doc """
+  What waits for one person (`Cyfr.Bus.Attention`): `user_id` is that
+  person, and only their clients hear it.
+  """
+  @spec attention(Actor.t(), String.t()) :: String.t()
+  def attention(actor, user_id) when is_binary(user_id) and user_id != "",
+    do: prefix(actor) <> "bus:attention:" <> user_id
+
+  @doc """
+  One person's list of threads (`Cyfr.Bus.ThreadListed`): `user_id` is
+  that person, and only their clients hear it.
+  """
+  @spec threads(Actor.t(), String.t()) :: String.t()
+  def threads(actor, user_id) when is_binary(user_id) and user_id != "",
+    do: prefix(actor) <> "bus:threads:" <> user_id
 
   # ---------------------------------------------------------------------------
   # Global topics

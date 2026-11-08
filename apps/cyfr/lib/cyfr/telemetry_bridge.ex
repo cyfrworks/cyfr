@@ -217,8 +217,7 @@ defmodule Cyfr.TelemetryBridge do
   defp messages([:cyfr, :compendium, :component, action], _measurements, meta)
        when action in [:install, :remove, :push] do
     kind = %{install: :installed, remove: :removed, push: :pushed}[action]
-    fields = Map.take(meta, [:name, :version, :publisher, :component_type])
-    [tenant(meta, &Bus.components/1, &Components.new(&1, kind, fields))]
+    [tenant(meta, &Bus.components/1, &Components.new(&1, kind, component_fields(meta)))]
   end
 
   defp messages([:cyfr, :opus, :tincture, :invoke, stage], _measurements, meta)
@@ -367,6 +366,19 @@ defmodule Cyfr.TelemetryBridge do
       duration_ms: meta[:duration_ms],
       error: classify(meta[:error])
     }
+  end
+
+  # A version as a registry event names it: its versionless reference, its
+  # type, name and version. What only the listing reads (its icon, a newer
+  # shipped version, its grant) is left to the stream's refresh.
+  defp component_fields(meta) do
+    type = meta[:component_type] && to_string(meta[:component_type])
+
+    ref =
+      if is_binary(type) and is_binary(meta[:publisher]) and is_binary(meta[:name]),
+        do: Prima.ComponentRef.build(type, meta[:publisher], meta[:name])
+
+    %{ref: ref, type: type, name: meta[:name], version: meta[:version]}
   end
 
   # Who a file offer's message is for: a receipt, failed or landed, is its

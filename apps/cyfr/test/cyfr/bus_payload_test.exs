@@ -15,10 +15,12 @@ defmodule Cyfr.BusPayloadTest do
   alias Cyfr.Bus.{
     ApiKeys,
     AthanorArchived,
+    Attention,
     Build,
     CallerInvalidated,
     Components,
     Confirmation,
+    CrewActivity,
     Execution,
     ExecutionEvent,
     FeedPublished,
@@ -42,7 +44,9 @@ defmodule Cyfr.BusPayloadTest do
     ShareChanged,
     SharedThreadChanged,
     ThreadEvent,
+    ThreadListed,
     Tinctures,
+    VaultEntry,
     VaultEntryChanged,
     Webhooks
   }
@@ -54,7 +58,7 @@ defmodule Cyfr.BusPayloadTest do
     [
       Execution.new(@actor, :failed, execution_id: "e", error: "boom", component_type: :reagent),
       Request.new(@actor, :logged, request_id: "r", method: "tools/call", status: :success),
-      Components.new(@actor, :installed, name: "c", version: "1.0.0", publisher: "local"),
+      Components.new(@actor, :installed, ref: "catalyst:local.c", name: "c", version: "1.0.0"),
       Build.new(@actor, :stopped, build_id: "b", status: :error, error: :timeout),
       ScheduleRun.new(@actor, :failed,
         schedule_id: "s",
@@ -112,7 +116,27 @@ defmodule Cyfr.BusPayloadTest do
       Ping.new(1),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
       ScheduleCompleted.new(@actor),
-      CrewPending.new(@actor)
+      CrewPending.new(@actor),
+      VaultEntry.new(@actor, :changed, name: "github", type: "api_key", status: "fine"),
+      CrewActivity.new(@actor, :started,
+        member: "scout",
+        asked_by: "Ada",
+        since: ~U[2026-11-09 09:00:00Z],
+        status: "running"
+      ),
+      Attention.new(@actor, :failed_run,
+        id: "exe_payload",
+        label: "reagent:local.x",
+        since: ~U[2026-11-09 09:00:00Z],
+        destination: %{kind: "page", page: "runs"}
+      ),
+      ThreadListed.new(@actor, :own,
+        id: "thr_payload",
+        title: "Plans",
+        people: ["Ada"],
+        last_activity: ~U[2026-11-09 09:00:00Z],
+        waits_on_you: false
+      )
     ]
   end
 

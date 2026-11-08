@@ -180,9 +180,9 @@ defmodule Opus.Providers.FeedTest do
       error = runs.shape["fields"]["error"]
 
       assert {error["type"], error["nullable"], Enum.sort(error["required"])} ==
-               {"object", true, ["class", "cause"]}
+               {"object", true, ["cause", "class"]}
 
-      assert Map.keys(error["fields"]) |> Enum.sort() == ["class", "cause"]
+      assert Map.keys(error["fields"]) |> Enum.sort() == ["cause", "class"]
 
       cause = error["fields"]["cause"]
 
@@ -830,7 +830,7 @@ defmodule Opus.Providers.FeedTest do
         assert %{"kind" => "failed", "error" => %{"class" => class, "cause" => cause} = error} =
                  failed
 
-        assert Map.keys(error) |> Enum.sort() == ["class", "cause"]
+        assert Map.keys(error) |> Enum.sort() == ["cause", "class"]
         assert class in Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
         assert cause in Enum.map(Cyfr.Bus.Execution.causes(), &Atom.to_string(elem(&1, 0)))
         assert :ok = Prima.Canvas.Shape.check(stream.shape, failed)
