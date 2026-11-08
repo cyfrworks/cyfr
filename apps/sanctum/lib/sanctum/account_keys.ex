@@ -20,7 +20,8 @@ defmodule Sanctum.AccountKeys do
   the caller's own (`current`).
 
   This CYFR owns only the sessions: a key is the account's, and removing
-  one is the account pages' (`/account/devices`). Ending one session is
+  one is the account pages', at the directory the account's genesis names
+  (`account_page`, its `/account/devices`). Ending one session is
   `Sanctum.Session.end_own/2`.
   """
 
@@ -97,13 +98,13 @@ defmodule Sanctum.AccountKeys do
         }
 
   @doc """
-  The context person's account keys and their sessions here (the module
-  doc). Refused with `:unauthenticated` for no person, the account's
+  The context person's account keys and their sessions here, and the
+  account page where a key is removed (the module doc). Refused with `:unauthenticated` for no person, the account's
   freshness refusals (`{:refused, :identity_stale | :identity_gone}`),
   and `:unavailable` when a store cannot answer.
   """
   @spec list(Context.t()) ::
-          {:ok, [key()]}
+          {:ok, %{keys: [key()], account_page: String.t()}}
           | {:error, :unauthenticated | :unavailable}
           | IdentityFreshness.refusal()
   def list(%Context{} = ctx) do
@@ -115,18 +116,20 @@ defmodule Sanctum.AccountKeys do
          {:ok, names} <- names(user_id) do
       by_kid = Enum.group_by(sessions, & &1.kid)
 
-      {:ok,
-       Enum.map(keys, fn %{key: key} = listed ->
-         %{
-           kid: key.kid,
-           kind: Atom.to_string(key.kind),
-           code: code(key.kid),
-           added_at: iso(DateTime.from_unix!(listed.added_at, :millisecond)),
-           maker: listed.aaguid && Map.get(@makers, listed.aaguid),
-           name: if(key.kind == :device, do: Map.get(names, key.kid)),
-           sessions: Enum.map(Map.get(by_kid, key.kid, []), &session(&1, ctx))
-         }
-       end)}
+      listed =
+        Enum.map(keys, fn %{key: key} = listed ->
+          %{
+            kid: key.kid,
+            kind: Atom.to_string(key.kind),
+            code: code(key.kid),
+            added_at: iso(DateTime.from_unix!(listed.added_at, :millisecond)),
+            maker: listed.aaguid && Map.get(@makers, listed.aaguid),
+            name: if(key.kind == :device, do: Map.get(names, key.kid)),
+            sessions: Enum.map(Map.get(by_kid, key.kid, []), &session(&1, ctx))
+          }
+        end)
+
+      {:ok, %{keys: listed, account_page: head.directory_url <> "/account/devices"}}
     end
   end
 

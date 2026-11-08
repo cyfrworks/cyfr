@@ -27,7 +27,8 @@ defmodule Sanctum.Providers.Session do
   kept; the answer is the name recorded.
 
   `list` answers the keys of the person's account, every one its log
-  lists, with their sessions here under each (`Sanctum.AccountKeys`).
+  lists, with their sessions here under each, and the account page where
+  a key is removed (`Sanctum.AccountKeys`).
   `end` signs one of those sessions out by its `session_id`, whichever
   browser or device holds it, their own included, and nothing else
   (`Sanctum.Session.end_own/2`): a sign-out is a session's, never a key's,
@@ -260,7 +261,7 @@ defmodule Sanctum.Providers.Session do
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     case Sanctum.AccountKeys.list(ctx) do
-      {:ok, keys} -> {:ok, %{keys: keys}}
+      {:ok, listing} -> {:ok, listing}
       {:refused, why} -> {:error, why}
       {:error, reason} -> {:error, keys_refusal(reason)}
     end

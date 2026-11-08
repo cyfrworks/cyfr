@@ -420,7 +420,6 @@ defmodule PrismWeb.SettingsLiveTest do
       %{account: account, dir: dir} = Sanctum.Test.DirectoryServer.member!(person.user_id)
       account = Sanctum.Test.DirectoryServer.add_passkey!(dir.dir, account, aaguid: @apple)
       _head = Sanctum.Test.DirectoryServer.cached!(account)
-      Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
 
       [device] = account.devices
       device_kid = Sanctum.Test.DirectoryServer.kid(device)

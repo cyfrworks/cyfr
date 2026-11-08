@@ -128,7 +128,8 @@ defmodule Sanctum.AccountKeysTest do
     {stranger, theirs} = stranger!(dir)
     _not_listed = session!(stranger, theirs, DirectoryServer.kid(hd(theirs.devices)), @safari)
 
-    assert {:ok, keys} = AccountKeys.list(ctx(person, own.hash))
+    assert {:ok, %{keys: keys, account_page: page}} = AccountKeys.list(ctx(person, own.hash))
+    assert page == account.url <> "/account/devices"
 
     assert Enum.map(keys, &Map.delete(&1, :sessions)) == [
              %{

@@ -84,6 +84,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:name, socket.assigns.context.namespace)
       |> assign(:name_error, nil)
       |> assign(:keys, nil)
+      |> assign(:account_page, nil)
       |> assign(:keys_error, nil)
 
     {:ok, socket}
@@ -417,8 +418,11 @@ defmodule PrismWeb.SettingsLive do
 
   defp load_keys(socket) do
     case call_tool(socket, "session/list", %{}) do
-      {:ok, %{keys: keys}} -> assign(socket, keys: keys, keys_error: nil)
-      {:error, reason} -> assign(socket, keys: nil, keys_error: error_message(reason))
+      {:ok, %{keys: keys, account_page: page}} ->
+        assign(socket, keys: keys, account_page: page, keys_error: nil)
+
+      {:error, reason} ->
+        assign(socket, keys: nil, keys_error: error_message(reason))
     end
   end
 
@@ -456,15 +460,6 @@ defmodule PrismWeb.SettingsLive do
     case DateTime.from_iso8601(iso) do
       {:ok, at, _offset} -> PrismWeb.DisplayHelpers.relative_time(at)
       _unreadable -> ""
-    end
-  end
-
-  # Where a key is removed: the account pages of this deployment's
-  # directory.
-  defp account_pages do
-    case Sanctum.directory_url() do
-      url when is_binary(url) -> url <> "/account/devices"
-      _none -> nil
     end
   end
 
@@ -534,7 +529,7 @@ defmodule PrismWeb.SettingsLive do
           <IdentityCard.card name={@name} identifier={@identifier} error={@name_error} />
         </.card>
 
-        <.keys_card keys={@keys} error={@keys_error} account={account_pages()} />
+        <.keys_card keys={@keys} error={@keys_error} account={@account_page} />
 
         <%!-- System Status --%>
         <.card>
