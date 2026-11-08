@@ -223,6 +223,8 @@
     recover: ["prev", "keys", "recovery"],
     add_recovery: ["prev", "recovery"]
   };
+  var OPTIONAL_FIELDS = { add_key: ["aaguid"] };
+  var AAGUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   var PKCS8_ED25519 = [48, 46, 2, 1, 0, 48, 5, 6, 3, 43, 101, 112, 4, 34, 4, 32];
   var kid = (pub) => digestOf(pub);
   var recoverySigner = async (pub) => "recovery:" + await kid(pub);
@@ -243,6 +245,10 @@
   }
   async function keyOf({ pub, credentialId }) {
     return credentialId ? { kid: await kid(pub), alg: "es256", kind: "passkey", pub: b64(pub), credential_id: b64(credentialId) } : { kid: await kid(pub), alg: "ed25519", kind: "device", pub: b64(pub) };
+  }
+  async function passkeyAdded({ pub, credentialId, aaguid }) {
+    const key = await keyOf({ pub, credentialId });
+    return aaguid ? { key, aaguid } : { key };
   }
   function genesis({ directory: directory2, recovery: recovery2, at, signer }) {
     return { protocol: PROTOCOL, kind: "genesis", seq: 0, at, signer, directory: directory2, recovery: recovery2 };
@@ -370,7 +376,7 @@
     if (!Object.hasOwn(map, "kind")) refuse("missing_field", { field: "kind" });
     if (!KINDS.includes(map.kind)) refuse("unknown_kind", { kind: map.kind });
     const kind = map.kind;
-    fields(map, [...COMMON, ...KIND_FIELDS[kind], "sig"]);
+    fields(map, [...COMMON, ...KIND_FIELDS[kind], "sig"], OPTIONAL_FIELDS[kind]);
     check(map, "seq", kind === "genesis" ? (seq) => seq === 0 : isMs);
     check(map, "at", isMs);
     check(map, "signer", (signer) => typeof signer === "string" && SIGNER.test(signer));
@@ -380,6 +386,7 @@
       recovery(map);
     } else if (kind === "add_key") {
       if (!await decodeKey(map.key)) invalid("key");
+      if (Object.hasOwn(map, "aaguid") && !(map.key.kind === "passkey" && typeof map.aaguid === "string" && AAGUID.test(map.aaguid))) invalid("aaguid");
     } else if (kind === "remove_key") {
       check(map, "kid", isDigest);
     } else if (kind === "recover") {
@@ -465,6 +472,17 @@
     66,
     0
   ];
+  var ATTESTED = 64;
+  var AAGUID_AT = 37;
+  var AAGUID_BYTES = 16;
+  function makerOf(response) {
+    const data = typeof response.getAuthenticatorData === "function" ? bytes(response.getAuthenticatorData()) : null;
+    if (!data || data.length < AAGUID_AT + AAGUID_BYTES || !(data[32] & ATTESTED)) return void 0;
+    const aaguid = data.subarray(AAGUID_AT, AAGUID_AT + AAGUID_BYTES);
+    if (aaguid.every((byte) => byte === 0)) return void 0;
+    const h = hex(aaguid);
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
   function bytes(buffer) {
     if (!buffer) return null;
     return buffer instanceof ArrayBuffer ? new Uint8Array(buffer.slice(0)) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength).slice();
@@ -495,7 +513,8 @@
       /**
        * A new discoverable passkey for the account whose identifier's digest
        * bytes are `userId`, shown as `name`. Resolves to its raw credential
-       * id and its 65-byte P-256 point; rejects for any other algorithm.
+       * id, its 65-byte P-256 point and, when the browser reports one, its
+       * maker's `aaguid`; rejects for any other algorithm.
        */
       async create({ userId: userId2, name, challenge: challenge2 }) {
         const credential = await credentials.create({
@@ -512,7 +531,9 @@
         const spki = bytes(response.getPublicKey());
         const p256 = response.getPublicKeyAlgorithm() === ES256 && spki?.length === P256_SPKI.length + 65 && P256_SPKI.every((byte, i) => spki[i] === byte);
         if (!p256) refuse("no_public_key");
-        return { credentialId: bytes(credential.rawId), pub: spki.subarray(P256_SPKI.length) };
+        const made = { credentialId: bytes(credential.rawId), pub: spki.subarray(P256_SPKI.length) };
+        const aaguid = makerOf(response);
+        return aaguid ? { ...made, aaguid } : made;
       }
     };
   }
@@ -1315,9 +1336,9 @@
         const first = await signWith(genesis({ directory: this.config.directory, recovery: [key.pubText], at: this.env.now(), signer: key.signer }), key);
         const identifier2 = await identifier(first);
         const accepted = this.config.policy?.version ?? null;
-        const { credentialId, pub } = await this.env.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: this.env.random(32) });
+        const { credentialId, pub, aaguid } = await this.env.passkeys.create({ userId: userId(identifier2), name: `@${name}`, challenge: this.env.random(32) });
         const { state } = await walk([first]);
-        const entry = next(state, "add_key", { key: await keyOf({ pub, credentialId }) }, { at: this.env.now(), signer: key.signer });
+        const entry = next(state, "add_key", await passkeyAdded({ pub, credentialId, aaguid }), { at: this.env.now(), signer: key.signer });
         this.key = key;
         this.attempt = { identifier: identifier2, name, accepted, genesis: first, created_at: this.env.now() };
         this.attempt = {
@@ -1565,8 +1586,8 @@
       if (!isHandle(name)) refuse("name_invalid");
       const found = await this.place.registry.handle(name);
       if (found.answer?.identifier !== this.identifier) refuse("name_elsewhere");
-      const { credentialId, pub } = await this.env.passkeys.create({ userId: userId(this.identifier), name: `@${name}`, challenge: this.env.random(32) });
-      return this.submit(await this.sign("add_key", { key: await keyOf({ pub, credentialId }) }));
+      const { credentialId, pub, aaguid } = await this.env.passkeys.create({ userId: userId(this.identifier), name: `@${name}`, challenge: this.env.random(32) });
+      return this.submit(await this.sign("add_key", await passkeyAdded({ pub, credentialId, aaguid })));
     }
     removeKey(kid2) {
       return this.sign("remove_key", { kid: kid2 }).then((entry) => this.submit(entry));

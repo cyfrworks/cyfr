@@ -25,6 +25,13 @@ const identity = read("identity.json")
 const ORIGIN = signIn.directory
 const RP_ID = new URL(ORIGIN).hostname
 const DAY = 24 * 60 * 60 * 1000
+const APPLE = "fbfc3007-154e-4ecc-8c0b-6e020557d7bd"
+// The DER prefix of a P-256 public key's SubjectPublicKeyInfo, as a
+// browser's getPublicKey() answers it before the 65-byte point.
+const P256_SPKI = Uint8Array.from([
+  0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
+  0x03, 0x42, 0x00
+])
 
 // A passkey that answers with the canned assertion a vector holds, after
 // checking what the page asked of it.
@@ -48,8 +55,9 @@ function cannedPasskey(vector, expect) {
 }
 
 // An authenticator holding one of the vectors' P-256 passkeys: it makes
-// real assertions at ORIGIN, so the entries the pages sign verify.
-async function authenticator(passkey, identifier) {
+// real assertions at ORIGIN, so the entries the pages sign verify. Its
+// creation reports `aaguid` as its maker when given one.
+async function authenticator(passkey, identifier, aaguid) {
   const point = unb64(passkey.public, 65)
   const key = await crypto.subtle.importKey(
     "jwk",
@@ -65,7 +73,7 @@ async function authenticator(passkey, identifier) {
     identifier,
     async create(options) {
       calls.push({create: options})
-      return {credentialId, pub: point}
+      return aaguid ? {credentialId, pub: point, aaguid} : {credentialId, pub: point}
     },
     async assert({challenge, allow}) {
       calls.push({assert: {challenge, allow}})
@@ -199,8 +207,8 @@ function environment(passkeys, net, {storage = memoryStorage(), now = 1790000000
   }
 }
 
-async function accountWithPasskey(net, name = "alice") {
-  const passkey = await authenticator(identity.keys.passkey_1, null)
+async function accountWithPasskey(net, name = "alice", aaguid = undefined) {
+  const passkey = await authenticator(identity.keys.passkey_1, null, aaguid)
   const env = environment(passkey, net)
   const creation = await Creation.open(env)
   await creation.check(name)
@@ -301,6 +309,16 @@ describe("/account/new", () => {
       ["handle.claim"]
     )
     assert.equal(net.handles.get("alice"), identifier)
+  })
+
+  test("names the passkey's maker on its add_key when its creation reported one, and nothing when it did not", async () => {
+    const net = world()
+    const {identifier} = await accountWithPasskey(net, "alice", APPLE)
+    assert.equal(net.logs.get(identifier)[1].aaguid, APPLE)
+
+    const plain = world()
+    const made = await accountWithPasskey(plain)
+    assert.equal(Object.hasOwn(plain.logs.get(made.identifier)[1], "aaguid"), false)
   })
 
   test("creates the passkey for the account's digest bytes, named by its name", async () => {
@@ -411,6 +429,26 @@ describe("/account/new", () => {
     assert.equal(net.logs.size, 0)
   })
 
+  test("reads the passkey's maker from its authenticator data, and none from zeros or a browser that cannot say", async () => {
+    const point = unb64(identity.keys.passkey_1.public, 65)
+    const credentialId = new Uint8Array(16).fill(7)
+    const made = (aaguid, withData = true) => ({
+      async create() {
+        const authenticatorData = concat(await sha256(RP_ID), new Uint8Array([0x45, 0, 0, 0, 0]), aaguid, new Uint8Array([0, 16]), credentialId)
+        const response = {getPublicKey: () => concat(P256_SPKI, point).buffer, getPublicKeyAlgorithm: () => -7}
+        if (withData) response.getAuthenticatorData = () => authenticatorData.buffer
+        return {rawId: credentialId.buffer, response}
+      }
+    })
+    const create = (credentials) => passkeys(credentials, RP_ID).create({userId: new Uint8Array(32), name: "@alice", challenge: new Uint8Array(32)})
+    const apple = Uint8Array.from(Buffer.from(APPLE.replaceAll("-", ""), "hex"))
+
+    assert.equal((await create(made(apple))).aaguid, APPLE)
+    assert.equal((await create(made(new Uint8Array(16)))).aaguid, undefined)
+    assert.equal((await create(made(apple, false))).aaguid, undefined)
+    assert.deepEqual((await create(made(apple))).pub, point)
+  })
+
   test("a browser that withholds the passkey's key is refused before the code, and nothing is kept", async () => {
     const credentials = {
       async create() {
@@ -518,6 +556,17 @@ describe("/account/recover", () => {
     await recovery.addPasskey("alice")
     const {state} = await walk(net.logs.get(identifier))
     assert.equal(state.keys[0].credential_id, identity.keys.passkey_1.credential_id)
+  })
+
+  test("names a passkey's maker on the add_key the code signs, when its creation reported one", async () => {
+    const net = world()
+    const {env, code, identifier} = await accountWithPasskey(net)
+    const second = await authenticator(identity.keys.passkey_2, identifier, APPLE)
+    const recovery = await Recovery.open({...env, passkeys: second}, await here(env), code)
+    await recovery.addPasskey("alice")
+    const added = net.logs.get(identifier).at(-1)
+    assert.equal(added.key.kid, identity.keys.passkey_2.kid)
+    assert.equal(added.aaguid, APPLE)
   })
 })
 
