@@ -57,7 +57,7 @@ defmodule Sanctum.Gate.StreamsTest do
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
 
     @impl true
-    defdelegate tincture_placement(ctx, row), to: Compendium.ConsentFacts
+    defdelegate tincture_kind(ctx, row), to: Compendium.ConsentFacts
   end
 
   # The component domain's facts, but for a placement it cannot read.
@@ -88,7 +88,7 @@ defmodule Sanctum.Gate.StreamsTest do
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
 
     @impl true
-    def tincture_placement(_ctx, _row), do: {:error, :component_facts_unavailable}
+    def tincture_kind(_ctx, _row), do: {:error, :component_facts_unavailable}
   end
 
   defmodule Probe do
@@ -527,7 +527,7 @@ defmodule Sanctum.Gate.StreamsTest do
 
       # Its placement reads, and is not a canvas.
       {:ok, row} = Components.get_component(ctx, app, "1.0.0", "local", "tincture")
-      assert Components.tincture_placement(ctx, row) == {:ok, nil}
+      assert Components.tincture_kind(ctx, row) == {:ok, :app}
 
       for {name, subject} <- [{"feed.results", "btc"}, {"runs.changes", nil}] do
         assert {:error,
@@ -568,7 +568,7 @@ defmodule Sanctum.Gate.StreamsTest do
         })
 
       {:ok, row} = Components.get_component(ctx, refused, "1.0.0", "local", "tincture")
-      assert Components.tincture_placement(ctx, row) == {:error, :refused}
+      assert Components.tincture_kind(ctx, row) == {:error, :refused}
 
       assert {:error, :not_found} =
                Components.get_component(ctx, "nobody-installed", "1.0.0", "local", "tincture")

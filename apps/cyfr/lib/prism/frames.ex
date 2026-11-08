@@ -41,10 +41,11 @@ defmodule Prism.Frames do
   out — by its grant, its declaration and its credential — never by the
   sandbox.
 
-    * A canvas or validation frame opens only a version whose placement is
-      `canvas`, and an app or a launched frame never opens one. Anything
-      else is refused `:undeclared`.
-    * One builder makes every canvas-placement frame, live or validation,
+    * A canvas or validation frame opens only a version that declares the
+      desktop block (`Prima.Manifest.Tincture.canvas?/1`), and an app or a
+      launched frame never opens one. Anything else is refused
+      `:undeclared`.
+    * One builder makes every canvas frame, live or validation,
       so its address, its sandbox and its handshake have one definition.
       Its `src` is the canvas's page (`Prima.TinctureWire.page_path/2`)
       under an asset credential for the version, its `sandbox` the
@@ -187,7 +188,7 @@ defmodule Prism.Frames do
         }
 
   @typedoc """
-  A canvas-placement frame's handshake block: its `mode`, `data_path`
+  A canvas frame's handshake block: its `mode`, `data_path`
   and `streams` (`Prima.TinctureWire.canvas_handshake/4`).
   """
   @type canvas :: %{String.t() => term()}
@@ -220,7 +221,7 @@ defmodule Prism.Frames do
 
   @typedoc """
   What a frame's bridge is handed at its handshake: its credential, and a
-  canvas-placement frame's `canvas` block beside it.
+  canvas frame's `canvas` block beside it.
   """
   @type handshake :: %{required(:credential) => String.t()} | %{String.t() => term()}
 
@@ -345,7 +346,7 @@ defmodule Prism.Frames do
   def renewable?(%{state: :live, deadline: %DateTime{}}), do: true
   def renewable?(_frame), do: false
 
-  @doc "Whether `key` is a canvas-placement frame's: a canvas's or a validation's."
+  @doc "Whether `key` is a canvas frame's: a canvas's or a validation's."
   @spec canvas_key?(term()) :: boolean()
   def canvas_key?({:canvas, id}) when is_binary(id), do: true
   def canvas_key?({:validation, id}) when is_binary(id), do: true
@@ -411,20 +412,18 @@ defmodule Prism.Frames do
   end
 
   @doc """
-  Whether the card is a canvas: its frame declares the placement
-  `canvas`. A declaration that does not hold to the rules is no canvas.
+  Whether the card is a canvas: its declaration carries the desktop
+  block. A declaration that does not hold to the rules is no canvas.
   """
   @spec canvas?(card()) :: boolean()
-  def canvas?(card), do: placement_of(card) == "canvas"
-
-  defp placement_of(%{manifest: manifest}) do
+  def canvas?(%{manifest: manifest}) do
     case Compendium.tincture_declaration(manifest) do
-      {:ok, %{frame: %{placement: placement}}} -> placement
-      {:error, _refused} -> nil
+      {:ok, declaration} -> Prima.Manifest.Tincture.canvas?(declaration)
+      {:error, _refused} -> false
     end
   end
 
-  defp placement_of(_card), do: nil
+  def canvas?(_card), do: false
 
   @doc """
   The listed card a versionless layout reference names, or nil when no
@@ -748,7 +747,7 @@ defmodule Prism.Frames do
   def refusal({:unavailable, _what}), do: :unavailable
   def refusal({:undeclared_capability, _names}), do: :undeclared
   def refusal({:invalid_tincture, _sentence}), do: :undeclared
-  def refusal({:placement, _wanted}), do: :undeclared
+  def refusal({:canvas, _wanted}), do: :undeclared
   def refusal(:unregistered), do: :unregistered
   def refusal(:ungranted), do: :ungranted
   def refusal(_standing), do: :refused
@@ -1215,7 +1214,7 @@ defmodule Prism.Frames do
     base = base_frame(key, frame_id, card, placement, stack, minimised)
 
     with {:ok, declaration} <- Compendium.tincture_declaration(card.manifest),
-         :ok <- placed_as_declared(declaration, key),
+         :ok <- opened_as_declared(declaration, key),
          {:ok, attributes} <- frame_attributes(declaration, declaration.frame.capabilities),
          {:ok, digest} <- version_digest(ctx, card),
          {:ok, src} <- frame_src(ctx, card, digest),
@@ -1240,7 +1239,7 @@ defmodule Prism.Frames do
     end
   end
 
-  # The one builder of a canvas-placement frame, live or validation: its
+  # The one builder of a canvas frame, live or validation: its
   # page under an asset credential for the version, the canvas's sandbox
   # and no `allow`, and its handshake block from the version's stored
   # declaration. Only `mint` differs between the two.
@@ -1249,7 +1248,7 @@ defmodule Prism.Frames do
     base = base_frame(key, frame_id, card, kind)
 
     with {:ok, declaration} <- Compendium.tincture_declaration(card.manifest),
-         :ok <- placed_as_declared(declaration, key),
+         :ok <- opened_as_declared(declaration, key),
          {:ok, digest} <- version_digest(ctx, card),
          {:ok, %{credential: asset}} <- TinctureAuth.mint_asset_credential(ctx, digest),
          {:ok, revision} <- Compendium.tincture_grant_revision(ctx, version_ref(card)),
@@ -1276,17 +1275,13 @@ defmodule Prism.Frames do
   end
 
   # A canvas frame opens only a canvas, and nothing else opens one.
-  defp placed_as_declared(%{frame: %{placement: "canvas"}}, {kind, _id})
-       when kind in [:canvas, :validation],
-       do: :ok
-
-  defp placed_as_declared(_declaration, {kind, _id}) when kind in [:canvas, :validation],
-    do: {:error, {:placement, "canvas"}}
-
-  defp placed_as_declared(%{frame: %{placement: "canvas"}}, _key),
-    do: {:error, {:placement, "not canvas"}}
-
-  defp placed_as_declared(_declaration, _key), do: :ok
+  defp opened_as_declared(declaration, {kind, _id}) do
+    case {Prima.Manifest.Tincture.canvas?(declaration), kind in [:canvas, :validation]} do
+      {same, same} -> :ok
+      {_canvas?, true} -> {:error, {:canvas, true}}
+      {_canvas?, false} -> {:error, {:canvas, false}}
+    end
+  end
 
   # A private tincture's page, under an asset credential in its path; a
   # public one's, at its public address. Neither URL carries a credential

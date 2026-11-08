@@ -61,7 +61,7 @@ defmodule Cyfr.Test.FillWatch do
   @impl true
   def newer_shipped(ctx, row), do: real().newer_shipped(ctx, row)
   @impl true
-  def tincture_placement(ctx, row), do: real().tincture_placement(ctx, row)
+  def tincture_kind(ctx, row), do: real().tincture_kind(ctx, row)
 
   defp real, do: :persistent_term.get(@real)
 end

@@ -109,9 +109,11 @@ defmodule Compendium.Tincture do
   the version's files as `{relative_path, byte_count}`, the excluded ones
   already out.
 
-  A canvas (placement `canvas`) is also held to the streams a canvas may
-  read (`Compendium.tincture_check_canvas_streams/2`) and holds its page,
-  its entry (`Compendium.tincture_check_canvas_files/2`).
+  A desktop (a declaration with the `tincture.desktop` block) is also
+  held to what its controls run (`Compendium.tincture_check_desktop/2`)
+  and holds its page, its entry
+  (`Compendium.tincture_check_canvas_files/2`); its chrome declaration,
+  which needs the files' bytes, is `check_chrome/2`'s.
 
   The files a version serves are all of them but the reserved files,
   dotfiles, its readme and its `src/` tree; for a built tincture (one that
@@ -155,15 +157,34 @@ defmodule Compendium.Tincture do
     end
   end
 
-  # A canvas reads only what a canvas may read, and its version holds its
-  # page.
-  defp check_canvas(%{frame: %{placement: "canvas"}} = declaration, manifest, streams, files) do
-    with :ok <- Compendium.tincture_check_canvas_streams(declaration, streams) do
+  # A desktop's controls run only what it may offer, and its version holds
+  # its page.
+  defp check_canvas(%{desktop: %{}} = declaration, manifest, streams, files) do
+    with :ok <- Compendium.tincture_check_desktop(declaration, streams) do
       Compendium.tincture_check_canvas_files(manifest, Enum.map(files, &elem(&1, 0)))
     end
   end
 
   defp check_canvas(_declaration, _manifest, _streams, _files), do: :ok
+
+  @doc """
+  The publish check of a desktop's chrome declaration, which reads the
+  version's files (`read`, from a relative path to `{:ok, bytes}` or
+  `:error`): the file and what it names held to the chrome's grammar and
+  caps (`Compendium.tincture_check_chrome/2`). `:ok` for a tincture that
+  names no chrome; a refusal names the file and its line. Publish runs it
+  once `check_version/2` holds.
+  """
+  @spec check_chrome(map(), (String.t() -> {:ok, binary()} | :error)) ::
+          :ok | {:error, String.t()}
+  def check_chrome(manifest, read) when is_map(manifest) and is_function(read, 1) do
+    with {:ok, declaration} <- Compendium.tincture_declaration(manifest),
+         {:ok, _tokens} <- Compendium.tincture_check_chrome(declaration, read) do
+      :ok
+    else
+      {:error, {:invalid_tincture, sentence}} -> {:error, sentence}
+    end
+  end
 
   defp check_types(manifest, files) do
     types = Compendium.tincture_served_types()

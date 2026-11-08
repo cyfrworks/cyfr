@@ -845,8 +845,16 @@ type CanvasWriteArgs struct {
 	Template string `json:"template"`
 	// write: the page's files, each relative path to its UTF-8 text, index.html among them (at most 64 files and 524288 bytes together); a react page's files are index.html and files under src/ and public/, which may also be .ts, .tsx, .jsx, .json, .css sources
 	Files map[string]string `json:"files"`
-	// write: the streams the canvas reads, [{name, subject}], from catalog's streams; a feed's results name the feed as the subject
-	Streams any `json:"streams"`
+	// write: the desktop block's data, the canvas-readable streams the page opens, by name from catalog's streams; omit when it opens none
+	Data Field[any] `json:"data,omitzero"`
+	// write: the desktop block's feeds, the names of the bound feeds the page reads; omit when it reads none
+	Feeds Field[any] `json:"feeds,omitzero"`
+	// write: the desktop block's controls, [{id, label, operation, args, pick}], each run by the shell on the person's tap; omit when it offers none
+	Controls Field[any] `json:"controls,omitzero"`
+	// write: the desktop block's prefs, the schema of its preferences {widgets, desktop}; omit when it keeps none
+	Prefs Field[any] `json:"prefs,omitzero"`
+	// write: the desktop block's chrome, the path among files of its chrome.css; omit for the default chrome
+	Chrome Field[string] `json:"chrome,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

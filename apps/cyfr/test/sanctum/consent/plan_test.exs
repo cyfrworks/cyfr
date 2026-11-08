@@ -869,7 +869,7 @@ defmodule Sanctum.Consent.PlanTest do
     def newer_shipped(ctx, row), do: real().newer_shipped(ctx, row)
 
     @impl true
-    def tincture_placement(ctx, row), do: real().tincture_placement(ctx, row)
+    def tincture_kind(ctx, row), do: real().tincture_kind(ctx, row)
 
     defp answer(read, answered) do
       counted_outage =

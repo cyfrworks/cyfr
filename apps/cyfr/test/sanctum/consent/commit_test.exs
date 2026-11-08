@@ -48,7 +48,7 @@ defmodule Sanctum.Consent.CommitTest do
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
 
     @impl true
-    def tincture_placement(_ctx, _row), do: {:error, :component_facts_unavailable}
+    def tincture_kind(_ctx, _row), do: {:error, :component_facts_unavailable}
   end
 
   # Runs `grant` with the table's tool-action reads counted, wherever the

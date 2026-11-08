@@ -50,8 +50,8 @@ defmodule Emissary.Web.TinctureAssets do
   route under the canvas's policy (`Emissary.Web.CanvasController`, which
   assembles it with `canvas_page/5`), and an HTML file of a canvas version
   is not found here, so no page of a canvas is ever served under the
-  ordinary policy. A version whose placement cannot be read, its
-  declaration refused by today's rules, is served as a canvas version is.
+  ordinary policy. A version whose declaration cannot be read, refused by
+  today's rules, is served as a canvas version is.
   The SDK a canvas page loads is served at one path named by its digest
   (`canvas_sdk_path/0`), since no inline script runs in a canvas page.
   """
@@ -90,10 +90,13 @@ defmodule Emissary.Web.TinctureAssets do
   `dist/index.html` resolves its relative assets from `dist/`.
 
   A version holds pages only when the frame's rules read its declaration
-  and its placement is not `canvas`. Any other version — a canvas, or one
-  whose declaration today's rules refuse — serves no document: its `.html`
-  file answers the not-found refusal below, as an `.htm` file of any
-  version does, and every other file is served as its type.
+  and it is no desktop (it declares no `tincture.desktop` block). Any
+  other version — a desktop, or one whose declaration today's rules
+  refuse — serves no document: its `.html` file answers the not-found
+  refusal below, as an `.htm` file of any version does, and every other
+  file is served as its type. A desktop's chrome declaration
+  (`tincture.desktop.chrome`) is never served: Prism reads it as tokens,
+  never as a stylesheet, and it answers the not-found refusal too.
 
   A reserved file, a dotfile, an unsafe path, a type the rules do not
   serve and an absent file all answer the same JSON `not_found` refusal
@@ -111,6 +114,9 @@ defmodule Emissary.Web.TinctureAssets do
 
       cond do
         type == "text/html" and not holds_pages?(tincture) ->
+          not_found(conn)
+
+        chrome?(tincture, path) ->
           not_found(conn)
 
         entry_document?(tincture, path) ->
@@ -226,25 +232,32 @@ defmodule Emissary.Web.TinctureAssets do
   end
 
   # Whether `path` is the tincture's entry page. Only a version that holds
-  # pages has one: a canvas's entry is served at its own route, and a
-  # version whose placement cannot be read is held as a canvas.
+  # pages has one: a desktop's entry is served at its own route, and a
+  # version whose declaration cannot be read is held as a desktop.
   defp entry_document?(tincture, path),
     do: Compendium.tincture_entry(tincture) == {:ok, path} and holds_pages?(tincture)
 
   # Whether the version holds pages: only when its manifest is a decoded
   # object, the frame's rules read its declaration
-  # (`Compendium.tincture_declaration/1`) and its placement is not
-  # `canvas`. A declaration today's rules refuse fails closed, held as a
-  # canvas, whatever its raw placement says, and so does a manifest that is
-  # not a map, which the declaration's parse would read as an empty one.
+  # (`Compendium.tincture_declaration/1`) and it is no desktop. A
+  # declaration today's rules refuse fails closed, held as a desktop,
+  # whatever its raw manifest says, and so does a manifest that is not a
+  # map, which the declaration's parse would read as an empty one.
   defp holds_pages?(%{manifest: manifest}) when is_map(manifest) do
     case Compendium.tincture_declaration(manifest) do
-      {:ok, %{frame: %{placement: placement}}} -> placement != "canvas"
+      {:ok, declaration} -> not Prima.Manifest.Tincture.canvas?(declaration)
       {:error, _refused} -> false
     end
   end
 
   defp holds_pages?(_no_manifest), do: false
+
+  # Whether `path` is the chrome declaration a desktop's block names.
+  defp chrome?(%{manifest: manifest}, path) when is_map(manifest) do
+    match?({:ok, %{desktop: %{chrome: ^path}}}, Compendium.tincture_declaration(manifest))
+  end
+
+  defp chrome?(_no_manifest, _path), do: false
 
   defp headers(conn, cache) do
     conn

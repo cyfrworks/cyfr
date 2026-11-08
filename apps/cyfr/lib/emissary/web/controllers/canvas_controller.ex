@@ -12,7 +12,7 @@ defmodule Emissary.Web.CanvasController do
   (`Sanctum.TinctureAuth.verify_asset_credential/2`) and a frame id naming
   a standing frame of the credential's person, athanor and version
   (`Sanctum.TinctureAuth.page_frame/2`), while that version's release
-  digest is still the credential's and its placement is `canvas`. Every
+  digest is still the credential's and it declares the desktop block. Every
   refusal is 404 with an empty body, whatever its cause, so the page says
   nothing of what a credential or a frame id names; an entry that cannot
   be read is one. A store that could not say is 503 with `retry-after`,
@@ -151,8 +151,8 @@ defmodule Emissary.Web.CanvasController do
 
   defp canvas_declared(manifest) do
     case Compendium.tincture_declaration(manifest) do
-      {:ok, %{frame: %{placement: "canvas"}}} -> :ok
-      _another_placement -> {:error, :not_found}
+      {:ok, %{desktop: %{}}} -> :ok
+      _no_desktop -> {:error, :not_found}
     end
   end
 

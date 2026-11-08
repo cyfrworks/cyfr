@@ -85,7 +85,7 @@ defmodule Prima.TinctureWire do
 
   ## A canvas
 
-  A canvas (a tincture whose placement is `canvas`) is opened at its page,
+  A canvas (a tincture that declares the `tincture.desktop` block) is opened at its page,
   `page_path/2` (`/_c/v1/<asset credential>/<frame id>`, under
   `page_prefix/0`), and reads its streams at its open's data path alone:
   `data_path/1` (`/_f/v1/o/<frame id>/`) and its one route under it,
