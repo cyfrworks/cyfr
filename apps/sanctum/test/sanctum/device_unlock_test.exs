@@ -51,6 +51,17 @@ defmodule Sanctum.DeviceUnlockTest do
     %{dir: dir}
   end
 
+  test "a device admission learns the account's registry name", %{dir: dir} do
+    account = DirectoryServer.account!(dir.dir, dir.url)
+    Sanctum.Test.RegistryStub.handles!(%{"mira" => account.identifier}, dir.url)
+
+    device = Devices.admitted!(account, List.last(account.devices), {:setup, @token})
+
+    assert device.user.namespace == "mira"
+    assert_received {:registry_request, %{path: "/v1/identities/" <> rest}}
+    assert rest == account.identifier <> "/handle"
+  end
+
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------

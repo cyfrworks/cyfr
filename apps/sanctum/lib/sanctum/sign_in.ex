@@ -753,7 +753,7 @@ defmodule Sanctum.SignIn do
       pair = &Sanctum.DeviceUnlock.pair(&1, device, key, head.head_hash)
 
       with {:ok, user} <- signed_in(identifier, held.admission, head, pair),
-           do: {:ok, %{purpose: :sign_in, user: user, kid: kid}}
+           do: {:ok, %{purpose: :sign_in, user: learned(user), kid: kid}}
     else
       refused(:wrong_key)
     end
@@ -1036,9 +1036,11 @@ defmodule Sanctum.SignIn do
   Record `name` as the person `user_id`'s name here (`record_namespace/2`)
   once the registry says their account holds it: its answer for that name
   (`Sanctum.Handle.resolve/1`, which also reads the account it names at
-  its directory) names the person's own identifier. The registry holds a
-  name for life and has no lookup from an account to its name, so the
-  person says which name is theirs and the registry confirms it.
+  its directory) names the person's own identifier. A sign-in asks the
+  registry for the account's name by its identifier
+  (`Sanctum.Handle.name_of/1`); this is the way the person names
+  themselves when that could not be answered, and the registry confirms
+  it.
 
   Refusals: `:invalid_name` (not a name's spelling, before any request),
   `:name_not_theirs` (the registry names another account by it),
