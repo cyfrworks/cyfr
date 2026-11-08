@@ -17,13 +17,14 @@ defmodule Emissary.External.ServerEraTest do
   """
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.HTTPStub
   alias Emissary.External.Server
   alias Prima.MCP.Protocol
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    bypass = Bypass.open()
-    {:ok, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+    stub = HTTPStub.open()
+    {:ok, stub: stub, url: "http://127.0.0.1:#{stub.port}/mcp"}
   end
 
   # Connection is lazy — the first request for tools is what triggers it, so
@@ -47,11 +48,11 @@ defmodule Emissary.External.ServerEraTest do
   end
 
   describe "a modern peer" do
-    test "is used directly, with no handshake at all", %{bypass: bypass, url: url} do
+    test "is used directly, with no handshake at all", %{stub: stub, url: url} do
       methods = :counters.new(1, [])
       test_pid = self()
 
-      Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         send(test_pid, {:method, body["method"], Plug.Conn.get_req_header(conn, "mcp-method")})
         :counters.add(methods, 1, 1)
@@ -67,10 +68,10 @@ defmodule Emissary.External.ServerEraTest do
       assert_received {:method, "tools/list", ["tools/list"]}
     end
 
-    test "every request carries the per-request metadata", %{bypass: bypass, url: url} do
+    test "every request carries the per-request metadata", %{stub: stub, url: url} do
       test_pid = self()
 
-      Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         send(test_pid, {:request, body, Plug.Conn.get_req_header(conn, "mcp-protocol-version")})
         json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
@@ -90,10 +91,10 @@ defmodule Emissary.External.ServerEraTest do
   end
 
   describe "a legacy peer" do
-    test "falls back to the handshake after a bare 4xx", %{bypass: bypass, url: url} do
+    test "falls back to the handshake after a bare 4xx", %{stub: stub, url: url} do
       test_pid = self()
 
-      Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         send(test_pid, {:method, body["method"]})
 
@@ -133,10 +134,10 @@ defmodule Emissary.External.ServerEraTest do
   describe "a modern peer having a bad day is not mistaken for a legacy one" do
     # The era is cached, so a wrong call here downgrades a current server for the
     # life of the connection — on an error that says "retry differently".
-    test "a JSON-RPC error in a 4xx body means modern, not old", %{bypass: bypass, url: url} do
+    test "a JSON-RPC error in a 4xx body means modern, not old", %{stub: stub, url: url} do
       test_pid = self()
 
-      Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         send(test_pid, {:method, body["method"]})
 
@@ -166,15 +167,15 @@ defmodule Emissary.External.ServerEraTest do
     # answer to this one, a response carrying both result and error is not
     # decidable, and an answer to another id belongs to another call. Each
     # is refused with one sentence of this node's, never the body's.
-    defp answering(bypass, reply) do
-      Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+    defp answering(stub, reply) do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         json(conn, reply.(body["id"]))
       end)
     end
 
-    test "a request carrying this request's id is not its response", %{bypass: bypass, url: url} do
-      answering(bypass, fn id ->
+    test "a request carrying this request's id is not its response", %{stub: stub, url: url} do
+      answering(stub, fn id ->
         %{"jsonrpc" => "2.0", "id" => id, "method" => "sampling/createMessage", "params" => %{}}
       end)
 
@@ -183,8 +184,8 @@ defmodule Emissary.External.ServerEraTest do
       assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
     end
 
-    test "a response carrying both result and error is refused", %{bypass: bypass, url: url} do
-      answering(bypass, fn id ->
+    test "a response carrying both result and error is refused", %{stub: stub, url: url} do
+      answering(stub, fn id ->
         %{
           "jsonrpc" => "2.0",
           "id" => id,
@@ -199,8 +200,8 @@ defmodule Emissary.External.ServerEraTest do
       assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
     end
 
-    test "an answer to another id is not this request's", %{bypass: bypass, url: url} do
-      answering(bypass, fn id ->
+    test "an answer to another id is not this request's", %{stub: stub, url: url} do
+      answering(stub, fn id ->
         %{"jsonrpc" => "2.0", "id" => "not-#{id}", "result" => %{"tools" => []}}
       end)
 
@@ -208,8 +209,8 @@ defmodule Emissary.External.ServerEraTest do
       assert reason =~ "not the response to this request"
     end
 
-    test "an error response with a null id is refused", %{bypass: bypass, url: url} do
-      answering(bypass, fn _id ->
+    test "an error response with a null id is refused", %{stub: stub, url: url} do
+      answering(stub, fn _id ->
         %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32603, "message" => "x"}}
       end)
 

@@ -17,6 +17,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
 
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.HTTPStub
   alias Sanctum.CipherAAD
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
@@ -205,11 +206,11 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   end
 
   test "a plaintext token endpoint is refused before any provider contact", %{ctx: ctx} do
-    bypass = Bypass.open()
+    stub = HTTPStub.open()
     parent = self()
 
     # Stubbed, not expected: the point is that it is never called.
-    Bypass.stub(bypass, "POST", "/token", fn conn ->
+    HTTPStub.stub(stub, "POST", "/token", fn conn ->
       send(parent, :provider_called)
       Plug.Conn.resp(conn, 200, "{}")
     end)
@@ -227,7 +228,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
         },
         %{
           "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-          "token_url" => "http://127.0.0.1:#{bypass.port}/token"
+          "token_url" => "http://127.0.0.1:#{stub.port}/token"
         }
       )
 
