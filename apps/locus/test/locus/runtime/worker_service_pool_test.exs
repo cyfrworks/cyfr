@@ -356,7 +356,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
 
   test "a report ends with its service when the service is killed", context do
     {report, held} = held_report!(context)
-    ref = Process.monitor(report)
+    ref = monitored!(report)
     service = Process.whereis(WorkerService)
 
     Process.exit(service, :kill)
@@ -378,6 +378,16 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
     assert_receive {:report_held, held}, 5_000
     assert [report] = Runners.reports_in_flight()
     {report, held}
+  end
+
+  # The barrier is there because `Process.monitor/1` returns before its
+  # signal reaches the report, so a kill that ends the report through its
+  # link can land first and leave the monitor answering `:noproc`.
+  defp monitored!(report) do
+    ref = Process.monitor(report)
+    assert {:monitored_by, monitors} = Process.info(report, :monitored_by)
+    assert self() in monitors
+    ref
   end
 
   @tag :refusing
