@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/claude-code/0.1.1/catalyst.wasm) under a
+(seed/components/catalysts/local/claude-code/0.1.2/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `claude` program, driven by requests signed as
 CYFR signs them (harness.py). The control plane plays CYFR's host for the
@@ -41,8 +41,9 @@ CYFR's tools as the harness starts an MCP server.
   message goes on in the session with no allow sent again.
 - An interruption: when the read after the next ask's allow is answered
   unavailable, the chat answers provider_error (which the loop does not
-  retry) saying the session was interrupted, closes the session with its
-  harness and sends nothing more; the next message resumes the session
+  retry) saying the session was interrupted and carrying the session,
+  closes the session with its harness and sends nothing more; the next
+  message, naming the session the refusal carried, resumes the session
   with `--resume` and the same id, sending no allow again.
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the harness again with `--resume`,
@@ -72,8 +73,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.1")
-REF = "catalyst:local.claude-code:0.1.1"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.2")
+REF = "catalyst:local.claude-code:0.1.2"
 NEED = "claude"
 OWNER = owner_of("claude-code")
 HOME = "vlt_claude-code"
@@ -382,12 +383,14 @@ def main():
                and "interrupted" in output["error"]["message"] and "next message" in output["error"]["message"],
                "a read the box could not answer after the allow answers provider_error, which the loop does not "
                "retry, saying the session was interrupted", output)
+        expect(output["error"].get("session") == session,
+               "the refusal carries the session, which the next message names as AQUA keeps it", output)
         expect([op for op, _ in bridge.calls if op == "close"] == ["close"]
                and [line["type"] for line in sent] == ["control_response"],
                "the session is closed, the allow sent once and nothing else", [bridge.calls, sent])
         eventually(lambda: not fakes(backends), "the interrupted session's harness to end with it")
         bridge.calls.clear()
-        resumed = {"model": "fake-opus", "session": session, "options": {"tools": ""},
+        resumed = {"model": "fake-opus", "session": output["error"]["session"], "options": {"tools": ""},
                    "messages": [{"role": "user", "content": "what was my first message?"}]}
         output, events = run_catalyst(rt, plane, wasm, "chat", resumed, "the next message after the interruption")
         answers.append((output, events))

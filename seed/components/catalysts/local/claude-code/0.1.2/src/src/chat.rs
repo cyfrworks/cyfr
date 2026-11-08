@@ -15,7 +15,8 @@
 //!
 //! The catalyst holds nothing between runs: the session is the program's,
 //! a pending ask's id rides on its `tool_call` (`provider_data`), and the
-//! session id on the response. Nothing the harness writes but its reply's
+//! session id on the response, or on the refusal once the session exists
+//! (`carried`). Nothing the harness writes but its reply's
 //! text and its tool calls reaches the answer: no line, no stderr, no file
 //! of its folder, no sign-in text.
 
@@ -112,23 +113,28 @@ pub trait Pipe {
 // Refusals
 // ---------------------------------------------------------------------------
 
-/// A typed refusal of the contract, and the pipe's code when the pipe
-/// answered it.
+/// A typed refusal of the contract, the pipe's code when the pipe
+/// answered it, and the session it carries (`Prima.Model`).
 #[derive(Debug, PartialEq)]
 pub struct Refusal {
     pub status: i64,
     pub kind: &'static str,
     pub message: String,
     pub code: Option<String>,
+    pub session: Option<String>,
 }
 
 impl Refusal {
     fn new(status: i64, kind: &'static str, message: impl Into<String>) -> Self {
-        Refusal { status, kind, message: message.into(), code: None }
+        Refusal { status, kind, message: message.into(), code: None, session: None }
     }
 
     pub fn envelope(&self) -> String {
-        json!({"status": self.status, "error": {"type": self.kind, "message": self.message}}).to_string()
+        let mut error = json!({"type": self.kind, "message": self.message});
+        if let Some(session) = &self.session {
+            error["session"] = json!(session);
+        }
+        json!({"status": self.status, "error": error}).to_string()
     }
 }
 
@@ -798,8 +804,8 @@ pub fn carried_tools(tools: &[Tool]) -> Result<Vec<String>, Refusal> {
     Ok(args)
 }
 
-/// One `chat`: the contract response, or a refusal. `fresh` names a new
-/// session.
+/// One `chat`: the contract response, or a refusal carrying the session
+/// it leaves (`carried`). `fresh` names a new session.
 pub fn chat<P: Pipe, S: Sink>(
     pipe: &mut P,
     deltas: &mut Deltas<S>,
@@ -807,8 +813,42 @@ pub fn chat<P: Pipe, S: Sink>(
     fresh: String,
     deadline: Instant,
 ) -> Result<Value, Refusal> {
-    let tools = carried_tools(&request.tools)?;
     let id = request.session.clone().unwrap_or(fresh);
+    let mut taken = false;
+    run(pipe, deltas, request, &id, deadline, &mut taken)
+        .map_err(|refusal| Refusal { session: carried(request, &id, taken), ..refusal })
+}
+
+/// The session a refusal carries, which the host keeps as a response's:
+/// once the harness has shown this run's turn (`taken`), the session this
+/// run would have answered, so a first chat interrupted at its budget is
+/// resumed by the next; before, the one the request named, unchanged. A
+/// new session the harness never showed a turn of carries none: it may
+/// hold no transcript to resume, and a session that cannot be resumed
+/// would refuse every later message.
+fn carried(request: &Request, id: &str, taken: bool) -> Option<String> {
+    if taken {
+        return Some(format!("{id}.{}", fingerprint(&request.flags)));
+    }
+    let named = request.session.as_ref()?;
+    Some(match &request.started {
+        Some(print) => format!("{named}.{print}"),
+        None => named.clone(),
+    })
+}
+
+/// Open the session and converse; `taken` turns true once the harness
+/// shows the turn.
+fn run<P: Pipe, S: Sink>(
+    pipe: &mut P,
+    deltas: &mut Deltas<S>,
+    request: &Request,
+    id: &str,
+    deadline: Instant,
+    taken: &mut bool,
+) -> Result<Value, Refusal> {
+    let tools = carried_tools(&request.tools)?;
+    let id = id.to_string();
     let start = if request.session.is_some() { Start::Resume(&id) } else { Start::New(&id) };
     let argv = harness::argv(start, &request.flags);
     let mut opened = pipe.open(NEED, &id, &argv).map_err(|code| pipe_refusal(&code))?;
@@ -833,7 +873,7 @@ pub fn chat<P: Pipe, S: Sink>(
     // Once this run sends anything, a failure of the pipe interrupts the
     // session: it is closed, nothing is sent again, and the next message
     // resumes it (`interrupted`).
-    match converse(pipe, deltas, &mut reader, request, &id, &tools, opened.resumed, deadline) {
+    match converse(pipe, deltas, &mut reader, request, &id, &tools, opened.resumed, deadline, taken) {
         Err(refusal) if refusal.code.is_some() => {
             let _ = pipe.close(&session);
             Err(interrupted())
@@ -855,6 +895,7 @@ fn converse<P: Pipe, S: Sink>(
     tools: &[String],
     resumed: bool,
     deadline: Instant,
+    taken: &mut bool,
 ) -> Result<Value, Refusal> {
     let session = reader.session.clone();
     let send = |pipe: &mut P, line: String| pipe.send(&session, &[line]).map_err(|code| pipe_refusal(&code));
@@ -892,10 +933,11 @@ fn converse<P: Pipe, S: Sink>(
         }
     };
     send(pipe, line)?;
-    turn(pipe, deltas, reader, request, id, deadline)
+    turn(pipe, deltas, reader, request, id, deadline, taken)
 }
 
-/// Read the turn to its first answer.
+/// Read the turn to its first answer; `taken` turns true at the first line
+/// of the turn's own.
 fn turn<P: Pipe, S: Sink>(
     pipe: &mut P,
     deltas: &mut Deltas<S>,
@@ -903,6 +945,7 @@ fn turn<P: Pipe, S: Sink>(
     request: &Request,
     id: &str,
     deadline: Instant,
+    taken: &mut bool,
 ) -> Result<Value, Refusal> {
     let mut model = request.flags.model.clone().unwrap_or_else(|| request.model.clone());
     let mut text = String::new();
@@ -931,7 +974,14 @@ fn turn<P: Pipe, S: Sink>(
             continue;
         }
         for line in lines {
-            match harness::read(&line) {
+            let event = harness::read(&line);
+            if matches!(
+                event,
+                Event::Init { .. } | Event::TextDelta(_) | Event::Assistant { .. } | Event::Ask { .. } | Event::Result { .. }
+            ) {
+                *taken = true;
+            }
+            match event {
                 Event::TextDelta(delta) => {
                     deltas.text(&delta);
                     streamed = true;
@@ -1170,6 +1220,7 @@ mod tests {
         assert!(refusal.message.contains("interrupted") && refusal.message.contains("next message"), "{}", refusal.message);
         assert_eq!(pipe.log.iter().filter(|l| *l == "close pipe-1").count(), 1, "{:?}", pipe.log);
         assert_eq!(sent_count(pipe, "\"behavior\":\"allow\""), 1, "{:?}", pipe.sent);
+        assert_eq!(refusal.session.as_deref(), Some(session), "the refusal carries the session it resumes");
 
         let next = request(json!({"model": "default", "session": session, "messages": [{"role": "user", "content": "go on"}]}));
         let mut deltas = Deltas::new(Vec::new());
@@ -1226,11 +1277,64 @@ mod tests {
         assert_eq!(refusal.kind, "provider_error", "never a type the loop retries: {refusal:?}");
         assert!(refusal.message.contains("rate limit") && refusal.message.contains("again later"), "{}", refusal.message);
         assert!(!pipe.log.iter().any(|l| l.starts_with("close")), "the session is left as the harness left it: {:?}", pipe.log);
+        assert_eq!(refusal.session.as_deref(), Some(session.as_str()), "the refusal carries the session it goes on in");
 
         let next = request(json!({"model": "default", "session": session, "messages": [{"role": "user", "content": "go on"}]}));
         assert!(chat(&mut pipe, &mut deltas, &next, "unused".into(), soon()).is_ok());
         assert_eq!(sent_count(&pipe, "\"behavior\":\"allow\""), 1, "no allow sent again: {:?}", pipe.sent);
         assert!(!pipe.log.iter().any(|l| l.starts_with("close")));
+    }
+
+    /// A harness whose user messages are answered by `turns`, one each.
+    fn harness_turns(turns: Vec<Vec<String>>) -> impl FnMut(&str) -> Vec<String> {
+        let mut turns = VecDeque::from(turns);
+        let mut control = harness_answers(Vec::new());
+        move |line| {
+            let v: Value = serde_json::from_str(line).unwrap();
+            match v["type"].as_str() {
+                Some("user") => turns.pop_front().unwrap_or_default(),
+                _ => control(line),
+            }
+        }
+    }
+
+    #[test]
+    fn a_first_chat_interrupted_at_its_budget_carries_its_session_and_the_next_chat_resumes_it() {
+        let working = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Working"}},"parent_tool_use_id":null}"#;
+        let mut pipe = Scripted::new(harness_turns(vec![vec![init_line(), working.into()], vec![result_line()]]));
+        let first = request(json!({"model": "default", "messages": [{"role": "user", "content": "a long job"}]}));
+        let mut deltas = Deltas::new(Vec::new());
+        let refusal = chat(&mut pipe, &mut deltas, &first, ID.into(), Instant::now() + Duration::from_millis(300)).unwrap_err();
+        assert!(refusal.message.contains("interrupted") && refusal.message.contains("next message"), "{}", refusal.message);
+        assert_eq!(pipe.log.last().unwrap(), "close pipe-1");
+        let session = started(&Flags::default());
+        assert_eq!(refusal.session.as_deref(), Some(session.as_str()), "the new session rides on the refusal");
+        let envelope: Value = serde_json::from_str(&refusal.envelope()).unwrap();
+        assert_eq!(envelope["error"]["session"], json!(session));
+
+        // The host keeps it as a response's: the next chat names it and
+        // resumes the session.
+        let next = request(json!({"model": "default", "session": envelope["error"]["session"],
+                                  "messages": [{"role": "user", "content": "go on"}]}));
+        let answer = chat(&mut pipe, &mut deltas, &next, "unused".into(), soon()).unwrap();
+        assert!(pipe.log.last().unwrap().contains(&format!("--resume {ID}")), "{:?}", pipe.log);
+        assert_eq!(answer["session"], json!(session));
+    }
+
+    #[test]
+    fn a_refusal_before_the_harness_shows_the_turn_carries_the_session_the_request_named_or_none() {
+        let mut deltas = Deltas::new(Vec::new());
+        let mut pipe = Scripted::new(harness_answers(Vec::new()));
+        pipe.open_error = Some("busy".into());
+        let first = request(json!({"model": "default", "messages": [{"role": "user", "content": "hi"}]}));
+        let refusal = chat(&mut pipe, &mut deltas, &first, ID.into(), soon()).unwrap_err();
+        assert_eq!(refusal.session, None, "a new session no turn was sent to holds nothing to resume");
+        assert!(!refusal.envelope().contains("session"), "{}", refusal.envelope());
+
+        let session = started(&Flags::default());
+        let named = request(json!({"model": "default", "session": session, "messages": [{"role": "user", "content": "hi"}]}));
+        let refusal = chat(&mut pipe, &mut deltas, &named, "unused".into(), soon()).unwrap_err();
+        assert_eq!(refusal.session.as_deref(), Some(session.as_str()));
     }
 
     #[test]

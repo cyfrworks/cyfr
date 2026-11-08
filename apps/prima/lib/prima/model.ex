@@ -41,11 +41,14 @@ defmodule Prima.Model do
   arguments}`, `tool_call.end {index}`, `usage {usage}`, `stop
   {stop_reason}`, `error {error}` — and still answers the whole response.
 
-  A refusal is `{"status": N, "error": {"type", "message", "provider"?}}`
-  with `type` one of `invalid_request`, `secret_denied`, `authentication`,
-  `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (the
-  provider's stream ended before its closing signal), `unknown_model`,
-  `unknown_operation`.
+  A refusal is `{"status": N, "error": {"type", "message", "provider"?,
+  "session"?}}` with `type` one of `invalid_request`, `secret_denied`,
+  `authentication`, `rate_limited`, `overloaded`, `provider_error`,
+  `incomplete_stream` (the provider's stream ended before its closing
+  signal), `unknown_model`, `unknown_operation`. A refusal's `session` is
+  a response's: the brain's session once it exists, such as a chat
+  interrupted after it opened one, which the host keeps as it keeps a
+  response's, so the next request continues it.
 
   The provider's HTTP call and the key stay in the catalyst. This module
   names the contract, says whether a manifest declares it, reads the
@@ -223,8 +226,9 @@ defmodule Prima.Model do
   defp set_options(%{}, _declared), do: :ok
 
   @doc """
-  The session a `chat` response names: `{:ok, nil}` when it names none,
-  refused when its `session` is not a non-empty string.
+  The session a `chat` answer names, a response's data or a refusal's
+  `error`: `{:ok, nil}` when it names none, refused when its `session` is
+  not a non-empty string.
   """
   @spec response_session(map()) :: {:ok, String.t() | nil} | {:error, invalid()}
   def response_session(%{"session" => session}) when is_binary(session) and session != "",

@@ -1617,8 +1617,10 @@ defmodule Arca.TurnStorage do
   `outcome`, `execution_id` and error, and the `step.closed` event, in
   one transaction. `attrs`: `:result` (`%{content, payload}` for the
   row; omitted for a step that produced none), `:execution_id`, `:error`,
-  `:fence`, and `:sources`, the `Prima.Source`s the result carries, joined
-  into the turn's in the same transaction. `:launched` (`%{reference, reached_outside}`, the
+  `:fence`, `:sources`, the `Prima.Source`s the result carries, joined
+  into the turn's in the same transaction, and `:session`, the brain's
+  session a model step's refusal named, kept on the thread as
+  `record_response/4` keeps a response's. `:launched` (`%{reference, reached_outside}`, the
   latter from the launch's completion result) names a component the step
   launched: outside, under its reference, unless `reached_outside` is
   `false`. A step closes from `dispatched`, or from
@@ -2544,6 +2546,11 @@ defmodule Arca.TurnStorage do
       )
 
     if count != 1, do: Arca.Repo.rollback(:not_open)
+
+    case Map.get(attrs, :session) do
+      nil -> :ok
+      session -> keep_session!(athanor_id, thread!(athanor_id, turn.thread_id), session)
+    end
 
     _turn = join_sources!(athanor_id, turn, closed_sources!(athanor_id, attrs))
 

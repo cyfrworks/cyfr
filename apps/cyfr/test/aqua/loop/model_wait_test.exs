@@ -17,7 +17,9 @@ defmodule Aqua.Loop.ModelWaitTest do
   same way, where the loop's step clock killed it and noted the kill (the
   `:long` test consents its hand past that five-minute clock); and a
   turn on a brain consented thirty minutes lasts at least that long, past
-  the five its agent is consented.
+  the five its agent is consented. A brain whose first chat is
+  interrupted answers a refusal carrying the session it opened, and the
+  next turn's request continues that session.
   """
   use ExUnit.Case, async: false
 
@@ -152,6 +154,37 @@ defmodule Aqua.Loop.ModelWaitTest do
     {:ok, own} = Prima.Limits.timeout_ms(Prima.Authority.limits(authority))
     assert own < 30 * 60_000
     assert spec.deadline_ms == 30 * 60_000
+  end
+
+  test "a brain's first chat interrupted with a session is resumed by the next turn",
+       %{ctx: ctx, thread: thread} do
+    interrupted = "The session was interrupted mid-turn. The next message resumes it."
+    turn = accept!(ctx, thread, "a long job")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         {:refuse,
+          %{"type" => "provider_error", "message" => interrupted, "session" => "brain-1"}},
+         reply("Resumed.")
+       ]}
+    )
+
+    # The refusal ends the turn as any refusal does.
+    assert {:failed, ^interrupted} = Task.await(run(ctx, turn), 30_000)
+
+    next = accept!(ctx, thread, "go on")
+    assert :completed = Task.await(run(ctx, next), 30_000)
+
+    assert [first, second] =
+             for(
+               %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+               do: params
+             )
+
+    refute Map.has_key?(first, "session")
+    assert second["session"] == "brain-1"
   end
 
   # A files hand consented `consented_ms` hangs: the worker service ends
