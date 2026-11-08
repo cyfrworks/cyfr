@@ -16,6 +16,7 @@ defmodule Compendium.OCI.BlobTest do
 
   alias Compendium.OCI.{Blob, Errors, Reference}
   alias Compendium.Registry.CredentialStore
+  alias Cyfr.Test.HTTPStub
   alias Sanctum.Context
 
   @user "oci_blob_test_user"
@@ -35,10 +36,10 @@ defmodule Compendium.OCI.BlobTest do
       end
     end)
 
-    registry = Bypass.open()
-    storage = Bypass.open()
+    registry = HTTPStub.open()
+    storage = HTTPStub.open()
     # A loopback registry is reached over http (`Compendium.RegistryHost.base_url/1`),
-    # so Bypass answers it.
+    # so the stub answers it.
     name = "localhost:#{registry.port}"
     ref = %Reference{registry: name, repository: "#{@namespace}/catalysts/foo", tag: "1.0.0"}
 
@@ -61,17 +62,7 @@ defmodule Compendium.OCI.BlobTest do
     )
   end
 
-  # Bypass reads every request path as a Plug route, where `:` opens a
-  # parameter whose name must start with a letter, so the hex of a
-  # `sha256:<hex>` segment must start with a-f. The first such blob of a
-  # fixed sequence keeps each case the same on every run.
-  defp blob(label) do
-    Enum.find_value(0..1_000, fn n ->
-      bytes = "#{label} #{n}"
-      digest = Prima.Digest.sha256(bytes)
-      if digest =~ ~r/\Asha256:[a-f]/, do: {bytes, digest}
-    end)
-  end
+  defp blob(label), do: {label, Prima.Digest.sha256(label)}
 
   # The registry answers the blob's GET with a 307 to `location`, telling
   # the test the path and the authorization it was sent, and running
@@ -79,7 +70,7 @@ defmodule Compendium.OCI.BlobTest do
   defp redirects(registry, location, before_redirect \\ fn -> :ok end) do
     test = self()
 
-    Bypass.expect_once(registry, fn conn ->
+    HTTPStub.expect_once(registry, fn conn ->
       send(test, {:registry, conn.request_path, Plug.Conn.get_req_header(conn, "authorization")})
       before_redirect.()
 
@@ -95,7 +86,7 @@ defmodule Compendium.OCI.BlobTest do
     test = self()
     redirects(registry, "http://127.0.0.1:#{storage.port}/presigned/blob?sig=s1")
 
-    Bypass.expect_once(storage, fn conn ->
+    HTTPStub.expect_once(storage, fn conn ->
       send(test, {:storage, conn.request_path, conn.query_string, conn.req_headers})
       Plug.Conn.resp(conn, 200, bytes)
     end)
@@ -118,7 +109,7 @@ defmodule Compendium.OCI.BlobTest do
     test = self()
     redirects(registry, "http://127.0.0.1:#{storage.port}/presigned/blob")
 
-    Bypass.expect_once(storage, fn conn ->
+    HTTPStub.expect_once(storage, fn conn ->
       send(test, :storage_reached)
       Plug.Conn.resp(conn, 200, "other bytes")
     end)
@@ -143,7 +134,7 @@ defmodule Compendium.OCI.BlobTest do
       Application.put_env(:sanctum, :private_egress_targets, [])
     end)
 
-    Bypass.stub(storage, "GET", "/presigned/blob", fn conn ->
+    HTTPStub.stub(storage, "GET", "/presigned/blob", fn conn ->
       send(test, :storage_reached)
       Plug.Conn.resp(conn, 200, "x")
     end)
@@ -163,7 +154,7 @@ defmodule Compendium.OCI.BlobTest do
     defp opens_session(registry, location) do
       test = self()
 
-      Bypass.expect(registry, fn conn ->
+      HTTPStub.expect(registry, fn conn ->
         authorization = Plug.Conn.get_req_header(conn, "authorization")
         send(test, {:registry, conn.method, conn.request_path, authorization})
 
@@ -194,7 +185,7 @@ defmodule Compendium.OCI.BlobTest do
       {bytes, digest} = blob("uploaded elsewhere")
       test = self()
       opens_session(registry, "http://127.0.0.1:#{storage.port}/upload/session?state=s1")
-      Bypass.expect_once(storage, &takes_upload(&1, test))
+      HTTPStub.expect_once(storage, &takes_upload(&1, test))
 
       assert {:ok, ^digest} = Blob.upload(ctx(), ref, bytes)
 

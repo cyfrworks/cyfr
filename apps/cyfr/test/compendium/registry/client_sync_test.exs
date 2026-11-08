@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Compendium.Registry.ClientSyncTest do
-  # Tests that point the client at a Bypass server or at a seeded cache
+  # Tests that point the client at an HTTP stub or at a seeded cache
   # (`:registry_url`, `:oci_registry_url` and the
   # storage root are global configuration) or capture its log (the capture
   # and the log level are global), so they run alone. The rest of the
@@ -14,27 +14,28 @@ defmodule Compendium.Registry.ClientSyncTest do
   alias Compendium.Registry.{Client, CredentialStore}
   alias Compendium.Provider
   alias Compendium.OCI.{Cache, Errors, Reference, Transport}
+  alias Cyfr.Test.HTTPStub
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # Boots a real (but ephemeral) HTTP server per test via Bypass and points
+  # Boots a real (but ephemeral) HTTP server per test (`Cyfr.Test.HTTPStub`) and points
   # the client at it through the :registry_url override; a loopback host is
-  # reached over http (`Compendium.RegistryHost.base_url/1`). Bypass fails the test on any request it holds no expectation
-  # for, so a test that sets none proves that no request left.
-  defp point_at_bypass(_context) do
-    bypass = Bypass.open()
+  # reached over http (`Compendium.RegistryHost.base_url/1`). The stub fails the test on any request it holds no
+  # expectation for, so a test that sets none proves that no request left.
+  defp point_at_stub(_context) do
+    stub = HTTPStub.open()
     original_url = Application.get_env(:cyfr, :registry_url)
 
-    Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+    Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{stub.port}")
 
     on_exit(fn ->
       restore_env(:cyfr, :registry_url, original_url)
     end)
 
-    {:ok, bypass: bypass}
+    {:ok, stub: stub}
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
@@ -65,10 +66,10 @@ defmodule Compendium.Registry.ClientSyncTest do
   # ============================================================================
 
   describe "request shapes" do
-    setup :point_at_bypass
+    setup :point_at_stub
 
-    test "search/2 sends every filter param", %{ctx: ctx, bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/components", fn conn ->
+    test "search/2 sends every filter param", %{ctx: ctx, stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
         assert query_pairs(conn) == [
                  {"q", "data"},
                  {"type", "reagent"},
@@ -97,10 +98,10 @@ defmodule Compendium.Registry.ClientSyncTest do
 
     test "get_component/5 puts the version in the path", %{
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(
-        bypass,
+      HTTPStub.expect_once(
+        stub,
         "GET",
         "/v1/components/reagent/cyfr/data-processor/1.0.0",
         fn conn ->
@@ -112,10 +113,10 @@ defmodule Compendium.Registry.ClientSyncTest do
                Client.get_component(ctx, "reagent", "cyfr", "data-processor", "1.0.0")
     end
 
-    test "issue_additional_token/3 with a nil label sends device_label()", %{bypass: bypass} do
+    test "issue_additional_token/3 with a nil label sends device_label()", %{stub: stub} do
       label = CredentialStore.device_label()
 
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/alice/tokens", fn conn ->
+      HTTPStub.expect_once(stub, "POST", "/v1/namespaces/alice/tokens", fn conn ->
         assert auth_header(conn) == "Bearer fake-bearer"
         {body, conn} = read_json(conn)
         assert body == %{"label" => label}
@@ -127,10 +128,10 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "deprecate_component/6 reaches the registry with the right path, bearer and reason", %{
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(
-        bypass,
+      HTTPStub.expect_once(
+        stub,
         "POST",
         "/v1/components/alice/catalyst/widget/1.0.0/deprecate",
         fn conn ->
@@ -154,11 +155,11 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "deprecate_component/6 leaves a legitimate slug, name and version untouched", %{
-      bypass: bypass
+      stub: stub
     } do
       parent = self()
 
-      Bypass.expect_once(bypass, fn conn ->
+      HTTPStub.expect_once(stub, fn conn ->
         send(parent, {:request, conn.method, conn.request_path})
         json_resp(conn, 200, %{"status" => "deprecated"})
       end)
@@ -179,9 +180,9 @@ defmodule Compendium.Registry.ClientSyncTest do
                        "/v1/components/stripe.com/reagent/api-v2/1.2.3-beta%2Babc/deprecate"}
     end
 
-    test "yank_component/6 sends an empty reason", %{bypass: bypass} do
-      Bypass.expect_once(
-        bypass,
+    test "yank_component/6 sends an empty reason", %{stub: stub} do
+      HTTPStub.expect_once(
+        stub,
         "POST",
         "/v1/components/alice/catalyst/widget/1.0.0/yank",
         fn conn ->
@@ -198,9 +199,9 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "create_abuse_report/5 reaches the registry with its bearer and report", %{
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(bypass, "POST", "/v1/abuse-reports", fn conn ->
+      HTTPStub.expect_once(stub, "POST", "/v1/abuse-reports", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_x"
         {body, conn} = read_json(conn)
 
@@ -224,11 +225,11 @@ defmodule Compendium.Registry.ClientSyncTest do
   # ============================================================================
 
   describe "MCP search routing" do
-    setup :point_at_bypass
+    setup :point_at_stub
 
     test "a search asks cyfr.run and answers the local rows, marked incomplete, when it refuses",
-         %{ctx: ctx, bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/components", fn conn ->
+         %{ctx: ctx, stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
         assert {"q", "nonexistent-component-xyz"} in query_pairs(conn)
         json_resp(conn, 403, %{"error" => "denied"})
       end)
@@ -246,10 +247,10 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert result.note =~ "Only local components are shown."
     end
 
-    test "a local-only search sends cyfr.run nothing", %{ctx: ctx, bypass: bypass} do
-      # No expectation is set: Bypass fails the test on any request that
+    test "a local-only search sends cyfr.run nothing", %{ctx: ctx, stub: stub} do
+      # No expectation is set: the stub fails the test on any request that
       # reaches it.
-      _ = bypass
+      _ = stub
 
       {:ok, result} =
         Provider.handle("component", ctx, %{
@@ -269,10 +270,10 @@ defmodule Compendium.Registry.ClientSyncTest do
   # ============================================================================
 
   describe "MCP discover routing" do
-    setup :point_at_bypass
+    setup :point_at_stub
 
-    test "discover asks cyfr.run's REST API", %{ctx: ctx, bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/components", fn conn ->
+    test "discover asks cyfr.run's REST API", %{ctx: ctx, stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
         assert query_pairs(conn) == []
 
         json_resp(conn, 200, %{
@@ -293,8 +294,8 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "a listing without its total, or with an entry that is no object, is refused",
-         %{ctx: ctx, bypass: bypass} do
-      Bypass.expect(bypass, "GET", "/v1/components", fn conn ->
+         %{ctx: ctx, stub: stub} do
+      HTTPStub.expect(stub, "GET", "/v1/components", fn conn ->
         case conn.query_string do
           "publisher=a" -> json_resp(conn, 200, %{"components" => []})
           _ -> json_resp(conn, 200, %{"components" => ["entry"], "total" => 1})
@@ -308,11 +309,11 @@ defmodule Compendium.Registry.ClientSyncTest do
 
     test "discover refuses a registry other than the canonical one before any request", %{
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
-      # No expectation is set: Bypass fails the test on any request that
+      # No expectation is set: the stub fails the test on any request that
       # reaches it.
-      _ = bypass
+      _ = stub
 
       {:error, refusal} =
         Provider.handle("component", ctx, %{
@@ -329,9 +330,9 @@ defmodule Compendium.Registry.ClientSyncTest do
 
     test "discover naming the canonical registry sends its namespace and type to cyfr.run", %{
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(bypass, "GET", "/v1/components", fn conn ->
+      HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
         assert query_pairs(conn) == [{"publisher", "cyfr"}, {"type", "reagent"}]
         json_resp(conn, 200, %{"components" => [], "total" => 0})
       end)
@@ -347,10 +348,10 @@ defmodule Compendium.Registry.ClientSyncTest do
 
     test "discover is refused as unconfigured when no registry is configured", %{
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
-      # `CYFR_REGISTRY_URL=none`; `point_at_bypass/1` restores the URL.
-      _ = bypass
+      # `CYFR_REGISTRY_URL=none`; `point_at_stub/1` restores the URL.
+      _ = stub
       Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
 
       {:error, refusal} = Provider.handle("component", ctx, %{"action" => "discover"})
@@ -501,15 +502,15 @@ defmodule Compendium.Registry.ClientSyncTest do
     })
   end
 
-  describe "happy-path wire tests (Bypass)" do
+  describe "happy-path wire tests (HTTP stub)" do
     # Confirms method + path + Authorization-header plumbing for every
     # Registry.Client endpoint, and the 200-response decode path that a
     # refused connection can never reach.
-    setup :point_at_bypass
+    setup :point_at_stub
 
     test "a damaged stored push token refuses before any request leaves", %{
       ctx: ctx,
-      bypass: bypass
+      stub: stub
     } do
       registry = Compendium.RegistryHost.canonical_host()
 
@@ -536,9 +537,9 @@ defmodule Compendium.Registry.ClientSyncTest do
           credential_ciphertext: ciphertext
         })
 
-      # No expectation is set: Bypass fails the test on any request that
+      # No expectation is set: the stub fails the test on any request that
       # reaches it.
-      _ = bypass
+      _ = stub
 
       assert {:error, {:corrupt, :registry_credential}} = Client.search(ctx, %{query: "x"})
       assert {:error, {:corrupt, :registry_credential}} = Client.discover(ctx, %{})
@@ -550,8 +551,8 @@ defmodule Compendium.Registry.ClientSyncTest do
                Prima.Refusal.classify({:corrupt, :registry_credential})
     end
 
-    test "get_namespace/1 — GET /v1/namespaces/{slug} without auth", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/namespaces/alice", fn conn ->
+    test "get_namespace/1 — GET /v1/namespaces/{slug} without auth", %{stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/namespaces/alice", fn conn ->
         assert auth_header(conn) == nil
 
         json_resp(conn, 200, %{
@@ -564,8 +565,8 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert {:ok, %{"slug" => "alice"}} = Client.get_namespace("alice")
     end
 
-    test "list_tokens/2 — GET /v1/namespaces/{slug}/tokens with Bearer", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/namespaces/alice/tokens", fn conn ->
+    test "list_tokens/2 — GET /v1/namespaces/{slug}/tokens with Bearer", %{stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/namespaces/alice/tokens", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_alice_abc"
 
         json_resp(conn, 200, %{
@@ -580,9 +581,9 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "issue_additional_token/3 — POST /v1/namespaces/{slug}/tokens with Bearer", %{
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/alice/tokens", fn conn ->
+      HTTPStub.expect_once(stub, "POST", "/v1/namespaces/alice/tokens", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_alice_abc"
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         assert %{"label" => "workstation"} = Jason.decode!(raw)
@@ -600,9 +601,9 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "revoke_token/3 — DELETE /v1/namespaces/{slug}/tokens/{id} returns :ok", %{
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(bypass, "DELETE", "/v1/namespaces/alice/tokens/t1", fn conn ->
+      HTTPStub.expect_once(stub, "DELETE", "/v1/namespaces/alice/tokens/t1", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_alice_abc"
         Plug.Conn.resp(conn, 204, "")
       end)
@@ -610,8 +611,8 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert :ok = Client.revoke_token("alice", "t1", "cyfr_pt_alice_abc")
     end
 
-    test "add_member/4 — POST /v1/namespaces/{slug}/members with Bearer + body", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/stripe.com/members", fn conn ->
+    test "add_member/4 — POST /v1/namespaces/{slug}/members with Bearer + body", %{stub: stub} do
+      HTTPStub.expect_once(stub, "POST", "/v1/namespaces/stripe.com/members", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_stripe_admin"
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         body = Jason.decode!(raw)
@@ -629,9 +630,9 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "update_member/4 — PATCH /v1/namespaces/{slug}/members/{target} with Bearer", %{
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(bypass, "PATCH", "/v1/namespaces/stripe.com/members/bob", fn conn ->
+      HTTPStub.expect_once(stub, "PATCH", "/v1/namespaces/stripe.com/members/bob", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_stripe_admin"
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         assert %{"role" => "admin"} = Jason.decode!(raw)
@@ -646,9 +647,9 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "remove_member/3 — DELETE /v1/namespaces/{slug}/members/{target} returns :ok", %{
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(bypass, "DELETE", "/v1/namespaces/stripe.com/members/bob", fn conn ->
+      HTTPStub.expect_once(stub, "DELETE", "/v1/namespaces/stripe.com/members/bob", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_stripe_admin"
         Plug.Conn.resp(conn, 204, "")
       end)
@@ -656,8 +657,8 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert :ok = Client.remove_member("stripe.com", "bob", "cyfr_pt_stripe_admin")
     end
 
-    test "list_members/2 — GET /v1/namespaces/{slug}/members with Bearer", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/namespaces/stripe.com/members", fn conn ->
+    test "list_members/2 — GET /v1/namespaces/{slug}/members with Bearer", %{stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/namespaces/stripe.com/members", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_stripe_admin"
 
         json_resp(conn, 200, %{
@@ -673,9 +674,9 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "list_my_reports/2 — GET /v1/abuse-reports/mine with paging and Bearer", %{
-      bypass: bypass
+      stub: stub
     } do
-      Bypass.expect_once(bypass, "GET", "/v1/abuse-reports/mine", fn conn ->
+      HTTPStub.expect_once(stub, "GET", "/v1/abuse-reports/mine", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_alice"
         params = Plug.Conn.fetch_query_params(conn).query_params
         assert params["limit"] == "10"
@@ -688,8 +689,8 @@ defmodule Compendium.Registry.ClientSyncTest do
                Client.list_my_reports("cyfr_pt_alice", limit: 10, offset: 20)
     end
 
-    test "get_legal_page/1 — GET /v1/legal/{name}, no bearer", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/legal/terms", fn conn ->
+    test "get_legal_page/1 — GET /v1/legal/{name}, no bearer", %{stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/legal/terms", fn conn ->
         assert auth_header(conn) == nil
 
         json_resp(conn, 200, %{
@@ -703,8 +704,8 @@ defmodule Compendium.Registry.ClientSyncTest do
                Client.get_legal_page("terms")
     end
 
-    test "get_legal_version/0 — GET /v1/legal/version, no bearer", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "GET", "/v1/legal/version", fn conn ->
+    test "get_legal_version/0 — GET /v1/legal/version, no bearer", %{stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/legal/version", fn conn ->
         assert auth_header(conn) == nil
 
         json_resp(conn, 200, %{
@@ -716,10 +717,10 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert {:ok, %{"policy_version" => "2026-08-01"}} = Client.get_legal_version()
     end
 
-    test "a slug carrying path separators stays one segment", %{bypass: bypass} do
+    test "a slug carrying path separators stays one segment", %{stub: stub} do
       parent = self()
 
-      Bypass.expect(bypass, fn conn ->
+      HTTPStub.expect(stub, fn conn ->
         send(parent, {:segments, conn.path_info})
         json_resp(conn, 404, %{"error" => "not found"})
       end)
@@ -736,7 +737,7 @@ defmodule Compendium.Registry.ClientSyncTest do
     # Token-returning endpoints route through log_token_returning_result/redact.
     # Verify that on a successful response containing a `token` field, the
     # Logger.info line carries `[REDACTED]` and never the raw token value.
-    setup :point_at_bypass
+    setup :point_at_stub
 
     @raw_token "cyfr_pt_SUPERSECRET_TEST_ONLY_zzz"
 
@@ -754,8 +755,8 @@ defmodule Compendium.Registry.ClientSyncTest do
       end
     end
 
-    test "issue_additional_token — token is redacted", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/alice/tokens", fn conn ->
+    test "issue_additional_token — token is redacted", %{stub: stub} do
+      HTTPStub.expect_once(stub, "POST", "/v1/namespaces/alice/tokens", fn conn ->
         json_resp(conn, 200, %{
           "id" => "t2",
           "token" => @raw_token,
@@ -779,12 +780,12 @@ defmodule Compendium.Registry.ClientSyncTest do
   # the answer is decoded, and each refusal the registry answers in its
   # envelope reaches the caller as its protocol name.
   describe "signed/2" do
-    setup :point_at_bypass
+    setup :point_at_stub
 
     @bytes ~s({"operation":"policy.accept"})
 
     test "sends the signed bytes as they are to the operation's route, under no bearer", %{
-      bypass: bypass
+      stub: stub
     } do
       for {operation, path} <- [
             {"policy.accept", "/v1/legal/accept"},
@@ -794,7 +795,7 @@ defmodule Compendium.Registry.ClientSyncTest do
             {"publisher.verify", "/v1/namespaces/publisher/verify"},
             {"handle.claim", "/v1/namespaces/personal/claim"}
           ] do
-        Bypass.expect_once(bypass, "POST", path, fn conn ->
+        HTTPStub.expect_once(stub, "POST", path, fn conn ->
           assert auth_header(conn) == nil
           {:ok, raw, conn} = Plug.Conn.read_body(conn)
           assert raw == @bytes
@@ -810,12 +811,12 @@ defmodule Compendium.Registry.ClientSyncTest do
       end
     end
 
-    test "the registry's refusals reach the caller by their protocol names", %{bypass: bypass} do
+    test "the registry's refusals reach the caller by their protocol names", %{stub: stub} do
       # A 429 says the registry did not act, so the transport asks again:
       # the registry answers every attempt the same.
       {:ok, refusal} = Agent.start_link(fn -> nil end)
 
-      Bypass.expect(bypass, "POST", "/v1/legal/accept", fn conn ->
+      HTTPStub.expect(stub, "POST", "/v1/legal/accept", fn conn ->
         {status, body} = Agent.get(refusal, & &1)
 
         conn
@@ -842,7 +843,7 @@ defmodule Compendium.Registry.ClientSyncTest do
     end
 
     test "an answer that cannot be read is malformed, and a gateway's is no answer", %{
-      bypass: bypass
+      stub: stub
     } do
       for {status, body, expected} <- [
             {200, "not json", :malformed_answer},
@@ -850,7 +851,7 @@ defmodule Compendium.Registry.ClientSyncTest do
             {400, ~s({"error":"bad"}), :malformed_answer},
             {503, "Bad Gateway", :registry_unavailable}
           ] do
-        Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
+        HTTPStub.expect_once(stub, "POST", "/v1/legal/accept", fn conn ->
           Plug.Conn.resp(conn, status, body)
         end)
 
@@ -860,8 +861,8 @@ defmodule Compendium.Registry.ClientSyncTest do
       end
     end
 
-    test "a registry that does not answer is unavailable", %{bypass: bypass} do
-      Bypass.down(bypass)
+    test "a registry that does not answer is unavailable", %{stub: stub} do
+      HTTPStub.down(stub)
 
       log =
         capture_log(fn ->
@@ -871,8 +872,8 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert log =~ "policy.accept refused"
     end
 
-    test "a token's answer is logged redacted", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/tokens/mint", fn conn ->
+    test "a token's answer is logged redacted", %{stub: stub} do
+      HTTPStub.expect_once(stub, "POST", "/v1/tokens/mint", fn conn ->
         json_resp(conn, 200, %{"memberships" => [], "token" => "cyfr_pt_SIGNED_SECRET"})
       end)
 
