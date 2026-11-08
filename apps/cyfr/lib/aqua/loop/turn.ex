@@ -17,7 +17,7 @@ defmodule Aqua.Loop.Turn do
   read once here for every request the spec makes,
   `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
   the deadline the authority allows, never under one answer of its brain
-  (`brain_timeout_ms/1`), and the admission decision the
+  (`deadline_ms/2`), and the admission decision the
   turn's root execution was started under (`call_id`), which every call
   the turn makes names as its parent call.
 
@@ -307,20 +307,13 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  @doc """
-  How long the brain the spec runs on is consented to take over one
-  answer, in milliseconds: the `limits.timeout` of its catalyst's node in
-  the turn's authority, read by name as `request_cap` is. It is the
-  deadline admission gives a model call and the worker service enforces
-  (`Opus.Admission`), so it is how long the loop waits for the answer
-  (`Aqua.Loop`), and the turn's own deadline is never under it. Nil when
-  the graph holds no such node or its timeout does not parse: admission
-  refuses such a call before anything runs.
-  """
-  @spec brain_timeout_ms(t()) :: pos_integer() | nil
-  def brain_timeout_ms(%__MODULE__{authority: authority, catalyst: catalyst}),
-    do: brain_timeout_ms(authority, catalyst)
-
+  # How long the brain is consented to take over one answer, in
+  # milliseconds: the `limits.timeout` of its catalyst's node in the turn's
+  # authority, read by name as `request_cap/2` is. It is the deadline
+  # admission gives each model call and the worker service enforces
+  # (`Opus.Admission`), so the turn's own deadline is never under it. Nil
+  # when the graph holds no such node or its timeout does not parse:
+  # admission refuses such a call before anything runs.
   defp brain_timeout_ms(authority, catalyst) do
     with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
          {:ok, limits} <- Prima.Authority.node_limits(authority, name_ref),
