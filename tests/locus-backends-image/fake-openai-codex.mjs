@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// A stand-in for Codex's app-server, run as the `codex` program's command
-// by codex.py: it speaks the JSON-RPC lines Codex 0.167.0's `app-server`
-// was driven to write (seed/components/catalysts/local/codex/0.1.0/README.md,
+// A stand-in for Codex's app-server, run as the `openai-codex` program's
+// command by openai_codex.py: it speaks the JSON-RPC lines Codex 0.167.0's `app-server`
+// was driven to write (seed/components/catalysts/local/openai-codex/0.1.0/README.md,
 // "Verified against 0.167.0") and keeps its threads in its HOME, the kept
 // folder, under ~/.codex as Codex does.
 //
@@ -36,7 +36,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 if (process.argv.slice(2).join(' ') !== 'app-server') {
-  process.stderr.write(`fake-codex: started with ${process.argv.slice(2).join(' ')}, not app-server\n`);
+  process.stderr.write(`fake-openai-codex: started with ${process.argv.slice(2).join(' ')}, not app-server\n`);
   process.exit(2);
 }
 
@@ -51,7 +51,7 @@ if (!fs.existsSync(path.join(home, 'fake-first-start'))) {
 process.stderr.write('FAKE-STDERR-CANARY Codex writes this to its stderr\n');
 
 const MODELS = [
-  { id: 'fake-codex', model: 'fake-codex', displayName: 'Fake Codex', description: 'fake', hidden: false, isDefault: true,
+  { id: 'fake-sol', model: 'fake-sol', displayName: 'Fake Sol', description: 'fake', hidden: false, isDefault: true,
     supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }],
     defaultReasoningEffort: 'low', inputModalities: ['text', 'image'] },
   { id: 'fake-mini', model: 'fake-mini', displayName: 'Fake Mini', description: 'fake', hidden: false, isDefault: false,
@@ -113,7 +113,7 @@ async function turn(turnId, params) {
     notify('item/completed', { ...base, item: { ...command, status: 'completed', aggregatedOutput: 'FAKE-FOLDER-CANARY', exitCode: 0 } });
     const patch = await request('item/fileChange/requestApproval', { ...base, itemId: 'call_own_2', reason: 'write FAKE-FOLDER-CANARY' });
     const tools = thread.dynamicTools.map((t) => t.name).join(',');
-    reply(turnId, `Hello from the fake Codex: thread ${thread.id}, model ${params.model || 'fake-codex'}, effort ${params.effort || 'unset'}, `
+    reply(turnId, `Hello from the fake Codex: thread ${thread.id}, model ${params.model || 'fake-sol'}, effort ${params.effort || 'unset'}, `
       + `tools ${tools}, policy ${thread.approvalPolicy}/${thread.sandbox}, patch ${patch.result?.decision}, instructions "${thread.developerInstructions}".`);
   } else if (text.includes('read')) {
     const itemId = `msg_${crypto.randomUUID()}`;
@@ -146,7 +146,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (message.method === 'initialize') {
     initialized = message.params?.capabilities?.experimentalApi === true;
-    return ok({ userAgent: 'fake-codex/0.167.0', codexHome: home, platformFamily: 'unix', platformOs: 'linux' });
+    return ok({ userAgent: 'fake-openai-codex/0.167.0', codexHome: home, platformFamily: 'unix', platformOs: 'linux' });
   }
   if (!initialized) return fail('initialize with experimentalApi first');
   switch (message.method) {
@@ -164,7 +164,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         developerInstructions: p.developerInstructions || '', history: [],
         total: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } };
       save();
-      ok({ thread: { id: thread.id, status: { type: 'idle' }, turns: [] }, model: 'fake-codex', approvalPolicy: p.approvalPolicy });
+      ok({ thread: { id: thread.id, status: { type: 'idle' }, turns: [] }, model: 'fake-sol', approvalPolicy: p.approvalPolicy });
       return notify('thread/started', { thread: { id: thread.id } });
     }
     case 'thread/resume': {
@@ -175,7 +175,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       thread.sandbox = message.params.sandbox;
       if (message.params.developerInstructions !== undefined) thread.developerInstructions = message.params.developerInstructions;
       save();
-      return ok({ thread: { id: thread.id, status: { type: 'idle' }, turns: [] }, model: 'fake-codex' });
+      return ok({ thread: { id: thread.id, status: { type: 'idle' }, turns: [] }, model: 'fake-sol' });
     }
     case 'turn/start': {
       if (!thread || message.params.threadId !== thread.id) return fail('thread not found');
@@ -185,6 +185,6 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return undefined;
     }
     default:
-      return fail(`fake-codex does not answer ${message.method}`);
+      return fail(`fake-openai-codex does not answer ${message.method}`);
   }
 }).on('close', () => turns.then(() => process.exit(0)));

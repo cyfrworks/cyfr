@@ -28,10 +28,10 @@ use crate::server::{self, Counts, Event};
 use crate::stream::{self, Deltas, Sink};
 
 pub const CONTRACT: &str = "model/chat@1";
-const PROVIDER: &str = "codex";
+const PROVIDER: &str = "openai-codex";
 
-/// The `login` need the manifest declares for the program `codex`.
-pub const NEED: &str = "codex";
+/// The `login` need the manifest declares for the program `openai-codex`.
+pub const NEED: &str = "openai-codex";
 
 /// What Codex's app-server does not list: a model's context window, as
 /// the catalog Codex 0.167.0 ships (`codex-rs/models-manager/models.json`,
@@ -160,16 +160,16 @@ pub fn pipe_refusal(code: &str) -> Refusal {
         "setup_required" => Refusal::new(
             403,
             "secret_denied",
-            "The codex program's login entry, its row or its grant no longer serves, or its folder is past its cap; see the Programs page.",
+            "The openai-codex program's login entry, its row or its grant no longer serves, or its folder is past its cap; see the Programs page.",
         ),
         "busy" => Refusal::new(529, "overloaded", "The box runs as many programs as it may; try again later."),
         "unavailable" => Refusal::new(503, "overloaded", "The program's box could not answer; try again later."),
-        "ended" => Refusal::new(502, "incomplete_stream", "Codex ended before it finished its turn."),
+        "ended" => Refusal::new(502, "incomplete_stream", "OpenAI Codex ended before it finished its turn."),
         "invalid_request" | "too_large" => invalid("The program's pipe refused what this turn sent."),
         _ => Refusal::new(
             502,
             "provider_error",
-            "The pipe's answer was lost; Codex may have received what this turn sent.",
+            "The pipe's answer was lost; OpenAI Codex may have received what this turn sent.",
         ),
     };
     Refusal { code: Some(code.to_string()), ..refusal }
@@ -183,12 +183,12 @@ pub fn pipe_refusal(code: &str) -> Refusal {
 /// it is, and the next message goes on in it.
 fn turn_error(kind: &'static str) -> Refusal {
     let (status, kind, message) = match kind {
-        "authentication" => (401, kind, "Codex is not signed in, or its account cannot serve this; sign in again from the Programs page."),
-        "rate_limited" => (502, "provider_error", "Codex's account is past its usage or rate limit, and its turn ended; send the message again later."),
-        "overloaded" => (502, "provider_error", "Codex's provider is overloaded, and its turn ended; send the message again later."),
-        "invalid_request" => (400, kind, "Codex refused the request."),
-        "unknown_model" => (404, kind, "Codex does not know the model."),
-        _ => (502, "provider_error", "Codex failed to finish its turn."),
+        "authentication" => (401, kind, "OpenAI Codex is not signed in, or its account cannot serve this; sign in again from the Programs page."),
+        "rate_limited" => (502, "provider_error", "OpenAI Codex's account is past its usage or rate limit, and its turn ended; send the message again later."),
+        "overloaded" => (502, "provider_error", "OpenAI Codex's provider is overloaded, and its turn ended; send the message again later."),
+        "invalid_request" => (400, kind, "OpenAI Codex refused the request."),
+        "unknown_model" => (404, kind, "OpenAI Codex does not know the model."),
+        _ => (502, "provider_error", "OpenAI Codex failed to finish its turn."),
     };
     Refusal::new(status, kind, message)
 }
@@ -196,7 +196,7 @@ fn turn_error(kind: &'static str) -> Refusal {
 /// The refusal of a program whose sign-in Codex holds none of: read before
 /// anything is sent to a thread.
 fn not_signed_in() -> Refusal {
-    Refusal::new(401, "authentication", "Codex is not signed in; sign in from the Programs page.")
+    Refusal::new(401, "authentication", "OpenAI Codex is not signed in; sign in from the Programs page.")
 }
 
 fn ended() -> Refusal {
@@ -518,7 +518,7 @@ pub fn dynamic_tools(tools: &[Tool]) -> Result<Vec<Value>, Refusal> {
     for tool in tools {
         if !dynamic_name(&tool.name) {
             return Err(invalid(format!(
-                "The tool {} has a name Codex does not take: letters, digits, _ and - only, never mcp.",
+                "The tool {} has a name OpenAI Codex does not take: letters, digits, _ and - only, never mcp.",
                 tool.name
             )));
         }
@@ -534,7 +534,7 @@ pub fn dynamic_tools(tools: &[Tool]) -> Result<Vec<Value>, Refusal> {
     let line = json!(specs).to_string().len();
     if line + 1024 > MAX_LINE_BYTES {
         return Err(invalid(format!(
-            "The tools are {line} bytes as one line to Codex, past the {MAX_LINE_BYTES} one line carries."
+            "The tools are {line} bytes as one line to OpenAI Codex, past the {MAX_LINE_BYTES} one line carries."
         )));
     }
     Ok(specs)
@@ -768,7 +768,7 @@ impl Reader {
         if got.dropped > 0 && !first {
             return Err(Refusal {
                 code: Some("dropped".into()),
-                ..Refusal::new(502, "provider_error", format!("{} lines of Codex's output were lost unread.", got.dropped))
+                ..Refusal::new(502, "provider_error", format!("{} lines of OpenAI Codex's output were lost unread.", got.dropped))
             });
         }
         if got.lines.is_empty() && !got.running {
@@ -801,7 +801,7 @@ impl Reader {
             }
             match answered {
                 Some(Ok(result)) => return Ok((result, others)),
-                Some(Err(_)) => return Err(Refusal::new(502, "provider_error", "Codex refused to start this session or turn.")),
+                Some(Err(_)) => return Err(Refusal::new(502, "provider_error", "OpenAI Codex refused to start this session or turn.")),
                 None => {}
             }
         }
@@ -816,7 +816,7 @@ fn wait_until(deadline: Instant) -> Option<u32> {
 fn timed_out() -> Refusal {
     Refusal {
         code: Some("deadline".into()),
-        ..Refusal::new(504, "incomplete_stream", "Codex was still working when this run's time ran out.")
+        ..Refusal::new(504, "incomplete_stream", "OpenAI Codex was still working when this run's time ran out.")
     }
 }
 
@@ -830,7 +830,7 @@ fn interrupted() -> Refusal {
     Refusal::new(
         502,
         "provider_error",
-        "The session with Codex was interrupted mid-turn: its pipe failed or its time ran out, and what reached it is not known. The next message resumes the session from its home.",
+        "The session with OpenAI Codex was interrupted mid-turn: its pipe failed or its time ran out, and what reached it is not known. The next message resumes the session from its home.",
     )
 }
 
@@ -855,7 +855,7 @@ pub fn bounded(content: &str) -> String {
         return content.to_string();
     }
     let note = |cut: usize| {
-        format!("\n…[CYFR cut this result at {MAX_RESULT_BYTES} bytes, what one answer to Codex carries; {cut} more bytes were not shown. Ask for a narrower part.]")
+        format!("\n…[CYFR cut this result at {MAX_RESULT_BYTES} bytes, what one answer to OpenAI Codex carries; {cut} more bytes were not shown. Ask for a narrower part.]")
     };
     let room = MAX_RESULT_BYTES - note(total).len() * 2;
     let mut kept = String::new();
@@ -908,7 +908,7 @@ pub fn chat<P: Pipe, S: Sink>(
         let _ = pipe.close(&opened.session);
         opened = pipe.open(NEED, &key, &argv).map_err(|code| pipe_refusal(&code))?;
         if opened.resumed {
-            return Err(Refusal::new(502, "provider_error", "Codex's session could not be restarted."));
+            return Err(Refusal::new(502, "provider_error", "OpenAI Codex's session could not be restarted."));
         }
     }
     let session = opened.session.clone();
@@ -990,11 +990,11 @@ fn converse<P: Pipe, S: Sink>(
             }
             match started["thread"].get("id").and_then(Value::as_str) {
                 Some(thread) if session_id(thread) => thread.to_string(),
-                _ => return Err(Refusal::new(502, "provider_error", "Codex started no thread this brain can name.")),
+                _ => return Err(Refusal::new(502, "provider_error", "OpenAI Codex started no thread this brain can name.")),
             }
         }
         // A fresh key names no running program.
-        (None, true) => return Err(Refusal::new(502, "provider_error", "Codex's session could not be started.")),
+        (None, true) => return Err(Refusal::new(502, "provider_error", "OpenAI Codex's session could not be started.")),
     };
     let answered: Vec<Value>;
     let turn = match &request.input {
@@ -1022,7 +1022,7 @@ fn converse<P: Pipe, S: Sink>(
                 .get("id")
                 .and_then(Value::as_str)
                 .filter(|t| !t.is_empty())
-                .ok_or_else(|| Refusal::new(502, "provider_error", "Codex started no turn."))?
+                .ok_or_else(|| Refusal::new(502, "provider_error", "OpenAI Codex started no turn."))?
                 .to_string()
         }
     };
@@ -1186,7 +1186,7 @@ fn read_turn<P: Pipe, S: Sink>(
                 Event::TurnDone { turn: t, status, error } if t == turn.id && finished.is_none() => {
                     finished = Some(match status.as_str() {
                         "completed" => Ok(response(&text, Vec::new(), "end_turn", &used, total.as_ref())),
-                        "interrupted" => Err(Refusal::new(502, "provider_error", "Codex's turn was interrupted on its side.")),
+                        "interrupted" => Err(Refusal::new(502, "provider_error", "OpenAI Codex's turn was interrupted on its side.")),
                         _ => Err(turn_error(server::error_kind(&error))),
                     });
                 }
@@ -1500,7 +1500,7 @@ mod tests {
         ]]]));
         let (answer, events) = run(&mut pipe, &first("hi"), far());
         let answer = answer.unwrap();
-        assert_eq!(pipe.log, [format!("open codex {KEY} app-server")]);
+        assert_eq!(pipe.log, [format!("open openai-codex {KEY} app-server")]);
         assert_eq!(pipe.sent_since(0), ["initialize", "initialized", "account/read", "thread/start", "turn/start"]);
         let start = pipe.sent_with("thread/start");
         assert_eq!(start["params"]["dynamicTools"], json!([
@@ -1618,7 +1618,7 @@ mod tests {
                                      "options": {"effort": "high"}, "messages": [{"role": "user", "content": "again"}]}));
         let (answer, _) = run(&mut pipe, &resumed, far());
         let answer = answer.unwrap();
-        assert_eq!(pipe.log, [format!("open codex {KEY} app-server")], "the session's own key");
+        assert_eq!(pipe.log, [format!("open openai-codex {KEY} app-server")], "the session's own key");
         assert_eq!(pipe.sent_since(0), ["initialize", "initialized", "account/read", "thread/resume", "turn/start"]);
         let resume = pipe.sent_with("thread/resume");
         assert_eq!(resume["params"]["threadId"], THREAD);
@@ -1734,8 +1734,8 @@ mod tests {
         ]}));
         let from = pipe.sent.len();
         let (answer, _) = run(&mut pipe, &moved_on, far());
-        assert_eq!(&pipe.log[1..], ["open codex 0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b app-server", "close pipe-1",
-                                    "open codex 0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b app-server"]);
+        assert_eq!(&pipe.log[1..], ["open openai-codex 0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b app-server", "close pipe-1",
+                                    "open openai-codex 0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b app-server"]);
         assert_eq!(pipe.sent_since(from), ["initialize", "initialized", "account/read", "thread/resume", "turn/start"]);
         assert_eq!(answer.unwrap()["content"], json!([{"type": "text", "text": "New topic."}]));
     }
@@ -1821,7 +1821,7 @@ mod tests {
         let mut pipe = BoxPipe::new(Codex::new(vec![]));
         let listed = listing(&mut pipe, "listing-1", far()).unwrap();
         assert_eq!(pipe.sent_since(0), ["initialize", "initialized", "model/list"]);
-        assert_eq!(pipe.log, ["open codex listing-1 app-server", "close pipe-1"]);
+        assert_eq!(pipe.log, ["open openai-codex listing-1 app-server", "close pipe-1"]);
         let described = describe(Some("gpt-5.5"), Some(&listed));
         assert_eq!(described["options"], json!([
             {"name": "model", "kind": "enum", "values": ["default", "gpt-6.1-sol", "gpt-5.5"]},

@@ -119,7 +119,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
     # The harnesses' catalysts are not installed: their members have no
     # consent, and the soul's is whole without them.
-    for member <- ~w(agent:local.claude-code agent:local.codex) do
+    for member <- ~w(agent:local.claude-code agent:local.openai-codex) do
       refute member in minted
       assert {^member, {:activation_unresolvable, _}} = List.keyfind(skipped, member, 0)
     end

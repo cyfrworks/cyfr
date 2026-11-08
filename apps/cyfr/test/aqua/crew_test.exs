@@ -184,13 +184,13 @@ defmodule Aqua.CrewTest do
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
 
     assert roster |> Enum.map(& &1["name"]) |> Enum.sort() ==
-             ~w(aqua claude-code codex explorer planner)
+             ~w(aqua claude-code explorer openai-codex planner)
 
     # The harnesses' catalysts ship, with no login entry bound to their
     # programs, and the explorer's key is not bound: none is told of.
     status = Aqua.Models.model_status(ctx, roster)
     assert status["claude-code"] == {:needs_sign_in, "catalyst:local.claude-code:0.1.1"}
-    assert status["codex"] == {:needs_sign_in, "catalyst:local.codex:0.1.0"}
+    assert status["openai-codex"] == {:needs_sign_in, "catalyst:local.openai-codex:0.1.0"}
     assert {:needs_key, _} = status["explorer"]
 
     assert Crew.index(ctx, roster) ==
@@ -274,11 +274,11 @@ defmodule Aqua.CrewTest do
 
   # Readiness holds at every way a job reaches a member, not only in the
   # index: the shipped explorer has no key bound here, and the programs of
-  # claude-code and codex have no login entry signed in.
+  # claude-code and openai-codex have no login entry signed in.
   @unready [
     {"explorer", :no_key, "no key bound"},
     {"claude-code", :not_signed_in, "not signed in"},
-    {"codex", :not_signed_in, "not signed in"}
+    {"openai-codex", :not_signed_in, "not signed in"}
   ]
 
   test "a person's @name of a member that is not ready is refused with why, and writes nothing",
@@ -331,7 +331,11 @@ defmodule Aqua.CrewTest do
              "no refused ask of #{member} says #{words}: #{inspect(Enum.map(refused, & &1.error))}"
     end
 
-    refute Enum.any?(rows(ctx, room.id), &(&1.addressee in ["explorer", "claude-code", "codex"]))
+    refute Enum.any?(
+             rows(ctx, room.id),
+             &(&1.addressee in ["explorer", "claude-code", "openai-codex"])
+           )
+
     assert Threads.children(actor(ctx), room.id) == []
     assert pending_records(ctx) == []
   end

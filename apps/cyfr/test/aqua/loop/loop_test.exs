@@ -164,7 +164,7 @@ defmodule Aqua.LoopTest do
     # turns last at least as long as (a turn of the member itself needs its
     # sign-in, which no test holds; `Aqua.Loop.ModelWaitTest` runs a turn on
     # a brain consented as long).
-    for harness <- ~w(claude-code codex) do
+    for harness <- ~w(claude-code openai-codex) do
       {:ok, authority} = Opus.authority_for(ctx, :default, "agent:local.#{harness}")
       {:ok, own} = Prima.Limits.timeout_ms(Prima.Authority.limits(authority))
       {:ok, brain} = Prima.Authority.node_limits(authority, "catalyst:local.#{harness}")

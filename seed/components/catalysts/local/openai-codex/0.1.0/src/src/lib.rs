@@ -58,7 +58,7 @@ fn handle(input: &str) -> String {
                 None | Some(Value::Null) => None,
                 Some(Value::String(model)) if chat::model_id(model) => Some(model.as_str()),
                 Some(_) => {
-                    return json!({"status": 404, "error": {"type": "unknown_model", "message": "Codex takes no such model id."}})
+                    return json!({"status": 404, "error": {"type": "unknown_model", "message": "OpenAI Codex takes no such model id."}})
                         .to_string()
                 }
             };

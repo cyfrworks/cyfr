@@ -1,17 +1,17 @@
 {
-  "name": "codex",
+  "name": "openai-codex",
   "type": "catalyst",
   "version": "0.1.0",
   "publisher": "local",
-  "description": "Codex as a brain of the model/chat@1 contract: Codex runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
+  "description": "OpenAI Codex as a brain of the model/chat@1 contract: it runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
   "contracts": [
     "model/chat@1"
   ],
   "needs": {
-    "codex": {
+    "openai-codex": {
       "type": "login",
-      "program": "codex",
-      "reason": "to run Codex in its own folder, signed in to your own plan",
+      "program": "openai-codex",
+      "reason": "to run OpenAI Codex in its own folder, signed in to your own plan",
       "required": true,
       "install": {
         "command": "npx -y @openai/codex@0.167.0",
@@ -58,7 +58,7 @@
   "examples": [
     {
       "name": "Chat (model/chat@1)",
-      "description": "One turn: the newest message starts a turn on Codex's thread, its reply streams as contract events, and the response names the session the next turn continues",
+      "description": "One turn: the newest message starts a turn on OpenAI Codex's thread, its reply streams as contract events, and the response names the session the next turn continues",
       "input": {
         "operation": "chat",
         "params": {
@@ -131,7 +131,7 @@
     },
     {
       "name": "Describe (model/chat@1)",
-      "description": "What this brain can do, and the options Codex lets a caller set",
+      "description": "What this brain can do, and the options OpenAI Codex lets a caller set",
       "input": {
         "operation": "describe",
         "params": {}
@@ -141,7 +141,7 @@
           "contracts": [
             "model/chat@1"
           ],
-          "provider": "codex",
+          "provider": "openai-codex",
           "tools": true,
           "provider_tools": [],
           "streaming": true,
@@ -174,7 +174,7 @@
     },
     {
       "name": "Models (model/chat@1)",
-      "description": "The models Codex lists for its sign-in, its default first",
+      "description": "The models OpenAI Codex lists for its sign-in, its default first",
       "input": {
         "operation": "models",
         "params": {}

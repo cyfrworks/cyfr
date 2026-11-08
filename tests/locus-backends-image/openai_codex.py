@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The Codex catalyst drives Codex's app-server over its program's pipe, in a kept folder of the backends image.
+"""The OpenAI Codex catalyst drives Codex's app-server over its program's pipe, in a kept folder of the backends image.
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/codex/0.1.0/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.0/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
-locus-backends runs the `codex` program, driven by requests signed as CYFR
+locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
 catalyst's pipe as `Opus.Host.Pipe` does: each `pipe_open` names the
-`codex` need and is opened on the program in one login entry's kept folder
+`openai-codex` need and is opened on the program in one login entry's kept folder
 under a key of the catalyst's own; `pipe_send`, `pipe_recv` and
 `pipe_close` go to the session it opened. The program's command runs
-fake-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
+fake-openai-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
 0.167.0 was driven to write, keeping its threads in the kept folder.
 
 - `describe` starts the program in a session of its own, reads its
@@ -51,7 +51,7 @@ fake-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
 
 Prerequisites: harness.py's, the runtime image suites' (the control plane
 on the default bridge's gateway), and the built catalyst. Usage:
-tests/locus-backends-image/codex.py IMAGE
+tests/locus-backends-image/openai_codex.py IMAGE
 """
 
 import hashlib
@@ -70,18 +70,18 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "codex", "0.1.0")
-REF = "catalyst:local.codex:0.1.0"
-NEED = "codex"
-OWNER = owner_of("codex")
-HOME = "vlt_codex"
-FAKE = "fake-codex.mjs"
-PROGRAM = {"name": "codex", "command": f"node /probe/{FAKE}", "env": {}, "home": "kept"}
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.0")
+REF = "catalyst:local.openai-codex:0.1.0"
+NEED = "openai-codex"
+OWNER = owner_of("openai-codex")
+HOME = "vlt_openai-codex"
+FAKE = "fake-openai-codex.mjs"
+PROGRAM = {"name": "openai-codex", "command": f"node /probe/{FAKE}", "env": {}, "home": "kept"}
 # Short, so the retirement cases wait little; long enough that a chat
 # following another at once finds its session running.
 IDLE_MS = 15_000
 RUN_TIMEOUT_MS = 120_000
-ATHANOR = "ath_codex"
+ATHANOR = "ath_openai_codex"
 CANARIES = ("FAKE-STDERR-CANARY", "FAKE-FOLDER-CANARY", "auth.json")
 FILES = {
     "name": "files",
@@ -94,7 +94,7 @@ SYSTEM = "You are a crew member of this athanor."
 
 class Bridge:
     """CYFR's host for the catalyst's pipe, as `Opus.Host.Pipe` is: the need
-    granted is `codex`, bound to one login entry's kept home; a key is the
+    granted is `openai-codex`, bound to one login entry's kept home; a key is the
     catalyst's own, hashed with its node and need; a session is answered only
     to the attempt that opened it."""
 
@@ -127,7 +127,7 @@ class Bridge:
         self.calls.append(("open", args))
         if self.refuse_next_open:
             kind, self.refuse_next_open = self.refuse_next_open, None
-            return self.guest_error(kind, "The login entry bound to codex is revoked.")
+            return self.guest_error(kind, "The login entry bound to openai-codex is revoked.")
         if args.get("need") != NEED:
             return {"error": "denied"}
         key = "pipe-" + hashlib.sha256(f"{REF}\0{NEED}\0{args['key']}".encode()).hexdigest()[:40]
@@ -208,7 +208,7 @@ def fakes(backends):
 
 def main():
     if len(sys.argv) != 2:
-        sys.exit("usage: codex.py IMAGE")
+        sys.exit("usage: openai_codex.py IMAGE")
     image = sys.argv[1]
     require_docker()
     with open(os.path.join(CATALYST, "catalyst.wasm"), "rb") as handle:
@@ -216,24 +216,24 @@ def main():
     with open(os.path.join(CATALYST, "cyfr-manifest.json"), encoding="utf-8") as handle:
         manifest = json.load(handle)
     need = manifest["needs"].get(NEED, {})
-    expect(list(manifest["needs"]) == [NEED] and need.get("type") == "login" and need.get("program") == "codex"
+    expect(list(manifest["needs"]) == [NEED] and need.get("type") == "login" and need.get("program") == "openai-codex"
            and "model/chat@1" in manifest["contracts"],
-           "the catalyst declares model/chat@1 and one need, a login for the program codex", manifest["needs"])
+           "the catalyst declares model/chat@1 and one need, a login for the program openai-codex", manifest["needs"])
     install = need.get("install", {})
     expect(install.get("command", "").startswith("npx -y @openai/codex@")
            and install.get("login_command") == install.get("command") + " login --device-auth",
            "the need suggests fetching Codex with npx and signing in by device auth", install)
 
-    backends = Stack("locus-backends-codex", image)
+    backends = Stack("locus-backends-openai-codex", image)
     plane = ControlPlane(secrets.token_bytes(32), runtime.SERVICE).serve()
-    rt = runtime.Stack("cyfr-locus-runtime-codex", image, plane)
+    rt = runtime.Stack("cyfr-locus-runtime-openai-codex", image, plane)
     answers = []
     try:
         backends.up()
         c = backends.controller()
         expect(c.hello()[0] == 200, "the backends service is greeted")
         status, synced, _ = c.sync(OWNER, [PROGRAM], idle_ms=IDLE_MS)
-        expect(status == 200, "an owner of the codex program, kept, is synced", synced)
+        expect(status == 200, "an owner of the openai-codex program, kept, is synced", synced)
         bridge = Bridge(c)
         bridge.install(plane)
         rt.up()
@@ -245,7 +245,7 @@ def main():
         expect(described["status"] == 200 and described["data"]["streaming"] is True
                and described["data"]["provider_tools"] == [] and described["data"]["context_window"] > 0,
                "describe answers the contract, streaming, with no provider tools and the model's window", described)
-        expect(options["model"] == {"name": "model", "kind": "enum", "values": ["default", "fake-codex", "fake-mini"]}
+        expect(options["model"] == {"name": "model", "kind": "enum", "values": ["default", "fake-sol", "fake-mini"]}
                and options["effort"]["values"] == ["low", "high", "medium", "xhigh"],
                "the model and effort options are Codex's own listing", options)
         expect([op for op, _ in bridge.calls if op != "send"] == ["open", "close"]
@@ -254,7 +254,7 @@ def main():
         eventually(lambda: not fakes(backends), "the listing's program to end with its session")
         modelled, _ = run_catalyst(rt, plane, wasm, "models", {}, "models")
         expect(modelled == {"status": 200, "data": {"models": [
-            {"id": "default", "name": "Default (Fake Codex)"}, {"id": "fake-codex", "name": "Fake Codex"},
+            {"id": "default", "name": "Default (Fake Sol)"}, {"id": "fake-sol", "name": "Fake Sol"},
             {"id": "fake-mini", "name": "Fake Mini"}]}},
             "models answers the same listing, Codex's default first", modelled)
 

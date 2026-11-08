@@ -1,10 +1,10 @@
-# Codex Catalyst
+# OpenAI Codex Catalyst
 
-Codex as a brain of the `model/chat@1` contract. Codex runs as itself, with its own tools, its own prompt and the person's own sign-in, in the folder a login entry keeps for the program `codex`. This catalyst drives Codex's app-server over the program's pipe (`cyfr:process/pipe`) and gives it CYFR's tools as the thread's dynamic tools: Codex asks this catalyst to run each one, so every action of CYFR's still passes CYFR's gate. The catalyst holds no credential, no route and nothing between runs; CYFR ships nothing of OpenAI's.
+OpenAI Codex as a brain of the `model/chat@1` contract. Codex, OpenAI's coding agent, runs as itself, with its own tools, its own prompt and the person's own sign-in, in the folder a login entry keeps for the program `openai-codex`. This catalyst drives Codex's app-server over the program's pipe (`cyfr:process/pipe`) and gives it CYFR's tools as the thread's dynamic tools: Codex asks this catalyst to run each one, so every action of CYFR's still passes CYFR's gate. The catalyst holds no credential, no route and nothing between runs; CYFR ships nothing of OpenAI's.
 
 ## The program
 
-The manifest declares one need, `codex`, of type `login` for the program `codex`, and no other. Its `install` block suggests the row: command `npx -y @openai/codex@0.167.0`, sign-in `npx -y @openai/codex@0.167.0 login --device-auth`. Device auth prints a URL and a one-time code that the person opens in their own browser; plain `codex login` would start a callback server on the box's loopback, which that browser cannot reach. The person installs it from the setup plan or the crew entry on the AQUA page, which defines the row, makes the login entry and opens the sign-in terminal; or places a binary and writes the row by hand. Codex keeps its sign-in and its threads under `~/.codex` in the kept folder.
+The manifest declares one need, `openai-codex`, of type `login` for the program `openai-codex`, and no other. Its `install` block suggests the row: command `npx -y @openai/codex@0.167.0`, sign-in `npx -y @openai/codex@0.167.0 login --device-auth`. Device auth prints a URL and a one-time code that the person opens in their own browser; plain `codex login` would start a callback server on the box's loopback, which that browser cannot reach. The person installs it from the setup plan or the crew entry on the AQUA page, which defines the row, makes the login entry and opens the sign-in terminal; or places a binary and writes the row by hand. Codex keeps its sign-in and its threads under `~/.codex` in the kept folder.
 
 ## The protocol it depends on
 
@@ -20,7 +20,7 @@ Codex 0.167.0 (npm `latest` and GitHub's latest release, tag `rust-v0.167.0`, 20
 
 Codex runs a turn's dynamic tool calls in parallel (`DynamicToolHandler::supports_parallel_tool_calls` is true, and a turn's `parallel_tool_calls` is fixed true), so one turn can hold several calls at once.
 
-## The box, Codex's sandbox and its asks
+## The box, OpenAI Codex's sandbox and its asks
 
 Every thread starts and resumes with `sandbox: "danger-full-access"` and `approvalPolicy: "never"`, so the keeper's box is the only boundary (the user's ruling D2). Codex's own sandbox would nest a second one, built from namespaces and Landlock, inside the box's, and those are not the box's to grant. With asking off, Codex's commands and patches run as the box lets them. They are shown as a `tool_call.start` and `tool_call.end` pair under the item's own type (`commandExecution`, `fileChange`, `mcpToolCall`, `webSearch`, `imageView`, `collabAgentToolCall`), by name only, since what Codex ran may hold what its folder holds. An approval request that still arrives is answered allow. Under `never`, Codex itself refuses an MCP tool of the person's own Codex configuration that requires approval; CYFR's tools are no MCP tools and are not affected.
 
@@ -44,7 +44,7 @@ Once a run has sent anything, a failure of the pipe interrupts the session. That
 
 Before a run sends anything, what the pipe answers maps to the contract's refusals: `denied` and `setup_required` to `secret_denied`; `busy` and `unavailable` to `overloaded`, which the loop retries safely since nothing was sent; `lost` to `provider_error`; `invalid_request` and `too_large` to `invalid_request`. A turn that fails maps by its `codexErrorInfo`: an `unauthorized` or an HTTP 401 or 403 to `authentication`; a usage or rate limit (or 429) and an overload (or 503) to `provider_error` naming the reason and asking for the message again later; `modelNotFound` to `unknown_model`; `badRequest` and `contextWindowExceeded` to `invalid_request`. It ends a turn this run already sent to, so no answer of it is a type the loop retries; nothing is closed, and the next message goes on in the thread. No line of Codex's, none of its error text, nothing of its folder or its sign-in, reaches the answer.
 
-## What Codex answers, and the fallback
+## What OpenAI Codex answers, and the fallback
 
 `describe` and `models` start the program in a session of their own, send `initialize` and `model/list`, read every page and close the session. From the listing:
 
@@ -65,4 +65,4 @@ Not verified without a Codex account: a real model's turn (its streaming, usage 
 
 ## Building
 
-`scripts/build-seed-guest.sh seed/components/catalysts/local/codex/0.1.0` builds `catalyst.wasm` and writes `src/build.stamp`. `cargo test` in `src/` runs the contract and protocol tests on the host target, against a fake app-server scripted from the lines 0.167.0 wrote and against the shared vectors `tests/fixtures/model_chat.json`. `tests/locus-backends-image/codex.py` drives the built catalyst against a fake Codex in the backends image.
+`scripts/build-seed-guest.sh seed/components/catalysts/local/openai-codex/0.1.0` builds `catalyst.wasm` and writes `src/build.stamp`. `cargo test` in `src/` runs the contract and protocol tests on the host target, against a fake app-server scripted from the lines 0.167.0 wrote and against the shared vectors `tests/fixtures/model_chat.json`. `tests/locus-backends-image/openai_codex.py` drives the built catalyst against a fake Codex in the backends image.

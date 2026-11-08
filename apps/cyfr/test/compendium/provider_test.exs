@@ -1586,7 +1586,7 @@ defmodule Compendium.ProviderTest do
       assert "aqua" in names
       assert "explorer" in names
       assert "claude-code" in names
-      assert "codex" in names
+      assert "openai-codex" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do

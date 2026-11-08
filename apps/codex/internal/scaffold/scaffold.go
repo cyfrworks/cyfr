@@ -189,9 +189,9 @@ func ReplaceFile(name string, data []byte, mode os.FileMode) error {
 const aquaSoul = "aqua/aqua.md"
 
 var shippedCrew = map[string]bool{
-	"claude-code": true,
-	"codex":       true,
-	"explorer":    true,
+	"claude-code":  true,
+	"explorer":     true,
+	"openai-codex": true,
 }
 
 var shippedScrolls = map[string]bool{

@@ -1,5 +1,5 @@
 [package]
-name = "codex-catalyst"
+name = "openai-codex-catalyst"
 version = "0.1.0"
 edition = "2021"
 
