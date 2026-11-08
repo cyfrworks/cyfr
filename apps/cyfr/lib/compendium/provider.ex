@@ -226,6 +226,14 @@ defmodule Compendium.Provider do
     ]
   end
 
+  @doc """
+  The streams the component domain offers, each declared beside its
+  operations: the athanor's installed components as a canvas reads them
+  (`components.changes`).
+  """
+  @impl true
+  def streams, do: Compendium.Providers.Component.streams()
+
   # ============================================================================
   # Tool Handlers — delegated to per-tool modules
   # ============================================================================

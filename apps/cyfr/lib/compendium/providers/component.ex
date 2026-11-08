@@ -1851,4 +1851,127 @@ defmodule Compendium.Providers.Component do
   defp put_media_field(map, _key, nil), do: map
   defp put_media_field(map, _key, []), do: map
   defp put_media_field(map, key, value), do: Map.put(map, key, value)
+
+  # ============================================================================
+  # The stream a canvas reads
+  # ============================================================================
+
+  @doc """
+  The one stream a canvas reads of the registry, `components.changes`,
+  riding the athanor's components topic (`Cyfr.Bus.Components`): each
+  installed version by its versionless `ref`, `type`, `name` and
+  `version`, `installed`, `removed` or `pushed` as the registry's own
+  events name it, and `changed`, naming no version, when an operation
+  changed the registry in a way a reader takes by opening the stream again.
+  Its refresh is every installed version as the `list` action reads it,
+  each `installed`, with its `icon` (a tincture's declared icon hint),
+  whether a newer shipped version exists (`update_available`) and whether
+  a tincture's grant is current (`grant_current`; nil for a type whose
+  grant is a profile's rather than its own). The live events carry what
+  the registry event names, so those three are nil there.
+  """
+  def streams do
+    [
+      %Prima.Provider.Stream{
+        name: "components.changes",
+        topic: :components,
+        projection: [
+          "kind",
+          "ref",
+          "type",
+          "name",
+          "icon",
+          "version",
+          "update_available",
+          "grant_current"
+        ],
+        deadline_bound: 86_400,
+        shape: components_shape(),
+        refresh: {__MODULE__, :installed}
+      }
+    ]
+  end
+
+  @doc """
+  The refresh of `components.changes`: every installed version of the
+  caller's athanor as the `list` action reads it (`Registry.search/2` and
+  `Compendium.Provenance.annotate/2`), at most 1000, each `installed`.
+  The subject is none.
+  """
+  @spec installed(Context.t(), nil) :: {:ok, [map()]} | {:error, term()}
+  def installed(%Context{athanor_id: athanor_id} = ctx, _subject)
+      when is_binary(athanor_id) and athanor_id != "" do
+    with {:ok, result} <- Registry.search(ctx, %{type: nil, limit: 1000}),
+         {:ok, annotated} <- Compendium.Provenance.annotate(ctx, result.components) do
+      {:ok, Enum.map(annotated, &installed_item(ctx, &1))}
+    end
+  end
+
+  def installed(%Context{}, _subject), do: {:error, :no_athanor}
+
+  defp installed_item(ctx, %{component: component} = entry) do
+    type = component.component_type
+
+    %{
+      kind: :installed,
+      ref: Prima.ComponentRef.build(type, component.publisher, component.name),
+      type: type,
+      name: component.name,
+      icon: icon_hint(component),
+      version: component.version,
+      update_available: entry.superseded == true or entry.upstream_superseded == true,
+      grant_current: grant_current(ctx, type, component_ref_of(component))
+    }
+  end
+
+  defp component_ref_of(component),
+    do:
+      Prima.ComponentRef.build(
+        component.component_type,
+        component.publisher,
+        component.name,
+        component.version
+      )
+
+  # A tincture's declared icon hint, a short word the shell draws; none
+  # for any other type, or past the bound a canvas is promised.
+  defp icon_hint(%{component_type: "tincture", manifest: %{"tincture" => %{"icon" => icon}}})
+       when is_binary(icon) and byte_size(icon) in 1..64,
+       do: icon
+
+  defp icon_hint(_component), do: nil
+
+  # A tincture holds a grant of its own, which its frames open under; any
+  # other type is granted through the profiles that run it.
+  defp grant_current(ctx, "tincture", reference),
+    do: match?({:ok, _revision}, Compendium.tincture_grant_revision(ctx, reference))
+
+  defp grant_current(_ctx, _type, _reference), do: nil
+
+  defp components_shape do
+    {:ok, shape} =
+      Prima.Canvas.Shape.validate(%{
+        "type" => "object",
+        "fields" => %{
+          "kind" => %{
+            "type" => "enum",
+            "values" => Enum.map(Cyfr.Bus.Components.kinds(), &Atom.to_string/1)
+          },
+          "ref" => %{"type" => "string", "nullable" => true},
+          "type" => %{
+            "type" => "enum",
+            "nullable" => true,
+            "values" => Prima.ComponentRef.valid_types()
+          },
+          "name" => %{"type" => "string", "nullable" => true},
+          "icon" => %{"type" => "string", "max" => 64, "nullable" => true},
+          "version" => %{"type" => "string", "nullable" => true},
+          "update_available" => %{"type" => "boolean", "nullable" => true},
+          "grant_current" => %{"type" => "boolean", "nullable" => true}
+        },
+        "required" => ["kind"]
+      })
+
+    shape
+  end
 end
