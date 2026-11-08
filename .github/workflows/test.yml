@@ -715,10 +715,11 @@ jobs:
       # runner's four cores.
       #
       # Under the nightly input (.github/workflows/nightly.yml) the shard
-      # runs twice, each run keeping its directory and recording its
-      # timings (Prima.Test.TimingFormatter beside the CLI formatter), and
-      # each run's output, directory and timings go under
-      # $RUNNER_TEMP/nightly/<run>, for scripts/lib/nightly.py.
+      # runs twice, with the :long tests the suite otherwise excludes
+      # (apps/cyfr/test/test_helper.exs), each run keeping its directory
+      # and recording its timings (Prima.Test.TimingFormatter beside the
+      # CLI formatter), and each run's output, directory and timings go
+      # under $RUNNER_TEMP/nightly/<run>, for scripts/lib/nightly.py.
       #
       # A failed run's kept directory (each partition's log and scratch
       # root, the compile and assignment logs, the failures record), or the
@@ -736,10 +737,10 @@ jobs:
           NIGHTLY: ${{ inputs.nightly && 'true' || '' }}
         run: |
           set -o pipefail
-          runs=1 formatters=() status=0
+          runs=1 nightly_args=() status=0
           if [ -n "$NIGHTLY" ]; then
             runs=2
-            formatters=(--formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter)
+            nightly_args=(--include long --formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter)
             export CYFR_TEST_KEEP=1
           fi
           for n in $(seq "$runs"); do
@@ -749,7 +750,7 @@ jobs:
               out="$RUNNER_TEMP/nightly/$n/runner.out"
               export CYFR_TEST_TIMINGS_DIR="$RUNNER_TEMP/nightly/$n/timings"
             fi
-            scripts/test-partitioned.sh -n 16 --shard "${{ matrix.shard }}/4" -a "${{ matrix.db }}" -- --warnings-as-errors "${formatters[@]}" 2>&1 |
+            scripts/test-partitioned.sh -n 16 --shard "${{ matrix.shard }}/4" -a "${{ matrix.db }}" -- --warnings-as-errors "${nightly_args[@]}" 2>&1 |
               tee "$out" || status=1
           done
           # The one directory the runner's output $1 names as kept, in

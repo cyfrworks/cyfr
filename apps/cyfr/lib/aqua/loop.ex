@@ -71,8 +71,6 @@ defmodule Aqua.Loop do
   # A root turn's holder on this boot registers here (`holder/1`).
   @holders Aqua.RunnerRegistry
   @max_steps 30
-  @step_timeout_ms 5 * 60 * 1000
-  @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
   # `{"operation":"chat","params":}` around the request, which is what
   # `Opus.Admission` encodes and weighs against the node's cap.
@@ -776,17 +774,10 @@ defmodule Aqua.Loop do
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
-  # worker's death. The worker is waited for until the run ends, and the
-  # loop keeps no clock of its own over it: the run's deadline is the one
-  # its brain's node is consented (`Opus.Admission`), which the worker
-  # service enforces and reports, so its expiry closes the run lost and
-  # costs the athanor nothing (`Opus.Attempt`), where a waiter stopped by
-  # a clock here would be a kill counted against it; a worker service
-  # that stops answering is lapsed (`Opus.WorkerWatch`), and a person's
-  # cancel stops the holder at once (`abort/4`). A chat
-  # step's text streams to the thread while it runs,
-  # and is withdrawn when the step lands no text row; a flush or a
-  # compaction streams nothing.
+  # worker's death. The worker is waited for until the run ends, as every
+  # worker of the loop is (`worker/1`). A chat step's text streams to the
+  # thread while it runs, and is withdrawn when the step lands no text row;
+  # a flush or a compaction streams nothing.
   #
   # Whatever it answers, the child's ledger joins the step's turn before
   # the answer is handed back (`model_ledger/3`): every use of a model's
@@ -803,24 +794,21 @@ defmodule Aqua.Loop do
 
     answer =
       try do
-        worker(
-          fn ->
-            Opus.run_child(spec.authority, spec.catalyst, nil, input,
-              ctx: guest,
-              execution_id: step.child_execution_id,
-              step_id: step.id,
-              parent_execution_id: turn.root_execution_id,
-              root_execution_id: turn.root_execution_id,
-              declared_needs: [],
-              retention_class: "chat_step",
-              retained_input: retained_input,
-              charge: Binding.charge(step, turn),
-              guest_fn: :spawn,
-              envelope: true
-            )
-          end,
-          :infinity
-        )
+        worker(fn ->
+          Opus.run_child(spec.authority, spec.catalyst, nil, input,
+            ctx: guest,
+            execution_id: step.child_execution_id,
+            step_id: step.id,
+            parent_execution_id: turn.root_execution_id,
+            root_execution_id: turn.root_execution_id,
+            declared_needs: [],
+            retention_class: "chat_step",
+            retained_input: retained_input,
+            charge: Binding.charge(step, turn),
+            guest_fn: :spawn,
+            envelope: true
+          )
+        end)
       after
         Aqua.Loop.Stream.close(stream)
       end
@@ -843,8 +831,8 @@ defmodule Aqua.Loop do
 
   # The ledger a model child's answer brings into its turn: what its
   # completion result carries, else its row's, read by the id the step
-  # minted for it — a worker that died or timed out included, since its
-  # child may have read before it did.
+  # minted for it — a worker that died included, since its child may have
+  # read before it did.
   defp model_ledger(state, step, {:ok, answer}),
     do: child_ledger(state, step.child_execution_id, answer)
 
@@ -1264,7 +1252,7 @@ defmodule Aqua.Loop do
     state = activity(state, [item], :running)
 
     outcome =
-      case worker(fn -> run_one(state, item) end, @step_timeout_ms) do
+      case worker(fn -> run_one(state, item) end) do
         {:ok, {:uncertain, step, reason}} -> {:uncertain, step, reason}
         {:ok, _} -> :ok
         {:exit, reason} -> settle_dead(state, item, reason)
@@ -1291,8 +1279,9 @@ defmodule Aqua.Loop do
   end
 
   # The reads of a group run beside each other, at most `cap` at once,
-  # each in a worker of its own: every answer, timeout and death is
-  # attributed to its step as it arrives. The first unknown outcome stops
+  # each in a worker of its own, waited for as `worker/1` waits: every
+  # answer and death is attributed to its step as it arrives. The first
+  # unknown outcome stops
   # the group — nothing more is started, and what still runs is handed
   # back to be cancelled once the turn's stop is durable.
   defp run_concurrent(%State{} = state, items, cap) do
@@ -1304,20 +1293,10 @@ defmodule Aqua.Loop do
   defp collect(state, pending, running, cap) when map_size(running) < cap and pending != [] do
     [item | rest] = pending
     task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
-    deadline = System.monotonic_time(:millisecond) + @step_timeout_ms
-
-    collect(
-      state,
-      rest,
-      Map.put(running, task.ref, %{item: item, task: task, deadline: deadline}),
-      cap
-    )
+    collect(state, rest, Map.put(running, task.ref, %{item: item, task: task}), cap)
   end
 
   defp collect(state, pending, running, cap) do
-    {soonest_ref, %{deadline: deadline}} = Enum.min_by(running, fn {_ref, r} -> r.deadline end)
-    wait = max(deadline - System.monotonic_time(:millisecond), 0)
-
     receive do
       {ref, result} when is_map_key(running, ref) ->
         Process.demonitor(ref, [:flush])
@@ -1336,18 +1315,6 @@ defmodule Aqua.Loop do
         {%{item: item}, running} = Map.pop(running, ref)
 
         case settle_dead(state, item, reason) do
-          {:uncertain, step, why} ->
-            {:uncertain, step, why, Map.values(running) ++ pending_items(pending)}
-
-          _ ->
-            collect(state, pending, running, cap)
-        end
-    after
-      wait ->
-        {%{item: item, task: task}, running} = Map.pop(running, soonest_ref)
-        Aqua.Loop.Worker.shutdown(task)
-
-        case settle_dead(state, item, :timeout) do
           {:uncertain, step, why} ->
             {:uncertain, step, why, Map.values(running) ++ pending_items(pending)}
 
@@ -1587,7 +1554,7 @@ defmodule Aqua.Loop do
 
   defp render(%Call{} = call, result), do: Binding.render(call, result)
 
-  # A worker that died or timed out: a step it never dispatched is
+  # A worker that died: a step it never dispatched is
   # skipped; a dispatched one has what it started stopped, then settles by
   # `Prima.TurnStep.unresolved/1` — one safe to run again closes as an
   # error the model may retry, a flush's closes with its outcome unknown, and one whose effect is unknown is reported
@@ -1767,7 +1734,7 @@ defmodule Aqua.Loop do
       {:ok, step} ->
         case pause_root(state, :launch, step.id) do
           {:ok, state} ->
-            case worker(fn -> Aqua.Launch.run(ctx(state), step) end, @launch_timeout_ms) do
+            case worker(fn -> Aqua.Launch.run(ctx(state), step) end) do
               {:ok, {:ok, %{execution_id: id, result: result}}} ->
                 state |> close_launch(step, unwrap(call), {:ok, id, result}) |> resumed()
 
@@ -2246,7 +2213,7 @@ defmodule Aqua.Loop do
     else
       item = %{step: step, call: {:ok, call}, approval: nil}
 
-      case worker(fn -> run_one(state, item) end, @step_timeout_ms) do
+      case worker(fn -> run_one(state, item) end) do
         {:ok, {:uncertain, step, reason}} ->
           close(state, step, call, {:unknown, "the note's outcome is unknown: #{reason}"})
 
@@ -2443,14 +2410,23 @@ defmodule Aqua.Loop do
   defp announce(%State{} = state, kind, data),
     do: Tape.announce(guest(state), state.turn.thread_id, kind, data)
 
-  defp worker(fun, timeout) do
-    task = Aqua.Loop.Worker.async(fun)
-
-    case Aqua.Loop.Worker.yield(task, timeout) || Aqua.Loop.Worker.shutdown(task) do
-      {:ok, result} -> {:ok, result}
-      {:exit, reason} -> {:exit, reason}
-      nil -> {:exit, :timeout}
-    end
+  # A worker is waited for until it answers or dies, with no clock of the
+  # loop's over it, since what it runs is bounded where it runs. A
+  # catalyst run, a hand's, a brain's or a launched root's, ends at the
+  # deadline admission gave it (`Opus.Admission`), which the worker
+  # service enforces and reports, so its expiry closes the run lost and
+  # costs the athanor nothing (`Opus.Attempt`), where a waiter stopped by
+  # a clock here would be a kill counted against it; a worker service
+  # that stops answering is lapsed (`Opus.WorkerWatch`), and a run whose
+  # exit is never reported is stopped once its lease expires
+  # (`Opus.Sweeper`). A catalog or external call's handler is answered by
+  # the gate's own bound (`Sanctum.Dispatch`, "A handler that does not
+  # answer"). The `ui` event and the step's own rows are host calls under
+  # the store's bounds. A person's cancel stops the holder at once
+  # (`abort/4`), a lost lease kills it (`Opus.LeaseWatch`), and the
+  # holder's death stops its workers (`Aqua.Loop.Worker`).
+  defp worker(fun) do
+    fun |> Aqua.Loop.Worker.async() |> Aqua.Loop.Worker.yield(:infinity)
   end
 
   # The request the store keeps: the one sent, less the room excerpt the
