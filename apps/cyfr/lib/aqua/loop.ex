@@ -1593,9 +1593,11 @@ defmodule Aqua.Loop do
       {:ok, %{dispatch_state: "dispatched"} = fresh} ->
         # What the step started stops before the step settles: its child
         # execution, and the in-process handler the gate runs under the
-        # step's handle, which outlives the worker that claimed it
-        # (`Sanctum.RunningTasks`). The handle is the dead worker's own
-        # generation's, so a successor generation's call is untouched.
+        # step's handle. The handler also stops with the worker that
+        # claimed it (`Sanctum.RunningTasks`), on that server's own
+        # schedule; the cancel here orders its stop before the settlement.
+        # The handle is the dead worker's own generation's, so a successor
+        # generation's call is untouched.
         if id = cancellable(fresh), do: Opus.cancel(ctx(state), id)
         Aqua.Ops.cancel_call(handle(state, step))
 
@@ -2015,9 +2017,9 @@ defmodule Aqua.Loop do
 
   # What an interrupted step started stops before the step is settled,
   # advanced or closed: its child execution, and the in-process handler
-  # the gate runs under the step's handle, which outlives the worker and
-  # the runner that dispatched it (`Sanctum.RunningTasks`). The handle names
-  # the step's own generation, so no other turn's call or successor
+  # the gate runs under the step's handle, if one still runs (it stops
+  # with the worker that claimed it, `Sanctum.RunningTasks`). The handle
+  # names the step's own generation, so no other turn's call or successor
   # generation is touched.
   defp interrupted(%State{} = state, step) do
     if id = cancellable(step), do: Opus.cancel(ctx(state), id)
@@ -2099,7 +2101,7 @@ defmodule Aqua.Loop do
             with {:ok, rows} <- Tape.projection(guest(state), state.turn),
                  do: compact(state, rows, false)
 
-          :skipped ->
+          {:skipped, state} ->
             summarize(state, rows, boundary)
 
           {:error, :superseded} = superseded ->
@@ -2131,7 +2133,7 @@ defmodule Aqua.Loop do
       keep_notes(%{state | sent_upto: highest_seq(rows)}, step, request)
     else
       {:error, :superseded} = superseded -> superseded
-      _not_flushed -> :skipped
+      _not_flushed -> {:skipped, state}
     end
   end
 
@@ -2170,27 +2172,33 @@ defmodule Aqua.Loop do
   end
 
   # The reply's text is not the turn's and is not recorded; its calls are.
+  # The flush continues the brain's session, so the session its answer or
+  # its refusal names is kept as a chat round's is (`on_response/3`,
+  # `refused/2`), and the next request continues it: a brain that counts
+  # its usage against the session it is handed counts the flush once.
   defp keep_notes(%State{} = state, step, request) do
     case model_call(state, step, request, nil) do
       {:ok, data} ->
         {resolved, tool_calls} = resolve_calls(state, step, List.wrap(data["content"]))
         usage = data["usage"] || %{}
 
-        case Tape.record_response(guest(state), state.turn, step, %{
-               text: nil,
-               usage: usage,
-               stop_reason: data["stop_reason"],
-               tool_calls: tool_calls
-             }) do
-          {:ok, %{calls: recorded}} ->
-            state = count_usage(state, usage)
+        with {:ok, session} <- Prima.Model.response_session(data),
+             {:ok, %{calls: recorded}} <-
+               Tape.record_response(guest(state), state.turn, step, %{
+                 text: nil,
+                 usage: usage,
+                 stop_reason: data["stop_reason"],
+                 session: session,
+                 tool_calls: tool_calls
+               }) do
+          state = count_usage(%{state | session: session || state.session}, usage)
 
-            Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-              keep_note(state, call_step, call)
-            end)
+          Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
+            keep_note(state, call_step, call)
+          end)
 
-            {:flushed, state}
-
+          {:flushed, state}
+        else
           {:error, :superseded} = superseded ->
             superseded
 
@@ -2198,15 +2206,20 @@ defmodule Aqua.Loop do
             _ =
               Tape.close_step(guest(state), state.turn, step, "error", %{error: describe(reason)})
 
-            :skipped
+            {:skipped, state}
         end
 
       {:error, :superseded} = superseded ->
         superseded
 
+      {:error, %{"type" => _} = error} ->
+        closed = refused(error, describe(error))
+        _ = Tape.close_step(guest(state), state.turn, step, "error", closed)
+        {:skipped, %{state | session: closed[:session] || state.session}}
+
       {failure, reason} when failure in [:error, :exit] ->
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: describe(reason)})
-        :skipped
+        {:skipped, state}
     end
   end
 

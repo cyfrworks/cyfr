@@ -1880,12 +1880,11 @@ defmodule Aqua.RunnerTest do
 
     # The gate task is independent of the Aqua worker tree. Plant the
     # same claimed and registered handle a catalog dispatch owns while
-    # this real turn is running. Its claimer goes with the loop, while
-    # async_nolink leaves the handler for the continuation to cancel.
+    # this real turn is running, under a claimer that outlives the loop
+    # (a claimer's death stops its handler on its own), so only the
+    # continuation's cancel stops it.
     claimer =
       spawn(fn ->
-        loop_ref = Process.monitor(pids.loop)
-
         receive do
           :claim ->
             :ok = Sanctum.RunningTasks.claim(handle)
@@ -1897,9 +1896,7 @@ defmodule Aqua.RunnerTest do
             end)
         end
 
-        receive do
-          {:DOWN, ^loop_ref, :process, _, _} -> exit(:killed)
-        end
+        Process.sleep(:infinity)
       end)
 
     # Registered before the claim starts: even an earlier assertion
@@ -1911,7 +1908,6 @@ defmodule Aqua.RunnerTest do
       Aqua.Ops.release_call(handle)
     end)
 
-    claimer_ref = Process.monitor(claimer)
     send(claimer, :claim)
     assert_receive {:recovery_handler_registered, handler}, 5_000
     handler_ref = Process.monitor(handler)
@@ -1921,7 +1917,6 @@ defmodule Aqua.RunnerTest do
     # dispatched step through takeover/adoption and Loop.settle/1;
     # the dead Runner cannot call its ordinary Loop.abort crash path.
     :ok = kill_and_await!(pids)
-    assert_receive {:DOWN, ^claimer_ref, :process, ^claimer, :killed}, 5_000
 
     assert_receive %ThreadEvent{
                      kind: :turn_paused,

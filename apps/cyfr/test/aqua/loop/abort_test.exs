@@ -71,6 +71,67 @@ defmodule Aqua.Loop.AbortTest do
              })
   end
 
+  # The gate's handler is claimed by the worker waiting on it. An abort
+  # that stops the worker and then finds the member's slot lost settles
+  # nothing here, so the worker's death alone must stop the handler.
+  test "a handler whose worker the abort stops is stopped even when the slot is lost before settling",
+       %{ctx: ctx, turn: turn} do
+    turn = started!(ctx, turn)
+
+    {:ok, model} =
+      TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
+        kind: "model",
+        fence: turn.fence
+      })
+
+    {:ok, %{calls: [%{step: call}]}} =
+      TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, model.id, %{
+        fence: turn.fence,
+        tool_calls: [%{tool_call_id: "c1", name: "notes.keep", tool: "notes", action: "keep"}]
+      })
+
+    {:ok, call} =
+      TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), call.id, %{fence: turn.fence})
+
+    handle = {turn.id, call.id, call.generation}
+    test = self()
+
+    worker =
+      spawn(fn ->
+        :ok = Sanctum.RunningTasks.claim(handle)
+
+        Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
+          :ok = Sanctum.RunningTasks.register_handle(handle, self())
+          send(test, {:handler, self()})
+          Process.sleep(:infinity)
+        end)
+
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:handler, handler}, 1_000
+    ref = Process.monitor(handler)
+
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+    stop = fn ->
+      worker_ref = Process.monitor(worker)
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 1_000
+      Arca.ControlPlane.record(:lost)
+    end
+
+    assert {:error, :control_plane_lost} = Aqua.Loop.abort(ctx, turn, "stopped", stop)
+
+    assert_receive {:DOWN, ^ref, :process, ^handler, :cancelled}, 1_000
+    :sys.get_state(Sanctum.RunningTasks)
+    assert [] = :ets.lookup(Sanctum.RunningTasks.Handles, handle)
+
+    # The step is the successor's to settle.
+    assert {:ok, %{dispatch_state: "dispatched"}} =
+             TurnStorage.step(Sanctum.Context.actor(ctx), call.id)
+  end
+
   test "a model request closes as an error, and a flush's call closes with its outcome unknown",
        %{
          ctx: ctx,
