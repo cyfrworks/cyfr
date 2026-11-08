@@ -521,6 +521,12 @@ defmodule Cyfr.Cluster.Cell do
   # the suite's own configuration describes: the shared store, the cluster
   # flag and its six conditions, and the background work `config/test.exs`
   # turns off because a sandbox connection cannot lend itself to a timer.
+  defp member_endpoint do
+    endpoint = Application.fetch_env!(:cyfr, CyfrWeb.Endpoint)
+    http = Keyword.merge(Keyword.get(endpoint, :http, []), ip: {127, 0, 0, 1}, port: 0)
+    Keyword.merge(endpoint, http: http, server: true)
+  end
+
   defp member_env(member) do
     [
       arca: [
@@ -568,12 +574,10 @@ defmodule Cyfr.Cluster.Cell do
         {:host_api_bind, {127, 0, 0, 1}},
         {:host_api_url, member.host_api},
         {:locus_runtime_workers, []},
-        {CyfrWeb.Endpoint,
-         [
-           http: [ip: {127, 0, 0, 1}, port: 0],
-           secret_key_base: Application.fetch_env!(:cyfr, CyfrWeb.Endpoint)[:secret_key_base],
-           server: true
-         ]}
+        # Merged over the inherited endpoint, since `Application.put_all_env/1`
+        # replaces the keyword whole: a member keeps the endpoint's adapter
+        # (`CyfrWeb.Ingress`, on Bandit) and the listener options.
+        {CyfrWeb.Endpoint, member_endpoint()}
       ],
       libcluster: [
         {:topologies, [cyfr: [strategy: Cluster.Strategy.Epmd, config: [hosts: all_nodes()]]]}

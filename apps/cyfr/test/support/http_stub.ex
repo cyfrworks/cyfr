@@ -26,7 +26,12 @@ defmodule Cyfr.Test.HTTPStub do
   `on_exit` callbacks, and a sweep of the test's own processes may run
   before it (`Cyfr.Test.Sandbox`), so each server runs under the suite's
   supervisor (`serve!/0`, from the test helper) rather than the test's
-  lineage, and stays up for them.
+  lineage, and stays up for them. The check is what ends the server, so it
+  is bounded and its death is the server's: a request still in flight
+  15 seconds into the check fails the test, and a check that
+  dies (ExUnit kills an `on_exit` callback past the test's timeout) stops
+  the server. Either way the server kills the handlers it still runs and
+  closes its listener as it stops.
 
   One module plays both parts: this process holds the expectations, and
   Bandit serves this module as its plug, whose `init/1` takes the
@@ -36,6 +41,7 @@ defmodule Cyfr.Test.HTTPStub do
   use GenServer, restart: :temporary
 
   @supervisor Cyfr.Test.HTTPStub.Supervisor
+  @in_flight_wait 15_000
 
   @enforce_keys [:server, :port]
   defstruct [:server, :port]
@@ -89,8 +95,10 @@ defmodule Cyfr.Test.HTTPStub do
        when is_function(fun, 1),
        do: GenServer.call(server, {:route, route, expected, fun})
 
-  defp verify!(server) do
-    case GenServer.call(server, :verify, :infinity) do
+  # The check `open/0` registers; public for the stub's own test.
+  @doc false
+  def verify!(server) do
+    case GenServer.call(server, :verify, @in_flight_wait + 5_000) do
       :ok -> :ok
       {:error, message} -> raise ExUnit.AssertionError, message: message
       {:raised, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
@@ -124,7 +132,8 @@ defmodule Cyfr.Test.HTTPStub do
        pass: false,
        unexpected: nil,
        awaiting_down: [],
-       awaiting_verify: []
+       awaiting_verify: [],
+       verifier: nil
      }}
   end
 
@@ -194,8 +203,12 @@ defmodule Cyfr.Test.HTTPStub do
   def handle_call(:down, from, state),
     do: settle(%{state | awaiting_down: [from | state.awaiting_down]}) |> after_settle()
 
-  def handle_call(:verify, from, state),
-    do: settle(%{state | awaiting_verify: [from | state.awaiting_verify]}) |> after_settle()
+  def handle_call(:verify, {caller, _tag} = from, state) do
+    Process.send_after(self(), :in_flight_wait_over, @in_flight_wait)
+
+    settle(%{state | awaiting_verify: [from], verifier: Process.monitor(caller)})
+    |> after_settle()
+  end
 
   @impl GenServer
   def handle_cast({:result, ref, result}, state) do
@@ -204,8 +217,26 @@ defmodule Cyfr.Test.HTTPStub do
   end
 
   @impl GenServer
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{verifier: ref} = state),
+    do: {:stop, :normal, reclaim(state)}
+
   def handle_info({:DOWN, ref, :process, _pid, reason}, state),
     do: state |> record(ref, {:raised, :exit, reason, []}) |> settle() |> after_settle()
+
+  def handle_info(:in_flight_wait_over, state) do
+    late =
+      for {ref, route} <- state.in_flight do
+        Process.demonitor(ref, [:flush])
+
+        {:error,
+         "a request at #{describe(route)} was still in flight #{@in_flight_wait} ms into the check"}
+      end
+
+    # The late requests' handlers are killed as the check ends the server.
+    %{state | in_flight: %{}, unexpected: state.unexpected || List.first(late)}
+    |> settle()
+    |> after_settle()
+  end
 
   defp record(state, ref, result) do
     case Map.pop(state.in_flight, ref) do
@@ -242,7 +273,7 @@ defmodule Cyfr.Test.HTTPStub do
         state
 
       callers ->
-        state = stop_listener(state)
+        state = reclaim(state)
         result = verdict(state)
         Enum.each(callers, &GenServer.reply(&1, result))
         %{state | awaiting_verify: :answered}
@@ -259,6 +290,16 @@ defmodule Cyfr.Test.HTTPStub do
   defp stop_listener(%{listener: listener} = state) do
     :ok = ThousandIsland.stop(listener)
     %{state | listener: nil}
+  end
+
+  # The server's end: every connection process, and with it any handler
+  # still running, is killed before the listener stops.
+  defp reclaim(%{listener: nil} = state), do: state
+
+  defp reclaim(%{listener: listener} = state) do
+    {:ok, connections} = ThousandIsland.connection_pids(listener)
+    Enum.each(connections, &Process.exit(&1, :kill))
+    stop_listener(state)
   end
 
   defp verdict(%{pass: true}), do: :ok
