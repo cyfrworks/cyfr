@@ -15,6 +15,10 @@
 #     answer is `unverified` for a signature (the stand-in checks none, and
 #     a step refused that way changes nothing at a directory), a tombstone
 #     step made through the stand-in's own operator route;
+#   - the account log's grammar: every chain of tests/fixtures/identity.json
+#     with an entry naming a passkey's maker (`aaguid`) is posted entry by
+#     entry, and its last entry is accepted, or refused with the field the
+#     chain names; none of them turns on a signature;
 #   - forwarding against a local fake upstream that records every header it
 #     receives: a GET copies only Accept and User-Agent, an upstream 3xx
 #     answers 502 and is not followed, any other method on a route the
@@ -41,6 +45,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 STANDIN = os.path.join(HERE, "standin.py")
 REGISTRY = json.load(open(os.path.join(ROOT, "tests", "fixtures", "registry_wire.json"), encoding="utf-8"))
 DIRECTORY = json.load(open(os.path.join(ROOT, "tests", "fixtures", "directory_wire.json"), encoding="utf-8"))
+IDENTITY = json.load(open(os.path.join(ROOT, "tests", "fixtures", "identity.json"), encoding="utf-8"))
 LIMITS = {"sixth genesis from one source", "identity capacity", "log capacity and recovery reserve"}
 REDIRECTED = "cyfr.run answered with a redirect, which the stand-in does not follow."
 
@@ -235,6 +240,30 @@ def directory_checks():
         standin.stop()
 
 
+# ---- the account log's grammar ------------------------------------------------
+
+def identity_checks():
+    entries = IDENTITY["entries"]
+    chains = [c for c in IDENTITY["chains"] if any("aaguid" in entries[n]["entry"] for n in c["entries"])]
+    check(len(chains) >= 4, "identity.json holds the chains of a passkey's maker", [c["name"] for c in chains])
+    for number, chain in enumerate(chains):
+        standin = StandIn("identity-%d" % number, "--directory", IDENTITY["directory"])
+        genesis, *rest = [entries[n]["entry"] for n in chain["entries"]]
+        status, text, _ = standin.request("POST", "/directory/v1/register", genesis)
+        identifier = json.loads(text).get("identifier") if status == 200 else None
+        answers = [standin.request("POST", "/directory/v1/%s/append" % identifier, entry)[:2] for entry in rest]
+        held = status == 200 and all(s == 200 for s, _ in answers[:-1])
+        last_status, last_text = answers[-1]
+        error = chain.get("error")
+        if error is None:
+            held = held and last_status == 200 and json.loads(last_text).get("result") == "accepted"
+        else:
+            want = {"error": "invalid", "reason": error["reason"], "field": error["field"]}
+            held = held and last_status == 422 and json.loads(last_text) == want
+        check(held, "identity: " + chain["name"], (status, text, answers))
+        standin.stop()
+
+
 # ---- forwarding -------------------------------------------------------------
 
 class Upstream(http.server.BaseHTTPRequestHandler):
@@ -338,6 +367,7 @@ def lifecycle_checks():
 try:
     registry_checks()
     directory_checks()
+    identity_checks()
     forwarding_checks()
     lifecycle_checks()
 finally:

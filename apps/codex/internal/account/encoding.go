@@ -39,6 +39,7 @@ var (
 	hostShape       = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
 	digestShape     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	identifierShape = regexp.MustCompile(`^per_[0-9a-f]{64}$`)
+	aaguidShape     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	pathShape       = regexp.MustCompile(`^(/[A-Za-z0-9._~!$&'()*+,;=:@%-]+)*$`)
 )
 
@@ -47,6 +48,10 @@ func IsDigest(v any) bool { s, ok := v.(string); return ok && digestShape.MatchS
 
 // IsIdentifier is whether v is an account's identifier, per_<hex>.
 func IsIdentifier(v any) bool { s, ok := v.(string); return ok && identifierShape.MatchString(s) }
+
+// isAAGUID is whether v is a passkey's maker as the log spells it: a
+// lowercase hyphenated UUID.
+func isAAGUID(v any) bool { s, ok := v.(string); return ok && aaguidShape.MatchString(s) }
 
 func isHost(s string) bool { return len(s) <= 253 && hostShape.MatchString(s) }
 

@@ -11,7 +11,11 @@ defmodule Prima.Identity.Entry do
 
     * `genesis` — `directory`, the URL of the directory that orders the
       log, and `recovery`, 1 to 8 distinct Ed25519 recovery public keys.
-    * `add_key` — `key`, a `Prima.Identity.Key`.
+    * `add_key` — `key`, a `Prima.Identity.Key`, and for a passkey,
+      optionally `aaguid`: the authenticator model its creation reported,
+      as a lowercase hyphenated UUID. It names the passkey's maker (a
+      password manager or a security key's model), never its person, and
+      is public with the rest of the log.
     * `remove_key` — `kid`, the key it removes.
     * `recover` — `keys`, 0 to 64 keys, and `recovery`, 1 to 8 recovery
       keys: the account's whole key set and recovery set from here on.
@@ -45,11 +49,25 @@ defmodule Prima.Identity.Entry do
           recovery: [binary()] | nil,
           key: Key.t() | nil,
           kid: String.t() | nil,
-          keys: [Key.t()] | nil
+          keys: [Key.t()] | nil,
+          aaguid: String.t() | nil
         }
 
   @enforce_keys [:kind, :seq, :at, :signer]
-  defstruct [:kind, :prev, :seq, :at, :signer, :sig, :directory, :recovery, :key, :kid, :keys]
+  defstruct [
+    :kind,
+    :prev,
+    :seq,
+    :at,
+    :signer,
+    :sig,
+    :directory,
+    :recovery,
+    :key,
+    :kid,
+    :keys,
+    :aaguid
+  ]
 
   @kinds %{
     "genesis" => :genesis,
@@ -69,7 +87,10 @@ defmodule Prima.Identity.Entry do
     add_recovery: ~w(prev recovery)
   }
 
+  @optional %{add_key: ~w(aaguid)}
+
   @signer ~r/\A(?:recovery:)?sha256:[0-9a-f]{64}\z/
+  @aaguid ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
 
   @doc """
   An unsigned entry from its fields (atom keys: `kind` and the kind's
@@ -93,7 +114,8 @@ defmodule Prima.Identity.Entry do
       "recovery" => attrs[:recovery] && Encoding.b64_keys(attrs[:recovery]),
       "key" => attrs[:key] && Key.encode(attrs[:key]),
       "kid" => attrs[:kid],
-      "keys" => attrs[:keys] && Enum.map(attrs[:keys], &Key.encode/1)
+      "keys" => attrs[:keys] && Enum.map(attrs[:keys], &Key.encode/1),
+      "aaguid" => attrs[:aaguid]
     }
     |> Encoding.compact()
     |> read(false)
@@ -120,6 +142,7 @@ defmodule Prima.Identity.Entry do
       "key" => entry.key && Key.encode(entry.key),
       "kid" => entry.kid,
       "keys" => entry.keys && Enum.map(entry.keys, &Key.encode/1),
+      "aaguid" => entry.aaguid,
       "sig" => encode_sig(entry.sig)
     })
   end
@@ -133,7 +156,7 @@ defmodule Prima.Identity.Entry do
          :ok <- size(bytes),
          :ok <- Encoding.protocol(map, Identity.protocol()),
          {:ok, kind} <- kind(map),
-         :ok <- Encoding.fields(map, fields(kind, signed?), []),
+         :ok <- Encoding.fields(map, fields(kind, signed?), Map.get(@optional, kind, [])),
          {:ok, seq} <- seq(map, kind),
          {:ok, at} <- Encoding.check(map, "at", &Encoding.ms?/1),
          {:ok, signer} <- Encoding.check(map, "signer", &signer?/1),
@@ -155,8 +178,11 @@ defmodule Prima.Identity.Entry do
 
   defp read_kind(:add_key, map) do
     case Key.decode(map["key"]) do
-      {:ok, key} -> {:ok, blank(key: key)}
-      :error -> {:error, {:invalid_field, "key"}}
+      {:ok, key} ->
+        with {:ok, aaguid} <- aaguid(map, key), do: {:ok, blank(key: key, aaguid: aaguid)}
+
+      :error ->
+        {:error, {:invalid_field, "key"}}
     end
   end
 
@@ -202,6 +228,22 @@ defmodule Prima.Identity.Entry do
   defp prev(map, _kind), do: Encoding.check(map, "prev", &Encoding.digest?/1)
 
   defp signer?(value), do: is_binary(value) and Regex.match?(@signer, value)
+
+  # A passkey's maker, absent or in its one spelling; a device key has none.
+  defp aaguid(map, %Key{kind: kind}) do
+    case Map.fetch(map, "aaguid") do
+      :error ->
+        {:ok, nil}
+
+      {:ok, aaguid} when kind == :passkey and is_binary(aaguid) ->
+        if Regex.match?(@aaguid, aaguid),
+          do: {:ok, aaguid},
+          else: {:error, {:invalid_field, "aaguid"}}
+
+      {:ok, _aaguid} ->
+        {:error, {:invalid_field, "aaguid"}}
+    end
+  end
 
   defp recovery(map) do
     with {:ok, keys} <- Encoding.keys(map, "recovery") do

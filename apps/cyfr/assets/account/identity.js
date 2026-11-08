@@ -54,6 +54,8 @@ const KIND_FIELDS = {
   recover: ["prev", "keys", "recovery"],
   add_recovery: ["prev", "recovery"]
 }
+const OPTIONAL_FIELDS = {add_key: ["aaguid"]}
+const AAGUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // An Ed25519 private key as WebCrypto imports it: the PKCS #8 prefix of
 // RFC 8410 before the 32-byte seed.
@@ -95,6 +97,12 @@ export async function keyOf({pub, credentialId}) {
   return credentialId
     ? {kid: await kid(pub), alg: "es256", kind: "passkey", pub: b64(pub), credential_id: b64(credentialId)}
     : {kid: await kid(pub), alg: "ed25519", kind: "device", pub: b64(pub)}
+}
+
+/** A passkey's `add_key` fields: its key and, when its creation reported one, its maker's `aaguid`. */
+export async function passkeyAdded({pub, credentialId, aaguid}) {
+  const key = await keyOf({pub, credentialId})
+  return aaguid ? {key, aaguid} : {key}
 }
 
 /** The genesis an account begins with, unsigned: signed by its first recovery key. */
@@ -261,7 +269,7 @@ async function read(map) {
   if (!Object.hasOwn(map, "kind")) refuse("missing_field", {field: "kind"})
   if (!KINDS.includes(map.kind)) refuse("unknown_kind", {kind: map.kind})
   const kind = map.kind
-  fields(map, [...COMMON, ...KIND_FIELDS[kind], "sig"])
+  fields(map, [...COMMON, ...KIND_FIELDS[kind], "sig"], OPTIONAL_FIELDS[kind])
   check(map, "seq", kind === "genesis" ? (seq) => seq === 0 : isMs)
   check(map, "at", isMs)
   check(map, "signer", (signer) => typeof signer === "string" && SIGNER.test(signer))
@@ -272,6 +280,8 @@ async function read(map) {
     recovery(map)
   } else if (kind === "add_key") {
     if (!(await decodeKey(map.key))) invalid("key")
+    // A passkey's maker, absent or in its one spelling; a device key has none.
+    if (Object.hasOwn(map, "aaguid") && !(map.key.kind === "passkey" && typeof map.aaguid === "string" && AAGUID.test(map.aaguid))) invalid("aaguid")
   } else if (kind === "remove_key") {
     check(map, "kid", isDigest)
   } else if (kind === "recover") {

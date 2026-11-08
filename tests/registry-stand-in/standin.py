@@ -46,7 +46,8 @@
 # refusal the vectors name that needs no signature: stale_head,
 # duplicate_key (it lists each log's kids from its entries), broken_link,
 # an entry of the wrong kind for its route, wrong_directory (a genesis
-# naming another directory than its own), a body over 16 KiB (413),
+# naming another directory than its own), a passkey's maker (`aaguid`)
+# beside a device key or in another spelling, a body over 16 KiB (413),
 # not_found and gone. POST /stand-in/tombstone/{identifier} is its
 # operator's tombstone, the stand-in's alone: cyfr.run's is an
 # administrator's action, a CYFR's the operation directory.tombstone.
@@ -97,6 +98,8 @@ KINDS = {
     "recover": ["prev", "keys", "recovery"],
     "add_recovery": ["prev", "recovery"],
 }
+OPTIONAL = {"add_key": ["aaguid"]}
+AAGUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def jcs(value):
@@ -267,11 +270,15 @@ class StandIn:
             raise invalid("missing_field", "kind")
         if value["kind"] not in KINDS:
             raise invalid("unknown_kind")
-        fields(value, COMMON + KINDS[value["kind"]] + ["sig"])
+        fields(value, COMMON + KINDS[value["kind"]] + ["sig"], OPTIONAL.get(value["kind"], ()))
         if value["kind"] == "genesis" and not isinstance(value["directory"], str):
             raise invalid("invalid_field", "directory")
         if value["kind"] != "genesis" and (not isinstance(value["prev"], str) or not DIGEST.match(value["prev"])):
             raise invalid("invalid_field", "prev")
+        # A passkey's maker, in its one spelling; a device key has none.
+        if "aaguid" in value and not (isinstance(value["key"], dict) and value["key"].get("kind") == "passkey"
+                                      and isinstance(value["aaguid"], str) and AAGUID.match(value["aaguid"])):
+            raise invalid("invalid_field", "aaguid")
         return value
 
     def log(self, identifier):
