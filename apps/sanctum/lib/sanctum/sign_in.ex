@@ -809,9 +809,11 @@ defmodule Sanctum.SignIn do
   end
 
   # The name the new page was offered, recorded once the registry says the
-  # account that answered holds it. Nothing it meets refuses the sign-in,
-  # which is made already: the person names themselves in Settings.
-  defp named(user, nil), do: user
+  # account that answered holds it; with none offered, the name the registry
+  # records for the account, asked by its identifier while this CYFR has no
+  # name for the person. Nothing either meets refuses the sign-in, which is
+  # made already: the person can still name themselves in Settings.
+  defp named(user, nil), do: learned(user)
 
   defp named(user, name) do
     case record_name(user.id, name) do
@@ -827,6 +829,24 @@ defmodule Sanctum.SignIn do
         user
     end
   end
+
+  defp learned(%{namespace: nil} = user) do
+    with {:ok, identifier} <- account_of(user.id),
+         {:ok, %Prima.HandleAnswer{handle: name}} <- Sanctum.Handle.name_of(identifier),
+         {:ok, named} <- record_namespace(user.id, name) do
+      named
+    else
+      {:error, reason} ->
+        Logger.info(
+          "[Sanctum.SignIn] the account's name was not learned at sign-in: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+
+        user
+    end
+  end
+
+  defp learned(user), do: user
 
   defp registry_outcome(held, signed) do
     %{

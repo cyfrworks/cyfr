@@ -20,6 +20,8 @@
 # The registry (the shapes of tests/fixtures/registry_wire.json):
 #   GET  /v1/handles/{h}               the handle's answer, cyfr-handle/v1,
 #                                      or HANDLE_NOT_FOUND
+#   GET  /v1/identities/{id}/handle    the same for the one name {id} holds,
+#                                      or HANDLE_NOT_FOUND
 #   GET  /v1/legal/version             {"policy_version", "policies"}
 #   POST /v1/legal/accept              a signed policy.accept
 #   POST /v1/namespaces/personal/claim a signed handle.claim; a name another
@@ -205,6 +207,13 @@ class StandIn:
         with self.state.lock:
             identifier = self.state.data["names"].get(handle)
         if identifier is None:
+            raise registry_refusal(404, "HANDLE_NOT_FOUND")
+        return 200, jcs(self.answer_for(handle, identifier))
+
+    def name_of(self, identifier):
+        with self.state.lock:
+            handle = next((h for h, held in self.state.data["names"].items() if held == identifier), None)
+        if handle is None:
             raise registry_refusal(404, "HANDLE_NOT_FOUND")
         return 200, jcs(self.answer_for(handle, identifier))
 
@@ -400,6 +409,8 @@ class StandIn:
         owned = routes.get(tuple(parts))
         if owned is None and len(parts) == 3 and parts[:2] == ["v1", "handles"]:
             owned = ("GET", lambda: self.handle(parts[2]))
+        if owned is None and len(parts) == 4 and parts[:2] == ["v1", "identities"] and parts[3] == "handle":
+            owned = ("GET", lambda: self.name_of(parts[2]))
         if owned is None and len(parts) == 3 and parts[:2] == ["directory", "v1"] and parts[2] != "register":
             owned = ("GET", lambda: self.page(parts[2], query))
         if owned is None and len(parts) == 4 and parts[:2] == ["directory", "v1"] and parts[3] == "append":

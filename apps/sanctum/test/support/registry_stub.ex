@@ -67,25 +67,33 @@ defmodule Sanctum.Test.RegistryStub do
   holds.
   """
   def handles!(handles, directory \\ @directory) when is_map(handles) do
-    start!(fn %{method: "GET", path: "/v1/handles/" <> handle} ->
-      case Map.get(handles, handle) do
-        nil ->
-          refusal(:handle_not_found)
+    start!(fn
+      %{method: "GET", path: "/v1/handles/" <> handle} ->
+        case Map.get(handles, handle) do
+          nil -> refusal(:handle_not_found)
+          :close -> :close
+          identifier -> {200, handle_answer(handle, identifier, directory)}
+        end
 
-        :close ->
-          :close
+      # The reverse: the one name an identifier holds, as cyfr.run answers it.
+      %{method: "GET", path: "/v1/identities/" <> rest} ->
+        identifier = String.replace_suffix(rest, "/handle", "")
 
-        identifier ->
-          {200,
-           answer(%{
-             "protocol" => Prima.HandleAnswer.protocol(),
-             "registry" => @host,
-             "handle" => handle,
-             "identifier" => identifier,
-             "directory" => directory
-           })}
-      end
+        case Enum.find(handles, fn {_handle, held} -> held == identifier end) do
+          nil -> refusal(:handle_not_found)
+          {handle, ^identifier} -> {200, handle_answer(handle, identifier, directory)}
+        end
     end)
+  end
+
+  defp handle_answer(handle, identifier, directory) do
+    answer(%{
+      "protocol" => Prima.HandleAnswer.protocol(),
+      "registry" => @host,
+      "handle" => handle,
+      "identifier" => identifier,
+      "directory" => directory
+    })
   end
 
   @doc """

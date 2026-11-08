@@ -107,6 +107,39 @@ defmodule Sanctum.HandleTest do
     assert {:error, :malformed_answer} = Handle.resolve("alice")
   end
 
+  test "name_of/1 answers the name an identifier holds, as the name's own answer", %{
+    dir: dir,
+    account: alice
+  } do
+    RegistryStub.handles!(%{"alice" => alice.identifier}, dir.url)
+    assert {:ok, %HandleAnswer{} = answer} = Handle.name_of(alice.identifier)
+    assert answer.handle == "alice"
+    assert answer.identifier == alice.identifier
+    assert answer.registry == RegistryStub.host()
+    assert answer.directory == dir.url
+    assert_received {:registry_request, %{method: "GET", path: path, body: ""}}
+    assert path == "/v1/identities/" <> alice.identifier <> "/handle"
+  end
+
+  test "name_of/1: an identifier holding no name is not found, another's answer is malformed, and a spelling outside the grammar asks nothing",
+       %{dir: dir, account: alice} do
+    other = DirectoryServer.account!(dir.dir, dir.url)
+    RegistryStub.handles!(%{"alice" => alice.identifier}, dir.url)
+    assert {:error, :not_found} = Handle.name_of(other.identifier)
+
+    RegistryStub.start!(fn _ -> {200, rehosted("an answer")} end)
+    assert {:error, :malformed_answer} = Handle.name_of(other.identifier)
+
+    assert {:error, :invalid_identifier} = Handle.name_of("alice")
+    assert {:error, :invalid_identifier} = Handle.name_of("per_" <> String.duplicate("g", 64))
+    refute_received {:registry_request, %{path: "/v1/identities/alice" <> _}}
+
+    capture_log(fn ->
+      RegistryStub.start!(fn _ -> :close end)
+      assert {:error, :registry_unavailable} = Handle.name_of(alice.identifier)
+    end)
+  end
+
   test "a handle no one holds is not found, its envelope or a bare 404" do
     RegistryStub.start!(fn _ -> RegistryStub.refusal(:handle_not_found) end)
     assert {:error, :not_found} = Handle.resolve("alice")

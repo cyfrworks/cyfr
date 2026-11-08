@@ -97,7 +97,7 @@ Your first sign-in at a CYFR makes you a person there, with an athanor of your o
 
 ### Your name at a CYFR
 
-A CYFR records your name once the account service confirms the name is your account's: when you create your account from an invitation link and keep the name it offered, or when you type it under **Settings → Your name → Finish your name**. Until then that CYFR has no name for you.
+A CYFR records your name once the account service confirms the name is your account's: at a sign-in, it asks the account service which name your identifier holds, so your first sign-in there names you; when you create your account from an invitation link and keep the name it offered; or when you type it under **Settings → Your name → Finish your name**, which is the way back when the account service could not be reached at sign-in. Until then that CYFR has no name for you.
 
 ### Confirming a change
 
