@@ -66,4 +66,4 @@ Not verified without a Codex account: a real model's turn (its streaming, usage 
 
 ## Building
 
-`scripts/build-seed-guest.sh seed/components/catalysts/local/openai-codex/0.1.0` builds `catalyst.wasm` and writes `src/build.stamp`. `cargo test` in `src/` runs the contract and protocol tests on the host target, against a fake app-server scripted from the lines 0.167.0 wrote and against the shared vectors `tests/fixtures/model_chat.json`. `tests/locus-backends-image/openai_codex.py` drives the built catalyst against a fake Codex in the backends image.
+`scripts/build-seed-guest.sh seed/components/catalysts/local/openai-codex/0.1.1` builds `catalyst.wasm` and writes `src/build.stamp`. `cargo test` in `src/` runs the contract and protocol tests on the host target, against a fake app-server scripted from the lines 0.167.0 wrote and against the shared vectors `tests/fixtures/model_chat.json`. `tests/locus-backends-image/openai_codex.py` drives the built catalyst against a fake Codex in the backends image.
