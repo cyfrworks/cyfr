@@ -746,6 +746,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
   describe "an ask from the desktop" do
     test "opens the panel with Prism's sentence after the person's draft, attaching and sending nothing",
          %{conn: conn, me: me, mine: mine} do
+      # The catalogue held, so the pane lists its models with no run that
+      # could outlive the test.
+      :ok = PrismWeb.ModelCatalog.remember(mine.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(mine.id) end)
+
       {:ok, shell, _} = live(conn, "/a/#{route(mine)}/canvas")
       topic = :sys.get_state(shell.pid).socket.assigns.aqua_ask
       panel = child!(shell, "aqua-panel")
@@ -776,6 +781,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
       # Nothing was sent: no thread of You was made, and nothing is attached.
       assert Threads.list(Sanctum.Context.actor(me)) == []
       assert :sys.get_state(pane.pid).socket.assigns.uploads.attachments.entries == []
+
+      Cyfr.Test.Sandbox.end_views()
     end
   end
 end
