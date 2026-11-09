@@ -502,7 +502,7 @@ defmodule Prism.FramesTest do
           do: assert(Frames.handshake(t, id, desktop) == :error)
     end
 
-    test "an app opened on a subject is handed it beside its bearer, once, and only before" do
+    test "an app opened on a subject is handed it beside its bearer, and one that runs holds the new one for the view to tell" do
       subject = %{"kind" => "run", "id" => "exec_0190f3a2"}
 
       t =
@@ -512,12 +512,18 @@ defmodule Prism.FramesTest do
         ])
         |> Frames.put_subject({:full, "iframe_a"}, subject)
 
+      # Before its handshake the subject rides it, and nothing is due.
+      refute Frames.subject_due?(Frames.get(t, {:full, "iframe_a"}))
+
       assert {:ok, %{"credential" => "one-bearer", "subject" => ^subject}, _, t} =
                Frames.handshake(t, "frm_subject_one", nil)
 
-      # Once its bearer is handed over a subject changes nothing of it.
-      t = Frames.put_subject(t, {:full, "iframe_a"}, %{"kind" => "run", "id" => "exec_other"})
-      assert Frames.get(t, {:full, "iframe_a"}).subject == subject
+      # Once it runs, a new subject is held on the frame for the view to
+      # tell its bridge.
+      other = %{"kind" => "run", "id" => "exec_other"}
+      t = Frames.put_subject(t, {:full, "iframe_a"}, other)
+      assert Frames.get(t, {:full, "iframe_a"}).subject == other
+      assert Frames.subject_due?(Frames.get(t, {:full, "iframe_a"}))
 
       assert {:ok, reply, _, _t} = Frames.handshake(t, "frm_subject_two", nil)
       assert reply == %{"credential" => "two-bearer"}

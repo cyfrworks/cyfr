@@ -48,6 +48,7 @@
   var SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"]);
   var PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"]);
   var PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"]);
+  var CANCEL_REASONS = Object.freeze(["too_soon"]);
   var STAGES = Object.freeze(["load", "runtime"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
@@ -63,6 +64,7 @@
   var DESKTOP_ID = /^[a-z][a-z0-9_-]{0,62}$/;
   var SUBJECT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/;
   var MAX_PRESS_VALUE = 256;
+  var MAX_CALL = 2147483647;
   var ACCENT = /^#[0-9a-f]{6}$/;
   var LOCALE = /^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,7}$/;
   var TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]{0,31}(\/[A-Za-z0-9][A-Za-z0-9_+-]{0,31}){0,2}$/;
@@ -89,6 +91,7 @@
   var isBoundedText = (value, max) => isText(value) && value !== "" && codePointCount(value) <= max && !Array.from(value).some(isControl);
   var isDesktopId = (id) => typeof id === "string" && DESKTOP_ID.test(id);
   var isPressValue = (value) => isBoundedText(value, MAX_PRESS_VALUE);
+  var isCall = (call) => Number.isInteger(call) && call >= 1 && call <= MAX_CALL;
   var isSubject = (subject) => isObject(subject) && sameKeys(subject, ["kind", "id"]) && SUBJECT_KINDS.includes(subject.kind) && typeof subject.id === "string" && SUBJECT_ID.test(subject.id);
   function isFrameId(id) {
     return typeof id === "string" && FRAME_ID.test(id);
@@ -237,8 +240,9 @@
     "subject"
   ]);
   var TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"]);
-  var ANSWER_VERBS = Object.freeze(["pressed", "prefs"]);
-  var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop"]);
+  var ANSWER_OF = Object.freeze({ press: "pressed", prefs: "prefs" });
+  var ANSWER_VERBS = Object.freeze(Object.values(ANSWER_OF));
+  var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"]);
   var POSTURES = ["desk", "hand"];
   var SHELL_STATES = ["live", "frozen"];
   var MAX_STREAMS = 64;
@@ -278,14 +282,20 @@
     if (!isPerson(block.person)) return "a canvas's person is exactly a name, or none";
     return null;
   }
-  var isOutcome = (args, outcomes) => outcomes.includes(args.outcome) && (args.outcome === "refused" ? typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason) : !("reason" in args));
+  var isOutcome = (args, outcomes) => {
+    if (!outcomes.includes(args.outcome)) return false;
+    if (args.outcome === "refused") return typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason);
+    if (args.outcome === "cancelled") return !("reason" in args) || CANCEL_REASONS.includes(args.reason);
+    return !("reason" in args);
+  };
+  var withReason = (args, keys) => "reason" in args ? [...keys, "reason"] : keys;
   function pressedError(args) {
-    const keys = args.outcome === "refused" ? ["control", "outcome", "reason"] : ["control", "outcome"];
-    return sameKeys(args, keys) && isDesktopId(args.control) && isOutcome(args, PRESS_OUTCOMES) ? null : "pressed is exactly a control and its outcome, with a reason when refused";
+    const keys = withReason(args, ["control", "call", "outcome"]);
+    return sameKeys(args, keys) && isDesktopId(args.control) && isCall(args.call) && isOutcome(args, PRESS_OUTCOMES) ? null : "pressed is exactly a control, its call and its outcome, with a reason when refused or cancelled too soon";
   }
   function prefsAnswerError(args) {
-    const keys = args.outcome === "refused" ? ["outcome", "document", "revision", "reason"] : ["outcome", "document", "revision"];
-    return sameKeys(args, keys) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES) ? null : "prefs is exactly an outcome, a document and its revision, with a reason when refused";
+    const keys = withReason(args, ["call", "outcome", "document", "revision"]);
+    return sameKeys(args, keys) && isCall(args.call) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES) ? null : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused or cancelled too soon";
   }
   function toFrameArgsError(verb, args, frame) {
     switch (verb) {
@@ -365,8 +375,8 @@
     const unshown = [];
     let desktop = null;
     let subject = null;
-    const presses = /* @__PURE__ */ new Map();
-    const writes = [];
+    let nextCall = 1;
+    const calls = /* @__PURE__ */ new Map();
     let settle;
     const credentialArrived = new Promise((resolve) => {
       settle = resolve;
@@ -404,7 +414,11 @@
     }
     function onTold({ verb: told, args }) {
       if (told === "subject") {
-        if (kind === null && subject === null) subject = Object.freeze({ kind: args.kind, id: args.id });
+        if (kind === "canvas") return;
+        subject = Object.freeze({ kind: args.kind, id: args.id });
+        if (kind === null) return;
+        latest.set("subject", subject);
+        for (const entry of handlers.get("subject")) deliver("subject", entry, subject);
         return;
       }
       if (told === "canvas") {
@@ -415,11 +429,13 @@
         return tellDesktop();
       }
       if (kind !== "canvas") return;
-      if (told === "pressed") return answered(presses.get(args.control), answerOf(args));
+      if (told === "pressed") return answered(told, args.call, answerOf(args));
       if (told === "prefs") {
+        const settle2 = take(told, args.call);
+        if (!settle2) return;
         desktop = __spreadProps(__spreadValues({}, desktop), { prefs: { document: args.document, revision: args.revision } });
         tellDesktop();
-        return answered(writes, answerOf(args));
+        return settle2(answerOf(args));
       }
       const value = heard(told, args);
       latest.set(told, value);
@@ -440,23 +456,31 @@
       if ("document" in args) Object.assign(answer2, { document: args.document, revision: args.revision });
       return Object.freeze(answer2);
     }
-    function answered(queue, answer2) {
-      const waiting = queue ? queue.shift() : void 0;
-      if (waiting) waiting(answer2);
+    function answered(verb2, call2, answer2) {
+      const settle2 = take(verb2, call2);
+      if (settle2) settle2(answer2);
     }
-    function awaitAnswer(queue, name, args) {
+    function take(verb2, call2) {
+      const waiting = calls.get(call2);
+      if (!waiting || waiting.answer !== verb2) return null;
+      calls.delete(call2);
+      return waiting.settle;
+    }
+    function awaitAnswer(name, args) {
+      const call2 = nextCall++;
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
-          const at = queue.indexOf(done);
-          if (at !== -1) queue.splice(at, 1);
+          calls.delete(call2);
           resolve(UNCERTAIN);
         }, ANSWER_TIMEOUT_MS);
-        const done = (answer2) => {
-          clearTimeout(timer);
-          resolve(answer2);
-        };
-        queue.push(done);
-        verb(name, args);
+        calls.set(call2, {
+          answer: ANSWER_OF[name],
+          settle: (answer2) => {
+            clearTimeout(timer);
+            resolve(answer2);
+          }
+        });
+        verb(name, __spreadProps(__spreadValues({}, args), { call: call2 }));
       });
     }
     function shown() {
@@ -476,8 +500,8 @@
     }
     function send(name, args) {
       if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) {
-        if (name === "press" && "control" in args) answered(presses.get(args.control), CANCELLED);
-        if (name === "prefs") answered(writes, CANCELLED);
+        if (name === "press" && "control" in args) answered("pressed", args.call, CANCELLED);
+        if (name === "prefs") answered("prefs", args.call, CANCELLED);
         return;
       }
       post(name, args);
@@ -629,7 +653,10 @@
       get desktop() {
         return desktopValue();
       },
-      /** On an app opened on a subject, that subject, `{kind, id}`, or null. */
+      /**
+       * On an app opened on a subject, that subject, `{kind, id}`, or null;
+       * an app opened again on another hears it through `cyfr.on("subject")`.
+       */
       get subject() {
         return subject;
       },
@@ -700,7 +727,9 @@
        * person's, and answers its outcome: `{outcome: "accepted"}`,
        * `{outcome: "refused", reason}` with the refusal's class, or
        * `{outcome: "cancelled"}` when no input of the person's carried it or
-       * the canvas was not shown. Nothing is tried again.
+       * the canvas was not shown, with `reason: "too_soon"` when it came
+       * within a few seconds of the last spend of the activation. Nothing is
+       * tried again.
        *
        * Its first argument a binding id (as a `feed.results` event carries
        * one) and its second an action's name, it presses that feed's action
@@ -715,8 +744,7 @@
         if (!isDesktopId(control)) return invalid("a control is named by its id");
         if (value !== null && !isPressValue(value)) return invalid("a pressed value is text of 1 to 256 code points");
         if (!framed) return Promise.resolve(CANCELLED);
-        if (!presses.has(control)) presses.set(control, []);
-        return awaitAnswer(presses.get(control), "press", value === null ? { control } : { control, value });
+        return awaitAnswer("press", value === null ? { control } : { control, value });
       },
       /**
        * On a canvas, write the person's preferences for it: `document`,
@@ -725,7 +753,8 @@
        * revision the canvas holds. Answers `{outcome, document, revision}`:
        * `saved`, `stale` (another write came first; the document is the
        * current one, to write over), `refused` with its `reason`, or
-       * `cancelled` when no input of the person's carried it.
+       * `cancelled` when no input of the person's carried it, with `reason`
+       * `too_soon` when it came within a few seconds of the last spend.
        * @returns {Promise<{outcome: string, document: object, revision: number, reason?: string}>}
        */
       prefs(document2) {
@@ -733,7 +762,7 @@
           return invalid("preferences are an object");
         }
         if (!framed) return Promise.resolve(CANCELLED);
-        return awaitAnswer(writes, "prefs", { document: document2 });
+        return awaitAnswer("prefs", { document: document2 });
       },
       /**
        * On a canvas, ask AQUA about one of its widgets, by the widget's id:
@@ -766,13 +795,14 @@
        * tinctures, `[{ref, name, icon, open}]`), `posture` (`desk` or
        * `hand`), `covered` (the rects of it, `{x, y, width, height}` in its
        * own pixels, that the shown apps cover), `state` (`live` or
-       * `frozen`) or `desktop` (as `cyfr.desktop` reads it). The latest
-       * value, if one has come, is handed to a new handler first.
+       * `frozen`) or `desktop` (as `cyfr.desktop` reads it); on an app,
+       * `subject`, what it was opened on again. The latest value, if one has
+       * come, is handed to a new handler first.
        * @returns {function} stops the handler hearing more
        */
       on(event, handler) {
         if (!CANVAS_EVENTS.includes(event)) {
-          throw new TypeError("cyfr.on takes installed, posture, covered, state or desktop");
+          throw new TypeError("cyfr.on takes installed, posture, covered, state, desktop or subject");
         }
         if (typeof handler !== "function") throw new TypeError("cyfr.on takes a function");
         const entry = { handler };

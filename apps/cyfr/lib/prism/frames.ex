@@ -557,24 +557,36 @@ defmodule Prism.Frames do
   def find_frame(%__MODULE__{} = t, frame_id), do: find(t, frame_id)
 
   @doc """
-  Give the app under `key` the subject it is opened on, handed to it at
-  its handshake (`handshake/3`). A frame whose bearer was handed over
-  already, a canvas's or none keeps what it holds: opening an app on a
-  subject changes nothing of a page that runs.
+  Give the app under `key` the subject it is opened on: one whose bearer
+  is not handed over yet is handed it at its handshake (`handshake/3`);
+  one that runs is the view's to tell (`subject_due?/1`). A canvas, a
+  refused frame or none keeps what it holds.
   """
   @spec put_subject(t(), key(), map()) :: t()
   def put_subject(%__MODULE__{} = t, key, subject) do
     case get(t, key) do
-      %{key: {kind, _, _}, bearer: bearer} = frame when kind == :app and is_binary(bearer) ->
+      %{key: {kind, _, _}, state: state} = frame when kind == :app and state != :refused ->
         put_frame(t, key, %{frame | subject: subject})
 
-      %{key: {:full, _}, bearer: bearer} = frame when is_binary(bearer) ->
+      %{key: {:full, _}, state: state} = frame when state != :refused ->
         put_frame(t, key, %{frame | subject: subject})
 
-      _handed_canvas_or_none ->
+      _canvas_refused_or_none ->
         t
     end
   end
+
+  @doc """
+  Whether `frame` runs past its handshake, so a subject given to it now
+  reaches it only when the view tells its bridge: its bearer was handed
+  over and it is not refused.
+  """
+  @spec subject_due?(frame() | nil) :: boolean()
+  def subject_due?(%{bearer: nil, state: state, subject: subject})
+      when state != :refused and is_map(subject),
+      do: true
+
+  def subject_due?(_frame), do: false
 
   @doc "Count one dropped frame message."
   @spec drop_message(t()) :: t()

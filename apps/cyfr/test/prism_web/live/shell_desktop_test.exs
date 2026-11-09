@@ -208,6 +208,7 @@ defmodule PrismWeb.ShellDesktopTest do
   # the ordinal of a fresh input, unless `input` names one.
   defp verb!(view, frame_id, verb, args, input \\ :fresh) do
     input = if input == :fresh, do: System.unique_integer([:positive, :monotonic]), else: input
+    args = with_call(verb, args)
 
     payload =
       %{"frame" => frame_id, "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)}
@@ -218,6 +219,14 @@ defmodule PrismWeb.ShellDesktopTest do
       if(input, do: Map.put(payload, "input", input), else: payload)
     )
   end
+
+  # A press of a control and a write carry the call number their answer
+  # carries back, as the SDK sends them.
+  defp with_call(:press, %{"control" => _} = args), do: Map.put_new(args, "call", next_call())
+  defp with_call(:prefs, args), do: Map.put_new(args, "call", next_call())
+  defp with_call(_verb, args), do: args
+
+  defp next_call, do: System.unique_integer([:positive, :monotonic])
 
   defp answer!(view, frame_id, verb) do
     assert_push_event(view, "canvas_answer", %{frame: ^frame_id, verb: ^verb, args: args})
@@ -466,10 +475,15 @@ defmodule PrismWeb.ShellDesktopTest do
       view = shell!(conn)
       home = canvas(view).id
 
-      verb!(view, home, :press, %{"control" => "pause-schedule", "value" => digest.id})
+      verb!(view, home, :press, %{
+        "control" => "pause-schedule",
+        "value" => digest.id,
+        "call" => 7
+      })
 
       assert answer!(view, home, "pressed") == %{
                "control" => "pause-schedule",
+               "call" => 7,
                "outcome" => "accepted"
              }
 
@@ -659,6 +673,26 @@ defmodule PrismWeb.ShellDesktopTest do
       app = Frames.get(frames(view), {:app, "home", "tincture:local.run-view"})
       assert app.subject == subject
       assert handshake!(view, app.id)["subject"] == subject
+    end
+
+    test "opening an existing app on another subject delivers the new subject", %{conn: conn} do
+      view = shell!(conn)
+      home = canvas(view).id
+      first = %{"kind" => "run", "id" => "exec_first"}
+      second = %{"kind" => "run", "id" => "exec_second"}
+
+      verb!(view, home, :open, %{"ref" => "tincture:local.run-view", "subject" => first})
+      opened = Frames.get(frames(view), {:app, "home", "tincture:local.run-view"})
+      assert handshake!(view, opened.id)["subject"] == first
+
+      verb!(view, home, :open, %{"ref" => "tincture:local.run-view", "subject" => second})
+      current = Frames.get(frames(view), {:app, "home", "tincture:local.run-view"})
+
+      # The same frame, told the new subject through its bridge.
+      assert current.id == opened.id
+      assert current.subject == second
+      opened_id = opened.id
+      assert_push_event(view, "frame_subject", %{frame: ^opened_id, subject: ^second})
     end
   end
 

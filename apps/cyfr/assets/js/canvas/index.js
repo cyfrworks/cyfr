@@ -40,7 +40,8 @@ const COVERING = ["window"]
  * frame they name, its `canvas_installed` pushes to the canvas frame
  * they name, and its `canvas_answer` pushes (the outcome of a canvas's
  * press of a control or write of its preferences) to that canvas frame's
- * bridge, which posts each once.
+ * bridge, which posts each once, and its `frame_subject` pushes (an app
+ * opened again on another subject) to the app frame they name.
  *
  * It wears the visible desktop's chrome (`chrome`, `./chrome.js`) on the
  * page's root while the shell says so, and takes it off for Prism's
@@ -100,6 +101,7 @@ const Canvas = {
     this.handleEvent("frame_bearer", (payload) => this._bearer(payload))
     this.handleEvent("canvas_installed", (payload) => this._installed(payload))
     this.handleEvent("canvas_answer", (payload) => this._answer(payload))
+    this.handleEvent("frame_subject", (payload) => this._subject(payload))
     this.handleEvent("chrome", (payload) => this._wear(payload && payload.chrome))
     this._worn = null
 
@@ -273,6 +275,13 @@ const Canvas = {
     if (frame) {
       frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: payload.verb, args: payload.args}}))
     }
+  },
+
+  // A new subject for the app frame it names, which its bridge posts.
+  _subject(payload) {
+    if (payload === null || typeof payload !== "object") return
+    const frame = this._frames().find((el) => el.dataset.frameId === payload.frame)
+    if (frame) frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: "subject", args: payload.subject}}))
   },
 
   // The desktop's chrome on the page's root, or none.
