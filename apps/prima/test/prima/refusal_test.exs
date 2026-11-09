@@ -336,6 +336,7 @@ defmodule Prima.RefusalTest do
     {:slot_not_held, :not_owner},
     {:conflict, :conflict},
     {:approved_entry_moved, :conflict},
+    {:retry_grant_moved, :conflict},
     {:hold_expired, :conflict},
     {:step_superseded, :conflict},
     {:parent_ended, :conflict},

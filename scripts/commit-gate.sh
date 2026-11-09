@@ -526,13 +526,13 @@ island_phase() {
 
 # What test.yml's island job for application $1 (`$1-independence`)
 # gives the island, on stdout as one line: the application, then each path
-# its step copies in, in the step's order, and `_tools` where it installs
-# the pinned wasm-tools there. The step is read whole: each line is one the
-# gate mirrors (a `cp` of tracked paths, each to the island's directory of
-# the same name, the wasm-tools install, `cd` into the application,
-# `mix compile --warnings-as-errors` and `mix test`) or setup that changes
-# nothing the island holds (`set`, `island=`, `mkdir -p`); any other line
-# fails it, so the gate's island cannot drift from CI's.
+# its step copies in, in the step's order (`_tools` is the pinned
+# wasm-tools). The step is read whole: each line is one the gate mirrors (a
+# `cp` of paths of the checkout, each to the island's directory of the
+# same name, `cd` into the application, `mix compile --warnings-as-errors`
+# and `mix test`) or setup that changes nothing the island holds (`set`,
+# `island=`, `mkdir -p`); any other line fails it, so the gate's island
+# cannot drift from CI's.
 island_spec() {
   python3 -I - .github/workflows/test.yml "$1" <<'PY'
 import re, shlex, sys, yaml
@@ -550,9 +550,7 @@ for line in steps[0]["run"].split("\n"):
     if not line or line.startswith("#") or re.fullmatch(r"set -[a-z]+ pipefail|island=\S+|mkdir -p( \"\$island/[a-z]+\")+", line):
         continue
     words = shlex.split(line)
-    if line == 'scripts/wasm-tools.sh install "$island/_tools"':
-        copied.append("_tools")
-    elif line in (f'cd "$island/apps/{app}"', "mix compile --warnings-as-errors", "mix test"):
+    if line in (f'cd "$island/apps/{app}"', "mix compile --warnings-as-errors", "mix test"):
         ran.add(line)
     elif words[0] == "cp" and len(words) >= 3:
         sources = [w for w in words[1:-1] if w != "-R"]

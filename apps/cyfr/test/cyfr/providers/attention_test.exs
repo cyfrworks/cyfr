@@ -77,7 +77,7 @@ defmodule Cyfr.Providers.AttentionTest do
       assert Prima.Provider.Stream.valid?(stream)
       assert stream.name == @stream
       assert stream.topic == :attention
-      assert stream.projection == ~w(kind id label since destination)
+      assert stream.projection == ~w(kind id label since destination outcome)
       assert stream.bind == :holder
       assert stream.subject == ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z"
       assert stream.filter == nil
@@ -90,6 +90,12 @@ defmodule Cyfr.Providers.AttentionTest do
 
       assert stream.shape["fields"]["kind"]["values"] ==
                Enum.map(Attention.kinds(), &Atom.to_string/1)
+
+      assert stream.shape["fields"]["outcome"] == %{
+               "type" => "enum",
+               "values" => ~w(resolved expired withdrawn),
+               "nullable" => true
+             }
 
       destination = stream.shape["fields"]["destination"]
       assert destination["fields"]["kind"]["values"] == ["page", "ref"]
@@ -192,7 +198,8 @@ defmodule Cyfr.Providers.AttentionTest do
                "id" => "reagent:local.standing:1.0.0",
                "label" => "reagent:local.standing:1.0.0",
                "since" => DateTime.to_iso8601(DateTime.add(t, 120)),
-               "destination" => %{"kind" => "page", "page" => "executions", "ref" => newest.id}
+               "destination" => %{"kind" => "page", "page" => "executions", "ref" => newest.id},
+               "outcome" => nil
              }
     end
 
@@ -238,7 +245,8 @@ defmodule Cyfr.Providers.AttentionTest do
                "id" => failing.id,
                "label" => "nightly report",
                "since" => DateTime.to_iso8601(DateTime.add(t, 60)),
-               "destination" => %{"kind" => "page", "page" => "schedules", "ref" => failing.id}
+               "destination" => %{"kind" => "page", "page" => "schedules", "ref" => failing.id},
+               "outcome" => nil
              }
     end
 
@@ -342,8 +350,27 @@ defmodule Cyfr.Providers.AttentionTest do
         })
 
       assert_receive %Attention{kind: :removed} = left
-      assert removed?(left, approval.id)
+      assert removed?(left, approval.id, "resolved")
       assert refreshed(ctx) == []
+    end
+
+    test "an approval's removal names how its decision ended it", %{actor: actor} do
+      for {decision, outcome} <- [
+            {"declined", "resolved"},
+            {"error", "resolved"},
+            {"expired", "expired"},
+            {"withdrawn", "withdrawn"}
+          ] do
+        :ok =
+          Sanctum.Notify.broadcast(actor.athanor_id, :approval_resolved, %{
+            thread_id: "thr_decided",
+            approval_id: "apr_#{decision}",
+            decision: decision
+          })
+
+        assert_receive %Attention{kind: :removed} = left
+        assert removed?(left, "apr_#{decision}", outcome), decision
+      end
     end
 
     test "deleting a thread removes its waiting approval from attention",
@@ -356,7 +383,7 @@ defmodule Cyfr.Providers.AttentionTest do
       assert {:ok, _deleted} = Aqua.Tape.delete_thread(ctx, thread.id)
 
       assert_receive %Attention{kind: :removed, id: ^id} = left
-      assert removed?(left, id)
+      assert removed?(left, id, "withdrawn")
       assert refreshed(ctx) == []
     end
 
@@ -394,10 +421,15 @@ defmodule Cyfr.Providers.AttentionTest do
       :ok = Sanctum.Telemetry.confirmation(:confirmed, actor.athanor_id, ctx.user_id, fields)
       refute_receive %Attention{}, 200
 
-      for stage <- [:consumed, :cancelled, :voided, :expired] do
+      for {stage, outcome} <- [
+            consumed: "resolved",
+            cancelled: "resolved",
+            voided: "withdrawn",
+            expired: "expired"
+          ] do
         :ok = Sanctum.Telemetry.confirmation(stage, actor.athanor_id, ctx.user_id, fields)
         assert_receive %Attention{kind: :removed} = left
-        assert removed?(left, ref)
+        assert removed?(left, ref, outcome), inspect(stage)
       end
     end
 
@@ -415,7 +447,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
       execute(:stop, actor, ctx.user_id, "exec_next", reference)
       assert_receive %Attention{kind: :removed} = left
-      assert removed?(left, reference)
+      assert removed?(left, reference, "resolved")
     end
 
     test "a child's failure or completion, and a cancel, tell nothing", %{ctx: ctx, actor: actor} do
@@ -459,12 +491,12 @@ defmodule Cyfr.Providers.AttentionTest do
       })
 
       assert_receive %Attention{kind: :removed} = left
-      assert removed?(left, schedule.id)
+      assert removed?(left, schedule.id, "resolved")
 
       {:ok, row} = Arca.CronSchedule.soft_delete(actor, schedule.id)
       :ok = Opus.Schedules.Changes.removed(actor, row)
       assert_receive %Attention{kind: :removed} = deleted
-      assert removed?(deleted, schedule.id)
+      assert removed?(deleted, schedule.id, "withdrawn")
     end
 
     test "a feed's failure and completion tell nothing", %{ctx: ctx, actor: actor} do
@@ -499,11 +531,16 @@ defmodule Cyfr.Providers.AttentionTest do
       for kind <- [:landed, :failed], do: offered(kind, offer, other_ctx, ctx, "a.csv")
       refute_receive %Attention{}, 200
 
-      for kind <- [:accepted, :declined, :withdrawn, :expired] do
+      for {kind, outcome} <- [
+            accepted: "resolved",
+            declined: "resolved",
+            withdrawn: "withdrawn",
+            expired: "expired"
+          ] do
         offered(kind, offer, other_ctx, ctx, "a.csv")
         assert_receive %Attention{kind: :removed, athanor_id: athanor} = left
         assert athanor == ctx.athanor_id
-        assert removed?(left, offer)
+        assert removed?(left, offer, outcome), inspect(kind)
       end
 
       # The sender hears nothing of it on their own attention topic.
@@ -596,13 +633,14 @@ defmodule Cyfr.Providers.AttentionTest do
     data
   end
 
-  defp removed?(payload, id) do
+  defp removed?(payload, id, outcome) do
     read_as(payload) == %{
       "kind" => "removed",
       "id" => id,
       "label" => nil,
       "since" => nil,
-      "destination" => nil
+      "destination" => nil,
+      "outcome" => outcome
     }
   end
 

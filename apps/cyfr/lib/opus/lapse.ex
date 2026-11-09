@@ -48,7 +48,7 @@ defmodule Opus.Lapse do
         false
 
       {:ok, _count, event_seq} ->
-        lapsed(record, event_seq, duration_ms)
+        lapsed(record, event_seq, now, duration_ms)
         true
 
       :error ->
@@ -63,7 +63,12 @@ defmodule Opus.Lapse do
     {count, event_seq} =
       Arca.Execution.mark_failed_if_running(
         record.id,
-        %{completed_at: now, duration_ms: duration_ms, error_message: @message},
+        %{
+          completed_at: now,
+          duration_ms: duration_ms,
+          error_message: @message,
+          error_class: "uncertain"
+        },
         attempt: record.attempt,
         lease_until: record.lease_until,
         grant: stamp(record),
@@ -91,11 +96,16 @@ defmodule Opus.Lapse do
   # telemetry, its event and its children's failure each run whatever the
   # one before it did, so a publication that cannot be made never leaves a
   # formula's children running.
-  defp lapsed(record, event_seq, duration_ms) do
+  defp lapsed(record, event_seq, now, duration_ms) do
     Logger.info("[Opus.Lapse] #{record.id} lapsed after #{duration_ms}ms")
 
     after_commit(record, "telemetry", fn ->
-      Telemetry.row_failed(record, @message, duration_ms)
+      Telemetry.row_failed(record, %{
+        error: @message,
+        error_class: :uncertain,
+        ended_at: now,
+        duration_ms: duration_ms
+      })
     end)
 
     after_commit(record, "event", fn ->

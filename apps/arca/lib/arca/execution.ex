@@ -560,6 +560,7 @@ defmodule Arca.Execution do
             :duration_ms,
             :status,
             :error_message,
+            :error_class,
             :parent_execution_id,
             :root_execution_id,
             :resolver_digest,
@@ -691,6 +692,22 @@ defmodule Arca.Execution do
               else: row_of(actor, row.root_execution_id)
 
           {:ok, %{sources: ledger!(row), launch_classes: launch_classes(root)}}
+      end
+    end)
+  end
+
+  @doc """
+  The consent revision the root `id` was admitted at (its authority's,
+  written by its admission), or nil for a row that records none: a child,
+  or a root no consent loaded. `{:error, :not_found}` for no such row.
+  """
+  @spec root_consent(Prima.Actor.t(), String.t()) ::
+          {:ok, String.t() | nil} | {:error, :not_found | :database_error}
+  def root_consent(%Prima.Actor{} = actor, id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Execution.root_consent", fn ->
+      case row_of(actor, id) do
+        nil -> {:error, :not_found}
+        %Row{consent_id: consent_id} -> {:ok, consent_id}
       end
     end)
   end
@@ -1285,7 +1302,8 @@ defmodule Arca.Execution do
                   status: "failed",
                   completed_at: attrs[:completed_at],
                   duration_ms: attrs[:duration_ms],
-                  error_message: attrs[:error_message]
+                  error_message: attrs[:error_message],
+                  error_class: attrs[:error_class]
                 ]
               )
 

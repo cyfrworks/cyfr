@@ -1081,7 +1081,8 @@ defmodule Compendium.CanvasTest do
 
       assert Enum.sort(Map.keys(vault_fields)) == ~w(kind name status type)
 
-      assert Enum.sort(Map.keys(activity_fields)) == ~w(asked_by id kind member since status)
+      assert Enum.sort(Map.keys(activity_fields)) ==
+               ~w(asked_by id kind member since status title)
 
       assert Enum.sort(Map.keys(thread_fields)) ==
                ~w(id kind last_activity people title waits_on_you)
@@ -1095,10 +1096,12 @@ defmodule Compendium.CanvasTest do
       assert Enum.sort(Map.keys(feed_fields)) ==
                ~w(actions at binding feed label result revision)
 
-      assert Enum.sort(Map.keys(attention_fields)) == ~w(destination id kind label since)
+      assert Enum.sort(Map.keys(attention_fields)) ==
+               ~w(destination id kind label outcome since)
 
       assert Enum.sort(Map.keys(run_fields)) ==
-               ~w(component_type duration_ms error execution_id kind parent_execution_id reference)
+               ~w(component_type duration_ms ended_at error execution_id kind parent_execution_id
+                  reference started_at)
 
       assert length(Sanctum.Catalog.streams()) > length(streams)
     end

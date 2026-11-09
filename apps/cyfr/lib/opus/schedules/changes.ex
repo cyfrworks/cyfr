@@ -15,8 +15,8 @@ defmodule Opus.Schedules.Changes do
   whose write removed the live row (`Arca.CronSchedule.soft_delete/2`
   answers any other `:not_found`), with the row as it was, and tells the
   schedule's person it no longer waits for them (`Cyfr.Bus.Attention`'s
-  `removed`, its id the schedule's), so a failing schedule deleted leaves
-  their attention stream. Both run under
+  `removed`, its id the schedule's and its outcome `withdrawn`), so a
+  failing schedule deleted leaves their attention stream. Both run under
   the schedule's lock (`Cyfr.Bus.Schedules.serialized/2`), so once
   `removed` has left, a later `changed` reads the deleted row and
   announces nothing. Under the lock the row is read only while this
@@ -84,7 +84,7 @@ defmodule Opus.Schedules.Changes do
     case Cyfr.Bus.broadcast(
            actor,
            Cyfr.Bus.attention(actor, user_id),
-           Attention.new(actor, :removed, id: id)
+           Attention.new(actor, :removed, id: id, outcome: :withdrawn)
          ) do
       :ok ->
         :ok

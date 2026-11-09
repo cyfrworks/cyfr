@@ -368,8 +368,17 @@ with its key. Check that the code printed here is the one the new device
 shows, then unlock this command line: its key signs the addition, and the
 new device goes on by itself once your account lists it.`,
 	Example: "  cyfr device approve VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
-	Args:    cobra.ExactArgs(1),
+	// The one argument is taken raw, no flag parsed: a device's key is
+	// base64url, which starts with `-` one time in 64, and a parser would
+	// read such a key as flags and refuse the command as the new device
+	// shows it. The approval reads none of the root's flags (the key record
+	// names the directory), and --help or -h alone still prints the help.
+	DisableFlagParsing: true,
+	Args:               cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if args[0] == "--help" || args[0] == "-h" {
+			return cmd.Help()
+		}
 		return approveDevice(cmd.Context(), newConsole(os.Stdout), strings.TrimSpace(args[0]))
 	},
 }

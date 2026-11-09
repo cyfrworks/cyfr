@@ -1082,6 +1082,15 @@ defmodule Prima.Refusal do
        "The grant this launch was approved under has changed since it was approved, so nothing " <>
          "ran: ask again to approve it as it stands now."}
 
+  # A retry of a failed run whose grant has a new revision since it ran
+  # (`execution.retry`): nothing ran under a grant the person did not run
+  # it under.
+  defp row(:retry_grant_moved),
+    do:
+      {:conflict,
+       "The grant this run ran under has changed since, so it was not run again: run it " <>
+         "from where it started under the grant as it stands now."}
+
   defp row(reason) when reason in @barrier_conflicts,
     do: {:conflict, "The parent execution moved on — the child was not admitted"}
 

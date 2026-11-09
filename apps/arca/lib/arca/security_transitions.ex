@@ -911,7 +911,8 @@ defmodule Arca.SecurityTransitions do
       updated(from(e in Execution, where: e.status in ^execution_from, select: e.id),
         status: "failed",
         completed_at: now,
-        error_message: "Ended by a declared restore"
+        error_message: "Ended by a declared restore",
+        error_class: "uncertain"
       )
 
     attempt_ids =

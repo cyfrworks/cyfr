@@ -973,6 +973,47 @@ defmodule Compendium.Tincture.RulesTest do
       assert Rules.check_desktop(app, []) == :ok
     end
 
+    test "run execution.retry by its exact name, picking the run from runs.changes" do
+      retry =
+        control("execution.retry", %{
+          "pick" => %{
+            "stream" => "runs.changes",
+            "field" => "/execution_id",
+            "arg" => "execution_id"
+          }
+        })
+
+      assert control_check([retry]) == :ok
+      assert control_check([control("execution.retry")]) == :ok
+    end
+
+    test "never run any execute but feed.press and execution.retry" do
+      executes =
+        for {tool, {_provider, %{operations: operations}}} <- Sanctum.Catalog.operations(),
+            %Prima.Operation{kind: :execute, action: action} = op <- operations,
+            :external in op.planes,
+            is_nil(op.consent),
+            op.scope != :platform,
+            op.permission != :admin,
+            name = "#{tool}.#{action}",
+            name not in Prima.Manifest.Caps.agent_only_tools(),
+            do: name
+
+      # A positive control: the roster this reads is the one the rule reads.
+      assert "execution.retry" in executes
+      assert "feed.press" in executes
+      assert "execution.run" in executes
+
+      for operation <- executes -- ["execution.retry", "feed.press"] do
+        assert control_check([control(operation)]) ==
+                 {:error,
+                  {:invalid_tincture,
+                   "tincture.desktop.controls c1 runs #{operation}, which is an execute: a " <>
+                     "control runs a write, feed.press or execution.retry"}},
+               operation
+      end
+    end
+
     test "never run an unknown, person-only, administrator's or in-run operation, or any other kind" do
       for {operation, why} <- [
             {"nothing.here", "which no provider declares"},
@@ -993,10 +1034,14 @@ defmodule Compendium.Tincture.RulesTest do
             {"settings.set", "which is an administrator's"},
             {"key.create", "which is an administrator's"},
             {"source.write", "which runs only inside a run"},
-            {"athanor.get", "which is a read: a control runs a write or feed.press"},
-            {"execution.run", "which is an execute: a control runs a write or feed.press"},
-            {"schedule.delete", "which is destructive: a control runs a write or feed.press"},
-            {"registry.legal_accept", "which is external: a control runs a write or feed.press"}
+            {"athanor.get",
+             "which is a read: a control runs a write, feed.press or execution.retry"},
+            {"execution.run",
+             "which is an execute: a control runs a write, feed.press or execution.retry"},
+            {"schedule.delete",
+             "which is destructive: a control runs a write, feed.press or execution.retry"},
+            {"registry.legal_accept",
+             "which is external: a control runs a write, feed.press or execution.retry"}
           ] do
         assert control_check([control("schedule.pause", %{"id" => "ok"}), control(operation)]) ==
                  {:error,

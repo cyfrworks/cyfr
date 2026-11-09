@@ -299,7 +299,7 @@ defmodule Opus.Schedules.StreamsTest do
       assert id == row.id
 
       send(worker, :continue)
-      assert {:error, "Schedule not found: " <> _} = Task.await(late, 10_000)
+      assert {:error, {:not_found, "Schedule", _}} = Task.await(late, 10_000)
       refute_receive %Schedules{}, 500
     end
 
@@ -316,7 +316,7 @@ defmodule Opus.Schedules.StreamsTest do
       assert_receive %Schedules{kind: :removed}
 
       send(worker, :continue)
-      assert {:error, "Schedule not found: " <> _} = Task.await(late, 10_000)
+      assert {:error, {:not_found, "Schedule", _}} = Task.await(late, 10_000)
       assert {:ok, %{status: "deleted"}} = Arca.CronSchedule.get(actor, row.id)
       refute_receive %Schedules{}, 500
     end

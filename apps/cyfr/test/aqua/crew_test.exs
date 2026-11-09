@@ -453,7 +453,8 @@ defmodule Aqua.CrewTest do
     assert %{sent_by: "aqua", author: "aqua", status: "pending", content: "list the risks"} =
              request
 
-    assert %{"from_turn" => ^soul} = Tape.payload(request)
+    assert %{"from_turn" => ^soul} = payload = Tape.payload(request)
+    refute Map.has_key?(payload, "title")
 
     {:ok, steps} = Tape.steps(ctx, elem(Tape.turn(ctx, soul), 1))
     assert %{outcome: "ok"} = Enum.find(steps, &(&1.tool == "crew" and &1.action == "ask"))
@@ -478,6 +479,57 @@ defmodule Aqua.CrewTest do
     reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
     await_status(ctx, reply.turn_id, "completed")
     assert reply.turn_id != soul
+  end
+
+  test "the soul's crew.ask keeps the job's title on its request, and the member's job carries it",
+       %{ctx: ctx, room: room} do
+    :ok = Cyfr.Bus.subscribe(actor(ctx), Cyfr.Bus.crew_activity(actor(ctx)))
+
+    script!([
+      call("c1", "crew", %{
+        "action" => "ask",
+        "member" => "planner",
+        "task" => "list the risks",
+        "title" => "  Risks  "
+      }),
+      reply("Asked the planner."),
+      reply("Two risks.")
+    ])
+
+    {:ok, %{turn_id: soul}} = Runner.send_message(ctx, room.id, "what could go wrong?")
+    await_status(ctx, soul, "completed")
+
+    request = Enum.find(rows(ctx, room.id), &(&1.addressee == "planner" and &1.status))
+    assert %{"from_turn" => ^soul, "title" => "Risks"} = Tape.payload(request)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    job = delivered_turn(ctx, child!(ctx, room, "planner"), request.id)
+    await_status(ctx, job, "completed")
+
+    assert_receive %Cyfr.Bus.CrewActivity{kind: :started, id: ^job, title: "Risks"}
+    assert_receive %Cyfr.Bus.CrewActivity{kind: :ended, id: ^job, title: "Risks"}
+  end
+
+  test "crew.ask refuses a title over 64 code points or off one line, and takes a blank one as none",
+       %{ctx: ctx} do
+    ask = fn title -> Crew.ask(ctx, %{"member" => "planner", "task" => "x", "title" => title}) end
+
+    # 33 characters of two code points each are 66 code points.
+    for title <- [
+          String.duplicate("a", 65),
+          String.duplicate("e\u0301", 33),
+          "two\nlines",
+          "a\ttab",
+          "a\u0085next line",
+          "a\u2028separator",
+          7
+        ] do
+      assert {:error, {:invalid_argument, _}} = ask.(title), inspect(title)
+    end
+
+    # Past the title, a call with no turn behind it asks nobody.
+    for title <- [String.duplicate("a", 64), "  Risks  ", "   ", nil],
+        do: assert({:error, :not_addressable} = ask.(title), inspect(title))
   end
 
   test "an option the member's brain does not declare fails its turn, and the reply says why",

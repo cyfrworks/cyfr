@@ -386,7 +386,9 @@ defmodule Opus.Admission do
             ])
             |> Keyword.merge(
               grant: grant,
-              retention_class: opts[:retention_class] || Record.default_retention_class(ctx)
+              retention_class: opts[:retention_class] || Record.default_retention_class(ctx),
+              reservation: reservation(opts),
+              consent_id: root_consent(opts)
             )
         }
       }
@@ -488,12 +490,20 @@ defmodule Opus.Admission do
       |> maybe_put(:execution_id, opts[:execution_id])
       |> maybe_put(:launch, opts[:launch])
       |> maybe_put(:frame_sources, opts[:frame_sources])
-      |> maybe_put(:reservation, reservation(opts))
 
     ctx
     |> Record.new(reference, input, record_opts)
     |> Map.merge(resolution)
     |> stamp_activation(ctx, component, opts)
+  end
+
+  # The consent revision a root's authority was loaded at; a child, like
+  # its profile, records none.
+  defp root_consent(opts) do
+    case {opts[:parent_execution_id], opts[:authority]} do
+      {nil, %Authority{consent_id: consent_id}} -> consent_id
+      _child_or_none -> nil
+    end
   end
 
   # A root mints its invocation reservation at admission, from the budget
@@ -987,10 +997,24 @@ defmodule Opus.Admission do
          {:ok, profile} <- select.(candidates),
          {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
          {:ok, authority, stamp} <-
-           ctx |> approved_root(load_authority(ctx, profile, component, opts)) |> launched(ctx) do
+           ctx
+           |> approved_root(load_authority(ctx, profile, component, opts))
+           |> launched(ctx)
+           |> at_revision(opts[:consent_id]) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
   end
+
+  # A retry roots only at the consent revision its failed run rooted at
+  # (`execution.retry`, `:consent_id`): a grant changed since is not the
+  # one the person ran it under, so it is refused before anything starts.
+  defp at_revision(loaded, nil), do: loaded
+
+  defp at_revision({:ok, authority, _stamp} = loaded, consent_id) when is_binary(consent_id) do
+    if authority.consent_id == consent_id, do: loaded, else: {:error, :retry_grant_moved}
+  end
+
+  defp at_revision(refused, _consent_id), do: refused
 
   # An approved launch roots only at the consent revision its card showed
   # (the context's `launch`, which `Aqua.Launch` alone sets): the card bound

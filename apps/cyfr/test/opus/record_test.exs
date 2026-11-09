@@ -523,7 +523,7 @@ defmodule Opus.RecordTest do
       assert Enum.sort(Arca.Execution.start_fields()) ==
                Enum.sort(
                  Arca.Execution.fields() --
-                   [:completed_at, :duration_ms, :error_message, :output]
+                   [:completed_at, :duration_ms, :error_message, :error_class, :output]
                )
     end
   end

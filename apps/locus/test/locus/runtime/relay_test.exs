@@ -142,10 +142,14 @@ defmodule Locus.Runtime.RelayTest do
     {IO.iodata_to_binary(bytes), channel}
   end
 
-  # The service's end closes the channel for `reason`: the runner hears a
-  # `close` naming it, and the process stops.
-  defp assert_closed(relay, attempt, reason) do
+  # `bytes` delivered to the service's end close the channel for `reason`:
+  # the runner hears a `close` naming it, and the process stops. The
+  # monitor is taken before the bytes go in: a refusal read from a frame's
+  # length alone stops the relay before the test's next call, and a
+  # monitor taken after it would see only `:noproc`.
+  defp assert_closes(relay, bytes, attempt, reason) do
     monitor = Process.monitor(relay)
+    Locus.Runtime.Relay.deliver(relay, bytes)
     assert_receive {:DOWN, ^monitor, :process, ^relay, {:shutdown, {:closed, ^reason}}}, 5_000
     assert_receive {:to_runner, bytes}, 1_000
     runner = RunnerRelay.new(:runner, attempt.attempt)
@@ -201,8 +205,7 @@ defmodule Locus.Runtime.RelayTest do
           signed_call(other, :renew, %{"attempts" => []})
         )
 
-      Locus.Runtime.Relay.deliver(relay, bytes)
-      assert_closed(relay, attempt, :unknown_attempt)
+      assert_closes(relay, bytes, attempt, :unknown_attempt)
       assert ScriptedHost.requests(host) == []
     end
 
@@ -212,8 +215,7 @@ defmodule Locus.Runtime.RelayTest do
       frame = signed_call(attempt, :renew, %{"attempts" => [attempt.attempt]})
       {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
 
-      Locus.Runtime.Relay.deliver(relay, bytes)
-      assert_closed(relay, attempt, :runner_mismatch)
+      assert_closes(relay, bytes, attempt, :runner_mismatch)
       assert ScriptedHost.requests(host) == []
     end
 
@@ -233,8 +235,7 @@ defmodule Locus.Runtime.RelayTest do
           ] do
         relay = service_end!(host, attempt)
         {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
-        Locus.Runtime.Relay.deliver(relay, bytes)
-        assert_closed(relay, attempt, reason)
+        assert_closes(relay, bytes, attempt, reason)
       end
 
       assert ScriptedHost.requests(host) == []
@@ -246,8 +247,7 @@ defmodule Locus.Runtime.RelayTest do
       frame = signed_call(attempt, :take_rate, %{"bucket" => "http:" <> @ref})
       {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
 
-      Locus.Runtime.Relay.deliver(relay, bytes)
-      assert_closed(relay, attempt, :take_rate)
+      assert_closes(relay, bytes, attempt, :take_rate)
       assert ScriptedHost.requests(host, "take_rate") == []
     end
 
@@ -257,8 +257,7 @@ defmodule Locus.Runtime.RelayTest do
       frame = %{signed_call(attempt, :renew, %{"attempts" => []}) | op: :attach}
       {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
 
-      Locus.Runtime.Relay.deliver(relay, bytes)
-      assert_closed(relay, attempt, :malformed_call)
+      assert_closes(relay, bytes, attempt, :malformed_call)
     end
 
     test "a frame past the relay's bound closes the channel as soon as its length is in", %{
@@ -267,8 +266,7 @@ defmodule Locus.Runtime.RelayTest do
       attempt = attempt!(host)
       relay = service_end!(host, attempt)
 
-      Locus.Runtime.Relay.deliver(relay, <<RunnerRelay.max_frame_bytes() + 1::32>>)
-      assert_closed(relay, attempt, :frame_too_large)
+      assert_closes(relay, <<RunnerRelay.max_frame_bytes() + 1::32>>, attempt, :frame_too_large)
     end
 
     test "a child CYFR admits is carried, with calls and pins of its own", %{host: host} do

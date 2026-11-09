@@ -207,10 +207,13 @@ defmodule Opus.TelemetryTest do
   end
 
   # ============================================================================
-  # row_failed/3
+  # row_failed/2
   # ============================================================================
 
-  describe "row_failed/3" do
+  describe "row_failed/2" do
+    @started ~U[2026-11-09 10:00:00.000001Z]
+    @ended ~U[2026-11-09 10:00:00.012001Z]
+
     defp row(component_type) do
       %{
         id: "exec_row_failed",
@@ -218,12 +221,16 @@ defmodule Opus.TelemetryTest do
         reference: "formula:local.parent:1.0.0",
         component_type: component_type,
         user_id: "user_row_failed",
-        athanor_id: "ath_row_failed"
+        athanor_id: "ath_row_failed",
+        started_at: @started
       }
     end
 
+    defp failure(error, duration_ms),
+      do: %{error: error, error_class: :cancelled, ended_at: @ended, duration_ms: duration_ms}
+
     test "reports a row failed from outside with its stored type as an atom" do
-      Telemetry.row_failed(row("formula"), "Parent execution (exec_p) terminated", 12)
+      Telemetry.row_failed(row("formula"), failure("Parent execution (exec_p) terminated", 12))
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], measurements,
                       metadata}
@@ -241,13 +248,16 @@ defmodule Opus.TelemetryTest do
                athanor_id: "ath_row_failed",
                outcome: :failure,
                error: "Parent execution (exec_p) terminated",
+               error_class: :cancelled,
+               started_at: @started,
+               ended_at: @ended,
                duration_ms: 12
              }
     end
 
     test "reports a type that names no executable type as a reagent" do
       for type <- ["agent", nil, "tincture"] do
-        Telemetry.row_failed(row(type), "Execution terminated", 0)
+        Telemetry.row_failed(row(type), failure("Execution terminated", 0))
 
         assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _,
                         %{component_type: :reagent}}

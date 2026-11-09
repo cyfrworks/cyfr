@@ -32,10 +32,13 @@ streams.
   `controls`, `prefs` or `chrome` only when the person asked for them.
 - Declare each feed by name in `feeds`: the page reads a feed's results
   from the stream `feed.results`, with the feed's name as its subject.
-- A control runs `feed.press` or a write the person makes directly, on
-  the person's tap; publish refuses any other, naming why. A
-  `feed.press` control's pick fills its `pick` argument, for a feed
-  action that names a `pick`.
+- A control runs `feed.press`, `execution.retry` or a write the person
+  makes directly, on the person's tap; publish refuses any other, naming
+  why. A `feed.press` control's pick fills its `pick` argument, for a
+  feed action that names a `pick`. A retry control picks a failed run
+  from `runs.changes` at `/execution_id` into `execution_id`; only a
+  run a schedule or a feed started, and known to have failed, is run
+  again.
 - `canvas.write` asks the person first, and its card names the streams
   the version reads. Write what the person asked for, and declare only
   the streams the page opens.

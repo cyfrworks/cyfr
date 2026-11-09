@@ -40,6 +40,8 @@ defmodule Opus.Telemetry do
   - `component_type` - :catalyst, :reagent, or :formula
   - `user_id` - User who initiated the execution
   - `athanor_id` - The athanor the execution runs in
+  - `started_at` - When the row was admitted (UTC)
+  - `ended_at` - When the row ended (UTC; stop/exception only)
   - `outcome` - :success or :failure (stop/exception only)
   """
 
@@ -50,7 +52,8 @@ defmodule Opus.Telemetry do
   admitted, before any component code runs.
 
   Measurements: `system_time`. Metadata: `execution_id`, `request_id`,
-  `component`, `reference`, `component_type`, `user_id`, `athanor_id`.
+  `component`, `reference`, `component_type`, `user_id`, `athanor_id`,
+  `started_at`.
   """
   @spec execute_start(Record.t()) :: :ok
   def execute_start(%Record{} = record) do
@@ -64,7 +67,8 @@ defmodule Opus.Telemetry do
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
-        athanor_id: record.athanor_id
+        athanor_id: record.athanor_id,
+        started_at: record.started_at
       }
     )
   end
@@ -73,8 +77,8 @@ defmodule Opus.Telemetry do
   Emit `[:cyfr, :opus, :execute, :stop]` for a record marked completed.
 
   Measurements: `duration`. Metadata: that of `execute_start/1`, plus
-  `parent_execution_id` (nil for a root), `outcome: :success` and
-  `duration_ms`.
+  `parent_execution_id` (nil for a root), `outcome: :success`, `ended_at`
+  and `duration_ms`.
   """
   @spec execute_stop(Record.t()) :: :ok
   def execute_stop(%Record{} = record) do
@@ -93,6 +97,8 @@ defmodule Opus.Telemetry do
         # counts a piece of work once.
         parent_execution_id: record.parent_execution_id,
         outcome: :success,
+        started_at: record.started_at,
+        ended_at: record.completed_at,
         duration_ms: record.duration_ms
       }
     )
@@ -103,7 +109,9 @@ defmodule Opus.Telemetry do
 
   Measurements: `duration`. Metadata: that of `execute_start/1`, plus
   `parent_execution_id` (nil for a root), `outcome: :failure`, `error`
-  (`reason` itself when a string, else inspected) and `duration_ms`.
+  (`reason` itself when a string, else its rendered sentence),
+  `error_class` (the class the record keeps it under, `Opus.Record.fail/3`),
+  `ended_at` and `duration_ms`.
   """
   @spec execute_exception(Record.t(), term()) :: :ok
   def execute_exception(%Record{} = record, reason) do
@@ -123,6 +131,9 @@ defmodule Opus.Telemetry do
         parent_execution_id: record.parent_execution_id,
         outcome: :failure,
         error: format_error(reason),
+        error_class: record.error_class,
+        started_at: record.started_at,
+        ended_at: record.completed_at,
         duration_ms: record.duration_ms
       }
     )
@@ -132,10 +143,10 @@ defmodule Opus.Telemetry do
   Emit `[:cyfr, :opus, :execute, :exception]` for a record a caller
   cancelled, after the cancel's write: the record's `execution_id`,
   `request_id`, `component`, `reference`, `component_type`, `athanor_id`,
-  `parent_execution_id` and `duration_ms`, with `user_id` the person the
-  cancel ran as (`cancelled_by`, the server's own work names `"system"`),
-  `error: "cancelled"` and `status: :cancelled`, so the bridge announces a
-  cancel and not a failure.
+  `parent_execution_id`, `started_at`, `ended_at` and `duration_ms`, with
+  `user_id` the person the cancel ran as (`cancelled_by`, the server's own
+  work names `"system"`), `error: "cancelled"` of class `:cancelled` and
+  `status: :cancelled`, so the bridge announces a cancel and not a failure.
   """
   @spec execute_cancelled(Record.t(), String.t() | nil) :: :ok
   def execute_cancelled(%Record{} = record, cancelled_by) do
@@ -152,7 +163,10 @@ defmodule Opus.Telemetry do
         athanor_id: record.athanor_id,
         parent_execution_id: record.parent_execution_id,
         error: "cancelled",
+        error_class: :cancelled,
         status: :cancelled,
+        started_at: record.started_at,
+        ended_at: record.completed_at,
         duration_ms: record.duration_ms
       }
     )
@@ -165,13 +179,20 @@ defmodule Opus.Telemetry do
 
   `row` is the stored execution (`Arca.Execution`, or the sweeper's scan
   of it); its `component_type` column is reported as its executable type,
-  `:reagent` when it names none. Measurements: `duration` and
-  `system_time`. Metadata: `execution_id`, `request_id`, `component` and
-  `reference` (both the stored reference), `component_type`, `user_id`,
-  `athanor_id`, `outcome: :failure`, `error` and `duration_ms`.
+  `:reagent` when it names none. `failure` is what the write stored: its
+  `error`, `error_class`, `ended_at` and `duration_ms`. Measurements:
+  `duration` and `system_time`. Metadata: `execution_id`, `request_id`,
+  `component` and `reference` (both the stored reference),
+  `component_type`, `user_id`, `athanor_id`, `outcome: :failure`,
+  `started_at` and the failure's fields.
   """
-  @spec row_failed(map(), String.t(), non_neg_integer()) :: :ok
-  def row_failed(row, error, duration_ms) do
+  @spec row_failed(map(), %{
+          error: String.t(),
+          error_class: Prima.Refusal.class(),
+          ended_at: DateTime.t(),
+          duration_ms: non_neg_integer()
+        }) :: :ok
+  def row_failed(row, %{duration_ms: duration_ms} = failure) do
     component_type =
       case Record.executable_type(row.component_type) do
         {:ok, type} -> type
@@ -190,7 +211,10 @@ defmodule Opus.Telemetry do
         user_id: row.user_id,
         athanor_id: row.athanor_id,
         outcome: :failure,
-        error: error,
+        error: failure.error,
+        error_class: failure.error_class,
+        started_at: row.started_at,
+        ended_at: failure.ended_at,
         duration_ms: duration_ms
       }
     )

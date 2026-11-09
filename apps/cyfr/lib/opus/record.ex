@@ -86,6 +86,7 @@ defmodule Opus.Record do
           completed_at: DateTime.t() | nil,
           duration_ms: non_neg_integer() | nil,
           error: String.t() | nil,
+          error_class: Prima.Refusal.class() | nil,
           host_policy: json(),
           parent_execution_id: String.t() | nil,
           child_key: String.t() | nil,
@@ -98,15 +99,14 @@ defmodule Opus.Record do
           kind: String.t() | nil,
           turn_id: String.t() | nil,
           schedule_id: String.t() | nil,
-          reservation: map() | nil,
           sources: [Prima.Source.t()],
           launch_classes: [Prima.Source.class()]
         }
 
   # One execution row, as its admission builds it and a read returns it.
   # What admission alone needs to write the row (its grant, its origin,
-  # its payloads' retention class and retained input) is admission's
-  # (`write_started/3`), not the row's.
+  # its consent revision, its reservation, its payloads' retention class
+  # and retained input) is admission's (`write_started/3`), not the row's.
   defstruct [
     :id,
     :request_id,
@@ -126,6 +126,9 @@ defmodule Opus.Record do
     :completed_at,
     :duration_ms,
     :error,
+    # The refusal class of `error` (`Prima.Refusal.classes/0`), kept with
+    # it, so its cause is read without its sentence.
+    :error_class,
     :host_policy,
     :parent_execution_id,
     # The key the parent's runner minted for this child (`Prima.HostAPI`
@@ -143,11 +146,9 @@ defmodule Opus.Record do
     # belongs to; a turn root is admitted by `Opus.TurnRoot`.
     :kind,
     :turn_id,
-    # The schedule this root runs for (`Opus.Schedules`); nil otherwise.
+    # The schedule or feed this root runs for (`Opus.Schedules`), when
+    # the scheduler fired it; nil otherwise.
     :schedule_id,
-    # A root's invocation reservation, `%{budget_id, cap}`, minted at
-    # admission; nil for a child.
-    :reservation,
     # A root's seed (`Prima.Source`), from what admitted it (`root_seed/2`);
     # a child's is its parent's ledger, read where it is admitted. On a
     # record read back, the row's ledger as that read found it.
@@ -214,7 +215,6 @@ defmodule Opus.Record do
       kind: Keyword.get(opts, :kind, "component"),
       turn_id: Keyword.get(opts, :turn_id),
       schedule_id: Keyword.get(opts, :schedule_id),
-      reservation: Keyword.get(opts, :reservation),
       sources: if(is_nil(parent_execution_id), do: root_seed(ctx, opts), else: []),
       launch_classes: if(is_nil(parent_execution_id), do: launch_classes(opts), else: [])
     }
@@ -269,9 +269,13 @@ defmodule Opus.Record do
     }
   end
 
-  @doc "Mark execution as failed with error message."
-  @spec fail(t(), String.t()) :: t()
-  def fail(%__MODULE__{} = record, error) do
+  @doc """
+  Mark execution as failed with error message `error`, a refusal of
+  `class` (`Prima.Refusal.classes/0`): a producer's own sentence is
+  `:internal`, the default.
+  """
+  @spec fail(t(), String.t(), Prima.Refusal.class()) :: t()
+  def fail(%__MODULE__{} = record, error, class \\ :internal) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
@@ -279,6 +283,7 @@ defmodule Opus.Record do
       record
       | status: :failed,
         error: error,
+        error_class: class,
         completed_at: now,
         duration_ms: duration_ms
     }
@@ -365,7 +370,9 @@ defmodule Opus.Record do
   and envelope still describe the input). They also carry the admission
   barriers a child
   passes through (`:charge`, `:step`, and `:parent_attempt`, the attempt of
-  its parent it is admitted under), a scheduled run's `:occurrence_id`, and
+  its parent it is admitted under), a scheduled run's `:occurrence_id`, a
+  root's `:reservation` (`%{budget_id, cap}`, minted with the row) and
+  `:consent_id` (the consent revision its authority was loaded at), and
   the worker side holding the attempt: `:service_id`, the worker service it
   is dispatched to (absent when this control plane holds it), and
   `:boot_id`, the boot holding it (`boot_id/0` when absent).
@@ -501,6 +508,7 @@ defmodule Opus.Record do
              activation_digest: record.activation_digest,
              activation_graph: record.activation_graph,
              profile_id: record.profile_id,
+             consent_id: Keyword.get(opts, :consent_id),
              kind: record.kind,
              turn_id: record.turn_id,
              schedule_id: record.schedule_id,
@@ -511,7 +519,7 @@ defmodule Opus.Record do
              [
                attempt: record.attempt,
                boot_id: boot_id(),
-               reservation: record.reservation,
+               reservation: Keyword.get(opts, :reservation),
                payloads: payloads,
                grant: grant,
                verify: &Sanctum.ExecutionStanding.verify/1,
@@ -688,6 +696,7 @@ defmodule Opus.Record do
              completed_at: record.completed_at,
              duration_ms: record.duration_ms,
              error_message: message,
+             error_class: "uncertain",
              outcome: "uncertain"
            },
            record.attempt,
@@ -722,6 +731,7 @@ defmodule Opus.Record do
              completed_at: record.completed_at,
              duration_ms: record.duration_ms,
              error_message: "result not retained",
+             error_class: "uncertain",
              outcome: "result_lost"
            },
            record.attempt,
@@ -770,6 +780,12 @@ defmodule Opus.Record do
   def write_uncertain(%__MODULE__{status: :failed} = record, opts \\ []),
     do: write_ended(record, "uncertain", written_grant(opts))
 
+  # The class an ended row's error is kept under: a cancel's own, or the
+  # class `fail/3` gave the failure.
+  defp ended_class(%__MODULE__{status: :cancelled}), do: "cancelled"
+  defp ended_class(%__MODULE__{error_class: nil}), do: nil
+  defp ended_class(%__MODULE__{error_class: class}), do: Atom.to_string(class)
+
   defp write_ended(%__MODULE__{status: status} = record, outcome, grant) do
     ctx = record_to_ctx(record)
 
@@ -781,7 +797,8 @@ defmodule Opus.Record do
              %{
                completed_at: record.completed_at,
                duration_ms: record.duration_ms,
-               error_message: record.error
+               error_message: record.error,
+               error_class: ended_class(record)
              },
              :outcome,
              outcome
@@ -994,6 +1011,7 @@ defmodule Opus.Record do
       completed_at: result.completed_at,
       duration_ms: result.duration_ms,
       error: result.error_message,
+      error_class: stored_class(result[:error_class]),
       host_policy: json.host_policy,
       parent_execution_id: result[:parent_execution_id],
       child_key: result[:child_key],
@@ -1007,6 +1025,7 @@ defmodule Opus.Record do
       attempt: result[:current_attempt],
       kind: result[:kind],
       turn_id: result[:turn_id],
+      schedule_id: result[:schedule_id],
       sources: Arca.Execution.row_ledger(result)
     }
   end
@@ -1120,6 +1139,26 @@ defmodule Opus.Record do
 
   defp hydrate_output(_ctx, record), do: record
 
+  @doc """
+  The input `record` was admitted with, as the payload store keeps it for
+  the record's attempt (its row holds only the input's envelope), read
+  under `ctx`: `{:error, {:payload_not_retained, reason}}` when the store
+  no longer keeps it or what it keeps does not read as JSON.
+  """
+  @spec input(Context.t(), t()) :: {:ok, json()} | {:error, {:payload_not_retained, term()}}
+  def input(%Context{} = ctx, %__MODULE__{} = record) do
+    with {:ok, _row, bytes} <-
+           Arca.ExecutionPayloads.get(Context.actor(ctx), record.id, "input",
+             attempt: record.attempt
+           ),
+         {:ok, input} <- Jason.decode(bytes) do
+      {:ok, input}
+    else
+      {:error, %Jason.DecodeError{}} -> {:error, {:payload_not_retained, :unreadable}}
+      {:error, reason} -> {:error, {:payload_not_retained, reason}}
+    end
+  end
+
   # Usage is what a `model/chat@1` answer carries in its data
   # (`{"status": 200, "data": {..., "usage": {...}}}`); no other output
   # has a usage of its own.
@@ -1141,6 +1180,12 @@ defmodule Opus.Record do
   end
 
   @executable_types Map.new(Prima.ComponentRef.executable_types(), &{&1, String.to_atom(&1)})
+
+  # A stored error class read as its atom, from the closed set made at
+  # compile time; a column naming none, or nothing, is nil.
+  @error_classes Map.new(Prima.Refusal.classes(), &{Atom.to_string(&1), &1})
+
+  defp stored_class(class), do: Map.get(@error_classes, class)
 
   @doc """
   The executable component type a stored `component_type` column names, as

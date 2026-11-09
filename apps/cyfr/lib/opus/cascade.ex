@@ -74,14 +74,19 @@ defmodule Opus.Cascade do
     {count, event_seq} =
       Arca.Execution.mark_failed_if_running(
         child.id,
-        %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
+        %{
+          completed_at: now,
+          duration_ms: duration_ms,
+          error_message: error_msg,
+          error_class: "cancelled"
+        },
         attempt: child.current_attempt,
         grant: :stored,
         verify: &Sanctum.ExecutionStanding.stamp_only/1
       )
 
     if count > 0 do
-      announce_failed(child, error_msg, duration_ms, event_seq)
+      announce_failed(child, error_msg, now, duration_ms, event_seq)
       true
     else
       false
@@ -91,8 +96,13 @@ defmodule Opus.Cascade do
   # The child's row is failed: its telemetry and event follow, and one that
   # cannot be made is logged, never taken for a child left running, so the
   # siblings after it are failed and every failed child is stopped.
-  defp announce_failed(child, error_msg, duration_ms, event_seq) do
-    Telemetry.row_failed(child, error_msg, duration_ms)
+  defp announce_failed(child, error_msg, now, duration_ms, event_seq) do
+    Telemetry.row_failed(child, %{
+      error: error_msg,
+      error_class: :cancelled,
+      ended_at: now,
+      duration_ms: duration_ms
+    })
 
     Events.publish(child.id, child, "execution.failed", event_seq, %{
       "status" => "failed",

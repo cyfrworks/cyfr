@@ -11,9 +11,10 @@ defmodule Aqua.Crew.Activity do
   only a member's child thread opens one (`Aqua.Runner.Admission`). It is
   its `member`, who it was `asked_by` (a person by the name a reader
   outside CYFR may see, `Sanctum.Tenancy.Users.public_name/1`; the soul
-  as AQUA; another agent by its name), `since` it was accepted, and its
-  `status` (`Prima.TurnState`). Never the task's text, a person's id or an
-  address.
+  as AQUA; another agent by its name), its `title` (the one `crew.ask`
+  kept on the request that opened the turn, `Aqua.Crew.ask/2`, or nil),
+  `since` it was accepted, and its `status` (`Prima.TurnState`). Never the
+  task's text, a person's id or an address.
 
   `started/2` follows the tape's commits that open a job or start it
   (`Aqua.Tape.accept/3`, `start_turn/3`), and `ended/2` the one that ends
@@ -114,6 +115,7 @@ defmodule Aqua.Crew.Activity do
       id: turn.id,
       member: turn.agent,
       asked_by: asked_by(turn),
+      title: title(actor, turn),
       since: turn.accepted_at,
       status: turn.status
     )
@@ -130,4 +132,18 @@ defmodule Aqua.Crew.Activity do
   end
 
   defp asked_by(_turn), do: nil
+
+  # The title kept on the request whose reply address the turn holds. A
+  # turn no request opened, a request with none, and a request that no
+  # longer reads (its room deleted) give none.
+  defp title(actor, %{request_id: request_id}) when is_binary(request_id) do
+    with {:ok, request} <- Arca.ThreadStorage.get_message(actor, request_id),
+         %{"title" => title} when is_binary(title) <- Arca.ThreadStorage.payload(request) do
+      title
+    else
+      _none -> nil
+    end
+  end
+
+  defp title(_actor, _turn), do: nil
 end
