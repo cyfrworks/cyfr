@@ -61,7 +61,11 @@ defmodule Aqua.StreamsTest do
 
       assert {threads.topic, threads.bind} == {:threads, :holder}
       assert threads.refresh == {ThreadList, :listed}
-      assert threads.projection == ~w(kind id title people last_activity waits_on_you)
+      assert threads.projection == ~w(kind id title people last_activity waits_on_you revision at)
+
+      assert {threads.key, threads.removal, threads.reread, threads.stale_after} ==
+               {"id", "removed", [], 900}
+
       assert threads.shape["fields"]["kind"]["values"] == ["own", "shared", "removed"]
       assert Prima.Provider.Stream.admits?(threads, ada.user.id)
       refute Prima.Provider.Stream.admits?(threads, nil)
@@ -72,7 +76,11 @@ defmodule Aqua.StreamsTest do
 
       assert {activity.topic, activity.subject, activity.bind} == {:crew_activity, nil, nil}
       assert activity.refresh == {Activity, :open}
-      assert activity.projection == ~w(kind id member asked_by title since status)
+      assert activity.projection == ~w(kind id member asked_by title since status revision at)
+
+      # A job leaves the open list as it ends.
+      assert {activity.key, activity.removal, activity.reread, activity.stale_after} ==
+               {"id", "ended", [], 900}
 
       assert activity.shape["fields"]["title"] == %{
                "type" => "string",
@@ -398,10 +406,10 @@ defmodule Aqua.StreamsTest do
       jobs = items |> Enum.map(&read_as/1) |> Enum.filter(&(&1["member"] == "planner"))
       assert length(jobs) == 2
 
-      # The guide keys a crew job by its `id`, which the stream carries, so
-      # one member's two jobs at once stay two.
-      guide = File.read!(Path.expand("../../../../integration-guide.md", __DIR__))
-      assert guide =~ "a crew job's by `id`"
+      # The catalog keys a crew job by its `id`, which the stream carries,
+      # so one member's two jobs at once stay two.
+      {:ok, %{streams: catalog}} = Compendium.Canvas.catalog(ada.ctx)
+      assert %{key: "id"} = Enum.find(catalog, &(&1.name == "activity.changes"))
       assert map_size(Map.new(jobs, &{&1["id"], &1})) == 2
       assert Enum.sort(Enum.map(jobs, & &1["id"])) == Enum.sort([first.id, second.id])
 
@@ -522,7 +530,10 @@ defmodule Aqua.StreamsTest do
     data = grant |> Prima.StreamGrant.project(payload) |> Jason.encode!() |> Jason.decode!()
     assert :ok = Shape.check(stream.shape, data), inspect(data)
     assert Enum.sort(Map.keys(data)) == Enum.sort(stream.projection)
-    data
+    # The delivery fields, its revision its time in microseconds, set aside.
+    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
+    assert data["revision"] == DateTime.to_unix(at, :microsecond)
+    Map.drop(data, ~w(revision at))
   end
 
   defp later_or_same?(later, earlier) do

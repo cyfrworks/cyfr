@@ -98,7 +98,8 @@ defmodule Emissary.Web.FrameSocketTest do
 
   # A provider of three canvas-readable streams on the schedules topic,
   # each item a schedule by its id, whose picture the case sets
-  # (`picture/1`, a list of items or an error the read answers):
+  # (`picture/1`, a list of items or an error the read answers, kept in
+  # the application's environment through `Prima.Test.Env`):
   # `pictured.changes` delivers each change, `pictured.rereads` answers a
   # `changed` with a fresh picture, and `pictured.brief`'s picture stands a
   # second.
@@ -148,11 +149,10 @@ defmodule Emissary.Web.FrameSocketTest do
       end
     end
 
-    def picture(picture), do: :persistent_term.put({__MODULE__, :picture}, picture)
-    def unset, do: :persistent_term.erase({__MODULE__, :picture})
+    def picture(picture), do: Prima.Test.Env.put_app_env(:cyfr, __MODULE__, picture)
 
     def refresh(_ctx, nil) do
-      case :persistent_term.get({__MODULE__, :picture}, []) do
+      case Application.get_env(:cyfr, __MODULE__, []) do
         items when is_list(items) -> {:ok, items}
         {:error, _} = unread -> unread
       end
@@ -504,7 +504,6 @@ defmodule Emissary.Web.FrameSocketTest do
 
   describe "a canvas-readable stream keeps the delivery contract" do
     setup %{source: source} do
-      on_exit(&Pictured.unset/0)
       Pictured.picture([item("sch_one", "active")])
       %{actor: Sanctum.Context.actor(source)}
     end

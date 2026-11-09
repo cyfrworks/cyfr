@@ -1483,7 +1483,8 @@ defmodule Cyfr.DocsDriftTest do
 
   # The table of what a canvas reads has a row for each stream a canvas may
   # read, every one that declares a shape, and no other, and each row names
-  # every field of its stream's shape.
+  # every field of its stream's shape but the delivery contract's, which
+  # the guide names once, before the table.
   test "the guide's canvas stream table is the streams a canvas may read" do
     guide = File.read!(@integration_guide)
 
@@ -1508,9 +1509,19 @@ defmodule Cyfr.DocsDriftTest do
            "integration-guide.md's canvas streams are not the streams a canvas may read, " <>
              inspect(Enum.sort(Map.keys(readable)))
 
-    for {name, named} <- rows, field <- readable[name] do
+    delivery = Prima.Provider.Stream.delivery_fields()
+
+    for {name, named} <- rows, field <- readable[name] -- delivery do
       assert field in named, "integration-guide.md's #{name} row does not name #{field}"
     end
+
+    [contract] =
+      Regex.run(~r/^.*Each keeps one delivery contract.*$/m, guide) ||
+        flunk("integration-guide.md states no delivery contract before its canvas stream table")
+
+    for field <-
+          delivery ++ ~w(key removal reread stale_after snapshot resync unavailable stale denied),
+        do: assert(contract =~ "`#{field}`", "the delivery contract does not name #{field}")
   end
 
   # component-guide's CLI-to-MCP table names, for each command, the tool

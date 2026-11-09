@@ -79,12 +79,18 @@ defmodule Opus.Schedules.StreamsTest do
       assert {schedules.topic, runs.topic} == {:schedules, :schedule_runs}
 
       assert schedules.projection ==
-               ~w(kind schedule_id name reference cron_expression status next_run_at last_run_at run_count error_count)
+               ~w(kind schedule_id name reference cron_expression status next_run_at last_run_at run_count error_count revision at)
+
+      assert {schedules.key, schedules.removal, schedules.reread, schedules.stale_after} ==
+               {"schedule_id", "removed", [], 900}
 
       assert schedules.shape["fields"]["kind"]["values"] == ["changed", "removed"]
 
       assert runs.projection ==
-               ~w(kind schedule_id occurrence_id execution_id scheduled_for reason)
+               ~w(kind schedule_id occurrence_id execution_id scheduled_for reason revision at)
+
+      assert {runs.key, runs.removal, runs.reread, runs.stale_after} ==
+               {"occurrence_id", nil, [], 900}
 
       assert runs.shape["fields"]["kind"]["values"] == ["fired", "failed"]
 
