@@ -197,7 +197,7 @@ button { font: inherit; color: inherit; }
 #plan .hill { display: flex; flex-wrap: wrap; gap: 6px; }
 #plan .hill span { display: inline-flex; align-items: center; border: 2px solid var(--board-ink); }
 #plan .hill span b { font-weight: 400; padding: 0 6px; }
-#plan .hill button { min-width: 36px; min-height: 40px; border: 0; background: var(--tile-2); cursor: pointer; }
+#plan .hill button { min-width: 44px; min-height: 44px; border: 0; background: var(--tile-2); cursor: pointer; }
 #plan .foot {
   display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; justify-content: flex-end; align-items: center;
   position: sticky; bottom: -14px; margin-bottom: -14px; padding: 8px 0 14px; background: var(--board);
