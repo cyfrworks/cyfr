@@ -232,7 +232,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
 
       assert_receive {:registered, pid}, 1_000
       assert_receive {:task, %Task{pid: ^pid}}, 1_000
-      ref = Process.monitor(pid)
+      ref = monitor!(pid)
 
       # No one is left to read the task's answer: it stops as a cancel
       # stops it, and nothing is left for a cancel to reach.
@@ -414,7 +414,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
         end)
 
       assert_receive {:registered, pid}, 1_000
-      ref = Process.monitor(pid)
+      ref = monitor!(pid)
       assert [{^handle, ^pid}] = row(handle)
 
       Process.exit(claimer, :kill)
@@ -565,4 +565,16 @@ defmodule Sanctum.Gate.RunningTasksTest do
 
   defp handle, do: {:turn, System.unique_integer([:positive])}
   defp row(handle), do: :ets.lookup(Sanctum.RunningTasks.Handles, handle)
+
+  # A monitor request is a signal: `Process.monitor/1` returns before the
+  # process has taken it, and an exit sent on another path (the registry
+  # stopping a task whose claimer died) can reach it first, leaving the
+  # monitor to answer `:noproc`. The process's answer to `Process.info/2`
+  # comes after the monitor has landed.
+  defp monitor!(pid) do
+    ref = Process.monitor(pid)
+    assert {:monitored_by, by} = Process.info(pid, :monitored_by)
+    assert self() in by
+    ref
+  end
 end

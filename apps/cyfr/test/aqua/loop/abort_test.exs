@@ -110,7 +110,7 @@ defmodule Aqua.Loop.AbortTest do
       end)
 
     assert_receive {:handler, handler}, 1_000
-    ref = Process.monitor(handler)
+    ref = monitor!(handler)
 
     on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
@@ -212,5 +212,17 @@ defmodule Aqua.Loop.AbortTest do
       })
 
     started
+  end
+
+  # A monitor request is a signal: `Process.monitor/1` returns before the
+  # process has taken it, and an exit sent on another path (the registry
+  # stopping a task whose claimer died) can reach it first, leaving the
+  # monitor to answer `:noproc`. The process's answer to `Process.info/2`
+  # comes after the monitor has landed.
+  defp monitor!(pid) do
+    ref = Process.monitor(pid)
+    assert {:monitored_by, by} = Process.info(pid, :monitored_by)
+    assert self() in by
+    ref
   end
 end

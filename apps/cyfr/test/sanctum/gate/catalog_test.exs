@@ -709,8 +709,8 @@ defmodule Sanctum.Gate.CatalogTest do
 
         assert_receive {:waiter, waiter}, 5_000
         assert_receive {:handler_running, handler}, 5_000
-        waiter_ref = Process.monitor(waiter)
-        handler_ref = Process.monitor(handler)
+        waiter_ref = monitor!(waiter)
+        handler_ref = monitor!(handler)
 
         Process.exit(loop, :kill)
 
@@ -1292,5 +1292,17 @@ defmodule Sanctum.Gate.CatalogTest do
       assert_received {^lost, %{stage: :append, kind: :unavailable}}
       assert_received {^lost, %{stage: :finish, kind: :unavailable}}
     end
+  end
+
+  # A monitor request is a signal: `Process.monitor/1` returns before the
+  # process has taken it, and an exit sent on another path (the registry
+  # stopping a task whose claimer died) can reach it first, leaving the
+  # monitor to answer `:noproc`. The process's answer to `Process.info/2`
+  # comes after the monitor has landed.
+  defp monitor!(pid) do
+    ref = Process.monitor(pid)
+    assert {:monitored_by, by} = Process.info(pid, :monitored_by)
+    assert self() in by
+    ref
   end
 end
