@@ -3,7 +3,8 @@
 
 // The night desktop (seed/components/tinctures/local/night): its own page
 // files, run here as the page runs them, in a context of their own with the
-// SDK's client over a stand-in fetch and the few DOM calls the page makes.
+// SDK's client over a stand-in stream connection and the few DOM calls the
+// page makes.
 // What it keeps in flight while its parts change.
 
 import assert from "node:assert/strict"
@@ -35,25 +36,35 @@ function element() {
   }
 }
 
-// The page's model.js and street.js under the SDK's client, whose stream
-// opens never answer until the test settles them; answers every request
-// the page made, by stream, with whether it is still in flight.
+// The page's model.js and street.js under the SDK's client, whose
+// subscriptions are never answered until the test settles them, which ends
+// each unopened; answers every subscription the page made, by stream, with
+// whether it is still in flight.
 async function night(widgets) {
   const requests = []
+  const socket = {
+    send(data) {
+      const {type, sub, stream} = JSON.parse(data)
+      if (type === "unsubscribe") {
+        for (const request of requests) if (request.sub === sub) request.closed = true
+        return
+      }
+      const request = {stream, sub, settled: false, closed: false}
+      request.settle = () => {
+        request.settled = true
+        socket.onmessage({data: JSON.stringify({v: 1, type: "ended", sub})})
+      }
+      requests.push(request)
+    },
+  }
   const win = {location: {pathname: "/_c/v1/review/frm_1"}, parent: {}}
   const {api, onWindowMessage} = createClient({
     win,
     base: "http://127.0.0.1:4000/",
-    fetchFn: (_url, args) =>
-      new Promise((_resolve, reject) => {
-        const request = {stream: JSON.parse(args.body).stream, settled: false, signal: args.signal}
-        request.settle = () => {
-          request.settled = true
-          reject(new TypeError("closed"))
-        }
-        args.signal.addEventListener("abort", () => request.settle())
-        requests.push(request)
-      }),
+    socketFn: () => {
+      setTimeout(() => socket.onopen(), 0)
+      return socket
+    },
   })
   const elements = new Map(["street", "header", "wall", "level", "puddle-index", "plate", "fusebox"].map((id) => [`#${id}`, element()]))
   const document = {
@@ -99,7 +110,7 @@ async function night(widgets) {
   return {requests, close: () => (channel.port1.close(), channel.port2.close())}
 }
 
-const inFlight = (requests) => requests.filter((r) => !r.settled && !r.signal.aborted)
+const inFlight = (requests) => requests.filter((r) => !r.settled && !r.closed)
 
 describe("the night desktop", () => {
   test("parts turned off while their streams still open keep no more than five opens in flight, and what waits opens once they settle", async () => {

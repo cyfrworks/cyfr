@@ -5,8 +5,8 @@ import assert from "node:assert/strict"
 import {afterEach, describe, test} from "node:test"
 
 import {CyfrError, createClient} from "../../js/sdk/client.js"
-import {CANVAS_VERBS, CREDENTIAL, HANDSHAKE, credentialClosed, toFrameMessage} from "../../js/sdk/wire.js"
-import {credentialOf, eventually, fixture, frameWindow, nextMessage, stubServer} from "./support.mjs"
+import {CANVAS_VERBS, CREDENTIAL, HANDSHAKE, SOCKET_PATH, credentialClosed, toFrameMessage} from "../../js/sdk/wire.js"
+import {credentialOf, eventually, fixture, frameWindow, nextMessage, stubServer, stubSockets} from "./support.mjs"
 
 const GRANT = fixture.shell.find((vector) => vector.verb === "grant").message.args.ref
 
@@ -19,14 +19,31 @@ afterEach(async () => {
 })
 
 // A frame's SDK against a stub endpoint answering each route from the
-// fixture. `handshake()` plays the shell: it posts the handshake from the
-// parent window and the credential over the port, and answers the shell's
-// end of the port.
-async function frameClient({answer, framed = true, pathname, handshakeTimeoutMs, fetchFn = fetch} = {}) {
+// fixture, and its stream connection answering each subscription with
+// `streams` (`stubSockets`). `handshake()` plays the shell: it posts the
+// handshake from the parent window and the credential over the port, and
+// answers the shell's end of the port.
+async function frameClient({
+  answer,
+  streams = fixtureStreams,
+  opens,
+  socketFn,
+  framed = true,
+  pathname,
+  handshakeTimeoutMs,
+  fetchFn = fetch
+} = {}) {
   const server = await stubServer(answer || fixtureAnswer)
   cleanups.push(server.close)
+  const endpoint = stubSockets({answer: streams, opens})
   const win = frameWindow({framed, pathname})
-  const {api, onWindowMessage, onPageError} = createClient({win, fetchFn, base: server.base, handshakeTimeoutMs})
+  const {api, onWindowMessage, onPageError} = createClient({
+    win,
+    fetchFn,
+    socketFn: socketFn || endpoint.socketFn,
+    base: server.base,
+    handshakeTimeoutMs
+  })
 
   const handshake = ({source = win.parent, frame = FRAME, credential = CREDENTIAL_VALUE} = {}) => {
     const channel = new MessageChannel()
@@ -36,7 +53,7 @@ async function frameClient({answer, framed = true, pathname, handshakeTimeoutMs,
     return channel.port1
   }
 
-  return {api, onWindowMessage, onPageError, handshake, server, win}
+  return {api, onWindowMessage, onPageError, handshake, server, win, sockets: endpoint.sockets, sent: endpoint.sent}
 }
 
 const route = (url) => Object.entries(fixture.routes).find(([, path]) => path === url)?.[0]
@@ -44,46 +61,46 @@ const route = (url) => Object.entries(fixture.routes).find(([, path]) => path ==
 // A private version's page, which names no public tincture.
 const PRIVATE_PATH = "/_s/SFMyNTY.c2lnbmVkLWFzc2V0/local/weather/1.0.0/index.html"
 
-// The events a stream delivers, as the endpoint writes them: `id` the
-// sequence number, `event` the projection, `data` the projected payload.
-const EVENTS = [
-  {id: 1, event: "delta", data: {seq: 1, delta: "Lis"}},
-  {id: 2, event: "delta", data: {seq: 2, delta: "bon"}}
-]
-
-const sse = ({id, event, data}) => `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`
-
-// Each event split across two writes, so the parser meets a chunk that ends
-// mid-line; then the endpoint ends the stream, as its deadline does.
-function streamEvents(res) {
-  const text = ": open\n\n" + EVENTS.map(sse).join("")
-  const cut = Math.floor(text.length / 2)
-  res.write(text.slice(0, cut))
-  setTimeout(() => res.end(text.slice(cut)), 5)
-}
-
 function fixtureAnswer(request) {
-  const kind = route(request.url)
-  if (kind === "stream_open") return {stream: streamEvents}
-  return {body: fixture.answers.find((vector) => vector.kind === kind).body}
+  return {body: fixture.answers.find((vector) => vector.kind === route(request.url)).body}
 }
+
+// The fixture's stream connection: what the frame sends, what the endpoint
+// answers and what the page's handler hears of it.
+const {connection: CONNECTION} = fixture
+const SUBJECT = CONNECTION.from_frame[0].subject
+
+// The events of the fixture's first subscription, as its handler hears
+// them, but for its last, the refusal it ended with.
+const EVENTS = CONNECTION.heard[0].events.filter(({event}) => event !== "refusal")
+
+// The endpoint answering each subscription: it opens, carries EVENTS as its
+// stream's, and the endpoint ends it.
+function fixtureStreams({type, sub, stream, subject}) {
+  if (type !== "subscribe") return []
+  return [
+    {v: 1, type: "subscribed", sub},
+    ...EVENTS.map(({id, data}) => ({v: 1, type: "event", sub, stream, subject, id, data})),
+    {v: 1, type: "ended", sub}
+  ]
+}
+
+// EVENTS as the handler of a subscription to `stream` hears them.
+const eventsOf = (stream) => EVENTS.map((event) => ({...event, event: stream}))
+
+const subscribes = (sent) => sent().filter((message) => message.type === "subscribe")
 
 describe("data goes to the endpoint under the handshake's credential", () => {
-  test("invoke, action and stream post the fixture's bodies with the bearer", async () => {
+  test("invoke and action post the fixture's bodies with the bearer", async () => {
     const {api, handshake, server} = await frameClient()
     handshake()
 
-    const [invoke, action, stream] = fixture.requests.map((vector) => vector.body)
+    const [invoke, action] = fixture.requests.map((vector) => vector.body)
 
     assert.deepEqual(await api.invoke(invoke.ref, invoke.operation, invoke.args), {temperature: 21})
     assert.deepEqual(await api.action(action.operation, action.args), {executions: []})
 
-    const events = []
-    const handle = await api.stream(stream.stream, stream.subject, (event) => events.push(event))
-    await handle.closed
-    assert.deepEqual(events, EVENTS)
-
-    assert.equal(server.requests.length, 3)
+    assert.equal(server.requests.length, 2)
 
     for (const [i, request] of server.requests.entries()) {
       const vector = fixture.requests[i]
@@ -128,7 +145,7 @@ describe("data goes to the endpoint under the handshake's credential", () => {
   })
 
   test("arguments that are not the wire's are refused before anything is sent", async () => {
-    const {api, handshake, server} = await frameClient()
+    const {api, handshake, server, sockets} = await frameClient()
     handshake()
 
     await assert.rejects(api.invoke("", "run"), {code: "invalid_argument"})
@@ -136,16 +153,18 @@ describe("data goes to the endpoint under the handshake's credential", () => {
     await assert.rejects(api.stream("executions.deltas", 7, () => {}), {code: "invalid_argument"})
     await assert.rejects(api.stream("executions.deltas", null), {code: "invalid_argument"})
     assert.equal(server.requests.length, 0)
+    assert.equal(sockets.length, 0)
   })
 })
 
 describe("only the shell that created the frame hands it a port and a credential", () => {
   test("a top-level private page has no credential", async () => {
-    const {api, server} = await frameClient({framed: false, pathname: PRIVATE_PATH})
+    const {api, server, sockets} = await frameClient({framed: false, pathname: PRIVATE_PATH})
     assert.equal(api.public, null)
     await assert.rejects(api.invoke("c:local.weather:1.0.0", "run"), {code: "no_frame"})
     await assert.rejects(api.stream("executions.deltas", null, () => {}), {code: "no_frame"})
     assert.equal(server.requests.length, 0)
+    assert.equal(sockets.length, 0)
   })
 
   test("a handshake from another window is ignored", async () => {
@@ -244,32 +263,36 @@ describe("the shell replaces the credential over the port", () => {
     assert.deepEqual(authorizations(server), [CREDENTIAL_VALUE, "frm.v2.another-frames"])
   })
 
-  test("a request or a stream already sent keeps the credential it was sent with", async () => {
-    const sent = []
+  test("a request or a subscription already sent keeps the credential it was sent with; the next takes the newest", async () => {
+    const posted = []
     const fetchFn = (url, options) => {
-      sent.push(credentialOf(options.headers.authorization))
+      posted.push(credentialOf(options.headers.authorization))
       return fetch(url, options)
     }
-    const {api, handshake, server} = await frameClient({fetchFn})
+    const {api, handshake, server, sent} = await frameClient({fetchFn})
     const shell = handshake()
-    const [invoke, , stream] = fixture.requests.map((vector) => vector.body)
+    const [invoke] = fixture.requests.map((vector) => vector.body)
 
     const events = []
-    const opened = api.stream(stream.stream, stream.subject, (event) => events.push(event))
+    const opened = api.stream("executions.deltas", SUBJECT, (event) => events.push(event))
     const inFlight = api.invoke(invoke.ref, invoke.operation, invoke.args)
-    await eventually(() => sent.length === 2)
+    await eventually(() => posted.length === 1 && subscribes(sent).length === 1)
 
     shell.postMessage(renewal())
     await settled(api, shell)
 
     assert.deepEqual(await inFlight, {temperature: 21})
-    const handle = await opened
-    await handle.closed
-    assert.deepEqual(events, EVENTS)
+    await (await opened).closed
+    assert.deepEqual(events, eventsOf("executions.deltas"))
 
     await api.invoke(invoke.ref, invoke.operation, invoke.args)
-    assert.deepEqual(sent, [CREDENTIAL_VALUE, CREDENTIAL_VALUE, RENEWED])
-    assert.deepEqual(authorizations(server).sort(), [CREDENTIAL_VALUE, CREDENTIAL_VALUE, RENEWED].sort())
+    await (await api.stream("runs.changes", null, () => {})).closed
+    assert.deepEqual(posted, [CREDENTIAL_VALUE, RENEWED])
+    assert.deepEqual(authorizations(server), [CREDENTIAL_VALUE, RENEWED])
+    assert.deepEqual(
+      subscribes(sent).map((message) => message.credential),
+      [CREDENTIAL_VALUE, RENEWED]
+    )
   })
 })
 
@@ -373,88 +396,66 @@ describe("a credential is asked for through the shell's prompt", () => {
   })
 })
 
-describe("a stream is delivered as the response's event stream", () => {
-  async function opened(answer) {
-    const client = await frameClient({answer})
+describe("a stream is delivered over the frame's stream connection", () => {
+  async function opened(options) {
+    const client = await frameClient(options)
     client.handshake()
     return client
   }
 
   test("each event reaches onEvent, and the stream ends with the endpoint's", async () => {
-    const {api, server} = await opened(fixtureAnswer)
+    const {api, sockets} = await opened()
     const events = []
-    const handle = await api.stream("executions.deltas", "exec_1", (event) => events.push(event))
+    const handle = await api.stream("executions.deltas", SUBJECT, (event) => events.push(event))
 
     await handle.closed
-    assert.deepEqual(events, EVENTS)
-    assert.equal(server.requests[0].headers.authorization, `Bearer ${CREDENTIAL_VALUE}`)
+    assert.deepEqual(events, eventsOf("executions.deltas"))
+    assert.equal(sockets.length, 1)
   })
 
-  test("close() aborts the request and delivers nothing more", async () => {
-    let res
-    const {api, server} = await opened(() => ({stream: (r) => (res = r).write(sse(EVENTS[0]))}))
-    const events = []
-    const handle = await api.stream("executions.deltas", null, (event) => events.push(event))
+  test("what the frame sends is the fixture's: a subscribe per stream, numbered from 1, and an unsubscribe", async () => {
+    const [first, second] = CONNECTION.from_frame
+    const {api, sockets, sent} = await opened({streams: () => []})
 
-    await eventually(() => events.length === 1)
-    handle.close()
-    await handle.closed
-    await eventually(() => server.requests[0].closed)
+    api.stream(first.stream, first.subject, () => {})
+    const later = api.stream(second.stream, second.subject, () => {})
+    await eventually(() => sent().length === 2)
+    sockets[0].say({v: 1, type: "subscribed", sub: second.sub})
+    ;(await later).close()
 
-    res.write(sse(EVENTS[1]))
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    assert.deepEqual(events, [EVENTS[0]])
+    assert.deepEqual(sent(), CONNECTION.from_frame)
+    assert.equal(sockets.length, 1)
   })
 
-  test("a refusal rejects the open with its class, and delivers nothing", async () => {
-    const {api} = await opened(() => ({status: 403, body: fixture.refusal.body}))
-    const events = []
-
-    await assert.rejects(api.stream("executions.deltas", null, (event) => events.push(event)), {
-      code: "forbidden",
-      stage: "admission"
+  test("the endpoint's answers, in the fixture's order, are heard as the fixture's events", async () => {
+    const {api, sockets, sent} = await opened({streams: () => []})
+    const reads = CONNECTION.heard.map(({sub}) => {
+      const {stream, subject} = CONNECTION.from_frame.find((message) => message.sub === sub)
+      const read = {sub, events: [], ended: false}
+      read.opened = api.stream(stream, subject, (event) => read.events.push(event))
+      return read
     })
-    assert.deepEqual(events, [])
-  })
+    await eventually(() => sent().length === reads.length)
+    assert.deepEqual(
+      sent().map((message) => message.sub),
+      reads.map(({sub}) => sub)
+    )
 
-  // tests/fixtures/tincture_wire.json's stream_rejections: each answer an
-  // open can get that opens no stream, and how the SDK rejects it.
-  test("an open the endpoint gave no answer on rejects unavailable with no stage; any other, as its refusal", async () => {
-    const {cases} = fixture.stream_rejections
-    assert.ok(cases.some(({answer}) => answer === null))
-    assert.ok(cases.some(({answer}) => answer !== null && answer.status >= 500 && "body" in answer))
-    assert.ok(cases.some(({rejects}) => rejects.stage === "admission"))
-
-    const reads = []
-    for (const {answer} of cases) {
-      const client = await frameClient({
-        answer: () => ({status: answer?.status, body: answer?.body ?? answer?.text}),
-        fetchFn: answer === null ? () => Promise.reject(new TypeError("Failed to fetch")) : fetch
-      })
-      client.handshake()
-      const events = []
-
-      await assert.rejects(client.api.stream("executions.deltas", null, (event) => events.push(event)), (error) => {
-        assert.ok(error instanceof CyfrError)
-        const read = {class: error.code, message: error.message}
-        if ("stage" in error) read.stage = error.stage
-        reads.push(read)
-        return true
-      })
-      assert.deepEqual(events, [])
+    for (const message of CONNECTION.to_frame) sockets[0].say(message)
+    for (const read of reads) {
+      await (await read.opened).closed
+      read.ended = true
     }
 
-    assert.deepEqual(reads, cases.map(({rejects}) => rejects))
-  })
-
-  test("a JSON answer that is not a refusal is no stream", async () => {
-    const grant = fixture.answers.find((vector) => vector.kind === "stream_open").body
-    const {api} = await opened(() => ({body: grant}))
-    await assert.rejects(api.stream("executions.deltas", null, () => {}), {code: "invalid_answer"})
+    assert.deepEqual(
+      reads.map(({sub, events, ended}) => ({sub, events, ended})),
+      CONNECTION.heard
+    )
+    assert.equal(sockets.length, 1)
   })
 
   test("a handler that throws does not end the stream", async () => {
-    const {api} = await opened(fixtureAnswer)
+    const {api} = await opened()
     const seen = []
     const handle = await api.stream("executions.deltas", null, (event) => {
       seen.push(event.id)
@@ -464,25 +465,217 @@ describe("a stream is delivered as the response's event stream", () => {
     await handle.closed
     assert.deepEqual(seen, [1, 2])
   })
+
+  test("closed before its subscribe is sent, it sends nothing and rejects cancelled", async () => {
+    const cancelled = {code: "cancelled", message: "The stream was closed before it opened."}
+
+    // Before the shell handed the frame its credential.
+    const early = await frameClient()
+    const waiting = early.api.stream("runs.changes", null, () => {})
+    waiting.close()
+    await assert.rejects(waiting, cancelled)
+    early.handshake()
+    await tick()
+    assert.equal(early.sockets.length, 0)
+
+    // While the connection opens.
+    const {api, sockets} = await opened({opens: false})
+    const opening = api.stream("runs.changes", null, () => {})
+    await eventually(() => sockets.length === 1)
+    opening.close()
+    await assert.rejects(opening, cancelled)
+    sockets[0].open()
+    await tick()
+    assert.deepEqual(sockets[0].sent, [])
+  })
+
+  test("closed while it waits for its answer, it sends unsubscribe and rejects cancelled; the answer moves nothing", async () => {
+    const {api, sockets, sent} = await opened({streams: () => []})
+    const events = []
+    const pending = api.stream("runs.changes", null, (event) => events.push(event))
+    await eventually(() => sent().length === 1)
+
+    pending.close()
+    await assert.rejects(pending, {code: "cancelled"})
+    pending.close()
+    sockets[0].say({v: 1, type: "subscribed", sub: 1})
+    sockets[0].say({v: 1, type: "event", sub: 1, stream: "runs.changes", subject: null, id: null, data: {kind: "failed"}})
+    await tick()
+
+    assert.deepEqual(sent(), [
+      {...CONNECTION.from_frame[1], sub: 1},
+      {...CONNECTION.from_frame[2], sub: 1}
+    ])
+    assert.deepEqual(events, [])
+  })
+
+  test("closed when open, it sends unsubscribe, its closed resolves and nothing more is delivered; the promise's close is the handle's", async () => {
+    const {api, sockets, sent} = await opened({streams: ({type, sub}) => (type === "subscribe" ? [{v: 1, type: "subscribed", sub}] : [])})
+    const events = []
+    const pending = api.stream("runs.changes", null, (event) => events.push(event))
+    const handle = await pending
+    const event = (id) => ({v: 1, type: "event", sub: 1, stream: "runs.changes", subject: null, id, data: {kind: "failed"}})
+
+    sockets[0].say(event(1))
+    handle.close()
+    await handle.closed
+    sockets[0].say(event(2))
+    pending.close()
+    handle.close()
+    await tick()
+
+    assert.deepEqual(events, [{id: 1, event: "runs.changes", data: {kind: "failed"}}])
+    assert.deepEqual(
+      sent().map(({type, sub}) => [type, sub]),
+      [
+        ["subscribe", 1],
+        ["unsubscribe", 1]
+      ]
+    )
+  })
+
+  test("a closed connection ends every subscription it carried, and the next stream opens a new one", async () => {
+    const {api, sockets, sent} = await opened({
+      streams: ({type, sub, stream}) => (type === "subscribe" && stream === "runs.changes" ? [{v: 1, type: "subscribed", sub}] : [])
+    })
+    const open = await api.stream("runs.changes", null, () => {})
+    const pending = api.stream("executions.deltas", SUBJECT, () => {})
+    await eventually(() => sent().length === 2)
+
+    sockets[0].drop()
+    const unreachable = {code: "unavailable", message: "The endpoint could not be reached."}
+    await assert.rejects(open.closed, unreachable)
+    await assert.rejects(pending, unreachable)
+
+    const again = await api.stream("runs.changes", null, () => {})
+    assert.equal(sockets.length, 2)
+    assert.deepEqual(
+      sockets.map((socket) => socket.sent.map(({sub}) => sub)),
+      [[1, 2], [3]]
+    )
+    again.close()
+  })
+
+  test("a refusal rejects the open with its class, and delivers nothing", async () => {
+    const {error} = fixture.refusal.body
+    const {api} = await opened({streams: ({sub}) => [{v: 1, type: "ended", sub, error}]})
+    const events = []
+
+    await assert.rejects(api.stream("executions.deltas", null, (event) => events.push(event)), {
+      code: "forbidden",
+      message: error.message,
+      stage: "admission"
+    })
+    assert.deepEqual(events, [])
+  })
+
+  // tests/fixtures/tincture_wire.json's stream_rejections: each answer a
+  // subscription can get that opens no stream, and how the SDK rejects it.
+  // No answer is the connection that never opened, that the SDK could not
+  // open, or that closed after the subscribe went.
+  test("a subscription that got no answer rejects unavailable with no stage; any other, as its refusal", async () => {
+    const {cases} = fixture.stream_rejections
+    assert.ok(cases.some(({answer}) => answer === null))
+    assert.ok(cases.some(({answer}) => answer?.error && fixture.stream_rejections.no_answer_classes.includes(answer.error.class)))
+    assert.ok(cases.some(({rejects}) => rejects.stage === "admission"))
+
+    const unanswered = {
+      "the connection never opens": async () => {
+        const client = await opened({opens: false})
+        const pending = client.api.stream("executions.deltas", null, () => {})
+        await eventually(() => client.sockets.length === 1)
+        client.sockets[0].drop()
+        return pending
+      },
+      "the connection cannot be made": async () => {
+        const client = await opened({
+          socketFn: () => {
+            throw new SyntaxError("The URL's scheme must be either 'ws' or 'wss'.")
+          }
+        })
+        return client.api.stream("executions.deltas", null, () => {})
+      },
+      "the connection closes after the subscribe": async () => {
+        const drop = (_message, socket) => {
+          setTimeout(() => socket.drop(), 0)
+          return []
+        }
+        return (await opened({streams: drop})).api.stream("executions.deltas", null, () => {})
+      }
+    }
+
+    for (const {answer, rejects} of cases) {
+      // The fixture's answer names the first subscription a frame makes.
+      const answered = async () => (await opened({streams: () => [answer]})).api.stream("executions.deltas", null, () => {})
+      const ways = answer === null ? Object.entries(unanswered) : [[JSON.stringify(answer), answered]]
+      for (const [way, open] of ways) {
+        await assert.rejects(open(), (error) => {
+          assert.ok(error instanceof CyfrError, way)
+          const read = {class: error.code, message: error.message}
+          if ("stage" in error) read.stage = error.stage
+          assert.deepEqual(read, rejects, way)
+          return true
+        })
+      }
+    }
+  })
+
+  test("a message that does not read, or names no live subscription, moves nothing", async () => {
+    const {api} = await opened({
+      streams: ({type, sub, stream, subject}) =>
+        type !== "subscribe"
+          ? []
+          : [
+              "not json",
+              {v: 1, type: "ended", sub, error: {class: "forbidden", message: "no"}},
+              {v: 1, type: "subscribed", sub: sub + 1},
+              {v: 1, type: "subscribed", sub, origin: "elsewhere"},
+              {v: 2, type: "subscribed", sub},
+              {v: 1, type: "subscribed", sub},
+              {v: 1, type: "event", sub, stream, subject, id: "1", data: {}},
+              {v: 1, type: "ended", sub: sub + 1},
+              ...fixtureStreams({type, sub, stream, subject}).slice(1)
+            ]
+    })
+    const events = []
+    await (await api.stream("executions.deltas", SUBJECT, (event) => events.push(event))).closed
+    assert.deepEqual(events, eventsOf("executions.deltas"))
+  })
+
+  test("the connection is the app's, at the base's host, ws for http and wss for https, the credential never in it", async () => {
+    const {api, sockets, server} = await opened()
+    await (await api.stream("runs.changes", null, () => {})).closed
+    assert.equal(sockets[0].url, new URL(CONNECTION.paths.app, server.base.replace(/^http:/, "ws:")).href)
+    assert.equal(new URL(sockets[0].url).pathname, SOCKET_PATH)
+
+    const endpoint = stubSockets({answer: fixtureStreams})
+    const win = frameWindow()
+    const {api: secure, onWindowMessage} = createClient({win, fetchFn: fetch, socketFn: endpoint.socketFn, base: "https://cyfr.test/_s/x/index.html"})
+    const channel = new MessageChannel()
+    cleanups.push(() => channel.port1.close())
+    onWindowMessage({source: win.parent, data: {v: 1, type: HANDSHAKE, frame: FRAME}, ports: [channel.port2]})
+    channel.port1.postMessage({v: 1, type: CREDENTIAL, frame: FRAME, credential: CREDENTIAL_VALUE})
+    await (await secure.stream("runs.changes", null, () => {})).closed
+    assert.equal(endpoint.sockets[0].url, "wss://cyfr.test/_f/v1/socket")
+
+    for (const socket of [...sockets, ...endpoint.sockets]) assert.ok(!socket.url.includes(CREDENTIAL_VALUE))
+  })
 })
 
 describe("a public tincture's top-level page names itself", () => {
-  test("its requests carry public and no bearer, and its streams too", async () => {
-    const {api, server} = await frameClient({framed: false})
+  test("its requests carry public and no bearer, and it opens no stream", async () => {
+    const {api, server, sockets} = await frameClient({framed: false})
     const identity = {athanor: "@home", publisher: "local", name: "weather"}
     assert.deepEqual(api.public, identity)
 
     const [invoke] = fixture.requests.map((vector) => vector.body)
     assert.deepEqual(await api.invoke(invoke.ref, invoke.operation, invoke.args), {temperature: 21})
-    const handle = await api.stream("executions.deltas", null, () => {})
-    await handle.closed
+    await assert.rejects(api.stream("executions.deltas", null, () => {}), {code: "no_frame"})
 
-    for (const request of server.requests) {
-      assert.equal(request.headers.authorization, undefined)
-      assert.deepEqual(request.body.public, identity)
-    }
-
+    assert.equal(server.requests.length, 1)
+    assert.equal(server.requests[0].headers.authorization, undefined)
     assert.deepEqual(server.requests[0].body, {...invoke, public: identity})
+    assert.equal(sockets.length, 0)
   })
 
   test("an encoded path reads as its decoded one", async () => {
@@ -501,9 +694,9 @@ describe("a public tincture's top-level page names itself", () => {
 // ---- a canvas's page ----------------------------------------------------------
 
 // The fixture's canvas open: its frame, credential and canvas block, as the
-// shell's handshake reply carries them, and the route its streams take.
+// shell's handshake reply carries them, and its stream connection's path.
 const [{frame: CANVAS, reply: OPEN}] = fixture.canvas.handshake.valid
-const [{stream_path: STREAM_PATH}] = fixture.canvas.paths.valid.filter(({frame}) => frame === CANVAS)
+const [{socket_path: SOCKET}] = fixture.canvas.paths.valid.filter(({frame}) => frame === CANVAS)
 const DECLARED = OPEN.canvas.streams[0]
 const PRESS = fixture.shell.find((vector) => vector.verb === "press").message.args
 
@@ -514,11 +707,8 @@ const SHOWN = [["state", {state: "live"}]]
 // handshake from the parent window, then over the port the canvas message,
 // the credential and anything in `told`; `heard` is every message the page
 // posts the shell.
-async function canvasClient({
-  block = OPEN.canvas,
-  answer = (request) => (request.url === STREAM_PATH ? {stream: streamEvents} : fixtureAnswer(request))
-} = {}) {
-  const client = await frameClient({answer})
+async function canvasClient({block = OPEN.canvas, streams} = {}) {
+  const client = await frameClient({streams})
   const heard = []
 
   const open = (told = []) => {
@@ -546,40 +736,40 @@ async function settled({api, heard}) {
 // What the page heard of what the shell told it, after the port drained.
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20))
 
-describe("a canvas's streams go to its open's data path", () => {
-  test("a declared stream posts the stream body to the stream route, under the canvas's credential", async () => {
-    const {api, open, server} = await canvasClient()
+// The path of each connection a canvas's SDK opened.
+const paths = (sockets) => sockets.map((socket) => new URL(socket.url).pathname)
+
+describe("a canvas's streams go over its open's own connection", () => {
+  test("a declared stream subscribes on the data path's connection, under the canvas's credential", async () => {
+    const {api, open, server, sockets} = await canvasClient()
     open(SHOWN)
 
     const events = []
     const handle = await api.stream(DECLARED.name, DECLARED.subject, (event) => events.push(event))
     await handle.closed
 
-    assert.deepEqual(events, EVENTS)
-    assert.equal(server.requests.length, 1)
-    const [request] = server.requests
-    assert.equal(request.method, "POST")
-    assert.equal(request.url, STREAM_PATH)
-    assert.equal(request.headers.authorization, `Bearer ${OPEN.credential}`)
-    assert.deepEqual(request.body, {v: 1, stream: DECLARED.name, subject: DECLARED.subject})
+    assert.deepEqual(events, eventsOf(DECLARED.name))
+    assert.equal(sockets.length, 1)
+    assert.equal(sockets[0].url, new URL(SOCKET, server.base.replace(/^http:/, "ws:")).href)
+    assert.deepEqual(sockets[0].sent, [
+      {v: 1, type: "subscribe", sub: 1, credential: OPEN.credential, stream: DECLARED.name, subject: DECLARED.subject}
+    ])
+    assert.equal(server.requests.length, 0)
   })
 
   test("a stream asked for before the handshake goes there once the canvas is open", async () => {
-    const {api, open, server} = await canvasClient()
+    const {api, open, sockets} = await canvasClient()
     const opened = api.stream(DECLARED.name, DECLARED.subject, () => {})
     await tick()
-    assert.equal(server.requests.length, 0)
+    assert.equal(sockets.length, 0)
 
     open(SHOWN)
     await (await opened).closed
-    assert.deepEqual(
-      server.requests.map((request) => request.url),
-      [STREAM_PATH]
-    )
+    assert.deepEqual(paths(sockets), [SOCKET])
   })
 
   test("a pair the canvas does not declare is refused before anything is sent", async () => {
-    const {api, open, server} = await canvasClient()
+    const {api, open, sockets} = await canvasClient()
     open()
 
     for (const [name, subject] of [
@@ -594,18 +784,18 @@ describe("a canvas's streams go to its open's data path", () => {
         return true
       })
     }
-    assert.equal(server.requests.length, 0)
+    assert.equal(sockets.length, 0)
   })
 
   test("a canvas that declares nothing opens no stream", async () => {
-    const {api, open, server} = await canvasClient({block: {...OPEN.canvas, streams: []}})
+    const {api, open, sockets} = await canvasClient({block: {...OPEN.canvas, streams: []}})
     open()
     await assert.rejects(api.stream(DECLARED.name, DECLARED.subject, () => {}), {code: "forbidden"})
-    assert.equal(server.requests.length, 0)
+    assert.equal(sockets.length, 0)
   })
 
   test("a second canvas message, or one for another frame, changes nothing", async () => {
-    const {api, open, server} = await canvasClient()
+    const {api, open, sockets} = await canvasClient()
     const shell = open(SHOWN)
     shell.postMessage(toFrameMessage("canvas", CANVAS, {...OPEN.canvas, streams: [{name: "executions.deltas", subject: null}]}))
     shell.postMessage(
@@ -620,9 +810,10 @@ describe("a canvas's streams go to its open's data path", () => {
 
     await assert.rejects(api.stream("executions.deltas", null, () => {}), {code: "forbidden"})
     await (await api.stream(DECLARED.name, DECLARED.subject, () => {})).closed
+    assert.deepEqual(paths(sockets), [SOCKET])
     assert.deepEqual(
-      server.requests.map((request) => request.url),
-      [STREAM_PATH]
+      sockets[0].sent.map(({stream}) => stream),
+      [DECLARED.name]
     )
   })
 })
@@ -630,22 +821,21 @@ describe("a canvas's streams go to its open's data path", () => {
 // A canvas the layout holds hidden, a second canvas or one behind a full
 // frame, is opened frozen: the bridge hands it its open, its credential and
 // then `state` `frozen`, and its credential is suspended, so the endpoint
-// answers its stream open as tests/fixtures/tincture_wire.json's
-// suspended-frame stream rejection (403 `forbidden`, `admission`), a
-// refusal a page opening again meets again.
+// answers its subscription as tests/fixtures/tincture_wire.json's
+// suspended-frame stream rejection (`ended` with `forbidden`,
+// `admission`), a refusal a page opening again meets again.
 describe("a hidden canvas's stream opens once it is shown", () => {
   const SUSPENDED = fixture.stream_rejections.cases.find(({rejects}) => /suspended/.test(rejects.message)).answer
 
-  // A canvas opened frozen, whose endpoint refuses its stream opens while
+  // A canvas opened frozen, whose endpoint refuses its subscriptions while
   // its credential is suspended. As the shell does, `show(shell)` resumes
   // the credential and then tells the canvas `live`, and `hide(shell)`
   // suspends it and then tells it `frozen`; `states` is every state the
   // page heard.
   async function hiddenCanvas() {
     let suspended = true
-    const answer = (request) =>
-      request.url !== STREAM_PATH ? fixtureAnswer(request) : suspended ? SUSPENDED : {stream: streamEvents}
-    const client = await canvasClient({answer})
+    const streams = (message) => (suspended ? [{...SUSPENDED, sub: message.sub}] : fixtureStreams(message))
+    const client = await canvasClient({streams})
     const states = []
     client.api.on("state", (state) => states.push(state))
     const tell = (shell, state) => {
@@ -667,7 +857,7 @@ describe("a hidden canvas's stream opens once it is shown", () => {
 
   test("asked for before it is shown it sends nothing, and opens once, as any open, when it is shown", async () => {
     const RENEWED = "frm.v2.cmVuZXdlZC1oaWRkZW4tY2FudmFz"
-    const {api, open, server, states, show, hide} = await hiddenCanvas()
+    const {api, open, sockets, sent, states, show, hide} = await hiddenCanvas()
     const events = {early: [], late: []}
 
     // As a page asks at its load, before the handshake, and again once it
@@ -689,19 +879,18 @@ describe("a hidden canvas's stream opens once it is shown", () => {
       reads.map((read) => read.outcome),
       ["pending", "pending"]
     )
-    assert.equal(server.requests.length, 0)
+    assert.equal(sockets.length, 0)
 
     show(shell)
     const handles = await Promise.all([early, late])
     await Promise.all(handles.map((handle) => handle.closed))
 
-    assert.deepEqual(events, {early: EVENTS, late: EVENTS})
-    assert.equal(server.requests.length, 2)
-    for (const request of server.requests) {
-      assert.equal(request.url, STREAM_PATH)
-      assert.equal(request.headers.authorization, `Bearer ${RENEWED}`)
-      assert.deepEqual(request.body, {v: 1, stream: DECLARED.name, subject: DECLARED.subject})
-    }
+    assert.deepEqual(events, {early: eventsOf(DECLARED.name), late: eventsOf(DECLARED.name)})
+    assert.deepEqual(paths(sockets), [SOCKET])
+    assert.deepEqual(sent(), [
+      {v: 1, type: "subscribe", sub: 1, credential: RENEWED, stream: DECLARED.name, subject: DECLARED.subject},
+      {v: 1, type: "subscribe", sub: 2, credential: RENEWED, stream: DECLARED.name, subject: DECLARED.subject}
+    ])
 
     // Hidden and shown again, nothing it asked for before opens again.
     hide(shell)
@@ -709,16 +898,16 @@ describe("a hidden canvas's stream opens once it is shown", () => {
     await eventually(() => states.length === 4)
     await tick()
     assert.deepEqual(states, ["frozen", "live", "frozen", "live"])
-    assert.equal(server.requests.length, 2)
+    assert.equal(sent().length, 2)
   })
 
   test("asked for while hidden again after it was shown, it waits for the next showing", async () => {
-    const {api, open, server, states, show, hide} = await hiddenCanvas()
+    const {api, open, sent, states, show, hide} = await hiddenCanvas()
     const shell = open([["state", {state: "frozen"}]])
     show(shell)
     await eventually(() => states.length === 2)
     await (await api.stream(DECLARED.name, DECLARED.subject, () => {})).closed
-    assert.equal(server.requests.length, 1)
+    assert.equal(sent().length, 1)
 
     hide(shell)
     await eventually(() => states.length === 3)
@@ -726,15 +915,15 @@ describe("a hidden canvas's stream opens once it is shown", () => {
     const read = outcome(again)
     await tick()
     assert.equal(read.outcome, "pending")
-    assert.equal(server.requests.length, 1)
+    assert.equal(sent().length, 1)
 
     show(shell)
     await (await again).closed
-    assert.equal(server.requests.length, 2)
+    assert.equal(sent().length, 2)
   })
 
   test("closed before it is ever shown, it has sent nothing", async () => {
-    const {api, open, server, states} = await hiddenCanvas()
+    const {api, open, sockets, states} = await hiddenCanvas()
     const opened = outcome(api.stream(DECLARED.name, DECLARED.subject, () => {}))
     const shell = open([["state", {state: "frozen"}]])
     await eventually(() => states.length === 1)
@@ -742,7 +931,21 @@ describe("a hidden canvas's stream opens once it is shown", () => {
     shell.close()
     await tick()
     assert.equal(opened.outcome, "pending")
-    assert.equal(server.requests.length, 0)
+    assert.equal(sockets.length, 0)
+  })
+
+  test("closed by the page while it waits to be shown, it rejects cancelled and sends nothing once shown", async () => {
+    const {api, open, sockets, states, show} = await hiddenCanvas()
+    const shell = open([["state", {state: "frozen"}]])
+    await eventually(() => states.length === 1)
+    const waiting = api.stream(DECLARED.name, DECLARED.subject, () => {})
+
+    waiting.close()
+    await assert.rejects(waiting, {code: "cancelled"})
+    show(shell)
+    await eventually(() => states.length === 2)
+    await tick()
+    assert.equal(sockets.length, 0)
   })
 })
 

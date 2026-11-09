@@ -6,7 +6,7 @@
 // page's own. Its source's behaviour is the other tests' (client, wire);
 // these hold the bundle to it: `window.cyfr` is there once the script has
 // run, the shell's handshake and the page's uncaught errors reach it, and
-// its requests resolve against the page's base.
+// its stream connection resolves against the page's base.
 
 import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
@@ -14,12 +14,12 @@ import {afterEach, describe, test} from "node:test"
 import vm from "node:vm"
 
 import {CREDENTIAL, HANDSHAKE, toFrameMessage} from "../../js/sdk/wire.js"
-import {eventually, fixture} from "./support.mjs"
+import {eventually, fixture, stubSockets} from "./support.mjs"
 
 const BUNDLE = readFileSync(new URL("../../../priv/static/sdk/cyfr.js", import.meta.url), "utf8")
 
 const [{frame: CANVAS, reply: OPEN}] = fixture.canvas.handshake.valid
-const [{stream_path: STREAM_PATH}] = fixture.canvas.paths.valid.filter(({frame}) => frame === CANVAS)
+const [{socket_path: SOCKET_PATH}] = fixture.canvas.paths.valid.filter(({frame}) => frame === CANVAS)
 const DECLARED = OPEN.canvas.streams[0]
 const BASE = "https://cyfr.test/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/local/canvas/0.4.0/dist/"
 
@@ -30,30 +30,36 @@ afterEach(() => {
 
 // A canvas's page with the bundle run in it: its window (an event target
 // whose parent is the shell's), a document whose base is the page's
-// `<base>`, and a fetch that records each request and answers it with an
-// empty event stream.
+// `<base>`, and a WebSocket whose endpoint opens each subscription and
+// ends it.
 function page() {
   const win = new EventTarget()
   win.parent = {name: "shell"}
   win.location = {pathname: `/_c/v1/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/${CANVAS}`}
-  const requests = []
-  win.fetch = async (url, options) => {
-    requests.push({url, options})
-    return new Response("", {headers: {"content-type": "text/event-stream"}})
+  win.fetch = async () => assert.fail("the page made no request")
+  const endpoint = stubSockets({
+    answer: ({type, sub}) =>
+      type === "subscribe"
+        ? [
+            {v: 1, type: "subscribed", sub},
+            {v: 1, type: "ended", sub}
+          ]
+        : []
+  })
+  win.WebSocket = function WebSocket(url) {
+    return endpoint.socketFn(url)
   }
 
   const context = vm.createContext({
     window: win,
     document: {baseURI: BASE},
     URL,
-    TextDecoder,
-    AbortController,
     queueMicrotask,
     setTimeout,
     clearTimeout
   })
   vm.runInContext(BUNDLE, context, {filename: "cyfr.js"})
-  return {win, requests}
+  return {win, sockets: endpoint.sockets}
 }
 
 // The shell's handshake for a shown canvas, as the bridge posts it: the
@@ -89,17 +95,19 @@ describe("the built SDK in a canvas's page", () => {
     }
   })
 
-  test("takes the shell's handshake from the window, and streams to the data path under the page's base", async () => {
-    const {win, requests} = page()
+  test("takes the shell's handshake from the window, and streams over the data path's connection under the page's base", async () => {
+    const {win, sockets} = page()
     handshake(win)
 
     const handle = await win.cyfr.stream(DECLARED.name, DECLARED.subject, () => {})
     await handle.closed
 
-    assert.equal(requests.length, 1)
-    assert.equal(requests[0].url, new URL(STREAM_PATH, BASE).href)
-    assert.equal(new URL(requests[0].url).origin, "https://cyfr.test")
-    assert.deepEqual(JSON.parse(requests[0].options.body), {v: 1, stream: DECLARED.name, subject: DECLARED.subject})
+    assert.equal(sockets.length, 1)
+    assert.equal(sockets[0].url, new URL(SOCKET_PATH, BASE.replace(/^https:/, "wss:")).href)
+    assert.equal(new URL(sockets[0].url).host, "cyfr.test")
+    assert.deepEqual(sockets[0].sent, [
+      {v: 1, type: "subscribe", sub: 1, credential: OPEN.credential, stream: DECLARED.name, subject: DECLARED.subject}
+    ])
   })
 
   test("hears the page's uncaught error before ready() as a failure to load", async () => {

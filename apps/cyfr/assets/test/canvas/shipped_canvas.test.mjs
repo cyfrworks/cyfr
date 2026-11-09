@@ -12,7 +12,7 @@ import {describe, mock, test} from "node:test"
 
 import {createClient} from "../../js/sdk/client.js"
 import {CREDENTIAL, HANDSHAKE, toFrameMessage} from "../../js/sdk/wire.js"
-import {eventually, fixture} from "../sdk/support.mjs"
+import {eventually, fixture, stubSockets} from "../sdk/support.mjs"
 
 import {
   EMPTY,
@@ -129,20 +129,22 @@ function started() {
 
 // What the SDK rejects a stream open with for `answer`, one of
 // tests/fixtures/tincture_wire.json's stream_rejections: its own
-// rejection, as the page meets it.
+// rejection, as the page meets it. No answer is a connection that closes
+// before it opens.
 async function rejection(answer) {
   const win = {location: {pathname: "/"}, parent: {}}
-  const fetchFn = async () => {
-    if (answer === null) throw new TypeError("Failed to fetch")
-    const body = answer.text ?? JSON.stringify(answer.body)
-    return new Response(body, {status: answer.status, headers: {"content-type": "application/json"}})
-  }
-  const {api, onWindowMessage} = createClient({win, fetchFn, base: "https://cyfr.test/"})
+  const endpoint = stubSockets({answer: () => [answer], opens: answer !== null})
+  const {api, onWindowMessage} = createClient({win, socketFn: endpoint.socketFn, base: "https://cyfr.test/"})
   const channel = new MessageChannel()
   onWindowMessage({source: win.parent, data: {v: 1, type: HANDSHAKE, frame: "frm_shipped_canvas"}, ports: [channel.port2]})
   channel.port1.postMessage({v: 1, type: CREDENTIAL, frame: "frm_shipped_canvas", credential: "frm.v2.shipped"})
   try {
-    await api.stream("runs.changes", null, () => {})
+    const opened = api.stream("runs.changes", null, () => {})
+    if (answer === null) {
+      await eventually(() => endpoint.sockets.length === 1)
+      endpoint.sockets[0].drop()
+    }
+    await opened
   } catch (error) {
     return error
   } finally {
@@ -824,13 +826,13 @@ describe("nothing is pressed or written but by the page's own handlers", () => {
 describe("on the SDK itself", () => {
   // A canvas page's SDK, opened as the shell opens one: the fixture's
   // canvas block, whose document hides apps, and `heard`, every message
-  // the page posts the shell. Its streams wait to be shown, so nothing is
-  // fetched.
+  // the page posts the shell. Its streams wait to be shown, so no
+  // connection opens.
   async function opened() {
     const [{frame, reply}] = fixture.canvas.handshake.valid
     const win = {location: {pathname: "/"}, parent: {}}
-    const fetchFn = async () => assert.fail("the canvas fetched before it was shown")
-    const {api, onWindowMessage} = createClient({win, fetchFn, base: "https://cyfr.test/"})
+    const socketFn = () => assert.fail("the canvas connected before it was shown")
+    const {api, onWindowMessage} = createClient({win, socketFn, base: "https://cyfr.test/"})
     const channel = new MessageChannel()
     const heard = []
     channel.port1.onmessage = (event) => heard.push(event.data)

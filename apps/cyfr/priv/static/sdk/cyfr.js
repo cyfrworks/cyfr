@@ -27,8 +27,7 @@
   var BEARER_HEADER = "authorization";
   var ROUTES = Object.freeze({
     invoke: "/_f/v1/invoke",
-    action: "/_f/v1/action",
-    stream_open: "/_f/v1/stream"
+    action: "/_f/v1/action"
   });
   var VERBS = Object.freeze([
     "open",
@@ -111,9 +110,6 @@
       case "action":
         body = { v: VERSION, operation: fields.operation, args: fields.args };
         break;
-      case "stream_open":
-        body = { v: VERSION, stream: fields.stream, subject: fields.subject };
-        break;
       default:
         throw new TypeError("unknown request kind: " + kind);
     }
@@ -136,97 +132,66 @@
     }
     return ATHANOR_SEGMENT.test(athanor) && PUBLISHER_SEGMENT.test(publisher) && NAME_SEGMENT.test(name) ? { athanor, publisher, name } : null;
   }
-  var STREAM_CONTENT_TYPE = "text/event-stream";
-  function sseParser(onEvent) {
-    let buffer = "";
-    let pendingCR = false;
-    let frame = { id: null, event: "message", data: [] };
-    const dispatch = () => {
-      const { id, event, data } = frame;
-      frame = { id: null, event: "message", data: [] };
-      if (data.length === 0) return;
-      let payload;
-      try {
-        payload = JSON.parse(data.join("\n"));
-      } catch (_error) {
-        return;
-      }
-      onEvent({ id, event, data: payload });
-    };
-    const line = (text) => {
-      if (text === "") return dispatch();
-      if (text.startsWith(":")) return;
-      const colon = text.indexOf(":");
-      const field = colon === -1 ? text : text.slice(0, colon);
-      let value = colon === -1 ? "" : text.slice(colon + 1);
-      if (value.startsWith(" ")) value = value.slice(1);
-      if (field === "data") frame.data.push(value);
-      else if (field === "event") frame.event = value;
-      else if (field === "id") frame.id = /^\d+$/.test(value) ? Number(value) : null;
-    };
-    return {
-      // Lines end with LF, CRLF or CR, and a chunk may end anywhere, a CRLF
-      // pair split between two chunks included.
-      push(text) {
-        if (pendingCR && text.startsWith("\n")) text = text.slice(1);
-        pendingCR = false;
-        buffer += text;
-        let match;
-        while ((match = /\r\n|\r|\n/.exec(buffer)) !== null) {
-          if (match[0] === "\r" && match.index === buffer.length - 1) {
-            pendingCR = true;
-          }
-          line(buffer.slice(0, match.index));
-          buffer = buffer.slice(match.index + match[0].length);
-        }
-      },
-      // A stream that ends mid-event dispatches nothing more: an event is
-      // complete only at its blank line.
-      end() {
-        buffer = "";
-        frame = { id: null, event: "message", data: [] };
-      }
-    };
-  }
+  var isRefusal = (error) => isObject(error) && sameKeys(error, ["class", "message", "stage"]) && typeof error.class === "string" && error.class !== "" && typeof error.message === "string" && (error.stage === "admission" || error.stage === "execution");
   function decodeAnswer(kind, body) {
     const invalid = { ok: false, invalid: true };
     if (!isObject(body) || body.v !== VERSION || !(kind in ROUTES)) return invalid;
-    const keys = Object.keys(body);
-    if (body.ok === true && keys.length === 3) {
-      if ((kind === "invoke" || kind === "action") && "result" in body) {
-        return { ok: true, value: body.result };
-      }
-      if (kind === "stream_open" && isObject(body.stream)) return decodeGrant(body.stream);
-      return invalid;
-    }
-    if (body.ok === false && keys.length === 3 && isObject(body.error)) {
+    if (sameKeys(body, ["v", "ok", "result"]) && body.ok === true) return { ok: true, value: body.result };
+    if (sameKeys(body, ["v", "ok", "error"]) && body.ok === false && isRefusal(body.error)) {
       const { class: cls, message, stage } = body.error;
-      if (Object.keys(body.error).length === 3 && typeof cls === "string" && cls !== "" && typeof message === "string" && (stage === "admission" || stage === "execution")) {
-        return { ok: false, refusal: { class: cls, message, stage } };
-      }
+      return { ok: false, refusal: { class: cls, message, stage } };
     }
     return invalid;
   }
-  function decodeGrant(stream) {
-    const { grant_id, stream: name, subject, projection, deadline } = stream;
-    const at = typeof deadline === "string" ? new Date(deadline) : null;
-    if (Object.keys(stream).length === 5 && typeof grant_id === "string" && typeof name === "string" && (subject === null || typeof subject === "string") && Array.isArray(projection) && projection.every((field) => typeof field === "string") && at !== null && !Number.isNaN(at.getTime())) {
-      return { ok: true, value: { grant_id, stream: name, subject, projection, deadline: at } };
+  var SOCKET_PATH = "/_f/v1/socket";
+  var REFUSAL_EVENT = "refusal";
+  var NO_ANSWER_CLASSES = Object.freeze([
+    "cancelled",
+    "corrupt",
+    "internal",
+    "setup_required",
+    "timeout",
+    "uncertain",
+    "unavailable"
+  ]);
+  function subscribeMessage(sub, credential, stream, subject) {
+    return { v: VERSION, type: "subscribe", sub, credential, stream, subject };
+  }
+  function unsubscribeMessage(sub) {
+    return { v: VERSION, type: "unsubscribe", sub };
+  }
+  var isEvent = ({ stream, subject, id }) => typeof stream === "string" && (subject === null || typeof subject === "string") && (id === null || Number.isInteger(id) && id >= 0);
+  function decodeConnectionMessage(message) {
+    if (!isObject(message) || message.v !== VERSION || !isCall(message.sub)) return { ok: false };
+    const head = ["v", "type", "sub"];
+    let read;
+    switch (message.type) {
+      case "subscribed":
+        read = sameKeys(message, head);
+        break;
+      case "event":
+        read = sameKeys(message, [...head, "stream", "subject", "id", "data"]) && isEvent(message);
+        break;
+      case "ended":
+        read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error);
+        break;
+      default:
+        read = false;
     }
-    return { ok: false, invalid: true };
+    return read ? { ok: true, message } : { ok: false };
   }
   function shellMessage(verb, frame, args = {}) {
     if (!VERBS.includes(verb)) throw new TypeError("unknown shell verb: " + verb);
     return { v: VERSION, verb, frame, args };
   }
   var DATA_PREFIX = "/_f/v1/o/";
-  var STREAM_ROUTE = "stream";
+  var SOCKET_ROUTE = "socket";
   function dataPath(frame) {
     if (!isFrameId(frame)) throw new TypeError("a frame id is 8 to 64 URL-safe characters");
     return DATA_PREFIX + frame + "/";
   }
-  function streamPath(frame) {
-    return dataPath(frame) + STREAM_ROUTE;
+  function socketPath(frame) {
+    return dataPath(frame) + SOCKET_ROUTE;
   }
   var MODES = Object.freeze(["live", "validation"]);
   var TO_FRAME_VERBS = Object.freeze([
@@ -357,8 +322,16 @@
   var isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   var unreadable = () => new CyfrError("The endpoint's answer could not be read.", "invalid_answer");
   var unreachable = () => new CyfrError("The endpoint could not be reached.", "unavailable");
-  var unanswered = (status, rejection) => status >= 500 ? new CyfrError(rejection.code === "invalid_answer" ? unreachable().message : rejection.message, "unavailable") : rejection;
-  function createClient({ win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS }) {
+  var noFrame = () => new CyfrError("This page is not a frame the shell opened.", "no_frame");
+  var refusedOpen = (error) => error === null ? unreachable() : NO_ANSWER_CLASSES.includes(error.class) ? new CyfrError(error.message, "unavailable") : new CyfrError(error.message, error.class, error.stage);
+  var SOCKET_SCHEMES = Object.freeze({ "http:": "ws:", "https:": "wss:" });
+  function createClient({
+    win,
+    fetchFn,
+    socketFn = (url) => new win.WebSocket(url),
+    base,
+    handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS
+  }) {
     const framed = win.parent !== win && win.parent !== null && win.parent !== void 0;
     const standalone = framed ? null : publicIdentity(win.location && win.location.pathname);
     let frame = null;
@@ -373,6 +346,8 @@
     const latest = /* @__PURE__ */ new Map();
     const handlers = new Map(CANVAS_EVENTS.map((event) => [event, /* @__PURE__ */ new Set()]));
     const unshown = [];
+    let connection = null;
+    let nextSubscription = 1;
     let desktop = null;
     let subject = null;
     let nextCall = 1;
@@ -451,14 +426,14 @@
       return desktop === null ? null : Object.freeze(__spreadValues({}, desktop));
     }
     function answerOf(args) {
-      const answer2 = { outcome: args.outcome };
-      if ("reason" in args) answer2.reason = args.reason;
-      if ("document" in args) Object.assign(answer2, { document: args.document, revision: args.revision });
-      return Object.freeze(answer2);
+      const answer = { outcome: args.outcome };
+      if ("reason" in args) answer.reason = args.reason;
+      if ("document" in args) Object.assign(answer, { document: args.document, revision: args.revision });
+      return Object.freeze(answer);
     }
-    function answered(verb2, call2, answer2) {
+    function answered(verb2, call2, answer) {
       const settle2 = take(verb2, call2);
-      if (settle2) settle2(answer2);
+      if (settle2) settle2(answer);
     }
     function take(verb2, call2) {
       const waiting = calls.get(call2);
@@ -475,9 +450,9 @@
         }, ANSWER_TIMEOUT_MS);
         calls.set(call2, {
           answer: ANSWER_OF[name],
-          settle: (answer2) => {
+          settle: (answer) => {
             clearTimeout(timer);
-            resolve(answer2);
+            resolve(answer);
           }
         });
         verb(name, __spreadProps(__spreadValues({}, args), { call: call2 }));
@@ -520,9 +495,7 @@
     function identity() {
       if (standalone) return Promise.resolve({ public: standalone });
       if (credential !== null) return Promise.resolve({ credential });
-      if (!framed) {
-        return Promise.reject(new CyfrError("This page is not a frame the shell opened.", "no_frame"));
-      }
+      if (!framed) return Promise.reject(noFrame());
       return new Promise((resolve, reject) => {
         const timer = setTimeout(
           () => reject(new CyfrError("The shell did not hand this frame its credential.", "no_frame")),
@@ -534,37 +507,23 @@
         });
       });
     }
-    function routeOf(requestKind, fields) {
-      if (canvas === null || requestKind !== "stream_open") return ROUTES[requestKind];
-      if (!canvas.streams.has(pairKey({ name: fields.stream, subject: fields.subject }))) {
-        throw new CyfrError("This canvas does not declare that stream.", "forbidden", "admission");
-      }
-      return streamPath(frame);
-    }
-    async function postRequest(requestKind, fields, signal) {
-      let who = await identity();
-      const path = routeOf(requestKind, fields);
-      if (canvas !== null && requestKind === "stream_open") {
-        await shown();
-        who = await identity();
-      }
+    async function call(requestKind, fields) {
+      const who = await identity();
       const headers = { "content-type": "application/json" };
       if (who.credential) headers[BEARER_HEADER] = bearer(who.credential);
+      let response;
       try {
-        return await fetchFn(new URL(path, base).toString(), {
+        response = await fetchFn(new URL(ROUTES[requestKind], base).toString(), {
           method: "POST",
           headers,
           body: JSON.stringify(request(requestKind, fields, who.public || null)),
           credentials: "omit",
           cache: "no-store",
-          redirect: "error",
-          signal
+          redirect: "error"
         });
       } catch (_error) {
         throw unreachable();
       }
-    }
-    async function answer(requestKind, response) {
       let body;
       try {
         body = await response.json();
@@ -579,58 +538,125 @@
       }
       throw unreadable();
     }
-    async function call(requestKind, fields) {
-      return answer(requestKind, await postRequest(requestKind, fields));
-    }
-    async function openStream(fields, onEvent) {
-      const controller = new AbortController();
-      const response = await postRequest("stream_open", fields, controller.signal);
-      const type = (response.headers.get("content-type") || "").split(";")[0].trim();
-      if (type !== STREAM_CONTENT_TYPE) {
-        let rejection = unreadable();
-        try {
-          await answer("stream_open", response);
-        } catch (error) {
-          rejection = error;
-        } finally {
-          controller.abort();
-        }
-        throw unanswered(response.status, rejection);
-      }
-      const parser = sseParser((event) => {
-        try {
-          onEvent(event);
-        } catch (_error) {
-        }
-      });
-      let closing = false;
-      const closed = (async () => {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        try {
-          for (; ; ) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            parser.push(decoder.decode(value, { stream: true }));
-          }
-          parser.push(decoder.decode());
-        } catch (_error) {
-          if (!closing) throw unreachable();
-        } finally {
-          parser.end();
-        }
-      })();
+    function subscribe(name, subject2, onEvent) {
+      const subscription = { name, subject: subject2, onEvent, state: "waiting", held: null, number: null, sent: false };
+      const opened = new Promise((resolve, reject) => Object.assign(subscription, { resolve, reject }));
+      const closed = new Promise((resolve, reject) => subscription.closed = { resolve, reject });
       closed.catch(() => {
       });
-      return {
+      const close = () => unsubscribe(subscription);
+      subscription.handle = {
         /** Settles when the stream ends; rejects if the connection broke. */
         closed,
-        /** End the stream: the request is aborted and no further event is delivered. */
-        close() {
-          closing = true;
-          controller.abort();
-        }
+        /** End the stream: nothing more of it is delivered. */
+        close
       };
+      sendable(subscription).then(
+        () => attach(subscription),
+        (error) => refuse(subscription, error)
+      );
+      opened.close = close;
+      return opened;
+    }
+    async function sendable({ name, subject: subject2 }) {
+      if (!framed) throw noFrame();
+      await identity();
+      if (canvas === null) return;
+      if (!canvas.streams.has(pairKey({ name, subject: subject2 }))) {
+        throw new CyfrError("This canvas does not declare that stream.", "forbidden", "admission");
+      }
+      await shown();
+    }
+    function refuse(subscription, error) {
+      if (subscription.state !== "waiting") return;
+      subscription.state = "over";
+      subscription.reject(error);
+    }
+    function attach(subscription) {
+      if (subscription.state !== "waiting") return;
+      let held;
+      try {
+        held = connect();
+      } catch (_error) {
+        return refuse(subscription, unreachable());
+      }
+      subscription.state = "asked";
+      subscription.held = held;
+      subscription.number = nextSubscription++;
+      held.subscriptions.set(subscription.number, subscription);
+      if (held.open) ask(held, subscription);
+    }
+    function connect() {
+      if (connection !== null) return connection;
+      const url = new URL(canvas !== null ? socketPath(frame) : SOCKET_PATH, base);
+      url.protocol = SOCKET_SCHEMES[url.protocol] || url.protocol;
+      const held = { socket: socketFn(url.toString()), open: false, subscriptions: /* @__PURE__ */ new Map() };
+      held.socket.onopen = () => {
+        held.open = true;
+        for (const subscription of held.subscriptions.values()) ask(held, subscription);
+      };
+      held.socket.onmessage = (event) => onConnectionMessage(held, event.data);
+      held.socket.onclose = () => lost(held);
+      held.socket.onerror = () => lost(held);
+      connection = held;
+      return held;
+    }
+    function ask(held, subscription) {
+      const { number, name, subject: subject2 } = subscription;
+      subscription.sent = true;
+      held.socket.send(JSON.stringify(subscribeMessage(number, credential, name, subject2)));
+    }
+    function onConnectionMessage(held, data) {
+      let message;
+      try {
+        message = JSON.parse(data);
+      } catch (_error) {
+        return;
+      }
+      const decoded = decodeConnectionMessage(message);
+      const subscription = decoded.ok ? held.subscriptions.get(decoded.message.sub) : void 0;
+      if (subscription === void 0) return;
+      if (message.type === "subscribed") {
+        if (subscription.state !== "asked") return;
+        subscription.state = "open";
+        subscription.resolve(subscription.handle);
+      } else if (message.type === "event") {
+        if (subscription.state === "open") hear(subscription, { id: message.id, event: message.stream, data: message.data });
+      } else {
+        held.subscriptions.delete(subscription.number);
+        end(subscription, "error" in message ? message.error : null, null);
+      }
+    }
+    function lost(held) {
+      if (connection === held) connection = null;
+      const carried = [...held.subscriptions.values()];
+      held.subscriptions.clear();
+      for (const subscription of carried) end(subscription, null, unreachable());
+    }
+    function end(subscription, error, broke) {
+      const was = subscription.state;
+      subscription.state = "over";
+      if (was === "asked") return subscription.reject(broke || refusedOpen(error));
+      if (error !== null) hear(subscription, { id: null, event: REFUSAL_EVENT, data: error });
+      if (broke) subscription.closed.reject(broke);
+      else subscription.closed.resolve();
+    }
+    function hear(subscription, event) {
+      try {
+        subscription.onEvent(event);
+      } catch (_error) {
+      }
+    }
+    function unsubscribe(subscription) {
+      const was = subscription.state;
+      if (was === "over") return;
+      subscription.state = "over";
+      if (subscription.held !== null) {
+        subscription.held.subscriptions.delete(subscription.number);
+        if (subscription.sent) subscription.held.socket.send(JSON.stringify(unsubscribeMessage(subscription.number)));
+      }
+      if (was === "open") subscription.closed.resolve();
+      else subscription.reject(new CyfrError("The stream was closed before it opened.", "cancelled"));
     }
     const invalid = (sentence) => Promise.reject(new CyfrError(sentence, "invalid_argument"));
     const api = {
@@ -684,20 +710,24 @@
         return call("action", { operation: name, args });
       },
       /**
-       * Open a stream the tincture declares and deliver its events. On a
-       * canvas it opens on the canvas's data path, and a pair the canvas does
+       * Open a stream the tincture declares and deliver its events, over the
+       * frame's one stream connection. On a canvas, a pair the canvas does
        * not declare is refused as `forbidden` before anything is sent; asked
        * for while the canvas is hidden, it sends nothing and opens once the
-       * canvas is shown.
+       * canvas is shown. A page that is not a frame, a public page among
+       * them, opens no stream: it is refused as `no_frame`.
        * @param {string} name - the stream's name
        * @param {string|null} subject - a literal subject, or null for a stream that takes none
-       * @param {function} onEvent - called with {id, event, data} per event
-       * @returns {Promise<{close: function, closed: Promise}>} once the stream is open;
-       *   a refusal rejects with a CyfrError of its class. An open the endpoint
-       *   gave no answer on (it could not be reached, the connection broke or
-       *   timed out, or it answered a server error) rejects `unavailable`, and
-       *   may succeed if opened again later; opened again after any other
-       *   refusal, it meets the same refusal until something changes.
+       * @param {function} onEvent - called with {id, event, data} per event; a stream the
+       *   endpoint ends with a refusal delivers it last, as {id: null, event: "refusal", data}
+       * @returns {Promise<{close: function, closed: Promise}>} once the stream is open,
+       *   carrying `close()` itself, the handle's: closed before it opened, the
+       *   promise rejects `cancelled`. A refusal rejects with a CyfrError of
+       *   its class. An open that got no answer (the connection could not
+       *   open, or broke or closed before an answer, or the endpoint could not
+       *   answer) rejects `unavailable`, and may succeed if opened again later;
+       *   opened again after any other refusal, it meets the same refusal
+       *   until something changes.
        */
       stream(name, subject2, onEvent) {
         if (typeof name !== "string" || name === "") return invalid("stream must be a stream name");
@@ -705,7 +735,7 @@
           return invalid("subject must be a literal subject or null");
         }
         if (typeof onEvent !== "function") return invalid("onEvent must be a function");
-        return openStream({ stream: name, subject: subject2 }, onEvent);
+        return subscribe(name, subject2, onEvent);
       },
       /**
        * Ask the shell to open a tincture: a tincture reference, e.g.
@@ -835,9 +865,7 @@
        */
       credential(name) {
         if (typeof name !== "string" || name === "") return invalid("a vault entry has a name");
-        if (!framed) {
-          return Promise.reject(new CyfrError("This page is not a frame the shell opened.", "no_frame"));
-        }
+        if (!framed) return Promise.reject(noFrame());
         if (prompt !== null) {
           return Promise.reject(new CyfrError("A credential prompt is already open.", "pending"));
         }
@@ -851,9 +879,11 @@
   }
 
   // js/sdk/index.js
+  var Socket = window.WebSocket;
   var client = createClient({
     win: window,
     fetchFn: window.fetch.bind(window),
+    socketFn: (url) => new Socket(url),
     base: document.baseURI
   });
   window.addEventListener("message", client.onWindowMessage);
