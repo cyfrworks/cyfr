@@ -2138,8 +2138,8 @@ defmodule Aqua.Loop do
          true <- flush_granted?(state, policy),
          request = flush_request(probe, Map.put(policy, @flush_key, "auto")),
          size when is_integer(size) and (is_nil(cap) or size <= cap) <- encoded_size(request),
-         {:ok, step, state} <- open_model_step(state, "flush", rows) do
-      keep_notes(%{state | sent_upto: highest_seq(rows)}, step, request)
+         {:ok, step, opened} <- open_model_step(state, "flush", rows) do
+      keep_notes(%{opened | sent_upto: highest_seq(rows)}, step, request)
     else
       {:error, :superseded} = superseded -> superseded
       _not_flushed -> {:skipped, state}
