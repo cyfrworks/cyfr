@@ -461,8 +461,10 @@ export const TO_FRAME_VERBS = Object.freeze([
 // again after its handshake.
 export const TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"])
 
-// The shell's answers to a canvas's press and write, each posted once.
-export const ANSWER_VERBS = Object.freeze(["pressed", "prefs"])
+// The shell's answers to a canvas's press of a control and write, each
+// posted once, by the verb each answers.
+export const ANSWER_OF = Object.freeze({press: "pressed", prefs: "prefs"})
+export const ANSWER_VERBS = Object.freeze(Object.values(ANSWER_OF))
 
 // What a page hears through `cyfr.on`: on a canvas what the shell tells
 // it and `desktop`, its preferences, appearance and person; on an app,

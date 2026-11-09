@@ -132,7 +132,11 @@ defmodule Prima.TinctureWire do
   `prefs` answers a `prefs` write, exactly its `call`, `outcome`
   (`prefs_outcomes/0`), `document` and `revision` (the stored document as
   the shell now holds it), with `reason` exactly when refused. A frame
-  matches each answer to its call by `call`, never by order;
+  numbers its presses of a control and its writes upward, one count for
+  both, and the shell's end of its port drops one numbered no higher than
+  the last, unanswered; the frame matches each answer to the call it is
+  still waiting on by `call` and the answer's verb, never by order, and an
+  answer to no such call moves nothing;
   `installed` names at most `max_installed/0` tinctures, each exactly the
   keys `installed_keys/0`: its `ref`, a tincture reference; its `name`, 1
   to `max_installed_name/0` code points; its `icon`, an emoji of 1 to

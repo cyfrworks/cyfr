@@ -2,6 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {
+  ANSWER_OF,
   BEARER_HEADER,
   CANVAS_EVENTS,
   CANVAS_VERBS,
@@ -156,7 +157,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   let desktop = null
   let subject = null
   // The presses and writes waiting for their answer, by the call number
-  // each was sent with and its answer carries back.
+  // each was sent with and its answer carries back, with the answer verb
+  // that settles it.
   let nextCall = 1
   const calls = new Map()
 
@@ -223,11 +225,15 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
       return tellDesktop()
     }
     if (kind !== "canvas") return
-    if (told === "pressed") return answered(args.call, answerOf(args))
+    if (told === "pressed") return answered(told, args.call, answerOf(args))
     if (told === "prefs") {
+      // Only the answer to a write still waiting moves the preferences: one
+      // to a call answered already or never made would roll them back.
+      const settle = take(told, args.call)
+      if (!settle) return
       desktop = {...desktop, prefs: {document: args.document, revision: args.revision}}
       tellDesktop()
-      return answered(args.call, answerOf(args))
+      return settle(answerOf(args))
     }
 
     const value = heard(told, args)
@@ -255,13 +261,19 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     return Object.freeze(answer)
   }
 
-  // The call `call` waiting settles with `answer`; an answer to a call
-  // that waits no longer settles nothing.
-  function answered(call, answer) {
+  // The call `call` waiting for a `verb` answer settles with `answer`; an
+  // answer to a call that waits no longer, or that waits for another verb's
+  // answer, settles nothing.
+  function answered(verb, call, answer) {
+    const settle = take(verb, call)
+    if (settle) settle(answer)
+  }
+
+  function take(verb, call) {
     const waiting = calls.get(call)
-    if (!waiting) return
+    if (!waiting || waiting.answer !== verb) return null
     calls.delete(call)
-    waiting(answer)
+    return waiting.settle
   }
 
   // A press or a write is sent with a call number of its own and waits, a
@@ -273,9 +285,12 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
         calls.delete(call)
         resolve(UNCERTAIN)
       }, ANSWER_TIMEOUT_MS)
-      calls.set(call, (answer) => {
-        clearTimeout(timer)
-        resolve(answer)
+      calls.set(call, {
+        answer: ANSWER_OF[name],
+        settle: (answer) => {
+          clearTimeout(timer)
+          resolve(answer)
+        }
       })
       verb(name, {...args, call})
     })
@@ -312,8 +327,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // press of a control or a write it asked for did not run.
   function send(name, args) {
     if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) {
-      if (name === "press" && "control" in args) answered(args.call, CANCELLED)
-      if (name === "prefs") answered(args.call, CANCELLED)
+      if (name === "press" && "control" in args) answered("pressed", args.call, CANCELLED)
+      if (name === "prefs") answered("prefs", args.call, CANCELLED)
       return
     }
     post(name, args)

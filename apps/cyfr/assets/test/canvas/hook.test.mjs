@@ -859,6 +859,89 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
+  // A canvas page on the SDK behind its bridge: the frame's window hands
+  // the handshake to the client, and `port()` is the page's own end of the
+  // port, on which a script of the page's posts what it likes.
+  async function connectPage() {
+    const el = canvasFrame(CANVAS)
+    const win = frameWindow()
+    const {api, onWindowMessage} = createClient({win, fetchFn: fetch, base: "http://127.0.0.1/"})
+    let port = null
+    el.contentWindow = {
+      postMessage: (data, _origin, transfer) => {
+        port = transfer[0]
+        onWindowMessage({source: win.parent, data, ports: transfer})
+      }
+    }
+    const {hook, events} = mountBridge(el, LIVE)
+    el.dispatchEvent(new Event("load"))
+    await eventually(() => api.desktop !== null)
+    const tell = (verb, args) => el.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
+    const close = () => {
+      hook.destroyed()
+      port?.close()
+    }
+    return {el, api, hook, events, port: () => port, tell, close}
+  }
+
+  // Post `message` as a script on the page would, and wait until the
+  // bridge has forwarded or dropped it and anything it would answer has had
+  // its turn.
+  async function forge(page, message) {
+    const before = page.hook.dropped + page.events.length
+    page.port().postMessage(message)
+    await eventually(() => page.hook.dropped + page.events.length > before)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  test("duplicate page call cannot cancel a pending real press", async () => {
+    const page = await connectPage()
+    page.hook.lifespan = 0
+
+    try {
+      input(page.el)
+      let settled
+      const pressing = page.api.press("pause-digest", "sch_first").then((answer) => (settled = answer))
+      await eventually(() => forwarded(page.events).length === 1)
+      const [message] = forwarded(page.events)
+
+      // The page posts the press again: under no input, and under one.
+      activation("inactive")
+      await forge(page, message)
+      assert.equal(settled, undefined)
+      input(page.el)
+      await forge(page, message)
+      assert.equal(forwarded(page.events).length, 1)
+
+      page.tell("pressed", {control: "pause-digest", call: message.args.call, outcome: "accepted"})
+      assert.deepEqual({...(await pressing)}, {outcome: "accepted"})
+    } finally {
+      page.close()
+    }
+  })
+
+  test("forged page press with pending write call cannot settle that write", async () => {
+    const page = await connectPage()
+
+    try {
+      input(page.el)
+      let settled
+      const writing = page.api.prefs({widgets: {runs: {on: false}}}).then((answer) => (settled = answer))
+      await eventually(() => forwarded(page.events).length === 1)
+      const [{args: {call}}] = forwarded(page.events)
+
+      activation("inactive")
+      await forge(page, {v: 1, verb: "press", frame: CANVAS, args: {control: "pause-digest", call}})
+      assert.equal(settled, undefined)
+
+      const document = {widgets: {runs: {on: false}}, desktop: {}}
+      page.tell("prefs", {call, outcome: "saved", document, revision: 1})
+      assert.deepEqual({...(await writing)}, {outcome: "saved", document, revision: 1})
+    } finally {
+      page.close()
+    }
+  })
+
   test("a canvas covered by an inert layer, or not shown, acts on nothing however it is pressed", async () => {
     const bridge = connect()
     const port = bridge.load()

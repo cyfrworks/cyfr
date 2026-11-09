@@ -1104,7 +1104,7 @@ describe("a desktop's verbs and data", () => {
     )
   })
 
-  test("a cancelled later write cannot answer an earlier write still pending, and an answer to no call settles nothing", async () => {
+  test("a cancelled later write cannot answer an earlier write still pending", async () => {
     const client = await canvasClient()
     const port = client.open(SHOWN)
     const {api, heard} = client
@@ -1115,7 +1115,7 @@ describe("a desktop's verbs and data", () => {
     await eventually(() => sent(heard, "prefs").length === 2)
     const [one, two] = sent(heard, "prefs").map(({args}) => args.call)
 
-    answerOn(port, "prefs", {call: 999, outcome: "saved", document, revision: 5})
+    // The second is told it did not run before the first's write is answered.
     answerOn(port, "prefs", {call: two, outcome: "cancelled", ...OPEN.canvas.prefs})
     answerOn(port, "prefs", {call: one, outcome: "saved", document, revision: 1})
 
@@ -1123,6 +1123,50 @@ describe("a desktop's verbs and data", () => {
       (await Promise.all([first, second])).map(({outcome}) => outcome),
       ["saved", "cancelled"]
     )
+  })
+
+  test("stale completed prefs call cannot roll back a later saved revision", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+    const seen = []
+    api.on("desktop", (desktop) => seen.push(desktop))
+    await eventually(() => seen.length === 1)
+    const older = {widgets: {runs: {on: false}}, desktop: {}}
+    const newer = {widgets: {runs: {on: true}}, desktop: {}}
+
+    const first = api.prefs(older)
+    await eventually(() => sent(heard, "prefs").length === 1)
+    const one = sent(heard, "prefs")[0].args.call
+    answerOn(port, "prefs", {call: one, outcome: "saved", document: older, revision: 4})
+    await first
+    const second = api.prefs(newer)
+    await eventually(() => sent(heard, "prefs").length === 2)
+    answerOn(port, "prefs", {call: sent(heard, "prefs")[1].args.call, outcome: "saved", document: newer, revision: 5})
+    await second
+    await eventually(() => seen.length === 3)
+
+    // The first write's answer comes again.
+    answerOn(port, "prefs", {call: one, outcome: "saved", document: older, revision: 4})
+    await tick()
+    assert.deepEqual(api.desktop.prefs, {document: newer, revision: 5})
+    assert.equal(seen.length, 3)
+  })
+
+  test("unknown prefs reply leaves desktop and desktop events untouched", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api} = client
+    const seen = []
+    api.on("desktop", (desktop) => seen.push(desktop))
+    await eventually(() => seen.length === 1)
+    const before = {...api.desktop}
+
+    const document = {widgets: {runs: {on: false}}, desktop: {}}
+    answerOn(port, "prefs", {call: 999, outcome: "saved", document, revision: 99})
+    await tick()
+    assert.deepEqual({...api.desktop}, before)
+    assert.equal(seen.length, 1)
   })
 
   test("ask, settings and an open on a subject post the wire's messages; an open on a subject outside it posts nothing", async () => {

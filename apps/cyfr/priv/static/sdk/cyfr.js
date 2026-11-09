@@ -239,7 +239,8 @@
     "subject"
   ]);
   var TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"]);
-  var ANSWER_VERBS = Object.freeze(["pressed", "prefs"]);
+  var ANSWER_OF = Object.freeze({ press: "pressed", prefs: "prefs" });
+  var ANSWER_VERBS = Object.freeze(Object.values(ANSWER_OF));
   var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"]);
   var POSTURES = ["desk", "hand"];
   var SHELL_STATES = ["live", "frozen"];
@@ -421,11 +422,13 @@
         return tellDesktop();
       }
       if (kind !== "canvas") return;
-      if (told === "pressed") return answered(args.call, answerOf(args));
+      if (told === "pressed") return answered(told, args.call, answerOf(args));
       if (told === "prefs") {
+        const settle2 = take(told, args.call);
+        if (!settle2) return;
         desktop = __spreadProps(__spreadValues({}, desktop), { prefs: { document: args.document, revision: args.revision } });
         tellDesktop();
-        return answered(args.call, answerOf(args));
+        return settle2(answerOf(args));
       }
       const value = heard(told, args);
       latest.set(told, value);
@@ -446,11 +449,15 @@
       if ("document" in args) Object.assign(answer2, { document: args.document, revision: args.revision });
       return Object.freeze(answer2);
     }
-    function answered(call2, answer2) {
+    function answered(verb2, call2, answer2) {
+      const settle2 = take(verb2, call2);
+      if (settle2) settle2(answer2);
+    }
+    function take(verb2, call2) {
       const waiting = calls.get(call2);
-      if (!waiting) return;
+      if (!waiting || waiting.answer !== verb2) return null;
       calls.delete(call2);
-      waiting(answer2);
+      return waiting.settle;
     }
     function awaitAnswer(name, args) {
       const call2 = nextCall++;
@@ -459,9 +466,12 @@
           calls.delete(call2);
           resolve(UNCERTAIN);
         }, ANSWER_TIMEOUT_MS);
-        calls.set(call2, (answer2) => {
-          clearTimeout(timer);
-          resolve(answer2);
+        calls.set(call2, {
+          answer: ANSWER_OF[name],
+          settle: (answer2) => {
+            clearTimeout(timer);
+            resolve(answer2);
+          }
         });
         verb(name, __spreadProps(__spreadValues({}, args), { call: call2 }));
       });
@@ -483,8 +493,8 @@
     }
     function send(name, args) {
       if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) {
-        if (name === "press" && "control" in args) answered(args.call, CANCELLED);
-        if (name === "prefs") answered(args.call, CANCELLED);
+        if (name === "press" && "control" in args) answered("pressed", args.call, CANCELLED);
+        if (name === "prefs") answered("prefs", args.call, CANCELLED);
         return;
       }
       post(name, args);

@@ -91,7 +91,9 @@ const TOLD = TOLD_VERBS
  * one verb per input too. One verb is held at a time; another sent
  * meanwhile is dropped. A person's verb dropped is counted, and a press of
  * a control or a write of the preferences is answered `cancelled` over the
- * port. So a press in the chrome followed by the frame focusing itself
+ * port, under its call number; one whose call number is no higher than
+ * the last the frame used is a replay or a forgery of another call's, and
+ * is dropped first, unanswered and never forwarded. So a press in the chrome followed by the frame focusing itself
  * passes nothing, and two verbs from one input pass one; a person's
  * press in the frame right after a press in the chrome, or right after
  * the frame's last verb, waits out the rest of that activation before it
@@ -164,6 +166,10 @@ const IframeBridge = {
     // no input in this frame, so it starts spent.
     this._spentAt = activated() ? now() : -Infinity
     this._held = null
+    // The highest call number the frame has numbered a press or a write
+    // with: a frame numbers its calls upward, so one not above it was used
+    // already, pending or answered.
+    this._lastCall = 0
     // The preferences the frame holds as the shell last told it, for a
     // write the bridge answers itself.
     this._prefs = null
@@ -310,6 +316,17 @@ const IframeBridge = {
 
     const {message} = decoded
     const person = this._canvas && PERSON_VERBS.includes(message.verb)
+
+    // A call number used already is a replay or a forgery, and an answer
+    // under it, the bridge's or the shell's, would settle the call that
+    // number belongs to: it is dropped and answered nothing.
+    if (person && "call" in message.args) {
+      if (message.args.call <= this._lastCall) {
+        this._drop()
+        return
+      }
+      this._lastCall = message.args.call
+    }
 
     if (!this._forwards(message.verb)) {
       this._drop()
