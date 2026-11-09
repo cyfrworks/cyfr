@@ -25,7 +25,7 @@ defmodule Opus.Feeds do
       A refused result writes nothing. An accepted one is answered as the
       envelope a feed's stream carries (`Prima.Feed.envelope/5`), built
       from the row the write committed.
-    * `bind/2`, `remove/2` and `press/3` are the `feed` tool's writes
+    * `bind/2`, `remove/2` and `press/4` are the `feed` tool's writes
       (`Opus.Providers.Feed`), and `latest/2` is the refresh of its
       `feed.results` stream.
 
@@ -50,7 +50,12 @@ defmodule Opus.Feeds do
   claims a fresh seq and accepts the run's result as a fire does, and
   publishes it; a `run` runs its own operation of the binding's
   component, with the arguments the binding fixed, and publishes
-  nothing. Only a person's press of a control Prism draws reaches it: the
+  nothing. A press carries a picked value exactly when its action names a
+  pick, which a refresh never does, and the value fills the argument the
+  pick names (`Prima.Feed.input/2`); any other press is `invalid_argument`
+  before anything runs. The value is not checked against any stream here:
+  the shell checks it against the stream's current state before it calls
+  the tool. Only a person's press of a control Prism draws reaches it: the
   operation is external only, and a canvas's code has no verb that binds,
   changes or refreshes a feed.
 
@@ -182,25 +187,28 @@ defmodule Opus.Feeds do
   end
 
   @doc """
-  Press action `action` of the caller's athanor's live feed `binding_id`
-  (the moduledoc's "A press"). A `refresh` answers the binding, the action
-  and the accepted revision; a `run` the binding, the action, the
-  execution it ran as and its status, never its output. A refused result
-  is named by its pointer and its reason's sentence, never its content,
-  and a failed run answers the run's own refusal.
+  Press action `action` of the caller's athanor's live feed `binding_id`,
+  with `pick` the value a desktop's control picked or nil (the
+  moduledoc's "A press"). A `refresh` answers the binding, the action and
+  the accepted revision; a `run` the binding, the action, the execution it
+  ran as and its status, never its output. A refused result is named by
+  its pointer and its reason's sentence, never its content, and a failed
+  run answers the run's own refusal.
   """
-  @spec press(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def press(%Context{} = ctx, binding_id, action)
-      when is_binary(binding_id) and is_binary(action) do
+  @spec press(Context.t(), String.t(), String.t(), String.t() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def press(%Context{} = ctx, binding_id, action, pick)
+      when is_binary(binding_id) and is_binary(action) and (is_binary(pick) or is_nil(pick)) do
     with {:ok, row, binding} <- live_binding(ctx, binding_id),
-         {:ok, declared} <- declared_action(binding, action) do
+         {:ok, declared} <- declared_action(binding, action),
+         {:ok, input} <- press_input(binding, declared, pick) do
       # Minted before the run, as the scheduler mints a fire's: the
       # execution the run is admitted as.
       execution_id = Prima.UUID7.execution_id()
 
       case declared do
-        %Action{kind: :refresh} -> refresh(ctx, row, binding, declared, execution_id)
-        %Action{kind: :run} -> run_action(ctx, row, declared, execution_id)
+        %Action{kind: :refresh} -> refresh(ctx, row, binding, declared, input, execution_id)
+        %Action{kind: :run} -> run_action(ctx, row, declared, input, execution_id)
       end
     end
   end
@@ -494,13 +502,30 @@ defmodule Opus.Feeds do
     end
   end
 
+  # What the press runs with: a picked value exactly when the action names
+  # a pick, and never for a refresh, whose action names none.
+  defp press_input(binding, %Action{kind: :refresh}, nil), do: {:ok, Prima.Feed.input(binding)}
+
+  defp press_input(_binding, %Action{kind: :run, pick: nil} = action, nil),
+    do: {:ok, Prima.Feed.input(action)}
+
+  defp press_input(_binding, %Action{kind: :run, pick: arg} = action, value)
+       when is_binary(arg) and is_binary(value),
+       do: {:ok, Prima.Feed.input(action, value)}
+
+  defp press_input(_binding, %Action{kind: :run, name: name, pick: arg}, nil),
+    do: {:error, {:invalid_argument, "action #{name} takes a pick, which fills #{arg}"}}
+
+  defp press_input(_binding, %Action{name: name}, _value),
+    do: {:error, {:invalid_argument, "action #{name} takes no pick"}}
+
   # A refresh is a fire the person asked for: a fresh seq claimed under
   # the slot read before the run, the run's result accepted under both,
   # then published from the envelope the accept committed.
-  defp refresh(ctx, row, binding, action, execution_id) do
+  defp refresh(ctx, row, binding, action, input, execution_id) do
     with {:ok, slot} <- Arca.ControlPlane.member_slot(),
          {:ok, seq} <- claim(ctx, row.id),
-         {:ok, result} <- run(ctx, row, Prima.Feed.input(binding), execution_id) do
+         {:ok, result} <- run(ctx, row, input, execution_id) do
       case accept(ctx, row.id, seq, result.output, slot) do
         {:ok, envelope} ->
           publish(ctx, envelope)
@@ -525,8 +550,8 @@ defmodule Opus.Feeds do
     end
   end
 
-  defp run_action(ctx, row, action, execution_id) do
-    with {:ok, result} <- run(ctx, row, Prima.Feed.input(action), execution_id) do
+  defp run_action(ctx, row, action, input, execution_id) do
+    with {:ok, result} <- run(ctx, row, input, execution_id) do
       {:ok,
        %{
          binding: row.id,

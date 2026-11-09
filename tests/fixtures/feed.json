@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Feed, read by apps/prima/test/prima/feed_test.exs. Every row is plain JSON. Every valid binding reads and writes back as its `json`, its result shape normalized; every invalid binding is refused at `path`, an RFC 6901 pointer into it, for `reason`, one of `reasons`. `inputs` are the component inputs a binding (by index) or its run action (by index) runs with, and `crons` each interval's cron expression. Each binding's `results` pass or are refused at `path` for `reason`. Each envelope is the stream payload for its binding id, binding, revision, time and result: it names the binding and the feed and never the operation, args, reference or interval. A binding's args and a result are bounded by the bytes of their JSON text: `args_max_bytes` and `result_max_bytes`. `bounds` pins the byte bounds on the binding at index `binding`, each row stating `bytes`, the length of its value's Prima.Json text: a result of `result_max_bytes` is accepted and one of a byte more is refused at `path` for `reason`, `size`, even when the value also breaks the shape, whose own refusal `shape_refusal` names; args of `args_max_bytes` are accepted and one byte more is refused `size` at `/args`. `outputs` pins what a feed keeps of a run's output (`Opus.Feeds.accept/5`), read by apps/cyfr/test/opus/feeds_test.exs, which hands each row's `output` to a feed bound to the binding at index `binding`, as its JSON text and, for an object or a list, also as the decoded value. A run's output, a catalyst's or a formula's alike, is an envelope: an object of exactly `status`, an integer, and `data`, or an object holding `error`. The result is the `data` of an envelope whose `status` is 200 to 299, kept as `accepted` once the binding's result shape holds, and data outside that shape is refused at `path`, a pointer into the data, for `reason`. Every other output is refused at the root for `error`, naming the output's `status` when it carries an integer one and nothing else of it.",
+  "comment": "The vectors pinning Prima.Feed, read by apps/prima/test/prima/feed_test.exs. Every row is plain JSON. Every valid binding reads and writes back as its `json`, its result shape normalized; every invalid binding is refused at `path`, an RFC 6901 pointer into it, for `reason`, one of `reasons`. `inputs` are the component inputs a binding (by index) or its run action (by index) runs with, a run action that names a `pick` with the value a press picked (the row's `pick`) set as the argument it names, and `crons` each interval's cron expression. Each binding's `results` pass or are refused at `path` for `reason`. Each envelope is the stream payload for its binding id, binding, revision, time and result: it names the binding and the feed and never the operation, args, reference or interval. A binding's args and a result are bounded by the bytes of their JSON text: `args_max_bytes` and `result_max_bytes`. `bounds` pins the byte bounds on the binding at index `binding`, each row stating `bytes`, the length of its value's Prima.Json text: a result of `result_max_bytes` is accepted and one of a byte more is refused at `path` for `reason`, `size`, even when the value also breaks the shape, whose own refusal `shape_refusal` names; args of `args_max_bytes` are accepted and one byte more is refused `size` at `/args`. `outputs` pins what a feed keeps of a run's output (`Opus.Feeds.accept/5`), read by apps/cyfr/test/opus/feeds_test.exs, which hands each row's `output` to a feed bound to the binding at index `binding`, as its JSON text and, for an object or a list, also as the decoded value. A run's output, a catalyst's or a formula's alike, is an envelope: an object of exactly `status`, an integer, and `data`, or an object holding `error`. The result is the `data` of an envelope whose `status` is 200 to 299, kept as `accepted` once the binding's result shape holds, and data outside that shape is refused at `path`, a pointer into the data, for `reason`. Every other output is refused at the root for `error`, naming the output's `status` when it carries an integer one and nothing else of it.",
   "intervals": [
     1,
     2,
@@ -44,6 +44,10 @@
       {
         "binding": {"name": "lisbon-weather", "label": "Lisbon", "reference": "formula:example.com.weather", "operation": "today", "args": {}, "interval_minutes": 60, "result_shape": {"type": "object", "fields": {"temperature": {"type": "number"}, "summary": {"type": "string", "max": 80}}, "required": ["temperature"]}, "actions": []},
         "json": {"name": "lisbon-weather", "label": "Lisbon", "reference": "formula:example.com.weather", "operation": "today", "args": {}, "interval_minutes": 60, "result_shape": {"type": "object", "nullable": false, "fields": {"temperature": {"type": "number", "nullable": false}, "summary": {"type": "string", "nullable": false, "max": 80}}, "required": ["temperature"]}, "actions": []}
+      },
+      {
+        "binding": {"name": "vpn", "label": "VPN", "reference": "catalyst:local.vpn", "operation": "status", "args": {}, "interval_minutes": 1, "result_shape": {"type": "object", "fields": {"connected": {"type": "boolean"}, "servers": {"type": "list", "max": 32, "of": {"type": "string", "max": 64}}}, "required": ["connected", "servers"]}, "actions": [{"name": "connect", "label": "Connect", "kind": "run", "operation": "connect", "args": {"protocol": "wireguard"}, "pick": "server"}, {"name": "disconnect", "label": "Disconnect", "kind": "run", "operation": "disconnect", "args": {}}]},
+        "json": {"name": "vpn", "label": "VPN", "reference": "catalyst:local.vpn", "operation": "status", "args": {}, "interval_minutes": 1, "result_shape": {"type": "object", "nullable": false, "fields": {"connected": {"type": "boolean", "nullable": false}, "servers": {"type": "list", "nullable": false, "max": 32, "of": {"type": "string", "nullable": false, "max": 64}}}, "required": ["connected", "servers"]}, "actions": [{"name": "connect", "label": "Connect", "kind": "run", "operation": "connect", "args": {"protocol": "wireguard"}, "pick": "server"}, {"name": "disconnect", "label": "Disconnect", "kind": "run", "operation": "disconnect", "args": {}}]}
       }
     ],
     "invalid": [
@@ -222,6 +226,24 @@
         "reason": "unknown_key"
       },
       {
+        "why": "a refresh action carrying a pick",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh", "pick": "venue"}]},
+        "path": "/actions/0/pick",
+        "reason": "unknown_key"
+      },
+      {
+        "why": "a run action's pick an argument its args already hold",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}, "pick": "side"}]},
+        "path": "/actions/0/pick",
+        "reason": "duplicate"
+      },
+      {
+        "why": "a run action's pick outside the argument grammar",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"size": 0.01}, "pick": "Side"}]},
+        "path": "/actions/0/pick",
+        "reason": "name"
+      },
+      {
         "why": "an action of another kind",
         "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "delete"}]},
         "path": "/actions/0/kind",
@@ -313,6 +335,16 @@
       "input": {
         "operation": "today",
         "params": {}
+      }
+    },
+    {
+      "why": "a run action that names a pick, pressed with a picked value, which fills the argument it names",
+      "binding": 2,
+      "action": 0,
+      "pick": "lisbon",
+      "input": {
+        "operation": "connect",
+        "params": {"protocol": "wireguard", "server": "lisbon"}
       }
     }
   ],
