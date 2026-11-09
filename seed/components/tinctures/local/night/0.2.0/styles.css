@@ -234,7 +234,7 @@ button:disabled { cursor: default; opacity: .6; }
 .dish--on { color: #fff; }
 .mastbox { padding: .55rem .75rem .65rem; display: flex; flex-direction: column; gap: .2rem; }
 .mastbox__head { font-weight: 400; font-size: 1.2rem; }
-.mastbox__head button { border-radius: 6px; }
+.mastbox__head button { border-radius: 6px; min-width: 44px; min-height: 44px; }
 .mastbox__state { font-size: .88rem; color: var(--pane); }
 .mastbox .btn { margin-top: .35rem; align-self: stretch; }
 
