@@ -180,7 +180,15 @@ defmodule Opus.Providers.FeedTest do
 
       assert runs.projection ==
                ~w(kind execution_id parent_execution_id reference component_type duration_ms
-                  started_at ended_at error)
+                  started_at ended_at error revision at)
+
+      # Each carries the delivery contract: a feed's result by its binding,
+      # revisioned by its result's sequence; a run by its id, never leaving.
+      assert {results.key, results.removal, results.reread, results.stale_after} ==
+               {"binding", nil, [], 900}
+
+      assert {runs.key, runs.removal, runs.reread, runs.stale_after} ==
+               {"execution_id", nil, [], 900}
 
       # When the run started and when it ended, ISO 8601 times; a run that
       # has not ended has no end.
@@ -214,7 +222,9 @@ defmodule Opus.Providers.FeedTest do
         "component_type" => "catalyst",
         "duration_ms" => 1,
         "started_at" => "2026-11-09T10:00:00.000001Z",
-        "ended_at" => "2026-11-09T10:00:01Z"
+        "ended_at" => "2026-11-09T10:00:01Z",
+        "revision" => 1_794_218_401_000_000,
+        "at" => "2026-11-09T10:00:01Z"
       }
 
       assert :ok = Shape.check(runs.shape, Map.put(run, "error", nil))
@@ -944,7 +954,7 @@ defmodule Opus.Providers.FeedTest do
                "ended_at" => ended_at
              } = refreshed
 
-      assert refreshed == live
+      assert unstamped(refreshed) == unstamped(live)
       assert {:ok, %Opus.Record{error_class: :rate_limited}} = Opus.Record.get(ctx, execution_id)
 
       {:ok, started, 0} = DateTime.from_iso8601(started_at)
@@ -973,7 +983,9 @@ defmodule Opus.Providers.FeedTest do
         :ok = emit(vector_record(actor, event))
 
         assert_receive %Cyfr.Bus.Execution{} = payload, 5_000
-        assert on_the_wire(stream, Map.from_struct(payload)) == event
+        told = on_the_wire(stream, Map.from_struct(payload))
+        assert unstamped(told) == unstamped(event)
+        assert is_integer(told["revision"]) and is_binary(told["at"])
       end
     end
   end
@@ -1011,6 +1023,10 @@ defmodule Opus.Providers.FeedTest do
 
   # A refresh item or a live payload as a canvas reads it: projected by the
   # grant and passed through JSON.
+  # A change as a canvas reads it, its delivery stamp aside: the time a
+  # change is told is the teller's.
+  defp unstamped(data), do: Map.drop(data, ~w(revision at))
+
   defp on_the_wire(stream, payload) do
     grant = %Prima.StreamGrant{
       topic: stream.topic,

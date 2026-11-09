@@ -18,13 +18,15 @@ defmodule Cyfr.Bus.ScheduleRun do
   @fields [:schedule_id, :occurrence_id, :execution_id, :scheduled_for, :reason]
 
   @enforce_keys [:athanor_id, :kind]
-  defstruct [:athanor_id, :kind | @fields]
+  defstruct [:athanor_id, :kind, :revision, :at | @fields]
 
   @type kind :: :fired | :failed
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
           kind: kind(),
+          revision: non_neg_integer(),
+          at: DateTime.t(),
           schedule_id: String.t() | nil,
           occurrence_id: String.t() | nil,
           execution_id: String.t() | nil,
@@ -67,7 +69,7 @@ defmodule Cyfr.Bus.ScheduleRun do
   def new(%Prima.Actor{} = actor, kind, fields \\ %{}) do
     fields = fields |> Map.new() |> Payload.caused([:reason])
 
-    Payload.build(__MODULE__, @fields, fields, %{
+    Payload.build(__MODULE__, [:revision, :at | @fields], Payload.stamped(fields), %{
       athanor_id: Payload.athanor!(actor),
       kind: Payload.kind!(__MODULE__, kind, @kinds)
     })

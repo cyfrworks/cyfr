@@ -299,16 +299,22 @@ defmodule Sanctum.Providers.Vault do
   revoke or a rename takes the name away (`Sanctum.Vault.standing/2`,
   published by the host's bridge). Never a value, a field, a destination
   or a last use. Its refresh is every standing entry, each as `changed`.
+  Under the delivery contract (`Compendium.Canvas.catalog/1`) an item is
+  an entry by its name, and its picture is read again after fifteen
+  minutes.
   """
   def streams do
     [
       %Prima.Provider.Stream{
         name: "vault.changes",
         topic: :vault_entries,
-        projection: ["kind", "name", "type", "status"],
+        projection: ["kind", "name", "type", "status" | Prima.Provider.Stream.delivery_fields()],
         deadline_bound: 86_400,
-        shape: vault_changes_shape(),
-        refresh: {__MODULE__, :standing}
+        shape: Prima.Provider.Stream.delivered(vault_changes_shape()),
+        refresh: {__MODULE__, :standing},
+        key: "name",
+        removal: "removed",
+        stale_after: 900
       }
     ]
   end
@@ -321,8 +327,14 @@ defmodule Sanctum.Providers.Vault do
   @spec standing(Context.t(), nil) :: {:ok, [map()]} | {:error, term()}
   def standing(%Context{athanor_id: athanor_id} = ctx, _subject)
       when is_binary(athanor_id) and athanor_id != "" do
+    began = DateTime.utc_now()
+
     with {:ok, entries} <- Vault.standing_entries(ctx) do
-      {:ok, Enum.map(entries, &Map.put(&1, :kind, :changed))}
+      {:ok,
+       Enum.map(
+         entries,
+         &(&1 |> Map.put(:kind, :changed) |> Prima.Provider.Stream.stamped(began))
+       )}
     end
   end
 

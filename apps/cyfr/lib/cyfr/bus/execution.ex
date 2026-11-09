@@ -28,13 +28,15 @@ defmodule Cyfr.Bus.Execution do
   ]
 
   @enforce_keys [:athanor_id, :kind]
-  defstruct [:athanor_id, :kind | @fields]
+  defstruct [:athanor_id, :kind, :revision, :at | @fields]
 
   @type kind :: :started | :completed | :failed | :cancelled
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
           kind: kind(),
+          revision: non_neg_integer(),
+          at: DateTime.t(),
           execution_id: String.t() | nil,
           request_id: String.t() | nil,
           parent_execution_id: String.t() | nil,
@@ -94,7 +96,7 @@ defmodule Cyfr.Bus.Execution do
 
     fields = Payload.caused(fields, [:error])
 
-    Payload.build(__MODULE__, @fields, fields, %{
+    Payload.build(__MODULE__, [:revision, :at | @fields], Payload.stamped(fields), %{
       athanor_id: Payload.athanor!(actor),
       kind: Payload.kind!(__MODULE__, kind, @kinds)
     })

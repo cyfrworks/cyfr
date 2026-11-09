@@ -63,6 +63,22 @@ defmodule Prima.Provider do
         grant's subject for a payload to be delivered, for a stream whose
         subject selects payloads on one exact topic rather than naming the
         topic. A filtering stream has a subject grammar.
+
+    A canvas-readable stream carries the delivery contract
+    (`Compendium.Canvas.catalog/1`): its shape declares `revision`, a
+    whole number, and `at`, a time, neither nullable, and it declares
+    three more fields, each `nil` on any other stream:
+
+      * `key` — the projected field naming one item, or `nil` for a
+        stream whose one item is the stream itself;
+      * `removal` — the value of the payload's `kind` enum an item that
+        leaves is announced with, or `nil` for a stream whose items never
+        leave;
+      * `reread` — the values of the payload's `kind` enum whose change
+        says only that the picture moved, which the deliverer answers
+        with a fresh picture rather than the change, `[]` for none;
+      * `stale_after` — the seconds a delivered picture stands before its
+        deliverer reads it again.
     """
 
     @type bind :: :holder | nil
@@ -76,7 +92,11 @@ defmodule Prima.Provider do
             deadline_bound: pos_integer(),
             shape: Prima.Canvas.Shape.t() | nil,
             refresh: {module(), atom()} | nil,
-            filter: String.t() | nil
+            filter: String.t() | nil,
+            key: String.t() | nil,
+            removal: String.t() | nil,
+            reread: [String.t()],
+            stale_after: pos_integer() | nil
           }
 
     @enforce_keys [:name, :topic, :projection, :deadline_bound]
@@ -89,17 +109,31 @@ defmodule Prima.Provider do
       bind: nil,
       shape: nil,
       refresh: nil,
-      filter: nil
+      filter: nil,
+      key: nil,
+      removal: nil,
+      reread: [],
+      stale_after: nil
     ]
 
     @field ~r/\A[a-z][a-z0-9_]{0,62}\z/
+
+    # The delivery fields of a canvas-readable stream's payload, as its
+    # normalized shape spells them.
+    @revision %{"type" => "integer", "nullable" => false}
+    @at %{"type" => "time", "nullable" => false}
+    @delivery_fields ["revision", "at"]
 
     @doc """
     Whether `stream` is a well-formed declaration: a stream name, an atom
     topic, a non-empty list of distinct field names, a subject grammar that
     compiles and is anchored at both ends (or none), a binding of `nil` or
     `:holder` (a holder-bound stream with a grammar), a positive bound, and
-    a `shape`, `refresh` and `filter` each `nil` or as `t:t/0` describes.
+    a `shape`, `refresh` and `filter` each `nil` or as `t:t/0` describes,
+    and the delivery contract's `key`, `removal`, `reread` and
+    `stale_after` as the moduledoc gives them: on a stream with a shape, a
+    `revision` and an `at` in it and a `stale_after`, and on any other
+    none of them.
     A struct missing any field is not one.
     """
     @spec valid?(term()) :: boolean()
@@ -112,7 +146,11 @@ defmodule Prima.Provider do
           deadline_bound: deadline_bound,
           shape: shape,
           refresh: refresh,
-          filter: filter
+          filter: filter,
+          key: key,
+          removal: removal,
+          reread: reread,
+          stale_after: stale_after
         }) do
       Prima.Manifest.Tincture.stream_name?(name) and is_atom(topic) and
         topic not in [nil, true, false] and
@@ -120,12 +158,55 @@ defmodule Prima.Provider do
         bind?(bind, subject) and
         is_integer(deadline_bound) and deadline_bound > 0 and
         shape?(shape, projection) and refresh?(refresh) and
-        filter?(filter, projection, subject)
+        filter?(filter, projection, subject) and
+        delivery?(shape, projection, key, {removal, reread}, stale_after)
     end
 
     # Every field is matched above before any is read: a key error's report
     # would print the struct.
     def valid?(_other), do: false
+
+    @doc """
+    The payload fields every canvas-readable stream carries beside its own,
+    `revision` and `at` (`Compendium.Canvas.catalog/1`), each in its
+    projection.
+    """
+    @spec delivery_fields() :: [String.t()]
+    def delivery_fields, do: @delivery_fields
+
+    @doc """
+    A normalized `object` shape with the delivery fields added, each
+    required: `revision`, a whole number, and `at`, a time. A shape that
+    holds them already answers as it was.
+    """
+    @spec delivered(Prima.Canvas.Shape.t()) :: Prima.Canvas.Shape.t()
+    def delivered(%{"type" => "object", "fields" => fields, "required" => required} = shape)
+        when is_map(fields) and is_list(required) do
+      %{
+        shape
+        | "fields" => Map.merge(fields, %{"revision" => @revision, "at" => @at}),
+          "required" => Enum.sort(Enum.uniq(required ++ @delivery_fields))
+      }
+    end
+
+    @doc """
+    A canvas-readable payload's `fields` (atom-keyed) with the delivery
+    fields stamped: `at`, the one the fields carry or else `at`, and
+    `revision`, the one they carry or else that time in microseconds. A
+    refresh hands in the time its read began, so no item it reads outranks
+    a change committed after the read; a live change, built after its
+    commit, the time it is built.
+    """
+    @spec stamped(map() | keyword(), DateTime.t()) :: map()
+    def stamped(fields, %DateTime{} = at) do
+      fields = Map.new(fields)
+      at = Map.get(fields, :at) || at
+      Map.merge(fields, %{at: at, revision: Map.get(fields, :revision) || revision(at)})
+    end
+
+    @doc "A change's time as its revision: microseconds since the epoch."
+    @spec revision(DateTime.t()) :: non_neg_integer()
+    def revision(%DateTime{} = at), do: DateTime.to_unix(at, :microsecond)
 
     @doc "Whether the stream's subject is its grant holder's own user id (`bind: :holder`)."
     @spec holder_bound?(t()) :: boolean()
@@ -192,6 +273,47 @@ defmodule Prima.Provider do
       do: field in projection and is_binary(subject)
 
     defp filter?(_field, _projection, _subject), do: false
+
+    # The delivery contract a canvas-readable stream carries: an ordered,
+    # timed change per item, a key among its fields, a removal among its
+    # kinds, and a bound on how long a picture stands. A stream without a
+    # shape declares none of it.
+
+    defp delivery?(nil, _projection, key, {removal, reread}, stale_after),
+      do: is_nil(key) and is_nil(removal) and reread == [] and is_nil(stale_after)
+
+    defp delivery?(
+           %{"fields" => fields, "required" => required},
+           projection,
+           key,
+           {removal, reread},
+           stale_after
+         )
+         when is_map(fields) and is_list(required) do
+      kinds = kinds(fields)
+
+      Map.get(fields, "revision") == @revision and Map.get(fields, "at") == @at and
+        "revision" in required and "at" in required and
+        (is_nil(key) or (is_binary(key) and key in projection)) and
+        (is_nil(removal) or removal in kinds) and
+        reread?(reread, kinds) and
+        is_integer(stale_after) and stale_after > 0
+    end
+
+    defp delivery?(_shape, _projection, _key, _leaving, _stale_after), do: false
+
+    # The values the payload's `kind` enum takes, none for a shape without one.
+    defp kinds(%{"kind" => %{"type" => "enum", "values" => values}}) when is_list(values),
+      do: values
+
+    defp kinds(_fields), do: []
+
+    defp reread?(reread, kinds) when is_list(reread),
+      do:
+        not List.improper?(reread) and Enum.uniq(reread) == reread and
+          Enum.all?(reread, &(is_binary(&1) and &1 in kinds))
+
+    defp reread?(_reread, _kinds), do: false
 
     # Anchored at both ends, so a grammar cannot admit a subject by matching
     # a part of it.

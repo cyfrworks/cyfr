@@ -21,14 +21,18 @@ defmodule Opus.Schedules.Provider do
   `removed` after a delete.
 
   The streams (`streams/0`) are canvas-readable, each declaring a shape,
-  taking no subject, and handed its current state first:
+  taking no subject, and carrying the delivery contract
+  (`Compendium.Canvas.catalog/1`):
 
     * `schedules.changes` rides the athanor's schedules topic. Its
       refresh is every live schedule of the athanor, paused ones
-      included, as `changed` (`live_schedules/2`).
+      included, as `changed` (`live_schedules/2`). An item is a
+      schedule, which leaves as `removed`.
     * `schedule_runs.changes` rides the athanor's schedule runs topic. Its
       refresh is the athanor's 20 newest occurrences of schedules
-      (`recent_runs/2`).
+      (`recent_runs/2`). An item is an occurrence, which never leaves; a
+      schedule that failed before it claimed any occurrence is told with
+      no `occurrence_id`, a change that names no item.
 
   Neither carries a schedule's input, metadata, profile, pinned
   reference, maker or feed columns.
@@ -58,6 +62,11 @@ defmodule Opus.Schedules.Provider do
 
   # A day: the longest a grant on either stream lives.
   @deadline_bound 86_400
+
+  # Fifteen minutes: how long a picture of either stream stands before it
+  # is read again. Each change is announced, so a read only mends one the
+  # bus lost.
+  @stale_after 900
 
   require Logger
 
@@ -500,11 +509,14 @@ defmodule Opus.Schedules.Provider do
           "next_run_at",
           "last_run_at",
           "run_count",
-          "error_count"
+          "error_count" | Prima.Provider.Stream.delivery_fields()
         ],
         deadline_bound: @deadline_bound,
-        shape: schedules_shape(),
-        refresh: {__MODULE__, :live_schedules}
+        shape: Prima.Provider.Stream.delivered(schedules_shape()),
+        refresh: {__MODULE__, :live_schedules},
+        key: "schedule_id",
+        removal: "removed",
+        stale_after: @stale_after
       },
       %Prima.Provider.Stream{
         name: "schedule_runs.changes",
@@ -515,11 +527,13 @@ defmodule Opus.Schedules.Provider do
           "occurrence_id",
           "execution_id",
           "scheduled_for",
-          "reason"
+          "reason" | Prima.Provider.Stream.delivery_fields()
         ],
         deadline_bound: @deadline_bound,
-        shape: schedule_runs_shape(),
-        refresh: {__MODULE__, :recent_runs}
+        shape: Prima.Provider.Stream.delivered(schedule_runs_shape()),
+        refresh: {__MODULE__, :recent_runs},
+        key: "occurrence_id",
+        stale_after: @stale_after
       }
     ]
   end
