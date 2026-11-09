@@ -1215,15 +1215,21 @@ async function main() {
     const thread = await ask({ op: "thread" });
     // The desktop, and AQUA's panel on the shelf turned to the thread: the
     // pane is the panel's, and a grant its turn needs is asked in the
-    // panel's own layer.
+    // panel's own layer. The panel draws the thread chosen once it has
+    // kept it, and the desktop opened again finds the panel open on it.
     await open(page, pagePath(""));
     await page.locator("#aqua-panel-button").click({ timeout: 30_000 });
     await page.locator("#aqua-panel-threads").selectOption(thread.thread_id, { timeout: 30_000 });
+    await page.waitForSelector(`#aqua-panel-threads option[value="${thread.thread_id}"][selected]`,
+      { state: "attached", timeout: 30_000 });
+    await open(page, pagePath(""));
     layer = "#system-layer-panel-dialog";
-    // The panel's thread pane, its own view, connected. Its connected
-    // mount follows the thread's events (`PrismWeb.ThreadPaneLive`'s
-    // `open_thread/2`) before it answers the join that marks it connected,
-    // so once it is, the announcement reaches it: nothing more is waited for.
+    // The panel's thread pane, its own view, connected. Mounted on the kept
+    // thread, its connected mount follows the thread's events
+    // (`PrismWeb.ThreadPaneLive`'s `open_thread/2`) before it answers the
+    // join that marks it connected, so once it is, the announcement reaches
+    // it: nothing more is waited for. A pane turned by message gives no such
+    // sign, so the proof does not announce to one.
     await page.waitForFunction((id) => {
       const pane = document.getElementById("aqua-panel-pane");
       const select = document.getElementById("aqua-panel-threads");

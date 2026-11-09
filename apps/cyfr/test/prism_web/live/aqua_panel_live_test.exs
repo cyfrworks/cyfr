@@ -125,7 +125,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   # The panel's pane, turned to thread `id`.
   defp select!(panel, id) do
-    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => id})
+    panel |> form("#aqua-panel-thread-form", %{"id" => id}) |> render_change()
     on_thread!(child!(panel, "aqua-panel-pane"), id)
   end
 
@@ -1114,7 +1114,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     select!(panel, second.id)
     assert child!(panel, "aqua-panel-pane").pid == pane.pid
 
-    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => ""})
+    panel |> form("#aqua-panel-thread-form", %{"id" => ""}) |> render_change()
     wait_until(fn -> thread_of(pane) == nil end, 5_000, "the pane on a blank thread")
     assert child!(panel, "aqua-panel-pane").pid == pane.pid
 

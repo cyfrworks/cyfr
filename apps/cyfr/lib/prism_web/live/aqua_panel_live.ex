@@ -483,11 +483,16 @@ defmodule PrismWeb.AquaPanelLive do
         >
           <span class="aqua-panel-orb" aria-hidden="true"></span>
           <span class="shrink-0 text-sm font-semibold">AQUA</span>
-          <span class="relative ml-1 min-w-0 max-w-[13rem]">
+          <%!-- A browser's LiveView sends a change only from an input inside
+               a form, so the change is the form's. --%>
+          <form
+            id="aqua-panel-thread-form"
+            phx-change="select"
+            class="relative ml-1 min-w-0 max-w-[13rem]"
+          >
             <select
               id="aqua-panel-threads"
               name="id"
-              phx-change="select"
               title="Your threads"
               aria-label="Your threads"
               class="w-full min-w-0 cursor-pointer appearance-none truncate rounded-[7px] border border-border-default bg-transparent py-[3px] pl-2 pr-6 text-xs text-text-secondary hover:text-text-primary focus:border-border-focus focus:outline-none"
@@ -510,7 +515,7 @@ defmodule PrismWeb.AquaPanelLive do
             >
               ▾
             </span>
-          </span>
+          </form>
           <span class="flex-1"></span>
           <button
             :if={match?(%{kind: "own"}, @thread)}

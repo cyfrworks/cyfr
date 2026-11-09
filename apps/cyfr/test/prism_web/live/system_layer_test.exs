@@ -687,7 +687,7 @@ defmodule PrismWeb.SystemLayerTest do
     wait_until(fn -> find_live_child(desktop, "aqua-panel") end, 5_000, "the desktop's panel")
     panel = find_live_child(desktop, "aqua-panel")
     panel |> element("#aqua-panel-button") |> render_click()
-    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => thread_id})
+    panel |> form("#aqua-panel-thread-form", %{"id" => thread_id}) |> render_change()
 
     wait_until(
       fn ->

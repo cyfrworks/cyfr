@@ -199,7 +199,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     unless has_element?(panel, "#aqua-panel-sheet"),
       do: panel |> element("#aqua-panel-button") |> render_click()
 
-    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => thread.id})
+    panel |> form("#aqua-panel-thread-form", %{"id" => thread.id}) |> render_change()
     {panel, on_thread!(child!(panel, "aqua-panel-pane"), thread.id)}
   end
 
