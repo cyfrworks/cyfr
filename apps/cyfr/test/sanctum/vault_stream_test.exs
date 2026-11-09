@@ -47,7 +47,11 @@ defmodule Sanctum.VaultStreamTest do
     assert {stream.topic, stream.subject, stream.bind, stream.filter, stream.refresh} ==
              {:vault_entries, nil, nil, nil, {Sanctum.Providers.Vault, :standing}}
 
-    assert stream.projection == ~w(kind name type status)
+    assert stream.projection == ~w(kind name type status revision at)
+
+    assert {stream.key, stream.removal, stream.reread, stream.stale_after} ==
+             {"name", "removed", [], 900}
+
     assert stream.shape["fields"]["kind"]["values"] == ["changed", "removed"]
     assert stream.shape["fields"]["status"]["values"] == ["fine", "needs_reauthorisation"]
     assert stream.shape["fields"]["type"]["values"] == Prima.CredentialKinds.all()
@@ -67,7 +71,11 @@ defmodule Sanctum.VaultStreamTest do
     assert {:ok, items} = Sanctum.Providers.Vault.standing(ctx, nil)
     read = Enum.map(items, &read_as/1)
 
-    assert %{"kind" => "changed", "name" => "github", "type" => "api_key", "status" => "fine"} in read
+    assert %{"kind" => "changed", "name" => "github", "type" => "api_key", "status" => "fine"} in Enum.map(
+             read,
+             &Map.drop(&1, ~w(revision at))
+           )
+
     refute Enum.any?(read, &(&1["name"] == "old-key"))
     refute_secret(read)
     assert key.status == "active"

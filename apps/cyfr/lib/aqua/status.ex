@@ -55,6 +55,8 @@ defmodule Aqua.Status do
   @doc "How the context's athanor stands, each field from its source (the moduledoc's)."
   @spec read(Context.t()) :: SystemStatus.t()
   def read(%Context{} = ctx) do
+    began = DateTime.utc_now()
+
     brains =
       case Aqua.Crew.brains(ctx) do
         {:ok, brains} -> brains
@@ -69,7 +71,8 @@ defmodule Aqua.Status do
       crew_ready: brains[:crew_ready],
       crew_total: brains[:crew_total],
       version: Prima.Version.current(),
-      update_available: Cyfr.ReleaseChannel.update_available()
+      update_available: Cyfr.ReleaseChannel.update_available(),
+      at: began
     })
   end
 
@@ -130,8 +133,8 @@ defmodule Aqua.Status do
     watched =
       case state.watched do
         %{^id => entry} ->
-          if status != entry.told, do: publish(ctx, status)
-          %{entry | ctx: ctx, expires: expires, told: status}
+          told = if same?(status, entry.told), do: entry.told, else: publish(ctx, status)
+          %{entry | ctx: ctx, expires: expires, told: told}
 
         _new ->
           actor = Context.actor(ctx)
@@ -251,12 +254,10 @@ defmodule Aqua.Status do
 
   defp read_done(state, id, {:read, status}) do
     case state.watched do
-      %{^id => %{told: ^status}} ->
-        state
-
-      %{^id => entry} ->
-        publish(entry.ctx, status)
-        put_in(state.watched[id].told, status)
+      %{^id => %{told: told} = entry} ->
+        if same?(status, told),
+          do: state,
+          else: put_in(state.watched[id].told, publish(entry.ctx, status))
 
       _dropped ->
         state
@@ -265,6 +266,12 @@ defmodule Aqua.Status do
 
   defp read_done(state, id, :fallen), do: drop(state, id)
   defp read_done(state, _id, _unread), do: state
+
+  # Two statuses say the same when every field but the delivery stamp
+  # agrees: a read stamps the time it began, so two reads of one status
+  # never match whole.
+  defp same?(status, told),
+    do: Map.drop(status, [:revision, :at]) == Map.drop(told, [:revision, :at])
 
   defp drop(state, id) do
     case state.watched do
@@ -279,10 +286,11 @@ defmodule Aqua.Status do
     end
   end
 
+  # Published, the status is what was last told.
   defp publish(ctx, status) do
     actor = Context.actor(ctx)
     _ = Cyfr.Bus.broadcast(actor, Cyfr.Bus.system(actor), status)
-    :ok
+    status
   end
 
   defp reading(state, ref) do

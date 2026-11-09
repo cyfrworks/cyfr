@@ -123,6 +123,14 @@ defmodule Cyfr.Bus.Payload do
   end
 
   @doc false
+  # The delivery fields a canvas-readable stream's payload carries
+  # (`Prima.Provider.Stream.stamped/2`), stamped now unless the caller
+  # hands in its own: a live change is built after the state it carries
+  # was committed and read, so it is stamped later than that state.
+  @spec stamped(map() | keyword()) :: map()
+  def stamped(fields), do: Prima.Provider.Stream.stamped(fields, DateTime.utc_now())
+
+  @doc false
   @spec build(module(), [atom()], map() | keyword(), map()) :: struct()
   def build(module, allowed, fields, fixed) do
     fields = Map.new(fields)

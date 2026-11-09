@@ -144,7 +144,10 @@
     return invalid;
   }
   var SOCKET_PATH = "/_f/v1/socket";
+  var CLOSE_CODES = Object.freeze({ unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1e3 });
   var REFUSAL_EVENT = "refusal";
+  var DELIVERY_EVENTS = Object.freeze(["snapshot", "resync", "unavailable", "stale", "denied"]);
+  var STREAM_STATES = Object.freeze(["live", "unavailable", "stale", "denied", "ended"]);
   var NO_ANSWER_CLASSES = Object.freeze([
     "cancelled",
     "corrupt",
@@ -161,6 +164,7 @@
     return { v: VERSION, type: "unsubscribe", sub };
   }
   var isEvent = ({ stream, subject, id }) => typeof stream === "string" && (subject === null || typeof subject === "string") && (id === null || Number.isInteger(id) && id >= 0);
+  var isTime = (at) => typeof at === "string" && at !== "" && !Number.isNaN(Date.parse(at));
   function decodeConnectionMessage(message) {
     if (!isObject(message) || message.v !== VERSION || !isCall(message.sub)) return { ok: false };
     const head = ["v", "type", "sub"];
@@ -171,6 +175,13 @@
         break;
       case "event":
         read = sameKeys(message, [...head, "stream", "subject", "id", "data"]) && isEvent(message);
+        break;
+      case "snapshot":
+      case "stale":
+        read = sameKeys(message, [...head, "at"]) && isTime(message.at);
+        break;
+      case "resync":
+        read = sameKeys(message, head);
         break;
       case "ended":
         read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error);
@@ -301,6 +312,8 @@
   // js/sdk/client.js
   var HANDSHAKE_TIMEOUT_MS = 3e4;
   var MAX_QUEUED_VERBS = 32;
+  var REOPEN_FIRST_MS = 1e3;
+  var REOPEN_MOST_MS = 3e4;
   var ANSWER_TIMEOUT_MS = 3e4;
   var BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   var ACTION_NAME = /^[a-z0-9][a-z0-9-]{0,47}$/;
@@ -375,9 +388,9 @@
         if (waiting) waiting({ saved: closed.saved });
         return;
       }
-      const told = decodeToFrame(data);
-      if (told.ok) {
-        if (told.message.frame === frame) onTold(told.message);
+      const told2 = decodeToFrame(data);
+      if (told2.ok) {
+        if (told2.message.frame === frame) onTold(told2.message);
         return;
       }
       if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return;
@@ -387,8 +400,8 @@
       if (kind === null) known("frame");
       if (first) settle();
     }
-    function onTold({ verb: told, args }) {
-      if (told === "subject") {
+    function onTold({ verb: told2, args }) {
+      if (told2 === "subject") {
         if (kind === "canvas") return;
         subject = Object.freeze({ kind: args.kind, id: args.id });
         if (kind === null) return;
@@ -396,7 +409,7 @@
         for (const entry of handlers.get("subject")) deliver("subject", entry, subject);
         return;
       }
-      if (told === "canvas") {
+      if (told2 === "canvas") {
         if (kind !== null) return;
         canvas = { streams: new Set(args.streams.map(pairKey)) };
         desktop = { prefs: args.prefs, appearance: args.appearance, person: args.person };
@@ -404,18 +417,18 @@
         return tellDesktop();
       }
       if (kind !== "canvas") return;
-      if (told === "pressed") return answered(told, args.call, answerOf(args));
-      if (told === "prefs") {
-        const settle2 = take(told, args.call);
+      if (told2 === "pressed") return answered(told2, args.call, answerOf(args));
+      if (told2 === "prefs") {
+        const settle2 = take(told2, args.call);
         if (!settle2) return;
         desktop = __spreadProps(__spreadValues({}, desktop), { prefs: { document: args.document, revision: args.revision } });
         tellDesktop();
         return settle2(answerOf(args));
       }
-      const value = heard(told, args);
-      latest.set(told, value);
-      if (told === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
-      for (const entry of handlers.get(told)) deliver(told, entry, value);
+      const value = heard(told2, args);
+      latest.set(told2, value);
+      if (told2 === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
+      for (const entry of handlers.get(told2)) deliver(told2, entry, value);
     }
     function tellDesktop() {
       const value = desktopValue();
@@ -539,7 +552,19 @@
       throw unreadable();
     }
     function subscribe(name, subject2, onEvent) {
-      const subscription = { name, subject: subject2, onEvent, state: "waiting", held: null, number: null, sent: false };
+      const subscription = {
+        name,
+        subject: subject2,
+        onEvent,
+        state: "waiting",
+        held: null,
+        number: null,
+        sent: false,
+        delivery: "live",
+        opened: false,
+        tries: 0,
+        timer: null
+      };
       const opened = new Promise((resolve, reject) => Object.assign(subscription, { resolve, reject }));
       const closed = new Promise((resolve, reject) => subscription.closed = { resolve, reject });
       closed.catch(() => {
@@ -549,7 +574,15 @@
         /** Settles when the stream ends; rejects if the connection broke. */
         closed,
         /** End the stream: nothing more of it is delivered. */
-        close
+        close,
+        /**
+         * On a canvas, the stream's state: `live`, `unavailable` (it opens
+         * again at the time its last `unavailable` event named), `stale`,
+         * `denied` or `ended`.
+         */
+        get state() {
+          return subscription.delivery;
+        }
       };
       sendable(subscription).then(
         () => attach(subscription),
@@ -569,6 +602,7 @@
     }
     function refuse(subscription, error) {
       if (subscription.state !== "waiting") return;
+      if (subscription.opened) return deny(subscription, { class: error.code, message: error.message, stage: error.stage || "admission" });
       subscription.state = "over";
       subscription.reject(error);
     }
@@ -578,6 +612,7 @@
       try {
         held = connect();
       } catch (_error) {
+        if (subscription.opened) return reopen(subscription);
         return refuse(subscription, unreachable());
       }
       subscription.state = "asked";
@@ -596,7 +631,7 @@
         for (const subscription of held.subscriptions.values()) ask(held, subscription);
       };
       held.socket.onmessage = (event) => onConnectionMessage(held, event.data);
-      held.socket.onclose = () => lost(held);
+      held.socket.onclose = (event) => lost(held, event && event.code);
       held.socket.onerror = () => lost(held);
       connection = held;
       return held;
@@ -619,27 +654,79 @@
       if (message.type === "subscribed") {
         if (subscription.state !== "asked") return;
         subscription.state = "open";
+        subscription.delivery = "live";
+        if (subscription.opened) return told(subscription, "resync");
+        subscription.opened = true;
         subscription.resolve(subscription.handle);
       } else if (message.type === "event") {
-        if (subscription.state === "open") hear(subscription, { id: message.id, event: message.stream, data: message.data });
-      } else {
+        if (subscription.state === "open") hear(subscription, heardEvent(message));
+      } else if (message.type === "ended") {
         held.subscriptions.delete(subscription.number);
         end(subscription, "error" in message ? message.error : null, null);
+      } else if (subscription.state === "open" && canvas !== null) {
+        if (message.type === "snapshot") Object.assign(subscription, { delivery: "live", tries: 0 });
+        if (message.type === "stale") subscription.delivery = "stale";
+        told(subscription, message.type, null, "at" in message ? message.at : null);
       }
     }
-    function lost(held) {
+    function heardEvent({ id, stream, data }) {
+      if (canvas === null) return { id, event: stream, data };
+      const revision = isPlainObject(data) && Number.isInteger(data.revision) ? data.revision : null;
+      const at = isPlainObject(data) && typeof data.at === "string" ? data.at : null;
+      return { id, event: stream, data, revision, at };
+    }
+    function told(subscription, name, data = null, at = null) {
+      hear(subscription, { id: null, event: name, data, revision: null, at });
+    }
+    function lost(held, code) {
       if (connection === held) connection = null;
       const carried = [...held.subscriptions.values()];
       held.subscriptions.clear();
-      for (const subscription of carried) end(subscription, null, unreachable());
+      const final = [CLOSE_CODES.unreadable, CLOSE_CODES.too_big, CLOSE_CODES.replaced].includes(code);
+      for (const subscription of carried) {
+        if (final && subscription.opened) {
+          Object.assign(subscription, { state: "over", delivery: "ended" });
+          subscription.closed.reject(unreachable());
+        } else {
+          end(subscription, null, unreachable());
+        }
+      }
     }
     function end(subscription, error, broke) {
       const was = subscription.state;
       subscription.state = "over";
+      if (canvas !== null && subscription.opened) {
+        if (broke !== null || error !== null && NO_ANSWER_CLASSES.includes(error.class)) return reopen(subscription);
+        if (error === null && was === "asked") return reopen(subscription);
+        if (error !== null) return deny(subscription, error);
+        subscription.delivery = "ended";
+        return subscription.closed.resolve();
+      }
       if (was === "asked") return subscription.reject(broke || refusedOpen(error));
+      subscription.delivery = "ended";
       if (error !== null) hear(subscription, { id: null, event: REFUSAL_EVENT, data: error });
       if (broke) subscription.closed.reject(broke);
       else subscription.closed.resolve();
+    }
+    function deny(subscription, error) {
+      subscription.state = "over";
+      subscription.delivery = "denied";
+      told(subscription, "denied", error);
+      subscription.closed.resolve();
+    }
+    function reopen(subscription) {
+      const wait = Math.min(REOPEN_FIRST_MS * 2 ** subscription.tries, REOPEN_MOST_MS);
+      subscription.tries += 1;
+      Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false, delivery: "unavailable" });
+      told(subscription, "unavailable", { retry_at: new Date(Date.now() + wait).toISOString() });
+      subscription.timer = setTimeout(() => {
+        subscription.timer = null;
+        if (subscription.state !== "waiting") return;
+        sendable(subscription).then(
+          () => attach(subscription),
+          (error) => refuse(subscription, error)
+        );
+      }, wait);
     }
     function hear(subscription, event) {
       try {
@@ -651,11 +738,13 @@
       const was = subscription.state;
       if (was === "over") return;
       subscription.state = "over";
+      subscription.delivery = "ended";
+      if (subscription.timer !== null) clearTimeout(subscription.timer);
       if (subscription.held !== null) {
         subscription.held.subscriptions.delete(subscription.number);
         if (subscription.sent) subscription.held.socket.send(JSON.stringify(unsubscribeMessage(subscription.number)));
       }
-      if (was === "open") subscription.closed.resolve();
+      if (was === "open" || subscription.opened) subscription.closed.resolve();
       else subscription.reject(new CyfrError("The stream was closed before it opened.", "cancelled"));
     }
     const invalid = (sentence) => Promise.reject(new CyfrError(sentence, "invalid_argument"));
@@ -719,8 +808,15 @@
        * @param {string} name - the stream's name
        * @param {string|null} subject - a literal subject, or null for a stream that takes none
        * @param {function} onEvent - called with {id, event, data} per event; a stream the
-       *   endpoint ends with a refusal delivers it last, as {id: null, event: "refusal", data}
-       * @returns {Promise<{close: function, closed: Promise}>} once the stream is open,
+       *   endpoint ends with a refusal delivers it last, as {id: null, event: "refusal", data}.
+       *   On a canvas, a stream keeps the delivery contract (`Compendium.Canvas.catalog`):
+       *   each event also carries the change's `revision` and `at`, and the handler hears
+       *   `snapshot` (`at`, its picture is whole), `resync` (a fresh picture follows and
+       *   replaces it), `stale` (`at`, the picture's time), `unavailable` (`data.retry_at`,
+       *   when the SDK opens it again, after a lost connection or an end for want of an
+       *   answer) and `denied` (`data`, the refusal; the stream ended), each as
+       *   {id: null, event, data, revision: null, at}
+       * @returns {Promise<{close: function, closed: Promise, state: string}>} once the stream is open,
        *   carrying `close()` itself, the handle's: closed before it opened, the
        *   promise rejects `cancelled`. A refusal rejects with a CyfrError of
        *   its class. An open that got no answer (the connection could not

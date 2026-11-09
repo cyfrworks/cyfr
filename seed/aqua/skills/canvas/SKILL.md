@@ -103,8 +103,9 @@ working, which is kept, and which validation last failed.
 
 - `cyfr.stream(name, subject, onEvent)` opens a declared stream
   (`subject` is `null` for one that takes none) and resolves once it is
-  open with a handle whose `close()` ends it; `onEvent` gets
-  `{id, event, data}`. Every stream rides the page's one connection, so
+  open with a handle whose `close()` ends it and whose `state` is
+  `live`, `unavailable`, `stale`, `denied` or `ended`; `onEvent` gets
+  `{id, event, data, revision, at}`. Every stream rides the page's one connection, so
   open every stream the page shows at once, up to 32. The returned
   promise has the same `close()`, which cancels an open still waiting.
   A refused open rejects: catch it, since an error the page does not
@@ -132,11 +133,17 @@ working, which is kept, and which validation last failed.
   before calling it, is replaced on the screen by the standard canvas
   until the person tries it again. An error after it is not a crash.
 
-Each stream hands its current state first and then its live events, and
-an event that races the current state can arrive twice: keep a run's
-latest change by `execution_id`, a schedule's by `schedule_id` (drop it
-on `removed`), a schedule run once per `occurrence_id`, and a feed's
-result once per `revision`.
+Every stream keeps the delivery contract `canvas(action: "catalog")`
+documents and lists per stream (`key`, `removal`, `reread`,
+`stale_after`). Its current items come first, each marked `refresh`,
+then a `snapshot` event: the picture is whole. Each later event is one
+item's whole state under its `key`, with a `revision`: keep per item the
+highest you heard, since an event can arrive twice; drop an item on its
+stream's `removal` kind. A `resync` event means a fresh picture follows
+up to the next `snapshot` and replaces yours. `unavailable` (`data.retry_at`,
+the SDK opens it again by itself), `stale` (the picture is old; `at` is
+when it was read) and `denied` (it ended) are states to show, never
+errors to throw.
 
 ```html
 <!DOCTYPE html>
@@ -155,23 +162,36 @@ result once per `revision`.
 
 ```js
 // app.js: each run's latest change, newest first, drawn as text.
-const runs = new Map()
+let runs = new Map()
+// A fresh picture being gathered, from a resync until its snapshot.
+let next = null
 const list = document.getElementById("runs")
 
-function draw() {
+function draw(note = "") {
   const items = [...runs.values()].reverse().slice(0, 20).map((run) => {
     const item = document.createElement("li")
     item.textContent = `${run.reference} ${run.kind}`
     return item
   })
   list.replaceChildren(...items)
+  list.title = note
 }
 
 cyfr
-  .stream("runs.changes", null, ({data}) => {
-    runs.delete(data.execution_id)
-    runs.set(data.execution_id, data)
-    draw()
+  .stream("runs.changes", null, ({event, data, revision, at}) => {
+    if (event === "resync") return void (next = new Map())
+    if (event === "snapshot") {
+      if (next) [runs, next] = [next, null]
+      return draw()
+    }
+    if (event === "stale") return draw(`As of ${at}`)
+    if (event !== "runs.changes") return draw(event) // unavailable or denied
+    const into = next || runs
+    const held = into.get(data.execution_id)
+    if (held && held.revision > revision) return
+    into.delete(data.execution_id)
+    into.set(data.execution_id, data)
+    if (!next) draw()
   })
   .catch(() => {
     list.textContent = "Your runs cannot be shown."
