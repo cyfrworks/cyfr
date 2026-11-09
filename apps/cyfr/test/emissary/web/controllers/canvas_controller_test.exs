@@ -6,7 +6,7 @@ defmodule Emissary.Web.CanvasControllerTest do
   A canvas's page (`/_c/v1/<asset credential>/<frame id>`): the version's
   own entry, served only for a standing asset credential and a standing
   frame of its person, athanor and version, while its release digest is
-  the credential's, for a version whose placement is `canvas`, and 404
+  the credential's, for a version that declares the desktop block, and 404
   with no body otherwise, a missing entry included; CYFR's prefix (a
   doctype, its `<base>` and the SDK's script) followed by the entry's
   bytes as published, which the HTML parser reads with CYFR's two
