@@ -1,0 +1,53 @@
+{
+  "name": "line",
+  "type": "tincture",
+  "version": "0.2.0",
+  "publisher": "local",
+  "description": "A desktop split by one line: on your side, what waits on your tap, oldest first, each with the one thing to do; on the other, what your CYFR runs on its own, its schedules, today's runs and crew, your feeds, and your threads and vault when you turn them on. A settled item crosses the line into today's log. Arrange turns each widget off or on and moves it, and is remembered per screen size.",
+  "tags": ["canvas", "desktop"],
+  "category": "utility",
+  "tincture": {
+    "icon": "line",
+    "tagline": "What waits on you, and what runs on its own",
+    "entry": "index.html",
+    "desktop": {
+      "data": [
+        "attention.changes",
+        "runs.changes",
+        "schedules.changes",
+        "activity.changes",
+        "threads.changes",
+        "vault.changes"
+      ],
+      "feeds": ["weather", "vpn"],
+      "controls": [
+        {
+          "id": "pause-schedule",
+          "label": "Pause",
+          "operation": "schedule.pause",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {
+          "id": "resume-schedule",
+          "label": "Resume",
+          "operation": "schedule.resume",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        }
+      ],
+      "prefs": {
+        "widgets": {
+          "queue": {},
+          "apps": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}},
+          "threads": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}},
+          "weather": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}},
+          "vpn": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}},
+          "schedules": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}},
+          "today": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}},
+          "vault": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}},
+          "day": {"fields": {"phone": {"type": "boolean"}, "carried": {"type": "boolean"}, "desk": {"type": "boolean"}, "order": {"type": "integer"}}}
+        }
+      },
+      "chrome": "chrome.css"
+    }
+  }
+}
