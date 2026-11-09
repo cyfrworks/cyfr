@@ -1006,10 +1006,10 @@ defmodule Compendium.CanvasTest do
 
       # A canvas reads exactly its crew's activity, what waits for its
       # person, by their own id, the athanor's components, a feed's results,
-      # by the feed's name, the athanor's runs, its schedules and its
-      # schedules' runs, its person's own list of threads, by their own id,
-      # and the athanor's vault entries; every other stream declares no
-      # shape.
+      # by the feed's name, the athanor's recent files and waiting offers,
+      # its runs, its schedules and its schedules' runs, how its CYFR
+      # stands, its person's own list of threads, by their own id, and the
+      # athanor's vault entries; every other stream declares no shape.
       assert [
                %{
                  name: "activity.changes",
@@ -1040,6 +1040,13 @@ defmodule Compendium.CanvasTest do
                  refresh: true
                },
                %{
+                 name: "files.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => file_fields},
+                 filter: nil,
+                 refresh: true
+               },
+               %{
                  name: "runs.changes",
                  subject: nil,
                  shape: %{"type" => "object", "fields" => run_fields},
@@ -1057,6 +1064,13 @@ defmodule Compendium.CanvasTest do
                  name: "schedules.changes",
                  subject: nil,
                  shape: %{"type" => "object", "fields" => schedule_fields},
+                 filter: nil,
+                 refresh: true
+               },
+               %{
+                 name: "system.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => system_fields},
                  filter: nil,
                  refresh: true
                },
@@ -1080,6 +1094,11 @@ defmodule Compendium.CanvasTest do
                ~w(grant_current icon kind name ref type update_available version)
 
       assert Enum.sort(Map.keys(vault_fields)) == ~w(kind name status type)
+
+      assert Enum.sort(Map.keys(file_fields)) == ~w(changed_at from id kind name type)
+
+      assert Enum.sort(Map.keys(system_fields)) ==
+               ~w(crew_ready crew_total health kind model_connected storage_cap storage_used update_available version)
 
       assert Enum.sort(Map.keys(activity_fields)) == ~w(asked_by id kind member since status)
 
