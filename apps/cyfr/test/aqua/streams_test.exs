@@ -279,7 +279,7 @@ defmodule Aqua.StreamsTest do
             at: at
           )
 
-        assert read_as(payload) == event
+        assert projected(payload) == event
       end
     end
   end
@@ -612,9 +612,18 @@ defmodule Aqua.StreamsTest do
   end
 
   # A refresh item or a live payload as a canvas reads it on the stream
-  # its topic feeds: projected by the grant, passed through JSON, and held
-  # to the declared shape.
-  defp read_as(%module{} = payload) do
+  # its topic feeds, with its delivery fields set aside.
+  defp read_as(payload) do
+    data = projected(payload)
+    # The delivery fields, its revision its time in microseconds, set aside.
+    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
+    assert data["revision"] == DateTime.to_unix(at, :microsecond)
+    Map.drop(data, ~w(revision at))
+  end
+
+  # The payload whole as a canvas reads it: projected by the grant, passed
+  # through JSON, and held to the declared shape.
+  defp projected(%module{} = payload) do
     name = if module == ThreadListed, do: "threads.changes", else: "activity.changes"
     {:ok, {Provider, stream}} = Sanctum.Catalog.lookup_stream(name)
 
@@ -629,10 +638,7 @@ defmodule Aqua.StreamsTest do
     data = grant |> Prima.StreamGrant.project(payload) |> Jason.encode!() |> Jason.decode!()
     assert :ok = Shape.check(stream.shape, data), inspect(data)
     assert Enum.sort(Map.keys(data)) == Enum.sort(stream.projection)
-    # The delivery fields, its revision its time in microseconds, set aside.
-    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
-    assert data["revision"] == DateTime.to_unix(at, :microsecond)
-    Map.drop(data, ~w(revision at))
+    data
   end
 
   defp later_or_same?(later, earlier) do
