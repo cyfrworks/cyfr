@@ -828,8 +828,9 @@ defmodule Arca.ConsentStorage do
   selects the labelled profile of its target whose head binds it on the
   target's own ingress, the one binding a selection borrows
   (`Sanctum.Consent.Loader`'s selections). A profile's own ingress is no
-  edge and is not answered. A profile of any status is read, so one
-  blocked when the entry changed is still named.
+  edge and is not answered, and neither is a named account's binding,
+  which no mount reads. A profile of any status is read, so one blocked
+  when the entry changed is still named.
   """
   @spec head_edges_binding(Prima.Actor.t(), String.t()) ::
           {:ok, [{String.t(), String.t(), String.t()}]} | {:error, term()}
@@ -885,16 +886,17 @@ defmodule Arca.ConsentStorage do
   def head_edges_binding(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
 
   # The node a binding key's edge leaves and the target it names
-  # (`:ingress` for the node's own), name-level; nil for a key outside the
-  # grammar.
+  # (`:ingress` for the node's own), name-level, for the edge's unnamed
+  # binding, the one a mount reads (`Sanctum.Mount.resolve/4`); nil for a
+  # named account's and for a key outside the grammar.
   defp edge(binding_key) do
-    with {:ok, {node, edge_key, _slot}} <- Prima.Authority.Blob.parse_binding_key(binding_key) do
+    with {:ok, {node, edge_key, nil}} <- Prima.Authority.Blob.parse_binding_key(binding_key) do
       case Prima.Authority.Blob.edge_target(edge_key) do
         :ingress -> {name_level(node), :ingress}
         {:ok, target} -> {name_level(node), name_level(target)}
       end
     else
-      :error -> nil
+      _named_or_unparsed -> nil
     end
   end
 

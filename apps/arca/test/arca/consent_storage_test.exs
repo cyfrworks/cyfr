@@ -1649,6 +1649,11 @@ defmodule Arca.ConsentStorageTest do
         lent("agent:local.unlent|catalyst:local.brain|default", "home")
       ])
 
+      # A named account's binding, which no mount reads.
+      using!(athanor, "prof_e_named", "agent:local.named", "default", [
+        bound("agent:local.named|catalyst:local.brain|claude|name:spare", entry.id)
+      ])
+
       # A head that no longer binds what an earlier revision did.
       earlier =
         using!(athanor, "prof_e_moved", "agent:local.moved", "default", [
