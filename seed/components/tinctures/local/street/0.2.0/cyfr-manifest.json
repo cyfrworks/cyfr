@@ -19,7 +19,15 @@
         "threads.changes",
         "runs.changes",
         "schedules.changes",
-        "activity.changes"
+        "activity.changes",
+        "files.changes",
+        "components.changes",
+        "vault.changes",
+        "system.changes"
+      ],
+      "feeds": [
+        "weather",
+        "vpn"
       ],
       "controls": [
         {
@@ -41,16 +49,39 @@
             "field": "/schedule_id",
             "arg": "schedule_id"
           }
+        },
+        {
+          "id": "retry-run",
+          "label": "Retry",
+          "operation": "execution.retry",
+          "args": {},
+          "pick": {
+            "stream": "runs.changes",
+            "field": "/execution_id",
+            "arg": "execution_id"
+          }
         }
       ],
       "prefs": {
         "widgets": {
-          "sky": {},
+          "sky": {
+            "fields": {
+              "units": {
+                "type": "enum",
+                "values": [
+                  "c",
+                  "f"
+                ]
+              }
+            }
+          },
+          "ferry": {},
           "waiting": {},
           "houses": {},
           "lamps": {},
           "stops": {},
           "crew": {},
+          "files": {},
           "apps": {},
           "vault": {},
           "castle": {}

@@ -57,17 +57,31 @@ function when(t) {
 const secs = (ms) => (typeof ms === 'number' && Number.isFinite(ms) ? (ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(1) + ' s') : '');
 
 /* ================= what the streams hold ================= */
-const D = {
-  attention: new Map(),   // id -> {item, open}
-  threads: new Map(),     // id -> {item, open}
-  activity: new Map(),    // id -> {item, open}
-  schedules: new Map(),   // schedule_id -> {item, open}
-  runs: new Map(),        // execution_id -> {run, t, seq}
-  apps: [],               // the installed apps, as the shell tells them
-  refused: {},            // stream -> the sentence it was refused with
-};
-let seq = 0;
-const MAX_RUNS = 40;
+// Every stream the manifest declares, all open at once on the desktop's one connection, each held by the
+// delivery contract: items by their key, the highest revision heard of each, a picture replaced whole at its
+// snapshot. Each belongs to the part that shows it; a part switched off is only not drawn.
+const STREAMS = [
+  { name: 'attention.changes', part: 'waiting', key: 'id', removal: 'removed', leave: (id) => board(id) },
+  { name: 'threads.changes', part: 'houses', key: 'id', removal: 'removed' },
+  { name: 'runs.changes', part: 'lamps', key: 'execution_id', cap: 20 },
+  { name: 'schedules.changes', part: 'stops', key: 'schedule_id', removal: 'removed' },
+  { name: 'activity.changes', part: 'crew', key: 'id', removal: 'ended' },
+  { name: 'files.changes', part: 'files', key: 'id', removal: 'removed' },
+  { name: 'components.changes', part: 'apps', key: 'ref', removal: 'removed' },
+  { name: 'vault.changes', part: 'vault', key: 'name', removal: 'removed' },
+  { name: 'system.changes', part: 'castle', key: null },
+  { name: 'feed.results', subject: 'weather', part: 'sky', key: 'binding' },
+  { name: 'feed.results', subject: 'vpn', part: 'ferry', key: 'binding' },
+];
+const picture = () => ({ items: new Map(), revs: new Map() });
+const H = {};   // stream id -> what it holds and how it stands
+for (const spec of STREAMS) {
+  spec.id = spec.subject ? 'feed:' + spec.subject : spec.name;
+  H[spec.id] = { spec, ...picture(), next: null, state: 'live', at: null, retryAt: null, why: '', opens: 0, tries: 0, timer: 0 };
+}
+const all = (id) => [...H[id].items.values()];
+const one = (id, key) => H[id].items.get(key);
+let apps = [];          // the installed apps, as the shell tells them
 let person = null;
 let posture = null;
 let coveredRects = [];
@@ -90,98 +104,84 @@ const SHORT_REASONS = {
 };
 const shortReason = (cause) => SHORT_REASONS[cause] || 'failed';
 
-/* Each stream's events folded into D. A live removal of a waiting item sends its villager to the tram. */
-function foldAttention(item, open, live) {
-  if (typeof item.id !== 'string') return;
-  if (item.kind === 'removed') {
-    if (D.attention.has(item.id) && live) board(item.id);
-    D.attention.delete(item.id);
-  } else {
-    D.attention.set(item.id, { item, open });
+// What one stream's handler hears. A change of an item goes to the picture being gathered, if one is, else to
+// what is held; `snapshot` makes the gathered picture the held one; the states are the part's to show.
+function hear(h, ev) {
+  const { event, data, revision, at } = isItem(ev) ? ev : {};
+  if (event === h.spec.name) { if (isItem(data)) take(h, data, revision); }
+  else if (event === 'resync') h.next = picture();
+  else if (event === 'snapshot') {
+    if (h.next) Object.assign(h, h.next, { next: null });
+    Object.assign(h, { state: 'live', at: mins(at), retryAt: null, tries: 0 });
+  } else if (event === 'stale') Object.assign(h, { state: 'stale' }, mins(at) == null ? {} : { at: mins(at) });
+  else if (event === 'unavailable') Object.assign(h, { state: 'unavailable', retryAt: isItem(data) ? mins(data.retry_at) : null });
+  else if (event === 'denied') Object.assign(h, picture(), { state: 'denied', next: null });
+  else return;
+  changed();
+}
+// One item's change. A revision no higher than the one heard of that item is an older change or the same one
+// twice. A removal keeps its revision, so an older change cannot bring the item back; only a live removal
+// (none a picture drops) is seen leaving.
+function take(h, data, revision) {
+  const s = h.spec, into = h.next || h;
+  const key = s.key ? data[s.key] : '';
+  if (typeof key !== 'string') return;   // a notice, naming no item
+  if (Number.isInteger(revision)) {
+    const heard = into.revs.get(key);
+    if (heard != null && revision <= heard) return;
+    into.revs.set(key, revision);
+  }
+  if (s.removal && data.kind === s.removal) {
+    if (into.items.delete(key) && into === h && s.leave) s.leave(key);
+    return;
+  }
+  into.items.delete(key);
+  into.items.set(key, data);
+  if (s.cap && into.items.size > s.cap) { // the stream keeps the newest runs by their start, and so does the page
+    let oldest = null;
+    for (const [k, v] of into.items) { const t = mins(v.started_at) ?? -Infinity; if (!oldest || t < oldest[1]) oldest = [k, t]; }
+    into.items.delete(oldest[0]);
   }
 }
-function foldKeyed(map, key, gone) {
-  return (item, open) => {
-    const id = item[key];
-    if (typeof id !== 'string') return;
-    if (gone(item)) map.delete(id); else map.set(id, { item, open });
-  };
-}
-function foldRun(run, open, live) {
-  const id = run.execution_id;
-  if (typeof id !== 'string') return;
-  const held = D.runs.get(id);
-  // A start published while the stream opened can arrive after the refresh showed the run finished.
-  if (held && held.run.kind !== 'started' && run.kind === 'started') return;
-  let t = held ? held.t : null;
-  if (t == null && live) t = now() - (run.kind !== 'started' && typeof run.duration_ms === 'number' ? run.duration_ms / MINUTE : 0);
-  D.runs.set(id, { run, t, seq: ++seq });
-  if (D.runs.size > MAX_RUNS) {
-    const oldest = [...D.runs.entries()].sort((a, b) => a[1].seq - b[1].seq)[0];
-    D.runs.delete(oldest[0]);
-  }
-}
-// Each stream belongs to the part that shows it and is open only while that part is on: five at most,
-// since a browser keeps six connections to one host over HTTP/1.1 and each open stream holds one.
-const STREAMS = [
-  { name: 'attention.changes', part: 'waiting', fold: foldAttention, sweep: D.attention },
-  { name: 'threads.changes', part: 'houses', fold: foldKeyed(D.threads, 'id', (i) => i.kind === 'removed'), sweep: D.threads },
-  { name: 'activity.changes', part: 'crew', fold: foldKeyed(D.activity, 'id', (i) => i.kind === 'ended'), sweep: D.activity },
-  { name: 'schedules.changes', part: 'stops', fold: foldKeyed(D.schedules, 'schedule_id', (i) => i.kind === 'removed'), sweep: D.schedules },
-  { name: 'runs.changes', part: 'lamps', fold: foldRun, sweep: D.runs },
-];
 
-// Pauses before opening an ended stream again, growing while opens fail.
+// Pauses before opening a stream again, growing while it repeats.
 const RETRY_MS = [2000, 5000, 15000, 60000];
-// A reopened stream's refresh holds everything there is, so what an earlier open delivered and this one did not has gone.
-const SWEEP_MS = 2500;
-
-// Keeps one declared stream open: an ended stream is opened again after a pause and starts again with its
-// refresh. Before it has ever opened, a refusal is final and an unanswered open is tried again.
-function follow(spec) {
-  let stopped = false;
-  let opens = 0;
-  let everOpened = false;
-  let current = null;
-  let timer = 0;
-  async function open() {
-    const n = ++opens;
-    const stream = await sdk.stream(spec.name, null, ({ data }) => {
-      if (stopped || !isItem(data)) return;
-      try { spec.fold(data, n, data.refresh !== true); } catch (err) { /* a malformed event changes nothing */ }
-      changed();
+const pause = (h) => RETRY_MS[Math.min(h.tries++, RETRY_MS.length - 1)];
+// Opens one declared stream, its first picture gathered apart. The SDK opens an opened stream again by itself;
+// the page opens one again only when its first open got no answer, or when the endpoint ended it with no refusal.
+function open(h) {
+  clearTimeout(h.timer);
+  h.timer = 0;
+  const n = ++h.opens;
+  h.next = picture();
+  sdk.stream(h.spec.name, h.spec.subject || null, (ev) => { if (n === h.opens) hear(h, ev); }).then((handle) => {
+    if (n !== h.opens) { handle.close(); return; }
+    handle.closed.catch(() => {}).then(() => {
+      if (n === h.opens && handle.state === 'ended') h.timer = setTimeout(() => open(h), pause(h));
     });
-    if (stopped) { stream.close(); return; }
-    everOpened = true;
-    current = stream;
-    delete D.refused[spec.name];
-    if (spec.sweep) {
-      setTimeout(() => {
-        if (stopped || n !== opens) return;
-        for (const [id, held] of spec.sweep) if (held.open < n) spec.sweep.delete(id);
-        changed();
-      }, SWEEP_MS);
-    }
-    stream.closed.catch(() => {}).then(() => { current = null; retry(0); });
-  }
-  function failed(error, attempt) {
-    if (stopped) return;
-    const unanswered = isItem(error) && error.code === 'unavailable';
-    if (!everOpened && !unanswered) {
-      D.refused[spec.name] = (error && error.message) || 'This could not be opened.';
-      changed();
-    } else retry(attempt);
-  }
-  function retry(attempt) {
-    if (stopped) return;
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      open().catch((error) => failed(error, Math.min(attempt + 1, RETRY_MS.length - 1)));
-    }, RETRY_MS[attempt]);
-  }
-  open().catch((error) => failed(error, 0));
-  return () => { stopped = true; clearTimeout(timer); if (current) current.close(); };
+  }, (error) => {
+    if (n !== h.opens) return;
+    const code = isItem(error) ? error.code : '';
+    if (code === 'unavailable') {
+      const wait = pause(h);
+      Object.assign(h, { state: 'unavailable', retryAt: now() + wait / MINUTE });
+      h.timer = setTimeout(() => open(h), wait);
+    } else if (h.state !== 'denied') Object.assign(h, { state: 'refused', why: code === 'forbidden' ? 'not granted' : 'could not be read' });
+    changed();
+  });
 }
+// How a part's streams stand, the worst of them, in the street's words; none while they are live.
+const WORST = ['denied', 'refused', 'unavailable', 'stale'];
+function noteOf(part) {
+  const h = STREAMS.filter((s) => s.part === part).map((s) => H[s.id]).filter((x) => WORST.includes(x.state))
+    .sort((a, b) => WORST.indexOf(a.state) - WORST.indexOf(b.state))[0];
+  if (!h) return null;
+  const words = h.state === 'denied' ? 'no longer granted' : h.state === 'refused' ? h.why
+    : h.state === 'unavailable' ? (h.retryAt == null ? 'trying again soon' : `trying again at ${when(h.retryAt)}`)
+      : (h.at == null ? 'an older picture' : `as of ${when(h.at)}`);
+  return { state: h.state, words };
+}
+let notes = {};         // part -> its note, as of the last rebuild
 
 let changeQueued = false;
 function changed() {
@@ -192,20 +192,26 @@ function changed() {
 
 /* ================= preferences: the parts on the street and the order of the hill ================= */
 const PARTS = [
-  ['sky', 'Sky and sun'], ['waiting', 'Waiting on you'], ['houses', 'Thread houses'], ['lamps', 'Run lamps'],
-  ['stops', 'Schedule stops'], ['crew', 'Crew at work'], ['apps', 'Apps on the hill'], ['vault', 'Vault tower'], ['castle', 'CYFR castle'],
+  ['sky', 'Sky and weather'], ['ferry', 'Ferry (VPN)'], ['waiting', 'Waiting on you'], ['houses', 'Thread houses'], ['lamps', 'Run lamps'],
+  ['stops', 'Schedule stops'], ['crew', 'Crew at work'], ['files', 'Files'], ['apps', 'Apps on the hill'], ['vault', 'Vault tower'], ['castle', 'CYFR castle'],
 ];
 const HILL_MAX = 256;
-let draft = null;   // the arrange sheet's unsaved choice: {parts, hill}
-function storedOn(part) {
+let draft = null;   // the arrange sheet's unsaved choice: {parts, hill, units}
+function storedEntry(part) {
   const widgets = isItem(prefsDoc.widgets) ? prefsDoc.widgets : {};
-  const entry = widgets[part];
-  return !(isItem(entry) && entry.on === false);
+  return isItem(widgets[part]) ? widgets[part] : {};
 }
+const storedOn = (part) => storedEntry(part).on !== false;
 const on = (part) => (draft ? draft.parts[part] !== false : storedOn(part));
+const storedUnits = () => (storedEntry('sky').units === 'f' ? 'f' : 'c');
+const units = () => (draft ? draft.units : storedUnits());
 const appKey = (ref) => ref.slice(ref.indexOf(':') + 1);
+// The catalysts and formulas installed, as components.changes holds them: the hill's workshops, kept by their ref.
+const workshops = () => all('components.changes').filter((c) => (c.type === 'catalyst' || c.type === 'formula') && typeof c.ref === 'string')
+  .sort((a, b) => text(a.name).localeCompare(text(b.name)));
+const defaultHill = () => ['castle', 'vault', ...apps.map((a) => appKey(a.ref)), ...workshops().map((c) => c.ref)];
 function hillKeys() {
-  const keys = ['castle', 'vault', ...D.apps.map((a) => appKey(a.ref))];
+  const keys = defaultHill();
   const saved = draft ? draft.hill : (isItem(prefsDoc.desktop) && typeof prefsDoc.desktop.hill === 'string' ? prefsDoc.desktop.hill.split(' ') : []);
   const ordered = saved.filter((k) => keys.includes(k));
   return [...ordered, ...keys.filter((k) => !ordered.includes(k))];
@@ -235,7 +241,7 @@ function applyDesktop(value) {
   person = isItem(value.person) && typeof value.person.name === 'string' && value.person.name ? value.person.name : null;
 }
 function applyInstalled(list) {
-  D.apps = Array.isArray(list) ? list.filter((a) => isItem(a) && typeof a.ref === 'string' && typeof a.name === 'string')
+  apps = Array.isArray(list) ? list.filter((a) => isItem(a) && typeof a.ref === 'string' && typeof a.name === 'string')
     .map((a) => ({ ref: a.ref, name: a.name, open: a.open === true })) : [];
 }
 function applyCovered(rects) {
@@ -434,11 +440,23 @@ function placeHill() {
 }
 function hillItem(key) {
   const phone = L.posture === 'phone';
-  if (key === 'castle') return { id: 'castle', part: 'castle', w: phone ? 30 : 40, kind: 'castle', draw(t) { drawCastle(this, t); } };
-  if (key === 'vault') return { id: 'vault', part: 'vault', w: 12, kind: 'vault', draw() { drawVault(this); } };
-  const app = D.apps.find((a) => appKey(a.ref) === key);
-  if (!app) return null;
-  return { id: 'app:' + app.ref, part: 'apps', w: phone ? 11 : 16, app, kind: 'app', draw(t) { drawAppHouse(this, t); } };
+  // On the desk and carried, the castle's cistern stands beside it.
+  if (key === 'castle') return { id: 'castle', part: 'castle', w: phone ? 30 : 48, kind: 'castle', draw(t) { drawCastle(this, t); } };
+  if (key === 'vault') return { id: 'vault', part: 'vault', w: 12, kind: 'vault', draw(t) { drawVault(this, t); } };
+  const app = apps.find((a) => appKey(a.ref) === key);
+  if (app) return { id: 'app:' + app.ref, part: 'apps', w: phone ? 11 : 16, app, comp: one('components.changes', app.ref), kind: 'app', draw(t) { drawAppHouse(this, t); } };
+  // The workshops stay off the hand's small hill.
+  const c = phone ? null : workshops().find((w) => w.ref === key);
+  if (!c) return null;
+  const last = lampRuns().filter((r) => r.root && r.t != null && componentRef(r.ref) === c.ref).sort((a, z) => z.t - a.t)[0];
+  return { id: 'work:' + c.ref, part: 'apps', w: c.type === 'formula' ? 15 : 22, comp: c, failed: !!last && last.state === 'failed', kind: 'work', draw() { drawWorkshop(this); } };
+}
+const system = () => one('system.changes', '') || null;
+const update = (c) => !!(c && c.update_available === true);
+// Scaffolding: an update waits for this app or workshop.
+function scaffold(x, y, w, h, base) {
+  for (let yy = y - 1; yy < base; yy += 4) R(x - 2, yy, w + 4, 1, '#8a5a2e');
+  R(x - 2, y - 2, 1, h + 2, '#8a5a2e'); R(x + w + 1, y - 2, 1, h + 2, '#8a5a2e');
 }
 const APP_WALLS = ['#e8a29a', '#f1d27a', '#9fd3b8', '#b9c3cf', '#e6b450', '#a9c7e8'];
 function roof(x, y, w, c, dark) {
@@ -467,11 +485,31 @@ function drawAppHouse(b, t) {
       }
     }
   }
+  if (update(b.comp)) scaffold(x, y, w, h, b.base);
 }
+// A catalyst's workshop is a shed with a shutter, a formula's a green kiosk; a red mark when its last run failed.
+function drawWorkshop(b) {
+  const c = b.comp, x = b.x, base = b.base, w = b.w;
+  if (c.type === 'formula') {
+    R(x - 1, base - 14, w + 2, 2, '#2c5444'); R(x + 3, base - 16, w - 6, 2, '#2c5444');
+    R(x, base - 12, w, 12, '#3f6e58');
+    R(x + 2, base - 9, w - 4, 4, '#f3efe4');
+    R(x + 3, base - 8, 3, 1, '#7a7a7a'); R(x + 8, base - 8, 3, 1, '#7a7a7a');
+  } else {
+    R(x - 1, base - 13, w + 2, 2, '#8e3a28');
+    R(x, base - 11, w, 11, '#cdbd9e');
+    R(x + 4, base - 8, w - 8, 8, '#8d8d8d');
+    for (let yy = base - 7; yy < base; yy += 2) R(x + 4, yy, w - 8, 1, '#777');
+  }
+  if (b.failed) R(x + w - 5, base - 9, 2, 4, '#c23a2e');
+  if (update(c)) scaffold(x, base - 12, w, 12, base);
+}
+// The castle is CYFR: its flag the health, its lantern the model, its guards the crew, its cistern the storage
+// against the cap, a notice on the gate an update. Before CYFR tells how it stands, it flies CYFR's colours.
 function drawCastle(b, t) {
-  const phone = L.posture === 'phone', x = b.x, base = b.base;
+  const phone = L.posture === 'phone', x = b.x, base = b.base, s = system();
   const stone = '#cbbd9f', dark = '#a8997b';
-  const w = b.w;
+  const w = phone ? 30 : 40;
   R(x, base - 12, w, 12, stone);
   for (let i = 0; i < w; i += 3) R(x + i, base - 14, 2, 2, stone);
   R(x + 1, base - 22, 8, 22, stone); for (let i = 0; i < 8; i += 3) R(x + 1 + i, base - 24, 2, 2, stone);
@@ -481,20 +519,49 @@ function drawCastle(b, t) {
   R(x, base - 3, w, 3, dark);
   R(kx + 4, base - 8, 4, 8, '#3a2c20'); R(kx + 5, base - 9, 2, 1, '#3a2c20');
   for (let i = 0; i < 3; i++) R(kx + 2 + i * 4, base - 22, 1, 3, '#3a2c20');
-  // the flag: CYFR's cobalt and white
   R(kx + 6, base - 36, 1, 8, '#333');
   const wave = reduceMotion ? 0 : Math.floor(t / 300) % 2;
-  R(kx + 7, base - 36, 5, 2, '#1f4593'); R(kx + 7 + wave, base - 34, 5, 1, '#f6f2e8');
-  if (!phone) R(x + 4, base - 27, 2, 2, '#ffd76a');
+  if (!s) { // CYFR's cobalt and white
+    R(kx + 7, base - 36, 5, 2, '#1f4593'); R(kx + 7 + wave, base - 34, 5, 1, '#f6f2e8');
+    if (!phone) R(x + 4, base - 27, 2, 2, '#ffd76a');
+    return;
+  }
+  const fc = s.health === 'ok' ? '#3d8a4f' : s.health == null ? '#1f4593' : '#c23a2e';
+  R(kx + 7, base - 36, 5, 2, fc); R(kx + 7 + wave, base - 34, 5, 1, fc);
+  R(x + 4, base - 27, 2, 2, s.model_connected === true ? (Math.floor(t / 500) % 6 === 0 && !reduceMotion ? '#fff3b8' : '#ffd76a') : '#555');
+  const total = Math.min(3, Number.isInteger(s.crew_total) ? s.crew_total : 0);
+  for (let i = 0; i < total; i++) {
+    const gx = x + 12 + i * (phone ? 6 : 8), ready = i < (Number(s.crew_ready) || 0);
+    R(gx, base - 17, 2, 3, ready ? '#1f4593' : '#888'); R(gx, base - 19, 2, 2, ready ? '#e2b48a' : '#888');
+  }
+  if (!phone && storageKnown(s) && capKnown(s)) {
+    const cx = x + w + 1, ch = 12, fill = Math.round(ch * Math.min(1, s.storage_used / s.storage_cap));
+    R(cx, base - ch - 1, 6, ch + 1, '#8e826b'); R(cx + 1, base - ch, 4, ch - 1, '#e9e3d3');
+    R(cx + 1, base - 1 - fill, 4, fill, '#5aa6d6');
+  }
+  if (s.update_available === true) R(kx + 9, base - 8, 2, 3, '#f4c22e');
 }
-function drawVault(b) {
-  const x = b.x, base = b.base;
-  R(x, base - 30, 12, 30, '#b9ad94');
-  for (let i = 0; i < 12; i += 3) R(x + i, base - 32, 2, 2, '#b9ad94');
+// The vault tower: one lit slit per entry, red (and blinking) for one that needs re-authorising; it grows a
+// storey for every two entries past four. Dark slits before the vault tells its entries.
+function drawVault(b, t) {
+  const x = b.x, base = b.base, entries = vaultEntries().slice(0, 8);
+  const top = towerTop(entries.length);
+  R(x, base - top, 12, top, '#b9ad94');
+  for (let i = 0; i < 12; i += 3) R(x + i, base - top - 2, 2, 2, '#b9ad94');
   R(x, base - 2, 12, 2, '#9a8e76');
-  for (let i = 0; i < 4; i++) { const cx = x + 2 + (i % 2) * 5, cy = base - 26 + Math.floor(i / 2) * 9; R(cx, cy, 3, 5, '#2a241c'); }
+  const slits = entries.length || 4;
+  for (let i = 0; i < slits; i++) {
+    const cx = x + 2 + (i % 2) * 5, cy = base - top + 4 + Math.floor(i / 2) * 9;
+    R(cx, cy, 3, 5, '#2a241c');
+    const v = entries[i];
+    if (!v) continue;
+    const fine = v.status === 'fine';
+    R(cx, cy + 1, 3, 3, fine ? '#3d8a4f' : !reduceMotion && Math.floor(t / 450) % 2 ? '#7a1f17' : '#c23a2e');
+  }
   R(x + 4, base - 7, 4, 7, '#3a2c20');
 }
+const vaultEntries = () => all('vault.changes').sort((a, b) => text(a.name).localeCompare(text(b.name)));
+const towerTop = (n) => 30 + Math.max(0, Math.ceil(n / 2) - 2) * 9;
 
 /* ================= the street ================= */
 const FILL = ['#efe2c4', '#e7c9a0', '#d9e2d0', '#ecd2c6', '#d6dfe8', '#f0e6cf'];
@@ -566,9 +633,46 @@ function drawRiver(t) {
   }
 }
 
-/* the sun stands over now by day, the moon by night; wisps drift over it */
+/* A feed's result is the feed's own shape: read the fields a weather or a vpn feed names. */
+function latest(id) { return all(id).filter((f) => isItem(f.result)).sort((a, b) => (mins(b.at) ?? 0) - (mins(a.at) ?? 0))[0] || null; }
+function pick(r, keys, test) { for (const k of keys) if (test(r[k])) return r[k]; return null; }
+const isNum = Number.isFinite, isStr = (v) => typeof v === 'string' && v !== '';
+function weatherNow() {
+  const f = latest('feed:weather');
+  if (!f) return null;
+  const r = f.result;
+  return {
+    f, temp: pick(r, ['temp_c', 'temperature_c', 'temperature', 'temp'], isNum), place: pick(r, ['place', 'location', 'city', 'name'], isStr) || text(f.label) || 'Weather',
+    sky: pick(r, ['sky', 'condition', 'conditions', 'summary', 'description'], isStr) || '', wind: pick(r, ['wind_kmh', 'wind_speed_kmh', 'wind'], isNum),
+    next: Array.isArray(r.next_hours) ? r.next_hours.filter(isNum).slice(0, 4) : [], at: mins(f.at),
+  };
+}
+function vpnNow() {
+  const f = latest('feed:vpn');
+  if (!f) return null;
+  const r = f.result, state = String(pick(r, ['state', 'status'], isStr) || '');
+  return {
+    f, state: state || 'unknown', connected: /^(connected|up|on)$/i.test(state), connecting: /^connecting$/i.test(state),
+    server: pick(r, ['server', 'location', 'exit'], isStr) || '', since: mins(r.since),
+    servers: Array.isArray(r.servers) ? r.servers.filter(isStr).slice(0, 8) : [], mbps: pick(r, ['down_mbps', 'mbps', 'speed_mbps'], isNum),
+  };
+}
+// A temperature the feed tells in °C, in the person's units.
+const deg = (c) => (units() === 'f' ? Math.round(c * 9 / 5 + 32) + '°F' : Math.round(c) + '°');
+// The forecast's coming hours step down the evening sky, lower as it cools: where each small sun stands.
+function forecast(w) {
+  const from = w.temp ?? w.next[0];
+  return w.next.map((temp, i) => {
+    const t = Math.ceil(now() / 60) * 60 + (i + 1) * 60;
+    return { t, temp, x: Math.round(X(t)), y: Math.max(4, Math.min(L.ridge - 8, L.sunY + 2 + Math.round((from - temp) * 5) + i * 2)) };
+  });
+}
+
+/* the sun stands over now by day, the moon by night; wisps drift over it with the wind */
+let wx = null;          // the weather feed's latest result, as of the last rebuild
 function drawSun(t) {
   if (!on('sky')) return;
+  const w = wx;
   const sx = L.nowX, sy = L.sunY;
   const r = L.posture === 'phone' ? 4 : 6;
   const day = isDay(now());
@@ -583,11 +687,15 @@ function drawSun(t) {
   } else {
     for (let dy = -r; dy <= r; dy++) { const dx = Math.floor(Math.sqrt(r * r - dy * dy)); R(sx - dx + 3, sy + dy - 1, dx * 2 + 1, 1, skyAt(now(), 0)); }
   }
-  const drift = reduceMotion ? 0 : (t / 1000) * 1.2;
+  const drift = reduceMotion ? 0 : (t / 1000) * 1.2 * (w && w.wind != null ? Math.max(0.3, w.wind / 14) : 1);
   for (let i = 0; i < 3; i++) {
     const cx = ((i * 131 + drift) % (L.aw + 40)) - 20, cy = 8 + i * 9 + (i === 1 ? 4 : 0);
     R(cx, cy, 10 + i * 3, 1, 'rgba(255,255,255,.75)'); R(cx + 3, cy - 1, 5, 1, 'rgba(255,255,255,.6)');
   }
+  if (!w || L.posture === 'phone') return;
+  forecast(w).forEach(({ x, y }, i) => {
+    R(x - 1, y - 1, 3, 3, mix('#ffd94a', '#f08a5a', i / 4)); P(x, y - 3, '#ffd94a'); P(x, y + 3, '#ffd94a'); P(x - 3, y, '#ffd94a'); P(x + 3, y, '#ffd94a');
+  });
 }
 function drawGulls(t) {
   if (reduceMotion || !on('sky')) return;
@@ -661,30 +769,61 @@ function drawStop(e) {
   R(x - 2, base - 21, 5, 1, '#1c1d26');
   if (paused) { for (let i = 0; i < 7; i++) P(x - 3 + i, base - 23 + Math.floor(i * 5 / 7), '#7a4a2a'); }
 }
+// A recent file stands on the pavement at its change: a picture on an easel, a PDF or a paper.
+function drawFile(e) {
+  const x = Math.round(e.x), feet = L.paveY + 8, type = text(e.file.type);
+  if (type.startsWith('image/')) {
+    R(x - 3, feet - 1, 1, 1, '#6b4a2a'); R(x + 3, feet - 1, 1, 1, '#6b4a2a'); R(x - 2, feet - 4, 1, 3, '#6b4a2a'); R(x + 2, feet - 4, 1, 3, '#6b4a2a');
+    R(x - 4, feet - 11, 9, 7, '#6b4a2a'); R(x - 3, feet - 10, 7, 5, '#8fd0ee'); R(x - 3, feet - 7, 7, 2, '#7c9650'); P(x + 2, feet - 9, '#ffd94a');
+  } else if (type === 'application/pdf') {
+    R(x - 3, feet - 5, 7, 5, '#f3efe4'); P(x - 2, feet - 4, '#999'); P(x - 1, feet - 3, '#999'); P(x, feet - 2, '#999'); P(x + 1, feet - 3, '#999'); P(x + 2, feet - 4, '#999');
+  } else {
+    R(x - 3, feet - 5, 6, 5, '#f3efe4'); R(x - 2, feet - 4, 4, 1, '#999'); R(x - 2, feet - 2, 3, 1, '#999'); R(x + 3, feet - 5, 1, 5, '#d9cba6');
+  }
+}
+// The VPN is the ferry: its wake runs from the pier it left at to now while it is connected.
+function drawFerry(e, t) {
+  const v = e.vpn, y = L.quayY + 3 + Math.round(L.riverH * 0.45);
+  const pierX = Math.round(X(v.since != null ? v.since : now()));
+  R(pierX - 4, L.quayY + 3, 8, 2, '#7a5a3a'); R(pierX - 4, L.quayY + 5, 1, 3, '#5a3b2a'); R(pierX + 3, L.quayY + 5, 1, 3, '#5a3b2a');
+  const going = v.connected || v.connecting;
+  const bob = reduceMotion ? 0 : Math.floor(t / 600) % 2;
+  const fx = Math.round(e.x);
+  if (going) for (let x = pierX + 4; x < fx - 12; x += 2) if ((x + Math.floor(t / 200)) % 5) P(x, y + 2, '#cfeaf6');
+  const yy = y + bob + (going ? 0 : 1);
+  R(fx - 12, yy, 24, 3, '#e0702f'); R(fx - 11, yy + 3, 22, 1, '#a84f1e');
+  R(fx - 9, yy - 3, 17, 3, '#f3efe4');
+  for (let i = 0; i < 4; i++) R(fx - 7 + i * 4, yy - 2, 2, 1, '#2f4256');
+  R(fx + 1, yy - 6, 3, 3, '#2b2b2b');
+  if (v.connecting && !reduceMotion) { const k = (t / 700) % 1; P(fx + 2 + Math.round(k * 3), yy - 8 - Math.round(k * 5), '#f3efe4'); P(fx + 1, yy - 9 - Math.round(k * 4), '#f3efe4'); }
+  if (!going) R(fx - 13, yy + 1, 1, 4, '#5a3b2a');
+}
+// Each server the feed names is a buoy on the river, the one the ferry is on green.
+function drawBuoy(e, t) {
+  const x = Math.round(e.x), y = L.quayY + 3 + Math.round(L.riverH * 0.55);
+  const bob = reduceMotion ? 0 : Math.floor(t / 650 + e.x) % 2;
+  R(x - 2, y + bob, 5, 3, e.current ? '#3d8a4f' : '#c23a2e'); R(x - 2, y + 1 + bob, 5, 1, '#f3efe4');
+  R(x, y - 6 + bob, 1, 6, '#2b2b2b');
+  R(x + 1, y - 6 + bob, 4, 3, e.current ? '#3d8a4f' : '#f3efe4');
+  P(x - 3, y + 3, '#cfeaf6'); P(x + 3, y + 3, '#cfeaf6');
+}
 
 /* ================= entities: the streams turned into things on the street ================= */
 let ents = [];
 let selected = null;
 const leaving = new Map();     // attention id -> {from, start, dur, ent, done}
 
-// The runs as lamps want them, each with a state and a time: the time it was heard of, or, for a failure
-// that waits on the person, when it failed. A run from the stream's refresh carries no time.
+// The runs as lamps want them, each with a state and the time it started.
 function lampRuns() {
-  const out = [];
-  for (const { run, t } of D.runs.values()) {
-    let at = t;
-    if (at == null && run.kind === 'failed' && typeof run.reference === 'string') {
-      const waiting = D.attention.get(run.reference);
-      if (waiting && waiting.item.kind === 'failed_run') at = mins(waiting.item.since);
-    }
+  return all('runs.changes').map((run) => {
     const error = isItem(run.error) ? run.error : null;
-    out.push({
-      id: run.execution_id, ref: text(run.reference), t: at,
+    const t = mins(run.started_at), end = mins(run.ended_at);
+    return {
+      id: run.execution_id, ref: text(run.reference), t, root: run.parent_execution_id == null,
       state: run.kind === 'completed' ? 'ok' : run.kind === 'failed' ? 'failed' : run.kind === 'cancelled' ? 'cancelled' : 'running',
-      ms: run.duration_ms, cause: error ? text(error.cause) : '',
-    });
-  }
-  return out;
+      ms: typeof run.duration_ms === 'number' ? run.duration_ms : t != null && end != null ? (end - t) * MINUTE : null, cause: error ? text(error.cause) : '',
+    };
+  });
 }
 // Things that would stand on each other: the latest keeps its place and each earlier one steps back
 // (toward the earlier hours) until it stands clear, never past the left arch.
@@ -699,8 +838,8 @@ function spread(list, gap) {
 const looksFor = (id) => LOOKS[[...id].reduce((h, c) => h + c.charCodeAt(0), 0) % LOOKS.length];
 
 function rebuild() {
+  notes = Object.fromEntries(PARTS.map(([k]) => [k, noteOf(k)]));
   if (root.classList.contains('plain')) { renderFallback(); return; }
-  syncStreams();
   if (!L) return;
   timeScale();
   ents = [];
@@ -709,26 +848,29 @@ function rebuild() {
   const phone = L.posture === 'phone';
   const add = (e) => { ents.push(e); return e; };
   if (on('houses')) {
-    for (const { item: th } of D.threads.values()) {
+    for (const th of all('threads.changes')) {
       const t = mins(th.last_activity);
       if (t == null) continue;
       add({ id: 'thread-' + th.id, kind: 'thread', part: 'houses', t, th, x: X(t), w: phone ? 16 : 22 });
     }
   }
-  if (on('lamps')) { // lamps, grouped when they stand within three pixels
-    const runs = lampRuns();
-    const timed = runs.filter((r) => r.t != null && r.t >= L.dayStart && r.t <= n + 1).sort((a, b) => a.t - b.t);
+  if (on('lamps')) { // lamps at each run's start today, grouped when they stand within three pixels
+    const timed = lampRuns().filter((r) => r.t != null && r.t >= L.dayStart && r.t <= n + 1).sort((a, b) => a.t - b.t);
     let cur = null;
     for (const r of timed) {
       const x = X(r.t);
       if (cur && Math.abs(x - cur.x) < 4 && cur.runs.length < 3) cur.runs.push(r);
       else cur = add({ id: 'lamp-' + r.id, kind: 'lamp', part: 'lamps', t: r.t, x, runs: [r] });
     }
-    const untimed = runs.filter((r) => r.t == null);
-    if (untimed.length) add({ id: 'lamp-untold', kind: 'lamp', part: 'lamps', t: null, x: L.vx0 + L.depotW + 9, runs: untimed, untold: true });
+  }
+  if (on('files')) { // the recent files on the pavement, at their change
+    for (const file of all('files.changes')) {
+      const t = mins(file.changed_at);
+      if (file.kind === 'file' && t != null) add({ id: 'file-' + file.id, kind: 'file', part: 'files', t, x: X(t) + 6, file });
+    }
   }
   if (on('stops')) { // the next firing; a paused stop stands boarded up at its last firing
-    for (const { item: s } of D.schedules.values()) {
+    for (const s of all('schedules.changes')) {
       const t = s.status === 'paused' ? mins(s.last_run_at) : mins(s.next_run_at);
       if (t != null) add({ id: 'stop-' + s.schedule_id, kind: 'stop', part: 'stops', t, x: X(t), sched: s });
       // A paused schedule that never ran has no hour: it stands boarded up just past the left arch, to be resumed.
@@ -736,7 +878,7 @@ function rebuild() {
     }
   }
   if (on('waiting')) {
-    for (const { item: a } of D.attention.values()) {
+    for (const a of all('attention.changes')) {
       const t = mins(a.since);
       const at = t == null ? n : t;
       // The tram's body covers the last minutes of the street: what waits from then queues behind its tail.
@@ -749,14 +891,26 @@ function rebuild() {
   for (const [id, lv] of leaving) if (!ents.some((e) => e.id === id)) ents.push(lv.ent);
   if (on('crew')) {
     let i = 0;
-    for (const { item: job } of D.activity.values()) {
+    for (const job of all('activity.changes')) {
       const t = mins(job.since);
       add({ id: 'crew-' + job.id, kind: 'crew', part: 'crew', t: t == null ? n : t, x: L.nowX + 7 + i * 9, job });
       i++;
     }
   }
+  const v = on('ferry') ? vpnNow() : null;
+  if (v) { // the ferry at now; the servers as buoys between the left arch and the pier it left at
+    add({ id: 'ferry', kind: 'ferry', part: 'ferry', t: n, x: L.nowX - 2, vpn: v });
+    if (!phone && v.servers.length) {
+      const a = L.vx0 + L.depotW + 8;
+      let b = X(v.since != null ? v.since : n) - 10;
+      if (b - a < v.servers.length * 14) b = L.nowX - 30;
+      v.servers.forEach((sv, i) => add({ id: 'server-' + sv, kind: 'server', part: 'ferry', x: a + (b - a) * (i + 0.5) / v.servers.length, server: sv, current: sv === v.server && (v.connected || v.connecting), vpn: v }));
+    }
+  }
+  wx = on('sky') ? weatherNow() : null;
+  if (wx) add({ id: 'sun', kind: 'sun', part: 'sky', t: n, x: L.nowX, weather: wx });
   add({ id: 'tram', kind: 'tram', part: null, t: n, x: L.nowX });
-  for (const b of hillBuildings) add({ id: b.id, kind: b.kind, part: b.part, x: b.x + b.w / 2, hill: b, app: b.app });
+  for (const b of hillBuildings) add({ id: b.id, kind: b.kind, part: b.part, x: b.x + b.w / 2, hill: b, app: b.app, comp: b.comp });
   if (selected && !ents.some((e) => e.id === selected) && selected !== 'earlier' && selected !== 'later') selected = null;
   renderLabels();
   renderBoard();
@@ -775,6 +929,7 @@ function frame(t) {
   const night = (x0, w) => { g.globalAlpha = 0.42; R(x0, 0, w, L.quayY, '#0e1430'); g.globalAlpha = 1; };
   for (const e of ents) if (e.kind === 'thread') drawThread(e, t);
   drawStreet(t);
+  for (const e of ents) if (e.kind === 'file') drawFile(e);
   for (const e of ents) if (e.kind === 'crew') {
     for (let x = Math.round(Math.max(L.vx0 + L.depotW, X(e.t))); x < e.x - 3; x += 3) P(x, L.paveY + 8, '#b9b09a');
   }
@@ -793,6 +948,8 @@ function frame(t) {
   if (Math.abs(target - tramX) < 0.3) tramX = target;
   drawTram(tramX, t);
   drawRiver(t);
+  for (const e of ents) if (e.kind === 'server') drawBuoy(e, t);
+  for (const e of ents) if (e.kind === 'ferry') drawFerry(e, t);
   drawSelection(t);
   moveLabels();
 }
@@ -814,7 +971,7 @@ function drawLitWindows() {
   }
 }
 const THREAD_WALLS = ['#e3b04b', '#e79b8f', '#93c59a', '#d6dfe8', '#ecd2c6'];
-function drawThread(e) {
+function drawThread(e, t) {
   const th = e.th, w = e.w, h = L.houseH, x = Math.round(e.x - w / 2);
   const shared = th.kind === 'shared';
   const people = Array.isArray(th.people) ? th.people.length : 0;
@@ -825,6 +982,14 @@ function drawThread(e) {
     entry: th.waits_on_you ? '#f4c22e' : '#5a3b2a',
   });
   const top = L.paveY - h;
+  const unread = Math.min(Math.floor((w - 4) / 6), Number.isInteger(th.unread) ? th.unread : 0);
+  if (unread > 0) { // laundry: one piece per unread message, moving with the wind
+    R(x + 1, top + 14, w - 2, 1, '#d9d4c4');
+    for (let i = 0; i < unread; i++) {
+      const lx = x + 4 + i * 6, sway = reduceMotion ? 0 : Math.floor(t / 350 + i) % 2;
+      R(lx + sway, top + 15, 4, 4, ['#f6f2e8', '#2d5cb8', '#c4553a'][i % 3]); P(lx + sway, top + 19, '#d9d4c4');
+    }
+  }
   if (th.waits_on_you) { // a banner from the balcony: this thread waits on you
     R(x + 5, top + 23, w - 10, 6, '#f4c22e'); R(x + (w >> 1), top + 24, 1, 3, '#1c1d26'); P(x + (w >> 1), top + 28, '#1c1d26');
   }
@@ -871,34 +1036,53 @@ function hitBox(e) {
     case 'ask': return box(e.x - 5, L.paveY - 6, 10, 16);
     case 'lamp': return box(e.x - 5, L.roadY - 30, 10, 29);
     case 'stop': return box(e.x - 4, L.roadY - 25, 9, 24);
+    case 'file': return box(e.x - 5, L.paveY - 4, 10, 13);
     case 'crew': return box(e.x - 4, L.paveY - 5, 9, 15);
+    case 'ferry': return box(e.x - 13, L.quayY + 2, 26, L.riverH - 2);
+    case 'server': return box(e.x - 6, L.quayY + 4, 12, L.riverH - 4);
+    case 'sun': return box(e.x - 11, L.sunY - 11, 22, 22);
     case 'tram': return box(e.x - 34, L.roadY - 17, 34, 23);
     case 'castle': return box(e.hill.x, e.hill.base - 36, e.hill.w, 36);
-    case 'vault': return box(e.hill.x - 1, e.hill.base - 33, 14, 33);
+    case 'vault': { const top = towerTop(Math.min(8, vaultEntries().length)) + 3; return box(e.hill.x - 1, e.hill.base - top, 14, top); }
     default: return box(e.hill.x - 1, e.hill.base - 22, e.hill.w + 2, 22);
   }
+}
+const destOf = (a) => (isItem(a.destination) ? a.destination : {});
+// The offer a file_offer item waits on, as files.changes holds it, with its sender.
+function offerOf(a) {
+  const f = one('files.changes', text(destOf(a).ref) || text(a.id));
+  return f && f.kind === 'offer' ? f : null;
 }
 function waitingWords(a) {
   const label = text(a.label);
   switch (a.kind) {
     case 'failed_run': {
-      const name = componentName(text(a.id));
-      const run = [...D.runs.values()].filter((r) => r.run.reference === a.id && r.run.kind === 'failed').sort((x, y) => y.seq - x.seq)[0];
-      const cause = run && isItem(run.run.error) ? text(run.run.error.cause) : '';
-      return { head: `${name} failed`, tail: cause && cause !== 'failed' ? shortReason(cause) : 'its last run', fail: true };
+      const run = one('runs.changes', text(destOf(a).ref));
+      const cause = run && isItem(run.error) ? text(run.error.cause) : '';
+      return { head: `${componentName(text(a.id))} failed`, tail: cause && cause !== 'failed' ? shortReason(cause) : 'its last run', fail: true };
     }
     case 'failed_schedule': return { head: `${label || 'A schedule'} failed`, tail: 'its last run', fail: true };
     case 'approval': return { head: 'Approve in', tail: label || 'a thread' };
     case 'confirmation': return { head: 'Confirm in CYFR', tail: label || 'a change' };
-    case 'file_offer': return { head: 'A file offered', tail: label || 'a file' };
+    case 'file_offer': { const from = offerOf(a) && text(offerOf(a).from); return { head: from ? `${from} offers` : 'A file offered', tail: label || 'a file' }; }
     default: return { head: 'Waiting', tail: label };
   }
 }
 function threadSub(th) {
   const people = Array.isArray(th.people) ? th.people.length : 0;
   if (th.waits_on_you) return 'waits on you';
+  if (th.unread > 0) return `${th.unread} unread · ${people} people`;
   if (th.kind === 'shared') return people === 2 ? 'a pair' : people + ' people';
   return 'with AQUA';
+}
+const HEALTH = { ok: 'healthy', degraded: 'degraded', low_storage: 'low on storage' };
+// Bytes as storage is read: "38" (GB).
+function gb(n) { const v = n / 1e9; return String(v >= 10 ? Math.round(v) : v >= 1 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100); }
+const storageKnown = (s) => Number.isFinite(s.storage_used) && s.storage_used >= 0;
+const capKnown = (s) => Number.isFinite(s.storage_cap) && s.storage_cap > 0;
+function vaultWords() {
+  const entries = vaultEntries(), bad = entries.filter((v) => v.status !== 'fine').length;
+  return entries.length ? (bad ? `${bad} to see` : 'all fine') : '';
 }
 function labelFor(e) {
   const phone = L.posture === 'phone';
@@ -912,31 +1096,67 @@ function labelFor(e) {
       const w = waitingWords(e.a);
       return { cls: w.fail ? 'ask fail' : 'ask', band: 'street', html: `<b>${esc(w.head)}</b><small>${esc(w.tail)}</small>` };
     }
-    case 'crew': return phone ? null : { cls: '', band: 'street', html: `<b>${esc(text(e.job.member) || 'crew')} · since ${when(e.t)}</b><small>${esc(text(e.job.status) || 'working')}</small>` };
+    case 'crew': return phone ? null : { cls: '', band: 'street', html: `<b>${esc(text(e.job.member) || 'crew')} · since ${when(e.t)}</b><small>${esc(text(e.job.title) || text(e.job.status) || 'working')}</small>` };
     case 'stop': {
       if (phone || (!e.untold && (e.t < L.dayStart || e.t > L.dayEnd))) return null;
       if (e.untold) return { cls: 'quiet', band: 'street', html: `${esc((text(e.sched.name) || 'a stop').split(' ')[0].toLowerCase())} paused` };
       const name = text(e.sched.name) || componentName(text(e.sched.reference));
       return { cls: 'quiet', band: 'street', html: `${when(e.t)} ${esc(name.split(' ')[0].toLowerCase())}` };
     }
-    case 'lamp': return e.untold && !phone ? { cls: 'quiet', band: 'street', html: 'earlier runs' } : null;
+    case 'file': return phone || e.t < L.dayStart ? null : { cls: 'quiet', band: 'street', html: esc(text(e.file.name) || 'a file') };
+    case 'ferry': {
+      const v = e.vpn;
+      const state = v.connected ? [v.server, v.mbps != null ? v.mbps + ' Mb/s' : ''].filter(Boolean).join(' · ') : v.connecting ? `to ${v.server}…` : 'not connected';
+      if (phone) return { cls: '', band: 'river', align: 'west', html: `<b>VPN</b> ${esc(state)}` };
+      const since = v.since == null ? '' : v.connected ? 'since ' + when(v.since) : v.connecting ? 'connecting' : 'off since ' + when(v.since);
+      return { cls: '', band: 'river', align: 'side', html: `<b>VPN ${esc(state)}</b>${since ? `<small>${esc(since)}</small>` : ''}` };
+    }
+    case 'server': return { cls: e.current ? '' : 'quiet', band: 'river', html: `${esc(e.server)}${e.current ? ' · ' + (e.vpn.connecting ? 'going' : 'now') : ''}` };
+    case 'sun': {
+      const w = e.weather, temp = w.temp != null ? ' ' + deg(w.temp) : '';
+      if (phone) return { cls: 'quiet', band: 'sky', align: 'side', html: esc(w.place + temp) };
+      const small = [w.wind != null ? `wind ${w.wind} km/h` : '', w.at != null ? `at ${when(w.at)}` : ''].filter(Boolean).join(' · ');
+      return { cls: 'sky', band: 'sky', align: 'west', html: `<b>${esc(w.place + temp + (w.sky ? ' ' + w.sky : ''))}</b>${small ? `<small>${small}</small>` : ''}` };
+    }
+    case 'lamp': return null;
     case 'tram': return null;
-    case 'castle': return phone ? null : { cls: 'quiet', band: 'hill', html: '<b>CYFR</b><small>settings</small>' };
-    case 'vault': return phone ? null : { cls: 'quiet', band: 'hill', html: '<b>Vault</b>' };
-    default: return phone ? null : { cls: 'quiet', band: 'hill', html: `<b>${esc(e.app.name)}</b>${e.app.open ? '<small>open</small>' : ''}` };
+    case 'castle': {
+      if (phone) return null;
+      const s = system(), note = notes.castle;
+      if (!s) return { cls: 'quiet', band: 'hill', html: `<b>CYFR</b><small>${esc(note ? note.words : 'settings')}</small>` };
+      const store = storageKnown(s) ? (capKnown(s) ? `${gb(s.storage_used)}/${gb(s.storage_cap)} GB` : `${gb(s.storage_used)} GB used`) : '';
+      const small = [HEALTH[s.health], store, s.update_available === true ? 'update' : ''].filter(Boolean).join(' · ');
+      return { cls: 'quiet', band: 'hill', html: `<b>CYFR${s.version ? ' ' + esc(s.version) : ''}</b>${small ? `<small>${esc(small)}</small>` : ''}` };
+    }
+    case 'vault': {
+      if (phone) return null;
+      const small = vaultWords() || (notes.vault ? notes.vault.words : '');
+      return { cls: 'quiet', band: 'hill', html: `<b>Vault</b>${small ? `<small>${esc(small)}</small>` : ''}` };
+    }
+    case 'work': return phone ? null : { cls: 'quiet', band: 'hill', html: `<b>${esc(text(e.comp.name) || componentName(e.comp.ref))}</b>${update(e.comp) ? '<small>update</small>' : ''}` };
+    default: {
+      if (phone) return null;
+      const sub = e.app.open ? 'open' : update(e.comp) ? 'update' : '';
+      return { cls: 'quiet', band: 'hill', html: `<b>${esc(e.app.name)}</b>${sub ? `<small>${sub}</small>` : ''}` };
+    }
   }
 }
 function ariaFor(e) {
   switch (e.kind) {
-    case 'thread': return `Thread ${text(e.th.title)}, ${e.th.kind}, last active ${when(e.t)}${e.th.waits_on_you ? ', waits on you' : ''}`;
+    case 'thread': return `Thread ${text(e.th.title)}, ${e.th.kind}, last active ${when(e.t)}${e.th.unread > 0 ? `, ${e.th.unread} unread` : ''}${e.th.waits_on_you ? ', waits on you' : ''}`;
     case 'ask': { const w = waitingWords(e.a); return `Waiting on you: ${KIND_WORD[e.a.kind] || 'an item'}, ${w.head} ${w.tail}, since ${when(e.t)}`; }
-    case 'lamp': return (e.untold ? 'Earlier runs, time not told: ' : 'Runs at ') + e.runs.map((r) => `${r.t == null ? '' : when(r.t) + ' '}${componentName(r.ref)} ${r.state}`).join('; ');
+    case 'lamp': return 'Runs at ' + e.runs.map((r) => `${when(r.t)} ${componentName(r.ref)} ${r.state}`).join('; ');
     case 'stop': return `Schedule ${text(e.sched.name)}, ${e.sched.status}${e.untold ? ', never ran' : `, ${e.sched.status === 'paused' ? 'last ' : 'next '}${when(e.t)}`}`;
-    case 'crew': return `Crew ${text(e.job.member)} ${text(e.job.status)} since ${when(e.t)}`;
+    case 'file': return `File ${text(e.file.name)}, changed ${when(e.t)}`;
+    case 'crew': return `Crew ${text(e.job.member)} ${text(e.job.status)} since ${when(e.t)}${text(e.job.title) ? ': ' + text(e.job.title) : ''}`;
+    case 'ferry': return `VPN ${e.vpn.state}${e.vpn.server ? ' to ' + e.vpn.server : ''}`;
+    case 'server': return `VPN server ${e.server}${e.current ? ', current' : ''}`;
+    case 'sun': return `Weather in ${e.weather.place}${e.weather.temp != null ? ': ' + deg(e.weather.temp) : ''}${e.weather.sky ? ', ' + e.weather.sky : ''}`;
     case 'tram': return `Now, ${clock(now())}. Arrow keys walk the day; Escape returns to now.`;
-    case 'castle': return 'CYFR: open the settings';
-    case 'vault': return 'The vault';
-    default: return `App ${e.app.name}${e.app.open ? ', open' : ''}`;
+    case 'castle': { const s = system(); return s ? `CYFR${s.version ? ' ' + s.version : ''}${HEALTH[s.health] ? ', ' + HEALTH[s.health] : ''}` : 'CYFR: open the settings'; }
+    case 'vault': return `The vault${vaultWords() ? ', ' + vaultWords() : ''}`;
+    case 'work': return `${text(e.comp.type)} ${text(e.comp.name)}${update(e.comp) ? ', update available' : ''}`;
+    default: return `App ${e.app.name}${e.app.open ? ', open' : ''}${update(e.comp) ? ', update available' : ''}`;
   }
 }
 
@@ -959,10 +1179,16 @@ function renderLabels() {
     ticks.push(`<span class="tick day" style="left:${(L.vx1 - L.termW / 2) * s}px;top:${L.roadY * s + 2}px">${esc(dayName(1) + ' →')}</span>`);
   }
   html.push(ticks.join(''));
+  const sun = ents.find((e) => e.kind === 'sun');
+  if (sun && L.posture !== 'phone') { // the forecast's temperatures beside its small suns
+    for (const { x, y, temp } of forecast(sun.weather)) html.push(`<span class="plate quiet${notes.sky && notes.sky.state === 'stale' ? ' dim' : ''}" aria-hidden="true" style="left:${x * s}px;top:${(y - 3) * s}px;transform:translate(8px,-50%);bottom:auto;padding:0 3px">${esc(deg(temp))}</span>`);
+  }
   const order = ents.slice().sort((a, b) => (a.hill ? 0 : 1) - (b.hill ? 0 : 1) || a.x - b.x);
   for (const e of order) {
     const b = hitBox(e);
     const lab = labelFor(e);
+    // A part whose picture went stale shows it tired until a fresh one comes.
+    if (lab && e.part && notes[e.part] && notes[e.part].state === 'stale') lab.cls += ' dim';
     const plate = lab ? `<span class="plate ${lab.cls}${selected === e.id ? ' sel' : ''}" data-band="${lab.band}" data-align="${lab.align || 'center'}">${lab.html}</span>` : '';
     html.push(`<button class="hit" data-id="${esc(e.id)}" aria-label="${esc(ariaFor(e))}" style="left:${b.x}px;top:${b.y}px;width:${Math.max(b.w, 44)}px;height:${Math.max(b.h, 44)}px;margin-left:${b.w < 44 ? (b.w - 44) / 2 : 0}px;margin-top:${b.h < 44 ? (b.h - 44) / 2 : 0}px">${plate}</button>`);
   }
@@ -1008,7 +1234,9 @@ function placePlates() {
     const laneH = band === 'hill' ? 38 : 40;
     const maxShift = band === 'hill' ? 40 : band === 'street' ? 150 : 90;
     for (const it of items) {
-      let want = it.ax - it.w / 2;
+      const align = it.p.dataset.align;
+      const hitLeft = it.hit.left - box.left;
+      let want = align === 'side' ? hitLeft + it.hit.width + 6 : align === 'west' ? hitLeft - it.w - 4 : it.ax - it.w / 2;
       want = Math.max(6, Math.min(L.W - 6 - it.w, want));
       let placed = null;
       for (let lane = 0; lane < lanes.length && !placed; lane++) {
@@ -1023,6 +1251,9 @@ function placePlates() {
       it.p.style.left = (placed.x - (it.hit.left - box.left)) + 'px';
       it.p.style.transform = 'none';
       if (band === 'house') { it.p.style.top = (14 + placed.lane * 36) + 'px'; houses.push(it.p.getBoundingClientRect()); }
+      else if (band === 'river' || band === 'sky') { // beside its thing, on the water or in the air
+        it.p.style.bottom = 'auto'; it.p.style.top = (band === 'sky' ? 2 : Math.max(2, (it.hit.height - it.p.offsetHeight) / 2)) + 'px';
+      }
       else if (band === 'street') { // one baseline for the whole street, just over the heads
         const base = (L.paveY - 7) * L.scale - placed.lane * laneH;
         it.p.style.bottom = 'auto'; it.p.style.top = (base - it.p.offsetHeight - (it.hit.top - box.top)) + 'px';
@@ -1032,12 +1263,13 @@ function placePlates() {
 }
 function itemText(e) {
   if (e.kind === 'thread') return text(e.th.title) || 'A thread';
+  if (e.kind === 'file') return text(e.file.name) || 'a file';
   if (e.kind === 'stop') return (text(e.sched.name) || componentName(text(e.sched.reference))) + (e.sched.status === 'paused' ? ' (paused)' : '');
   if (e.kind === 'ask') { const w = waitingWords(e.a); return `${w.head} ${w.tail}`; }
   return '';
 }
 function dayItems(id) {
-  const kinds = ['thread', 'stop', 'ask'];
+  const kinds = ['thread', 'stop', 'ask', 'file'];
   const pick = id === 'earlier' ? (e) => e.t < L.dayStart : (e) => e.t > L.dayEnd;
   return ents.filter((e) => e.t != null && kinds.includes(e.kind) && pick(e))
     .sort((a, b) => (id === 'earlier' ? b.t - a.t : a.t - b.t))
@@ -1092,9 +1324,12 @@ function board(attentionId) {
 
 /* ================= the board ================= */
 let said = '';                 // what the board says of the last tap's outcome
+let saidOk = false;            // whether that was the outcome asked for
 const pending = new Set();     // schedules with a press on its way
+const retrying = new Set();    // runs with a Retry on its way
 function select(id) {
   said = '';
+  if (id.startsWith('server-')) id = 'ferry';   // a buoy is the ferry's: its server is the feed's to choose
   selected = selected === id && id !== 'tram' ? null : id;
   if (id === 'tram') { ding(); selected = null; if (scrub) endScrub(); }
   renderLabels(); renderBoard();
@@ -1102,7 +1337,7 @@ function select(id) {
 const act = (label, fn, cls = '') => ({ label, fn, cls });
 const ask = (widget) => act('Ask AQUA', () => sdk && sdk.ask(widget));
 const page = (label, key, cls = '') => act(label, () => sdk && sdk.settings(key), cls);
-const PAGE_LABEL = { chat: 'Open the chat', executions: 'Open runs', schedules: 'Open schedules', files: 'Open files' };
+const PAGE_LABEL = { aqua: 'Open AQUA', chat: 'Open the chat', executions: 'Open runs', schedules: 'Open schedules', files: 'Open files' };
 
 function scheduleControl(s) {
   if (s.status === 'active') return { control: 'pause-schedule', label: 'Pause', going: 'Pausing…' };
@@ -1120,7 +1355,7 @@ async function pressSchedule(s) {
   const c = scheduleControl(s);
   if (!c || !sdk) return;
   pending.add(s.schedule_id);
-  said = '';
+  said = ''; saidOk = false;
   renderBoard();
   let answer;
   try { answer = await sdk.press(c.control, s.schedule_id); } catch (err) { answer = { outcome: 'refused', reason: (err && err.code) || 'refused' }; }
@@ -1130,42 +1365,85 @@ async function pressSchedule(s) {
   else ding(c.label === 'Pause' ? 'paused' : 'resumed');
   renderBoard();
 }
+// Retry runs a failed run again, as the person, on their tap alone: one press per tap, waiting until it is answered.
+const AGAIN_LATER = 'CYFR cannot run it now: try again shortly.';
+const RETRY_REFUSED = {
+  conflict: 'This run cannot run again: only a run a schedule or a feed started runs again.',
+  invalid_argument: 'This run is no longer among the latest runs.',
+  not_found: 'This run is gone.',
+  forbidden: 'This run is not yours to run again.',
+  unavailable: AGAIN_LATER, rate_limited: AGAIN_LATER, timeout: AGAIN_LATER,
+  uncertain: 'No answer came: look at Runs before trying again.',
+};
+function retryAct(id, cls = '') {
+  const a = act(retrying.has(id) ? 'Retrying…' : 'Retry', () => pressRetry(id), cls);
+  a.disabled = retrying.has(id);
+  return a;
+}
+async function pressRetry(id) {
+  if (!sdk || retrying.has(id)) return;
+  retrying.add(id);
+  said = ''; saidOk = false;
+  renderBoard();
+  let answer;
+  try { answer = await sdk.press('retry-run', id); } catch (err) { answer = { outcome: 'refused', reason: (err && err.code) || 'refused' }; }
+  retrying.delete(id);
+  if (!isItem(answer)) answer = {};
+  if (answer.outcome === 'accepted') { said = 'It runs again.'; saidOk = true; ding('again'); }
+  else if (answer.outcome === 'cancelled') said = answer.reason === 'too_soon' ? 'Too soon after your last tap: tap Retry again in a moment.' : 'Nothing ran: tap Retry again.';
+  else said = RETRY_REFUSED[answer.reason] || 'It could not be run again.';
+  renderBoard();
+}
+// A failed run that started nothing above it can run again.
+const retryable = (r) => r && r.state === 'failed' && r.root;
+// A feed's own actions, as its latest result names them; the feed answers with its next result.
+function feedActs(f) {
+  const actions = Array.isArray(f.actions) ? f.actions.filter((x) => isItem(x) && isStr(x.name)).slice(0, 3) : [];
+  return actions.map((x, i) => act(text(x.label) || x.name, () => {
+    if (!sdk || !isStr(f.binding)) return;
+    sdk.press(f.binding, x.name);
+    said = 'Asked: its next result shows here.'; saidOk = true;
+    renderBoard();
+  }, i === 0 ? 'go' : ''));
+}
 
 function signFor(e) {
   switch (e.kind) {
     case 'ask': {
-      const a = e.a, w = waitingWords(a);
-      const dest = isItem(a.destination) ? a.destination : {};
+      const a = e.a, w = waitingWords(a), dest = destOf(a);
       const base = { title: `${w.head} ${w.tail}`, facts: [['since', when(e.t)]], acts: [] };
-      if (dest.kind === 'page' && PAGE_LABEL[dest.page]) base.acts.push(page(PAGE_LABEL[dest.page], dest.page, 'go'));
+      // Retry, while the failed run is among the runs this street holds.
+      const run = a.kind === 'failed_run' && isStr(dest.ref) && one('runs.changes', dest.ref) ? dest.ref : null;
+      if (run) base.acts.push(retryAct(run, 'go'));
+      if (dest.kind === 'page' && isStr(dest.page)) base.acts.push(page(PAGE_LABEL[dest.page] || 'Open', dest.page, run ? '' : 'go'));
       if (a.kind === 'failed_schedule') {
-        const held = D.schedules.get(a.id);
-        const control = held && scheduleAct(held.item);
+        const held = one('schedules.changes', a.id);
+        const control = held && scheduleAct(held);
         if (control) base.acts.push(control);
       }
       if (a.kind === 'failed_run') base.facts.push(['reference', text(a.id)]);
+      if (a.kind === 'file_offer' && offerOf(a)) base.facts.push(['from', text(offerOf(a).from)]);
       if (a.kind === 'confirmation') base.facts.push(['', 'CYFR asks you in its own dialog']);
       base.acts.push(ask('waiting'));
       return base;
     }
     case 'thread': {
-      const th = e.th;
+      const th = e.th, own = th.kind === 'own';
       const people = Array.isArray(th.people) ? th.people : [];
       return {
         title: text(th.title) || 'A thread',
-        facts: [['kind', th.kind === 'own' ? 'own, with AQUA' : `shared, ${people.length} people`], ['last', when(e.t)], ...(th.waits_on_you ? [['', 'waits on you']] : [])],
-        acts: [page('Open the chat', 'chat', 'go'), ask('houses')],
+        facts: [['kind', own ? 'own, with AQUA' : `shared, ${people.length} people`], ['last', when(e.t)], ...(th.unread > 0 ? [['unread', String(th.unread)]] : []), ...(th.waits_on_you ? [['', 'waits on you']] : [])],
+        // An own thread is AQUA's, in its panel; a shared one is in the chat.
+        acts: [own ? page('Open AQUA', 'aqua', 'go') : page('Open the chat', 'chat', 'go'), ask('houses')],
       };
     }
     case 'lamp': {
       const r = e.runs[e.runs.length - 1];
-      const many = e.runs.length > 1;
-      const title = e.untold ? `${e.runs.length} earlier ${e.runs.length === 1 ? 'run' : 'runs'}, time not told`
-        : many ? `${e.runs.length} runs at ${when(e.runs[0].t)}–${when(r.t)}` : `${componentName(r.ref)} ${r.state} at ${when(r.t)}`;
+      const again = e.runs.filter(retryable).pop();
       return {
-        title,
-        facts: e.runs.slice(0, 8).map((x) => [x.t == null ? '' : when(x.t), `${componentName(x.ref)} ${x.state}${secs(x.ms) ? ' ' + secs(x.ms) : ''}${x.state === 'failed' && x.cause && x.cause !== 'failed' ? ' · ' + shortReason(x.cause) : ''}`]),
-        acts: [page('Open runs', 'executions', 'go'), ask('lamps')],
+        title: e.runs.length > 1 ? `${e.runs.length} runs at ${when(e.runs[0].t)}–${when(r.t)}` : `${componentName(r.ref)} ${r.state} at ${when(r.t)}`,
+        facts: e.runs.slice(0, 8).map((x) => [when(x.t), `${componentName(x.ref)} ${x.state}${secs(x.ms) ? ' ' + secs(x.ms) : ''}${x.state === 'failed' && x.cause && x.cause !== 'failed' ? ' · ' + shortReason(x.cause) : ''}`]),
+        acts: [page('Open runs', 'executions', 'go'), ...(again ? [retryAct(again.id)] : []), ask('lamps')],
       };
     }
     case 'stop': {
@@ -1177,44 +1455,88 @@ function signFor(e) {
         acts: [...(control ? [control] : []), page('Open schedules', 'schedules'), ask('stops')],
       };
     }
+    case 'file': return {
+      title: text(e.file.name) || 'A file', facts: [['type', text(e.file.type)], ['changed', when(e.t)]],
+      acts: [page('Open files', 'files', 'go'), ask('files')],
+    };
     case 'crew': return {
-      title: `${text(e.job.member) || 'Crew'} at work`,
+      title: `${text(e.job.member) || 'Crew'}${text(e.job.title) ? ' · ' + text(e.job.title) : ' at work'}`,
       facts: [['for', text(e.job.asked_by)], ['since', when(e.t)], ['status', text(e.job.status)], ['for now', Math.max(0, Math.round(now() - e.t)) + ' min']],
       acts: [ask('crew')],
     };
+    case 'sun': {
+      const w = e.weather;
+      return {
+        title: `${w.place}${w.temp != null ? ' ' + deg(w.temp) : ''}${w.sky ? ', ' + w.sky : ''}`,
+        facts: [['wind', w.wind != null ? w.wind + ' km/h' : ''], ['next hours', w.next.map(deg).join(' ')], ['at', w.at != null ? when(w.at) : '']],
+        acts: [...feedActs(w.f), ask('sky')],
+      };
+    }
+    case 'ferry': {
+      const v = e.vpn;
+      return {
+        title: v.connected ? `VPN connected${v.server ? ' to ' + v.server : ''}` : v.connecting ? `VPN connecting${v.server ? ' to ' + v.server : ''}…` : `VPN ${v.state === 'unknown' ? 'not connected' : v.state}`,
+        facts: [['since', v.since != null ? when(v.since) : ''], ['down', v.connected && v.mbps != null ? v.mbps + ' Mb/s' : '']],
+        acts: [...feedActs(v.f), ask('ferry')],
+      };
+    }
     case 'days': {
       const items = dayItems(e.id);
       return { title: e.id === 'earlier' ? 'Earlier days' : 'Later days', facts: [], picks: items.map((i) => ({ id: i.id, label: `${when(i.t)} ${i.text}` })), acts: [] };
     }
-    case 'castle': return { title: 'CYFR', facts: [['', 'its settings, updates and health']], acts: [page('Open settings', 'settings', 'go'), ask('castle')] };
-    case 'vault': return { title: 'Vault', facts: [['', 'your keys and accounts']], acts: [page('Open the vault', 'vault', 'go'), ask('vault')] };
-    default: {
-      const app = e.app;
+    case 'castle': {
+      const s = system();
+      const acts = [page('Open settings', 'settings', 'go'), ask('castle')];
+      if (!s) return { title: 'CYFR', facts: [['', 'its settings, updates and health']], acts };
+      const crew = Number.isInteger(s.crew_total) ? `${Number(s.crew_ready) || 0} of ${s.crew_total} ready` : '';
       return {
-        title: app.name, facts: [['', app.open ? 'open' : 'on the hill']],
-        acts: [act(`Open ${app.name}`, () => sdk && sdk.open(app.ref), 'go'), ask('apps')],
+        title: `CYFR${s.version ? ' ' + s.version : ''}${HEALTH[s.health] ? ' · ' + HEALTH[s.health] : ''}`,
+        facts: [['storage', storageKnown(s) ? (capKnown(s) ? `${gb(s.storage_used)} GB of ${gb(s.storage_cap)} GB` : `${gb(s.storage_used)} GB used`) : ''],
+          ['model', s.model_connected == null ? '' : s.model_connected ? 'connected' : 'none'], ['crew', crew], ...(s.update_available === true ? [['', 'update available']] : [])],
+        acts,
+      };
+    }
+    case 'vault': {
+      const entries = vaultEntries();
+      return {
+        title: 'Vault', facts: entries.length ? entries.slice(0, 8).map((v) => [text(v.name), v.status === 'fine' ? 'fine' : 'needs re-authorising']) : [['', 'your keys and accounts']],
+        acts: [page('Open the vault', 'vault', 'go'), ask('vault')],
+      };
+    }
+    case 'work': {
+      const c = e.comp;
+      return {
+        title: text(c.name) || componentName(c.ref), facts: [['type', text(c.type)], ['version', text(c.version)], ...(update(c) ? [['', 'update available']] : [])],
+        acts: [...(update(c) ? [page('Open updates', 'components', 'go')] : []), ask('apps')],
+      };
+    }
+    default: {
+      const app = e.app, c = e.comp;
+      return {
+        title: app.name, facts: [['', app.open ? 'open' : 'on the hill'], ['version', c ? text(c.version) : ''], ...(update(c) ? [['', 'update available']] : [])],
+        acts: [act(`Open ${app.name}`, () => sdk && sdk.open(app.ref), 'go'), ...(update(c) ? [page('Open updates', 'components')] : []), ask('apps')],
       };
     }
   }
 }
 function defaultSign() {
-  const waiting = on('waiting') ? D.attention.size : 0;
-  const next = [...D.schedules.values()].map((h) => h.item).filter((s) => s.status === 'active' && mins(s.next_run_at) != null)
+  const waiting = on('waiting') ? H['attention.changes'].items.size : 0;
+  const next = all('schedules.changes').filter((s) => s.status === 'active' && mins(s.next_run_at) != null)
     .sort((a, b) => mins(a.next_run_at) - mins(b.next_run_at));
-  const job = [...D.activity.values()][0];
-  const refused = Object.keys(D.refused);
+  const job = all('activity.changes')[0];
   return {
     title: waiting ? `${waiting} ${waiting === 1 ? 'thing waits' : 'things wait'} on you` : 'Nothing waits on you',
     facts: [
       ...(next[0] ? [['next stop', `${when(mins(next[0].next_run_at))} ${(text(next[0].name) || text(next[0].reference)).toLowerCase()}`]] : []),
-      ...(job && L.posture !== 'phone' ? [['crew', `${text(job.item.member)} is at work`]] : []),
-      ...(refused.length ? [['not shown', refused.map((n) => n.split('.')[0]).join(', ')]] : []),
+      ...(job && L.posture !== 'phone' ? [['crew', text(job.title) ? `${text(job.member)} is on “${text(job.title)}”` : `${text(job.member)} is at work`]] : []),
+      // Each part that cannot show a live picture says how it stands.
+      ...PARTS.filter(([k]) => on(k) && notes[k]).map(([k, label]) => [label.toLowerCase(), notes[k].words]),
     ],
     acts: [act('Arrange', openPlan)],
   };
 }
 function scrubSign() {
-  const near = ents.filter((e) => e.t != null && !e.hill && e.kind !== 'tram' && Math.abs(e.x - scrub.x) <= 8).sort((a, b) => a.t - b.t);
+  const near = ents.filter((e) => e.t != null && !e.hill && !['tram', 'sun', 'ferry'].includes(e.kind) && Math.abs(e.x - scrub.x) <= 8).sort((a, b) => a.t - b.t);
   return {
     title: `At ${clock(scrub.t)}`,
     facts: near.length ? near.map((e) => [when(e.t), ariaFor(e).split(',')[0]]) : [['', 'nothing stood here']],
@@ -1227,12 +1549,13 @@ function renderBoard() {
   if (!L) return;
   const e = selected && (selected === 'earlier' || selected === 'later' ? { id: selected, kind: 'days' } : ents.find((x) => x.id === selected));
   const sign = scrub ? scrubSign() : e ? signFor(e) : defaultSign();
+  if (!scrub && e && e.part && notes[e.part]) sign.facts.push(['', notes[e.part].words]);
   const facts = sign.facts.filter((f) => f[1] !== '' && f[1] != null).map(([k, v]) => `${k ? `<span class="k">${esc(k)}</span> ` : ''}${esc(v)}`).join(' · ');
   const picks = sign.picks ? `<div class="tickets">${sign.picks.map((p) => `<button class="ticket" data-pick="${esc(p.id)}">${esc(p.label)}</button>`).join('')}</div>` : '';
   const list = L.posture === 'phone' && !e && !scrub ? phoneList() : '';
   const acts = sign.acts.map((a, i) => `<button class="btn ${a.cls}" data-act="${i}" ${a.disabled ? 'disabled' : ''}>${esc(a.label)}</button>`).join('');
   const back = e ? '<button class="btn" data-back>Close</button>' : '';
-  const html = `<div class="say"><h2>${esc(sign.title)}</h2>${facts ? `<p class="facts">${facts}</p>` : ''}${said ? `<p class="said">${esc(said)}</p>` : ''}${picks}${list}</div><div class="acts">${acts}${back}</div>`;
+  const html = `<div class="say"><h2>${esc(sign.title)}</h2>${facts ? `<p class="facts">${facts}</p>` : ''}${said ? `<p class="said${saidOk ? ' ok' : ''}">${esc(said)}</p>` : ''}${picks}${list}</div><div class="acts">${acts}${back}</div>`;
   boardActs = sign.acts;
   // The same board is not written again: a tap landing while a stream's event redraws would be lost.
   if (html === boardHtml) return;
@@ -1252,8 +1575,15 @@ function phoneList() {
   const houses = ents.filter((e) => e.kind === 'thread').sort((a, b) => b.t - a.t).slice(0, 4);
   const stops = ents.filter((e) => e.kind === 'stop').sort((a, b) => (a.t ?? -Infinity) - (b.t ?? -Infinity)).slice(0, 3);
   const row = (e, head, sub) => `<li><button data-pick="${esc(e.id)}"><span>${esc(head)}<small>${esc(sub)}</small></span><span class="when">${e.t == null ? '' : when(e.t)}</span></button></li>`;
+  const card = (id, head, sub) => `<ul class="list" style="margin:0"><li><button data-pick="${id}"><span>${esc(head)}<small>${esc(sub) || '&nbsp;'}</small></span></button></li></ul>`;
+  const sun = ents.find((e) => e.kind === 'sun'), ferry = ents.find((e) => e.kind === 'ferry');
+  const cards = [
+    sun ? card('sun', `${sun.weather.place}${sun.weather.temp != null ? ' ' + deg(sun.weather.temp) : ''}`, [sun.weather.sky, sun.weather.wind != null ? 'wind ' + sun.weather.wind : ''].filter(Boolean).join(' · ')) : '',
+    ferry ? card('ferry', `VPN ${ferry.vpn.connected ? ferry.vpn.server : ferry.vpn.state}`, ferry.vpn.connected && ferry.vpn.mbps != null ? ferry.vpn.mbps + ' Mb/s' : '') : '',
+  ].join('');
   return `<ul class="list" aria-label="Waiting on you">${rows || '<li class="empty">Nothing waits on you.</li>'}</ul>
-  <ul class="list">${crew.map((e) => row(e, `${text(e.job.member)} at work`, text(e.job.status))).join('')}${stops.map((e) => row(e, text(e.sched.name), e.sched.status)).join('')}${houses.map((e) => row(e, text(e.th.title), threadSub(e.th))).join('')}</ul>`;
+  ${cards ? `<div class="row2" style="margin-top:6px">${cards}</div>` : ''}
+  <ul class="list">${crew.map((e) => row(e, text(e.job.title) ? `${text(e.job.member)}: ${text(e.job.title)}` : `${text(e.job.member)} at work`, text(e.job.title) ? 'since ' + when(e.t) : text(e.job.status))).join('')}${stops.map((e) => row(e, text(e.sched.name), e.sched.status)).join('')}${houses.map((e) => row(e, text(e.th.title), threadSub(e.th))).join('')}</ul>`;
 }
 
 /* ================= scrubbing the day ================= */
@@ -1291,11 +1621,11 @@ let saving = false;
 function hillName(key) {
   if (key === 'castle') return 'CYFR castle';
   if (key === 'vault') return 'Vault';
-  const app = D.apps.find((a) => appKey(a.ref) === key);
-  return app ? app.name : key;
+  const app = apps.find((a) => appKey(a.ref) === key) || workshops().find((c) => c.ref === key);
+  return app ? text(app.name) || key : key;
 }
 function openPlan() {
-  if (!draft) draft = { parts: Object.fromEntries(PARTS.map(([k]) => [k, storedOn(k)])), hill: hillKeys() };
+  if (!draft) draft = { parts: Object.fromEntries(PARTS.map(([k]) => [k, storedOn(k)])), hill: hillKeys(), units: storedUnits() };
   renderPlan();
   rebuild();
 }
@@ -1305,6 +1635,8 @@ function renderPlan() {
     <div class="grid">${PARTS.map(([k, label]) => `<label><input type="checkbox" data-part="${k}" ${draft.parts[k] !== false ? 'checked' : ''}> ${label}</label>`).join('')}</div>
     <h3>On the hill, left to right</h3>
     <div class="hill">${hill.map((k, i) => `<span><button data-move="${i}" data-d="-1" aria-label="Move ${esc(hillName(k))} left" ${i === 0 ? 'disabled' : ''}>◀</button><b>${esc(hillName(k))}</b><button data-move="${i}" data-d="1" aria-label="Move ${esc(hillName(k))} right" ${i === hill.length - 1 ? 'disabled' : ''}>▶</button></span>`).join('')}</div>
+    <h3>Temperatures</h3>
+    <div class="units">${[['c', '°C'], ['f', '°F']].map(([u, label]) => `<button class="btn${draft.units === u ? ' go' : ''}" data-units="${u}" aria-pressed="${draft.units === u}">${label}</button>`).join('')}</div>
     <p style="margin:10px 0 0;font-size:15px">On the street, time decides where things stand. On the hill, you do.</p>
     <div class="foot"><p class="said" role="status">${esc(planSaid)}</p><button class="btn" data-reset>Reset</button><button class="btn" data-cancel>Cancel</button><button class="btn go" data-done ${saving ? 'disabled' : ''}>${saving ? 'Saving…' : 'Done'}</button></div>`;
   plan.hidden = false;
@@ -1315,8 +1647,9 @@ function renderPlan() {
     renderPlan(); rebuild();
     const again = plan.querySelector(`[data-move="${j}"][data-d="${b.dataset.d}"]`) || plan.querySelector(`[data-move="${j}"]`); if (again) again.focus();
   }));
+  plan.querySelectorAll('[data-units]').forEach((b) => b.addEventListener('click', () => { draft.units = b.dataset.units; renderPlan(); rebuild(); }));
   plan.querySelector('[data-reset]').addEventListener('click', () => {
-    draft = { parts: Object.fromEntries(PARTS.map(([k]) => [k, true])), hill: ['castle', 'vault', ...D.apps.map((a) => appKey(a.ref))] };
+    draft = { parts: Object.fromEntries(PARTS.map(([k]) => [k, true])), hill: defaultHill(), units: 'c' };
     planSaid = ''; skyKey = ''; renderPlan(); rebuild();
   });
   plan.querySelector('[data-cancel]').addEventListener('click', closePlan);
@@ -1326,7 +1659,7 @@ function closePlan() { draft = null; planSaid = ''; plan.hidden = true; skyKey =
 async function savePlan() {
   if (!sdk || saving) return;
   const document = {
-    widgets: Object.fromEntries(PARTS.map(([k]) => [k, { on: draft.parts[k] !== false }])),
+    widgets: Object.fromEntries(PARTS.map(([k]) => [k, k === 'sky' ? { on: draft.parts[k] !== false, units: draft.units } : { on: draft.parts[k] !== false }])),
     desktop: { hill: hillString(draft.hill) },
   };
   saving = true; planSaid = ''; renderPlan();
@@ -1348,21 +1681,31 @@ async function savePlan() {
 
 /* ================= the plain page: every list as text, when the drawing cannot run ================= */
 function renderFallback() {
-  const section = (title, items, empty) => `<section><h2>${esc(title)}</h2>${items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : `<p class="empty">${esc(empty)}</p>`}</section>`;
+  const section = (title, part, items, empty) => `<section><h2>${esc(title)}</h2>${notes[part] ? `<p class="note">${esc(notes[part].words)}</p>` : ''}${items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : `<p class="empty">${esc(empty)}</p>`}</section>`;
   const at = (iso, word = '') => { const t = mins(iso); return t == null ? '' : `, ${word}${when(t)}`; };
-  const waiting = [...D.attention.values()].map(({ item }) => { const w = waitingWords(item); return `${w.head} ${w.tail}${at(item.since)}`; });
-  const threads = [...D.threads.values()].map(({ item }) => `${text(item.title) || 'A thread'} (${threadSub(item)})${at(item.last_activity)}`);
+  const waiting = all('attention.changes').map((item) => { const w = waitingWords(item); return `${w.head} ${w.tail}${at(item.since)}`; });
+  const threads = all('threads.changes').map((item) => `${text(item.title) || 'A thread'} (${threadSub(item)})${at(item.last_activity)}`);
   const runs = lampRuns().map((r) => `${componentName(r.ref)} ${r.state}${r.t == null ? '' : ', ' + when(r.t)}${r.state === 'failed' && r.cause && r.cause !== 'failed' ? ' (' + shortReason(r.cause) + ')' : ''}`);
-  const schedules = [...D.schedules.values()].map(({ item: s }) => `${text(s.name) || text(s.reference)}, ${s.status}${s.status === 'paused' ? '' : at(s.next_run_at, 'next ')}`);
-  const crew = [...D.activity.values()].map(({ item: j }) => `${text(j.member)}, ${text(j.status)}${at(j.since, 'since ')}`);
-  const apps = D.apps.map((a) => a.name + (a.open ? ' (open)' : ''));
-  const refused = Object.entries(D.refused).map(([n, why]) => `<p class="note">${esc(n)}: ${esc(why)}</p>`).join('');
+  const schedules = all('schedules.changes').map((s) => `${text(s.name) || text(s.reference)}, ${s.status}${s.status === 'paused' ? '' : at(s.next_run_at, 'next ')}`);
+  const crew = all('activity.changes').map((j) => `${text(j.member)}, ${text(j.title) || text(j.status)}${at(j.since, 'since ')}`);
+  const files = all('files.changes').map((f) => (f.kind === 'offer' ? `${text(f.from) || 'Someone'} offers ${text(f.name)}` : `${text(f.name)}${at(f.changed_at, 'changed ')}`));
+  const w = weatherNow(), v = vpnNow(), s = system();
+  const weather = w ? [`${w.place}${w.temp != null ? ' ' + deg(w.temp) : ''}${w.sky ? ', ' + w.sky : ''}`, ...(w.next.length ? ['next hours ' + w.next.map(deg).join(' ')] : [])] : [];
+  const vpn = v ? [`${v.state}${v.server ? ' to ' + v.server : ''}${v.connected && v.mbps != null ? ', ' + v.mbps + ' Mb/s' : ''}`] : [];
+  const hill = [...apps.map((a) => a.name + (a.open ? ' (open)' : '') + (update(one('components.changes', a.ref)) ? ', update available' : '')),
+    ...workshops().map((c) => `${text(c.name)} (${text(c.type)})${update(c) ? ', update available' : ''}`)];
+  const vault = vaultEntries().map((e) => `${text(e.name)}: ${e.status === 'fine' ? 'fine' : 'needs re-authorising'}`);
+  const cyfr = s ? [`CYFR${s.version ? ' ' + s.version : ''}${HEALTH[s.health] ? ', ' + HEALTH[s.health] : ''}`,
+    ...(storageKnown(s) ? [capKnown(s) ? `${gb(s.storage_used)} GB of ${gb(s.storage_cap)} GB` : `${gb(s.storage_used)} GB used`] : []), ...(s.update_available === true ? ['update available'] : [])] : [];
   $('#fallback h1').textContent = person ? `${person}'s street` : 'Your street';
   $('#fallback-when').textContent = `${plaqueTime()}. The street could not be drawn here, so here it is as lists.`;
-  $('#fallback-lists').innerHTML = refused + [
-    section('Waiting on you', waiting, 'Nothing waits on you.'), section('Threads', threads, 'No threads.'),
-    section('Runs', runs, 'No runs yet.'), section('Schedules', schedules, 'No schedules.'),
-    section('Crew at work', crew, 'No crew at work.'), section('Apps', apps, 'No apps installed.'),
+  $('#fallback-lists').innerHTML = [
+    section('Waiting on you', 'waiting', waiting, 'Nothing waits on you.'), section('Threads', 'houses', threads, 'No threads.'),
+    section('Runs', 'lamps', runs, 'No runs yet.'), section('Schedules', 'stops', schedules, 'No schedules.'),
+    section('Crew at work', 'crew', crew, 'No crew at work.'), section('Files', 'files', files, 'No recent files.'),
+    section('Weather', 'sky', weather, 'No weather feed is bound.'), section('VPN', 'ferry', vpn, 'No VPN feed is bound.'),
+    section('Apps', 'apps', hill, 'No apps installed.'), section('Vault', 'vault', vault, 'Nothing in the vault.'),
+    section('CYFR', 'castle', cyfr, 'Not told yet.'),
   ].join('');
 }
 function fallBack(err) {
@@ -1421,22 +1764,6 @@ function listen() {
     if (live()) startLoop(); else stopLoop();
   });
 }
-// Opens the streams of the parts that are on and closes those of the parts that are off; what a closed
-// stream held is let go, and opened again it starts with its refresh.
-const following = new Map();
-function syncStreams() {
-  if (!sdk || typeof sdk.stream !== 'function') return;
-  for (const spec of STREAMS) {
-    const want = on(spec.part);
-    if (want && !following.has(spec.name)) following.set(spec.name, follow(spec));
-    else if (!want && following.has(spec.name)) {
-      following.get(spec.name)();
-      following.delete(spec.name);
-      spec.sweep.clear();
-      delete D.refused[spec.name];
-    }
-  }
-}
 let readied = false;
 function ready() {
   if (readied || !sdk || typeof sdk.ready !== 'function') return;
@@ -1452,7 +1779,8 @@ function boot() {
   } catch (err) {
     fallBack(err);
   }
-  syncStreams();
+  // Every declared stream, once each, together, whatever part is on.
+  if (sdk && typeof sdk.stream === 'function') for (const h of Object.values(H)) open(h);
   ready();
 }
 const fontsReady = document.fonts && document.fonts.ready ? Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]) : Promise.resolve();

@@ -206,6 +206,8 @@ button { font: inherit; color: inherit; }
 :root:not(.phone) #plan { max-height: calc(100% - 88px); }
 #plan .said { flex: 1 1 auto; margin: 0; font-size: 15px; }
 #board .said { margin: 4px 0 0; font-size: 15px; color: var(--fail); }
+#board .said.ok { color: var(--board-ink); }
+#plan .units { display: flex; gap: 8px; }
 .phone #plan .grid { grid-template-columns: 1fr; }
 
 /* ---------- the plain fallback (scripts off or failing) ---------- */
