@@ -7,8 +7,10 @@ defmodule Prima.TinctureWireTest do
   `tests/fixtures/tincture_wire.json` decodes and encodes back to itself
   and carries its credential as a bearer, and the public request names its
   tincture in place of one; every answer reads back; the refusal is a
-  `Prima.Refusal`'s projection and nothing more; the event stream is the
-  one the encoders write and reads back as its events; every shell
+  `Prima.Refusal`'s projection and nothing more; the stream connection's
+  messages are the ones the encoders write, each refused one is refused
+  for the subscription or the connection, and each rejection's refusal
+  reads back as itself; every shell
   message decodes and every refused one is refused; a canvas's handshake
   replies are the ones the builder writes, and no refused reply is; and
   a canvas's paths are the fixture's, a value outside its grammar
@@ -18,8 +20,7 @@ defmodule Prima.TinctureWireTest do
 
   use ExUnit.Case, async: true
 
-  alias Prima.{StreamGrant, TinctureUrl, TinctureWire}
-  alias Prima.Test.EventStream
+  alias Prima.{TinctureUrl, TinctureWire}
 
   @vectors Path.expand("../../../../tests/fixtures/tincture_wire.json", __DIR__)
   @refs Path.expand("../../../../tests/fixtures/component_refs.json", __DIR__)
@@ -56,7 +57,7 @@ defmodule Prima.TinctureWireTest do
   end
 
   test "a body at another version, with a field its kind does not carry, or a malformed field is refused" do
-    [invoke, action, stream] = vectors()["requests"] |> Enum.map(& &1["body"])
+    [invoke, action] = vectors()["requests"] |> Enum.map(& &1["body"])
 
     assert {:error, _} = TinctureWire.decode_request(:invoke, Map.delete(invoke, "v"))
     assert {:error, _} = TinctureWire.decode_request(:invoke, %{invoke | "v" => 2})
@@ -64,12 +65,7 @@ defmodule Prima.TinctureWireTest do
     assert {:error, _} = TinctureWire.decode_request(:invoke, %{invoke | "ref" => "not a ref"})
     assert {:error, _} = TinctureWire.decode_request(:action, %{action | "operation" => "list"})
     assert {:error, _} = TinctureWire.decode_request(:action, %{action | "args" => [1]})
-    assert {:error, _} = TinctureWire.decode_request(:stream_open, %{stream | "stream" => "x"})
-    assert {:error, _} = TinctureWire.decode_request(:stream_open, %{stream | "subject" => "*"})
     assert {:error, _} = TinctureWire.decode_request(:action, "not an object")
-
-    assert {:ok, %{subject: nil}} =
-             TinctureWire.decode_request(:stream_open, %{stream | "subject" => nil})
   end
 
   test "a public request names its tincture and carries no bearer" do
@@ -100,43 +96,108 @@ defmodule Prima.TinctureWireTest do
     refute TinctureWire.public_identity?(%{athanor: "@home", publisher: "local"})
   end
 
-  test "an admitted stream is the event stream the encoders write, and reads back as its events" do
-    %{"kind" => "stream_open", "content_type" => type, "body" => body, "events" => events} =
-      vectors()["stream"]
+  describe "the stream connection" do
+    defp connection, do: vectors()["connection"]
 
-    assert type == TinctureWire.stream_content_type()
+    test "its path, bounds and close codes are the fixture's" do
+      c = connection()
+      assert c["paths"]["app"] == TinctureWire.socket_path()
+      assert c["max_subscriptions"] == TinctureWire.max_subscriptions()
+      assert c["max_message_bytes"] == TinctureWire.max_message_bytes()
+      assert c["idle_ms"] == TinctureWire.idle_ms()
 
-    expected =
-      for %{"id" => id, "event" => event, "data" => data} <- events,
-          do: %{id: id, event: event, data: data}
+      for {reason, code} <- c["close_codes"],
+          do: assert(TinctureWire.close_code(String.to_existing_atom(reason)) == code)
+    end
 
-    assert EventStream.decode(body) == expected
+    test "every message a frame sends decodes and encodes back to itself" do
+      for message <- connection()["from_frame"] do
+        case TinctureWire.decode_message(message) do
+          {:ok,
+           {:subscribe, %{sub: sub, credential: credential, stream: stream, subject: subject}}} ->
+            assert TinctureWire.subscribe(sub, credential, stream, subject) == message
 
-    {deliveries, [%{event: "refusal", data: projection}]} =
-      Enum.split_while(expected, &(&1.event != TinctureWire.refusal_event()))
+          {:ok, {:unsubscribe, sub}} ->
+            assert TinctureWire.unsubscribe(sub) == message
+        end
+      end
+    end
 
-    refusal = %Prima.Refusal{
-      class: String.to_existing_atom(projection["class"]),
-      reason: :stream_overflow,
-      message: projection["message"],
-      stage: String.to_existing_atom(projection["stage"])
-    }
+    test "a refused message refuses its subscription when its number reads, and the connection otherwise" do
+      refused = connection()["refused"]
+      assert Enum.any?(refused, &(&1["refuses"] == "subscription"))
+      assert Enum.any?(refused, &(&1["refuses"] == "connection"))
 
-    written =
-      Enum.map_join(deliveries, &TinctureWire.stream_event(&1.id, &1.event, &1.data)) <>
-        TinctureWire.stream_refusal(refusal)
+      for %{"why" => why, "message" => message, "refuses" => refuses} <- refused do
+        case {refuses, TinctureWire.decode_message(message)} do
+          {"subscription", {:refused, sub, sentence}} ->
+            assert sub == message["sub"], why
+            assert is_binary(sentence), why
 
-    assert ": open\n\n" <> written == body
-    refute body =~ "stream_overflow"
+          {"connection", {:error, sentence}} ->
+            assert is_binary(sentence), why
+
+          {_refuses, other} ->
+            flunk("#{why}: #{inspect(other)}")
+        end
+      end
+    end
+
+    test "every answer is the one its encoder writes, and an error is a refusal's projection" do
+      for message <- connection()["to_frame"] do
+        written =
+          case message do
+            %{"type" => "subscribed", "sub" => sub} ->
+              TinctureWire.subscribed(sub)
+
+            %{"type" => "event"} = event ->
+              TinctureWire.event(
+                event["sub"],
+                event["stream"],
+                event["subject"],
+                event["id"],
+                event["data"]
+              )
+
+            %{"type" => "ended", "sub" => sub, "error" => error} ->
+              TinctureWire.ended(sub, refusal_of(error))
+
+            %{"type" => "ended", "sub" => sub} ->
+              TinctureWire.ended(sub, nil)
+          end
+
+        assert written == message
+      end
+    end
+
+    test "what the handler hears of each subscription ends with the refusal event its error names" do
+      to_frame = connection()["to_frame"]
+
+      for %{"sub" => sub, "events" => events} <- connection()["heard"] do
+        mine = Enum.filter(to_frame, &(&1["sub"] == sub))
+
+        heard =
+          for %{"type" => "event"} = event <- mine,
+              do: %{"id" => event["id"], "event" => event["stream"], "data" => event["data"]}
+
+        last =
+          for %{"type" => "ended", "error" => error} <- mine,
+              do: %{"id" => nil, "event" => TinctureWire.refusal_event(), "data" => error}
+
+        assert heard ++ last == events
+      end
+    end
   end
 
-  test "a stream event not ended by its blank line, without data or with data that is not JSON is dropped" do
-    assert EventStream.decode("event: a\ndata: {\"x\":1}") == []
-    assert EventStream.decode("event: a\n\n") == []
-    assert EventStream.decode("event: a\ndata: {x\n\n") == []
-
-    assert EventStream.decode("id: 7\r\nretry: 5\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n") ==
-             [%{id: 7, event: "message", data: %{"a" => 1}}]
+  # The refusal a vector's error projects: a reason of its own, which the
+  # projection never carries.
+  defp refusal_of(%{"class" => class, "message" => message, "stage" => stage}) do
+    %Prima.Refusal{
+      class: String.to_existing_atom(class),
+      reason: :vector,
+      message: message,
+      stage: String.to_existing_atom(stage)
+    }
   end
 
   test "a bearer is `Bearer <credential>` and nothing else" do
@@ -147,27 +208,10 @@ defmodule Prima.TinctureWireTest do
     assert TinctureWire.read_bearer(nil) == :error
   end
 
-  test "every answer reads back, and the stream answer is the grant without its topic" do
+  test "every answer reads back" do
     for %{"kind" => name, "body" => body} <- vectors()["answers"] do
       assert {:ok, _value} = TinctureWire.decode_answer(kind(name), body)
     end
-
-    %{"body" => %{"stream" => stream} = body} =
-      Enum.find(vectors()["answers"], &(&1["kind"] == "stream_open"))
-
-    {:ok, deadline, 0} = DateTime.from_iso8601(stream["deadline"])
-
-    grant = %StreamGrant{
-      topic: :execution_events,
-      projection: stream["projection"],
-      subject: stream["subject"],
-      deadline: deadline,
-      grant_id: stream["grant_id"]
-    }
-
-    assert TinctureWire.stream(grant, stream["stream"]) == body
-    # The bus key the grant rides stays on the server.
-    refute inspect(TinctureWire.stream(grant, stream["stream"])) =~ "execution_events"
 
     assert TinctureWire.result(%{"temperature" => 21}) ==
              Enum.find(vectors()["answers"], &(&1["kind"] == "invoke"))["body"]
@@ -197,26 +241,16 @@ defmodule Prima.TinctureWireTest do
              TinctureWire.decode_answer(kind(name), put_in(body, ["error", "reason"], "x"))
   end
 
-  test "each stream rejection's refusal body is a Prima.Refusal's projection, which reads back as itself" do
-    %{"cases" => cases} = vectors()["stream_rejections"]
+  test "each subscription rejection is an `ended` before `subscribed` whose error reads back as itself" do
+    %{"cases" => cases, "no_answer_classes" => no_answer} = vectors()["stream_rejections"]
     classes = Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
-    bodies = for %{"answer" => %{"body" => body}} <- cases, do: body
-    assert bodies != []
+    assert no_answer -- classes == []
 
-    for %{"error" => %{"class" => class, "message" => message, "stage" => stage}} = body <- bodies do
-      assert class in classes, class
+    answers = for %{"answer" => %{} = answer} <- cases, do: answer
+    assert answers != []
 
-      refusal = %Prima.Refusal{
-        class: String.to_existing_atom(class),
-        reason: :vector,
-        message: message,
-        stage: String.to_existing_atom(stage)
-      }
-
-      assert TinctureWire.refusal(refusal) == body
-
-      assert TinctureWire.decode_answer(:stream_open, body) ==
-               {:refused, %{class: class, message: message, stage: stage}}
+    for %{"sub" => sub, "error" => error} = answer <- answers do
+      assert TinctureWire.ended(sub, refusal_of(error)) == answer
     end
 
     # Every case says how the SDK rejects it, with a stage only for a
@@ -225,10 +259,12 @@ defmodule Prima.TinctureWireTest do
       assert Map.keys(rejects) -- ["stage"] == ["class", "message"], inspect(answer)
 
       case answer do
-        %{"body" => %{"error" => error}} when is_map_key(rejects, "stage") ->
-          assert rejects == error
+        %{"error" => %{"class" => class} = error} ->
+          if class in no_answer,
+            do: assert(rejects == %{"class" => "unavailable", "message" => error["message"]}),
+            else: assert(rejects == error)
 
-        _no_refusal_of_its_own ->
+        nil ->
           refute Map.has_key?(rejects, "stage")
       end
     end
@@ -565,7 +601,7 @@ defmodule Prima.TinctureWireTest do
                  TinctureWire.page_prefix() <> row["credential"] <> "/" <> row["frame"]
 
         assert TinctureWire.data_path(row["frame"]) == row["data_path"]
-        assert TinctureWire.stream_path(row["frame"]) == row["stream_path"]
+        assert TinctureWire.socket_path(row["frame"]) == row["socket_path"]
       end
 
       for %{"why" => why, "credential" => credential, "frame" => frame} <- invalid do
@@ -575,7 +611,7 @@ defmodule Prima.TinctureWireTest do
           assert is_binary(TinctureWire.data_path(frame)), why
         else
           assert_raise ArgumentError, fn -> TinctureWire.data_path(frame) end
-          assert_raise ArgumentError, fn -> TinctureWire.stream_path(frame) end
+          assert_raise ArgumentError, fn -> TinctureWire.socket_path(frame) end
         end
       end
     end
