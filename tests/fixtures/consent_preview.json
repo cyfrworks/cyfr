@@ -3153,6 +3153,34 @@
     },
     {
       "error": "invalid_field",
+      "name": "a control whose label is 17 letters but 34 code points",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive",
+          "programmatic"
+        ],
+        "removed": [],
+        "rows": [
+          {
+            "kind": "controls",
+            "narrowed": false,
+            "node": "tincture:local.desk",
+            "values": {
+              "controls": [
+                {
+                  "label": "ééééééééééééééééé",
+                  "operation": "schedule.pause"
+                }
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
       "name": "a control carrying its args",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",

@@ -534,7 +534,8 @@ defmodule Prima.ConsentPreview.Row do
     %{label_points: points} = Tincture.desktop_bounds()
 
     Enum.all?(Map.keys(control), &(&1 in ~w(label operation pick))) and
-      text?(label) and String.length(label) <= points and Tincture.operation_name?(operation) and
+      text?(label) and length(String.codepoints(label)) <= points and
+      Tincture.operation_name?(operation) and
       (not Map.has_key?(control, "pick") or pick?(control["pick"]))
   end
 
