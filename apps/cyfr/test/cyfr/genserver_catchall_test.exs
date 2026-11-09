@@ -29,7 +29,8 @@ defmodule Cyfr.GenServerCatchallTest do
     {Prima.RateLimiter, "RateLimiter"},
     {Opus.Slots, "Slots"},
     {Opus.Events.Sequence, "Events.Sequence"},
-    {Compendium.ProjectionReconciler, "ProjectionReconciler"}
+    {Compendium.ProjectionReconciler, "ProjectionReconciler"},
+    {Cyfr.ReleaseChannel, "ReleaseChannel"}
   ]
 
   # Named adopters not probed live, each with the reason it cannot be:
@@ -39,6 +40,7 @@ defmodule Cyfr.GenServerCatchallTest do
     Opus.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Aqua.ScheduleNotes => "gated by :schedule_notes_enabled; probed on an instance below",
     Aqua.Crew => "gated by :crew_delivery_enabled; probed on an instance below",
+    Aqua.Status => "gated by :status_watch_enabled; probed on an instance in its own test",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
     Cyfr.StorageReserve =>
       "started before the gate, which the sandboxed test boot omits; probed on an instance in its own test",

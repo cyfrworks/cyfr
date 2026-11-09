@@ -44,6 +44,7 @@ defmodule Cyfr.BusPayloadTest do
     SettingsChanged,
     ShareChanged,
     SharedThreadChanged,
+    SystemStatus,
     ThreadEvent,
     ThreadListed,
     Tinctures,
@@ -138,6 +139,16 @@ defmodule Cyfr.BusPayloadTest do
         people: ["Ada"],
         last_activity: ~U[2026-11-09 09:00:00Z],
         waits_on_you: false
+      ),
+      SystemStatus.new(@actor, :changed,
+        health: "ok",
+        storage_used: 1_024,
+        storage_cap: nil,
+        model_connected: true,
+        crew_ready: 1,
+        crew_total: 3,
+        version: "0.6.0",
+        update_available: false
       )
     ]
   end

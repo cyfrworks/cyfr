@@ -73,7 +73,9 @@ config :sanctum,
     # `cyfr`: the platform settings, for the server's operators.
     Cyfr.Providers.Settings,
     # `cyfr`: what waits for a person, the stream a canvas reads; no tool.
-    Cyfr.Providers.Attention
+    Cyfr.Providers.Attention,
+    # `aqua`: how the person's CYFR stands, the stream a canvas reads; no tool.
+    Aqua.Providers.Status
   ]
 
 # The proxies whose forwarded headers the proxy listener trusts

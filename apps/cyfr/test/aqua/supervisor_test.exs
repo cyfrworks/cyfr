@@ -18,7 +18,7 @@ defmodule Aqua.SupervisorTest do
   end
 
   test "the recovery is transient, and listed without a process once it has run" do
-    {:ok, {_flags, children}} = Aqua.Supervisor.init(thread_recovery: true)
+    {:ok, {_flags, children}} = Aqua.Supervisor.init(thread_recovery: true, status_watch: true)
 
     %{start: {Supervisor, :start_link, [group, _opts]}} =
       Enum.find(children, &(&1.id == Aqua.RunnerTree))

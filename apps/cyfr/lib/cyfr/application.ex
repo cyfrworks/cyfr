@@ -773,8 +773,12 @@ defmodule Cyfr.Application do
          root: Application.get_env(:cyfr, :locus_backends_key),
          cluster: Application.get_env(:cyfr, :cluster, false) == true
        ]},
-      # Off in the test env: suites drive runners directly.
-      {Aqua.Supervisor, thread_recovery: Application.get_env(:cyfr, :thread_recovery, true)},
+      # Off in the test env: suites drive runners directly, and start the
+      # status watch they read.
+      {Aqua.Supervisor,
+       thread_recovery: Application.get_env(:cyfr, :thread_recovery, true),
+       status_watch:
+         switch!(:status_watch_enabled, Application.get_env(:cyfr, :status_watch_enabled, true))},
       Emissary.Supervisor,
       # Recurring component executions: the runs the scheduler fires are
       # tasks of their own, monitored by it. Last among the domains, so a
@@ -791,8 +795,26 @@ defmodule Cyfr.Application do
       # which holds no work in flight; 30 s: the longest page task it lets
       # finish.
       Supervisor.child_spec(Prism.TinctureRegistry, shutdown: 5_000),
-      Supervisor.child_spec({Task.Supervisor, name: Prism.TaskSupervisor}, shutdown: 30_000)
+      Supervisor.child_spec({Task.Supervisor, name: Prism.TaskSupervisor}, shutdown: 30_000),
+      # The release channel `cyfr update` reads, asked by the status a
+      # canvas reads; it never reads in the test env. Last, so its restart
+      # restarts nothing that admits work. 5 s: its stop, which holds no
+      # work in flight.
+      Supervisor.child_spec({Cyfr.ReleaseChannel, release_channel()}, shutdown: 5_000)
     ]
+  end
+
+  defp release_channel do
+    enabled = Application.get_env(:cyfr, :release_channel_enabled, true)
+    if switch!(:release_channel_enabled, enabled), do: [], else: [fetch: false]
+  end
+
+  # A boot switch is true or false, and anything else refuses the boot.
+  defp switch!(_key, value) when is_boolean(value), do: value
+
+  defp switch!(key, other) do
+    raise ArgumentError,
+          "config :cyfr, #{inspect(key)} must be true or false, got #{inspect(other)}"
   end
 
   # Last in the infra tier, and optional: offers new seed media to the

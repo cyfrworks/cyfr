@@ -2234,6 +2234,8 @@ defmodule Cyfr.Boundaries do
       request: 3
     ],
     "Sanctum.Tenancy" => [channel_active?: 2, continuation: 3, revalidate: 1],
+    # The status a canvas reads names the athanor's storage cap.
+    "Sanctum.Tenancy.Caps" => [get: 1],
     "Sanctum.Tenancy.Athanors" => [
       active?: 1,
       by_route_slug: 1,
@@ -2653,6 +2655,8 @@ defmodule Cyfr.Boundaries do
     cron_scheduler_enabled: :default,
     schedule_notes_enabled: :default,
     crew_delivery_enabled: :default,
+    status_watch_enabled: :default,
+    release_channel_enabled: :default,
     execution_sweeper_enabled: :default,
     execution_archive_watch_enabled: :default,
     worker_watch_enabled: :default,
