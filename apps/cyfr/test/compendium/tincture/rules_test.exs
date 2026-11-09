@@ -1028,26 +1028,10 @@ defmodule Compendium.Tincture.RulesTest do
 
       both = %{"data" => ["runs.changes", "tags.changes"], "feeds" => ["vpn"]}
 
-      # An enum, nested under a nullable object; a list of strings; a
-      # feed's result, a json node beneath which the stream says nothing.
+      # An enum, nested under a nullable object, and a list of strings.
       assert check.(%{"field" => "/kind"}, both) == :ok
       assert check.(%{"field" => "/error/class"}, both) == :ok
       assert check.(%{"stream" => "tags.changes", "field" => "/tags"}, both) == :ok
-
-      assert control_check(
-               [
-                 control("feed.press", %{
-                   "pick" => %{
-                     "stream" => "feed.results",
-                     "subject" => "vpn",
-                     "field" => "/result/servers",
-                     "arg" => "action_name"
-                   }
-                 })
-               ],
-               both,
-               streams
-             ) == :ok
 
       where = "tincture.desktop.controls c1: the pick"
 
@@ -1078,9 +1062,41 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    # The plan's example fills `server`, which feed.press does not take:
-    # the rule as written refuses it.
-    test "the plan's vpn example is refused: feed.press takes no server argument" do
+    # Review of A1, finding 2: a json value declares nothing a pick can
+    # offer, at it or beneath it, so the pick is refused at publish.
+    test "json pick targets and their descendants refuse at publish" do
+      for field <- ["/result", "/result/servers", "/result/does/not/exist"] do
+        pick = %{
+          "stream" => "feed.results",
+          "subject" => "vpn",
+          "field" => field,
+          "arg" => "schedule_id"
+        }
+
+        block = %{
+          "feeds" => ["vpn"],
+          "controls" => [control("schedule.pause", %{"pick" => pick})]
+        }
+
+        assert {:error, {:invalid_tincture, sentence}} = control_check(block["controls"], block)
+        assert sentence =~ "the pick's field #{field} reaches a json value", field
+
+        manifest = %{
+          "type" => "tincture",
+          "tincture" => %{"entry" => "index.html", "desktop" => block}
+        }
+
+        assert {:error, published} =
+                 Compendium.Tincture.check_version(manifest, [{"index.html", 1}])
+
+        assert published == sentence
+      end
+    end
+
+    # The plan's example picks from a feed's result, a json value, and
+    # fills `server`, which feed.press does not take: refused until A3
+    # gives feed.press a pick argument.
+    test "the plan's vpn example is refused: its field reaches a json value" do
       assert {:error, {:invalid_tincture, sentence}} =
                control_check(
                  [
@@ -1097,7 +1113,7 @@ defmodule Compendium.Tincture.RulesTest do
                  %{"feeds" => ["vpn"]}
                )
 
-      assert sentence =~ "fills server, which feed.press takes no argument named"
+      assert sentence =~ "the pick's field /result/servers reaches a json value"
     end
   end
 
@@ -1185,10 +1201,47 @@ defmodule Compendium.Tincture.RulesTest do
             {%{fits | "s.svg" => svg(~s(viewBox="0 0 10 10"))},
              "#{where}: s.svg: an SVG texture's root element says its width and height in pixels"},
             {%{fits | "s.svg" => svg(~s(width="100%" height="64"))},
+             "#{where}: s.svg: an SVG texture's root element says its width and height in pixels"},
+            {%{fits | "s.svg" => svg(~s(data-width="64" height="64"))},
+             "#{where}: s.svg: an SVG texture's root element says its width and height in pixels"},
+            {%{
+               fits
+               | "s.svg" =>
+                   ~s(<!DOCTYPE svg [<!ENTITY w "64">]><svg width="64" height="64"></svg>)
+             },
+             "#{where}: s.svg: an SVG texture's root element says its width and height in pixels"},
+            {%{fits | "s.svg" => ~s(<g><svg width="64" height="64"></svg></g>)},
              "#{where}: s.svg: an SVG texture's root element says its width and height in pixels"}
           ] do
         assert chrome_check(css, files) == {:error, {:invalid_tincture, sentence}}, sentence
       end
+    end
+
+    # Review of A1, finding 3: a comment holding an svg tag is no root.
+    test "SVG texture dimensions come from the actual root" do
+      css = ":root { --chrome-texture-title: url(t.svg); }"
+      big = ~s(<svg xmlns="http://www.w3.org/2000/svg" width="4096" height="4096"></svg>)
+      where = "tincture.desktop.chrome chrome.css: t.svg"
+
+      for prolog <- [
+            ~s(<!-- <svg width="1" height="1"> -->\n),
+            ~s(<?xml version="1.0"?>\n<!-- <svg width="1" height="1"> -->\n),
+            ~s(<?svg width="1" height="1"?>)
+          ] do
+        assert chrome_check(css, %{"t.svg" => prolog <> big}) ==
+                 {:error,
+                  {:invalid_tincture,
+                   "#{where} is 4096 by 4096 pixels; a texture is at most 2048 a side"}},
+               prolog
+      end
+
+      # A prolog of a declaration, comments and a byte order mark, then the
+      # root with single-quoted attributes, reads as that root.
+      fits =
+        <<0xEF, 0xBB, 0xBF>> <>
+          ~s(<?xml version="1.0"?>\n<!-- logo -->\n<svg width='64px' height='32'></svg>)
+
+      assert {:ok, _} = chrome_check(css, %{"t.svg" => fits})
     end
 
     test "a font is a WOFF2 in the version, at most 512 KiB, and needs no licence file" do
@@ -1279,6 +1332,29 @@ defmodule Compendium.Tincture.RulesTest do
           ] do
         assert Rules.read_classes({:stream, name}) == [:outside], name
       end
+    end
+
+    # From A2's report: a thread's title and what waits on the person are
+    # their own words, so the threads and attention streams carry every
+    # class, and so does a desktop that reads either.
+    test "a desktop declaring attention.changes or threads.changes gets the thread classes" do
+      for name <- ["attention.changes", "threads.changes"] do
+        assert Rules.read_classes({:stream, name}) == Prima.Source.classes(), name
+
+        desktop = %{
+          "type" => "tincture",
+          "tincture" => %{"entry" => "index.html", "desktop" => %{"data" => [name]}}
+        }
+
+        assert Rules.frame_classes(desktop) == Prima.Source.classes(), name
+      end
+
+      # A desktop reading only runs carries the outside alone.
+      runs = %{
+        "tincture" => %{"entry" => "index.html", "desktop" => %{"data" => ["runs.changes"]}}
+      }
+
+      assert Rules.frame_classes(runs) == [:outside]
     end
 
     test "a frame's declared reads together carry every class any of them may" do

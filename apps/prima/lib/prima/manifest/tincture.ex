@@ -532,12 +532,17 @@ defmodule Prima.Manifest.Tincture do
   defp actions(nil), do: {:ok, []}
 
   defp actions(list) when is_list(list) do
+    refused = first_refused(list, &operation_name?/1)
+
     cond do
       length(list) > @max_actions ->
         refuse("tincture.actions names at most #{@max_actions} operations")
 
-      bad = Enum.find(list, &(not operation_name?(&1))) ->
-        refuse("tincture.actions entries must be operation names (tool.action), got #{show(bad)}")
+      match?({:refused, _}, refused) ->
+        refuse(
+          "tincture.actions entries must be operation names (tool.action), " <>
+            "got #{show(elem(refused, 1))}"
+        )
 
       true ->
         {:ok, list}
@@ -586,10 +591,13 @@ defmodule Prima.Manifest.Tincture do
   defp subjects(nil), do: {:ok, []}
 
   defp subjects(list) when is_list(list) do
+    refused = first_refused(list, &(&1 in @subject_kinds))
+
     cond do
-      bad = Enum.find(list, &(&1 not in @subject_kinds)) ->
+      match?({:refused, _}, refused) ->
         refuse(
-          "tincture.subjects names kinds of #{Enum.join(@subject_kinds, ", ")}, got #{show(bad)}"
+          "tincture.subjects names kinds of #{Enum.join(@subject_kinds, ", ")}, " <>
+            "got #{show(elem(refused, 1))}"
         )
 
       Enum.uniq(list) != list ->
@@ -639,13 +647,14 @@ defmodule Prima.Manifest.Tincture do
 
   defp desktop_names(list, key, grammar) when is_list(list) do
     noun = if key == "data", do: "a dotted stream name", else: "a feed's name"
+    refused = first_refused(list, grammar)
 
     cond do
       length(list) > @max_desktop_names ->
         refuse("tincture.desktop.#{key} names at most #{@max_desktop_names}")
 
-      bad = Enum.find(list, &(not grammar.(&1))) ->
-        refuse("tincture.desktop.#{key} entries are each #{noun}, got #{show(bad)}")
+      match?({:refused, _}, refused) ->
+        refuse("tincture.desktop.#{key} entries are each #{noun}, got #{show(elem(refused, 1))}")
 
       Enum.uniq(list) != list ->
         refuse("tincture.desktop.#{key} names each once")
@@ -721,7 +730,7 @@ defmodule Prima.Manifest.Tincture do
   defp control(_other), do: refuse("a tincture.desktop.controls entry must be an object")
 
   defp label?(label) do
-    is_binary(label) and String.valid?(label) and String.length(label) in 1..@max_label_points and
+    is_binary(label) and String.valid?(label) and code_points(label) in 1..@max_label_points and
       not Regex.match?(@control_characters, label)
   end
 
@@ -907,7 +916,7 @@ defmodule Prima.Manifest.Tincture do
   defp field_bounds(type, _field, _where), do: {:ok, %{"type" => type}}
 
   defp enum_value?(value) do
-    is_binary(value) and String.valid?(value) and String.length(value) in @enum_value_points and
+    is_binary(value) and String.valid?(value) and code_points(value) in @enum_value_points and
       not Regex.match?(@control_characters, value)
   end
 
@@ -932,6 +941,20 @@ defmodule Prima.Manifest.Tincture do
     do: refuse("tincture.desktop.chrome must be a relative path, got #{show(other)}")
 
   # ---- helpers ---------------------------------------------------------------
+
+  # The first entry `ok?` refuses, as `{:refused, entry}`, so a refused
+  # `nil` or `false` is a refusal and never a falsy miss; `:none` when
+  # every entry holds.
+  defp first_refused(list, ok?) do
+    case Enum.find_index(list, &(not ok?.(&1))) do
+      nil -> :none
+      index -> {:refused, Enum.at(list, index)}
+    end
+  end
+
+  # A bound on text counts Unicode code points, never graphemes: a letter
+  # and its combining mark are two.
+  defp code_points(text), do: text |> String.codepoints() |> length()
 
   defp collect(list, fun) do
     Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->

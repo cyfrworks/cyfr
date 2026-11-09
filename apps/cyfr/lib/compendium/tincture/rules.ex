@@ -151,14 +151,20 @@ defmodule Compendium.Tincture.Rules do
   # among them) is refused beside them.
   @persons_controls Caps.agent_only_tools()
 
-  # The stream namespaces whose events carry a thread's or the
-  # notes' material, which may be of any source class.
-  @thread_streams ~w(turn thread notes)
+  # The stream namespaces whose events carry a thread's or the notes'
+  # material, which may be of any source class: a thread's title, the
+  # people in it and what waits on the person are their own words.
+  @thread_streams ~w(turn thread threads notes attention)
 
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
   # An absolute path whose every segment is plain and none is `.` or `..`.
   @absolute_path ~r/\A(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+\z/
+
+  # The root element of an SVG texture: `<svg`, its attributes, each a
+  # name and a quoted value, and its close.
+  @svg_start_tag ~r/\A<svg((?:\s+[A-Za-z_:][A-Za-z0-9_:.-]*\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/
+  @svg_attribute ~r/([A-Za-z_:][A-Za-z0-9_:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/
 
   @typedoc "A refusal in `Prima.Manifest`'s block vocabulary: the tag and a sentence."
   @type refusal :: {:invalid_tincture, String.t()}
@@ -537,8 +543,10 @@ defmodule Compendium.Tincture.Rules do
       (`Prima.Operation.possible_classes/1`, `outside` for an operation that
       declares nothing), and every class for one the catalog does not hold;
     * `{:stream, name}`, a stream's events and its refresh: every class for
-      a stream over a turn, a thread or notes (a name under `turn.`,
-      `thread.` or `notes.`), `outside` for any other;
+      a stream over a turn, a thread, the threads, notes or what needs
+      the person's attention (a name under `turn.`, `thread.`, `threads.`,
+      `notes.` or `attention.`), whose events carry a person's own words,
+      `outside` for any other;
     * `:storage`, a stored file: `files_by_grant` and `outside`, since a
       file carries no provenance of its own.
 
@@ -730,9 +738,8 @@ defmodule Compendium.Tincture.Rules do
   naming which. A control's `pick` names a stream the desktop reads (a
   name in `data`, or `#{"feed.results"}` with a feed in `feeds`), a
   `field` that resolves in that stream's shape to a list of strings or an
-  enum (or reaches a `json` node, beneath which the stream declares
-  nothing and the shell holds the value at the press), and an `arg` the
-  operation takes. A declaration without the desktop block holds nothing
+  enum the shape declares (never a `json` value, beneath which it
+  declares nothing), and an `arg` the operation takes. A declaration without the desktop block holds nothing
   here. Publish runs it beside `check_streams/2`.
   """
   @spec check_desktop(Tincture.t(), [Prima.Provider.Stream.t()]) :: :ok | {:error, refusal()}
@@ -837,10 +844,16 @@ defmodule Compendium.Tincture.Rules do
   defp pointer(:error, where),
     do: refuse("#{where}'s field is no RFC 6901 pointer")
 
-  # A pointer walks an object's fields. It resolves where it ends on a
-  # list of strings or an enum, and where it reaches a `json` node, which
-  # declares nothing beneath it.
-  defp resolves(%{"type" => "json"}, _segments, _field, _where), do: :ok
+  # A pointer walks an object's fields, and resolves only where it ends on
+  # a list of strings or an enum the shape declares. A `json` node declares
+  # nothing beneath it, so a pointer that reaches one, or reaches past it,
+  # resolves to nothing a pick can offer.
+  defp resolves(%{"type" => "json"}, _segments, field, where),
+    do:
+      refuse(
+        "#{where}'s field #{field} reaches a json value in the stream's shape, which " <>
+          "declares no list of strings or enum: a pick takes one the shape declares"
+      )
 
   defp resolves(%{"type" => "enum"}, [], _field, _where), do: :ok
 
@@ -953,14 +966,54 @@ defmodule Compendium.Tincture.Rules do
 
   defp dimensions(".png", _bytes, where), do: refuse("#{where} is not a PNG image")
 
+  # An SVG's size is its root element's: past the prolog, which holds only
+  # whitespace, an XML declaration, comments and processing instructions
+  # (a document type is refused), the first element is `svg`, whose
+  # `width` and `height` attributes are whole pixels.
   defp dimensions(".svg", bytes, where) do
-    with [_, attributes] <- Regex.run(~r/<svg\b([^>]*)>/, bytes),
-         [_, width] <- Regex.run(~r/\swidth="([0-9]{1,5})(?:px)?"/, attributes),
-         [_, height] <- Regex.run(~r/\sheight="([0-9]{1,5})(?:px)?"/, attributes) do
-      within_pixels(String.to_integer(width), String.to_integer(height), where)
+    with {:ok, root} <- svg_root(bytes),
+         [_, attributes] <- Regex.run(@svg_start_tag, root),
+         pairs = Regex.scan(@svg_attribute, attributes, capture: :all_but_first),
+         {:ok, width} <- svg_pixels(pairs, "width"),
+         {:ok, height} <- svg_pixels(pairs, "height") do
+      within_pixels(width, height, where)
     else
       _ ->
         refuse("#{where}: an SVG texture's root element says its width and height in pixels")
+    end
+  end
+
+  defp svg_root(<<0xEF, 0xBB, 0xBF, rest::binary>>), do: svg_root(rest)
+
+  defp svg_root(bytes) do
+    case String.trim_leading(bytes) do
+      "<?" <> rest -> skip_past(rest, "?>")
+      "<!--" <> rest -> skip_past(rest, "-->")
+      "<svg" <> _ = root -> {:ok, root}
+      _other -> :error
+    end
+  end
+
+  defp skip_past(bytes, closing) do
+    case :binary.split(bytes, closing) do
+      [_skipped, rest] -> svg_root(rest)
+      [_unclosed] -> :error
+    end
+  end
+
+  # The value of the one attribute `name`, as whole pixels.
+  defp svg_pixels(pairs, name) do
+    # A double-quoted value is the second capture, a single-quoted one the
+    # third.
+    case for([^name | values] <- pairs, do: Enum.join(values)) do
+      [value] ->
+        case Regex.run(~r/\A([0-9]{1,5})(?:px)?\z/, value) do
+          [_, digits] -> {:ok, String.to_integer(digits)}
+          nil -> :error
+        end
+
+      _none_or_several ->
+        :error
     end
   end
 

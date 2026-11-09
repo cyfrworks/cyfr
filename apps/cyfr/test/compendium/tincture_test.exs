@@ -408,5 +408,21 @@ defmodule Compendium.TinctureTest do
       File.write!(Path.join(dir, "chrome.css"), ":root { --chrome-edge: 8px; }")
       assert {:ok, %{digest: _}} = Compendium.TinctureValidator.validate(dir)
     end
+
+    # Review of A1, finding 4: ruled that a font needs no licence file
+    # beside it; the guide states the author's duty.
+    test "a WOFF2 within its cap publishes without a licence file" do
+      css = ~s|@font-face { font-family: "Inter"; src: url("fonts/inter.woff2"); }|
+
+      pairs = [
+        {[ComponentPath.manifest_name()],
+         Jason.encode!(canvas(%{"desktop" => %{"chrome" => "chrome.css"}}))},
+        {["index.html"], "<html></html>"},
+        {["chrome.css"], css},
+        {["fonts", "inter.woff2"], "wOF2" <> :binary.copy(<<0>>, 524_284)}
+      ]
+
+      assert {:ok, %{digest: _}} = Compendium.TinctureValidator.validate_from_pairs(pairs)
+    end
   end
 end

@@ -414,6 +414,47 @@ defmodule Prima.ManifestTinctureTest do
       refute desktop_digest(%{}) == Tincture.digest(app)
     end
 
+    # Review of A1, finding 1: a refused entry that is itself falsy was
+    # taken for no refusal, and raised later in the stream rules.
+    test "null and false desktop names refuse without raising" do
+      for {key, valid} <- [{"data", "ok.changes"}, {"feeds", "ok"}], value <- [nil, false] do
+        sentence = refused(desktop(%{key => [valid, value]}))
+        assert sentence =~ "tincture.desktop.#{key} entries are each", inspect({key, value})
+        assert sentence =~ "got #{if value == nil, do: "nothing", else: "false"}"
+      end
+
+      for value <- [nil, false] do
+        assert refused(%{"actions" => [value]}) =~
+                 "tincture.actions entries must be operation names"
+
+        assert refused(%{"subjects" => [value]}) =~ "tincture.subjects names kinds of"
+      end
+    end
+
+    # Review of A1, finding 5: a combining mark is a code point of its own.
+    test "label and enum bounds count Unicode code points" do
+      composed = fn count -> String.duplicate("e\u0301", count) end
+
+      control = fn label ->
+        %{"controls" => [%{"id" => "c1", "label" => label, "operation" => "schedule.pause"}]}
+      end
+
+      enum = fn value ->
+        %{
+          "prefs" => %{
+            "desktop" => %{"fields" => %{"u" => %{"type" => "enum", "values" => [value]}}}
+          }
+        }
+      end
+
+      assert {:ok, _} = Tincture.from_manifest(manifest(desktop(control.(composed.(16)))))
+      assert refused(desktop(control.(composed.(16) <> "e"))) =~ "1 to 32 code points"
+      assert refused(desktop(control.(composed.(32)))) =~ "1 to 32 code points"
+
+      assert {:ok, _} = Tincture.from_manifest(manifest(desktop(enum.(composed.(128)))))
+      assert refused(desktop(enum.(composed.(128) <> "e"))) =~ "1 to 256 code points"
+    end
+
     test "data and feeds are each at most 32 names in their grammars, each once" do
       names = for i <- 1..32, do: "s#{i}.changes"
       feeds = for i <- 1..32, do: "f#{i}"
