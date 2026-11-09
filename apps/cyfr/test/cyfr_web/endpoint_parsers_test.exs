@@ -953,7 +953,7 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       assert Prima.HostAPI.max_body_bytes() == 1_048_576
 
       assert guide =~
-               "| Request body | a host call's body (1 MiB) per invoke, action or stream open | " <>
+               "| Request body | a host call's body (1 MiB) per invoke or action | " <>
                  "a declared length over it is refused 413 before any of the body is read; " <>
                  "a body of undeclared length is read up to it, then refused 413; " <>
                  "either way the call rejects |"
