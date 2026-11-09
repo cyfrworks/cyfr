@@ -72,11 +72,13 @@ defmodule Prima.TinctureWire do
     * `press` — press a feed's action: `args.binding`, a binding id
       (`Prima.Feed.binding_id?/1`), and `args.action`, the action's name
       (`Prima.Feed.name?/1`), exactly those two; or press a control the
-      desktop declares: `args.control`, its id (`control?/1`), and, for a
-      control with a pick, `args.value`, the picked string
-      (`press_value?/1`);
+      desktop declares: `args.control`, its id (`control?/1`), `args.call`,
+      the number the frame gives this press (`call?/1`), which its answer
+      carries back, and, for a control with a pick, `args.value`, the
+      picked string (`press_value?/1`);
     * `prefs` — write the desktop's preferences: `args.document`, an
-      object (what it may hold is `Prima.CanvasPrefs`');
+      object (what it may hold is `Prima.CanvasPrefs`'), and `args.call`,
+      the number its answer carries back;
     * `ask` — ask AQUA about a widget: `args.widget`, a widget id
       (`widget?/1`). The sentence AQUA's panel opens with is Prism's;
     * `settings` — open one of Prism's pages: `args.page`, a page's key
@@ -124,12 +126,22 @@ defmodule Prima.TinctureWire do
   never from anything a frame or a page sends. The
   shell's later messages to a canvas over its port (`canvas`, `posture`,
   `covered`, `installed`, `state`, `pressed` and `prefs`) are JavaScript
-  on both ends; `pressed` answers a control's press, exactly `control`
-  and `outcome` (`press_outcomes/0`), with `reason`, a refusal's class
-  (`Prima.Refusal.classes/0`), exactly when refused; `prefs` answers a
-  `prefs` write, exactly `outcome` (`prefs_outcomes/0`), `document` and
-  `revision` (the stored document as the shell now holds it), with
-  `reason` exactly when refused;
+  on both ends; `pressed` answers a control's press, exactly `control`,
+  the press's `call` and `outcome` (`press_outcomes/0`), with `reason`, a
+  refusal's class (`Prima.Refusal.classes/0`), exactly when refused;
+  `prefs` answers a `prefs` write, exactly its `call`, `outcome`
+  (`prefs_outcomes/0`), `document` and `revision` (the stored document as
+  the shell now holds it), with `reason` exactly when refused. Either,
+  `cancelled`, may name `too_soon` (`cancel_reasons/0`): the shell's end
+  of the port forwards a canvas's verb for the person only while the
+  shell's page holds activation that no input in its chrome and no
+  earlier verb has spent, and drops one sent within the activation's
+  lifespan of the last spend at once, never holding it. A frame
+  numbers its presses of a control and its writes upward, one count for
+  both, and the shell's end of its port drops one numbered no higher than
+  the last, unanswered; the frame matches each answer to the call it is
+  still waiting on by `call` and the answer's verb, never by order, and an
+  answer to no such call moves nothing;
   `installed` names at most `max_installed/0` tinctures, each exactly the
   keys `installed_keys/0`: its `ref`, a tincture reference; its `name`, 1
   to `max_installed_name/0` code points; its `icon`, an emoji of 1 to
@@ -175,8 +187,10 @@ defmodule Prima.TinctureWire do
   @max_safe_area 512
   @max_person_name 128
   @max_press_value 256
+  @max_call 2_147_483_647
   @press_outcomes ~w(accepted refused cancelled)
   @prefs_outcomes ~w(saved stale refused cancelled)
+  @cancel_reasons ~w(too_soon)
 
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
   @athanor_segment ~r/\A@[a-z0-9]+(-[a-z0-9]+)*\z/
@@ -286,6 +300,13 @@ defmodule Prima.TinctureWire do
   def press_value?(value), do: bounded_text?(value, @max_press_value)
 
   @doc """
+  Whether `call` numbers a frame's press or write: a whole number from 1
+  to #{@max_call}, which the answer to it carries back.
+  """
+  @spec call?(term()) :: boolean()
+  def call?(call), do: is_integer(call) and call >= 1 and call <= @max_call
+
+  @doc """
   Whether `id` names what an app is opened on: 1 to 256 characters of
   letters, digits and `_ . : @ / -`, the first a letter or a digit.
   """
@@ -330,8 +351,9 @@ defmodule Prima.TinctureWire do
   @doc """
   What a control's press comes to, as `pressed` tells the canvas: the gate
   ran it (`accepted`), it was refused (`refused`, with the refusal's
-  class), or it did not run because no input of the person's carried it
-  or the desktop was not shown live (`cancelled`).
+  class), or it did not run because no input of the person's carried it,
+  it came too soon after the last spend of the activation (`cancelled`
+  naming `too_soon`) or the desktop was not shown live (`cancelled`).
   """
   @spec press_outcomes() :: [String.t()]
   def press_outcomes, do: @press_outcomes
@@ -340,10 +362,19 @@ defmodule Prima.TinctureWire do
   What a `prefs` write comes to, as `prefs` tells the canvas: written
   (`saved`), not written because another write came first (`stale`, with
   the stored document), refused (`refused`, with the refusal's class), or
-  not written for want of the person's input (`cancelled`).
+  not written for want of the person's input (`cancelled`, naming
+  `too_soon` when it came too soon after the last spend of the
+  activation).
   """
   @spec prefs_outcomes() :: [String.t()]
   def prefs_outcomes, do: @prefs_outcomes
+
+  @doc """
+  Why a press or a write was cancelled, when its answer says: `too_soon`,
+  sent while the activation its input gave was spent already.
+  """
+  @spec cancel_reasons() :: [String.t()]
+  def cancel_reasons, do: @cancel_reasons
 
   @doc "Whether `id` is a frame id: 8 to 64 URL-safe characters."
   @spec frame_id?(term()) :: boolean()
@@ -761,29 +792,35 @@ defmodule Prima.TinctureWire do
   end
 
   @doc """
-  The `pressed` message's arguments: control `control`'s press came to
-  `outcome`, with the refusal's class `reason` exactly when refused. A
-  value outside the wire raises.
+  The `pressed` message's arguments: press `call` of control `control`
+  came to `outcome`, with the refusal's class `reason` exactly when
+  refused, or `too_soon` when cancelled for it. A value outside the wire
+  raises.
   """
-  @spec pressed(String.t(), String.t(), String.t() | nil) :: map()
-  def pressed(control, outcome, reason \\ nil) do
+  @spec pressed(String.t(), pos_integer(), String.t(), String.t() | nil) :: map()
+  def pressed(control, call, outcome, reason \\ nil) do
     unless control?(control), do: raise(ArgumentError, "pressed names a control id")
+    unless call?(call), do: raise(ArgumentError, "pressed names the press's call")
 
-    %{"control" => control, "outcome" => outcome}
+    %{"control" => control, "call" => call, "outcome" => outcome}
     |> answered(outcome, reason, @press_outcomes)
   end
 
   @doc """
-  The `prefs` message's arguments: a write came to `outcome`, and the
-  shell now holds `document` at `revision`, with the refusal's class
-  `reason` exactly when refused. A value outside the wire raises.
+  The `prefs` message's arguments: write `call` came to `outcome`, and
+  the shell now holds `document` at `revision`, with the refusal's class
+  `reason` exactly when refused, or `too_soon` when cancelled for it. A
+  value outside the wire raises.
   """
-  @spec prefs_answer(String.t(), map(), non_neg_integer(), String.t() | nil) :: map()
-  def prefs_answer(outcome, document, revision, reason \\ nil) do
+  @spec prefs_answer(pos_integer(), String.t(), map(), non_neg_integer(), String.t() | nil) ::
+          map()
+  def prefs_answer(call, outcome, document, revision, reason \\ nil) do
+    unless call?(call), do: raise(ArgumentError, "a prefs answer names the write's call")
+
     unless prefs?(%{"document" => document, "revision" => revision}),
       do: raise(ArgumentError, "a prefs answer carries a document and its revision")
 
-    %{"outcome" => outcome, "document" => document, "revision" => revision}
+    %{"call" => call, "outcome" => outcome, "document" => document, "revision" => revision}
     |> answered(outcome, reason, @prefs_outcomes)
   end
 
@@ -800,11 +837,14 @@ defmodule Prima.TinctureWire do
       outcome == "refused" ->
         raise ArgumentError, "a refused outcome names its refusal's class"
 
+      outcome == "cancelled" and reason in @cancel_reasons ->
+        Map.put(args, "reason", reason)
+
       is_nil(reason) ->
         args
 
       true ->
-        raise ArgumentError, "only a refused outcome names a reason"
+        raise ArgumentError, "only a refused or a cancelled outcome names a reason"
     end
   end
 
@@ -957,23 +997,29 @@ defmodule Prima.TinctureWire do
     end
   end
 
-  defp shell_args(:press, %{"control" => control} = args) when map_size(args) in [1, 2] do
+  defp shell_args(:press, %{"control" => control, "call" => call} = args)
+       when map_size(args) in [2, 3] do
     cond do
       not control?(control) -> {:error, "press names a control by its id"}
-      map_size(args) == 1 -> {:ok, args}
+      not call?(call) -> {:error, "a press's call is a whole number from 1 to #{@max_call}"}
+      map_size(args) == 2 -> {:ok, args}
       press_value?(Map.get(args, "value")) -> {:ok, args}
       true -> {:error, "a press's value is text of 1 to #{@max_press_value} code points"}
     end
   end
 
   defp shell_args(:press, _args),
-    do: {:error, "press names a binding id and an action, or a control"}
+    do: {:error, "press names a binding id and an action, or a control and its call"}
 
-  defp shell_args(:prefs, %{"document" => document} = args)
-       when map_size(args) == 1 and is_map(document),
-       do: {:ok, args}
+  defp shell_args(:prefs, %{"document" => document, "call" => call} = args)
+       when map_size(args) == 2 and is_map(document) do
+    if call?(call),
+      do: {:ok, args},
+      else: {:error, "a prefs write's call is a whole number from 1 to #{@max_call}"}
+  end
 
-  defp shell_args(:prefs, _args), do: {:error, "prefs carries exactly a document, an object"}
+  defp shell_args(:prefs, _args),
+    do: {:error, "prefs carries exactly a document, an object, and its call"}
 
   defp shell_args(:ask, %{"widget" => widget} = args) when map_size(args) == 1 do
     if widget?(widget), do: {:ok, args}, else: {:error, "ask names a widget by its id"}

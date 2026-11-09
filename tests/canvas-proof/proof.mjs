@@ -61,6 +61,7 @@ import { join } from "node:path";
 import { hostname, cpus } from "node:os";
 import { createSocket } from "node:dgram";
 import { request as httpRequest } from "node:http";
+import { pathToFileURL } from "node:url";
 // Its asks and redaction only: lib.mjs loads without Playwright's library,
 // so the record check runs without a browser.
 import { ask as askRunSh, redact as redactKnown } from "../browser/lib.mjs";
@@ -343,7 +344,7 @@ const INSTRUMENT = `(() => {
             before = droppedOf(el);
             const ua = navigator.userActivation;
             receipt = {
-              at: performance.now(), verb: data.verb, frame: data.frame,
+              at: performance.now(), wall: Date.now(), verb: data.verb, frame: data.frame,
               kind: el ? (el.dataset.frameKind || null) : null,
               active: !!(ua && ua.isActive === true),
               activeElementIsFrame: el !== null && document.activeElement === el,
@@ -359,6 +360,7 @@ const INSTRUMENT = `(() => {
               const after = droppedOf(frameEl(data.frame));
               receipt.dropped_after = after;
               receipt.dropped = before !== null && after !== null ? after > before : null;
+              console.debug("cyfr-proof:handled " + data.verb + " " + data.frame);
             }
           }
         };
@@ -414,9 +416,11 @@ function receiptFacts(receipts) {
 // the frame that is the shell's active element, so it drops that verb. Only
 // the shell's document is read while the button is down; nothing is
 // evaluated on the frame, and the page sends its verb from its own click
-// handler. Answers whether the shell held the frame as its active element
+// handler. The click waits out the bridge's activation lifespan first
+// (`lapse`). Answers whether the shell held the frame as its active element
 // before the button came up.
 async function personClick(page, frame, x, y) {
+  await lapse();
   await page.mouse.move(x, y);
   await page.mouse.down();
   const focused = await lib.waitFor(
@@ -428,6 +432,26 @@ async function personClick(page, frame, x, y) {
   ).then(() => true, () => false);
   await page.mouse.up();
   return focused;
+}
+
+// The bridge spends the shell page's activation on an input in its chrome
+// (a switch of canvas, a dismissal), on a frame's opening and on each verb
+// it forwards, and drops a person's verb sent within its activation
+// lifespan of that spend, too soon (`iframe_bridge.js`). The proof's own
+// clicks and verbs spend it, so a person's click in a frame waits that
+// lifespan out first, and the verb it carries goes. The
+// lifespan is the bridge's own: from the checkout beside this file, or, in
+// the Playwright container, from the assets it mounts at /assets
+// (harness.sh `playwright_run`).
+const BRIDGE = "js/hooks/iframe_bridge.js";
+let bridge = null;
+async function lapse() {
+  if (!bridge) {
+    const beside = new URL(`../../apps/cyfr/assets/${BRIDGE}`, import.meta.url);
+    bridge = import(existsSync(beside) ? beside.href : pathToFileURL(`/assets/${BRIDGE}`).href);
+  }
+  const { ACTIVATION_LIFESPAN_MS } = await bridge;
+  await sleep(ACTIVATION_LIFESPAN_MS + 250);
 }
 
 // The center of `locator` in the page's viewport, scrolled into view.
@@ -454,6 +478,7 @@ function installRecorder() {
         verb: message.verb,
         binding: (message.args && message.args.binding) || null,
         action: (message.args && message.args.action) || null,
+        at: Date.now(),
       });
     }
     return original.call(this, message, ...rest);
@@ -1422,11 +1447,38 @@ async function marketsBound(page) {
   return { shown, centers };
 }
 
+// Settles true once the shell's page has handled a `verb` from `frame`, or
+// false after `timeoutMs`. The instrument says so on the console, which the
+// proof hears without evaluating anything on the page: an evaluation is a
+// user gesture there, which would give the page activation for the verb.
+// Made before the verb can be sent, so a page timer that fires late (seen
+// in Firefox) is waited for rather than missed.
+const SCRIPTED_WAIT_MS = 30_000;
+const handledSignal = (page, verb, frame) =>
+  page.waitForEvent("console", { predicate: (m) => m.text() === `cyfr-proof:handled ${verb} ${frame}`, timeout: SCRIPTED_WAIT_MS })
+    .then(() => true, () => false);
+
+// When a verb the page scheduled at `at` (its own clock) left it and
+// reached the shell, from the frame's recorder and the shell's receipts:
+// how long after scheduling it was posted, and how long the post took to
+// reach the shell. Read once the step's window has closed.
+async function scriptedTiming(frame, verb, at, receipts) {
+  const sent = (await posts(frame).catch(() => [])).filter((p) => p.verb === verb && p.at >= at);
+  const posted = sent.length > 0 ? sent[0].at : null;
+  const received = receipts.length > 0 ? receipts[0].wall : null;
+  return {
+    posted_after_ms: posted === null ? null : posted - at,
+    received_after_ms: received === null ? null : received - at,
+  };
+}
+
 // activation: a press the shell forwards to the view only within moments of
 // the person's own input, on the shown canvas whose frame it focuses
 // (`iframe_bridge.js`). A press dispatched by the page with no input, or
 // held past the window, is dropped; one inside a click is forwarded, and
-// several inside one click are each forwarded. The residual cases — a click
+// of several inside one click one is: the first goes and spends the
+// activation, and the second and third, inside its lifespan, are dropped
+// at once, too soon. The residual cases — a click
 // elsewhere in the shell or in a sibling frame with the canvas focusing
 // itself — are recorded per browser with no drop asserted.
 async function stepActivation(page, name) {
@@ -1448,10 +1500,14 @@ async function stepActivation(page, name) {
   await personClick(page, shown.id, centers.press.x, centers.press.y);
   const inside = classify(await handled(page, mark, shown.id, "press", 1));
 
-  // Several inside one click: three presses, each forwarded.
+  // Several inside one click: three presses, one forwarded and two dropped
+  // as they arrive.
   mark = (await readMarks()).receipts.length;
+  const severalDropped0 = Number((await canvasFrame(page, shown.id)).dropped);
   await personClick(page, shown.id, centers.press3.x, centers.press3.y);
-  const several = classify(await handled(page, mark, shown.id, "press", 3));
+  const severalReceived = (await handled(page, mark, shown.id, "press", 3)).length;
+  const severalDropped = Number((await canvasFrame(page, shown.id)).dropped) - severalDropped0;
+  const several = { received: severalReceived, dropped: severalDropped, forwarded: severalReceived - severalDropped };
 
   // The residual cases, recorded per browser, no drop asserted. A click
   // elsewhere (the markets switcher button, in the shell; the sibling window
@@ -1485,33 +1541,38 @@ async function stepActivation(page, name) {
   }
 
   // Held 8 s: a click schedules the press 8 s on, past the activation
-  // window, so it is dropped. No evaluation on any frame while it is held.
+  // window, so it is dropped. Nothing is evaluated until the shell has
+  // handled it.
   mark = (await readMarks()).receipts.length;
   const heldDropped0 = Number((await canvasFrame(page, shown.id)).dropped);
+  const heldHandled = handledSignal(page, "press", shown.id);
   await page.mouse.click(centers.later.x, centers.later.y);
-  await sleep(8800);
+  await heldHandled;
   const held8 = await since(mark);
   const heldDropped1 = Number((await canvasFrame(page, shown.id)).dropped);
 
-  // Scripted, no input: the page presses from a timer 9 s on, with no click
-  // and no evaluation near it, so it is dropped.
+  // Scripted, no input: the page presses from a timer 9 s on, with no click,
+  // well past the activation the evaluation that sets the timer gives, and
+  // nothing evaluated until the shell has handled it, so it is dropped.
   const noInputDropped0 = Number((await canvasFrame(page, shown.id)).dropped);
   mark = (await readMarks()).receipts.length;
-  await frame.evaluate(() => window.__canvas && window.__canvas.pressAfter(9000));
-  await sleep(9800);
+  const noInputHandled = handledSignal(page, "press", shown.id);
+  const noInputAt = await frame.evaluate(() => (window.__canvas && window.__canvas.pressAfter(9000), Date.now()));
+  await noInputHandled;
   const noInput = await since(mark);
   const noInputDropped1 = Number((await canvasFrame(page, shown.id)).dropped);
+  const noInputTiming = await scriptedTiming(frame, "press", noInputAt, noInput.receipts);
 
   note("activation", name,
     inside.forwarded === 1 && inside.total === 1 && inside.receipts[0] && inside.receipts[0].active === true && inside.receipts[0].activeElementIsFrame === true &&
-      several.forwarded === 3 && several.total === 3 &&
+      several.received === 3 && several.dropped === 2 &&
       held8.forwarded === 0 && heldDropped1 > heldDropped0 &&
       noInput.forwarded === 0 && noInputDropped1 > noInputDropped0,
     {
       inside_click: { forwarded: inside.forwarded, total: inside.total, active: inside.receipts[0] && inside.receipts[0].active, active_element_is_frame: inside.receipts[0] && inside.receipts[0].activeElementIsFrame },
-      several_in_one_click: { forwarded: several.forwarded, total: several.total },
+      several_in_one_click: { received: several.received, forwarded: several.forwarded, dropped_delta: several.dropped },
       held_8s: { forwarded: held8.forwarded, dropped_delta: heldDropped1 - heldDropped0 },
-      scripted_no_input: { forwarded: noInput.forwarded, dropped_delta: noInputDropped1 - noInputDropped0 },
+      scripted_no_input: { forwarded: noInput.forwarded, dropped_delta: noInputDropped1 - noInputDropped0, ...noInputTiming },
       recorded_residuals: recorded,
     });
   await showCanvas(page, "start");
@@ -1555,11 +1616,13 @@ async function stepGrantControl(page, name) {
 
   const dropped0 = Number((await canvasFrame(page, shown.id)).dropped);
   mark = (await instrument(page)).receipts.length;
-  await shown.frame.evaluate(() => window.__canvas && window.__canvas.grantAfter(9000));
-  await sleep(9800);
+  const noInputHandled = handledSignal(page, "grant", shown.id);
+  const noInputAt = await shown.frame.evaluate(() => (window.__canvas && window.__canvas.grantAfter(9000), Date.now()));
+  await noInputHandled;
   const noInput = classify(receiptsOf(await instrument(page), mark, shown.id, "grant"));
   const dropped1 = Number((await canvasFrame(page, shown.id)).dropped);
   const offeredAfterTimer = await prompt(page);
+  const noInputTiming = await scriptedTiming(shown.frame, "grant", noInputAt, noInput.receipts);
 
   note("grant_control", name,
     inside.forwarded === 1 && inside.total === 1 && inside.receipts[0].active === true && inside.receipts[0].activeElementIsFrame === true &&
@@ -1567,7 +1630,7 @@ async function stepGrantControl(page, name) {
       offered !== null && names && inCanvas === false && offeredAfterTimer === null,
     {
       inside_click: { forwarded: inside.forwarded, total: inside.total, active: inside.receipts[0] && inside.receipts[0].active, active_element_is_frame: inside.receipts[0] && inside.receipts[0].activeElementIsFrame },
-      scripted_no_input: { received: noInput.total, forwarded: noInput.forwarded, dropped_delta: dropped1 - dropped0 },
+      scripted_no_input: { received: noInput.total, forwarded: noInput.forwarded, dropped_delta: dropped1 - dropped0, ...noInputTiming },
       offer: { in_system_layer: offered !== null, names_the_component: names, in_canvas: inCanvas, after_the_timer: offeredAfterTimer },
     });
   await showCanvas(page, "start");
@@ -2041,7 +2104,9 @@ async function runBrowser(name, viewport, proxy, receiver, udp, { only, measurin
   try {
     const page = await ctx.newPage();
     page.__log = [];
-    page.on("console", (m) => page.__log.push(redact(`${m.type()}: ${m.text()}`).slice(0, 200)));
+    page.on("console", (m) => {
+      if (!m.text().startsWith("cyfr-proof:")) page.__log.push(redact(`${m.type()}: ${m.text()}`).slice(0, 200));
+    });
     page.on("pageerror", (e) => page.__log.push(redact(`pageerror: ${e.message}`).slice(0, 200)));
     await ask({ op: "layout", document: layout() });
     await openShell(page);
