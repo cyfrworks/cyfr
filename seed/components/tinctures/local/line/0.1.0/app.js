@@ -31,18 +31,18 @@
   };
   const DEFAULT_ORDER = Object.keys(WIDGETS);
   // Which widgets are on at each screen size until the person says
-  // otherwise: the carried screen fits everything it shows in 600 pixels.
+  // otherwise: the carried screen fits everything it shows in 600 pixels,
+  // and each size's widgets read five streams (STREAMS).
   const DEFAULT_ON = {
-    phone: ["apps", "threads", "weather", "vpn", "schedules", "today"],
-    carried: ["apps", "weather", "vpn", "schedules", "today"],
-    desk: ["apps", "threads", "weather", "vpn", "schedules", "today", "day"],
+    phone: ["apps", "weather", "schedules", "today"],
+    carried: ["apps", "weather", "schedules", "today"],
+    desk: ["apps", "weather", "schedules", "today", "day"],
   };
   // How many rows a list shows before "all", per size.
   const CAP = { phone: 6, carried: 4, desk: 6 };
   const PAUSE = "pause-schedule";
   const RESUME = "resume-schedule";
   const MAX_RUNS = 20;
-  const MAX_SCHEDULE_RUNS = 40;
   const RETRY_MS = [2000, 5000, 15000, 60000];
   // How long one open waits for the one before it, and how long the first
   // draw waits for the opens before the page tells the shell it is ready,
@@ -64,7 +64,6 @@
     attention: new Map(), // id -> {item, open}
     runs: [], // one per execution, latest change first
     schedules: new Map(), // schedule_id -> {item, open}
-    scheduleRuns: [], // newest first
     activity: new Map(), // job id -> {item, open}
     threads: new Map(), // id -> {item, open}
     vault: new Map(), // name -> {item, open}
@@ -165,22 +164,18 @@
     }
     return componentName(reference);
   }
-  const runOfSchedule = (executionId) => S.scheduleRuns.find((r) => r.execution_id === executionId) || null;
-  function runName(run) {
-    const fired = runOfSchedule(run.execution_id);
-    const schedule = fired && S.schedules.get(fired.schedule_id);
-    return schedule ? text(schedule.item.name) || refName(run.reference) : componentName(text(run.reference));
-  }
+  const runName = (run) => refName(text(run.reference));
   const grantable = (error) => isItem(error) && (GRANTABLE.includes(error.class) || GRANT_CAUSES.includes(error.cause));
   const lastFailure = (reference) => S.runs.find((r) => r.kind === "failed" && text(r.reference) === reference) || null;
   const cause = (error) => (isItem(error) ? CAUSES[error.cause] || text(error.class) : "");
 
   // The streams this page opens, how each item folds into the state, and
-  // the widgets that read each: a stream no shown widget reads stays closed,
-  // since CYFR holds a desktop to a few open streams at once
-  // (`frame_stream_max_concurrent`, eight unless the operator says
-  // otherwise), and each size's default widgets read at most eight. The
-  // queue, the schedules and the runs are always read.
+  // the widgets that read each. A browser keeps six connections to one host
+  // over plain HTTP and each open stream holds one, so the page holds at
+  // most five open: the queue's, the schedules' and the runs', always,
+  // then the shown widgets' in the order they stand. A stream no shown
+  // widget reads stays closed, each size's default widgets read five, and
+  // a widget past the five says so in its place.
   const STREAMS = [
     { name: "attention.changes", subject: null, item: attentionItem, opened: (n) => prune(S.attention, n) },
     { name: "runs.changes", subject: null, item: runItem },
@@ -188,12 +183,12 @@
     { name: "threads.changes", subject: null, for: ["threads"], item: keyed(S.threads, "id", (i) => i.kind === "removed"), opened: (n) => prune(S.threads, n) },
     { name: "feed.results", subject: "weather", for: ["weather"], item: feedItem("weather") },
     { name: "feed.results", subject: "vpn", for: ["vpn"], item: feedItem("vpn") },
-    { name: "schedule_runs.changes", subject: null, for: ["today", "day"], item: scheduleRunItem },
     { name: "activity.changes", subject: null, for: ["today", "day"], item: keyed(S.activity, "id", (i) => i.kind === "ended"), opened: (n) => prune(S.activity, n) },
     { name: "vault.changes", subject: null, for: ["vault"], item: keyed(S.vault, "name", (i) => i.kind === "removed"), opened: (n) => prune(S.vault, n) },
   ];
   const label = (stream) => (stream.subject ? `${stream.name}:${stream.subject}` : stream.name);
-  const LIMITED = "Your desktop reads as many things at once as CYFR allows. Turn another widget off to show this one.";
+  const MAX_OPEN = 5;
+  const LIMITED = "This desktop reads five things at once. Turn another widget off to show this one.";
 
   // An item kept as its key's latest state; `gone` says it left.
   function keyed(map, key, gone) {
@@ -235,12 +230,6 @@
     const run = { ...item, heard, seq: before ? before.seq : ++seq };
     S.runs = [run, ...S.runs.filter((r) => r.execution_id !== id)].slice(0, MAX_RUNS);
     if (S.busy[`run:${id}`]) delete S.busy[`run:${id}`];
-  }
-
-  function scheduleRunItem(item) {
-    const key = `${text(item.occurrence_id)}:${text(item.kind)}`;
-    S.scheduleRuns = [item, ...S.scheduleRuns.filter((r) => `${text(r.occurrence_id)}:${text(r.kind)}` !== key)]
-      .slice(0, MAX_SCHEDULE_RUNS);
   }
 
   function feedItem(name) {
@@ -317,7 +306,9 @@
     const on = new Set([...shown("near"), ...shown("far")]);
     const order = [...shown("near"), ...shown("far")];
     const rank = (s) => (s.for ? Math.min(...s.for.map((id) => (on.has(id) ? order.indexOf(id) : Infinity))) : -1);
-    const wanted = STREAMS.filter((s) => rank(s) !== Infinity).sort((a, b) => rank(a) - rank(b));
+    const ranked = STREAMS.filter((s) => rank(s) !== Infinity).sort((a, b) => rank(a) - rank(b));
+    const wanted = ranked.slice(0, MAX_OPEN);
+    for (const s of ranked.slice(MAX_OPEN)) S.refusals[label(s)] = LIMITED;
     for (const s of STREAMS) {
       const held = followers.get(label(s));
       if (held && (!wanted.includes(s) || held.refused)) {
@@ -329,6 +320,7 @@
       if (followers.has(label(s))) continue;
       const placeholder = { refused: false, stop() { this.cancelled = true; } };
       followers.set(label(s), placeholder);
+      delete S.refusals[label(s)];
       opening = opening.then(() => {
         if (placeholder.cancelled || followers.get(label(s)) !== placeholder) return;
         const follower = follow(s);
@@ -519,8 +511,7 @@
       const cap = CAP[size()];
       const rows = [
         ...S.runs.map((r) => {
-          const fired = runOfSchedule(r.execution_id);
-          return { at: date(fired && fired.scheduled_for) || r.heard, seq: r.seq, html: (t) => runRow(r, fired, t) };
+          return { at: r.heard, seq: r.seq, html: (t) => runRow(r, t) };
         }),
         ...[...S.activity.values()].map(({ item: j }) => ({ at: date(j.since), seq: 0, html: (t) => `<li class="row log"><span class="t">${t}</span>
           <div style="min-width:0"><span class="row-t">${esc(text(j.member))}</span><span class="row-s">Crew${j.asked_by ? ` · for ${esc(text(j.asked_by))}` : ""}</span></div>
@@ -563,9 +554,7 @@
       const bars = waits.map((w, i) => `<span class="wbar${w.done ? " done" : ""}" style="left:${x(w.since).toFixed(2)}%;width:${Math.max(0, nowX - x(w.since)).toFixed(2)}%;top:${i * 19 + 9}px"></span>
         <span class="wlab${w.done ? " done" : ""}" style="left:calc(${Math.min(nowX, 70).toFixed(2)}% + 10px);top:${i * 19 + 9}px">${esc(w.about)} <span class="muted num">since ${esc(when(w.since))}</span></span>`).join("");
       const isToday = (d) => d && parts(d).day === today;
-      const ran = S.scheduleRuns.filter((r) => isToday(date(r.scheduled_for)))
-        .map((r) => `<span class="rdot${r.kind === "failed" ? " fail" : ""}" style="left:${x(date(r.scheduled_for)).toFixed(2)}%" title="${esc(when(r.scheduled_for))}"></span>`).join("");
-      const heard = S.runs.filter((r) => isToday(r.heard) && !runOfSchedule(r.execution_id))
+      const heard = S.runs.filter((r) => isToday(r.heard))
         .map((r) => `<span class="rdot${r.kind === "failed" ? " fail" : ""}" style="left:${x(r.heard).toFixed(2)}%"></span>`).join("");
       const crew = [...S.activity.values()].map(({ item }) => date(item.since)).filter(Boolean)
         .map((d) => `<span class="rspan" style="left:${x(d).toFixed(2)}%;width:${Math.max(0.5, nowX - x(d)).toFixed(2)}%"></span>`).join("");
@@ -580,17 +569,17 @@
         meta: `${S.attention.size} waiting · ${S.runs.length} runs`,
         body: `<div class="day"><div class="day-l"><span>Waits on you</span><span>Ran on its own</span></div>
           <div class="day-p" role="img" aria-label="${esc(waiting.map((w) => `${w.about} has waited since ${when(w.since)}`).join("; ") || "Nothing waits on you")}">
-            <div class="lane-w">${bars}</div><div class="lane-r">${ran}${heard}${crew}${next}</div>
+            <div class="lane-w">${bars}</div><div class="lane-r">${heard}${crew}${next}</div>
             <div class="axis">${ticks}<span class="nowt" style="left:${nowX.toFixed(2)}%">${esc(hm(now))}</span></div><span class="nowl" style="left:${nowX.toFixed(2)}%"></span></div></div>`,
       };
     },
   };
 
-  function runRow(r, fired, t) {
+  function runRow(r, t) {
     const waiting = r.kind === "failed" && S.attention.has(text(r.reference));
     const sub = waiting ? `<span class="mark">← waits on you</span>`
       : r.kind === "failed" ? esc(cause(r.error) || "failed")
-      : fired ? "Scheduled" : esc(capital(text(r.component_type) || "run"));
+      : esc(capital(text(r.component_type) || "run"));
     const out = r.kind === "completed" ? `<b>ok</b><span class="muted num">${duration(r.duration_ms)}</span>`
       : r.kind === "failed" ? `<b class="neg-t">failed</b><span class="muted">${esc(text(isItem(r.error) ? r.error.class : ""))}</span>`
       : r.kind === "cancelled" ? `<b>stopped</b>` : `<span><span class="dot run"></span> running</span>`;
