@@ -187,6 +187,31 @@ defmodule Aqua.Loop.ModelWaitTest do
     assert second["session"] == "brain-1"
   end
 
+  test "a retried chat continues the session its refusal named", %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "a long job")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         {:refuse,
+          %{"type" => "incomplete_stream", "message" => "ended early", "session" => "brain-1"}},
+         reply("Resumed.")
+       ]}
+    )
+
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    assert [first, retry] =
+             for(
+               %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+               do: params
+             )
+
+    refute Map.has_key?(first, "session")
+    assert retry["session"] == "brain-1"
+  end
+
   # A files hand consented `consented_ms` hangs: the worker service ends
   # its run at that deadline and its grace and reports it, and the loop
   # asked for no kill, so nothing is held against the athanor and its next

@@ -737,10 +737,16 @@ defmodule Aqua.Loop do
       {:error, :superseded} ->
         {:halt, :cancelled, state}
 
+      # The retry continues the session the refusal named, as the next
+      # turn would.
       {:error, %{"type" => type} = error}
       when type in @recoverable and retries < length(@retry_delays_ms) ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(error, type))
+        closed = refused(error, type)
+        _ = Tape.close_step(guest(state), state.turn, step, "error", closed)
         Process.sleep(Enum.at(@retry_delays_ms, retries))
+        state = %{state | session: closed[:session] || state.session}
+        request = continued(request, closed[:session])
+        retained = retained && continued(retained, closed[:session])
 
         case open_model_step(state, "chat") do
           {:ok, again, state} -> ask_model(state, again, request, retained, retries + 1)
@@ -778,6 +784,9 @@ defmodule Aqua.Loop do
         {:halt, {:failed, reason}, state}
     end
   end
+
+  defp continued(request, nil), do: request
+  defp continued(request, session), do: Map.put(request, "session", session)
 
   # A refused model step closes with the brain's session its refusal
   # names, kept on the thread as a response's is (`Prima.Model`), so the
