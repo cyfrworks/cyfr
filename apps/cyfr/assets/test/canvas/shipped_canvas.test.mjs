@@ -855,18 +855,18 @@ describe("on the SDK itself", () => {
       const write = showWidget(shell.api, "runs", false)
       await eventually(() => verbs(shell.heard, "prefs").length === 1)
       const current = {widgets: {apps: {on: false}, schedules: {on: false}}, desktop: {}}
-      shell.tell("prefs", {outcome: "stale", document: current, revision: 7})
+      shell.tell("prefs", {call: 1, outcome: "stale", document: current, revision: 7})
       assert.deepEqual(await write, {outcome: "stale", document: current, revision: 7})
       await eventually(() => hidden(states.at(-1)).length === 2)
       assert.deepEqual(hidden(states.at(-1)), ["apps", "schedules"])
       await new Promise((resolve) => setTimeout(resolve, 20))
-      assert.deepEqual(verbs(shell.heard, "prefs"), [{document: {widgets: {runs: {on: false}}}}])
+      assert.deepEqual(verbs(shell.heard, "prefs"), [{document: {widgets: {runs: {on: false}}}, call: 1}])
 
       // The person's next tap writes over it.
       const again = showWidget(shell.api, "runs", false)
       await eventually(() => verbs(shell.heard, "prefs").length === 2)
       const saved = {widgets: {apps: {on: false}, schedules: {on: false}, runs: {on: false}}, desktop: {}}
-      shell.tell("prefs", {outcome: "saved", document: saved, revision: 8})
+      shell.tell("prefs", {call: 2, outcome: "saved", document: saved, revision: 8})
       assert.deepEqual(await again, {outcome: "saved", document: saved, revision: 8})
       await eventually(() => hidden(states.at(-1)).length === 3)
       stop()
@@ -881,8 +881,8 @@ describe("on the SDK itself", () => {
       const row = scheduleRows(fold(EMPTY, "schedules.changes", {kind: "changed", schedule_id: "sch_1", name: "Morning", status: "active"}, 1), new Date())[0]
       const pressed = pressSchedule(shell.api, row)
       await eventually(() => verbs(shell.heard, "press").length === 1)
-      assert.deepEqual(verbs(shell.heard, "press"), [{control: PAUSE, value: "sch_1"}])
-      shell.tell("pressed", {control: PAUSE, outcome: "refused", reason: "not_found"})
+      assert.deepEqual(verbs(shell.heard, "press"), [{control: PAUSE, value: "sch_1", call: 1}])
+      shell.tell("pressed", {control: PAUSE, call: 1, outcome: "refused", reason: "not_found"})
       assert.equal(await pressed, "not_found")
     } finally {
       shell.close()

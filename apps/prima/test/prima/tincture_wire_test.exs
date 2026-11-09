@@ -399,20 +399,23 @@ defmodule Prima.TinctureWireTest do
       frame = "frm_01a09fee2e4f"
       decode = &TinctureWire.decode_shell_message(TinctureWire.shell_message(:press, frame, &1))
 
-      assert {:ok, %{args: %{"control" => "pause-digest"}}} =
-               decode.(%{"control" => "pause-digest"})
+      assert {:ok, %{args: %{"control" => "pause-digest", "call" => 1}}} =
+               decode.(%{"control" => "pause-digest", "call" => 1})
 
       assert {:ok, %{args: %{"value" => "lisbon-1"}}} =
-               decode.(%{"control" => "vpn-connect", "value" => "lisbon-1"})
+               decode.(%{"control" => "vpn-connect", "value" => "lisbon-1", "call" => 2})
 
       max = TinctureWire.max_press_value()
-      assert {:ok, _} = decode.(%{"control" => "c", "value" => String.duplicate("é", max)})
+      long = String.duplicate("é", max)
+      assert {:ok, _} = decode.(%{"control" => "c", "value" => long, "call" => 3})
+      assert {:error, _} = decode.(%{"control" => "c", "value" => long <> "é", "call" => 3})
+      assert {:error, _} = decode.(%{"control" => "c", "value" => "a\u0000b", "call" => 3})
+      assert {:error, _} = decode.(%{"control" => "c", "extra" => "x", "call" => 3})
 
-      assert {:error, _} =
-               decode.(%{"control" => "c", "value" => String.duplicate("é", max + 1)})
-
-      assert {:error, _} = decode.(%{"control" => "c", "value" => "a\u0000b"})
-      assert {:error, _} = decode.(%{"control" => "c", "extra" => "x"})
+      # A press of a control names the call its answer carries back.
+      assert {:error, _} = decode.(%{"control" => "c"})
+      assert {:error, _} = decode.(%{"control" => "c", "call" => 0})
+      assert TinctureWire.call?(1) and not TinctureWire.call?(2_147_483_648)
     end
 
     test "prefs, ask and settings are a canvas's alone, and open may carry a typed subject" do
@@ -449,11 +452,18 @@ defmodule Prima.TinctureWireTest do
       rows = vectors()["canvas"]["to_frame"]
 
       for %{"message" => %{"verb" => "pressed", "args" => args}} <- rows["valid"] do
-        assert TinctureWire.pressed(args["control"], args["outcome"], args["reason"]) == args
+        assert TinctureWire.pressed(
+                 args["control"],
+                 args["call"],
+                 args["outcome"],
+                 args["reason"]
+               ) ==
+                 args
       end
 
       for %{"message" => %{"verb" => "prefs", "args" => args}} <- rows["valid"] do
         assert TinctureWire.prefs_answer(
+                 args["call"],
                  args["outcome"],
                  args["document"],
                  args["revision"],
@@ -466,9 +476,16 @@ defmodule Prima.TinctureWireTest do
         built =
           try do
             if verb == "pressed",
-              do: TinctureWire.pressed(args["control"], args["outcome"], args["reason"]),
+              do:
+                TinctureWire.pressed(
+                  args["control"],
+                  args["call"],
+                  args["outcome"],
+                  args["reason"]
+                ),
               else:
                 TinctureWire.prefs_answer(
+                  args["call"],
                   args["outcome"],
                   args["document"],
                   args["revision"],

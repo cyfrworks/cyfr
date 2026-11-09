@@ -411,7 +411,8 @@
         "verb": "press",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "control": "pause-digest"
+          "control": "pause-digest",
+          "call": 1
         }
       }
     },
@@ -423,7 +424,8 @@
         "frame": "frm_01a09fee2e4f",
         "args": {
           "control": "vpn-connect",
-          "value": "lisbon-1"
+          "value": "lisbon-1",
+          "call": 2
         }
       }
     },
@@ -440,7 +442,8 @@
                 "on": false
               }
             }
-          }
+          },
+          "call": 3
         }
       }
     },
@@ -655,7 +658,8 @@
         "frame": "frm_01a09fee2e4f",
         "args": {
           "control": "pause-digest",
-          "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+          "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "call": 7
         }
       }
     },
@@ -666,7 +670,8 @@
         "verb": "press",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "control": "Pause Digest"
+          "control": "Pause Digest",
+          "call": 7
         }
       }
     },
@@ -678,7 +683,8 @@
         "frame": "frm_01a09fee2e4f",
         "args": {
           "control": "vpn-connect",
-          "value": ""
+          "value": "",
+          "call": 7
         }
       }
     },
@@ -690,7 +696,8 @@
         "frame": "frm_01a09fee2e4f",
         "args": {
           "control": "vpn-connect",
-          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "call": 7
         }
       }
     },
@@ -702,7 +709,8 @@
         "frame": "frm_01a09fee2e4f",
         "args": {
           "control": "vpn-connect",
-          "value": "lisbon\n1"
+          "value": "lisbon\n1",
+          "call": 7
         }
       }
     },
@@ -714,7 +722,8 @@
         "frame": "frm_01a09fee2e4f",
         "args": {
           "control": "vpn-connect",
-          "value": 1
+          "value": 1,
+          "call": 7
         }
       }
     },
@@ -725,7 +734,8 @@
         "verb": "prefs",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "document": []
+          "document": [],
+          "call": 7
         }
       }
     },
@@ -838,10 +848,70 @@
           }
         }
       }
+    },
+    {
+      "why": "a control press without its call",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "pause-digest"
+        }
+      }
+    },
+    {
+      "why": "a call that is not a whole number from 1",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "pause-digest",
+          "call": 0
+        }
+      }
+    },
+    {
+      "why": "a call that is not a whole number",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "pause-digest",
+          "call": 1.5
+        }
+      }
+    },
+    {
+      "why": "a call past 2147483647",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "pause-digest",
+          "call": 2147483648
+        }
+      }
+    },
+    {
+      "why": "prefs without its call",
+      "message": {
+        "v": 1,
+        "verb": "prefs",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "document": {
+            "widgets": {}
+          }
+        }
+      }
     }
   ],
   "canvas": {
-    "comment": "A canvas frame's part of the tincture wire. `verbs` are the shell verbs the shell takes from a canvas alone. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. A canvas block is exactly mode, data_path, streams, prefs (exactly document, an object, and revision, a whole number from 0), appearance (exactly mode, light or dark; accent, lowercase #rrggbb; locale, a language tag; time_zone, a zone name; and safe_areas, exactly top, right, bottom and left, whole CSS pixels to 512) and person (exactly name, 1 to 128 code points with no control character, or null). `to_frame` are the messages the bridge posts to a frame over its port, each exactly v, verb, frame and args, read by the SDK: a canvas's open, what the shell tells it, its answers `pressed` (exactly control and outcome, accepted, refused or cancelled, with reason, a refusal's class, exactly when refused) and `prefs` (exactly outcome, saved, stale, refused or cancelled, document and revision, with reason exactly when refused), and an app's `subject`. An `installed` tincture is exactly ref, name, icon (an emoji of 1 to 16 code points, or null) and open (a boolean). A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream route. Every invalid row is refused for the reason `why` gives.",
+    "comment": "A canvas frame's part of the tincture wire. `verbs` are the shell verbs the shell takes from a canvas alone. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. A canvas block is exactly mode, data_path, streams, prefs (exactly document, an object, and revision, a whole number from 0), appearance (exactly mode, light or dark; accent, lowercase #rrggbb; locale, a language tag; time_zone, a zone name; and safe_areas, exactly top, right, bottom and left, whole CSS pixels to 512) and person (exactly name, 1 to 128 code points with no control character, or null). `to_frame` are the messages the bridge posts to a frame over its port, each exactly v, verb, frame and args, read by the SDK: a canvas's open, what the shell tells it, its answers `pressed` (exactly control, call and outcome, accepted, refused or cancelled, with reason, a refusal's class, exactly when refused) and `prefs` (exactly call, outcome, saved, stale, refused or cancelled, document and revision, with reason exactly when refused), each carrying back the call number the frame's press or write was sent with, and an app's `subject`. An `installed` tincture is exactly ref, name, icon (an emoji of 1 to 16 code points, or null) and open (a boolean). A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream route. Every invalid row is refused for the reason `why` gives.",
     "stages": [
       "load",
       "runtime"
@@ -3879,6 +3949,7 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "control": "pause-digest",
+              "call": 11,
               "outcome": "accepted"
             }
           }
@@ -3890,6 +3961,7 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "control": "pause-digest",
+              "call": 12,
               "outcome": "refused",
               "reason": "not_found"
             }
@@ -3902,6 +3974,7 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "control": "vpn-connect",
+              "call": 13,
               "outcome": "cancelled"
             }
           }
@@ -3912,6 +3985,7 @@
             "verb": "prefs",
             "frame": "frm_8f3c2a1b9d",
             "args": {
+              "call": 14,
               "outcome": "saved",
               "document": {
                 "widgets": {
@@ -3942,6 +4016,7 @@
             "verb": "prefs",
             "frame": "frm_8f3c2a1b9d",
             "args": {
+              "call": 15,
               "outcome": "stale",
               "document": {
                 "widgets": {},
@@ -3957,6 +4032,7 @@
             "verb": "prefs",
             "frame": "frm_8f3c2a1b9d",
             "args": {
+              "call": 16,
               "outcome": "refused",
               "reason": "invalid_argument",
               "document": {
@@ -3973,7 +4049,38 @@
             "verb": "prefs",
             "frame": "frm_8f3c2a1b9d",
             "args": {
+              "call": 17,
               "outcome": "cancelled",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 0
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "vpn-connect",
+              "call": 18,
+              "outcome": "cancelled",
+              "reason": "too_soon"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 19,
+              "outcome": "cancelled",
+              "reason": "too_soon",
               "document": {
                 "widgets": {},
                 "desktop": {}
@@ -5495,7 +5602,8 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "control": "pause-digest",
-              "outcome": "refused"
+              "outcome": "refused",
+              "call": 9
             }
           }
         },
@@ -5508,7 +5616,8 @@
             "args": {
               "control": "pause-digest",
               "outcome": "accepted",
-              "reason": "internal"
+              "reason": "internal",
+              "call": 9
             }
           }
         },
@@ -5520,7 +5629,8 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "control": "pause-digest",
-              "outcome": "queued"
+              "outcome": "queued",
+              "call": 9
             }
           }
         },
@@ -5532,7 +5642,8 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "control": "../x",
-              "outcome": "accepted"
+              "outcome": "accepted",
+              "call": 9
             }
           }
         },
@@ -5548,7 +5659,8 @@
                 "widgets": {},
                 "desktop": {}
               },
-              "revision": -1
+              "revision": -1,
+              "call": 9
             }
           }
         },
@@ -5561,7 +5673,8 @@
             "args": {
               "outcome": "saved",
               "document": "{}",
-              "revision": 1
+              "revision": 1,
+              "call": 9
             }
           }
         },
@@ -5577,7 +5690,8 @@
                 "widgets": {},
                 "desktop": {}
               },
-              "revision": 1
+              "revision": 1,
+              "call": 9
             }
           }
         },
@@ -5589,7 +5703,8 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "outcome": "stale",
-              "revision": 1
+              "revision": 1,
+              "call": 9
             }
           }
         },
@@ -5602,6 +5717,79 @@
             "args": {
               "kind": "url",
               "id": "x"
+            }
+          }
+        },
+        {
+          "why": "a pressed answer without its call",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "outcome": "accepted"
+            }
+          }
+        },
+        {
+          "why": "a pressed answer whose call is not a whole number from 1",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "call": -1,
+              "outcome": "accepted"
+            }
+          }
+        },
+        {
+          "why": "a prefs answer without its call",
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "saved",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 1
+            }
+          }
+        },
+        {
+          "why": "a cancelled press naming a reason other than too_soon",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "call": 9,
+              "outcome": "cancelled",
+              "reason": "not_found"
+            }
+          }
+        },
+        {
+          "why": "a saved prefs answer naming too_soon",
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "saved",
+              "reason": "too_soon",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 1
             }
           }
         }
