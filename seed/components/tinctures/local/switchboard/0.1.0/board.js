@@ -316,7 +316,7 @@
     rope.patch($('.jack', posEl[dest]), { slack: 1.02, extra: 14 });
     posEl[dest].classList.add('lit'); setTimeout(() => posEl[dest].classList.remove('lit'), 1600);
     // A call patched to where it resolves keeps its cord in until it clears;
-    // any other patch is a plain open, and the cord comes home.
+    // any other patch is a plain open, and the cord is put back.
     const resolves = line.call && dest === line.primary;
     if (resolves) { patches.set(line.call.id, rope); el.classList.add('patched'); } else setTimeout(() => rope.retract(), 2200);
     act(line, dest);
