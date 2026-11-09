@@ -53,6 +53,9 @@ export const SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "compon
 // What a control's press, and a write of the preferences, come to.
 export const PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"])
 export const PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"])
+// Why a press or a write was cancelled, when the answer says: `too_soon`,
+// sent while the activation its input gave was spent already.
+export const CANCEL_REASONS = Object.freeze(["too_soon"])
 
 // Where a frame that posts `failed` failed: before its `ready`, or after.
 export const STAGES = Object.freeze(["load", "runtime"])
@@ -572,29 +575,34 @@ function canvasError(block, frame) {
   return null
 }
 
-// An answer's outcome, with a reason exactly when it was refused.
-const isOutcome = (args, outcomes) =>
-  outcomes.includes(args.outcome) &&
-  (args.outcome === "refused"
-    ? typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason)
-    : !("reason" in args))
+// An answer's outcome, with a reason exactly when it was refused (the
+// refusal's class) and, when it was cancelled, perhaps one of
+// `CANCEL_REASONS`.
+const isOutcome = (args, outcomes) => {
+  if (!outcomes.includes(args.outcome)) return false
+  if (args.outcome === "refused") return typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason)
+  if (args.outcome === "cancelled") return !("reason" in args) || CANCEL_REASONS.includes(args.reason)
+  return !("reason" in args)
+}
+
+const withReason = (args, keys) => ("reason" in args ? [...keys, "reason"] : keys)
 
 function pressedError(args) {
-  const keys = ["control", "call", "outcome", ...(args.outcome === "refused" ? ["reason"] : [])]
+  const keys = withReason(args, ["control", "call", "outcome"])
   return sameKeys(args, keys) && isDesktopId(args.control) && isCall(args.call) && isOutcome(args, PRESS_OUTCOMES)
     ? null
-    : "pressed is exactly a control, its call and its outcome, with a reason when refused"
+    : "pressed is exactly a control, its call and its outcome, with a reason when refused or cancelled too soon"
 }
 
 function prefsAnswerError(args) {
-  const keys = ["call", "outcome", "document", "revision", ...(args.outcome === "refused" ? ["reason"] : [])]
+  const keys = withReason(args, ["call", "outcome", "document", "revision"])
   return sameKeys(args, keys) &&
     isCall(args.call) &&
     isObject(args.document) &&
     isRevision(args.revision) &&
     isOutcome(args, PREFS_OUTCOMES)
     ? null
-    : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused"
+    : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused or cancelled too soon"
 }
 
 function toFrameArgsError(verb, args, frame) {

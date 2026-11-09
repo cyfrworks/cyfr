@@ -698,66 +698,49 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
-  test("one input carries one verb: a second inside the same activation waits, and is dropped once the activation lapses", async () => {
+  test("a verb within the activation's lifespan of the previous spend is dropped at once, too_soon, and one after it is forwarded", async () => {
     const bridge = connect()
     const port = bridge.load()
     bridge.hook.lifespan = 200
-    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
-    const grant = {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
+    const control = (call) => ({v: 1, verb: "press", frame: CANVAS, args: {control: "pause-digest", call}})
+    const answered = () => bridge.heard.slice(3)
 
     try {
+      await eventually(() => bridge.heard.length === 3)
       input(bridge.el)
-      await send(bridge, port, press)
-      assert.deepEqual(forwarded(bridge.events), [press])
+      await send(bridge, port, control(1))
+      assert.deepEqual(forwarded(bridge.events), [control(1)])
 
-      // A second inside the activation the first spent: held, then dropped
-      // when that activation lapses with no newer input.
-      port.postMessage(grant)
-      await new Promise((resolve) => setTimeout(resolve, 60))
-      assert.equal(bridge.hook.dropped, 0)
-      activation("inactive")
-      await eventually(() => bridge.hook.dropped === 1)
-      assert.deepEqual(forwarded(bridge.events), [press])
+      // A press and a write inside the lifespan of the first's spend, the
+      // page still holding activation: each dropped at once and told so,
+      // and nothing goes later on its own.
+      await send(bridge, port, control(2))
+      await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {}, call: 3}})
+      assert.equal(bridge.hook.dropped, 2)
+      await eventually(() => answered().length === 2)
+      assert.deepEqual(answered(), [
+        {v: 1, verb: "pressed", frame: CANVAS, args: {control: "pause-digest", call: 2, outcome: "cancelled", reason: "too_soon"}},
+        {v: 1, verb: "prefs", frame: CANVAS, args: {call: 3, outcome: "cancelled", reason: "too_soon", ...LIVE.canvas.prefs}}
+      ])
+      await new Promise((resolve) => setTimeout(resolve, 260))
+      assert.deepEqual(forwarded(bridge.events), [control(1)])
 
-      // A third, while one is held, is dropped at once.
+      // Past the lifespan, the next input's verb goes, as the next input.
       input(bridge.el)
-      port.postMessage(grant)
-      port.postMessage(press)
-      await eventually(() => bridge.hook.dropped === 2)
-      activation("inactive")
-      await eventually(() => bridge.hook.dropped === 3)
-      assert.deepEqual(forwarded(bridge.events), [press])
-    } finally {
-      bridge.close()
-      port.close()
-    }
-  })
-
-  test("a verb held past the spent activation's lifespan goes when the page still holds activation: a newer input carried it", async () => {
-    const bridge = connect()
-    const port = bridge.load()
-    bridge.hook.lifespan = 150
-    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
-    const grant = {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
-
-    try {
-      input(bridge.el)
-      await send(bridge, port, press)
-      port.postMessage(grant)
-      await eventually(() => forwarded(bridge.events).length === 2)
-      assert.deepEqual(forwarded(bridge.events), [press, grant])
+      await send(bridge, port, control(4))
+      assert.deepEqual(forwarded(bridge.events), [control(1), control(4)])
       assert.deepEqual(
         bridge.events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.input),
         [1, 2]
       )
-      assert.equal(bridge.hook.dropped, 0)
+      assert.equal(answered().length, 2)
     } finally {
       bridge.close()
       port.close()
     }
   })
 
-  test("a press in the chrome followed by the frame focusing itself passes nothing, and a chrome input drops a held verb", async () => {
+  test("a press in the chrome followed by the frame focusing itself passes nothing: its verb is dropped at once", async () => {
     const bridge = connect()
     const port = bridge.load()
     bridge.hook.lifespan = 200
@@ -769,18 +752,15 @@ describe("a canvas frame's bridge", () => {
       activation("active")
       chromePress()
       focus(bridge.el)
-      port.postMessage(press)
-      await new Promise((resolve) => setTimeout(resolve, 60))
-      activation("inactive")
-      await eventually(() => bridge.hook.dropped === 1)
+      await send(bridge, port, press)
+      assert.equal(bridge.hook.dropped, 1)
 
-      // Held, then the chrome hears another press: dropped at once.
+      // A press in the frame right after another press in the chrome too.
+      await new Promise((resolve) => setTimeout(resolve, 220))
       input(bridge.el)
       chromePress()
-      port.postMessage(press)
-      await new Promise((resolve) => setTimeout(resolve, 30))
-      chromePress()
-      await eventually(() => bridge.hook.dropped === 2)
+      await send(bridge, port, press)
+      assert.equal(bridge.hook.dropped, 2)
 
       assert.deepEqual(forwarded(bridge.events), [])
     } finally {
@@ -800,16 +780,14 @@ describe("a canvas frame's bridge", () => {
 
     try {
       focus(bridge.el)
-      port.postMessage(press)
-      await new Promise((resolve) => setTimeout(resolve, 60))
+      await send(bridge, port, press)
+      assert.equal(bridge.hook.dropped, 1)
       assert.deepEqual(forwarded(bridge.events), [])
-      activation("inactive")
-      await eventually(() => bridge.hook.dropped === 1)
 
-      // A fresh input of the person's carries the next.
+      // A fresh input of the person's past the lifespan carries the next.
+      await new Promise((resolve) => setTimeout(resolve, 220))
       input(bridge.el)
-      port.postMessage(press)
-      await eventually(() => forwarded(bridge.events).length === 1)
+      await send(bridge, port, press)
       assert.deepEqual(forwarded(bridge.events), [press])
     } finally {
       bridge.close()

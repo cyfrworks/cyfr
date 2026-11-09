@@ -78,27 +78,26 @@ const TOLD = TOLD_VERBS
  * for a few seconds (`ACTIVATION_LIFESPAN_MS`), and every input the
  * shell's own page hears (a press, a touch, a key). So an input of the
  * person's carries a verb only while the shell document holds activation
- * that nothing has spent: an input the shell's page heard spends
- * it, as does each verb the bridge forwards. A verb sent while the
- * activation is unspent is forwarded at once; one sent within the
- * activation's lifespan of a spend is held until that spent activation
- * would have lapsed, and forwarded then only if the document still holds
- * activation, which only a newer input can have given it, and is
- * dropped as soon as the activation lapses or the shell's page hears an
- * input. Either way the frame must be the document's active element and
- * shown, live and not inert when it goes, and the verb carries the
- * ordinal of the input it came with (`input`), by which the view honours
- * one verb per input too. One verb is held at a time; another sent
- * meanwhile is dropped. A person's verb dropped is counted, and a press of
- * a control or a write of the preferences is answered `cancelled` over the
- * port, under its call number; one whose call number is no higher than
- * the last the frame used is a replay or a forgery of another call's, and
- * is dropped first, unanswered and never forwarded. So a press in the chrome followed by the frame focusing itself
- * passes nothing, and two verbs from one input pass one; a person's
- * press in the frame right after a press in the chrome, or right after
- * the frame's last verb, waits out the rest of that activation before it
- * goes. What stays open: an input in another frame followed by this frame
- * taking focus within that input's activation counts as this frame's.
+ * that nothing has spent: an input the shell's page heard spends it, as
+ * do the frame's opening (activation the page holds as the bridge mounts)
+ * and each verb the bridge forwards. A verb is forwarded only while the
+ * document holds activation, the frame is its active element and shown,
+ * live and not inert, and the last spend is past the activation's
+ * lifespan; one sent within that lifespan is dropped at once, never held,
+ * and the verb forwarded carries the ordinal of the input it came with
+ * (`input`), by which the view honours one verb per input too. A person's
+ * verb dropped is counted, and a press of a control or a write of the
+ * preferences is answered `cancelled` over the port, under its call
+ * number, naming `too_soon` when it came within that lifespan; one whose
+ * call number is no higher than the last the frame used is a replay or a
+ * forgery of another call's, and is dropped first, unanswered and never
+ * forwarded. So a press in the chrome followed by the frame focusing
+ * itself passes nothing, two verbs from one input pass one, and a
+ * person's press in the frame within a few seconds of a press in the
+ * chrome or of the frame's last verb is dropped, `too_soon`, for the
+ * person to press again. What stays open: an input in another frame
+ * followed by this frame taking focus within that input's activation
+ * counts as this frame's.
  *
  * A later load (a reload, or the frame navigating itself) gets no second
  * handshake: the port is closed and the frame is spent until the person
@@ -156,16 +155,14 @@ const IframeBridge = {
     this._onBearer = (event) => this._replace(event.detail && event.detail.credential)
     this.el.addEventListener(FRAME_BEARER_EVENT, this._onBearer)
 
-    // The person's input: the ordinal of the last verb forwarded, when
-    // the activation last was spent and whether it has lapsed since, and
-    // the one verb held until it proves an input of its own.
+    // The person's input: the ordinal of the last verb forwarded and when
+    // the activation last was spent.
     this.lifespan = ACTIVATION_LIFESPAN_MS
     this._input = 0
     // A frame opens on an input of the chrome's (a switch, an open) or with
     // the page: activation the page holds as the bridge mounts was given by
     // no input in this frame, so it starts spent.
     this._spentAt = activated() ? now() : -Infinity
-    this._held = null
     // The highest call number the frame has numbered a press or a write
     // with: a frame numbers its calls upward, so one not above it was used
     // already, pending or answered.
@@ -179,16 +176,10 @@ const IframeBridge = {
   _listen() {
     const win = typeof window === "undefined" ? null : window
     if (!win || typeof win.addEventListener !== "function") return
-    this._onChromeInput = () => this._spend()
+    // The activation an input the shell's own page heard gives is not the
+    // frame's: it is spent as it is given.
+    this._onChromeInput = () => (this._spentAt = now())
     for (const type of CHROME_INPUTS) win.addEventListener(type, this._onChromeInput, true)
-  },
-
-  // The activation the document holds now is spent: by an input the
-  // shell's own page heard, which is not the frame's, or by a verb
-  // forwarded. A verb held is dropped with it.
-  _spend() {
-    this._spentAt = now()
-    this._release(false)
   },
 
   _replace(credential) {
@@ -235,14 +226,16 @@ const IframeBridge = {
   },
 
   // A person's verb the bridge dropped: a press of a control and a write
-  // of the preferences are told they did not run.
-  _cancelled(message) {
+  // of the preferences are told they did not run, and why when `reason`
+  // names it (`too_soon`).
+  _cancelled(message, reason = null) {
     if (!this._canvas || !this._port || this._mode === null) return
     const {verb, args} = message
+    const why = reason === null ? {} : {reason}
     if (verb === "press" && "control" in args) {
-      this._tell("pressed", {control: args.control, call: args.call, outcome: "cancelled"})
+      this._tell("pressed", {control: args.control, call: args.call, outcome: "cancelled", ...why})
     } else if (verb === "prefs" && this._prefs) {
-      this._tell("prefs", {call: args.call, outcome: "cancelled", ...this._prefs})
+      this._tell("prefs", {call: args.call, outcome: "cancelled", ...why, ...this._prefs})
     }
   },
 
@@ -339,51 +332,19 @@ const IframeBridge = {
       return
     }
 
-    if (now() - this._spentAt >= this.lifespan) {
-      this._forward(message)
-    } else if (this._held === null) {
-      this._hold(message)
-    } else {
+    // The activation it came on was spent within its lifespan, by an
+    // input in the chrome, the frame's opening or an earlier verb, so no
+    // input of its own is proven: it is dropped at once.
+    if (now() - this._spentAt < this.lifespan) {
       this._drop()
-      this._cancelled(message)
+      this._cancelled(message, "too_soon")
+      return
     }
-  },
 
-  // One input, one verb: forwarding spends the activation that carried it.
-  _forward(message) {
+    // One input, one verb: forwarding spends the activation that carried it.
     this._input += 1
     this._spentAt = now()
     this.pushEvent("frame_verb", {frame: this._frameId, message, input: this._input})
-  },
-
-  // Hold `message` until the activation spent at `_spentAt` would have
-  // lapsed: watched every few milliseconds, it goes the moment the
-  // activation lapses (no newer input) and goes on if the document still
-  // holds activation once the spent one is past its lifespan.
-  _hold(message) {
-    const due = this._spentAt + this.lifespan
-    const watch = () => {
-      if (this._held === null || this._held.message !== message) return
-      if (!activated()) return this._release(false)
-      if (now() >= due) return this._release(true)
-      this._held.timer = setTimeout(watch, HOLD_POLL_MS)
-    }
-    this._held = {message, timer: setTimeout(watch, HOLD_POLL_MS)}
-  },
-
-  // The held verb goes when an input of its own is proven and the frame
-  // may still act for the person, and is dropped otherwise.
-  _release(proven) {
-    const held = this._held
-    if (held === null) return
-    clearTimeout(held.timer)
-    this._held = null
-    if (proven && this._forwards(held.message.verb)) {
-      this._forward(held.message)
-    } else {
-      this._drop()
-      this._cancelled(held.message)
-    }
   },
 
   // Whether a verb this frame posted reaches the view, which it can only
@@ -441,8 +402,6 @@ const IframeBridge = {
     if (this._canvas && win && typeof win.removeEventListener === "function") {
       for (const type of CHROME_INPUTS) win.removeEventListener(type, this._onChromeInput, true)
     }
-    if (this._held) clearTimeout(this._held.timer)
-    this._held = null
     this.el.removeEventListener("load", this._onLoad)
     this.el.removeEventListener(FRAME_STATE_EVENT, this._onState)
     this.el.removeEventListener(CREDENTIAL_CLOSED_EVENT, this._onCredentialClosed)
@@ -453,16 +412,14 @@ const IframeBridge = {
 }
 
 // How long one input's transient user activation lasts: five seconds in
-// Chromium and Firefox. A browser whose activation lapses sooner only
-// makes a held verb's wait end sooner.
-const ACTIVATION_LIFESPAN_MS = 5000 + 150
+// Chromium and Firefox, and a little more. A verb within it of the last
+// spend is dropped `too_soon`. The canvas proof waits it out before a
+// person's click in a frame (tests/canvas-proof/proof.mjs).
+export const ACTIVATION_LIFESPAN_MS = 5000 + 150
 
 // The shell page's own inputs that give it activation: a press, a touch's
 // end, a key. Each spends the activation it gives.
 const CHROME_INPUTS = Object.freeze(["pointerdown", "pointerup", "touchend", "keydown"])
-
-// How often a held verb looks at the activation.
-const HOLD_POLL_MS = 50
 
 const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now())
 

@@ -4062,6 +4062,36 @@
         {
           "message": {
             "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "vpn-connect",
+              "call": 18,
+              "outcome": "cancelled",
+              "reason": "too_soon"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 19,
+              "outcome": "cancelled",
+              "reason": "too_soon",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 0
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
             "verb": "subject",
             "frame": "frm_01a09fee2e4f",
             "args": {
@@ -5723,6 +5753,38 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "outcome": "saved",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 1
+            }
+          }
+        },
+        {
+          "why": "a cancelled press naming a reason other than too_soon",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "call": 9,
+              "outcome": "cancelled",
+              "reason": "not_found"
+            }
+          }
+        },
+        {
+          "why": "a saved prefs answer naming too_soon",
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "saved",
+              "reason": "too_soon",
               "document": {
                 "widgets": {},
                 "desktop": {}

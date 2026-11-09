@@ -48,6 +48,7 @@
   var SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"]);
   var PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"]);
   var PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"]);
+  var CANCEL_REASONS = Object.freeze(["too_soon"]);
   var STAGES = Object.freeze(["load", "runtime"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
@@ -281,14 +282,20 @@
     if (!isPerson(block.person)) return "a canvas's person is exactly a name, or none";
     return null;
   }
-  var isOutcome = (args, outcomes) => outcomes.includes(args.outcome) && (args.outcome === "refused" ? typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason) : !("reason" in args));
+  var isOutcome = (args, outcomes) => {
+    if (!outcomes.includes(args.outcome)) return false;
+    if (args.outcome === "refused") return typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason);
+    if (args.outcome === "cancelled") return !("reason" in args) || CANCEL_REASONS.includes(args.reason);
+    return !("reason" in args);
+  };
+  var withReason = (args, keys) => "reason" in args ? [...keys, "reason"] : keys;
   function pressedError(args) {
-    const keys = ["control", "call", "outcome", ...args.outcome === "refused" ? ["reason"] : []];
-    return sameKeys(args, keys) && isDesktopId(args.control) && isCall(args.call) && isOutcome(args, PRESS_OUTCOMES) ? null : "pressed is exactly a control, its call and its outcome, with a reason when refused";
+    const keys = withReason(args, ["control", "call", "outcome"]);
+    return sameKeys(args, keys) && isDesktopId(args.control) && isCall(args.call) && isOutcome(args, PRESS_OUTCOMES) ? null : "pressed is exactly a control, its call and its outcome, with a reason when refused or cancelled too soon";
   }
   function prefsAnswerError(args) {
-    const keys = ["call", "outcome", "document", "revision", ...args.outcome === "refused" ? ["reason"] : []];
-    return sameKeys(args, keys) && isCall(args.call) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES) ? null : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused";
+    const keys = withReason(args, ["call", "outcome", "document", "revision"]);
+    return sameKeys(args, keys) && isCall(args.call) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES) ? null : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused or cancelled too soon";
   }
   function toFrameArgsError(verb, args, frame) {
     switch (verb) {
@@ -720,7 +727,9 @@
        * person's, and answers its outcome: `{outcome: "accepted"}`,
        * `{outcome: "refused", reason}` with the refusal's class, or
        * `{outcome: "cancelled"}` when no input of the person's carried it or
-       * the canvas was not shown. Nothing is tried again.
+       * the canvas was not shown, with `reason: "too_soon"` when it came
+       * within a few seconds of the last spend of the activation. Nothing is
+       * tried again.
        *
        * Its first argument a binding id (as a `feed.results` event carries
        * one) and its second an action's name, it presses that feed's action
@@ -744,7 +753,8 @@
        * revision the canvas holds. Answers `{outcome, document, revision}`:
        * `saved`, `stale` (another write came first; the document is the
        * current one, to write over), `refused` with its `reason`, or
-       * `cancelled` when no input of the person's carried it.
+       * `cancelled` when no input of the person's carried it, with `reason`
+       * `too_soon` when it came within a few seconds of the last spend.
        * @returns {Promise<{outcome: string, document: object, revision: number, reason?: string}>}
        */
       prefs(document2) {

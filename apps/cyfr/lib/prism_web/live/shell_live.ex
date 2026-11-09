@@ -95,8 +95,12 @@ defmodule PrismWeb.ShellLive do
   (`Cyfr.Bus.AquaAsk`); and `settings` opens one of the Dashboard's pages
   for the person's mode (`PrismWeb.Nav`). A control's press and a write
   are answered over the frame's port (`canvas_answer`) with their typed
-  outcome, `cancelled` when this view did not act on them. Each of those
-  verbs carries the ordinal of the person's input its bridge forwarded it
+  outcome, `cancelled` when this view did not act on them. Its bridge
+  (`iframe_bridge.js`) forwards those verbs only while the page holds
+  activation that no input in the shell's chrome and no earlier verb has
+  spent, and drops one sent within the activation's lifespan of the last
+  spend at once, a press or a write told `cancelled` naming `too_soon`.
+  Each carries the ordinal of the person's input its bridge forwarded it
   with, and one input is honoured once.
 
   A canvas frame's handshake carries the person's preferences for that
@@ -922,10 +926,11 @@ defmodule PrismWeb.ShellLive do
   end
 
   # The verbs a canvas sends for the person, which its bridge forwards
-  # only within moments of the person's own input, each carrying the
-  # ordinal of the input it came with: one input carries one verb, so a
-  # verb whose input this view has already honoured, or that names none,
-  # is dropped (and a press or a write told it did not run).
+  # only on activation of the person's own input that nothing has spent
+  # (the moduledoc), each carrying the ordinal of the input it came with:
+  # one input carries one verb, so a verb whose input this view has
+  # already honoured, or that names none, is dropped (and a press or a
+  # write told it did not run).
   @person_verbs [:open, :press, :grant, :prefs, :ask, :settings]
 
   defp canvas_input(socket, frame, %{verb: verb} = decoded, input) when verb in @person_verbs do

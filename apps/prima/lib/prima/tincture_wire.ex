@@ -131,7 +131,12 @@ defmodule Prima.TinctureWire do
   refusal's class (`Prima.Refusal.classes/0`), exactly when refused;
   `prefs` answers a `prefs` write, exactly its `call`, `outcome`
   (`prefs_outcomes/0`), `document` and `revision` (the stored document as
-  the shell now holds it), with `reason` exactly when refused. A frame
+  the shell now holds it), with `reason` exactly when refused. Either,
+  `cancelled`, may name `too_soon` (`cancel_reasons/0`): the shell's end
+  of the port forwards a canvas's verb for the person only while the
+  shell's page holds activation that no input in its chrome and no
+  earlier verb has spent, and drops one sent within the activation's
+  lifespan of the last spend at once, never holding it. A frame
   numbers its presses of a control and its writes upward, one count for
   both, and the shell's end of its port drops one numbered no higher than
   the last, unanswered; the frame matches each answer to the call it is
@@ -185,6 +190,7 @@ defmodule Prima.TinctureWire do
   @max_call 2_147_483_647
   @press_outcomes ~w(accepted refused cancelled)
   @prefs_outcomes ~w(saved stale refused cancelled)
+  @cancel_reasons ~w(too_soon)
 
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
   @athanor_segment ~r/\A@[a-z0-9]+(-[a-z0-9]+)*\z/
@@ -345,8 +351,9 @@ defmodule Prima.TinctureWire do
   @doc """
   What a control's press comes to, as `pressed` tells the canvas: the gate
   ran it (`accepted`), it was refused (`refused`, with the refusal's
-  class), or it did not run because no input of the person's carried it
-  or the desktop was not shown live (`cancelled`).
+  class), or it did not run because no input of the person's carried it,
+  it came too soon after the last spend of the activation (`cancelled`
+  naming `too_soon`) or the desktop was not shown live (`cancelled`).
   """
   @spec press_outcomes() :: [String.t()]
   def press_outcomes, do: @press_outcomes
@@ -355,10 +362,19 @@ defmodule Prima.TinctureWire do
   What a `prefs` write comes to, as `prefs` tells the canvas: written
   (`saved`), not written because another write came first (`stale`, with
   the stored document), refused (`refused`, with the refusal's class), or
-  not written for want of the person's input (`cancelled`).
+  not written for want of the person's input (`cancelled`, naming
+  `too_soon` when it came too soon after the last spend of the
+  activation).
   """
   @spec prefs_outcomes() :: [String.t()]
   def prefs_outcomes, do: @prefs_outcomes
+
+  @doc """
+  Why a press or a write was cancelled, when its answer says: `too_soon`,
+  sent while the activation its input gave was spent already.
+  """
+  @spec cancel_reasons() :: [String.t()]
+  def cancel_reasons, do: @cancel_reasons
 
   @doc "Whether `id` is a frame id: 8 to 64 URL-safe characters."
   @spec frame_id?(term()) :: boolean()
@@ -778,7 +794,8 @@ defmodule Prima.TinctureWire do
   @doc """
   The `pressed` message's arguments: press `call` of control `control`
   came to `outcome`, with the refusal's class `reason` exactly when
-  refused. A value outside the wire raises.
+  refused, or `too_soon` when cancelled for it. A value outside the wire
+  raises.
   """
   @spec pressed(String.t(), pos_integer(), String.t(), String.t() | nil) :: map()
   def pressed(control, call, outcome, reason \\ nil) do
@@ -792,7 +809,8 @@ defmodule Prima.TinctureWire do
   @doc """
   The `prefs` message's arguments: write `call` came to `outcome`, and
   the shell now holds `document` at `revision`, with the refusal's class
-  `reason` exactly when refused. A value outside the wire raises.
+  `reason` exactly when refused, or `too_soon` when cancelled for it. A
+  value outside the wire raises.
   """
   @spec prefs_answer(pos_integer(), String.t(), map(), non_neg_integer(), String.t() | nil) ::
           map()
@@ -819,11 +837,14 @@ defmodule Prima.TinctureWire do
       outcome == "refused" ->
         raise ArgumentError, "a refused outcome names its refusal's class"
 
+      outcome == "cancelled" and reason in @cancel_reasons ->
+        Map.put(args, "reason", reason)
+
       is_nil(reason) ->
         args
 
       true ->
-        raise ArgumentError, "only a refused outcome names a reason"
+        raise ArgumentError, "only a refused or a cancelled outcome names a reason"
     end
   end
 

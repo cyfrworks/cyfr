@@ -598,7 +598,9 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      * person's, and answers its outcome: `{outcome: "accepted"}`,
      * `{outcome: "refused", reason}` with the refusal's class, or
      * `{outcome: "cancelled"}` when no input of the person's carried it or
-     * the canvas was not shown. Nothing is tried again.
+     * the canvas was not shown, with `reason: "too_soon"` when it came
+     * within a few seconds of the last spend of the activation. Nothing is
+     * tried again.
      *
      * Its first argument a binding id (as a `feed.results` event carries
      * one) and its second an action's name, it presses that feed's action
@@ -623,7 +625,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      * revision the canvas holds. Answers `{outcome, document, revision}`:
      * `saved`, `stale` (another write came first; the document is the
      * current one, to write over), `refused` with its `reason`, or
-     * `cancelled` when no input of the person's carried it.
+     * `cancelled` when no input of the person's carried it, with `reason`
+     * `too_soon` when it came within a few seconds of the last spend.
      * @returns {Promise<{outcome: string, document: object, revision: number, reason?: string}>}
      */
     prefs(document) {
