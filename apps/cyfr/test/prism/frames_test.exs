@@ -70,7 +70,11 @@ defmodule Prism.FramesTest do
         actions: [],
         stack: 0,
         minimised: false,
-        canvas: nil
+        canvas: nil,
+        desktop: nil,
+        chrome: nil,
+        asset: nil,
+        subject: nil
       },
       Map.new(fields)
     )
@@ -456,13 +460,20 @@ defmodule Prism.FramesTest do
           )
         ])
 
-      assert {:ok, handed, %{key: {:canvas, "home"}}, t} =
-               Frames.handshake(t, "frm_canvas_hand")
+      desktop = %{
+        "prefs" => %{"document" => Prima.CanvasPrefs.empty(), "revision" => 2},
+        "appearance" => Prism.Appearance.block(%{}),
+        "person" => %{"name" => "Ada"}
+      }
 
-      # Exactly the wire's canvas handshake: the credential and the block.
+      assert {:ok, handed, %{key: {:canvas, "home"}}, t} =
+               Frames.handshake(t, "frm_canvas_hand", desktop)
+
+      # Exactly the wire's canvas handshake: the credential and the block,
+      # with the desktop's preferences, appearance and person beside it.
       assert handed == %{
                "credential" => "canvas-bearer",
-               "canvas" => block.("frm_canvas_hand", "live")
+               "canvas" => Map.merge(block.("frm_canvas_hand", "live"), desktop)
              }
 
       assert handed ==
@@ -470,24 +481,52 @@ defmodule Prism.FramesTest do
                  "frm_canvas_hand",
                  "canvas-bearer",
                  "live",
-                 streams
+                 streams,
+                 desktop
                )
 
       assert Frames.get(t, {:canvas, "home"}).bearer == nil
       assert Frames.get(t, {:canvas, "home"}).canvas == block.("frm_canvas_hand", "live")
 
       assert {:ok, %{"credential" => "trial-bearer", "canvas" => %{"mode" => "validation"}}, _, t} =
-               Frames.handshake(t, "frm_trial_hand")
+               Frames.handshake(t, "frm_trial_hand", desktop)
 
       # A canvas block is a canvas's alone: a frame under any other key is
-      # handed its bearer and nothing else.
-      assert {:ok, %{credential: "launch-bearer"} = reply, _, t} =
-               Frames.handshake(t, "frm_launch_hand")
+      # handed its bearer and nothing else, whatever the shell read.
+      assert {:ok, %{"credential" => "launch-bearer"} = reply, _, t} =
+               Frames.handshake(t, "frm_launch_hand", desktop)
 
-      assert Map.keys(reply) == [:credential]
+      assert Map.keys(reply) == ["credential"]
 
       for id <- ~w(frm_canvas_hand frm_trial_hand frm_launch_hand frm_unknown_one),
-          do: assert(Frames.handshake(t, id) == :error)
+          do: assert(Frames.handshake(t, id, desktop) == :error)
+    end
+
+    test "an app opened on a subject is handed it beside its bearer, and one that runs holds the new one for the view to tell" do
+      subject = %{"kind" => "run", "id" => "exec_0190f3a2"}
+
+      t =
+        held([
+          launch("a", id: "frm_subject_one", bearer: "one-bearer"),
+          launch("b", id: "frm_subject_two", bearer: "two-bearer")
+        ])
+        |> Frames.put_subject({:full, "iframe_a"}, subject)
+
+      # Before its handshake the subject rides it, and nothing is due.
+      refute Frames.subject_due?(Frames.get(t, {:full, "iframe_a"}))
+
+      assert {:ok, %{"credential" => "one-bearer", "subject" => ^subject}, _, t} =
+               Frames.handshake(t, "frm_subject_one", nil)
+
+      # Once it runs, a new subject is held on the frame for the view to
+      # tell its bridge.
+      other = %{"kind" => "run", "id" => "exec_other"}
+      t = Frames.put_subject(t, {:full, "iframe_a"}, other)
+      assert Frames.get(t, {:full, "iframe_a"}).subject == other
+      assert Frames.subject_due?(Frames.get(t, {:full, "iframe_a"}))
+
+      assert {:ok, reply, _, _t} = Frames.handshake(t, "frm_subject_two", nil)
+      assert reply == %{"credential" => "two-bearer"}
     end
 
     test "a dropped message is counted" do

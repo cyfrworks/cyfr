@@ -4,53 +4,67 @@
  * The canvas's chrome and shelf (PrismWeb.CanvasLive): the title bar, the
  * controls and the edges the shell draws around each window and tile,
  * outside the app's frame; the shield and snap preview the `Canvas` hook
- * shows while a gesture runs (js/canvas/windows.js); and the shelf along
- * the bottom. Stacking is CanvasLive's: tiles 20, windows from 30 (to
- * 61), the shield 63, a full app 64, the shelf 65 and the shell's chips on
- * it 66. Colours are the console's tokens (app.css). */
+ * shows while a gesture runs (js/canvas/windows.js); the shelf along the
+ * bottom with its dots; and the top bar's ground. Stacking is
+ * CanvasLive's: tiles 20, windows from 30 (to 61), the shield 63, a full
+ * app 64, the shelf 65 and the shell's chips on it 66.
+ *
+ * Written against a desktop's chrome tokens (Prima.Manifest.Chrome), which
+ * the canvas hook sets on the page's root while that desktop is the
+ * visible canvas (js/canvas/chrome.js) and takes off otherwise: the
+ * variables --chrome-ground, -surface, -ink and -accent (set together, with
+ * [data-chrome-colours] on the root), --chrome-radius, -border, -edge,
+ * -title-height, -font, -texture-title and -texture-shelf, and the root's
+ * data-chrome-controls, data-chrome-title-align and data-chrome-glyphs.
+ * Each use falls back to the console's own look (app.css's tokens), so a
+ * page with no desktop chrome looks as it always has. The system layer's
+ * prompts read none of them. */
 
 /* Windows and tiles. */
 .canvas-window {
-  border-radius: 12px;
-  border: 1px solid var(--color-border-default);
-  background: var(--color-surface-raised);
+  border-radius: var(--chrome-radius, 12px);
+  border: var(--chrome-border, 1px) solid var(--color-border-default);
+  background: var(--chrome-surface, var(--color-surface-raised));
   box-shadow: 0 18px 48px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.35);
 }
 
 .canvas-tile {
   border: 0 solid var(--color-border-default);
-  background: var(--color-surface-raised);
+  background: var(--chrome-surface, var(--color-surface-raised));
 }
-.canvas-tile[data-canvas-side="left"] { border-right-width: 1px; }
-.canvas-tile[data-canvas-side="right"] { border-left-width: 1px; }
+.canvas-tile[data-canvas-side="left"] { border-right-width: var(--chrome-border, 1px); }
+.canvas-tile[data-canvas-side="right"] { border-left-width: var(--chrome-border, 1px); }
 
-.canvas-active { border-color: color-mix(in srgb, var(--color-accent-hover) 60%, transparent); }
+.canvas-active { border-color: color-mix(in srgb, var(--chrome-accent, var(--color-accent-hover)) 60%, transparent); }
 .canvas-window.canvas-active {
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 45%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chrome-accent, var(--color-accent-primary)) 45%, transparent),
     0 22px 56px rgb(0 0 0 / 0.55),
     0 2px 8px rgb(0 0 0 / 0.35);
 }
 
-/* The title bar: 34 px, the app's icon and name, its controls. */
+/* The title bar: 34 px by default, the app's icon and name, its controls. */
 .canvas-titlebar {
   position: absolute;
   inset: 0 0 auto 0;
-  height: 34px;
+  height: var(--chrome-title-height, 34px);
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 6px 0 10px;
-  border-bottom: 1px solid var(--color-border-default);
+  border-bottom: var(--chrome-border, 1px) solid var(--color-border-default);
   background: color-mix(in srgb, var(--color-surface-overlay) 55%, var(--color-surface-raised));
-  color: var(--color-text-secondary);
+  background-image: var(--chrome-texture-title, none);
+  background-size: cover;
+  color: var(--chrome-ink, var(--color-text-secondary));
+  font-family: var(--chrome-font, inherit);
   font-size: 0.75rem;
   cursor: grab;
   user-select: none;
   touch-action: none;
 }
 .canvas-tile .canvas-titlebar { cursor: default; }
-.canvas-active .canvas-titlebar { color: var(--color-text-primary); }
+.canvas-active .canvas-titlebar { color: var(--chrome-ink, var(--color-text-primary)); }
 
 .canvas-app-icon {
   display: grid;
@@ -59,8 +73,8 @@
   height: 18px;
   flex-shrink: 0;
   border-radius: 5px;
-  background: color-mix(in srgb, var(--color-accent-primary) 25%, transparent);
-  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--chrome-accent, var(--color-accent-primary)) 25%, transparent);
+  color: var(--chrome-ink, var(--color-text-primary));
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
@@ -83,7 +97,7 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--color-text-muted);
+  color: var(--chrome-ink, var(--color-text-muted));
   font-size: 0.75rem;
 }
 
@@ -95,28 +109,29 @@
   width: 24px;
   height: 22px;
   border-radius: 6px;
-  color: var(--color-text-secondary);
+  color: var(--chrome-ink, var(--color-text-secondary));
   cursor: pointer;
 }
 .canvas-ghost svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.canvas-ghost:hover { background: var(--color-surface-overlay); color: var(--color-text-primary); }
-.canvas-ghost-close:hover { background: color-mix(in srgb, var(--color-status-error) 75%, transparent); color: var(--color-text-primary); }
+.canvas-ghost:hover { background: var(--color-surface-overlay); color: var(--chrome-ink, var(--color-text-primary)); }
+.canvas-ghost-close:hover { background: color-mix(in srgb, var(--color-status-error) 75%, transparent); color: var(--chrome-ink, var(--color-text-primary)); }
 .canvas-ghost:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
 
 /* The app's own frame, or its refusal, under the title bar. */
 .canvas-app-body {
   position: absolute;
-  inset: 34px 0 0 0;
+  inset: var(--chrome-title-height, 34px) 0 0 0;
   width: 100%;
-  height: calc(100% - 34px);
+  height: calc(100% - var(--chrome-title-height, 34px));
 }
 
-/* A window's edges and corners: 8 px handles just inside its border. */
+/* A window's edges and corners: 8 px handles by default, just inside its
+ * border. */
 .canvas-edge { position: absolute; z-index: 2; touch-action: none; }
-.canvas-edge[data-canvas-edge="n"] { top: 0; left: 12px; right: 12px; height: 4px; cursor: ns-resize; }
-.canvas-edge[data-canvas-edge="s"] { bottom: 0; left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
-.canvas-edge[data-canvas-edge="e"] { right: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
-.canvas-edge[data-canvas-edge="w"] { left: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
+.canvas-edge[data-canvas-edge="n"] { top: 0; left: 12px; right: 12px; height: calc(var(--chrome-edge, 8px) / 2); cursor: ns-resize; }
+.canvas-edge[data-canvas-edge="s"] { bottom: 0; left: 12px; right: 12px; height: var(--chrome-edge, 8px); cursor: ns-resize; }
+.canvas-edge[data-canvas-edge="e"] { right: 0; top: 12px; bottom: 12px; width: var(--chrome-edge, 8px); cursor: ew-resize; }
+.canvas-edge[data-canvas-edge="w"] { left: 0; top: 12px; bottom: 12px; width: var(--chrome-edge, 8px); cursor: ew-resize; }
 .canvas-edge[data-canvas-edge="ne"] { top: 0; right: 0; width: 12px; height: 8px; cursor: nesw-resize; }
 .canvas-edge[data-canvas-edge="nw"] { top: 0; left: 0; width: 12px; height: 8px; cursor: nwse-resize; }
 .canvas-edge[data-canvas-edge="sw"] { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
@@ -134,11 +149,11 @@
 }
 
 /* A tile's divider, on its inner edge. */
-.canvas-divider { position: absolute; z-index: 2; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
+.canvas-divider { position: absolute; z-index: 2; top: 0; bottom: 0; width: var(--chrome-edge, 8px); cursor: col-resize; touch-action: none; }
 .canvas-divider[data-canvas-edge="e"] { right: 0; }
 .canvas-divider[data-canvas-edge="w"] { left: 0; }
 .canvas-divider:hover,
-.canvas-divider:active { background: color-mix(in srgb, var(--color-accent-primary) 35%, transparent); }
+.canvas-divider:active { background: color-mix(in srgb, var(--chrome-accent, var(--color-accent-primary)) 35%, transparent); }
 
 /* While a gesture runs: a shield over every frame, so no frame under the
  * pointer takes it, carrying the gesture's cursor, and where a drop would
@@ -178,8 +193,11 @@
   align-items: center;
   gap: 12px;
   padding: 0 6rem 0 0;
-  border-top: 1px solid var(--color-border-default);
-  background: color-mix(in srgb, var(--color-surface-raised) 92%, transparent);
+  border-top: var(--chrome-border, 1px) solid var(--color-border-default);
+  background: color-mix(in srgb, var(--chrome-ground, var(--color-surface-raised)) 92%, transparent);
+  background-image: var(--chrome-texture-shelf, none);
+  background-size: cover;
+  font-family: var(--chrome-font, inherit);
   backdrop-filter: blur(12px);
   touch-action: pan-y;
 }
@@ -197,7 +215,7 @@
   transition: width 120ms ease;
 }
 .canvas-dot:hover { opacity: 1; }
-.canvas-dot[aria-pressed="true"] { width: 24px; background: var(--color-accent-hover); opacity: 1; }
+.canvas-dot[aria-pressed="true"] { width: 24px; background: var(--chrome-accent, var(--color-accent-hover)); opacity: 1; }
 .canvas-dot:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 2px; }
 
 #canvas-shelf-apps { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -210,16 +228,16 @@
   padding: 0 10px 0 6px;
   border-radius: 9px;
   border: 1px solid transparent;
-  color: var(--color-text-secondary);
+  color: var(--chrome-ink, var(--color-text-secondary));
   font-size: 0.75rem;
   cursor: pointer;
   flex-shrink: 0;
 }
-.canvas-shelf-app:hover { background: var(--color-surface-overlay); color: var(--color-text-primary); }
+.canvas-shelf-app:hover { background: var(--color-surface-overlay); color: var(--chrome-ink, var(--color-text-primary)); }
 .canvas-shelf-app[data-canvas-active="true"] {
-  border-color: color-mix(in srgb, var(--color-accent-hover) 45%, transparent);
-  background: color-mix(in srgb, var(--color-accent-primary) 16%, transparent);
-  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--chrome-accent, var(--color-accent-hover)) 45%, transparent);
+  background: color-mix(in srgb, var(--chrome-accent, var(--color-accent-primary)) 16%, transparent);
+  color: var(--chrome-ink, var(--color-text-primary));
 }
 .canvas-shelf-app[data-canvas-minimised="true"] { opacity: 0.5; }
 .canvas-shelf-app:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
@@ -233,3 +251,38 @@
 #shell:has(#canvas-shelf) #system-layer-notice { bottom: calc((var(--canvas-shelf-height) - 26px) / 2); }
 #system-layer-notice { width: min(30rem, 100vw - 10.75rem); }
 #shell:has(#system-layer-notice) .canvas-shelf-chips { width: calc(4.75rem + min(30rem, 100vw - 10.75rem)); }
+
+/* A desktop's own colours: the lines and the quieter surfaces drawn from
+ * its four, where the console's tokens draw them otherwise. */
+:root[data-chrome-colours] .canvas-window,
+:root[data-chrome-colours] .canvas-tile,
+:root[data-chrome-colours] .canvas-titlebar,
+:root[data-chrome-colours] .canvas-shelf { border-color: color-mix(in srgb, var(--chrome-ink) 16%, var(--chrome-surface)); }
+:root[data-chrome-colours] .canvas-titlebar { background-color: var(--chrome-surface); }
+:root[data-chrome-colours] .canvas-ghost:hover,
+:root[data-chrome-colours] .canvas-shelf-app:hover { background: color-mix(in srgb, var(--chrome-ink) 10%, transparent); }
+:root[data-chrome-colours] .canvas-dot { background: var(--chrome-ink); opacity: 0.45; }
+:root[data-chrome-colours] .canvas-dot[aria-pressed="true"] { background: var(--chrome-accent); opacity: 1; }
+:root[data-chrome-colours] #topbar > div:first-child {
+  border-color: color-mix(in srgb, var(--chrome-ink) 16%, var(--chrome-ground));
+  background-color: var(--chrome-ground);
+  color: var(--chrome-ink);
+}
+:root[data-chrome-colours] #topbar > div:first-child :where(.text-white, .text-gray-200, .text-gray-300, .text-gray-400) {
+  color: var(--chrome-ink);
+}
+#topbar > div:first-child { font-family: var(--chrome-font, inherit); }
+
+/* Where the window's controls stand and how its name sits. */
+:root[data-chrome-controls="left"] .canvas-titlebar { padding: 0 10px 0 6px; }
+:root[data-chrome-controls="left"] .canvas-controls { order: -1; margin-left: 0; margin-right: 4px; }
+:root[data-chrome-title-align="center"] .canvas-app-name { flex: 1 1 0; max-width: none; text-align: center; }
+:root[data-chrome-title-align="center"] .canvas-app-title { display: none; }
+
+/* The glyphs' shape: the controls and the dots. */
+:root[data-chrome-glyphs="round"] .canvas-ghost { border-radius: 9999px; }
+:root[data-chrome-glyphs="square"] .canvas-ghost,
+:root[data-chrome-glyphs="square"] .canvas-dot { border-radius: 0; }
+:root[data-chrome-glyphs="pixel"] .canvas-ghost,
+:root[data-chrome-glyphs="pixel"] .canvas-dot { border-radius: 0; }
+:root[data-chrome-glyphs="pixel"] .canvas-ghost svg { stroke-linecap: square; stroke-linejoin: miter; shape-rendering: crispEdges; }

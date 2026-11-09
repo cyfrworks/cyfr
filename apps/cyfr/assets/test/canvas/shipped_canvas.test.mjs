@@ -11,42 +11,51 @@ import {readFileSync, readdirSync} from "node:fs"
 import {describe, mock, test} from "node:test"
 
 import {createClient} from "../../js/sdk/client.js"
-import {CREDENTIAL, HANDSHAKE} from "../../js/sdk/wire.js"
-import {fixture} from "../sdk/support.mjs"
+import {CREDENTIAL, HANDSHAKE, toFrameMessage} from "../../js/sdk/wire.js"
+import {eventually, fixture} from "../sdk/support.mjs"
 
 import {
   EMPTY,
   GRANTABLE,
+  GRANT_CAUSES,
   MAX_RUNS,
   MAX_SCHEDULE_RUNS,
   MONOGRAM_HUES,
+  PAUSE,
+  RESUME,
   RETRY_MS,
   STREAMS,
+  WIDGETS,
   attentionColumn,
   byNextFire,
   causes,
   componentName,
   componentRef,
   covered,
+  desktop,
   fold,
   grantable,
   grantComponent,
+  hidden,
   installed,
+  isShown,
   monogram,
   openApp,
   postured,
+  pressSchedule,
   recentRows,
   relative,
   scheduleRows,
   shortReason,
+  showWidget,
   start,
   strip,
   text,
   today,
   week
-} from "../../../../../seed/components/tinctures/local/canvas/0.4.0/src/model.ts"
+} from "../../../../../seed/components/tinctures/local/canvas/0.5.0/src/model.ts"
 
-const VERSION = new URL("../../../../../seed/components/tinctures/local/canvas/0.4.0/", import.meta.url)
+const VERSION = new URL("../../../../../seed/components/tinctures/local/canvas/0.5.0/", import.meta.url)
 const SCAFFOLD = new URL("../../../lib/compendium/scaffold.ex", import.meta.url)
 
 // Every pending reaction runs: a promise's handlers, then theirs.
@@ -54,13 +63,16 @@ const settle = () => new Promise((resolve) => setImmediate(resolve))
 
 // window.cyfr as the canvas uses it. Each stream open waits for the test
 // to open it (`accept`) or refuse it (`refuse`), and an open stream ends
-// when the test ends it (`end`).
+// when the test ends it (`end`). A press or a write of the preferences is
+// answered with the next of `answers`' for it.
 function sdk() {
   const opens = []
-  const calls = {ready: 0, open: [], grant: [], installed: null, covered: null, posture: null}
+  const calls = {ready: 0, open: [], grant: [], press: [], prefs: [], installed: null, covered: null, posture: null, desktop: null}
+  const answers = {press: [], prefs: []}
   const cyfr = {
+    desktop: null,
     on(event, handler) {
-      assert.ok(["installed", "covered", "posture"].includes(event), event)
+      assert.ok(["installed", "covered", "posture", "desktop"].includes(event), event)
       calls[event] = handler
       return () => {
         calls[event] = null
@@ -92,12 +104,20 @@ function sdk() {
     grant(ref) {
       calls.grant.push(ref)
     },
+    press(control, value) {
+      calls.press.push([control, value])
+      return Promise.resolve(answers.press.shift())
+    },
+    prefs(document) {
+      calls.prefs.push(document)
+      return Promise.resolve(answers.prefs.shift())
+    },
     ready() {
       calls.ready += 1
     }
   }
   const latest = (name) => opens.filter((open) => open.name === name).at(-1)
-  return {cyfr, opens, calls, latest}
+  return {cyfr, opens, calls, answers, latest}
 }
 
 function started() {
@@ -294,7 +314,7 @@ describe("the installed apps", () => {
     page.calls.installed("not a list")
     assert.deepEqual(page.state().apps, [])
     page.stop()
-    for (const event of ["installed", "covered", "posture"]) {
+    for (const event of ["installed", "covered", "posture", "desktop"]) {
       assert.equal(page.calls[event], null, `the stopped page still hears ${event}`)
     }
   })
@@ -337,7 +357,7 @@ describe("runs.changes", () => {
   test("keeps the latest kind of each run, newest first", () => {
     const state = folded(
       run("a", "completed", {refresh: true, duration_ms: 12}),
-      run("b", "failed", {refresh: true, error: {class: "runtime", message: "it broke"}}),
+      run("b", "failed", {refresh: true, error: {class: "internal", cause: "failed"}}),
       run("c", "started", {refresh: true}),
       run("c", "completed"),
       run("d", "started")
@@ -436,7 +456,7 @@ describe("schedule_runs.changes", () => {
     let state = fold(EMPTY, "schedules.changes", {kind: "changed", schedule_id: "s1", name: "Morning report"}, 1)
     const fired = (occurrence, extra = {}) => ({kind: "fired", schedule_id: "s1", occurrence_id: occurrence, scheduled_for: "2026-10-27T08:00:00Z", ...extra})
     for (let i = 0; i < MAX_SCHEDULE_RUNS + 3; i++) state = fold(state, "schedule_runs.changes", fired(`o${i}`), 1)
-    state = fold(state, "schedule_runs.changes", fired("o12", {kind: "failed", reason: "timeout"}), 1)
+    state = fold(state, "schedule_runs.changes", fired("o12", {kind: "failed", reason: {class: "timeout", cause: "timed_out"}}), 1)
     assert.equal(state.scheduleRuns.length, MAX_SCHEDULE_RUNS)
     assert.deepEqual(state.scheduleRuns.slice(0, 2).map((r) => [r.occurrence_id, r.kind]), [["o12", "failed"], ["o11", "fired"]])
     assert.equal(state.scheduleRuns.at(-1).occurrence_id, "o3")
@@ -446,35 +466,32 @@ describe("schedule_runs.changes", () => {
 })
 
 describe("what needs attention", () => {
-  const failed = (id, reference, cls, message) =>
-    run(id, "failed", {reference, error: {class: cls, message}})
-  const NOT_GRANTED = "This account is not granted to the component; grant it first."
-  const CAPACITY = "the execution worker refused the start: cyfr-locus refused to start a runner (capacity)"
+  const failed = (id, reference, cls, cause) => run(id, "failed", {reference, error: {class: cls, cause}})
   const folded = (...items) => items.reduce((state, item) => fold(state, "runs.changes", item, 1), EMPTY)
 
   // 17 of 20 failed: 15 for want of a grant across five catalysts, two for
-  // want of a runner; three finished.
+  // want of something unavailable; three finished.
   const day = () => {
     const items = []
     const names = ["openai", "openrouter", "gemini", "grok", "claude"]
     for (let i = 0; i < 15; i++) {
-      items.push(failed(`g${i}`, `catalyst:local.${names[i % 5]}:1.4.1`, "setup_required", NOT_GRANTED))
+      items.push(failed(`g${i}`, `catalyst:local.${names[i % 5]}:1.4.1`, "setup_required", "needs_setup"))
     }
-    items.push(failed("c1", "catalyst:local.gemini:1.4.1", "unavailable", CAPACITY))
-    items.push(failed("c2", "catalyst:local.openrouter:1.4.1", "unavailable", CAPACITY))
+    items.push(failed("c1", "catalyst:local.gemini:1.4.1", "unavailable", "unavailable"))
+    items.push(failed("c2", "catalyst:local.openrouter:1.4.1", "unavailable", "unavailable"))
     for (let i = 0; i < 3; i++) items.push(run(`ok${i}`, "completed", {reference: "catalyst:local.claude:1.4.1", duration_ms: 289}))
     return folded(...items)
   }
 
-  test("groups failures by cause, each stated once with the components it hit and their counts", () => {
-    const [grant, capacity, ...rest] = causes(day())
+  test("groups failures by class and cause, each stated once with the components it hit and their counts", () => {
+    const [grant, unavailable, ...rest] = causes(day())
     assert.deepEqual(rest, [])
     assert.equal(grant.count, 15)
-    assert.equal(grant.message, NOT_GRANTED)
-    // What the page shows is the class and code, never the run's text.
+    assert.equal(grant.class, "setup_required")
+    assert.equal(grant.cause, "needs_setup")
     assert.equal(grant.shown, "setup_required")
     assert.equal(grant.grantable, true)
-    assert.equal(grant.short, "Not granted")
+    assert.equal(grant.short, "Needs setup")
     assert.deepEqual(
       grant.components.map((c) => [c.ref, c.name, c.count]),
       [
@@ -485,50 +502,64 @@ describe("what needs attention", () => {
         ["catalyst:local.openrouter", "openrouter", 3]
       ]
     )
-    assert.equal(capacity.count, 2)
-    assert.equal(capacity.grantable, false)
-    assert.equal(capacity.short, "No runner free")
-    assert.deepEqual(capacity.components.map((c) => [c.name, c.count]), [["gemini", 1], ["openrouter", 1]])
+    assert.equal(unavailable.count, 2)
+    assert.equal(unavailable.grantable, false)
+    assert.equal(unavailable.short, "Unavailable")
+    assert.deepEqual(unavailable.components.map((c) => [c.name, c.count]), [["gemini", 1], ["openrouter", 1]])
   })
 
-  test("a run's stored error, which reads back internal, offers a grant when its sentence asks for one", () => {
+  test("two classes one cause reads as are two causes, and a failure without an error is its own", () => {
     const state = folded(
-      failed("a", "catalyst:local.openai:1.4.1", "internal", NOT_GRANTED),
-      failed("b", "catalyst:local.openai:1.4.1", "internal", "The grant for this account has expired; grant it again."),
-      failed("c", "catalyst:local.openai:1.4.1", "internal", "Granted elsewhere, it says nothing to do here.")
+      failed("a", "catalyst:local.x:1.0.0", "forbidden", "refused"),
+      failed("b", "catalyst:local.x:1.0.0", "not_owner", "refused"),
+      failed("c", "catalyst:local.x:1.0.0", "not_owner", "refused"),
+      failed("d", "catalyst:local.y:1.0.0", "internal", "failed"),
+      run("e", "failed", {reference: "catalyst:local.z:1.0.0"})
     )
-    const byMessage = Object.fromEntries(causes(state).map((c) => [c.message, c]))
-    assert.equal(byMessage[NOT_GRANTED].grantable, true)
-    assert.equal(byMessage[NOT_GRANTED].short, "Not granted")
-    assert.equal(byMessage["The grant for this account has expired; grant it again."].grantable, true)
-    assert.equal(byMessage["Granted elsewhere, it says nothing to do here."].grantable, false)
-    assert.equal(today(state, new Date("2026-10-30T09:00:00Z")).sentence, "All of your last 3 runs failed. One grant fixes 2 of them.")
+    assert.deepEqual(
+      causes(state).map((c) => [c.shown, c.cause, c.short, c.count]),
+      [
+        ["not_owner", "refused", "Refused", 2],
+        ["forbidden", "refused", "Refused", 1],
+        ["internal", "", "Failed", 1],
+        ["internal", "failed", "Failed", 1]
+      ]
+    )
   })
 
-  test("a cause shows its class and code, and its class alone without a code", () => {
-    const state = folded(
-      run("a", "failed", {reference: "catalyst:local.x:1.0.0", error: {class: "unavailable", code: "no_runner"}}),
-      run("b", "failed", {reference: "catalyst:local.x:1.0.0", error: {class: "unavailable", code: "no_runner"}}),
-      failed("c", "catalyst:local.y:1.0.0", "timeout", "It took too long.")
-    )
-    const shown = causes(state).map((c) => [c.shown, c.count])
-    assert.deepEqual(shown, [["unavailable (no_runner)", 2], ["timeout", 1]])
+  test("what the page shows of a cause is its class and the canvas's few words for it, never a sentence", () => {
     const page = readFileSync(new URL("src/App.tsx", VERSION), "utf8")
     assert.match(page, /\{cause\.shown\}/)
-    assert.doesNotMatch(page, /\{cause\.message\}/)
+    assert.match(page, /cause\.short/)
+    assert.doesNotMatch(page, /message/)
+    const model = readFileSync(new URL("src/model.ts", VERSION), "utf8")
+    assert.doesNotMatch(model, /text\(error\??\.message\)/)
   })
 
-  test("only a grant's absence or lapse offers a grant", () => {
+  test("a grant is offered by a grant's class, or by the cause a missing or lapsed grant reads as", () => {
     assert.deepEqual(GRANTABLE, ["consent_required", "setup_required"])
+    assert.deepEqual(GRANT_CAUSES, ["needs_setup"])
+    assert.equal(grantable("consent_required", ""), true)
+    assert.equal(grantable("internal", "needs_setup"), true)
+    for (const [cls, cause] of [["timeout", "timed_out"], ["internal", "failed"], ["unavailable", "unavailable"], ["forbidden", "refused"], ["internal", ""]]) {
+      assert.equal(grantable(cls, cause), false, `${cls} ${cause}`)
+    }
     const state = folded(
-      failed("a", "catalyst:local.x:1.0.0", "consent_required", "The grant for this account has expired; grant it again."),
-      failed("b", "catalyst:local.y:1.0.0", "timeout", "It took too long."),
+      failed("a", "catalyst:local.x:1.0.0", "consent_required", "needs_setup"),
+      failed("b", "catalyst:local.y:1.0.0", "timeout", "timed_out"),
       run("c", "failed", {reference: "catalyst:local.z:1.0.0"})
     )
-    const byMessage = Object.fromEntries(causes(state).map((c) => [c.message, c]))
-    assert.equal(byMessage["The grant for this account has expired; grant it again."].grantable, true)
-    assert.equal(byMessage["It took too long."].grantable, false)
-    assert.equal(byMessage["The run failed without saying why."].short, "Failed")
+    const byClass = Object.fromEntries(causes(state).map((c) => [c.class + c.cause, c]))
+    assert.equal(byClass.consent_requiredneeds_setup.grantable, true)
+    assert.equal(byClass.timeouttimed_out.grantable, false)
+    assert.equal(byClass.internal.grantable, false)
+    assert.equal(today(state, new Date("2026-10-30T09:00:00Z")).sentence, "All of your last 3 runs failed. One grant fixes 1 of them.")
+  })
+
+  test("a failure no grant fixes offers none and promises no fix", () => {
+    const state = folded(failed("a", "catalyst:local.claude:1.4.1", "internal", "failed"))
+    assert.equal(causes(state)[0].grantable, false)
+    assert.doesNotMatch(today(state, new Date()).sentence, /grant/)
   })
 
   test("a Grant asks the shell to grant the component, by its reference without a version", () => {
@@ -544,8 +575,8 @@ describe("what needs attention", () => {
     const now = new Date("2026-10-30T09:00:00Z")
     assert.equal(today(day(), now).sentence, "17 of your last 20 runs failed. Five grants fix 15 of them.")
     const one = folded(
-      failed("a", "catalyst:local.openai:1.0.0", "setup_required", NOT_GRANTED),
-      failed("b", "catalyst:local.openai:1.0.0", "setup_required", NOT_GRANTED),
+      failed("a", "catalyst:local.openai:1.0.0", "setup_required", "needs_setup"),
+      failed("b", "catalyst:local.openai:1.0.0", "setup_required", "needs_setup"),
       run("c", "completed")
     )
     assert.equal(today(one, now).sentence, "2 of your last 3 runs failed. One grant fixes all of them.")
@@ -555,37 +586,12 @@ describe("what needs attention", () => {
     assert.match(today(EMPTY, now).date, /30/)
   })
 
-  test("short reasons come from the class, and a grant's from its sentence", () => {
-    assert.equal(shortReason("setup_required", "This component needs its secrets set."), "Needs setup")
-    assert.equal(shortReason("unavailable", "The store did not answer."), "Unavailable")
-    assert.equal(shortReason("internal", CAPACITY), "No runner free")
-    assert.equal(shortReason("internal", ""), "Failed")
-  })
-})
-
-describe("the grant a failure offers", () => {
-  const FIRST = "This account is not granted to the component; grant it first."
-
-  test("a message that is CYFR's own sentence offers a grant, whatever its class", () => {
-    assert.equal(grantable("internal", FIRST), true)
-    assert.equal(grantable("internal", "The grant for this account has expired; grant it again."), true)
-  })
-
-  test("an internal error quoting the words, or one sentence of CYFR's with more around it, offers no grant and promises no fix", () => {
-    for (const message of [
-      'The reply did not contain the required words "grant it first".',
-      `${FIRST} (while reading the model)`,
-      FIRST.toLowerCase()
-    ]) {
-      const state = fold(
-        EMPTY,
-        "runs.changes",
-        {kind: "failed", execution_id: "r", reference: "catalyst:local.claude:1.4.1", error: {class: "internal", message}},
-        1
-      )
-      assert.equal(causes(state)[0].grantable, false, message)
-      assert.notEqual(causes(state)[0].short, "Not granted", message)
-      assert.doesNotMatch(today(state, new Date()).sentence, /grant.*fix/, message)
+  test("short reasons come from the cause, and a cause the canvas has no words for reads as failed", () => {
+    assert.equal(shortReason("needs_setup"), "Needs setup")
+    assert.equal(shortReason("timed_out"), "Timed out")
+    assert.equal(shortReason("waits_for_you"), "Waits for you")
+    for (const cause of ["failed", "uncertain", "", "constructor", "a cause from a later server"]) {
+      assert.equal(shortReason(cause), "Failed", cause)
     }
   })
 })
@@ -602,7 +608,7 @@ describe("recent runs", () => {
     const items = Array.from({length: 12}, (_, i) =>
       run(`r${i}`, i % 2 ? "failed" : "completed", {
         duration_ms: 1500,
-        error: i % 2 ? {class: "timeout", message: "It took too long."} : null
+        error: i % 2 ? {class: "timeout", cause: "timed_out"} : null
       })
     )
     const {rows, more} = recentRows(folded(...items), 8)
@@ -627,10 +633,14 @@ describe("schedules", () => {
 
   test("each row says when it runs next and last, and its runs and errors", () => {
     const state = held(
-      schedule("s1", {next_run_at: "2026-10-30T09:30:00Z", last_run_at: "2026-10-29T09:00:00Z", run_count: 12, error_count: 1}),
-      schedule("s2", {status: "paused", next_run_at: null, last_run_at: null})
+      schedule("s1", {status: "active", next_run_at: "2026-10-30T09:30:00Z", last_run_at: "2026-10-29T09:00:00Z", run_count: 12, error_count: 1}),
+      schedule("s2", {status: "paused", next_run_at: null, last_run_at: null}),
+      schedule("s3", {status: "needs_consent", next_run_at: null, last_run_at: null})
     )
-    const [first, second] = scheduleRows(state, now)
+    const [first, second, third] = scheduleRows(state, now)
+    // Pause while it is active, Resume while it is paused, and neither in
+    // any other status.
+    assert.deepEqual([first.control, second.control, third.control], [PAUSE, RESUME, null])
     assert.equal(first.next, relative("2026-10-30T09:30:00Z", now, ""))
     assert.match(first.next, /30 minutes/)
     assert.match(first.last, /yesterday|1 day|24 hours/)
@@ -666,6 +676,217 @@ describe("schedules", () => {
     assert.equal(relative("garbage", now, "never"), "never")
     assert.equal(relative("2026-10-30T08:59:50Z", now, ""), "just now")
     assert.match(relative("2026-10-30T06:00:00Z", now, ""), /3 hours ago/)
+  })
+})
+
+describe("a schedule's Pause and Resume", () => {
+  const now = new Date("2026-10-30T09:00:00Z")
+  const rows = () =>
+    scheduleRows(
+      [
+        {kind: "changed", schedule_id: "sch_1", name: "Morning", status: "active"},
+        {kind: "changed", schedule_id: "sch_2", name: "Evening", status: "paused"},
+        {kind: "changed", schedule_id: "sch_3", name: "Waiting", status: "needs_consent"}
+      ].reduce((state, item) => fold(state, "schedules.changes", item, 1), EMPTY),
+      now
+    )
+
+  test("presses the declared control with the schedule's id as its pick, and says nothing of an accepted press", async () => {
+    const shell = sdk()
+    const [active, paused, waiting] = rows()
+    shell.answers.press.push({outcome: "accepted"}, {outcome: "cancelled"})
+    assert.equal(await pressSchedule(shell.cyfr, active), null)
+    assert.equal(await pressSchedule(shell.cyfr, paused), null)
+    assert.equal(await pressSchedule(shell.cyfr, waiting), null)
+    assert.deepEqual(shell.calls.press, [
+      [PAUSE, "sch_1"],
+      [RESUME, "sch_2"]
+    ])
+  })
+
+  test("a refused press answers its reason, to show for a moment", async () => {
+    const shell = sdk()
+    const [active] = rows()
+    shell.answers.press.push({outcome: "refused", reason: "not_found"}, {outcome: "refused"})
+    assert.equal(await pressSchedule(shell.cyfr, active), "not_found")
+    assert.equal(await pressSchedule(shell.cyfr, active), "refused")
+    const page = readFileSync(new URL("src/App.tsx", VERSION), "utf8")
+    assert.match(page, /Refused · \{refused\}/)
+  })
+
+  test("the manifest declares both controls, each picking a schedule's id from schedules.changes", () => {
+    const {desktop: block} = JSON.parse(readFileSync(new URL("cyfr-manifest.json", VERSION), "utf8")).tincture
+    const pick = {stream: "schedules.changes", field: "/schedule_id", arg: "schedule_id"}
+    assert.deepEqual(block.controls, [
+      {id: PAUSE, label: "Pause", operation: "schedule.pause", pick},
+      {id: RESUME, label: "Resume", operation: "schedule.resume", pick}
+    ])
+    assert.deepEqual(block.data, STREAMS)
+  })
+})
+
+describe("the sections the person hides", () => {
+  const prefs = (widgets, revision = 1) => ({prefs: {document: {widgets, desktop: {}}, revision}})
+
+  test("are the document's widgets whose entry says on: false, from the open and each desktop event", async () => {
+    const shell = sdk()
+    shell.cyfr.desktop = prefs({apps: {on: false}, runs: {on: true}})
+    const states = []
+    const stop = start(shell.cyfr, (state) => states.push(state))
+    shell.calls.installed([])
+    assert.deepEqual(hidden(states.at(-1)), ["apps"])
+
+    shell.calls.desktop(prefs({attention: {on: false}, schedules: {on: false, rect: {x: 0, y: 0, w: 10, h: 10}}}, 2))
+    assert.deepEqual(hidden(states.at(-1)), ["attention", "schedules"])
+    // What reads as no document leaves the one held.
+    for (const value of [null, {prefs: null}, {prefs: {document: "x", revision: 3}}]) shell.calls.desktop(value)
+    assert.deepEqual(hidden(states.at(-1)), ["attention", "schedules"])
+    stop()
+
+    assert.deepEqual(hidden(EMPTY), [])
+    assert.equal(isShown({widgets: {runs: {on: "false"}}}, "runs"), true)
+    assert.equal(isShown(null, "runs"), true)
+    assert.deepEqual(hidden(desktop(EMPTY, prefs({runs: {on: false}}))), ["runs"])
+  })
+
+  test("a hide or a show writes that widget's on alone", async () => {
+    const shell = sdk()
+    shell.answers.prefs.push({outcome: "saved", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 2})
+    assert.equal((await showWidget(shell.cyfr, "runs", false)).outcome, "saved")
+    shell.answers.prefs.push({outcome: "refused", reason: "invalid_argument", document: {widgets: {}, desktop: {}}, revision: 2})
+    assert.equal((await showWidget(shell.cyfr, "runs", true)).outcome, "refused")
+    shell.answers.prefs.push({outcome: "cancelled"})
+    assert.equal((await showWidget(shell.cyfr, "apps", false)).outcome, "cancelled")
+    assert.deepEqual(shell.calls.prefs, [
+      {widgets: {runs: {on: false}}},
+      {widgets: {runs: {on: true}}},
+      {widgets: {apps: {on: false}}}
+    ])
+  })
+
+  test("a stale write is not written again: one tap, one write, its answer the document now held", async () => {
+    const shell = sdk()
+    const current = {widgets: {apps: {on: false}}, desktop: {}}
+    shell.answers.prefs.push({outcome: "stale", document: current, revision: 7})
+    const answer = await showWidget(shell.cyfr, "runs", false)
+    assert.deepEqual(answer, {outcome: "stale", document: current, revision: 7})
+    assert.deepEqual(shell.calls.prefs, [{widgets: {runs: {on: false}}}])
+  })
+
+  test("the manifest declares a widget for each section, with no fields of its own", () => {
+    const {desktop: block} = JSON.parse(readFileSync(new URL("cyfr-manifest.json", VERSION), "utf8")).tincture
+    assert.deepEqual(block.prefs, {widgets: Object.fromEntries(WIDGETS.map((widget) => [widget, {}]))})
+    assert.equal(block.chrome, "chrome.css")
+  })
+})
+
+describe("nothing is pressed or written but by the page's own handlers", () => {
+  test("no stream event, no word of the shell and no reopen presses a control or writes the preferences", async (t) => {
+    t.mock.timers.enable({apis: ["setTimeout"]})
+    const page = started()
+    await settle()
+    for (const open of page.opens) open.accept()
+    page.latest("schedules.changes").send({kind: "changed", schedule_id: "sch_1", name: "Morning", status: "active", refresh: true})
+    page.latest("schedules.changes").send({kind: "changed", schedule_id: "sch_2", name: "Evening", status: "paused"})
+    page.latest("runs.changes").send(run("a", "failed", {error: {class: "setup_required", cause: "needs_setup"}}))
+    page.latest("schedule_runs.changes").send({kind: "failed", schedule_id: "sch_1", occurrence_id: "o1", reason: {class: "timeout", cause: "timed_out"}})
+    page.calls.installed([{ref: "tincture:local.notes", name: "Notes", icon: null, open: false}])
+    page.calls.covered([{x: 0, y: 0, width: 10, height: 10}])
+    page.calls.posture("hand")
+    page.calls.desktop({prefs: {document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 4}})
+    page.latest("schedules.changes").end()
+    await settle()
+    t.mock.timers.tick(RETRY_MS[0])
+    await settle()
+    page.latest("schedules.changes").accept()
+    await settle()
+    assert.deepEqual(hidden(page.state()), ["runs"])
+    assert.deepEqual([page.calls.press, page.calls.prefs, page.calls.open, page.calls.grant], [[], [], [], []])
+    page.stop()
+  })
+
+  test("the page presses and writes only from a tap's handler, and the model only in the two calls a handler makes", () => {
+    const app = readFileSync(new URL("src/App.tsx", VERSION), "utf8")
+    const taps = [...app.matchAll(/(pressSchedule|showWidget)\(cyfr/g)]
+    assert.equal(taps.length, 3)
+    for (const tap of taps) assert.match(app.slice(0, tap.index), /onClick=\{\(\) => $/)
+    assert.doesNotMatch(app, /cyfr\.(press|prefs)\(/)
+
+    const model = readFileSync(new URL("src/model.ts", VERSION), "utf8")
+    const outside = model
+      .replace(/^export async function pressSchedule\([\s\S]*?^\}$/m, "")
+      .replace(/^export async function showWidget\([\s\S]*?^\}$/m, "")
+    assert.notEqual(outside, model)
+    assert.doesNotMatch(outside, /\.(press|prefs)\(/)
+  })
+})
+
+describe("on the SDK itself", () => {
+  // A canvas page's SDK, opened as the shell opens one: the fixture's
+  // canvas block, whose document hides apps, and `heard`, every message
+  // the page posts the shell. Its streams wait to be shown, so nothing is
+  // fetched.
+  async function opened() {
+    const [{frame, reply}] = fixture.canvas.handshake.valid
+    const win = {location: {pathname: "/"}, parent: {}}
+    const fetchFn = async () => assert.fail("the canvas fetched before it was shown")
+    const {api, onWindowMessage} = createClient({win, fetchFn, base: "https://cyfr.test/"})
+    const channel = new MessageChannel()
+    const heard = []
+    channel.port1.onmessage = (event) => heard.push(event.data)
+    onWindowMessage({source: win.parent, data: {v: 1, type: HANDSHAKE, frame}, ports: [channel.port2]})
+    channel.port1.postMessage(toFrameMessage("canvas", frame, reply.canvas))
+    channel.port1.postMessage({v: 1, type: CREDENTIAL, frame, credential: reply.credential})
+    await eventually(() => api.desktop !== null)
+    const tell = (verb, args) => channel.port1.postMessage(toFrameMessage(verb, frame, args))
+    return {api, heard, tell, frame, close: () => channel.port1.close()}
+  }
+
+  const verbs = (heard, verb) => heard.filter((message) => message.verb === verb).map((message) => message.args)
+
+  test("the open's document hides its sections, and a stale write's answer is the document the page then shows", async () => {
+    const shell = await opened()
+    try {
+      const states = []
+      const stop = start(shell.api, (state) => states.push(state))
+      await eventually(() => states.length > 0)
+      assert.deepEqual(hidden(states.at(-1)), ["apps"])
+
+      const write = showWidget(shell.api, "runs", false)
+      await eventually(() => verbs(shell.heard, "prefs").length === 1)
+      const current = {widgets: {apps: {on: false}, schedules: {on: false}}, desktop: {}}
+      shell.tell("prefs", {call: 1, outcome: "stale", document: current, revision: 7})
+      assert.deepEqual(await write, {outcome: "stale", document: current, revision: 7})
+      await eventually(() => hidden(states.at(-1)).length === 2)
+      assert.deepEqual(hidden(states.at(-1)), ["apps", "schedules"])
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.deepEqual(verbs(shell.heard, "prefs"), [{document: {widgets: {runs: {on: false}}}, call: 1}])
+
+      // The person's next tap writes over it.
+      const again = showWidget(shell.api, "runs", false)
+      await eventually(() => verbs(shell.heard, "prefs").length === 2)
+      const saved = {widgets: {apps: {on: false}, schedules: {on: false}, runs: {on: false}}, desktop: {}}
+      shell.tell("prefs", {call: 2, outcome: "saved", document: saved, revision: 8})
+      assert.deepEqual(await again, {outcome: "saved", document: saved, revision: 8})
+      await eventually(() => hidden(states.at(-1)).length === 3)
+      stop()
+    } finally {
+      shell.close()
+    }
+  })
+
+  test("a press goes as the control and the picked id, and a refusal answers its reason", async () => {
+    const shell = await opened()
+    try {
+      const row = scheduleRows(fold(EMPTY, "schedules.changes", {kind: "changed", schedule_id: "sch_1", name: "Morning", status: "active"}, 1), new Date())[0]
+      const pressed = pressSchedule(shell.api, row)
+      await eventually(() => verbs(shell.heard, "press").length === 1)
+      assert.deepEqual(verbs(shell.heard, "press"), [{control: PAUSE, value: "sch_1", call: 1}])
+      shell.tell("pressed", {control: PAUSE, call: 1, outcome: "refused", reason: "not_found"})
+      assert.equal(await pressed, "not_found")
+    } finally {
+      shell.close()
+    }
   })
 })
 

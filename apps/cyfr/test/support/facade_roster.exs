@@ -10,6 +10,7 @@
 # in the same change.
 %{
   "Arca" => [
+    "Arca.CanvasPrefs",
     "Arca.CanvasVersions",
     "Arca.FencedPublication",
     "Arca.FencedPublication.Change",

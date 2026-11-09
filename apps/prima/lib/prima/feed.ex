@@ -126,17 +126,23 @@ defmodule Prima.Feed.Action do
     * `label` — 1 to 40 code points with no control character, the
       control's label;
     * `kind` — `:refresh` reruns the feed and publishes its result, and
-      carries no `operation` or `args`; `:run` runs `operation` (1 to 64
-      code points with no control character) with `args` (a JSON object,
-      `{}` allowed, at most 4096 bytes of JSON text) and publishes nothing.
+      carries no `operation`, `args` or `pick`; `:run` runs `operation` (1
+      to 64 code points with no control character) with `args` (a JSON
+      object, `{}` allowed, at most 4096 bytes of JSON text) and publishes
+      nothing;
+    * `pick` — a `run` action's optional name of the one argument of its
+      operation that a press's picked value fills (`[a-z][a-z0-9_]{0,62}`),
+      an argument its `args` leave open (`Prima.Feed.input/2`).
 
-  In JSON the kind is the string `refresh` or `run`.
+  In JSON the kind is the string `refresh` or `run`, and `pick` is absent
+  when the action names none.
   """
 
   alias Prima.Feed.Read
 
   @label_max 40
   @kinds %{"refresh" => :refresh, "run" => :run}
+  @pick ~r/\A[a-z][a-z0-9_]{0,62}\z/
 
   @type kind :: :refresh | :run
 
@@ -145,11 +151,12 @@ defmodule Prima.Feed.Action do
           label: String.t(),
           kind: kind(),
           operation: String.t() | nil,
-          args: map() | nil
+          args: map() | nil,
+          pick: String.t() | nil
         }
 
   @enforce_keys [:name, :label, :kind]
-  defstruct [:name, :label, :kind, operation: nil, args: nil]
+  defstruct [:name, :label, :kind, operation: nil, args: nil, pick: nil]
 
   @doc "The most code points an action's label takes."
   @spec label_max() :: pos_integer()
@@ -161,7 +168,7 @@ defmodule Prima.Feed.Action do
   """
   @spec validate(term()) :: {:ok, t()} | {:error, Prima.Feed.refusal()}
   def validate(%{} = json) when not is_struct(json) do
-    with :ok <- Read.known_keys(json, ~w(name label kind operation args), ""),
+    with :ok <- Read.known_keys(json, ~w(name label kind operation args pick), ""),
          {:ok, name} <- Read.fetch(json, "name", ""),
          {:ok, name} <- Read.name(name, "/name"),
          {:ok, label} <- Read.fetch(json, "label", ""),
@@ -176,16 +183,32 @@ defmodule Prima.Feed.Action do
   def validate(_json), do: Read.refuse("", "type")
 
   @doc """
-  The JSON form: string keys, `operation` and `args` only for `run`. Any
-  other term, an action missing a field it writes among them, raises an
-  `ArgumentError` naming no value.
+  The JSON form: string keys, `operation` and `args` only for `run`, and
+  `pick` only for a `run` that names one. Any other term, an action
+  missing a field it writes among them, raises an `ArgumentError` naming
+  no value.
   """
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{name: name, label: label, kind: :refresh}),
     do: %{"name" => name, "label" => label, "kind" => "refresh"}
 
-  def to_json(%__MODULE__{name: name, label: label, kind: :run, operation: operation, args: args}) do
-    %{"name" => name, "label" => label, "kind" => "run", "operation" => operation, "args" => args}
+  def to_json(%__MODULE__{
+        name: name,
+        label: label,
+        kind: :run,
+        operation: operation,
+        args: args,
+        pick: pick
+      }) do
+    json = %{
+      "name" => name,
+      "label" => label,
+      "kind" => "run",
+      "operation" => operation,
+      "args" => args
+    }
+
+    if is_nil(pick), do: json, else: Map.put(json, "pick", pick)
   end
 
   # Never a clause or key error: either report would print the term. The
@@ -198,7 +221,7 @@ defmodule Prima.Feed.Action do
   defp kind(_kind), do: Read.refuse("/kind", "type")
 
   defp kind_fields(:refresh, json) do
-    case Enum.find(~w(operation args), &Map.has_key?(json, &1)) do
+    case Enum.find(~w(operation args pick), &Map.has_key?(json, &1)) do
       nil -> {:ok, %{}}
       key -> Read.refuse("/" <> key, "unknown_key")
     end
@@ -208,10 +231,24 @@ defmodule Prima.Feed.Action do
     with {:ok, operation} <- Read.fetch(json, "operation", ""),
          {:ok, operation} <- Read.operation(operation, "/operation"),
          {:ok, args} <- Read.fetch(json, "args", ""),
-         {:ok, args} <- Read.args(args, "/args") do
-      {:ok, %{operation: operation, args: args}}
+         {:ok, args} <- Read.args(args, "/args"),
+         {:ok, pick} <- pick(json, args) do
+      {:ok, %{operation: operation, args: args, pick: pick}}
     end
   end
+
+  # The pick fills an argument the fixed args leave open, so one the args
+  # already hold is refused rather than overwritten at a press.
+  defp pick(%{"pick" => pick}, args) when is_binary(pick) do
+    cond do
+      not Regex.match?(@pick, pick) -> Read.refuse("/pick", "name")
+      Map.has_key?(args, pick) -> Read.refuse("/pick", "duplicate")
+      true -> {:ok, pick}
+    end
+  end
+
+  defp pick(%{"pick" => _pick}, _args), do: Read.refuse("/pick", "type")
+  defp pick(_json, _args), do: {:ok, nil}
 end
 
 defmodule Prima.Feed.Binding do
@@ -431,8 +468,9 @@ defmodule Prima.Feed do
   the path at its object, so a path is always text. A function handed
   an argument outside its type raises an `ArgumentError` naming no value.
 
-  `tests/fixtures/feed.json` holds bindings, inputs, crons, results,
-  envelopes, and results and arguments at their byte bounds.
+  `tests/fixtures/feed.json` holds bindings, inputs (a picked action's
+  among them), crons, results, envelopes, and results and arguments at
+  their byte bounds.
   """
 
   alias Prima.Canvas.Shape
@@ -486,18 +524,35 @@ defmodule Prima.Feed do
   def reasons, do: Map.merge(Shape.reasons(), @feed_reasons)
 
   @doc """
-  The component input a binding or a `run` action runs with, the catalyst
-  input convention: `%{"operation" => operation, "params" => args}`.
+  The component input a binding or a `run` action that names no pick runs
+  with, the catalyst input convention: `%{"operation" => operation,
+  "params" => args}`. An action that names a pick runs with a picked value
+  (`input/2`), so here it raises an `ArgumentError` naming no value.
   """
   @spec input(Binding.t() | Action.t()) :: %{String.t() => term()}
   def input(%Binding{operation: operation, args: args}),
     do: %{"operation" => operation, "params" => args}
 
-  def input(%Action{kind: :run, operation: operation, args: args}),
+  def input(%Action{kind: :run, operation: operation, args: args, pick: nil}),
     do: %{"operation" => operation, "params" => args}
 
   # Never a clause error: its report would print the term.
-  def input(_source), do: raise(ArgumentError, "input/1 takes a binding or a run action")
+  def input(_source),
+    do: raise(ArgumentError, "input/1 takes a binding or a run action that names no pick")
+
+  @doc """
+  The component input a `run` action that names a pick runs with when it
+  is pressed with the picked `value`: its args with the pick's argument
+  set to `value`. An action that names no pick, or a value that is not a
+  string, raises an `ArgumentError` naming no value: a caller checks first.
+  """
+  @spec input(Action.t(), String.t()) :: %{String.t() => term()}
+  def input(%Action{kind: :run, operation: operation, args: args, pick: pick}, value)
+      when is_binary(pick) and is_map(args) and is_binary(value),
+      do: %{"operation" => operation, "params" => Map.put(args, pick, value)}
+
+  def input(_action, _value),
+    do: raise(ArgumentError, "input/2 takes a run action that names a pick and a picked string")
 
   @doc "The binding's cron expression: `*/N * * * *`, or `0 * * * *` for 60."
   @spec cron(Binding.t()) :: String.t()

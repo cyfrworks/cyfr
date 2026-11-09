@@ -282,7 +282,7 @@ describe("shell verbs go over the port", () => {
 
     for (const {verb, message} of fixture.shell.filter(({verb}) => !CANVAS_VERBS.includes(verb))) {
       const received = nextMessage(shell)
-      if (verb === "open") api.open(message.args.ref)
+      if (verb === "open") api.open(message.args.ref, message.args.subject ?? null)
       else if (verb === "title") api.title(message.args.title)
       else if (verb === "credential") api.credential(message.args.name)
       else api[verb]()
@@ -610,6 +610,7 @@ describe("a canvas's streams go to its open's data path", () => {
     shell.postMessage(toFrameMessage("canvas", CANVAS, {...OPEN.canvas, streams: [{name: "executions.deltas", subject: null}]}))
     shell.postMessage(
       toFrameMessage("canvas", "frm_00aa11bb22", {
+        ...OPEN.canvas,
         mode: "live",
         data_path: "/_f/v1/o/frm_00aa11bb22/",
         streams: [{name: "executions.deltas", subject: null}]
@@ -1010,5 +1011,204 @@ describe("a canvas reports its own failure, once", () => {
     await eventually(() => heard.length === 1)
     await tick()
     assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}])
+  })
+})
+
+// ---- a desktop's verbs and what its open tells it --------------------------------
+
+describe("a desktop's verbs and data", () => {
+  const answerOn = (port, verb, args) => port.postMessage(toFrameMessage(verb, CANVAS, args))
+  const sent = (heard, verb) => heard.filter((message) => message.verb === verb)
+
+  test("its preferences, appearance and person come with its open, read through desktop and its event", async () => {
+    const {api, open} = await canvasClient()
+    const seen = []
+    api.on("desktop", (desktop) => seen.push(desktop))
+    assert.equal(api.desktop, null)
+
+    open(SHOWN)
+    await eventually(() => seen.length === 1)
+
+    const expected = {prefs: OPEN.canvas.prefs, appearance: OPEN.canvas.appearance, person: OPEN.canvas.person}
+    assert.deepEqual({...api.desktop}, expected)
+    assert.deepEqual({...seen[0]}, expected)
+  })
+
+  test("a press of a control posts the wire's message and settles with the shell's answer; a feed's press answers nothing", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+
+    const accepted = api.press("pause-digest")
+    const picked = api.press("vpn-connect", "lisbon-1")
+    await eventually(() => sent(heard, "press").length === 2)
+    assert.deepEqual(
+      sent(heard, "press").map(({args}) => args),
+      [
+        {control: "pause-digest", call: 1},
+        {control: "vpn-connect", value: "lisbon-1", call: 2}
+      ]
+    )
+
+    answerOn(port, "pressed", {control: "vpn-connect", call: 2, outcome: "refused", reason: "invalid_argument"})
+    answerOn(port, "pressed", {control: "pause-digest", call: 1, outcome: "accepted"})
+    assert.deepEqual({...(await accepted)}, {outcome: "accepted"})
+    assert.deepEqual({...(await picked)}, {outcome: "refused", reason: "invalid_argument"})
+
+    assert.equal(api.press(PRESS.binding, PRESS.action), undefined)
+    await eventually(() => sent(heard, "press").length === 3)
+    assert.deepEqual(sent(heard, "press")[2].args, PRESS)
+
+    await assert.rejects(api.press("Not An Id"), {code: "invalid_argument"})
+    await assert.rejects(api.press("pause-digest", ""), {code: "invalid_argument"})
+  })
+
+  test("a write of the preferences settles with the answer, and desktop follows the document the shell holds", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+    const seen = []
+    api.on("desktop", (desktop) => seen.push(desktop))
+    await eventually(() => seen.length === 1)
+
+    const writing = api.prefs({widgets: {runs: {on: false}}})
+    await eventually(() => sent(heard, "prefs").length === 1)
+    assert.deepEqual(sent(heard, "prefs")[0].args, {document: {widgets: {runs: {on: false}}}, call: 1})
+
+    const current = {widgets: {runs: {on: true}, apps: {on: false}}, desktop: {}}
+    answerOn(port, "prefs", {call: 1, outcome: "stale", document: current, revision: 8})
+    assert.deepEqual({...(await writing)}, {outcome: "stale", document: current, revision: 8})
+    await eventually(() => seen.length === 2)
+    assert.deepEqual(api.desktop.prefs, {document: current, revision: 8})
+
+    await assert.rejects(api.prefs([]), {code: "invalid_argument"})
+  })
+
+  test("a cancelled later press cannot answer an earlier press of the same control still running", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+
+    const first = api.press("pause-digest", "sch_first")
+    const second = api.press("pause-digest", "sch_second")
+    await eventually(() => sent(heard, "press").length === 2)
+    const [one, two] = sent(heard, "press").map(({args}) => args.call)
+
+    // The second is told it did not run before the first's run ends.
+    answerOn(port, "pressed", {control: "pause-digest", call: two, outcome: "cancelled"})
+    answerOn(port, "pressed", {control: "pause-digest", call: one, outcome: "accepted"})
+
+    assert.deepEqual(
+      (await Promise.all([first, second])).map((answer) => ({...answer})),
+      [{outcome: "accepted"}, {outcome: "cancelled"}]
+    )
+  })
+
+  test("a cancelled later write cannot answer an earlier write still pending", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+    const document = {widgets: {runs: {on: false}}, desktop: {}}
+
+    const first = api.prefs({widgets: document.widgets})
+    const second = api.prefs({widgets: {apps: {on: false}}})
+    await eventually(() => sent(heard, "prefs").length === 2)
+    const [one, two] = sent(heard, "prefs").map(({args}) => args.call)
+
+    // The second is told it did not run before the first's write is answered.
+    answerOn(port, "prefs", {call: two, outcome: "cancelled", ...OPEN.canvas.prefs})
+    answerOn(port, "prefs", {call: one, outcome: "saved", document, revision: 1})
+
+    assert.deepEqual(
+      (await Promise.all([first, second])).map(({outcome}) => outcome),
+      ["saved", "cancelled"]
+    )
+  })
+
+  test("stale completed prefs call cannot roll back a later saved revision", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+    const seen = []
+    api.on("desktop", (desktop) => seen.push(desktop))
+    await eventually(() => seen.length === 1)
+    const older = {widgets: {runs: {on: false}}, desktop: {}}
+    const newer = {widgets: {runs: {on: true}}, desktop: {}}
+
+    const first = api.prefs(older)
+    await eventually(() => sent(heard, "prefs").length === 1)
+    const one = sent(heard, "prefs")[0].args.call
+    answerOn(port, "prefs", {call: one, outcome: "saved", document: older, revision: 4})
+    await first
+    const second = api.prefs(newer)
+    await eventually(() => sent(heard, "prefs").length === 2)
+    answerOn(port, "prefs", {call: sent(heard, "prefs")[1].args.call, outcome: "saved", document: newer, revision: 5})
+    await second
+    await eventually(() => seen.length === 3)
+
+    // The first write's answer comes again.
+    answerOn(port, "prefs", {call: one, outcome: "saved", document: older, revision: 4})
+    await tick()
+    assert.deepEqual(api.desktop.prefs, {document: newer, revision: 5})
+    assert.equal(seen.length, 3)
+  })
+
+  test("unknown prefs reply leaves desktop and desktop events untouched", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api} = client
+    const seen = []
+    api.on("desktop", (desktop) => seen.push(desktop))
+    await eventually(() => seen.length === 1)
+    const before = {...api.desktop}
+
+    const document = {widgets: {runs: {on: false}}, desktop: {}}
+    answerOn(port, "prefs", {call: 999, outcome: "saved", document, revision: 99})
+    await tick()
+    assert.deepEqual({...api.desktop}, before)
+    assert.equal(seen.length, 1)
+  })
+
+  test("ask, settings and an open on a subject post the wire's messages; an open on a subject outside it posts nothing", async () => {
+    const client = await canvasClient()
+    client.open(SHOWN)
+    const {api, heard} = client
+    const subject = {kind: "run", id: "exec_0190f3a2"}
+
+    api.ask("runs")
+    api.settings("schedules")
+    api.open("t:local.runs", {kind: "url", id: "x"})
+    api.open("t:local.runs", subject)
+    await settled(client)
+
+    assert.deepEqual(
+      heard.filter(({verb}) => ["ask", "settings", "open"].includes(verb)).map(({verb, args}) => [verb, args]),
+      [
+        ["ask", {widget: "runs"}],
+        ["settings", {page: "schedules"}],
+        ["open", {ref: "t:local.runs", subject}]
+      ]
+    )
+  })
+
+  test("an app opened on a subject reads it; a page that is no canvas presses no control and writes nothing", async () => {
+    const {api, onWindowMessage, win} = await frameClient()
+    const channel = new MessageChannel()
+    cleanups.push(() => channel.port1.close())
+    const heard = []
+    channel.port1.onmessage = (event) => heard.push(event.data)
+    const subject = {kind: "thread", id: "thr_0190f3a2"}
+
+    onWindowMessage({source: win.parent, data: {v: 1, type: HANDSHAKE, frame: FRAME}, ports: [channel.port2]})
+    channel.port1.postMessage(toFrameMessage("subject", FRAME, subject))
+    channel.port1.postMessage({v: 1, type: CREDENTIAL, frame: FRAME, credential: CREDENTIAL_VALUE})
+    await eventually(() => api.frame === FRAME && api.subject !== null)
+
+    assert.deepEqual({...api.subject}, subject)
+    assert.deepEqual({...(await api.press("pause-digest"))}, {outcome: "cancelled"})
+    assert.deepEqual({...(await api.prefs({widgets: {}}))}, {outcome: "cancelled"})
+    api.ready()
+    await eventually(() => heard.length === 1)
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: FRAME, args: {}}])
   })
 })

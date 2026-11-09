@@ -14,9 +14,13 @@ import {
   frameSignal,
   installedSignal
 } from "./signals.js"
+import {wear} from "./chrome.js"
 import {WindowGestures} from "./windows.js"
 
 const SHELF = "#canvas-shelf"
+
+// The shell's answers a canvas hears from it.
+const ANSWERS = ["pressed", "prefs"]
 
 // What a canvas is told covers it: the windows over it. A tile narrows its
 // frame instead, and a full app's cover is the frozen state.
@@ -33,8 +37,15 @@ const COVERING = ["window"]
  * frame's element, its `frame_credential` signals (a credential prompt a
  * frame asked for closed) as `cyfr:credential-closed`, its `frame_bearer`
  * pushes (a frame's rotated credential) as `cyfr:frame-bearer` on the one
- * frame they name, and its `canvas_installed` pushes to the canvas frame
- * they name.
+ * frame they name, its `canvas_installed` pushes to the canvas frame
+ * they name, and its `canvas_answer` pushes (the outcome of a canvas's
+ * press of a control or write of its preferences) to that canvas frame's
+ * bridge, which posts each once, and its `frame_subject` pushes (an app
+ * opened again on another subject) to the app frame they name.
+ *
+ * It wears the visible desktop's chrome (`chrome`, `./chrome.js`) on the
+ * page's root while the shell says so, and takes it off for Prism's
+ * default when the shell says so or the hook goes with the shell.
  *
  * Each canvas frame (`data-frame-kind="canvas"`, a canvas or a validation
  * frame) is told, through its bridge (`cyfr:to-canvas`), the posture and
@@ -89,6 +100,10 @@ const Canvas = {
     this.handleEvent("frame_credential", (payload) => this._credentialClosed(payload))
     this.handleEvent("frame_bearer", (payload) => this._bearer(payload))
     this.handleEvent("canvas_installed", (payload) => this._installed(payload))
+    this.handleEvent("canvas_answer", (payload) => this._answer(payload))
+    this.handleEvent("frame_subject", (payload) => this._subject(payload))
+    this.handleEvent("chrome", (payload) => this._wear(payload && payload.chrome))
+    this._worn = null
 
     this._windowsMount()
     this._watchFrames()
@@ -116,6 +131,7 @@ const Canvas = {
   },
 
   destroyed() {
+    this._wear(null)
     if (this._frameWatch) this._frameWatch.disconnect()
     this._windowsDestroy()
     globalThis.window?.removeEventListener("resize", this._onResize)
@@ -250,6 +266,30 @@ const Canvas = {
         new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: "installed", args: {tinctures: signal.tinctures}}})
       )
     }
+  },
+
+  // An answer to the canvas frame it names, as its bridge posts it once.
+  _answer(payload) {
+    if (payload === null || typeof payload !== "object" || !ANSWERS.includes(payload.verb)) return
+    const frame = this._canvasFrames().find((el) => el.dataset.frameId === payload.frame)
+    if (frame) {
+      frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: payload.verb, args: payload.args}}))
+    }
+  },
+
+  // A new subject for the app frame it names, which its bridge posts.
+  _subject(payload) {
+    if (payload === null || typeof payload !== "object") return
+    const frame = this._frames().find((el) => el.dataset.frameId === payload.frame)
+    if (frame) frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: "subject", args: payload.subject}}))
+  },
+
+  // The desktop's chrome on the page's root, or none.
+  _wear(chrome) {
+    const doc = this._layer.ownerDocument
+    const root = doc && doc.documentElement
+    if (!root || !root.style || !root.dataset) return
+    this._worn = wear(root, doc, chrome || null, this._worn)
   },
 
   _swipeStart(event) {

@@ -177,6 +177,7 @@ defmodule Prism.CanvasValidationTest do
   defp verb!(view, frame_id, verb, args \\ %{}),
     do:
       render_hook(view, "frame_verb", %{
+        "input" => System.unique_integer([:positive, :monotonic]),
         "frame" => frame_id,
         "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
       })

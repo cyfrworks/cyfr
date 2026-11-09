@@ -19,6 +19,8 @@ defmodule Prism do
     did not start or stopped, and the ways back the system layer offers.
   - `Prism.ConsentChoices` — the consent sheet's choices, pure over the
     plan's typed rows.
+  - `Prism.Appearance` — how the screen looks to a desktop, and the chrome
+    a desktop restyles it with.
 
   `Aqua` owns agent orchestration; Prism renders its state.
   """
@@ -26,6 +28,7 @@ defmodule Prism do
   use Boundary,
     deps: [Sanctum, Arca, Cyfr, Compendium, Aqua, Opus, CyfrWeb],
     exports: [
+      Appearance,
       Arrangement,
       CanvasValidation,
       ConsentChoices,

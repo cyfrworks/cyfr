@@ -184,6 +184,22 @@ defmodule Prima.Layout do
   @spec version() :: pos_integer()
   def version, do: @version
 
+  @doc "Whether `id` is a canvas's id: a short lowercase name, 1 to 32 characters."
+  @spec canvas_id?(term()) :: boolean()
+  def canvas_id?(id), do: is_binary(id) and Regex.match?(@canvas_id, id)
+
+  @doc """
+  Whether `geometry` is a window's geometry in the JSON form: exactly
+  `x`, `y`, `w` and `h`, whole hundredths of a percent, `x` and `y` from 0
+  and `w` and `h` from 1, each to #{@max_fraction}.
+  """
+  @spec geometry?(term()) :: boolean()
+  def geometry?(%{"x" => x, "y" => y, "w" => w, "h" => h} = geometry)
+      when map_size(geometry) == 4,
+      do: fraction?(x, 0) and fraction?(y, 0) and fraction?(w, 1) and fraction?(h, 1)
+
+  def geometry?(_other), do: false
+
   @doc """
   The shipped default: one canvas, `#{@default_id}`, running the shipped
   canvas (`#{@default_canvas}`), with nothing open over it in any posture.
@@ -351,7 +367,7 @@ defmodule Prima.Layout do
   defp canvas(_other), do: refuse("a canvas must be an object")
 
   defp canvas_id(id) do
-    if is_binary(id) and Regex.match?(@canvas_id, id),
+    if canvas_id?(id),
       do: :ok,
       else: refuse("a canvas's id must be a short lowercase name, got #{show(id)}")
   end
@@ -455,7 +471,7 @@ defmodule Prima.Layout do
          :ok <- required(geometry, @geometry_keys, "#{where}: the geometry") do
       %{"x" => x, "y" => y, "w" => w, "h" => h} = geometry
 
-      if fraction?(x, 0) and fraction?(y, 0) and fraction?(w, 1) and fraction?(h, 1),
+      if geometry?(geometry),
         do: {:ok, %{geometry: %{x: x, y: y, w: w, h: h}}},
         else:
           refuse(

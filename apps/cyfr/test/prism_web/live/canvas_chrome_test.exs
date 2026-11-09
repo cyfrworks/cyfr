@@ -262,6 +262,7 @@ defmodule PrismWeb.CanvasChromeTest do
     title = "Your vault: the names of your stored credentials and where each may go"
 
     render_hook(view, "frame_verb", %{
+      "input" => System.unique_integer([:positive, :monotonic]),
       "frame" => window.id,
       "message" => Prima.TinctureWire.shell_message(:title, window.id, %{"title" => title})
     })
@@ -277,6 +278,7 @@ defmodule PrismWeb.CanvasChromeTest do
 
     # A title that only repeats the name is not shown twice.
     render_hook(view, "frame_verb", %{
+      "input" => System.unique_integer([:positive, :monotonic]),
       "frame" => window.id,
       "message" => Prima.TinctureWire.shell_message(:title, window.id, %{"title" => "slot-dash"})
     })

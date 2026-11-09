@@ -170,7 +170,7 @@ defmodule PrismWeb.ShellFrameTest do
   # The bearer the bridge is handed for `frame_id`.
   defp bearer!(view, frame_id) do
     render_hook(view, "frame_handshake", %{"frame" => frame_id})
-    assert_reply(view, %{credential: bearer})
+    assert_reply(view, %{"credential" => bearer})
     bearer
   end
 
@@ -333,7 +333,7 @@ defmodule PrismWeb.ShellFrameTest do
 
       # The bearer is in no URL and nowhere in the page.
       render_hook(view, "frame_handshake", %{"frame" => frame_id})
-      assert_reply(view, %{credential: bearer})
+      assert_reply(view, %{"credential" => bearer})
       refute render(view) =~ bearer
 
       assert {:ok, %{frame_id: ^frame_id, id: id}} =

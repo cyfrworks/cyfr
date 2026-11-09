@@ -93,21 +93,32 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
-  test "the shipped canvas offers a grant on exactly Prima.Refusal's sentences for a missing or lapsed grant" do
-    # The canvas reads a run's stored error as its sentence alone, so it
-    # matches these two whole; a third grant sentence, or a reworded one,
-    # fails here until the canvas's list is changed with it.
-    model = read!("seed/components/tinctures/local/canvas/0.4.0/src/model.ts")
+  test "the shipped canvas offers a grant on exactly the causes Cyfr.Bus.Payload reads a missing or lapsed grant as" do
+    # The canvas reads a run's error as its class and cause, and offers a
+    # grant for the classes in GRANTABLE or the causes in GRANT_CAUSES: the
+    # causes are exactly those the classes read as, and the classes exactly
+    # those that read as the causes, so a class that comes to read as
+    # another cause, or a cause renamed, fails here until the canvas's
+    # lists are changed with it.
+    canvas = Cyfr.Test.SeedBundle.local_unit!("tinctures", "canvas")
+    model = read!("seed/components/#{canvas.rel}/src/model.ts")
 
-    [list] =
-      Regex.run(~r/export const GRANT_SENTENCES = \[(.*?)\];/s, model, capture: :all_but_first)
+    list = fn name ->
+      [list] = Regex.run(~r/export const #{name} = \[(.*?)\];/s, model, capture: :all_but_first)
 
-    sentences = Regex.scan(~r/"([^"]+)"/, list, capture: :all_but_first) |> List.flatten()
+      Regex.scan(~r/"([^"]+)"/, list, capture: :all_but_first)
+      |> Enum.map(fn [value] -> String.to_existing_atom(value) end)
+    end
 
-    assert sentences == [
-             Prima.Refusal.message(:connection_not_granted),
-             Prima.Refusal.message(:grant_expired)
-           ]
+    classes = list.("GRANTABLE")
+    causes = list.("GRANT_CAUSES")
+    assert causes == classes |> Enum.map(&Cyfr.Bus.Payload.cause/1) |> Enum.uniq()
+    assert Enum.all?(causes, &Keyword.has_key?(Cyfr.Bus.Execution.causes(), &1))
+
+    assert Enum.sort(classes) ==
+             Prima.Refusal.classes()
+             |> Enum.filter(&(Cyfr.Bus.Payload.cause(&1) in causes))
+             |> Enum.sort()
   end
 
   # ==========================================================================
@@ -422,7 +433,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(protocol common_fields purpose_fields keys proofs verify exchange)}
     ],
     "feed.json" => [
-      {"apps/cyfr/test/opus/feeds_test.exs", ~w(bindings outputs)},
+      {"apps/cyfr/test/opus/feeds_test.exs", ~w(bindings inputs outputs)},
       {"apps/prima/test/prima/canvas/shape_test.exs", ~w(reasons bindings results)},
       {"apps/prima/test/prima/feed_test.exs",
        ~w(intervals args_max_bytes result_max_bytes reasons bindings binding_ids inputs crons results envelopes bounds)}

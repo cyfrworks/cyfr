@@ -42,6 +42,7 @@ defmodule Cyfr.Bus do
 
   alias Cyfr.Bus.{
     ApiKeys,
+    AquaAsk,
     AthanorArchived,
     BoundedDispatcher,
     Build,
@@ -540,6 +541,18 @@ defmodule Cyfr.Bus do
       producers: ["PrismWeb.RoomFeed"],
       consumers: ["PrismWeb.AquaPanelLive", "PrismWeb.ThreadPaneLive"],
       reason: "a page tells the assistant beside it which room it has open"
+    },
+    %{
+      key: :aqua_ask,
+      scope: :page,
+      struct: AquaAsk,
+      match: {:prefix, "page:aqua_ask:"},
+      template: "page:aqua_ask:<socket_id>",
+      producers: ["PrismWeb.ShellLive"],
+      consumers: ["PrismWeb.AquaPanelLive"],
+      reason:
+        "the person asked, from their desktop, about one of its widgets: the shell opens " <>
+          "the assistant beside it with Prism's own sentence"
     }
   ]
 
@@ -846,6 +859,11 @@ defmodule Cyfr.Bus do
   @spec room_feed(String.t()) :: String.t()
   def room_feed(socket_id) when is_binary(socket_id) and socket_id != "",
     do: "page:room_feed:" <> socket_id
+
+  @doc "What the page `socket_id` asks the assistant beside it (`Cyfr.Bus.AquaAsk`)."
+  @spec aqua_ask(String.t()) :: String.t()
+  def aqua_ask(socket_id) when is_binary(socket_id) and socket_id != "",
+    do: "page:aqua_ask:" <> socket_id
 
   # ---------------------------------------------------------------------------
   # Publishing and subscribing

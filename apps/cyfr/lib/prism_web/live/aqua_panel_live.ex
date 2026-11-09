@@ -19,6 +19,11 @@ defmodule PrismWeb.AquaPanelLive do
   task's first line, which turn the panel to the thread it was asked in.
   A crew member's thread is reached from its room, as in the chat.
 
+  A page may ask it about something it shows (`Cyfr.Bus.AquaAsk`, on the
+  page's own topic the session names, `aqua_ask`): the panel opens on the
+  thread it keeps and its pane takes Prism's sentence after the draft the
+  person has, attaching and sending nothing.
+
   The panel is an overlay: it takes no room from the page. From the
   bottom, the page draws: the canvas's frames (the canvas z-0, column
   apps z-20, floating apps z-30, a full app z-50), the canvas's own chrome
@@ -74,6 +79,7 @@ defmodule PrismWeb.AquaPanelLive do
   def mount(_params, session, socket) do
     token = session[to_string(CyfrWeb.SignInResponse.session_key())]
     room_feed = session["room_feed"]
+    aqua_ask = session["aqua_ask"]
 
     socket =
       socket
@@ -90,9 +96,11 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:room, session["room"])
       |> assign(:room_feed, room_feed)
       |> assign(:ui_mode, session["ui_mode"])
+      |> assign(:asked, nil)
 
     if connected?(socket) do
       if is_binary(room_feed), do: PrismWeb.RoomFeed.subscribe(room_feed)
+      if is_binary(aqua_ask), do: Cyfr.Bus.subscribe_page(aqua_ask)
       {:ok, socket |> own(token) |> restore(), layout: false}
     else
       {:ok, socket, layout: false}
@@ -254,9 +262,25 @@ defmodule PrismWeb.AquaPanelLive do
   def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
     do: {:noreply, assign(socket, :room, room)}
 
-  # The pane is live: this is where a thread switch goes.
+  # The page asked about something it shows: the panel opens on the
+  # thread it keeps, and the pane takes the sentence once it is live.
+  def handle_info(%Cyfr.Bus.AquaAsk{sentence: sentence}, %{assigns: %{phase: :ready}} = socket) do
+    socket = assign(socket, :asked, sentence)
+
+    socket =
+      if socket.assigns.open,
+        do: socket,
+        else: socket |> open_on(socket.assigns.thread && socket.assigns.thread.id) |> remember()
+
+    {:noreply, pass_asked(socket)}
+  end
+
+  def handle_info(%Cyfr.Bus.AquaAsk{}, socket), do: {:noreply, socket}
+
+  # The pane is live: this is where a thread switch goes, and an ask
+  # waiting for it is handed over.
   def handle_info({:pane, _pane, {:ready, pid, thread_id}}, socket) do
-    socket = assign(socket, :pane, pid)
+    socket = socket |> assign(:pane, pid) |> pass_asked()
     current = socket.assigns.thread && socket.assigns.thread.id
 
     if current != thread_id,
@@ -287,6 +311,16 @@ defmodule PrismWeb.AquaPanelLive do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
+
+  # The sentence goes to the pane once it is live: at once in an open
+  # panel, and in one just opened when its pane reports in.
+  defp pass_asked(%{assigns: %{asked: sentence, pane: pid}} = socket)
+       when is_binary(sentence) and is_pid(pid) do
+    send(pid, {:aqua_ask, sentence})
+    assign(socket, :asked, nil)
+  end
+
+  defp pass_asked(socket), do: socket
 
   # ============================================================================
   # Render

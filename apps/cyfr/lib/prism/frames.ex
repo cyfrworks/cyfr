@@ -52,7 +52,12 @@ defmodule Prism.Frames do
       canvas's (`Compendium.tincture_canvas_sandbox_tokens/0`) and it has
       no `allow`. It holds its handshake's `canvas` block: the mode, its
       data path and the streams the served version's stored declaration
-      names, never anything a frame or a page sends.
+      names, never anything a frame or a page sends; the version's desktop
+      block (`desktop`), whose controls and preferences schema the shell
+      reads; the chrome tokens of the version it serves (`chrome`, as the
+      card holds them, `Prism.TinctureRegistry.chrome/3`); and the asset
+      credential its page is served under (`asset`), which the shell names
+      the chrome's files with.
     * Any other frame takes its `sandbox` and `allow` from the rules for
       the capabilities it declares (`frame_attributes/2`), and a private
       tincture's page is served under an asset credential
@@ -121,10 +126,12 @@ defmodule Prism.Frames do
   A message is attributed to the live frame whose id it names and that
   this value holds; a frozen or refused frame acts on nothing, and any
   other message is dropped and counted (`drop_message/1`). A frame's
-  bearer is handed over once (`handshake/2`): a canvas or validation
-  frame's beside its `canvas` block (`Prima.TinctureWire.canvas_handshake/4`),
-  any other frame's alone. A bearer that replaces it later reaches the
-  frame only as a replacement.
+  bearer is handed over once (`handshake/3`): a canvas or validation
+  frame's beside its `canvas` block (`Prima.TinctureWire.canvas_handshake/5`),
+  with the desktop's preferences, appearance and person the shell read
+  for it; any other frame's beside the subject it was opened on, if any
+  (`put_subject/3`, `Prima.TinctureWire.frame_handshake/2`). A bearer
+  that replaces it later reaches the frame only as a replacement.
 
   ## Ending
 
@@ -188,8 +195,8 @@ defmodule Prism.Frames do
         }
 
   @typedoc """
-  A canvas frame's handshake block: its `mode`, `data_path`
-  and `streams` (`Prima.TinctureWire.canvas_handshake/4`).
+  A canvas frame's handshake block as the frame holds it: its `mode`,
+  `data_path` and `streams` (`Prima.TinctureWire.canvas_handshake/5`).
   """
   @type canvas :: %{String.t() => term()}
 
@@ -213,7 +220,11 @@ defmodule Prism.Frames do
           visible: boolean(),
           background: boolean(),
           actions: [String.t()],
-          canvas: canvas() | nil
+          canvas: canvas() | nil,
+          desktop: Prima.Manifest.Tincture.Desktop.t() | nil,
+          chrome: map() | nil,
+          asset: String.t() | nil,
+          subject: %{String.t() => String.t()} | nil
         }
 
   @typedoc "What the view signals a frame: its id and `frozen` or `live`."
@@ -510,12 +521,14 @@ defmodule Prism.Frames do
   @doc """
   What frame `frame_id`'s bridge is handed, once (`hand_over/2`): a
   canvas or validation frame's bearer and its `canvas` block, the canvas
-  handshake (`Prima.TinctureWire.canvas_handshake/4`), and any other
-  frame's bearer alone. Only a frame held under a canvas or validation key
-  is answered a `canvas` block.
+  handshake (`Prima.TinctureWire.canvas_handshake/5`) with `desktop`, the
+  preferences, appearance and person the shell read for it; any other
+  frame's bearer and the subject it was opened on, if any
+  (`Prima.TinctureWire.frame_handshake/2`). Only a frame held under a
+  canvas or validation key is answered a `canvas` block.
   """
-  @spec handshake(t(), term()) :: {:ok, handshake(), frame(), t()} | :error
-  def handshake(%__MODULE__{} = t, frame_id) do
+  @spec handshake(t(), term(), map() | nil) :: {:ok, handshake(), frame(), t()} | :error
+  def handshake(%__MODULE__{} = t, frame_id, desktop) do
     case hand_over(t, frame_id) do
       {:ok, bearer, t} ->
         %{key: key, id: id, canvas: canvas} = frame = find(t, frame_id)
@@ -523,14 +536,57 @@ defmodule Prism.Frames do
         if canvas_key?(key) and is_map(canvas),
           do:
             {:ok,
-             Prima.TinctureWire.canvas_handshake(id, bearer, canvas["mode"], canvas["streams"]),
-             frame, t},
-          else: {:ok, %{credential: bearer}, frame, t}
+             Prima.TinctureWire.canvas_handshake(
+               id,
+               bearer,
+               canvas["mode"],
+               canvas["streams"],
+               desktop
+             ), frame, t},
+          else: {:ok, Prima.TinctureWire.frame_handshake(bearer, frame.subject), frame, t}
 
       :error ->
         :error
     end
   end
+
+  @doc """
+  The frame `frame_id` this value holds, live or not, or nil.
+  """
+  @spec find_frame(t(), term()) :: frame() | nil
+  def find_frame(%__MODULE__{} = t, frame_id), do: find(t, frame_id)
+
+  @doc """
+  Give the app under `key` the subject it is opened on: one whose bearer
+  is not handed over yet is handed it at its handshake (`handshake/3`);
+  one that runs is the view's to tell (`subject_due?/1`). A canvas, a
+  refused frame or none keeps what it holds.
+  """
+  @spec put_subject(t(), key(), map()) :: t()
+  def put_subject(%__MODULE__{} = t, key, subject) do
+    case get(t, key) do
+      %{key: {kind, _, _}, state: state} = frame when kind == :app and state != :refused ->
+        put_frame(t, key, %{frame | subject: subject})
+
+      %{key: {:full, _}, state: state} = frame when state != :refused ->
+        put_frame(t, key, %{frame | subject: subject})
+
+      _canvas_refused_or_none ->
+        t
+    end
+  end
+
+  @doc """
+  Whether `frame` runs past its handshake, so a subject given to it now
+  reaches it only when the view tells its bridge: its bearer was handed
+  over and it is not refused.
+  """
+  @spec subject_due?(frame() | nil) :: boolean()
+  def subject_due?(%{bearer: nil, state: state, subject: subject})
+      when state != :refused and is_map(subject),
+      do: true
+
+  def subject_due?(_frame), do: false
 
   @doc "Count one dropped frame message."
   @spec drop_message(t()) :: t()
@@ -1110,8 +1166,20 @@ defmodule Prism.Frames do
     end
   end
 
-  @doc "The path of `segments` inside the card's version, under an asset credential."
-  @spec asset_path(String.t(), card(), [String.t()]) :: String.t()
+  @doc """
+  The path of `segments` inside a version, a card's or a frame's
+  `reference`, under an asset credential.
+  """
+  @spec asset_path(
+          String.t(),
+          %{
+            required(:publisher) => String.t(),
+            required(:name) => String.t(),
+            required(:version) => String.t(),
+            optional(atom()) => term()
+          },
+          [String.t()]
+        ) :: String.t()
   def asset_path(credential, card, segments) do
     Prima.TinctureUrl.asset_path(credential, [card.publisher, card.name, card.version | segments])
   end
@@ -1203,7 +1271,11 @@ defmodule Prism.Frames do
       visible: false,
       background: false,
       actions: [],
-      canvas: nil
+      canvas: nil,
+      desktop: nil,
+      chrome: nil,
+      asset: nil,
+      subject: nil
     }
   end
 
@@ -1267,7 +1339,10 @@ defmodule Prism.Frames do
             "data_path" => Prima.TinctureWire.data_path(frame_id),
             "streams" =>
               Enum.map(declaration.streams, &%{"name" => &1.name, "subject" => &1.subject})
-          }
+          },
+          desktop: declaration.desktop,
+          chrome: Map.get(card, :chrome),
+          asset: asset
       }
     else
       {:error, reason} -> %{base | refusal: refusal(reason)}

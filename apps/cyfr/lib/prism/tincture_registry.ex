@@ -492,6 +492,18 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
+  @doc """
+  A desktop version's chrome tokens, read from its files under
+  `version_segs` (the version's directory in the athanor's tree, as a
+  listed card's `segments`) as the listing reads a listed version's:
+  nil for a version that names no chrome, or whose declaration or chrome
+  no longer holds. The shell reads it for a working version that is not
+  the listed one.
+  """
+  @spec chrome(Context.t(), map(), [String.t()]) :: map() | nil
+  def chrome(%Context{} = ctx, manifest, version_segs) when is_list(version_segs),
+    do: declared_chrome(ctx, manifest, version_segs, version_segs ++ ["cyfr-manifest.json"])
+
   # A desktop's chrome tokens, read from the version's files as publish
   # read them; nil when it names no chrome, and nil, logged, when the
   # declaration or the chrome no longer holds to today's rules.

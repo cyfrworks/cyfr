@@ -143,6 +143,7 @@ defmodule Arca do
       Cache,
       Cache.Epoch,
       Cache.Keys,
+      CanvasPrefs,
       CanvasVersions,
       CipherRotation,
       CompanyAuthorizations,

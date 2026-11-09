@@ -737,9 +737,12 @@ defmodule Compendium.Tincture.Rules do
   `execute`, `destructive` and `external` operation are refused, each
   naming which. A control's `pick` names a stream the desktop reads (a
   name in `data`, or `#{"feed.results"}` with a feed in `feeds`), a
-  `field` that resolves in that stream's shape to a list of strings or an
-  enum the shape declares (never a `json` value, beneath which it
-  declares nothing), and an `arg` the operation takes. A declaration without the desktop block holds nothing
+  `field` that resolves in that stream's shape to a string, a list of
+  strings or an enum the shape declares (never a `json` value, beneath
+  which it declares nothing): the choices are the strings the stream
+  publishes there across its current state, which the shell reads again
+  at each press (`Compendium.Desktop.control/4`). And an `arg` the
+  operation takes. A declaration without the desktop block holds nothing
   here. Publish runs it beside `check_streams/2`.
   """
   @spec check_desktop(Tincture.t(), [Prima.Provider.Stream.t()]) :: :ok | {:error, refusal()}
@@ -845,17 +848,19 @@ defmodule Compendium.Tincture.Rules do
     do: refuse("#{where}'s field is no RFC 6901 pointer")
 
   # A pointer walks an object's fields, and resolves only where it ends on
-  # a list of strings or an enum the shape declares. A `json` node declares
+  # a string, a list of strings or an enum the shape declares. A `json` node declares
   # nothing beneath it, so a pointer that reaches one, or reaches past it,
   # resolves to nothing a pick can offer.
   defp resolves(%{"type" => "json"}, _segments, field, where),
     do:
       refuse(
         "#{where}'s field #{field} reaches a json value in the stream's shape, which " <>
-          "declares no list of strings or enum: a pick takes one the shape declares"
+          "declares no string, list of strings or enum: a pick takes one the shape declares"
       )
 
   defp resolves(%{"type" => "enum"}, [], _field, _where), do: :ok
+
+  defp resolves(%{"type" => "string"}, [], _field, _where), do: :ok
 
   defp resolves(%{"type" => "list", "of" => %{"type" => "string"}}, [], _field, _where), do: :ok
 
@@ -863,7 +868,7 @@ defmodule Compendium.Tincture.Rules do
     do:
       refuse(
         "#{where}'s field #{field} is #{article(type)} #{type} in the stream's shape: " <>
-          "a pick takes a list of strings or an enum"
+          "a pick takes a string, a list of strings or an enum"
       )
 
   defp resolves(%{"type" => "object", "fields" => fields}, [segment | rest], field, where) do

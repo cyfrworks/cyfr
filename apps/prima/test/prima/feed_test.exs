@@ -5,7 +5,8 @@ defmodule Prima.FeedTest do
   @moduledoc """
   Feeds against `tests/fixtures/feed.json`: every valid binding reads and
   writes back to itself, every refused binding is refused at its path for
-  its reason, the inputs, crons, results and envelopes are the fixture's,
+  its reason, the inputs (a picked action's with its value), crons,
+  results and envelopes are the fixture's,
   the fixture's rows at the byte bounds are their stated bytes and are
   accepted or refused as it says, the size before the shape, and a binding
   id has its grammar. Beside them, the envelope's refusal to carry
@@ -133,24 +134,36 @@ defmodule Prima.FeedTest do
       refute Feed.binding_id?(Prima.UUID7.generate_id("feed") <> "\n")
     end
 
-    test "a binding and a run action run with their operation and args as params" do
+    test "a binding and a run action run with their operation and args as params, a pick's value set" do
       bindings = bindings()
 
       for %{"why" => why, "binding" => index, "input" => input} = row <- vectors()["inputs"] do
         binding = Enum.at(bindings, index)
 
-        source =
-          case row do
-            %{"action" => action} -> Enum.at(binding.actions, action)
-            _ -> binding
-          end
+        case row do
+          %{"action" => action, "pick" => value} ->
+            action = Enum.at(binding.actions, action)
+            assert Feed.input(action, value) == input, why
+            # Pressed without its value, it has no input.
+            assert_raise ArgumentError, fn -> Feed.input(action) end
 
-        assert Feed.input(source) == input, why
+          %{"action" => action} ->
+            action = Enum.at(binding.actions, action)
+            assert Feed.input(action) == input, why
+            # A value for an action that names no pick has no input either.
+            assert_raise ArgumentError, fn -> Feed.input(action, "value") end
+
+          _binding ->
+            assert Feed.input(binding) == input, why
+        end
       end
+
+      assert Enum.any?(vectors()["inputs"], &Map.has_key?(&1, "pick"))
 
       [btc | _] = bindings
       refresh = Enum.find(btc.actions, &(&1.kind == :refresh))
       assert_raise ArgumentError, fn -> Feed.input(refresh) end
+      assert_raise ArgumentError, fn -> Feed.input(refresh, "value") end
     end
 
     test "each interval's cron expression" do
@@ -455,9 +468,17 @@ defmodule Prima.FeedTest do
       secret = %{btc | args: %{"key" => @canary}}
       [refresh | _] = btc.actions
 
+      run = %Action{name: "go", label: @canary, kind: :run, operation: @canary, args: %{}}
+      picked = %{run | pick: "server", args: %{"key" => @canary}}
+
       calls = [
         fn -> Feed.input(%{"operation" => @canary}) end,
         fn -> Feed.input(%{refresh | label: @canary}) end,
+        fn -> Feed.input(picked) end,
+        fn -> Feed.input(run, @canary) end,
+        fn -> Feed.input(picked, {@canary}) end,
+        fn -> Feed.input(%{picked | args: [@canary]}, "value") end,
+        fn -> Feed.input(%{"operation" => @canary}, @canary) end,
         fn -> Feed.cron(%{secret | interval_minutes: 7}) end,
         fn -> Feed.cron({@canary}) end,
         fn -> Feed.check_result(%{"result_shape" => @canary}, %{"price" => @canary}) end,
@@ -580,11 +601,15 @@ defmodule Prima.FeedTest do
 
       every_action_field = run |> Map.from_struct() |> Map.keys()
       refresh_reads = [:name, :label, :kind]
+      picked = %{run | pick: "server"}
 
       action_calls = [
         {"Action.to_json/1 of a refresh", refresh, &Action.to_json/1, refresh_reads},
         {"Action.to_json/1 of a run", run, &Action.to_json/1, every_action_field},
-        {"Feed.input/1 of a run", run, &Feed.input/1, [:kind, :operation, :args]},
+        {"Action.to_json/1 of a picked run", picked, &Action.to_json/1, every_action_field},
+        {"Feed.input/1 of a run", run, &Feed.input/1, [:kind, :operation, :args, :pick]},
+        {"Feed.input/2 of a picked run", picked, &Feed.input(&1, "value"),
+         [:kind, :operation, :args, :pick]},
         {"Binding.to_json/1 of a refresh", refresh, &Binding.to_json(%{secret | actions: [&1]}),
          refresh_reads},
         {"Binding.to_json/1 of a run", run, &Binding.to_json(%{secret | actions: [&1]}),

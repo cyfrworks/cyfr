@@ -78,12 +78,38 @@ defmodule PrismWeb.ShellLive do
   `posture`, `covered` and `state` come from the glass. From the live,
   visible canvas, `ready` keeps it standing, `failed` before `ready`
   falls it back (below), `open` is the person's open of a listed
-  tincture (`app_open` below), `press` presses a feed's action through
-  `feed.press` once the served version's declaration reads that feed, and
+  tincture (`app_open` below), on a subject of a kind the app declares
+  when it names one, which the app is handed at its handshake or, open
+  already, as it is opened again; `press`
+  of a binding presses a feed's action through `feed.press` once the
+  served version's declaration reads that feed, and `press` of a control
+  runs the call the component domain reads it as
+  (`Compendium.desktop_control/4`) through the gate as the person;
   `grant` offers the person's grant to an installed component through the
   system layer's generic grant path, unless an offer for it is open or it
-  is granted with nothing its grant needs missing; its outcome opens no
-  frame.
+  is granted with nothing its grant needs missing, and its outcome opens
+  no frame; `prefs` writes the person's preferences for the canvas over
+  the revision this view handed the frame or last answered it
+  (`Compendium.put_desktop_prefs/5`); `ask` opens AQUA's panel beside the
+  page with Prism's own sentence naming a widget the version declares
+  (`Cyfr.Bus.AquaAsk`); and `settings` opens one of the Dashboard's pages
+  for the person's mode (`PrismWeb.Nav`). A control's press and a write
+  are answered over the frame's port (`canvas_answer`) with their typed
+  outcome, `cancelled` when this view did not act on them. Its bridge
+  (`iframe_bridge.js`) forwards those verbs only while the page holds
+  activation that no input in the shell's chrome and no earlier verb has
+  spent, and drops one sent within the activation's lifespan of the last
+  spend at once, a press or a write told `cancelled` naming `too_soon`.
+  Each carries the ordinal of the person's input its bridge forwarded it
+  with, and one input is honoured once.
+
+  A canvas frame's handshake carries the person's preferences for that
+  canvas, reduced to the version's schema, with their revision; the
+  screen's appearance (`Prism.Appearance.block/1`, from what the browser
+  reported at connect); and the person's display name. While a canvas
+  with a chrome declaration is the visible canvas and has not fallen
+  back, the view has the canvas hook wear its tokens (`chrome`), and
+  Prism's default otherwise.
   `ready` and `failed` report how a canvas's page loaded and runs, so they
   count from a hidden canvas too, frozen or not the one shown: its `ready`
   makes it ready, and its `failed` before that marks it died, which falls
@@ -310,6 +336,12 @@ defmodule PrismWeb.ShellLive do
       |> assign(:canvases, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
+      |> assign(:appearance, Prism.Appearance.block(%{}))
+      |> assign(:person, %{"name" => nil})
+      |> assign(:prefs_held, %{})
+      |> assign(:inputs, %{})
+      |> assign(:chrome, nil)
+      |> assign(:aqua_ask, Cyfr.Bus.aqua_ask(socket.id))
 
     socket =
       if connected?(socket) do
@@ -326,7 +358,10 @@ defmodule PrismWeb.ShellLive do
             do: Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
         end
 
-        load_tinctures(socket)
+        socket
+        |> assign(:appearance, Prism.Appearance.block(get_connect_params(socket) || %{}))
+        |> assign(:person, %{"name" => Prism.Appearance.person_name(ctx.user_id)})
+        |> load_tinctures()
       else
         socket
       end
@@ -515,9 +550,11 @@ defmodule PrismWeb.ShellLive do
   # a reload, a navigation inside the frame, another script on the page —
   # is answered with nothing.
   def handle_event("frame_handshake", %{"frame" => frame_id}, socket) do
-    case Frames.handshake(socket.assigns.frames, frame_id) do
+    desktop = desktop_block(socket, Frames.find_frame(socket.assigns.frames, frame_id))
+
+    case Frames.handshake(socket.assigns.frames, frame_id, desktop) do
       {:ok, reply, frame, frames} ->
-        socket = assign(socket, :frames, frames)
+        socket = socket |> assign(:frames, frames) |> hold_prefs(frame, desktop)
         {:reply, reply, handshaken(socket, frame)}
 
       :error ->
@@ -544,12 +581,12 @@ defmodule PrismWeb.ShellLive do
   # this view holds live, or, for a canvas's `ready` or `failed`, holds
   # live or frozen (`reporting/3`). A canvas or validation frame's verb is
   # a canvas's; any other frame's is a tincture's.
-  def handle_event("frame_verb", %{"frame" => frame_id, "message" => message}, socket)
+  def handle_event("frame_verb", %{"frame" => frame_id, "message" => message} = params, socket)
       when is_binary(frame_id) do
     with {:ok, %{frame: ^frame_id} = decoded} <- Prima.TinctureWire.decode_shell_message(message),
          {:ok, %{key: key} = frame} <- reporting(socket.assigns.frames, frame_id, decoded.verb) do
       if Frames.canvas_key?(key),
-        do: {:noreply, canvas_verb(socket, frame, decoded)},
+        do: {:noreply, canvas_input(socket, frame, decoded, Map.get(params, "input"))},
         else: {:noreply, shell_verb(socket, frame, decoded)}
     else
       _ -> {:noreply, drop_message(socket)}
@@ -729,9 +766,36 @@ defmodule PrismWeb.ShellLive do
     # failure would have had it been shown then.
     died = socket.assigns.canvas_died
 
-    if Enum.any?(Frames.list(later), &(&1.visible and MapSet.member?(died, &1.id))),
-      do: enter_fallback(socket, :not_ready),
-      else: socket
+    socket =
+      if Enum.any?(Frames.list(later), &(&1.visible and MapSet.member?(died, &1.id))),
+        do: enter_fallback(socket, :not_ready),
+        else: socket
+
+    wear_chrome(socket)
+  end
+
+  # The chrome the screen wears: the visible desktop's tokens, applied as
+  # Prism's own variables by the canvas hook, while that desktop's frame is
+  # shown live and it has not fallen back; Prism's default otherwise, a
+  # full app over it among them. Pushed only when it changes.
+  defp wear_chrome(socket) do
+    chrome = worn_chrome(socket)
+
+    if chrome == socket.assigns.chrome,
+      do: socket,
+      else: socket |> assign(:chrome, chrome) |> push_event("chrome", %{chrome: chrome})
+  end
+
+  defp worn_chrome(%{assigns: %{frames: frames, fallbacks: fallbacks}}) do
+    with canvas_id when is_binary(canvas_id) <- Frames.visible_canvas(frames),
+         false <- Map.has_key?(fallbacks, canvas_id),
+         %{state: :live, visible: true, asset: asset, chrome: %{} = tokens, reference: version}
+         when is_binary(asset) <-
+           Frames.get(frames, {:canvas, canvas_id}) do
+      Prism.Appearance.chrome(tokens, &Frames.asset_path(asset, version, String.split(&1, "/")))
+    else
+      _default -> nil
+    end
   end
 
   # Every listed card: the tinctures the picker lists and the canvases.
@@ -804,10 +868,15 @@ defmodule PrismWeb.ShellLive do
 
   # `open` names a tincture this shell lists, versionless or at the
   # version it lists; anything else opens nothing.
-  defp tincture_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref}}) do
-    case listed(socket, ref) do
-      %{id: id} -> launch_tincture(socket, id)
-      nil -> drop_message(socket)
+  defp tincture_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref} = args}) do
+    subject = Map.get(args, "subject")
+
+    with %{id: id} = card <- listed(socket, ref),
+         :ok <- accepts(card, subject) do
+      socket = launch_tincture(socket, id)
+      if subject, do: give_subject(socket, {:full, id}, subject), else: socket
+    else
+      _refused -> drop_message(socket)
     end
   end
 
@@ -856,6 +925,28 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
+  # The verbs a canvas sends for the person, which its bridge forwards
+  # only on activation of the person's own input that nothing has spent
+  # (the moduledoc), each carrying the ordinal of the input it came with:
+  # one input carries one verb, so a verb whose input this view has
+  # already honoured, or that names none, is dropped (and a press or a
+  # write told it did not run).
+  @person_verbs [:open, :press, :grant, :prefs, :ask, :settings]
+
+  defp canvas_input(socket, frame, %{verb: verb} = decoded, input) when verb in @person_verbs do
+    honoured = Map.get(socket.assigns.inputs, frame.id, 0)
+
+    if is_integer(input) and input > honoured do
+      socket
+      |> update(:inputs, &Map.put(&1, frame.id, input))
+      |> canvas_verb(frame, decoded)
+    else
+      socket |> drop_message() |> not_run(frame, decoded)
+    end
+  end
+
+  defp canvas_input(socket, frame, decoded, _input), do: canvas_verb(socket, frame, decoded)
+
   # From a validation frame, only its `ready` and its failure act.
   defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :ready}),
     do: validation_ended(socket, canvas_id, :ready)
@@ -876,7 +967,7 @@ defmodule PrismWeb.ShellLive do
       _any when shown -> live_canvas_verb(socket, frame, decoded)
       %{verb: :ready} -> update(socket, :canvas_ready, &MapSet.put(&1, frame.id))
       %{verb: :failed} -> if ready?(socket, frame), do: socket, else: died(socket, frame)
-      _acts -> drop_message(socket)
+      _acts -> socket |> drop_message() |> not_run(frame, decoded)
     end
   end
 
@@ -891,9 +982,12 @@ defmodule PrismWeb.ShellLive do
 
   defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}}, %{
          verb: :open,
-         args: %{"ref" => ref}
+         args: %{"ref" => ref} = args
        }),
-       do: open_from_canvas(socket, canvas_id, ref)
+       do: open_from_canvas(socket, canvas_id, ref, Map.get(args, "subject"))
+
+  defp live_canvas_verb(socket, frame, %{verb: :press, args: %{"control" => _} = args}),
+    do: press_control(socket, frame, args)
 
   defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
     do: press(socket, frame, args)
@@ -901,7 +995,184 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, _frame, %{verb: :grant, args: %{"ref" => ref}}),
     do: grant_from_canvas(socket, ref)
 
+  defp live_canvas_verb(socket, frame, %{verb: :prefs, args: %{"document" => document} = args}),
+    do: write_prefs(socket, frame, document, args["call"])
+
+  defp live_canvas_verb(socket, frame, %{verb: :ask, args: %{"widget" => widget}}),
+    do: ask(socket, frame, widget)
+
+  defp live_canvas_verb(socket, _frame, %{verb: :settings, args: %{"page" => page}}),
+    do: settings(socket, page)
+
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
+
+  # A press of a control or a write of the preferences the shell did not
+  # act on is answered so, never left waiting: it did not run.
+  defp not_run(socket, frame, %{verb: :press, args: %{"control" => control, "call" => call}}),
+    do: answer(socket, frame, "pressed", Prima.TinctureWire.pressed(control, call, "cancelled"))
+
+  defp not_run(socket, frame, %{verb: :prefs, args: %{"call" => call}}),
+    do: answer_prefs(socket, frame, call, "cancelled")
+
+  defp not_run(socket, _frame, _decoded), do: socket
+
+  # The answer a canvas is told over its port, through the canvas hook and
+  # its bridge, once and never held for a later handshake.
+  defp answer(socket, %{id: frame_id}, verb, args),
+    do: push_event(socket, "canvas_answer", %{frame: frame_id, verb: verb, args: args})
+
+  # ---- a desktop's controls ---------------------------------------------------
+
+  # A declared control the person pressed: the component domain reads it as
+  # the call it makes, against the served version's declaration, the
+  # direct rule and, for a pick, the stream's current state, and the call
+  # runs through the gate as the person, which decides whether they own
+  # what it reaches. Its outcome is told to the canvas as it came; nothing
+  # is tried again.
+  defp press_control(socket, frame, %{"control" => control, "call" => call} = args) do
+    outcome =
+      with {:ok, {tool, call_args}} <-
+             Compendium.desktop_control(
+               socket.assigns.context,
+               frame.desktop,
+               control,
+               Map.get(args, "value")
+             ),
+           {:ok, _ran} <- call_tool(socket, tool, call_args) do
+        Prima.TinctureWire.pressed(control, call, "accepted")
+      else
+        {:error, reason} ->
+          Prima.TinctureWire.pressed(control, call, "refused", refusal_class(reason))
+      end
+
+    answer(socket, frame, "pressed", outcome)
+  end
+
+  defp refusal_class(reason),
+    do: reason |> Prima.Refusal.classify() |> Map.fetch!(:class) |> Atom.to_string()
+
+  # ---- a desktop's preferences ------------------------------------------------
+
+  # The desktop's handshake block: the person's preferences for this
+  # canvas as the version's schema reads them, the screen's appearance and
+  # the person's name. A document the store cannot read is handed empty.
+  defp desktop_block(socket, %{key: {kind, canvas_id}, desktop: %{} = desktop})
+       when kind in [:canvas, :validation] do
+    prefs =
+      case Compendium.desktop_prefs(socket.assigns.context, canvas_id, desktop) do
+        {:ok, %{document: document, revision: revision}} ->
+          %{"document" => document, "revision" => revision}
+
+        {:error, _unread} ->
+          %{"document" => Prima.CanvasPrefs.empty(), "revision" => 0}
+      end
+
+    %{
+      "prefs" => prefs,
+      "appearance" => socket.assigns.appearance,
+      "person" => socket.assigns.person
+    }
+  end
+
+  defp desktop_block(_socket, _frame), do: nil
+
+  defp hold_prefs(socket, %{id: id}, %{
+         "prefs" => %{"document" => document, "revision" => revision}
+       }),
+       do:
+         update(socket, :prefs_held, &Map.put(&1, id, %{document: document, revision: revision}))
+
+  defp hold_prefs(socket, _frame, _desktop), do: socket
+
+  # A write of the desktop's preferences, over the revision this view
+  # handed the frame or last answered it: written, or stale with the
+  # current document, which the frame is handed so it may write again
+  # over it; nothing is merged across a stale revision.
+  defp write_prefs(
+         socket,
+         %{key: {:canvas, canvas_id}, desktop: %{} = desktop} = frame,
+         document,
+         call
+       ) do
+    %{revision: revision} = held_prefs(socket, frame)
+
+    case Compendium.put_desktop_prefs(
+           socket.assigns.context,
+           canvas_id,
+           desktop,
+           document,
+           revision
+         ) do
+      {:ok, stored} ->
+        socket |> put_held_prefs(frame, stored) |> answer_prefs(frame, call, "saved")
+
+      {:error, {:stale, stored}} ->
+        socket |> put_held_prefs(frame, stored) |> answer_prefs(frame, call, "stale")
+
+      {:error, reason} ->
+        answer_prefs(socket, frame, call, "refused", refusal_class(reason))
+    end
+  end
+
+  defp write_prefs(socket, frame, _document, call),
+    do: answer_prefs(socket, frame, call, "refused", "invalid_argument")
+
+  defp held_prefs(socket, %{id: id}),
+    do:
+      Map.get(socket.assigns.prefs_held, id, %{document: Prima.CanvasPrefs.empty(), revision: 0})
+
+  defp put_held_prefs(socket, %{id: id}, %{document: document, revision: revision}),
+    do: update(socket, :prefs_held, &Map.put(&1, id, %{document: document, revision: revision}))
+
+  defp answer_prefs(socket, frame, call, outcome, reason \\ nil) do
+    %{document: document, revision: revision} = held_prefs(socket, frame)
+
+    answer(
+      socket,
+      frame,
+      "prefs",
+      Prima.TinctureWire.prefs_answer(call, outcome, document, revision, reason)
+    )
+  end
+
+  # ---- asking AQUA, and Prism's pages -----------------------------------------
+
+  # The person asked AQUA about one of the desktop's widgets: the panel
+  # opens with a sentence Prism writes, naming the widget and the desktop
+  # by what its declaration and the layout call them and nothing the page
+  # shows, after any draft the person had, and sends nothing.
+  defp ask(
+         socket,
+         %{key: {:canvas, canvas_id}, desktop: %{prefs: %{widgets: widgets}}} = frame,
+         widget
+       )
+       when is_map_key(widgets, widget) do
+    name =
+      case Enum.find(cards(socket), &(&1.id == frame.tincture_id)) do
+        %{name: name} when is_binary(name) -> name
+        _unlisted -> frame.reference.name
+      end
+
+    sentence = "About the #{widget} widget on my #{canvas_id} desktop (#{name}): "
+    :ok = Cyfr.Bus.broadcast_page(socket.assigns.aqua_ask, Cyfr.Bus.AquaAsk.new(sentence))
+    socket
+  end
+
+  defp ask(socket, _frame, _widget), do: drop_message(socket)
+
+  # One of Prism's own pages, by its key in the Dashboard's list for the
+  # person's mode: opening it leaves the canvas for the page.
+  defp settings(socket, page) do
+    mode = Prism.Labels.mode(socket.assigns[:ui_mode])
+
+    case Enum.find(PrismWeb.Nav.items(mode), &(&1.key == page)) do
+      %{} = item ->
+        push_navigate(socket, to: PrismWeb.Nav.href(item, socket.assigns.athanor_route))
+
+      nil ->
+        drop_message(socket)
+    end
+  end
 
   defp ready?(socket, %{id: id}), do: MapSet.member?(socket.assigns.canvas_ready, id)
 
@@ -974,13 +1245,42 @@ defmodule PrismWeb.ShellLive do
   # A listed tincture the canvas opens is the person's open: placed where
   # the layout has it, or opened as `Prism.Arrangement.open/4` places it,
   # and written to the layout with the next write.
-  defp open_from_canvas(socket, canvas_id, ref) do
+  defp open_from_canvas(socket, canvas_id, ref, subject) do
     with :ok <- arranging(socket),
          %{} = card <- listed(socket, ref),
+         :ok <- accepts(card, subject),
          {:ok, opened} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
-      opened
+      if subject,
+        do: give_subject(opened, {:app, canvas_id, Frames.ref_of(card)}, subject),
+        else: opened
     else
       _refused -> drop_message(socket)
+    end
+  end
+
+  # The app under `key` is opened on `subject`: handed it at its handshake
+  # when it has not had one, and told it through its bridge when it runs
+  # already (`frame_subject`), so an app opened again on another subject
+  # hears the new one.
+  defp give_subject(socket, key, subject) do
+    socket = frames(socket, &Frames.put_subject(&1, key, subject))
+    frame = Frames.get(socket.assigns.frames, key)
+
+    if Frames.subject_due?(frame),
+      do: push_event(socket, "frame_subject", %{frame: frame.id, subject: subject}),
+      else: socket
+  end
+
+  # An app is opened on a subject only of a kind its declaration accepts
+  # (`tincture.subjects`); the subject is handed to it, and opening it does
+  # nothing more: what the subject names is the app's to read under its
+  # own grant.
+  defp accepts(_card, nil), do: :ok
+
+  defp accepts(card, %{"kind" => kind}) do
+    case Compendium.tincture_declaration(card.manifest) do
+      {:ok, %{subjects: subjects}} -> if kind in subjects, do: :ok, else: :refused
+      {:error, _refused} -> :refused
     end
   end
 
@@ -1770,11 +2070,25 @@ defmodule PrismWeb.ShellLive do
 
     with {:ok, %{"manifest" => stored}} <- Compendium.inspect_component(ctx, ref),
          {:ok, manifest} <- Prima.Manifest.decode_strict(stored) do
-      {:ok, %{card | version: version, manifest: manifest}}
+      {:ok, %{card | version: version, manifest: manifest} |> version_chrome(ctx, version)}
     else
       _unreadable -> :error
     end
   end
+
+  # A card at another version wears that version's chrome, read from its
+  # own files.
+  defp version_chrome(%{segments: [_ | _] = segments} = card, ctx, version) do
+    segments = List.replace_at(segments, -1, version)
+
+    %{
+      card
+      | segments: segments,
+        chrome: Prism.TinctureRegistry.chrome(ctx, card.manifest, segments)
+    }
+  end
+
+  defp version_chrome(card, _ctx, _version), do: Map.put(card, :chrome, nil)
 
   # The fallback's shipped canvas, on this glass alone: the newest version
   # the install media ships, opened live with no validation and no write.
@@ -2284,6 +2598,8 @@ defmodule PrismWeb.ShellLive do
       icon_emoji: emoji_from_hint(t.icon),
       entry: t.entry,
       manifest: t.manifest,
+      chrome: Map.get(t, :chrome),
+      segments: Map.get(t, :segments),
       public: visibility(ctx, ref)
     }
 

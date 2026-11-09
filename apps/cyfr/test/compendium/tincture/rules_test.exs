@@ -994,7 +994,7 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "pick from a stream the desktop reads, at a list of strings or an enum, into an argument" do
+    test "pick from a stream the desktop reads, at a string, a list of strings or an enum, into an argument" do
       tags = %Prima.Provider.Stream{
         name: "tags.changes",
         topic: :tags,
@@ -1028,20 +1028,21 @@ defmodule Compendium.Tincture.RulesTest do
 
       both = %{"data" => ["runs.changes", "tags.changes"], "feeds" => ["vpn"]}
 
-      # An enum, nested under a nullable object, and a list of strings.
+      # An enum, nested under a nullable object, a list of strings, and a
+      # string, whose choices are the values the stream publishes there.
       assert check.(%{"field" => "/kind"}, both) == :ok
       assert check.(%{"field" => "/error/class"}, both) == :ok
       assert check.(%{"stream" => "tags.changes", "field" => "/tags"}, both) == :ok
+      assert check.(%{"field" => "/execution_id"}, both) == :ok
+      assert check.(%{"stream" => "tags.changes", "field" => "/name"}, both) == :ok
 
       where = "tincture.desktop.controls c1: the pick"
 
       for {fields, block, sentence} <- [
-            {%{"field" => "/execution_id"}, both,
-             "#{where}'s field /execution_id is a string in the stream's shape: a pick takes a list of strings or an enum"},
             {%{"stream" => "tags.changes", "field" => "/counts"}, both,
-             "#{where}'s field /counts is a list in the stream's shape: a pick takes a list of strings or an enum"},
+             "#{where}'s field /counts is a list in the stream's shape: a pick takes a string, a list of strings or an enum"},
             {%{"field" => "/error"}, both,
-             "#{where}'s field /error is an object in the stream's shape: a pick takes a list of strings or an enum"},
+             "#{where}'s field /error is an object in the stream's shape: a pick takes a string, a list of strings or an enum"},
             {%{"field" => "/nothing"}, both,
              "#{where}'s field /nothing names no field of the stream's shape"},
             {%{"field" => "/kind/deeper"}, both,
@@ -1093,27 +1094,63 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    # The plan's example picks from a feed's result, a json value, and
-    # fills `server`, which feed.press does not take: refused until A3
-    # gives feed.press a pick argument.
-    test "the plan's vpn example is refused: its field reaches a json value" do
-      assert {:error, {:invalid_tincture, sentence}} =
-               control_check(
-                 [
-                   control("feed.press", %{
-                     "args" => %{"binding" => "fb_1", "action" => "connect"},
-                     "pick" => %{
-                       "stream" => "feed.results",
-                       "subject" => "vpn",
-                       "field" => "/result/servers",
-                       "arg" => "server"
-                     }
-                   })
-                 ],
-                 %{"feeds" => ["vpn"]}
-               )
+    test "a feed.press pick fills its pick argument from an enum of a stream the desktop reads" do
+      block = %{
+        "data" => ["runs.changes"],
+        "controls" => [
+          control("feed.press", %{
+            "args" => %{"binding" => "fb_1", "action_name" => "connect"},
+            "pick" => %{"stream" => "runs.changes", "field" => "/kind", "arg" => "pick"}
+          })
+        ]
+      }
 
-      assert sentence =~ "the pick's field /result/servers reaches a json value"
+      assert control_check(block["controls"], block) == :ok
+
+      manifest = %{
+        "type" => "tincture",
+        "tincture" => %{"entry" => "index.html", "desktop" => block}
+      }
+
+      assert {:ok, _size} = Compendium.Tincture.check_version(manifest, [{"index.html", 1}])
+    end
+
+    # The plan's example picks from a feed's result, a json value, into
+    # feed.press's pick argument: refused for that reason alone, since
+    # feed.press takes `pick`.
+    test "the plan's vpn example is refused only because its field reaches a json value" do
+      block = %{
+        "feeds" => ["vpn"],
+        "controls" => [
+          control("feed.press", %{
+            "args" => %{"binding" => "fb_1", "action_name" => "connect"},
+            "pick" => %{
+              "stream" => "feed.results",
+              "subject" => "vpn",
+              "field" => "/result/servers",
+              "arg" => "pick"
+            }
+          })
+        ]
+      }
+
+      assert control_check(block["controls"], block) ==
+               {:error,
+                {:invalid_tincture,
+                 "tincture.desktop.controls c1: the pick's field /result/servers reaches a json " <>
+                   "value in the stream's shape, which declares no string, list of strings or enum: a " <>
+                   "pick takes one the shape declares"}}
+
+      manifest = %{
+        "type" => "tincture",
+        "tincture" => %{"entry" => "index.html", "desktop" => block}
+      }
+
+      assert {:error, published} =
+               Compendium.Tincture.check_version(manifest, [{"index.html", 1}])
+
+      assert published =~ "reaches a json value"
+      refute published =~ "fills pick"
     end
   end
 

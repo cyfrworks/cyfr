@@ -149,7 +149,12 @@ defmodule PrismWeb.ToolSeamTest do
     # The browser's own sign-out: it retires the session its cookie names and
     # nothing else. It reads only that cookie and runs before any caller
     # context exists, so it cannot pass the gate as `session/logout` does.
-    {"apps/cyfr/lib/prism_web/controllers/auth_controller.ex", "Sanctum.Session.destroy"}
+    {"apps/cyfr/lib/prism_web/controllers/auth_controller.ex", "Sanctum.Session.destroy"},
+    # A desktop's preferences, the person's own and carrying no authority,
+    # written only by the shell's `prefs` verb on the person's input
+    # (docs/plans/prism-desktop.md): no agent writes them, so there is no
+    # tool for them.
+    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Compendium.put_desktop_prefs"}
   ]
 
   # The namespaces whose state the console must not change behind the tool

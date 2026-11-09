@@ -11,7 +11,8 @@ defmodule Opus.Providers.FeedTest do
   before it binds. A list answers bindings, shapes and actions, never
   arguments or values. A press runs under the binding's own profile: a
   `refresh` publishes its accepted result on the athanor's feeds topic
-  once the accept committed, a `run` publishes nothing, and a binding id
+  once the accept committed, a `run` publishes nothing, a press carries a
+  picked value exactly when its action names a pick, and a binding id
   that is no longer live refuses, so a control drawn before a rebind
   never presses the new binding. A refused, stale or fenced-off result
   publishes nothing.
@@ -115,7 +116,7 @@ defmodule Opus.Providers.FeedTest do
       end
     end
 
-    test "each takes the arguments the table names, all required, JSON as a JSON value" do
+    test "each takes the arguments the table names, all required but a press's pick, JSON as a JSON value" do
       args = fn action -> Map.new(operations()[action].args, &{&1.name, &1}) end
 
       assert Enum.sort(Map.keys(args.("bind"))) ==
@@ -123,11 +124,13 @@ defmodule Opus.Providers.FeedTest do
 
       assert args.("list") == %{}
       assert Map.keys(args.("remove")) == ["binding"]
-      assert Enum.sort(Map.keys(args.("press"))) == ~w(action_name binding)
+      assert Enum.sort(Map.keys(args.("press"))) == ~w(action_name binding pick)
 
-      for action <- ~w(bind remove press), {_name, arg} <- args.(action) do
+      for action <- ~w(bind remove press), {name, arg} <- args.(action), name != "pick" do
         assert arg.required, "#{action}.#{arg.name} is required"
       end
+
+      assert %Prima.Arg{type: :string, required: false, nullable: false} = args.("press")["pick"]
 
       assert args.("bind")["args"].type == :json
       assert args.("bind")["actions"].type == :json
@@ -592,6 +595,59 @@ defmodule Opus.Providers.FeedTest do
       assert ScriptedWorker.calls() == []
     end
 
+    test "a run action that names a pick runs with the press's picked value as its argument", %{
+      ctx: ctx
+    } do
+      script!([%{"ordered" => "SECRET-RECEIPT"}])
+      {:ok, %{binding: id}} = call(ctx, bind_args("btc", %{"actions" => [picked_action()]}))
+
+      assert {:ok, %{binding: ^id, action: "buy", status: "completed"}} =
+               call(ctx, %{
+                 "action" => "press",
+                 "binding" => id,
+                 "action_name" => "buy",
+                 "pick" => "lisbon"
+               })
+
+      assert [%{input: input}] = ScriptedWorker.calls()
+
+      assert input == %{
+               "operation" => "buy",
+               "params" => %{"qty" => "SECRET-QTY", "venue" => "lisbon"}
+             }
+    end
+
+    test "a pick is given exactly when the action names one, a refresh never, and refused before anything runs",
+         %{ctx: ctx, actor: actor} do
+      script!([%{"price" => 1.0}])
+      watch_feeds(actor)
+
+      {:ok, %{binding: id}} =
+        call(ctx, bind_args("btc", %{"actions" => [refresh_action(), picked_action()]}))
+
+      {:ok, %{binding: plain}} = call(ctx, bind_args("eth"))
+
+      for {binding, action, pick, sentence} <- [
+            {id, "refresh", "lisbon", "action refresh takes no pick"},
+            {plain, "buy", "lisbon", "action buy takes no pick"},
+            {id, "buy", nil, "action buy takes a pick, which fills venue"}
+          ] do
+        args = %{"action" => "press", "binding" => binding, "action_name" => action}
+        args = if pick, do: Map.put(args, "pick", pick), else: args
+
+        assert %Prima.Refusal{class: :invalid_argument, message: ^sentence} =
+                 refused(call(ctx, args))
+      end
+
+      assert ScriptedWorker.calls() == []
+      refute_received %FeedPublished{}
+
+      for binding <- [id, plain] do
+        assert {:ok, %{feed_fire_seq: 0, feed_result_seq: 0}} =
+                 CronSchedule.get_feed(actor, binding)
+      end
+    end
+
     test "a failed run answers the run's own refusal and publishes nothing", %{
       ctx: ctx,
       actor: actor
@@ -906,6 +962,20 @@ defmodule Opus.Providers.FeedTest do
   # A refused answer as every surface renders it: its class and sentence
   # (`Sanctum.Refusals.classify/1`).
   defp refused({:error, reason}), do: Sanctum.Refusals.classify(reason)
+
+  defp refresh_action, do: %{"name" => "refresh", "label" => "Refresh", "kind" => "refresh"}
+
+  # A run action whose press's picked value fills `venue`.
+  defp picked_action do
+    %{
+      "name" => "buy",
+      "label" => "Buy",
+      "kind" => "run",
+      "operation" => "buy",
+      "args" => %{"qty" => "SECRET-QTY"},
+      "pick" => "venue"
+    }
+  end
 
   defp bind_args(name, overrides \\ %{}) do
     Map.merge(

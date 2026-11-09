@@ -2,6 +2,26 @@
 // Copyright 2026 CYFR Works Inc.
 // Built from apps/cyfr/assets/js/sdk by `mix esbuild sdk`.
 (() => {
+  var __defProp = Object.defineProperty;
+  var __defProps = Object.defineProperties;
+  var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
+  var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __propIsEnum = Object.prototype.propertyIsEnumerable;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __spreadValues = (a, b) => {
+    for (var prop in b || (b = {}))
+      if (__hasOwnProp.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    if (__getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(b)) {
+        if (__propIsEnum.call(b, prop))
+          __defNormalProp(a, prop, b[prop]);
+      }
+    return a;
+  };
+  var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+
   // js/sdk/wire.js
   var VERSION = 1;
   var BEARER_HEADER = "authorization";
@@ -10,8 +30,25 @@
     action: "/_f/v1/action",
     stream_open: "/_f/v1/stream"
   });
-  var VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed", "grant"]);
-  var CANVAS_VERBS = Object.freeze(["press", "failed", "grant"]);
+  var VERBS = Object.freeze([
+    "open",
+    "close",
+    "title",
+    "ready",
+    "credential",
+    "press",
+    "failed",
+    "grant",
+    "prefs",
+    "ask",
+    "settings"
+  ]);
+  var CANVAS_VERBS = Object.freeze(["press", "failed", "grant", "prefs", "ask", "settings"]);
+  var PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings"]);
+  var SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"]);
+  var PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"]);
+  var PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"]);
+  var CANCEL_REASONS = Object.freeze(["too_soon"]);
   var STAGES = Object.freeze(["load", "runtime"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
@@ -24,6 +61,17 @@
   }
   var FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/;
   var TINCTURE_REF = /^(t|tincture):\S+$/;
+  var DESKTOP_ID = /^[a-z][a-z0-9_-]{0,62}$/;
+  var SUBJECT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/;
+  var MAX_PRESS_VALUE = 256;
+  var MAX_CALL = 2147483647;
+  var ACCENT = /^#[0-9a-f]{6}$/;
+  var LOCALE = /^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,7}$/;
+  var TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]{0,31}(\/[A-Za-z0-9][A-Za-z0-9_+-]{0,31}){0,2}$/;
+  var APPEARANCE_MODES = ["light", "dark"];
+  var MAX_SAFE_AREA = 512;
+  var MAX_PERSON_NAME = 128;
+  var REFUSAL_CLASS = /^[a-z][a-z_]{0,63}$/;
   var STREAM_NAME = /^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})+$/;
   var LONE_SURROGATE = new RegExp("[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]");
   var isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -35,6 +83,16 @@
   };
   var isText = (value) => typeof value === "string" && !LONE_SURROGATE.test(value);
   var isTinctureRef = (ref) => typeof ref === "string" && TINCTURE_REF.test(ref);
+  var codePointCount = (value) => Array.from(value).length;
+  var isControl = (character) => {
+    const code = character.codePointAt(0);
+    return code <= 31 || code >= 127 && code <= 159;
+  };
+  var isBoundedText = (value, max) => isText(value) && value !== "" && codePointCount(value) <= max && !Array.from(value).some(isControl);
+  var isDesktopId = (id) => typeof id === "string" && DESKTOP_ID.test(id);
+  var isPressValue = (value) => isBoundedText(value, MAX_PRESS_VALUE);
+  var isCall = (call) => Number.isInteger(call) && call >= 1 && call <= MAX_CALL;
+  var isSubject = (subject) => isObject(subject) && sameKeys(subject, ["kind", "id"]) && SUBJECT_KINDS.includes(subject.kind) && typeof subject.id === "string" && SUBJECT_ID.test(subject.id);
   function isFrameId(id) {
     return typeof id === "string" && FRAME_ID.test(id);
   }
@@ -171,8 +229,20 @@
     return dataPath(frame) + STREAM_ROUTE;
   }
   var MODES = Object.freeze(["live", "validation"]);
-  var TO_FRAME_VERBS = Object.freeze(["canvas", "posture", "covered", "installed", "state"]);
-  var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state"]);
+  var TO_FRAME_VERBS = Object.freeze([
+    "canvas",
+    "posture",
+    "covered",
+    "installed",
+    "state",
+    "pressed",
+    "prefs",
+    "subject"
+  ]);
+  var TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"]);
+  var ANSWER_OF = Object.freeze({ press: "pressed", prefs: "prefs" });
+  var ANSWER_VERBS = Object.freeze(Object.values(ANSWER_OF));
+  var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"]);
   var POSTURES = ["desk", "hand"];
   var SHELL_STATES = ["live", "frozen"];
   var MAX_STREAMS = 64;
@@ -189,16 +259,43 @@
   var codePoints = (value) => Array.from(value).length;
   var isIcon = (icon) => icon === null || isText(icon) && codePoints(icon) >= 1 && codePoints(icon) <= MAX_ICON;
   var isInstalled = (tincture) => isObject(tincture) && sameKeys(tincture, ["ref", "name", "icon", "open"]) && isTinctureRef(tincture.ref) && isText(tincture.name) && codePoints(tincture.name) >= 1 && codePoints(tincture.name) <= MAX_NAME && isIcon(tincture.icon) && typeof tincture.open === "boolean";
+  var isRevision = (revision) => Number.isInteger(revision) && revision >= 0;
+  var isPrefs = (prefs) => isObject(prefs) && sameKeys(prefs, ["document", "revision"]) && isObject(prefs.document) && isRevision(prefs.revision);
+  var SIDES = ["top", "right", "bottom", "left"];
+  var isSafeAreas = (areas) => isObject(areas) && sameKeys(areas, SIDES) && SIDES.every((side) => Number.isInteger(areas[side]) && areas[side] >= 0 && areas[side] <= MAX_SAFE_AREA);
+  var isAppearance = (appearance) => isObject(appearance) && sameKeys(appearance, ["mode", "accent", "locale", "time_zone", "safe_areas"]) && APPEARANCE_MODES.includes(appearance.mode) && typeof appearance.accent === "string" && ACCENT.test(appearance.accent) && typeof appearance.locale === "string" && appearance.locale.length <= 64 && LOCALE.test(appearance.locale) && typeof appearance.time_zone === "string" && TIME_ZONE.test(appearance.time_zone) && isSafeAreas(appearance.safe_areas);
+  var isPerson = (person) => isObject(person) && sameKeys(person, ["name"]) && (person.name === null || isBoundedText(person.name, MAX_PERSON_NAME));
+  var CANVAS_KEYS = ["mode", "data_path", "streams", "prefs", "appearance", "person"];
   function canvasError(block, frame) {
-    if (!isObject(block) || !sameKeys(block, ["mode", "data_path", "streams"])) {
-      return "a canvas is exactly mode, data_path and streams";
+    if (!isObject(block) || !sameKeys(block, CANVAS_KEYS)) {
+      return "a canvas is exactly mode, data_path, streams, prefs, appearance and person";
     }
     if (!MODES.includes(block.mode)) return "a canvas's mode is live or validation";
     if (block.data_path !== dataPath(frame)) return "a canvas's data path is its frame's";
     if (!isStreams(block.streams)) {
       return `a canvas names at most ${MAX_STREAMS} distinct streams of name and subject`;
     }
+    if (!isPrefs(block.prefs)) return "a canvas's prefs are exactly a document and its revision";
+    if (!isAppearance(block.appearance)) {
+      return "a canvas's appearance is exactly mode, accent, locale, time_zone and safe_areas";
+    }
+    if (!isPerson(block.person)) return "a canvas's person is exactly a name, or none";
     return null;
+  }
+  var isOutcome = (args, outcomes) => {
+    if (!outcomes.includes(args.outcome)) return false;
+    if (args.outcome === "refused") return typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason);
+    if (args.outcome === "cancelled") return !("reason" in args) || CANCEL_REASONS.includes(args.reason);
+    return !("reason" in args);
+  };
+  var withReason = (args, keys) => "reason" in args ? [...keys, "reason"] : keys;
+  function pressedError(args) {
+    const keys = withReason(args, ["control", "call", "outcome"]);
+    return sameKeys(args, keys) && isDesktopId(args.control) && isCall(args.call) && isOutcome(args, PRESS_OUTCOMES) ? null : "pressed is exactly a control, its call and its outcome, with a reason when refused or cancelled too soon";
+  }
+  function prefsAnswerError(args) {
+    const keys = withReason(args, ["call", "outcome", "document", "revision"]);
+    return sameKeys(args, keys) && isCall(args.call) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES) ? null : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused or cancelled too soon";
   }
   function toFrameArgsError(verb, args, frame) {
     switch (verb) {
@@ -212,6 +309,12 @@
         return sameKeys(args, ["tinctures"]) && bounded(args.tinctures, MAX_TINCTURES, isInstalled) ? null : `installed names at most ${MAX_TINCTURES} tinctures of ref, name, icon and open`;
       case "state":
         return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen";
+      case "pressed":
+        return pressedError(args);
+      case "prefs":
+        return prefsAnswerError(args);
+      case "subject":
+        return isSubject(args) ? null : "subject is exactly a kind and an id";
       default:
         return "unknown verb";
     }
@@ -233,11 +336,16 @@
   // js/sdk/client.js
   var HANDSHAKE_TIMEOUT_MS = 3e4;
   var MAX_QUEUED_VERBS = 32;
+  var ANSWER_TIMEOUT_MS = 3e4;
+  var BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  var ACTION_NAME = /^[a-z0-9][a-z0-9-]{0,47}$/;
   var BENIGN_ERRORS = Object.freeze([
     "ResizeObserver loop completed with undelivered notifications.",
     "ResizeObserver loop limit exceeded"
   ]);
   var heard = (verb, args) => verb === "covered" ? args.rects : verb === "installed" ? args.tinctures : verb === "posture" ? args.posture : args.state;
+  var UNCERTAIN = Object.freeze({ outcome: "refused", reason: "uncertain" });
+  var CANCELLED = Object.freeze({ outcome: "cancelled" });
   var CyfrError = class extends Error {
     constructor(message, code, stage) {
       super(message);
@@ -265,6 +373,10 @@
     const latest = /* @__PURE__ */ new Map();
     const handlers = new Map(CANVAS_EVENTS.map((event) => [event, /* @__PURE__ */ new Set()]));
     const unshown = [];
+    let desktop = null;
+    let subject = null;
+    let nextCall = 1;
+    const calls = /* @__PURE__ */ new Map();
     let settle;
     const credentialArrived = new Promise((resolve) => {
       settle = resolve;
@@ -301,16 +413,75 @@
       if (first) settle();
     }
     function onTold({ verb: told, args }) {
+      if (told === "subject") {
+        if (kind === "canvas") return;
+        subject = Object.freeze({ kind: args.kind, id: args.id });
+        if (kind === null) return;
+        latest.set("subject", subject);
+        for (const entry of handlers.get("subject")) deliver("subject", entry, subject);
+        return;
+      }
       if (told === "canvas") {
         if (kind !== null) return;
         canvas = { streams: new Set(args.streams.map(pairKey)) };
-        return known("canvas");
+        desktop = { prefs: args.prefs, appearance: args.appearance, person: args.person };
+        known("canvas");
+        return tellDesktop();
       }
       if (kind !== "canvas") return;
+      if (told === "pressed") return answered(told, args.call, answerOf(args));
+      if (told === "prefs") {
+        const settle2 = take(told, args.call);
+        if (!settle2) return;
+        desktop = __spreadProps(__spreadValues({}, desktop), { prefs: { document: args.document, revision: args.revision } });
+        tellDesktop();
+        return settle2(answerOf(args));
+      }
       const value = heard(told, args);
       latest.set(told, value);
       if (told === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
       for (const entry of handlers.get(told)) deliver(told, entry, value);
+    }
+    function tellDesktop() {
+      const value = desktopValue();
+      latest.set("desktop", value);
+      for (const entry of handlers.get("desktop")) deliver("desktop", entry, value);
+    }
+    function desktopValue() {
+      return desktop === null ? null : Object.freeze(__spreadValues({}, desktop));
+    }
+    function answerOf(args) {
+      const answer2 = { outcome: args.outcome };
+      if ("reason" in args) answer2.reason = args.reason;
+      if ("document" in args) Object.assign(answer2, { document: args.document, revision: args.revision });
+      return Object.freeze(answer2);
+    }
+    function answered(verb2, call2, answer2) {
+      const settle2 = take(verb2, call2);
+      if (settle2) settle2(answer2);
+    }
+    function take(verb2, call2) {
+      const waiting = calls.get(call2);
+      if (!waiting || waiting.answer !== verb2) return null;
+      calls.delete(call2);
+      return waiting.settle;
+    }
+    function awaitAnswer(name, args) {
+      const call2 = nextCall++;
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          calls.delete(call2);
+          resolve(UNCERTAIN);
+        }, ANSWER_TIMEOUT_MS);
+        calls.set(call2, {
+          answer: ANSWER_OF[name],
+          settle: (answer2) => {
+            clearTimeout(timer);
+            resolve(answer2);
+          }
+        });
+        verb(name, __spreadProps(__spreadValues({}, args), { call: call2 }));
+      });
     }
     function shown() {
       return latest.get("state") === "live" ? Promise.resolve() : new Promise((resolve) => unshown.push(resolve));
@@ -328,7 +499,11 @@
       port.postMessage(shellMessage(name, frame, args));
     }
     function send(name, args) {
-      if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) return;
+      if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) {
+        if (name === "press" && "control" in args) answered("pressed", args.call, CANCELLED);
+        if (name === "prefs") answered("prefs", args.call, CANCELLED);
+        return;
+      }
       post(name, args);
     }
     function verb(name, args = {}) {
@@ -468,6 +643,24 @@
         return standalone;
       },
       /**
+       * On a canvas, its desktop as the shell told it: `prefs` (the person's
+       * preferences document for this canvas and its `revision`),
+       * `appearance` (`mode`, `accent`, `locale`, `time_zone`, `safe_areas`)
+       * and `person` (`name`, their display name, or null). Null until the
+       * canvas's open arrives; `cyfr.on("desktop", …)` hears it then and
+       * after each write.
+       */
+      get desktop() {
+        return desktopValue();
+      },
+      /**
+       * On an app opened on a subject, that subject, `{kind, id}`, or null;
+       * an app opened again on another hears it through `cyfr.on("subject")`.
+       */
+      get subject() {
+        return subject;
+      },
+      /**
        * Run an operation of a component the tincture declares.
        * @param {string} ref - a component reference, e.g. "c:local.weather:1.0.0"
        * @param {string} operation - the operation's name
@@ -506,30 +699,86 @@
        *   may succeed if opened again later; opened again after any other
        *   refusal, it meets the same refusal until something changes.
        */
-      stream(name, subject, onEvent) {
+      stream(name, subject2, onEvent) {
         if (typeof name !== "string" || name === "") return invalid("stream must be a stream name");
-        if (subject !== null && typeof subject !== "string") {
+        if (subject2 !== null && typeof subject2 !== "string") {
           return invalid("subject must be a literal subject or null");
         }
         if (typeof onEvent !== "function") return invalid("onEvent must be a function");
-        return openStream({ stream: name, subject }, onEvent);
+        return openStream({ stream: name, subject: subject2 }, onEvent);
       },
       /**
-       * Ask the shell to open a tincture: a tincture reference, e.g. "t:local.weather".
-       * From a canvas the shell acts on it only within moments of the person's
-       * own input, never from a script on its own.
+       * Ask the shell to open a tincture: a tincture reference, e.g.
+       * "t:local.weather", and optionally what to open it on, `{kind, id}`,
+       * a kind the app declares in `tincture.subjects` (run, thread,
+       * schedule, component or file). The app is handed the subject at its
+       * open (`cyfr.subject`); opening it does nothing more. From a canvas
+       * the shell acts on it only for an input of the person's, never from a
+       * script on its own.
        */
-      open(ref) {
-        verb("open", { ref });
+      open(ref, on = null) {
+        if (on !== null && !isSubject(on)) return;
+        verb("open", on === null ? { ref } : { ref, subject: on });
       },
       /**
-       * On a canvas, press a feed's action: the binding id a `feed.results`
-       * event carries, and the action's name. The shell acts on it only within
-       * moments of the person's own input, never from a script on its own, and
-       * only for a feed the canvas declares.
+       * On a canvas, press a control it declares: the control's id, and for
+       * a control with a pick the value picked, one the picked stream
+       * publishes. The shell runs it as the person, only for an input of the
+       * person's, and answers its outcome: `{outcome: "accepted"}`,
+       * `{outcome: "refused", reason}` with the refusal's class, or
+       * `{outcome: "cancelled"}` when no input of the person's carried it or
+       * the canvas was not shown, with `reason: "too_soon"` when it came
+       * within a few seconds of the last spend of the activation. Nothing is
+       * tried again.
+       *
+       * Its first argument a binding id (as a `feed.results` event carries
+       * one) and its second an action's name, it presses that feed's action
+       * instead, answering nothing.
+       * @returns {Promise<{outcome: string, reason?: string}> | undefined}
        */
-      press(binding, action) {
-        verb("press", { binding, action });
+      press(control, value = null) {
+        if (typeof control === "string" && BINDING_ID.test(control) && typeof value === "string" && ACTION_NAME.test(value)) {
+          verb("press", { binding: control, action: value });
+          return void 0;
+        }
+        if (!isDesktopId(control)) return invalid("a control is named by its id");
+        if (value !== null && !isPressValue(value)) return invalid("a pressed value is text of 1 to 256 code points");
+        if (!framed) return Promise.resolve(CANCELLED);
+        return awaitAnswer("press", value === null ? { control } : { control, value });
+      },
+      /**
+       * On a canvas, write the person's preferences for it: `document`,
+       * `{widgets: {<id>: {on, rect, <field>…}}, desktop: {<field>…}}`, each
+       * widget it names replacing that widget's whole entry, over the
+       * revision the canvas holds. Answers `{outcome, document, revision}`:
+       * `saved`, `stale` (another write came first; the document is the
+       * current one, to write over), `refused` with its `reason`, or
+       * `cancelled` when no input of the person's carried it, with `reason`
+       * `too_soon` when it came within a few seconds of the last spend.
+       * @returns {Promise<{outcome: string, document: object, revision: number, reason?: string}>}
+       */
+      prefs(document2) {
+        if (document2 === null || typeof document2 !== "object" || Array.isArray(document2)) {
+          return invalid("preferences are an object");
+        }
+        if (!framed) return Promise.resolve(CANCELLED);
+        return awaitAnswer("prefs", { document: document2 });
+      },
+      /**
+       * On a canvas, ask AQUA about one of its widgets, by the widget's id:
+       * AQUA's panel opens with a sentence CYFR writes naming the widget and
+       * the desktop, after the person's draft, and sends nothing. Only for
+       * an input of the person's.
+       */
+      ask(widget) {
+        verb("ask", { widget });
+      },
+      /**
+       * On a canvas, open one of CYFR's own pages by its key, e.g.
+       * "schedules" or "vault". Only for an input of the person's.
+       */
+      settings(page) {
+        verb("settings", { page });
       },
       /**
        * On a canvas, ask the person to grant a component: a component
@@ -545,13 +794,16 @@
        * On a canvas, hear what the shell tells it: `installed` (the installed
        * tinctures, `[{ref, name, icon, open}]`), `posture` (`desk` or
        * `hand`), `covered` (the rects of it, `{x, y, width, height}` in its
-       * own pixels, that the shown apps cover) or `state` (`live` or
-       * `frozen`). The latest value, if one has come, is handed to a new
-       * handler first.
+       * own pixels, that the shown apps cover), `state` (`live` or
+       * `frozen`) or `desktop` (as `cyfr.desktop` reads it); on an app,
+       * `subject`, what it was opened on again. The latest value, if one has
+       * come, is handed to a new handler first.
        * @returns {function} stops the handler hearing more
        */
       on(event, handler) {
-        if (!CANVAS_EVENTS.includes(event)) throw new TypeError("cyfr.on takes installed, posture, covered or state");
+        if (!CANVAS_EVENTS.includes(event)) {
+          throw new TypeError("cyfr.on takes installed, posture, covered, state, desktop or subject");
+        }
         if (typeof handler !== "function") throw new TypeError("cyfr.on takes a function");
         const entry = { handler };
         handlers.get(event).add(entry);
