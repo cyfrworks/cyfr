@@ -19,7 +19,10 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     {:ok, conn: log_in_user(conn, alice), alice: alice}
   end
 
-  defp mount_chat(conn, feed \\ PrismWeb.RoomFeed.topic("desk-#{System.unique_integer([:positive])}")) do
+  defp mount_chat(
+         conn,
+         feed \\ PrismWeb.RoomFeed.topic("desk-#{System.unique_integer([:positive])}")
+       ) do
     {:ok, view, _html} =
       live_isolated(conn, PrismWeb.ChatOverlayLive, session: %{"room_feed" => feed})
 
@@ -129,7 +132,7 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     |> render_click()
 
     {:ok, threads} = Sanctum.SharedThreads.list(alice.user_id)
-    assert [pair] = for %{kind: "pair"} = thread <- threads, do: thread
+    assert [pair] = for(%{kind: "pair"} = thread <- threads, do: thread)
     assert find_live_child(view, "chat-thread-" <> pair.id)
     assert has_element?(view, "#shared-thread-" <> pair.id)
 
@@ -243,7 +246,9 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     view |> element("#shared-thread-#{plans.id} button") |> render_click()
     title = "Plans #{alice.namespace}"
 
-    assert_receive %Cyfr.Bus.RoomInView{room: %{"shared_thread_id" => id, "title" => ^title} = room},
+    assert_receive %Cyfr.Bus.RoomInView{
+                     room: %{"shared_thread_id" => id, "title" => ^title} = room
+                   },
                    5_000
 
     assert id == plans.id

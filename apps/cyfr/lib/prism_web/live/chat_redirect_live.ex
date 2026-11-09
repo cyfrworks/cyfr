@@ -15,8 +15,12 @@ defmodule PrismWeb.ChatRedirectLive do
   @impl true
   def mount(_params, _session, socket) do
     case socket.assigns[:athanor_route] do
-      nil -> {:ok, redirect(socket, to: "/login?error=no_athanor")}
-      route -> {:ok, socket |> assign(:overlay, false) |> push_navigate(to: PrismWeb.DesktopLive.path(route))}
+      nil ->
+        {:ok, redirect(socket, to: "/login?error=no_athanor")}
+
+      route ->
+        {:ok,
+         socket |> assign(:overlay, false) |> push_navigate(to: PrismWeb.DesktopLive.path(route))}
     end
   end
 

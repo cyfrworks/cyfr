@@ -106,7 +106,10 @@ defmodule PrismWeb.ChatOverlayLive do
         assign(
           socket,
           :people,
-          for(person <- people, do: %{user_id: person.user_id, label: PrismWeb.People.label(person, ctx)})
+          for(
+            person <- people,
+            do: %{user_id: person.user_id, label: PrismWeb.People.label(person, ctx)}
+          )
         )
 
       {:error, _unread} ->
@@ -203,8 +206,11 @@ defmodule PrismWeb.ChatOverlayLive do
   # thread with").
   def handle_event("open_dm", %{"user-id" => user_id}, socket) do
     case call_tool(socket, "shared_thread/pair", %{"user" => user_id}) do
-      {:ok, %{id: id}} -> {:noreply, socket |> load() |> open_shared(id)}
-      {:error, reason} -> {:noreply, assign(socket, :error, "Could not open a pair: #{error_message(reason)}")}
+      {:ok, %{id: id}} ->
+        {:noreply, socket |> load() |> open_shared(id)}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, "Could not open a pair: #{error_message(reason)}")}
     end
   end
 
@@ -376,7 +382,9 @@ defmodule PrismWeb.ChatOverlayLive do
           <button
             id="chat-close"
             type="button"
-            phx-click={Phoenix.LiveView.JS.push("close") |> Phoenix.LiveView.JS.focus(to: "#chat-button")}
+            phx-click={
+              Phoenix.LiveView.JS.push("close") |> Phoenix.LiveView.JS.focus(to: "#chat-button")
+            }
             aria-label="Close"
             title="Close (Esc)"
             class="aqua-panel-ghost text-sm"
@@ -396,7 +404,11 @@ defmodule PrismWeb.ChatOverlayLive do
         </p>
 
         <div class="flex min-h-0 flex-1">
-          <nav id="chat-list" class="chat-list flex flex-col overflow-y-auto" aria-label="Your threads">
+          <nav
+            id="chat-list"
+            class="chat-list flex flex-col overflow-y-auto"
+            aria-label="Your threads"
+          >
             <section id="chat-threads">
               <div class="flex items-center justify-between pl-3 pr-2 py-1.5">
                 <span class="text-xs uppercase tracking-wider text-text-muted">With people</span>
@@ -453,7 +465,10 @@ defmodule PrismWeb.ChatOverlayLive do
                     aria-current={open? && "true"}
                     class={[
                       "flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-overlay",
-                      if(open?, do: "bg-surface-overlay text-text-primary", else: "text-text-secondary")
+                      if(open?,
+                        do: "bg-surface-overlay text-text-primary",
+                        else: "text-text-secondary"
+                      )
                     ]}
                   >
                     <span class={["truncate", count > 0 && "font-semibold text-text-primary"]}>

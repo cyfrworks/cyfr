@@ -117,7 +117,12 @@ defmodule PrismWeb.Layouts do
     assigns = assign(assigns, :sections, Nav.sections(assigns.mode))
 
     ~H"""
-    <div id="drawer" class="hidden fixed inset-0 z-[66] pointer-events-auto" role="dialog" aria-modal="true">
+    <div
+      id="drawer"
+      class="hidden fixed inset-0 z-[66] pointer-events-auto"
+      role="dialog"
+      aria-modal="true"
+    >
       <div class="absolute inset-0 bg-black/60" phx-click={hide_drawer()}></div>
       <div class="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-gray-800 bg-gray-900 shadow-xl">
         <div class="flex h-12 items-center justify-between border-b border-gray-800 px-4">

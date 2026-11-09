@@ -76,7 +76,10 @@ defmodule PrismWeb.NavTest do
     # one in — and a query string does not change the answer.
     assert Nav.href("/aqua", "home") == "/a/home/aqua"
     assert Nav.href("/executions?id=exec_1", "home") == "/a/home/executions?id=exec_1"
-    assert Nav.href("/?publisher=p&tincture_name=n", "home") == "/a/home/?publisher=p&tincture_name=n"
+
+    assert Nav.href("/?publisher=p&tincture_name=n", "home") ==
+             "/a/home/?publisher=p&tincture_name=n"
+
     refute Enum.any?(Nav.items("dev"), &(&1.key == "chat"))
   end
 

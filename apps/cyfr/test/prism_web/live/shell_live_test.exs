@@ -286,7 +286,10 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
              entry.name
            )
 
-    view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+    view
+    |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+    |> render_click()
+
     wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
     {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, "tincture:local.#{name}")

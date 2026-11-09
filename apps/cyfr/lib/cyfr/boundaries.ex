@@ -1891,7 +1891,7 @@ defmodule Cyfr.Boundaries do
         "the shell marks its tincture scan running per athanor for a bounded time, so " <>
           "two refreshes start one scan, and clears the mark when the scan ends: " <>
           "server-local memory, never a row."
-    },
+    }
   ]
 
   @doc """

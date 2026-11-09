@@ -436,7 +436,10 @@ defmodule Prism.CanvasValidationTest do
       assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
       _ = render(view)
 
       assert %{state: :refused, refusal: :ungranted} = live_canvas(view)

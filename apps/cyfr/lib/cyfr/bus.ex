@@ -310,6 +310,7 @@ defmodule Cyfr.Bus do
       producers: ["Cyfr.TelemetryBridge"],
       consumers: [
         "PrismWeb.ShellLive",
+        "PrismWeb.AquaPanelLive",
         "PrismWeb.AquaLive",
         "PrismWeb.ThreadPaneLive",
         "Aqua.Runner"

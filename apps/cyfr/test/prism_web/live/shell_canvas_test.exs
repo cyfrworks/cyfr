@@ -1730,7 +1730,10 @@ defmodule PrismWeb.ShellCanvasTest do
       refute Enum.any?(rows(), &(&1.version == "1.0.1"))
       assert render(view) =~ "Grant tincture:local.markets"
 
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
@@ -1758,7 +1761,11 @@ defmodule PrismWeb.ShellCanvasTest do
       # it fails.
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
       assert render(view) =~ "Grant tincture:local.markets:1.0.1"
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
       settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
       trial = validation(view)
@@ -1769,7 +1776,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert validation(view) == nil
       assert %{working: "1.0.0", failed: %{version: "1.0.1"}} = versions(ctx, "markets")
       assert render(view) =~ "Grant tincture:local.markets:1.0.0"
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
 
       wait_until(
         fn -> assigns(view).grant_prompts == %{} end,
@@ -1808,7 +1818,10 @@ defmodule PrismWeb.ShellCanvasTest do
                Map.to_list(assigns(view).grant_prompts)
 
       # Dismissed, with no working version: the canvas shows its refusal.
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
       _ = render(view)
 
       assert assigns(view).grant_prompts == %{}
@@ -1825,7 +1838,10 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
       assert validation(view) == nil
 
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{state: :live, reference: %{name: "markets"}} = trial = validation(view)
@@ -1880,7 +1896,10 @@ defmodule PrismWeb.ShellCanvasTest do
         assert %{state: :live} = newer = validation(view)
         if first, do: refute(first.id == newer.id)
 
-        view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
+        view
+        |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+        |> render_click()
+
         _ = render(view)
 
         assert assigns(view).grant_prompts == %{}
@@ -2109,7 +2128,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{^prompt, {{:activation, "home"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{state: :live, reference: %{version: "1.0.0"}} = live = canvas(view)
@@ -2127,7 +2149,10 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
 
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{state: :live, reference: %{version: "1.0.0"}} = live = canvas(view)
@@ -2533,7 +2558,10 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       before = Enum.map(opened(view), & &1.id)
 
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       settle!(view, fn -> assigns(view).grant_prompts == %{} end)
 
       assert Enum.map(opened(view), & &1.id) == before
@@ -3493,7 +3521,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{_prompt, {{:activation, "home"}, "iframe_canvas"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{reference: %{name: "canvas"}, state: :live} = live = canvas(view)
@@ -4226,7 +4257,10 @@ defmodule PrismWeb.ShellCanvasTest do
 
   # The system layer's dismissal of the prompt in front.
   defp dismiss!(view) do
-    view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
+    view
+    |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+    |> render_click()
+
     _ = render(view)
   end
 end

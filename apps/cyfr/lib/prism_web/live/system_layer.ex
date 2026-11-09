@@ -894,9 +894,10 @@ defmodule PrismWeb.SystemLayer do
     case pending_entries(socket) do
       {:ok, entries} ->
         Enum.reduce(entries, socket, fn entry, socket ->
-          if Map.has_key?(socket.assigns.panels, entry.ref) or not shows_others?(socket, entry.ref),
-            do: socket,
-            else: open_entry(socket, entry)
+          if Map.has_key?(socket.assigns.panels, entry.ref) or
+               not shows_others?(socket, entry.ref),
+             do: socket,
+             else: open_entry(socket, entry)
         end)
 
       {:error, _unread} ->

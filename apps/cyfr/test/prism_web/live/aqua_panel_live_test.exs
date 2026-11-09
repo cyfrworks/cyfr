@@ -969,6 +969,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Sanctum.Notify.broadcast(own.id, :athanor_changed, %{name: filled.name})
     refute render(pane) =~ "Still being prepared"
 
+    # And the panel's own line goes with it.
+    wait_until(
+      fn -> not has_element?(panel, "#aqua-panel-provisioning") end,
+      5_000,
+      "the panel's line that the athanor is being set up"
+    )
+
     Cyfr.Test.Sandbox.end_views()
   end
 

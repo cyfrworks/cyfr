@@ -118,6 +118,11 @@ defmodule PrismWeb.AquaPanelLive do
     with {:ok, %{status: "active"} = athanor} <- Athanors.get_by_owner(ctx.user_id),
          {:ok, focused} <- Sanctum.Context.focus(ctx, athanor),
          {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focused) do
+      # The athanor's own notifications: its seeding ending, or a rename,
+      # read again so the line saying it is still being set up goes.
+      actor = Sanctum.Context.actor(focused)
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
+
       refocused
       |> assign(:phase, :ready)
       |> assign(:athanor, athanor)
@@ -257,7 +262,11 @@ defmodule PrismWeb.AquaPanelLive do
   # The open thread, one of the athanor's own: deleted through the tool
   # the assistant's own delete goes through, and the panel turns to a
   # blank thread. A crew member's thread is its room's and has no delete.
-  def handle_event("delete_thread", _params, %{assigns: %{thread: %{id: id, kind: "own"}}} = socket) do
+  def handle_event(
+        "delete_thread",
+        _params,
+        %{assigns: %{thread: %{id: id, kind: "own"}}} = socket
+      ) do
     case call_tool(socket, "thread/delete", %{"thread" => id}) do
       {:ok, _} ->
         {:noreply, socket |> assign(:notice, nil) |> open_on(nil) |> remember()}
@@ -356,6 +365,12 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
+
+  # The athanor moved: its seeding ended or it was renamed; read it again.
+  def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, %{assigns: %{phase: :ready}} = socket),
+    do: {:noreply, reload_athanor(socket)}
+
+  def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -490,7 +505,13 @@ defmodule PrismWeb.AquaPanelLive do
             title="Delete this thread"
             class="aqua-panel-ghost text-sm hover:text-red-400"
           >
-            <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+            <svg
+              class="h-3.5 w-3.5"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
               <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5" />
             </svg>
           </button>

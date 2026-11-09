@@ -2303,7 +2303,11 @@ defmodule PrismWeb.ShellLive do
     if notice == socket.assigns.noticed do
       socket
     else
-      send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.desktop_layer_id(), notice: notice)
+      send_update(PrismWeb.SystemLayer,
+        id: PrismWeb.SystemLayer.desktop_layer_id(),
+        notice: notice
+      )
+
       assign(socket, :noticed, notice)
     end
   end
@@ -2313,10 +2317,18 @@ defmodule PrismWeb.ShellLive do
   # ============================================================================
 
   defp show_prompt(prompt),
-    do: send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.desktop_layer_id(), prompt: prompt)
+    do:
+      send_update(PrismWeb.SystemLayer,
+        id: PrismWeb.SystemLayer.desktop_layer_id(),
+        prompt: prompt
+      )
 
   defp withdraw_prompt(prompt_id),
-    do: send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.desktop_layer_id(), withdraw: prompt_id)
+    do:
+      send_update(PrismWeb.SystemLayer,
+        id: PrismWeb.SystemLayer.desktop_layer_id(),
+        withdraw: prompt_id
+      )
 
   defp next_prompt_id(socket, kind) do
     seq = socket.assigns.prompt_seq + 1
@@ -3052,7 +3064,6 @@ defmodule PrismWeb.ShellLive do
         tinctures={@tinctures}
         arrangement={@arrangement}
       />
-
 
       <%!-- The shell's own chrome: no frame draws it or reaches it. --%>
       <button

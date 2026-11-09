@@ -24,7 +24,6 @@ apps/cyfr/test/prism_web/live/aqua_live_consent_status_test.exs	1	pending
 apps/cyfr/test/prism_web/live/aqua_live_test.exs	3	pending
 apps/cyfr/test/prism_web/live/aqua_panel_live_test.exs	1	pending
 apps/cyfr/test/prism_web/live/canvas_live_test.exs	1	pending
-apps/cyfr/test/prism_web/live/chat_live_test.exs	4	pending
 apps/cyfr/test/prism_web/live/command_palette_test.exs	1	pending
 apps/cyfr/test/prism_web/live/company_login_live_test.exs	3	pending
 apps/cyfr/test/prism_web/live/components_live_test.exs	1	pending
