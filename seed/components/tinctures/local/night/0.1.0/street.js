@@ -356,6 +356,9 @@
   function plateSays(sentence) { const n = $('.plate__note', els.plate); if (n) n.textContent = sentence; }
 
   const SPENT = 'That tap was not taken. Tap again.';
+  // A tap within a few seconds of the last one is dropped (`too_soon`).
+  const TOO_SOON = 'Too soon after your last tap. Wait a moment, then tap again.';
+  const notTaken = (answer) => (answer.reason === 'too_soon' ? TOO_SOON : SPENT);
   // One tap, one verb: each act sends exactly one of the shell's verbs.
   function runPlateAct(a) {
     if (a.act === 'ask') { sdk.ask(a.widget); closePlate(); }
@@ -367,7 +370,7 @@
       plateSays('…');
       sdk.press(a.control, a.value).then((answer) => {
         if (answer.outcome === 'accepted') closePlate();
-        else plateSays(answer.outcome === 'cancelled' ? SPENT : 'Refused · ' + N.words(answer.reason || 'refused'));
+        else plateSays(answer.outcome === 'cancelled' ? notTaken(answer) : 'Refused · ' + N.words(answer.reason || 'refused'));
       });
     }
   }
@@ -379,7 +382,7 @@
       if (N.isItem(answer.document)) state.prefs = answer.document;
       if (answer.outcome === 'stale') ui.note = 'Another screen changed your parts first. Flip it again.';
       else if (answer.outcome === 'refused') ui.note = 'Not kept · ' + N.words(answer.reason || 'refused');
-      else if (answer.outcome === 'cancelled') ui.note = SPENT;
+      else if (answer.outcome === 'cancelled') ui.note = notTaken(answer);
       reconcile();
       render({ flip: true });
       if (after) after();
