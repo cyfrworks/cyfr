@@ -75,6 +75,11 @@ h1.q-title{font-size:24px;line-height:32px;font-weight:500;letter-spacing:-.015e
 .w-s .w-body{min-height:96px}
 .empty{margin:4px 0 0;color:var(--muted);font-size:13px;line-height:18px}
 .refusal{margin:4px 0 0;color:var(--negative);font-size:13px;line-height:18px}
+/* a part's stream state: a tired picture dimmed under its time, a wait
+   for the next attempt, an ended part's few words */
+.state{margin:4px 0 6px;color:var(--muted);font-size:13px;line-height:18px}
+.state.off{color:var(--negative)}
+.tired{opacity:.5}
 
 /* controls: every one at least 44 pixels each way, a finger's size */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:44px;min-width:44px;padding:0 12px;border-radius:var(--r-ctl);border:0;background:var(--raised);color:var(--text);font-weight:500;white-space:nowrap;flex:none;transition:background-color .15s,transform .12s,opacity .2s}
@@ -94,12 +99,16 @@ h1.q-title{font-size:24px;line-height:32px;font-weight:500;letter-spacing:-.015e
 .pill.neg{background:var(--pill-neg-bg);color:var(--pill-neg-ink)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
 .dot.pos{background:var(--positive)}
+.dot.neg{background:var(--negative)}
 .dot.run{background:var(--text);animation:breathe 1.6s ease-in-out infinite}
 .frozen .dot.run{animation:none}
 @keyframes breathe{50%{opacity:.25}}
 .mark{color:var(--hue);font-weight:500}
 .neg-t{color:var(--negative)}
 .note{font-size:13px;line-height:18px;color:var(--negative)}
+.note.ok{color:var(--text)}
+.said{white-space:normal}
+.unread{font-weight:500;color:var(--text)}
 
 /* apps */
 .apps{list-style:none;margin:4px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(56px,1fr));gap:8px}
@@ -136,6 +145,13 @@ h1.q-title{font-size:24px;line-height:32px;font-weight:500;letter-spacing:-.015e
 .kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 12px;margin:8px 0 0;font-size:13px;line-height:18px}
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* system: how the place stands */
+.sys-state{display:flex;align-items:center;gap:8px;margin:0;font-weight:500}
+.upd{margin-left:auto}
+.sys-row{display:flex;justify-content:space-between;margin:10px 0 0;font-size:13px;line-height:18px}
+.bar{height:8px;border-radius:4px;background:var(--raised);margin:6px 0 2px;overflow:hidden}
+.bar span{display:block;height:100%;background:var(--text);border-radius:4px}
 
 /* the day: what waited on you against what ran on its own */
 .w-wide{grid-column:1/-1;container-type:inline-size}
