@@ -19,6 +19,9 @@
   // this one has not by then was removed meanwhile.
   const SETTLE_MS = 2500;
   const MAX_SCHEDULE_RUNS = 60;
+  // What a tap within a few seconds of the last one that reached CYFR is told: CYFR takes one
+  // act per tap and answers the second `too_soon`, never holding it for later.
+  const TOO_SOON = 'Too soon after your last tap: wait a few seconds, then tap again.';
 
   // The parts of the village, each a widget of the preferences document. `bld` are the buildings
   // a part stands on the street; `hill` parts keep their hill; `order` parts move along the street;
@@ -267,7 +270,7 @@
     adopt(answer);
     if (answer.outcome === 'saved') return null;
     if (answer.outcome === 'stale') return 'Another screen changed this first. Tap again.';
-    if (answer.outcome === 'cancelled') return 'Not saved: tap once and wait a moment.';
+    if (answer.outcome === 'cancelled') return answer.reason === 'too_soon' ? TOO_SOON : 'Not saved: tap once and wait a moment.';
     return 'Not saved: ' + (answer.reason || 'refused') + '.';
   }
 
@@ -316,7 +319,7 @@
       let answer;
       try { answer = await sdk.press(control, value); } catch (e) { return 'Not sent: ' + ((e && e.message) || 'refused') + '.'; }
       if (!answer || answer.outcome === 'accepted') return null;
-      if (answer.outcome === 'cancelled') return 'Not sent: tap once and wait a moment.';
+      if (answer.outcome === 'cancelled') return answer.reason === 'too_soon' ? TOO_SOON : 'Not sent: tap once and wait a moment.';
       return 'Refused: ' + (answer.reason || 'refused') + '.';
     },
     pressFeed(feed, action) { const f = state.feeds[feed]; if (sdk && f && f.binding) sdk.press(f.binding, action); },
