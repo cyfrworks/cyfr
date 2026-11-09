@@ -53,6 +53,13 @@ defmodule Prima.ConsentPreview do
       row per stream and subject, so one stream declared under two
       subjects is two rows.
     * `system_actions` — `actions`, the `tool.action` names.
+    * `controls` — a desktop's `controls`, in the order of their ids, each
+      its `label`, the `operation` (`tool.action`) the shell runs on the
+      person's tap, and, for a control with a pick, its `pick`: the
+      `stream` the choice is read from, with the feed's name as its
+      `subject` for a feed's results, and the RFC 6901 pointer `field`
+      into that stream's shape (`Prima.Manifest.Tincture`). One row per
+      desktop that offers any control.
     * `exits` — `exit`, one place the node's bytes may leave
       (`Prima.Flow`): an egress domain or a tincture's connect origin as
       declared, `need:<name>` or `server:<name>`; and `flows`, the source
@@ -64,8 +71,8 @@ defmodule Prima.ConsentPreview do
   (`narrowable_kinds/0`); a row of another kind is granted whole or not at
   all and is never marked narrowed, and neither is a wildcard tools row,
   which is the whole ask. Lists of names are sets: no name twice, and at
-  most 256. A kind outside these ten is refused, and so is a field a kind
-  does not carry.
+  most 256. A kind outside these eleven is refused, and so is a field a
+  kind does not carry.
 
   ## Removed bindings
 
@@ -99,6 +106,7 @@ defmodule Prima.ConsentPreview do
     :frame,
     :streams,
     :system_actions,
+    :controls,
     :exits
   ]
   @narrowable [:egress, :storage, :tools, :limits, :exits]
@@ -113,6 +121,7 @@ defmodule Prima.ConsentPreview do
           | :frame
           | :streams
           | :system_actions
+          | :controls
           | :exits
 
   @typedoc "A removed binding in its JSON form (`check_removed/1`)."
@@ -142,7 +151,7 @@ defmodule Prima.ConsentPreview do
   @spec version() :: pos_integer()
   def version, do: @version
 
-  @doc "The ten row kinds."
+  @doc "The eleven row kinds."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
 
@@ -278,7 +287,7 @@ defmodule Prima.ConsentPreview.Row do
 
   @kinds Map.new(Prima.ConsentPreview.kinds(), &{Atom.to_string(&1), &1})
   @narrowable Prima.ConsentPreview.narrowable_kinds()
-  @one_per_node [:egress, :storage, :tools, :limits, :frame, :system_actions]
+  @one_per_node [:egress, :storage, :tools, :limits, :frame, :system_actions, :controls]
   @max_text 1024
   @max_set 256
   @wildcard "*"
@@ -432,6 +441,7 @@ defmodule Prima.ConsentPreview.Row do
     do: {~w(name), ~w(subject), %{"name" => &Tincture.stream_name?/1, "subject" => &subject?/1}}
 
   defp spec(:system_actions), do: {~w(actions), [], %{"actions" => &operations?/1}}
+  defp spec(:controls), do: {~w(controls), [], %{"controls" => &controls?/1}}
 
   defp spec(:exits), do: {~w(exit flows), [], %{"exit" => &exit?/1, "flows" => &classes?/1}}
 
@@ -509,6 +519,35 @@ defmodule Prima.ConsentPreview.Row do
   end
 
   defp operations?(values), do: set?(values) and Enum.all?(values, &Tincture.operation_name?/1)
+
+  # A desktop's controls as its declaration holds them: one to the
+  # block's bound, each a label within its bound, an operation name and an
+  # optional pick of a stream, a feed as its subject, and a pointer.
+  defp controls?(controls) when is_list(controls) do
+    %{controls: max} = Tincture.desktop_bounds()
+    length(controls) in 1..max and Enum.all?(controls, &control?/1)
+  end
+
+  defp controls?(_controls), do: false
+
+  defp control?(%{"label" => label, "operation" => operation} = control) do
+    %{label_points: points} = Tincture.desktop_bounds()
+
+    Enum.all?(Map.keys(control), &(&1 in ~w(label operation pick))) and
+      text?(label) and length(String.codepoints(label)) <= points and
+      Tincture.operation_name?(operation) and
+      (not Map.has_key?(control, "pick") or pick?(control["pick"]))
+  end
+
+  defp control?(_control), do: false
+
+  defp pick?(%{"stream" => stream, "field" => field} = pick) do
+    Enum.all?(Map.keys(pick), &(&1 in ~w(stream subject field))) and
+      Tincture.stream_name?(stream) and Tincture.pointer_segments(field) != :error and
+      (not Map.has_key?(pick, "subject") or Prima.Feed.name?(pick["subject"]))
+  end
+
+  defp pick?(_pick), do: false
 
   # An exit as a flow names it: a declared domain or origin, `need:<name>`
   # or `server:<name>`, held to the flow grammar's own reading of a `to`.

@@ -1513,7 +1513,7 @@ func unresolvedPlan(plan map[string]any) (string, bool) {
 // (tests/fixtures/consent_preview.json holds them).
 var previewKinds = []string{
 	"credential", "egress", "storage", "tools", "tool_servers",
-	"limits", "frame", "streams", "system_actions", "exits",
+	"limits", "frame", "streams", "system_actions", "controls", "exits",
 }
 
 var kindHeadings = map[string]string{
@@ -1526,6 +1526,7 @@ var kindHeadings = map[string]string{
 	"frame":          "Its frame",
 	"streams":        "Streams it listens to",
 	"system_actions": "System actions it may call",
+	"controls":       "Controls you can tap",
 	"exits":          "Where what it reads may go",
 }
 
@@ -1672,6 +1673,15 @@ func describeRow(row map[string]any) []string {
 
 	case "system_actions":
 		return []string{node, "actions: " + listOr(values["actions"], "none")}
+
+	case "controls":
+		lines := []string{node}
+		controls, _ := values["controls"].([]any)
+		for _, raw := range controls {
+			control, _ := raw.(map[string]any)
+			lines = append(lines, controlLine(control))
+		}
+		return lines
 
 	case "exits":
 		return []string{node + narrowed,
@@ -1850,6 +1860,22 @@ func lifetimeLabel(value any) string {
 	default:
 		return str(lifetime["kind"])
 	}
+}
+
+// controlLine is one control a desktop offers: its label, the operation
+// the shell runs on the person's tap, and where its one choice is picked
+// from.
+func controlLine(control map[string]any) string {
+	line := fmt.Sprintf("%q runs %s", str(control["label"]), str(control["operation"]))
+	pick, ok := control["pick"].(map[string]any)
+	if !ok {
+		return line
+	}
+	line += ", choosing from " + str(pick["stream"])
+	if subject := str(pick["subject"]); subject != "" {
+		line += " for " + subject
+	}
+	return line + " at " + str(pick["field"])
 }
 
 func subjectLabel(subject any) string {
