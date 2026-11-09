@@ -2819,6 +2819,75 @@ defmodule Sanctum.Consent.PlanTest do
                Enum.sort([{:frame, ref}, {:streams, ref}, {:system_actions, ref}, {:limits, ref}])
     end
 
+    test "a desktop's are its frame, its data and feeds as streams, and its controls as one row",
+         %{ctx: ctx} do
+      ref =
+        tincture!(ctx, "plan-desk", "1.0.0", %{
+          "desktop" => %{
+            "data" => ["runs.changes"],
+            "feeds" => ["vpn"],
+            "controls" => [
+              %{
+                "id" => "pause",
+                "label" => "Pause",
+                "operation" => "schedule.pause",
+                "args" => %{"schedule_id" => "sch_1"}
+              },
+              %{
+                "id" => "connect",
+                "label" => "Connect",
+                "operation" => "feed.press",
+                "args" => %{"binding" => "fb_1"},
+                "pick" => %{
+                  "stream" => "feed.results",
+                  "subject" => "vpn",
+                  "field" => "/result/actions",
+                  "arg" => "action_name"
+                }
+              }
+            ],
+            "prefs" => %{"desktop" => %{"fields" => %{"compact" => %{"type" => "boolean"}}}}
+          }
+        })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      grouped = by_kind(decode!(plan.rows))
+
+      assert grouped[{:frame, ref}] == [
+               %{"capabilities" => [], "background" => false, "placement" => "canvas"}
+             ]
+
+      assert grouped[{:streams, ref}] == [
+               %{"name" => "feed.results", "subject" => "vpn"},
+               %{"name" => "runs.changes"}
+             ]
+
+      # The controls in the order of their ids, each its label, its
+      # operation and its pick's stream and field: never its id, its args
+      # or the argument the pick fills, and nothing of the prefs.
+      assert grouped[{:controls, ref}] == [
+               %{
+                 "controls" => [
+                   %{
+                     "label" => "Connect",
+                     "operation" => "feed.press",
+                     "pick" => %{
+                       "stream" => "feed.results",
+                       "subject" => "vpn",
+                       "field" => "/result/actions"
+                     }
+                   },
+                   %{"label" => "Pause", "operation" => "schedule.pause"}
+                 ]
+               }
+             ]
+
+      # A desktop that offers no control has no controls row.
+      bare = tincture!(ctx, "plan-bare-desk", "1.0.0", %{"desktop" => %{}})
+      {:ok, plan} = Plan.plan(ctx, %{ref: bare})
+      refute Map.has_key?(by_kind(decode!(plan.rows)), {:controls, bare})
+    end
+
     test "a version adding background permission and widening a stream's subject changes " <>
            "the shape, and its rows show exactly what was added",
          %{ctx: ctx} do

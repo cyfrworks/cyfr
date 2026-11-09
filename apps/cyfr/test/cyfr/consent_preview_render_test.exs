@@ -31,7 +31,8 @@ end
 defmodule Cyfr.ConsentPreviewRenderTest do
   @moduledoc """
   No renderer hides a row kind. One preview holding a row of every kind —
-  a tincture's frame, streams and system actions included, one
+  a tincture's frame, streams and system actions and a desktop's controls
+  included, one
   vault entry lent on two edges and one stream under two subjects among
   them (`tests/fixtures/consent_preview.json`) — is rendered by Prism's
   consent sheet and by the system layer's grant prompt, and every row's
@@ -303,6 +304,17 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       |> Enum.map_join(", ", fn {need, entry} -> "#{need} from #{entry}" end)
 
     ["Fields: #{pairs}"]
+  end
+
+  # A desktop's controls: each its label in quotes, the operation it runs
+  # and, for a pick, its stream, the feed it names and its field.
+  defp expected(_row, "controls", controls) do
+    Enum.flat_map(controls, fn control ->
+      pick = control["pick"] || %{}
+
+      ["“#{control["label"]}” runs #{control["operation"]}"] ++
+        Enum.flat_map(~w(stream subject field), &List.wrap(pick[&1]))
+    end)
   end
 
   defp expected(_row, _field, values) when is_list(values), do: values

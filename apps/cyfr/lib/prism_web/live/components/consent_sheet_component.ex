@@ -2389,6 +2389,24 @@ defmodule PrismWeb.ConsentSheetComponent do
     """
   end
 
+  # A desktop's controls, each its label, the operation the shell runs on
+  # the person's tap, and where its one choice is picked from.
+  defp row(%{row: %{"kind" => "controls"}} = assigns) do
+    ~H"""
+    <div class="consent-sheet__row" data-row="controls" data-node={@row["node"]}>
+      <.node_line row={@row} />
+      <div :for={control <- @row["values"]["controls"]} data-control={control["label"]}>
+        “{control["label"]}” runs <span class="font-mono">{control["operation"]}</span>
+        <span :if={control["pick"]}>
+          choosing from <span class="font-mono">{control["pick"]["stream"]}</span>
+          <span :if={control["pick"]["subject"]}>for {control["pick"]["subject"]}</span>
+          at <span class="font-mono">{control["pick"]["field"]}</span>
+        </span>
+      </div>
+    </div>
+    """
+  end
+
   attr :refusal, :map, default: nil
   attr :at, :any, required: true
 
@@ -2562,6 +2580,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp kind_heading("frame"), do: "Its frame"
   defp kind_heading("streams"), do: "Streams it listens to"
   defp kind_heading("system_actions"), do: "System actions it may call"
+  defp kind_heading("controls"), do: "Controls you can tap"
   defp kind_heading("exits"), do: "Where what it reads may go"
   defp kind_heading(kind), do: kind
 

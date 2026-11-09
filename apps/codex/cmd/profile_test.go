@@ -106,6 +106,29 @@ func TestRenderPreview_ShowsEveryRowValue(t *testing.T) {
 	}
 }
 
+// A desktop's controls row draws each control on a line of its own: its
+// label, the operation it runs, and where a pick chooses from.
+func TestRenderPreview_DrawsADesktopsControls(t *testing.T) {
+	v := loadPreviewVectors(t)
+	var controls map[string]any
+	for _, raw := range v.Preview["rows"].([]any) {
+		if row := raw.(map[string]any); str(row["kind"]) == "controls" {
+			controls = row
+		}
+	}
+	if controls == nil {
+		t.Fatalf("the vectors' preview holds no controls row")
+	}
+	want := []string{
+		"tincture:local.desk",
+		`"Connect" runs feed.press, choosing from feed.results for vpn at /result/servers`,
+		`"Pause digest" runs schedule.pause`,
+	}
+	if got := describeRow(controls); !reflect.DeepEqual(got, want) {
+		t.Errorf("the controls row draws\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // A credential row's fields are drawn as each field the component reads
 // and the entry field that answers it, in the order of the component's
 // names: the vectors' row of the account 'Geo account' reads its api_key
@@ -1685,6 +1708,20 @@ func expected(row map[string]any, field string, value any) []string {
 		return []string{"may carry what it read from: " + joinStrings(value)}
 	case field == "connection":
 		return []string{"as the account '" + str(value) + "'"}
+	case field == "controls":
+		var wants []string
+		for _, raw := range value.([]any) {
+			control := raw.(map[string]any)
+			wants = append(wants, str(control["label"]), str(control["operation"]))
+			if pick, ok := control["pick"].(map[string]any); ok {
+				for _, key := range []string{"stream", "subject", "field"} {
+					if pick[key] != nil {
+						wants = append(wants, str(pick[key]))
+					}
+				}
+			}
+		}
+		return wants
 	}
 
 	switch typed := value.(type) {

@@ -35,10 +35,10 @@ defmodule Prima.ConsentPreviewTest do
     assert v["narrowable_kinds"] == Enum.map(ConsentPreview.narrowable_kinds(), &Atom.to_string/1)
   end
 
-  test "the kinds are these ten, in this order, and five of them narrow" do
+  test "the kinds are these eleven, in this order, and five of them narrow" do
     assert vectors()["kinds"] ==
              ~w(credential egress storage tools tool_servers limits frame streams system_actions
-                exits)
+                controls exits)
 
     assert vectors()["narrowable_kinds"] == ~w(egress storage tools limits exits)
   end
