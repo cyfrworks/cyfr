@@ -57,6 +57,10 @@ defmodule Prima.JCS do
           | :unsupported_type
   @type error :: {:invalid_value, path(), reason()}
 
+  @doc "The largest magnitude an integer in the canonical domain may have: 2^53 - 1."
+  @spec max_safe_integer() :: pos_integer()
+  def max_safe_integer, do: @max_safe_integer
+
   @doc """
   Canonicalize a term to its RFC 8785 serialization.
 
