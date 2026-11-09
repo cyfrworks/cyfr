@@ -293,9 +293,10 @@ defmodule Emissary.Web.FrameSocket do
   defp subscribe(%{sub: sub, credential: bearer} = fields, state) do
     with :ok <- room(state),
          {:ok, caller} <- FrameAdmission.frame(bearer, state.client_ip, path: state.path) do
+      # A refusal of either leaves the connection as it was.
       with :ok <- placed(caller, state.path),
-           {:ok, state} <- bind(caller, state) do
-        admitted(fields, caller, state)
+           {:ok, bound} <- bind(caller, state) do
+        admitted(fields, caller, bound)
       else
         {:error, refusal} -> refuse(sub, refusal, state, caller.ctx)
       end

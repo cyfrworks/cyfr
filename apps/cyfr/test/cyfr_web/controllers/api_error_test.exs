@@ -7,10 +7,9 @@ defmodule CyfrWeb.ApiErrorTest do
   its refusal as `code`, a public sentence as `message`, the class→HTTP
   status table, the 401 challenge, and `data` for a consent signal. A
   pending confirmation's 428 is the shared vector's
-  (`tests/fixtures/confirmation.json`'s `signal`), byte for byte; and each
-  refusal of `tests/fixtures/tincture_wire.json`'s `stream_rejections` is
-  answered at the status that vector gives it, a server error exactly
-  where the SDK reads it as no answer.
+  (`tests/fixtures/confirmation.json`'s `signal`), byte for byte; and the
+  classes `tests/fixtures/tincture_wire.json`'s `stream_rejections` names
+  as no answer are exactly those answered with a server error.
   """
 
   use ExUnit.Case, async: true
@@ -61,27 +60,22 @@ defmodule CyfrWeb.ApiErrorTest do
     for {class, status} <- @statuses, do: assert(ApiError.status(class) == status)
   end
 
-  # The SDK rejects a stream open answered with a server error as one that
-  # got no answer, and any other refusal as itself: each refusal the
-  # vectors answer an open with is at its class's status here, a 5xx just
-  # where the SDK's reading is `unavailable`.
-  test "each stream rejection's refusal is answered at the status the wire vectors give it" do
-    %{"cases" => cases} =
+  # The SDK rejects a subscription refused with a class a request is
+  # answered a server error for as one that got no answer, and any other
+  # refusal as itself: the vectors' `no_answer_classes` are exactly the
+  # classes answered with a 5xx here.
+  test "the stream rejections' no-answer classes are exactly those answered with a server error" do
+    %{"no_answer_classes" => no_answer, "cases" => cases} =
       @wire |> File.read!() |> Jason.decode!() |> Map.fetch!("stream_rejections")
 
-    refusals =
-      for %{"answer" => %{"body" => _} = answer, "rejects" => r} <- cases, do: {answer, r}
-
-    assert Enum.any?(refusals, fn {%{"status" => status}, _} -> status >= 500 end)
-    assert Enum.any?(refusals, fn {%{"status" => status}, _} -> status < 500 end)
-
-    for {%{"status" => status, "body" => %{"error" => %{"class" => class}}}, rejects} <- refusals do
-      assert ApiError.status(String.to_existing_atom(class)) == status, class
-
-      assert status >= 500 ==
-               (rejects["class"] == "unavailable" and not is_map_key(rejects, "stage")),
-             class
+    for class <- Prima.Refusal.classes() do
+      name = Atom.to_string(class)
+      assert ApiError.status(class) >= 500 == name in no_answer, name
     end
+
+    refused = for %{"answer" => %{"error" => %{"class" => class}}} <- cases, do: class
+    assert Enum.any?(refused, &(&1 in no_answer))
+    assert Enum.any?(refused, &(&1 not in no_answer))
   end
 
   test "a refusal answers at its class's status with its class and sentence" do
