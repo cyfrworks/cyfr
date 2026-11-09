@@ -814,7 +814,7 @@ defmodule Cyfr.Application do
 
   defp switch!(key, other) do
     raise ArgumentError,
-          "config :cyfr, #{inspect(key)} must be true or false, got #{inspect(other)}"
+          "config :cyfr, :#{key} must be true or false, got #{Prima.LoggerContext.shape(other)}"
   end
 
   # Last in the infra tier, and optional: offers new seed media to the

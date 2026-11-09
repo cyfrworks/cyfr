@@ -8,7 +8,7 @@ defmodule Cyfr.Bus.SystemStatus do
   `changed` whenever one of its facts moves.
 
     * `health` — `ok`, `degraded` (a service does not answer) or
-      `low_storage` (the home's storage reserve is spent, so it takes in
+      `low_storage` (the CYFR's storage reserve is spent, so it takes in
       no new bytes).
     * `storage_used` and `storage_cap` — the athanor's stored bytes and
       its cap, nil when no cap is set.
