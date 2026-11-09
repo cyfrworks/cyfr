@@ -118,8 +118,9 @@ function terminal(args, cliHome, cwd = cliHome) {
   child.stderr.on("data", (chunk) => { t.out += chunk; });
   t.exited = new Promise((resolve) => child.on("close", (code) => { t.exit = code; resolve(code); }));
   t.type = (line) => child.stdin.write(`${line}\n`);
+  // The excerpt is the terminal's at the timeout, not at the call.
   t.until = (pattern, from = 0, timeoutMs = 120_000) => waitFor(() => t.out.slice(from).match(pattern), {
-    timeoutMs, what: `the terminal to show ${pattern} (${JSON.stringify(redact(t.out.slice(from).slice(-600)))})`,
+    timeoutMs, what: () => `the terminal to show ${pattern} (${JSON.stringify(redact(t.out.slice(from).slice(-600)))})`,
   });
   t.kill = () => child.kill("SIGKILL");
   return t;
