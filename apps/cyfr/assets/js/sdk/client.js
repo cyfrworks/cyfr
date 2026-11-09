@@ -2,6 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {
+  ANSWER_OF,
   BEARER_HEADER,
   CANVAS_EVENTS,
   CANVAS_VERBS,
@@ -110,8 +111,10 @@ const unanswered = (status, rejection) =>
 // on before it (`subject`).
 //
 // A canvas presses a control it declares (`press`) and writes its
-// preferences (`prefs`), each answered by the shell with its outcome: the
-// promise each answers settles with it, and one the shell never answers
+// preferences (`prefs`), each sent with a call number of its own and
+// answered by the shell, or its bridge, with its outcome and that number:
+// the promise each answers settles with the answer carrying its number,
+// whatever order answers arrive in, and one never answered
 // settles as refused `uncertain` after a while, never tried again. A
 // write's answer carries the document and the revision the shell now
 // holds, which `desktop` and its event follow, so a stale write is
@@ -153,10 +156,11 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // shell's answers to its writes; an app's subject.
   let desktop = null
   let subject = null
-  // The presses waiting for their answer, by control, and the writes, in
-  // the order sent.
-  const presses = new Map()
-  const writes = []
+  // The presses and writes waiting for their answer, by the call number
+  // each was sent with and its answer carries back, with the answer verb
+  // that settles it.
+  let nextCall = 1
+  const calls = new Map()
 
   let settle
   const credentialArrived = new Promise((resolve) => {
@@ -206,7 +210,11 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // to the page.
   function onTold({verb: told, args}) {
     if (told === "subject") {
-      if (kind === null && subject === null) subject = Object.freeze({kind: args.kind, id: args.id})
+      if (kind === "canvas") return
+      subject = Object.freeze({kind: args.kind, id: args.id})
+      if (kind === null) return
+      latest.set("subject", subject)
+      for (const entry of handlers.get("subject")) deliver("subject", entry, subject)
       return
     }
     if (told === "canvas") {
@@ -217,11 +225,15 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
       return tellDesktop()
     }
     if (kind !== "canvas") return
-    if (told === "pressed") return answered(presses.get(args.control), answerOf(args))
+    if (told === "pressed") return answered(told, args.call, answerOf(args))
     if (told === "prefs") {
+      // Only the answer to a write still waiting moves the preferences: one
+      // to a call answered already or never made would roll them back.
+      const settle = take(told, args.call)
+      if (!settle) return
       desktop = {...desktop, prefs: {document: args.document, revision: args.revision}}
       tellDesktop()
-      return answered(writes, answerOf(args))
+      return settle(answerOf(args))
     }
 
     const value = heard(told, args)
@@ -249,26 +261,38 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     return Object.freeze(answer)
   }
 
-  // The oldest waiting of `queue` settles with `answer`.
-  function answered(queue, answer) {
-    const waiting = queue ? queue.shift() : undefined
-    if (waiting) waiting(answer)
+  // The call `call` waiting for a `verb` answer settles with `answer`; an
+  // answer to a call that waits no longer, or that waits for another verb's
+  // answer, settles nothing.
+  function answered(verb, call, answer) {
+    const settle = take(verb, call)
+    if (settle) settle(answer)
   }
 
-  // A press or a write waits for its answer, a bounded while.
-  function awaitAnswer(queue, name, args) {
+  function take(verb, call) {
+    const waiting = calls.get(call)
+    if (!waiting || waiting.answer !== verb) return null
+    calls.delete(call)
+    return waiting.settle
+  }
+
+  // A press or a write is sent with a call number of its own and waits, a
+  // bounded while, for the answer that carries it back.
+  function awaitAnswer(name, args) {
+    const call = nextCall++
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        const at = queue.indexOf(done)
-        if (at !== -1) queue.splice(at, 1)
+        calls.delete(call)
         resolve(UNCERTAIN)
       }, ANSWER_TIMEOUT_MS)
-      const done = (answer) => {
-        clearTimeout(timer)
-        resolve(answer)
-      }
-      queue.push(done)
-      verb(name, args)
+      calls.set(call, {
+        answer: ANSWER_OF[name],
+        settle: (answer) => {
+          clearTimeout(timer)
+          resolve(answer)
+        }
+      })
+      verb(name, {...args, call})
     })
   }
 
@@ -303,8 +327,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // press of a control or a write it asked for did not run.
   function send(name, args) {
     if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) {
-      if (name === "press" && "control" in args) answered(presses.get(args.control), CANCELLED)
-      if (name === "prefs") answered(writes, CANCELLED)
+      if (name === "press" && "control" in args) answered("pressed", args.call, CANCELLED)
+      if (name === "prefs") answered("prefs", args.call, CANCELLED)
       return
     }
     post(name, args)
@@ -495,7 +519,10 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
       return desktopValue()
     },
 
-    /** On an app opened on a subject, that subject, `{kind, id}`, or null. */
+    /**
+     * On an app opened on a subject, that subject, `{kind, id}`, or null;
+     * an app opened again on another hears it through `cyfr.on("subject")`.
+     */
     get subject() {
       return subject
     },
@@ -571,7 +598,9 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      * person's, and answers its outcome: `{outcome: "accepted"}`,
      * `{outcome: "refused", reason}` with the refusal's class, or
      * `{outcome: "cancelled"}` when no input of the person's carried it or
-     * the canvas was not shown. Nothing is tried again.
+     * the canvas was not shown, with `reason: "too_soon"` when it came
+     * within a few seconds of the last spend of the activation. Nothing is
+     * tried again.
      *
      * Its first argument a binding id (as a `feed.results` event carries
      * one) and its second an action's name, it presses that feed's action
@@ -586,8 +615,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
       if (!isDesktopId(control)) return invalid("a control is named by its id")
       if (value !== null && !isPressValue(value)) return invalid("a pressed value is text of 1 to 256 code points")
       if (!framed) return Promise.resolve(CANCELLED)
-      if (!presses.has(control)) presses.set(control, [])
-      return awaitAnswer(presses.get(control), "press", value === null ? {control} : {control, value})
+      return awaitAnswer("press", value === null ? {control} : {control, value})
     },
 
     /**
@@ -597,7 +625,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      * revision the canvas holds. Answers `{outcome, document, revision}`:
      * `saved`, `stale` (another write came first; the document is the
      * current one, to write over), `refused` with its `reason`, or
-     * `cancelled` when no input of the person's carried it.
+     * `cancelled` when no input of the person's carried it, with `reason`
+     * `too_soon` when it came within a few seconds of the last spend.
      * @returns {Promise<{outcome: string, document: object, revision: number, reason?: string}>}
      */
     prefs(document) {
@@ -605,7 +634,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
         return invalid("preferences are an object")
       }
       if (!framed) return Promise.resolve(CANCELLED)
-      return awaitAnswer(writes, "prefs", {document})
+      return awaitAnswer("prefs", {document})
     },
 
     /**
@@ -642,13 +671,14 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      * tinctures, `[{ref, name, icon, open}]`), `posture` (`desk` or
      * `hand`), `covered` (the rects of it, `{x, y, width, height}` in its
      * own pixels, that the shown apps cover), `state` (`live` or
-     * `frozen`) or `desktop` (as `cyfr.desktop` reads it). The latest
-     * value, if one has come, is handed to a new handler first.
+     * `frozen`) or `desktop` (as `cyfr.desktop` reads it); on an app,
+     * `subject`, what it was opened on again. The latest value, if one has
+     * come, is handed to a new handler first.
      * @returns {function} stops the handler hearing more
      */
     on(event, handler) {
       if (!CANVAS_EVENTS.includes(event)) {
-        throw new TypeError("cyfr.on takes installed, posture, covered, state or desktop")
+        throw new TypeError("cyfr.on takes installed, posture, covered, state, desktop or subject")
       }
       if (typeof handler !== "function") throw new TypeError("cyfr.on takes a function")
       const entry = {handler}
