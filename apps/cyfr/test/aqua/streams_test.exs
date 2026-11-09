@@ -371,9 +371,13 @@ defmodule Aqua.StreamsTest do
       assert map_size(Map.new(jobs, &{&1["id"], &1})) == 2
       assert Enum.sort(Enum.map(jobs, & &1["id"])) == Enum.sort([first.id, second.id])
 
-      assert_receive %CrewActivity{kind: :started, id: id_one}
-      assert_receive %CrewActivity{kind: :started, id: id_two}
-      assert Enum.sort([id_one, id_two]) == Enum.sort([first.id, second.id])
+      live =
+        for _ <- 1..2 do
+          assert_receive %CrewActivity{kind: :started} = started
+          read_as(started)["id"]
+        end
+
+      assert Enum.sort(live) == Enum.sort([first.id, second.id])
     end
 
     test "the refresh is every open job, oldest first, and no job once it ended", %{
