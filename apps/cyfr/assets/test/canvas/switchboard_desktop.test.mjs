@@ -86,3 +86,40 @@ test("once the stopped opens have their answers, the parts turned on open theirs
     assert.ok(!SB.reading(key), key)
   }
 })
+
+// The canvas wire's vectors: `stream_events["threads.changes"]`, a shared
+// thread with its unread count and an own thread with none.
+const WIRE = JSON.parse(
+  readFileSync(new URL("../../../../../tests/fixtures/tincture_wire.json", import.meta.url), "utf8")
+)
+
+test("folds the wire's thread events, a shared thread's unread count and an own thread's null, whole", async () => {
+  const events = WIRE.stream_events["threads.changes"].map(({event}) => event)
+  assert.equal(events.length, 2)
+
+  const handlers = {}
+  const delivered = {}
+  const sdk = {
+    desktop: null,
+    on(event, handler) {
+      handlers[event] = handler
+    },
+    stream(name, _subject, onEvent) {
+      delivered[name] = onEvent
+      return Promise.resolve({close() {}, closed: new Promise(() => {})})
+    }
+  }
+
+  const page = {Map, Set, Object, Array, String, Number, Math, Promise, setTimeout, clearTimeout, requestAnimationFrame() {}}
+  page.window = page
+  vm.createContext(page)
+  vm.runInContext(MODEL, page)
+  page.SB.start(sdk, () => {})
+  handlers.desktop({prefs: {document: {widgets: {}, desktop: {}}, revision: 1}})
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  assert.ok(delivered["threads.changes"], "the model reads threads.changes")
+  for (const data of events) delivered["threads.changes"]({data})
+
+  assert.deepEqual(JSON.parse(JSON.stringify(page.SB.threads())), events)
+})

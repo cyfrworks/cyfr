@@ -248,7 +248,7 @@ defmodule PrismWeb.ShellFrameTest do
   end
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     Process.put(:view, view)
     view
   end
@@ -390,9 +390,10 @@ defmodule PrismWeb.ShellFrameTest do
 
       old = view.pid
       ref = Process.monitor(old)
-      # The client leaves the shell's channel for the next page's; what
-      # that page answers is its own.
-      _navigated = live_redirect(view, to: athanor_path("/files"))
+      # The document ends, and the desktop's channel with it.
+      # The test hears the view's end as a message, not as its own.
+      Process.flag(:trap_exit, true)
+      GenServer.stop(view.pid, {:shutdown, :closed})
       assert_receive {:DOWN, ^ref, :process, ^old, _reason}, 5_000
 
       assert row(id).state == "revoked"

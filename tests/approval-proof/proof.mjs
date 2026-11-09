@@ -88,7 +88,9 @@ const keys = passkeys();
 let cookie = null;
 let segment = null;
 const codes = [];
-const layer = "#system-layer-dialog";
+// The system layer the prompt under test is drawn in: a page's, or AQUA's
+// panel's own for a grant its pane's turn needs (named_prompt).
+let layer = "#system-layer-dialog";
 const rows = [];
 const record = { viewport: { name: viewportName, ...viewport } };
 
@@ -1211,12 +1213,28 @@ async function main() {
     // named_prompt
     // -----------------------------------------------------------------------
     const thread = await ask({ op: "thread" });
-    await open(page, `${base}/chat?a=${encodeURIComponent(segment)}&c=${encodeURIComponent(thread.thread_id)}`);
-    // The athanor's thread pane, its own view, connected. Its connected
-    // mount follows the thread's events (`PrismWeb.ThreadPaneLive`'s
-    // `open_thread/2`) before it answers the join that marks it connected,
-    // so once it is, the announcement reaches it: nothing more is waited for.
-    await page.waitForSelector(`[id="pane-${person.athanor_id}"].phx-connected`, { timeout: 30_000 });
+    // The desktop, and AQUA's panel on the shelf turned to the thread: the
+    // pane is the panel's, and a grant its turn needs is asked in the
+    // panel's own layer. The panel draws the thread chosen once it has
+    // kept it, and the desktop opened again finds the panel open on it.
+    await open(page, pagePath(""));
+    await page.locator("#aqua-panel-button").click({ timeout: 30_000 });
+    await page.locator("#aqua-panel-threads").selectOption(thread.thread_id, { timeout: 30_000 });
+    await page.waitForSelector(`#aqua-panel-threads option[value="${thread.thread_id}"][selected]`,
+      { state: "attached", timeout: 30_000 });
+    await open(page, pagePath(""));
+    layer = "#system-layer-panel-dialog";
+    // The panel's thread pane, its own view, connected. Mounted on the kept
+    // thread, its connected mount follows the thread's events
+    // (`PrismWeb.ThreadPaneLive`'s `open_thread/2`) before it answers the
+    // join that marks it connected, so once it is, the announcement reaches
+    // it: nothing more is waited for. A pane turned by message gives no such
+    // sign, so the proof does not announce to one.
+    await page.waitForFunction((id) => {
+      const pane = document.getElementById("aqua-panel-pane");
+      const select = document.getElementById("aqua-panel-threads");
+      return pane && pane.classList.contains("phx-connected") && select && select.value === id;
+    }, thread.thread_id, { timeout: 30_000 });
     const announced = await ask({ op: "announce", thread_id: thread.thread_id, name: ACCOUNT });
     await granting(page);
     const named = await sheet(page);
@@ -1313,6 +1331,7 @@ async function main() {
     // -----------------------------------------------------------------------
     // revocation
     // -----------------------------------------------------------------------
+    layer = "#system-layer-dialog";
     await open(page, pagePath("/vault"));
     await page.locator(`button[phx-click="revoke"][phx-value-id="${ids[WORK.name]}"]`).click({ timeout: 30_000 });
     const revoked = await told(page, "Entry revoked — 1 profile(s) lose access at next run.");

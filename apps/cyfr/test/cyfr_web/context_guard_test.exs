@@ -344,8 +344,22 @@ defmodule CyfrWeb.ContextGuardTest do
     {conn, token, _hash} = signed_in(conn, user)
     {view, _html} = mount_athanor(conn, "/settings")
 
-    pids =
-      [view.pid, find_live_child(view, "topbar").pid, find_live_child(view, "aqua-panel").pid]
+    # The desktop beside the page, with the chat showing a thread: every
+    # view of the document, the desktop's nested ones included.
+    {:ok, thread} = Sanctum.SharedThreads.create(user.user_id, "Seam")
+    {desktop, _html} = mount_desktop(conn)
+    chat = find_live_child(desktop, "chat-overlay")
+    chat |> element("#chat-button") |> render_click()
+    render_click(chat, "open_shared", %{"id" => thread.id})
+
+    pids = [
+      view.pid,
+      find_live_child(view, "topbar").pid,
+      desktop.pid,
+      find_live_child(desktop, "aqua-panel").pid,
+      chat.pid,
+      find_live_child(chat, "chat-thread-" <> thread.id).pid
+    ]
 
     for pid <- pids do
       state = :sys.get_state(pid)

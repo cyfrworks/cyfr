@@ -51,7 +51,8 @@ defmodule Sanctum.Telemetry do
   @sessions_revoked_event [:cyfr, :sanctum, :sessions, :revoked]
   @shared_thread_events %{
     changed: [:cyfr, :sanctum, :shared_thread, :changed],
-    posted: [:cyfr, :sanctum, :shared_thread, :posted]
+    posted: [:cyfr, :sanctum, :shared_thread, :posted],
+    read: [:cyfr, :sanctum, :shared_thread, :read]
   }
   @vault_entry_event [:cyfr, :sanctum, :vault, :entry_changed]
   @consent_changed_event [:cyfr, :sanctum, :consent, :changed]
@@ -167,9 +168,10 @@ defmodule Sanctum.Telemetry do
   @doc """
   The shared thread `thread_id` changed (`:changed`: its title, status or
   people) or took a message (`:posted`), told to each person in
-  `user_ids`: its people, and anyone a change took from it.
+  `user_ids`: its people, and anyone a change took from it; or a person's
+  own read mark in it moved (`:read`), told to that person alone.
   """
-  @spec shared_thread(:changed | :posted, String.t(), [String.t()]) :: :ok
+  @spec shared_thread(:changed | :posted | :read, String.t(), [String.t()]) :: :ok
   def shared_thread(kind, thread_id, user_ids)
       when is_map_key(@shared_thread_events, kind) and is_binary(thread_id) and
              is_list(user_ids) do

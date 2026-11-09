@@ -21,10 +21,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
 
   # Routed through the `:athanor` live_session, whose on_mount is the guard.
   @routed ~w(
-    RootRedirectLive ChatRedirectLive ChatLive AquaLive FilesLive ActivitiesLive
+    DesktopLive ChatRedirectLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
     MyReportsLive BuildsLive VaultLive ApiKeysLive WebhooksLive
-    SchedulesLive SettingsLive ProgramsLive ShellLive LegalLive
+    SchedulesLive SettingsLive ProgramsLive LegalLive
   )
 
   # The sign-in page and the invitation page are what an anonymous caller
@@ -35,8 +35,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # sign-in alone (`Sanctum.CompanyLogin.held/1`).
   @public ~w(LoginLive SetupLive InviteLive CompanyLoginLive)
 
-  # Rendered by the layout or a page with `live_render/3`; each mounts the guard itself.
-  @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive SharedThreadLive)
+  # Rendered by a layout or a view with `live_render/3`; each mounts the guard itself.
+  # The desktop is the `:athanor` session's root layout's, beside the page.
+  @nested ~w(ShellLive TopbarLive AquaPanelLive ChatOverlayLive ThreadPaneLive SharedThreadLive)
 
   # Each `handle_event` and `update` that acts on the context runs inside `guard/2`.
   @components ~w(

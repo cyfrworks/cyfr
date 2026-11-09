@@ -42,9 +42,11 @@ defmodule Cyfr.Providers.Attention do
   names. Nothing an operator decides for the server is an item.
 
   The destination is where the person acts on the item, in one trusted
-  spelling: `{kind: "page", page, ref}` for a page of the console
-  (`chat`, `executions`, `schedules`, `files`) and the record on it (a
-  thread, a run, a schedule or an offer), or `{kind: "ref", page: nil,
+  spelling: `{kind: "page", page, ref}` for where Prism shows it, each a
+  page a canvas opens with `settings` (`aqua`, AQUA's panel on the desktop,
+  whose threads hold the approvals; the Dashboard's `executions`,
+  `schedules` and `files`), and the record there (a thread, a run, a
+  schedule or an offer), or `{kind: "ref", page: nil,
   ref}` for a confirmation, which the system layer presents wherever the
   person is. No field carries a message, a credential, a diagnostic
   sentence or a person's identifier.
@@ -65,7 +67,7 @@ defmodule Cyfr.Providers.Attention do
   # The failed runs a refresh lists, newest first.
   @failed_runs 20
 
-  @pages ~w(chat executions schedules files)
+  @pages ~w(aqua executions schedules files)
 
   @typedoc "One waiting item: the stream's payload fields with its kind."
   @type item :: %{
@@ -219,7 +221,7 @@ defmodule Cyfr.Providers.Attention do
     with {:ok, rows} <- Arca.TurnStorage.waiting_approvals(actor, now, opts) do
       {:ok,
        for row <- rows do
-         item(:approval, row.id, row.title, row.inserted_at, page("chat", row.thread_id))
+         item(:approval, row.id, row.title, row.inserted_at, page("aqua", row.thread_id))
        end}
     end
   end

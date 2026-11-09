@@ -1,0 +1,44 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 CYFR Works Inc.
+ *
+ * The chat overlay (PrismWeb.ChatOverlayLive): CYFR's own panel of the
+ * person's shared threads and pairs, beside AQUA's. On the desk a panel at
+ * the desktop's left, above the shelf, the list beside the open thread; in
+ * the hand a sheet that fills the screen, showing the list or the thread.
+ * Prism's own theme, never a desktop's chrome. The hand starts under 768
+ * CSS pixels, the width js/canvas/geometry.js names. */
+
+.chat-sheet {
+  position: fixed;
+  left: 1rem;
+  bottom: calc(var(--canvas-shelf-height) + 0.75rem);
+  width: min(46rem, calc(100vw - 2rem));
+  height: min(560px, calc(100vh - var(--canvas-shelf-height) - 4.75rem));
+  border-radius: 16px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-raised);
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.65);
+  overflow: hidden;
+}
+
+.chat-list {
+  width: 15rem;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border-default);
+}
+
+.chat-back { display: none; }
+
+@media (width < 768px) {
+  .chat-sheet {
+    inset: 0;
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    border-width: 0;
+  }
+  .chat-list { width: 100%; border-right-width: 0; }
+  .chat-sheet[data-showing="thread"] .chat-list { display: none; }
+  .chat-sheet[data-showing="list"] .chat-thread { display: none; }
+  .chat-back { display: grid; }
+}

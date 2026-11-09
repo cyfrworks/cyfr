@@ -94,7 +94,7 @@ Asking for one opens a pending confirmation of that exact change, shown with a p
 
 ### On every device of yours
 
-Prism's shell, the chat and the pages that ask for these changes (API keys, webhooks, the vault, the registry and Settings among them), in a browser or on the box's screen, show each request as it opens: the preview, and which client asked (a browser, a device, an API key, or an app). Check the preview and who asked before you confirm. The page that asked marks the request as its own and shows it waiting, then approved once confirmed anywhere, then the change's actual outcome. A typed credential stays in the page's own form while it waits and is submitted again once confirmed; the server never holds it. Cancelling ends the request, and so does dismissing your own waiting request.
+Prism's desktop and the pages that ask for these changes (API keys, webhooks, the vault, the registry and Settings among them), in a browser or on the box's screen, show each request as it opens: the preview, and which client asked (a browser, a device, an API key, or an app). Check the preview and who asked before you confirm. The page that asked marks the request as its own and shows it waiting, then approved once confirmed anywhere, then the change's actual outcome. A typed credential stays in the page's own form while it waits and is submitted again once confirmed; the server never holds it. Cancelling ends the request, and so does dismissing your own waiting request.
 
 ### Proofs
 

@@ -5,9 +5,12 @@
  * controls and the edges the shell draws around each window and tile,
  * outside the app's frame; the shield and snap preview the `Canvas` hook
  * shows while a gesture runs (js/canvas/windows.js); the shelf along the
- * bottom with its dots; and the top bar's ground. Stacking is
- * CanvasLive's: tiles 20, windows from 30 (to 61), the shield 63, a full
- * app 64, the shelf 65 and the shell's chips on it 66.
+ * bottom with its dots; the shelf's right end, the gear, the chat and
+ * AQUA (PrismWeb.ShellLive); a Dashboard page's overlay over the desktop
+ * (PrismWeb.Layouts); and the top bar's ground. Stacking is CanvasLive's:
+ * tiles 20, windows from 30 (to 61), the shield 63, a full app 64, the
+ * shelf and a Dashboard page's overlay 65, the shell's chips on the shelf
+ * and the buttons at its right end 66, the chat's and AQUA's panels 70.
  *
  * Written against a desktop's chrome tokens (Prima.Manifest.Chrome), which
  * the canvas hook sets on the page's root while that desktop is the
@@ -18,7 +21,8 @@
  * data-chrome-controls, data-chrome-title-align and data-chrome-glyphs.
  * Each use falls back to the console's own look (app.css's tokens), so a
  * page with no desktop chrome looks as it always has. The system layer's
- * prompts read none of them. */
+ * prompts and the overlays' panels read none of them; the buttons that open
+ * them on the shelf do. */
 
 /* Windows and tiles. */
 .canvas-window {
@@ -182,8 +186,8 @@
 :root { --canvas-shelf-height: 52px; }
 
 /* The shelf: along the bottom, under the apps' area, which ends at its top
- * edge. Its left end is the shell's chips' room, its right end the AQUA
- * button's. */
+ * edge. Its left end is the shell's chips' room, its right end the room of
+ * the gear, the chat and AQUA (#shelf-end). */
 .canvas-shelf {
   position: absolute;
   inset: auto 0 0 0;
@@ -192,7 +196,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 6rem 0 0;
+  padding: 0 var(--canvas-shelf-end) 0 0;
   border-top: var(--chrome-border, 1px) solid var(--color-border-default);
   background: color-mix(in srgb, var(--chrome-ground, var(--color-surface-raised)) 92%, transparent);
   background-image: var(--chrome-texture-shelf, none);
@@ -202,7 +206,79 @@
   touch-action: pan-y;
 }
 .canvas-shelf-chips { width: 11rem; flex-shrink: 0; }
-.canvas-shelf-aqua { width: 0; flex-shrink: 0; }
+
+/* The shelf's right end, the shell's own and outside the shelf, whose
+ * backdrop filter would otherwise be the containing block of the overlays'
+ * fixed panels: the gear, the chat with its unread count and AQUA, in that
+ * order, centred in the shelf's height. It sets no z-index, so the panels
+ * inside it stack with the page; its buttons stand above the shelf. */
+:root { --canvas-shelf-end: 14rem; }
+.shelf-end {
+  position: absolute;
+  right: 8px;
+  bottom: calc((var(--canvas-shelf-height) - 34px) / 2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.shelf-end-button {
+  position: relative;
+  z-index: 66;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  color: var(--chrome-ink, var(--color-text-secondary));
+  font-family: var(--chrome-font, inherit);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+#shelf-gear { padding: 0; }
+.shelf-end-button:hover { background: var(--color-surface-overlay); color: var(--chrome-ink, var(--color-text-primary)); }
+.shelf-end-button[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--chrome-accent, var(--color-accent-hover)) 45%, transparent);
+  background: color-mix(in srgb, var(--chrome-accent, var(--color-accent-primary)) 16%, transparent);
+  color: var(--chrome-ink, var(--color-text-primary));
+}
+.shelf-end-button:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
+.shelf-end-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: var(--chrome-accent, var(--color-accent-primary));
+  color: var(--chrome-ground, white);
+  font-size: 0.6875rem;
+  line-height: 18px;
+  text-align: center;
+}
+:root[data-chrome-colours] .shelf-end-button:hover { background: color-mix(in srgb, var(--chrome-ink) 10%, transparent); }
+:root[data-chrome-glyphs="round"] .shelf-end-button { border-radius: 9999px; }
+:root[data-chrome-glyphs="square"] .shelf-end-button,
+:root[data-chrome-glyphs="pixel"] .shelf-end-button { border-radius: 0; }
+
+/* A Dashboard page over the desktop (PrismWeb.Layouts): the apps' area,
+ * from the top bar to the shelf, which stays in reach. In the hand the
+ * whole area; on the desk a panel inset in it. Prism's own theme, never a
+ * desktop's chrome. */
+.settings-overlay {
+  position: absolute;
+  inset: 3rem 0 var(--canvas-shelf-height) 0;
+}
+@media (width >= 768px) {
+  .settings-overlay {
+    inset: calc(3rem + 10px) 14px calc(var(--canvas-shelf-height) + 10px) 14px;
+    border-radius: 14px;
+    border: 1px solid var(--color-border-default);
+    box-shadow: 0 30px 80px rgb(0 0 0 / 0.6);
+  }
+}
 
 #canvas-switcher { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .canvas-dot {
@@ -248,9 +324,9 @@
  * the chips' room widens to hold it, so the dots and the open apps stand to
  * its right rather than under it. */
 #shell:has(#canvas-shelf) #shell-devices,
-#shell:has(#canvas-shelf) #system-layer-notice { bottom: calc((var(--canvas-shelf-height) - 26px) / 2); }
-#system-layer-notice { width: min(30rem, 100vw - 10.75rem); }
-#shell:has(#system-layer-notice) .canvas-shelf-chips { width: calc(4.75rem + min(30rem, 100vw - 10.75rem)); }
+#shell:has(#canvas-shelf) #system-layer-desktop-notice { bottom: calc((var(--canvas-shelf-height) - 26px) / 2); }
+#system-layer-desktop-notice { width: min(30rem, 100vw - 10.75rem); }
+#shell:has(#system-layer-desktop-notice) .canvas-shelf-chips { width: calc(4.75rem + min(30rem, 100vw - 10.75rem)); }
 
 /* A desktop's own colours: the lines and the quieter surfaces drawn from
  * its four, where the console's tokens draw them otherwise. */

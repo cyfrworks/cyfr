@@ -26,7 +26,6 @@ defmodule Aqua.TurnSourcesTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Source
-  alias Sanctum.Tenancy.Athanors
 
   @model "catalyst:local.claude"
   @http "catalyst:local.http"
@@ -601,27 +600,14 @@ defmodule Aqua.TurnSourcesTest do
     assert {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
   end
 
+  # The pane on the person's own athanor, turned to `thread`.
   defp own_pane(conn, own, thread) do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(Athanors.route_slug(own), thread.id))
-    settled_render(view)
-    child!(view, "pane-" <> own.id)
-  end
+    {:ok, pane, _} =
+      live_isolated(conn, PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => own.id, "thread_id" => thread.id}
+      )
 
-  # A nested view mounts after its host renders; look again until it has.
-  defp child!(parent, id, tries \\ 50) do
-    render(parent)
-
-    case find_live_child(parent, id) do
-      nil when tries > 0 ->
-        Process.sleep(20)
-        child!(parent, id, tries - 1)
-
-      nil ->
-        flunk("no child #{id} under #{parent.id}")
-
-      child ->
-        child
-    end
+    pane
   end
 
   defp get(id), do: {id, "http", %{"action" => "get", "url" => @url}}

@@ -12,7 +12,8 @@ defmodule PrismWeb.ShellPromptsTest do
   browser types the value again once its record is confirmed. The shell's
   `Devices` control opens the system layer's pairing prompt. A frame
   refused for want of a grant is offered the grant prompt, and opens once
-  it is confirmed.
+  it is confirmed. While a Dashboard page covers the desktop, its layer
+  draws none of these prompts and keeps each as it stands.
 
   The frames open as the layout places them: each tincture is a `full` app
   over one of two canvases, opened by its canvas's `open`, so a frame
@@ -197,7 +198,7 @@ defmodule PrismWeb.ShellPromptsTest do
     }
 
     view
-    |> form("#system-layer-credential", typed)
+    |> form("#system-layer-desktop-credential", typed)
     |> render_submit()
 
     assert {:ok, [%{ref: ref, operation: "vault.create"}]} =
@@ -207,10 +208,16 @@ defmodule PrismWeb.ShellPromptsTest do
     waiting.()
 
     Sanctum.TestContext.prove!(ctx, ref)
-    assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+
+    assert_push_event(
+      view,
+      "system_layer:resubmit",
+      %{form: "system-layer-desktop-credential"},
+      2_000
+    )
 
     view
-    |> form("#system-layer-credential", typed)
+    |> form("#system-layer-desktop-credential", typed)
     |> render_submit()
   end
 
@@ -227,7 +234,7 @@ defmodule PrismWeb.ShellPromptsTest do
   end
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     Process.put(:view, view)
     # The canvas's read and the shell's placing are messages to the view.
     wait_until(fn -> render(view) && assigns(view).showing == :canvas end, 2_000, "the canvas")
@@ -338,7 +345,10 @@ defmodule PrismWeb.ShellPromptsTest do
       verb!(view, keeper, :credential, %{"name" => "another"})
       assert dropped(view) == 1
 
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
       _ = render(view)
 
       assert_push_event(view, "frame_credential", payload)
@@ -370,7 +380,10 @@ defmodule PrismWeb.ShellPromptsTest do
       refute html =~ "s3c0nd-v4lue"
       refute_push_event(view, "frame_credential", _payload, 50)
 
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
       _ = render(view)
       assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: false} = payload)
       assert Map.keys(payload) |> Enum.sort() == [:frame, :saved]
@@ -408,6 +421,106 @@ defmodule PrismWeb.ShellPromptsTest do
     end
   end
 
+  # The desktop and the desktop page, the credential prompt of a frame's
+  # `credential` typed and submitted in the desktop's layer: its record
+  # waits, drawn as the desktop's own and, by the page's layer, as another
+  # client's request.
+  defp waiting_in_both!(conn, ctx) do
+    view = shell!(conn)
+    {:ok, page, _html} = live(conn, "/")
+    open!(view, "keeper-dash")
+    keeper = full(view, "keeper-dash").id
+    verb!(view, keeper, :credential, %{"name" => "both-#{System.unique_integer([:positive])}"})
+    [{prompt_id, ^keeper}] = Map.to_list(assigns(view).credential_prompts)
+
+    typed = %{
+      "prompt_id" => prompt_id,
+      "secret" => "b0th-value",
+      "destination_hosts" => "api.example.com"
+    }
+
+    view |> form("#system-layer-desktop-credential", typed) |> render_submit()
+
+    assert {:ok, [%{ref: ref}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+    wait_until(
+      fn -> render(view) =~ ~s(data-ref="#{ref}") end,
+      2_000,
+      "the desktop's own wait"
+    )
+
+    wait_until(
+      fn -> page |> element("#system-layer") |> render() =~ ~s(data-ref="#{ref}") end,
+      2_000,
+      "the page's layer drawing the same record"
+    )
+
+    assert page |> element("#system-layer") |> render() =~ ~s(data-own="false")
+    %{view: view, page: page, typed: typed, keeper: keeper, ref: ref}
+  end
+
+  # A record the desktop's own change waits on is drawn twice in the
+  # document: in the desktop's prompt as its own, and by the page's layer as
+  # another client's request (`PrismWeb.SystemLayer`, `shows_others?/1`).
+  # Both follow the one record, so a decision in either clears both.
+  describe "a record the desktop waits on, beside the page's layer" do
+    setup %{ctx: ctx} do
+      tincture!(ctx, "keeper-dash", %{"actions" => ["vault.create", "vault.list"]})
+      :ok
+    end
+
+    test "a proof given for it ends the wait in both", %{conn: conn, user: user, athanor: athanor} do
+      ctx = person(user, athanor)
+
+      %{view: view, page: page, typed: typed, keeper: keeper, ref: ref} =
+        waiting_in_both!(conn, ctx)
+
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      assert_push_event(
+        view,
+        "system_layer:resubmit",
+        %{form: "system-layer-desktop-credential"},
+        2_000
+      )
+
+      view |> form("#system-layer-desktop-credential", typed) |> render_submit()
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true}, 2_000)
+
+      wait_until(
+        fn -> not (page |> element("#system-layer") |> render() =~ ~s(data-ref="#{ref}")) end,
+        2_000,
+        "the page's prompt gone once the record was consumed"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "cancelled from the desktop's prompt, it ends in the page's too",
+         %{conn: conn, user: user, athanor: athanor} do
+      ctx = person(user, athanor)
+      %{view: view, page: page, keeper: keeper, ref: ref} = waiting_in_both!(conn, ctx)
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: false}, 2_000)
+
+      wait_until(
+        fn -> not (page |> element("#system-layer") |> render() =~ ~s(data-ref="#{ref}")) end,
+        2_000,
+        "the page's prompt gone once the record was cancelled"
+      )
+
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   describe "the devices control" do
     test "opens the pairing prompt, once, listing the person's paired devices", %{conn: conn} do
       view = shell!(conn)
@@ -426,7 +539,10 @@ defmodule PrismWeb.ShellPromptsTest do
       refute render(view) =~ "waiting."
       assert assigns(view).pairing_prompt == prompt_id
 
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
       _ = render(view)
       assert assigns(view).pairing_prompt == nil
       refute render(view) =~ ~s(data-kind="pairing")
@@ -478,7 +594,9 @@ defmodule PrismWeb.ShellPromptsTest do
       assert html =~ ~s(data-kind="grant")
       assert html =~ "Grant tincture:local.blocked-dash"
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
 
       # The layer asks its sheet for the walk, commits, and reports.
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
@@ -487,18 +605,197 @@ defmodule PrismWeb.ShellPromptsTest do
       assert assigns(view).grant_prompts == %{}
     end
 
+    # A Dashboard page drawn over the desktop (`page_shown`, from the
+    # desktop's hook): the prompt the desktop raised on its own waits
+    # behind the page, so the desktop's layer stands modal over none of the
+    # page's asks, and is drawn again once the desktop is shown.
+    test "while a page is over the desktop, its grant prompt waits behind the page and is drawn again after",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "blocked-dash")
+      blocked!(ctx)
+
+      view = shell!(conn)
+      open!(view, "blocked-dash")
+      assert render(view) =~ ~s(data-kind="grant")
+
+      render_hook(view, "page_shown", %{"desktop" => false})
+      html = view |> element("#system-layer-desktop") |> render()
+      refute html =~ ~s(data-kind="grant")
+      refute html =~ ~s(data-open="true")
+      assert map_size(assigns(view).grant_prompts) == 1
+
+      # The page's own asks stand alone: the page's layer and form, with
+      # nothing of the desktop's open over them.
+      {:ok, page, _html} = live(conn, athanor_path("/settings"))
+      assert has_element?(page, "#settings-overlay")
+      refute page |> element("#system-layer") |> render() =~ ~s(data-open="true")
+
+      render_hook(view, "page_shown", %{"desktop" => true})
+      assert render(view) =~ ~s(data-kind="grant")
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+      assert %{state: :live} = full(view, "blocked-dash")
+    end
+
+    test "a desktop that joins under a page draws none of its own prompts until it is shown",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "blocked-dash")
+      blocked!(ctx)
+
+      conn =
+        Phoenix.LiveViewTest.put_connect_params(conn, %{"_path" => athanor_path("/settings")})
+
+      view = shell!(conn)
+      open!(view, "blocked-dash")
+
+      assert %{state: :refused, refusal: :ungranted} = full(view, "blocked-dash")
+      refute render(view) =~ ~s(data-kind="grant")
+      assert map_size(assigns(view).grant_prompts) == 1
+
+      render_hook(view, "page_shown", %{"desktop" => true})
+      assert render(view) =~ ~s(data-kind="grant")
+    end
+
     test "dismissed, the frame keeps showing its refusal", %{conn: conn, ctx: ctx} do
       tincture!(ctx, "blocked-dash")
       blocked!(ctx)
 
       view = shell!(conn)
       open!(view, "blocked-dash")
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
 
       assert %{state: :refused, refusal: :ungranted} = full(view, "blocked-dash")
 
       assert render(view) =~ "asks for what you have not granted it yet"
       assert rows() == []
+    end
+  end
+
+  # A Dashboard page drawn over the desktop (`page_shown`, from the
+  # desktop's hook) covers it: the desktop's layer draws none of its
+  # prompts, whatever raised them, and keeps each as it stands, drawn again
+  # once the desktop is shown. An app keeps running under the page, and its
+  # bridge forwards a verb without the person's input.
+  describe "a page over the desktop" do
+    setup %{ctx: ctx} do
+      tincture!(ctx, "keeper-dash", %{"actions" => ["vault.create", "vault.list"]})
+      :ok
+    end
+
+    defp layer(view), do: view |> element("#system-layer-desktop") |> render()
+
+    defp covered!(view) do
+      render_hook(view, "page_shown", %{"desktop" => false})
+      assert assigns(view).covered
+    end
+
+    test "a covered app cannot raise a credential modal over a Dashboard page", %{conn: conn} do
+      view = shell!(conn)
+      open!(view, "keeper-dash")
+      keeper = full(view, "keeper-dash")
+      assert keeper.visible
+      covered!(view)
+      assert %{state: :live, visible: true} = full(view, "keeper-dash")
+      {:ok, page, _html} = live(conn, athanor_path("/settings"))
+      assert has_element?(page, "#settings-overlay")
+
+      render_hook(view, "frame_verb", %{
+        "frame" => keeper.id,
+        "message" =>
+          Prima.TinctureWire.shell_message(:credential, keeper.id, %{"name" => "timer-key"})
+      })
+
+      _ = render(view)
+
+      refute has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="credential_entry"])),
+             "a still-running app raised its own modal above Settings without input"
+
+      refute layer(view) =~ ~s(data-open="true")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the credential an app asks for under a page is drawn once the page closes, and the frame hears its answer",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      open!(view, "keeper-dash")
+      keeper = full(view, "keeper-dash").id
+      covered!(view)
+
+      verb!(view, keeper, :credential, %{"name" => "under-page"})
+      refute layer(view) =~ ~s(data-kind="credential_entry")
+      [{prompt_id, ^keeper}] = Map.to_list(assigns(view).credential_prompts)
+
+      render_hook(view, "page_shown", %{"desktop" => true})
+      assert layer(view) =~ ~s(data-open="true")
+      assert layer(view) =~ ~s(data-kind="credential_entry")
+      assert layer(view) =~ "under-page"
+
+      enter_confirmed!(view, prompt_id, "und3r-value", person(user, athanor))
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true}, 2_000)
+      assert {:ok, entries} = Sanctum.Vault.list(person(user, athanor))
+      assert Enum.any?(entries, &(&1.name == "under-page"))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a credential entry waiting on its record keeps it under a page: confirmed meanwhile, it is drawn again and saves",
+         %{conn: conn, user: user, athanor: athanor} do
+      ctx = person(user, athanor)
+      view = shell!(conn)
+      open!(view, "keeper-dash")
+      keeper = full(view, "keeper-dash").id
+      verb!(view, keeper, :credential, %{"name" => "kept-wait"})
+      [{prompt_id, ^keeper}] = Map.to_list(assigns(view).credential_prompts)
+
+      typed = %{
+        "prompt_id" => prompt_id,
+        "secret" => "k3pt-value",
+        "destination_hosts" => "api.example.com"
+      }
+
+      view |> form("#system-layer-desktop-credential", typed) |> render_submit()
+
+      assert {:ok, [%{ref: ref}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      wait_until(fn -> layer(view) =~ ~s(data-ref="#{ref}") end, 2_000, "the waiting record")
+
+      covered!(view)
+      refute layer(view) =~ ~s(data-ref="#{ref}")
+      refute layer(view) =~ ~s(data-open="true")
+
+      # Covered, the entry lets go of nothing: its record still waits.
+      assert {:ok, [%{ref: ^ref}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      # The person confirms it meanwhile, as another of their clients would.
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      assert_push_event(
+        view,
+        "system_layer:resubmit",
+        %{form: "system-layer-desktop-credential"},
+        2_000
+      )
+
+      render_hook(view, "page_shown", %{"desktop" => true})
+      assert layer(view) =~ ~s(data-open="true")
+      assert layer(view) =~ ~s(data-ref="#{ref}")
+      assert has_element?(view, "#system-layer-desktop-credential")
+
+      # The value is typed again, the browser having cleared the closed
+      # prompt's form, and the confirmed record saves it.
+      view |> form("#system-layer-desktop-credential", typed) |> render_submit()
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true}, 2_000)
+      assert {:ok, entries} = Sanctum.Vault.list(ctx)
+      assert Enum.any?(entries, &(&1.name == "kept-wait"))
+      Cyfr.Test.Sandbox.end_views()
     end
   end
 end

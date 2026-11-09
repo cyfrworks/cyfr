@@ -308,7 +308,7 @@ WebAssembly; what a frame then may do is the table below.
 
 The fixture's person, signed in (`session.exs` signs the session's cookie as
 a sign-in's response does), opens `frame-probe` from the Prism shell at
-`/a/<athanor>/canvas` on the site origin. The shell creates the frame as
+`/a/<athanor>`, the desktop, on the site origin. The shell creates the frame as
 it creates every frame: the probe declares no capability, so
 `sandbox="allow-scripts"`, at the probe's public address, whose document
 carries the policy the frame's rules derive
@@ -322,7 +322,7 @@ from inside it. Every browser reaches the server through the harness's proxy
 tincture route redirects) and forwards the rest as the stack's proxy
 forwards it. The document's origin is `null` in all three browsers.
 
-Each browser sees the shell at `/a/<segment>/canvas` frame
+Each browser sees the shell at `/a/<segment>` frame
 `/t/<segment>/local/frame-probe`, `<segment>` the route segment of the
 fixture person's own athanor, as the release fixture answers it. The experiment asserts no outcome:
 it fails only when an attempt cannot be observed, and `frame-facts.json`,
@@ -340,7 +340,7 @@ observed in.
 | module script of its own (`module.js`) | allowed: sent with `Origin: null` (cors), ran; no CSP report | allowed, as Chromium | allowed, as Chromium |
 | Worker from a `blob:` URL | allowed: the worker ran (`worker-src 'self' blob:`) | allowed | allowed |
 | `WebAssembly.instantiate` of the smallest module | allowed (`'wasm-unsafe-eval'`) | allowed | allowed |
-| fetch of an asset answered 302 to another asset | allowed when the 302 carries `access-control-allow-origin: *` (followed, `redirected: true`, readable); refused when it carries no CORS header; the server's own 302 (`/chat` to `/login`) refused the same way | as Chromium | as Chromium |
+| fetch of an asset answered 302 to another asset | allowed when the 302 carries `access-control-allow-origin: *` (followed, `redirected: true`, readable); refused when it carries no CORS header; the server's own 302 (`/a`, the desktop's address, to `/login`) refused the same way | as Chromium | as Chromium |
 
 What the rows mean for the rules: a sandboxed frame without
 `allow-same-origin` is a `null` origin to every browser, so any data request

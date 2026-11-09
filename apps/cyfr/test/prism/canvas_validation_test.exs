@@ -152,7 +152,7 @@ defmodule Prism.CanvasValidationTest do
   end
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
 
     wait_until(
       fn ->
@@ -348,9 +348,9 @@ defmodule Prism.CanvasValidationTest do
       assert %{"home" => %{fallback: %{reason: :not_validated}}} = assigns(view).fallbacks
 
       # The notice offers trying again alone: there is no kept version.
-      assert has_element?(view, "#system-layer-notice", "Your canvas stopped.")
-      assert has_element?(view, ~s(#system-layer-notice button[phx-value-offer="retry"]))
-      refute has_element?(view, ~s(#system-layer-notice button[phx-value-offer="kept"]))
+      assert has_element?(view, "#system-layer-desktop-notice", "Your canvas stopped.")
+      assert has_element?(view, ~s(#system-layer-desktop-notice button[phx-value-offer="retry"]))
+      refute has_element?(view, ~s(#system-layer-desktop-notice button[phx-value-offer="kept"]))
     end
 
     test "a failure at runtime records died", %{conn: conn, ctx: ctx} do
@@ -436,7 +436,10 @@ defmodule Prism.CanvasValidationTest do
       assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
       _ = render(view)
 
       assert %{state: :refused, refusal: :ungranted} = live_canvas(view)

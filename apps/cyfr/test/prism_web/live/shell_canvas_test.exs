@@ -272,7 +272,7 @@ defmodule PrismWeb.ShellCanvasTest do
   # ---- the shell ------------------------------------------------------------
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     Process.put(:view, view)
     # The canvas's read and the shell's placing are messages to the view;
     # they end in a canvas decided on, or in its fallback.
@@ -848,9 +848,6 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
 
-      # The Canvas mode draws no sidebar and no drawer.
-      refute has_element?(view, "#chrome-side")
-
       refute has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
@@ -858,14 +855,15 @@ defmodule PrismWeb.ShellCanvasTest do
       # Every canvas layer under the full frame.
       assert has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
-      # The full frame and its capsule, the top bar with its mode switch,
-      # the shell's own Devices control, the switcher, the system layer and
-      # the assistant's panel stay reachable.
+      # The full frame and its capsule, the shell's own Devices control, the
+      # switcher, the system layer and the shelf's right end, the gear, the
+      # chat and the assistant's panel, stay reachable. The top bar is the
+      # page's, outside the desktop.
       refute has_element?(view, ~s([data-canvas-place="full"][inert]))
       refute has_element?(view, ~s([inert] button[phx-click="close_active_tincture"]))
 
       for reachable <-
-            ~w(#chrome-top #topbar #shell-devices #canvas-switcher #system-layer #aqua-panel) do
+            ~w(#shell-devices #canvas-switcher #system-layer-desktop #shelf-end #shelf-gear #chat-overlay #aqua-panel) do
         assert has_element?(view, reachable), reachable
         refute has_element?(view, "[inert] #{reachable}"), reachable
         refute has_element?(view, "#{reachable}[inert]"), reachable
@@ -1205,7 +1203,7 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
 
       assert %{"work" => %{fallback: %{reason: :not_ready}}} = assigns(view).fallbacks
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "the same tincture installed before the shell mounted falls back not_ready on the same switch",
@@ -1226,7 +1224,7 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
 
       assert %{"work" => %{fallback: %{reason: :not_ready}}} = assigns(view).fallbacks
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "a tincture listed at mount and removed since, then named as a canvas, draws the picker and does not fall back",
@@ -1401,9 +1399,10 @@ defmodule PrismWeb.ShellCanvasTest do
       ancestors = ancestors(view, "#canvas-frames")
       labels = Enum.map(ancestors, &label/1)
 
-      # The walk reaches the canvas layer, the shell and the layout's main.
+      # The walk reaches the canvas layer and the shell, the desktop's own
+      # root: the desktop is no page's, so no page's element stands around it.
       assert Enum.take(labels, 2) == ["canvas", "shell"]
-      assert "page-content" in labels and "main" in labels
+      refute "page-content" in labels or "main" in labels
 
       assert Enum.flat_map(ancestors, &bindings/1) == []
     end
@@ -1731,7 +1730,10 @@ defmodule PrismWeb.ShellCanvasTest do
       refute Enum.any?(rows(), &(&1.version == "1.0.1"))
       assert render(view) =~ "Grant tincture:local.markets"
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
@@ -1759,7 +1761,11 @@ defmodule PrismWeb.ShellCanvasTest do
       # it fails.
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
       assert render(view) =~ "Grant tincture:local.markets:1.0.1"
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
       settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
       trial = validation(view)
@@ -1770,7 +1776,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert validation(view) == nil
       assert %{working: "1.0.0", failed: %{version: "1.0.1"}} = versions(ctx, "markets")
       assert render(view) =~ "Grant tincture:local.markets:1.0.0"
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
 
       wait_until(
         fn -> assigns(view).grant_prompts == %{} end,
@@ -1809,7 +1818,10 @@ defmodule PrismWeb.ShellCanvasTest do
                Map.to_list(assigns(view).grant_prompts)
 
       # Dismissed, with no working version: the canvas shows its refusal.
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
       _ = render(view)
 
       assert assigns(view).grant_prompts == %{}
@@ -1826,7 +1838,10 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
       assert validation(view) == nil
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{state: :live, reference: %{name: "markets"}} = trial = validation(view)
@@ -1881,7 +1896,10 @@ defmodule PrismWeb.ShellCanvasTest do
         assert %{state: :live} = newer = validation(view)
         if first, do: refute(first.id == newer.id)
 
-        view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+        view
+        |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+        |> render_click()
+
         _ = render(view)
 
         assert assigns(view).grant_prompts == %{}
@@ -2110,7 +2128,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{^prompt, {{:activation, "home"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{state: :live, reference: %{version: "1.0.0"}} = live = canvas(view)
@@ -2128,7 +2149,10 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{state: :live, reference: %{version: "1.0.0"}} = live = canvas(view)
@@ -2523,7 +2547,7 @@ defmodule PrismWeb.ShellCanvasTest do
                Compendium.Component.setup_plan(person, catalyst)
 
       canvas_verb!(view, canvas(view).id, :grant, %{"ref" => catalyst})
-      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
       assert dropped(view) == 0
     end
 
@@ -2534,7 +2558,10 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       before = Enum.map(opened(view), & &1.id)
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       settle!(view, fn -> assigns(view).grant_prompts == %{} end)
 
       assert Enum.map(opened(view), & &1.id) == before
@@ -2554,7 +2581,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert assigns(view).grant_prompts == %{}
       assert dropped(view) == 1
-      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      refute has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
     end
 
     test "a canvas frozen under a full app cannot ask for a grant",
@@ -2577,7 +2604,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       canvas_verb!(view, home, :open, %{"ref" => "tincture:local.grant-app"})
       assert map_size(assigns(view).grant_prompts) == 1
-      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
 
       canvas_verb!(view, home, :grant, %{"ref" => "tincture:local.grant-app"})
       assert map_size(assigns(view).grant_prompts) == 1
@@ -2585,7 +2612,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # Dismissed, no second offer stands behind it.
       dismiss!(view)
-      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      refute has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
     end
 
     test "for an installed catalyst with no frame, the system layer offers the grant, and its outcome opens no frame",
@@ -2599,7 +2626,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{_prompt, {{:component, ^catalyst}, nil}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
       assert render(view) =~ catalyst
       assert dropped(view) == 0
 
@@ -2649,7 +2676,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, home, :grant, %{"ref" => catalyst})
 
       assert assigns(view).grant_prompts == %{}
-      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      refute has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
       assert dropped(view) == 3
     end
 
@@ -2669,7 +2696,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{_prompt, {{:component, ^catalyst}, nil}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert has_element?(view, ~s(#system-layer-desktop-dialog [data-kind="grant"]))
       assert render(view) =~ "api_key"
       assert dropped(view) == 0
     end
@@ -2806,12 +2833,12 @@ defmodule PrismWeb.ShellCanvasTest do
       do: get_in(assigns(view).fallbacks, [canvas, :fallback])
 
     defp notice(view, offer),
-      do: element(view, ~s(#system-layer-notice button[phx-value-offer="#{offer}"]))
+      do: element(view, ~s(#system-layer-desktop-notice button[phx-value-offer="#{offer}"]))
 
     # The notice's words, as a person reads them.
     defp notice_text(view) do
       view
-      |> element("#system-layer-notice")
+      |> element("#system-layer-desktop-notice")
       |> render()
       |> String.replace(~r/<[^>]*>/, " ")
       |> String.split()
@@ -2832,7 +2859,7 @@ defmodule PrismWeb.ShellCanvasTest do
       handshake!(view, home.id)
       dash = app_frame(view, "app-dash")
       assert %{state: :live, visible: true} = dash
-      refute has_element?(view, "#system-layer-notice")
+      refute has_element?(view, "#system-layer-desktop-notice")
 
       deadlines_pass!(view)
 
@@ -2847,18 +2874,18 @@ defmodule PrismWeb.ShellCanvasTest do
       # One line, offering to try again alone: no version is kept.
       assert has_element?(
                view,
-               "#system-layer-notice",
+               "#system-layer-desktop-notice",
                "Your canvas stopped. Showing the standard one."
              )
 
       assert has_element?(
                view,
-               ~s(#system-layer-notice button[phx-value-offer="retry"]),
+               ~s(#system-layer-desktop-notice button[phx-value-offer="retry"]),
                "Try again"
              )
 
-      refute has_element?(view, ~s(#system-layer-notice button[phx-value-offer="kept"]))
-      refute has_element?(view, "#system-layer-dialog[open]")
+      refute has_element?(view, ~s(#system-layer-desktop-notice button[phx-value-offer="kept"]))
+      refute has_element?(view, "#system-layer-desktop-dialog[open]")
       refute render(view) =~ ~r/safe mode/i
     end
 
@@ -2890,9 +2917,9 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # The line is the shown canvas's: back on `home`, none; on `work`, its.
       render_hook(view, "switch_canvas", %{"canvas" => "home"})
-      refute has_element?(view, "#system-layer-notice")
+      refute has_element?(view, "#system-layer-desktop-notice")
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "a canvas whose frame opens and never handshakes falls back at its deadline",
@@ -3039,13 +3066,13 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert has_element?(
                view,
-               ~s(#system-layer-notice button[phx-value-offer="retry"]),
+               ~s(#system-layer-desktop-notice button[phx-value-offer="retry"]),
                "Try again"
              )
 
       assert has_element?(
                view,
-               ~s(#system-layer-notice button[phx-value-offer="kept"]),
+               ~s(#system-layer-desktop-notice button[phx-value-offer="kept"]),
                "Restore the last working one"
              )
     end
@@ -3062,7 +3089,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{reason: :gone} = fallback(view)
       assert row(home.id).state == "revoked"
       assert %{reference: %{name: "canvas"}, state: :live} = canvas(view)
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "the shipped canvas dying in turn is torn down with its credential and renewal, its fallback, line and apps standing, and opens again only on trying again",
@@ -3089,7 +3116,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert assigns(view).fallbacks == kept
       assert app_frame(view, "app-dash") == dash
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
       assert row(shipped.id).state == "revoked"
       refute Map.has_key?(assigns(view).renewals, shipped.id)
       assert {:error, _} = verify(bearer)
@@ -3107,7 +3134,7 @@ defmodule PrismWeb.ShellCanvasTest do
       view |> notice("retry") |> render_click()
       assert assigns(view).fallbacks == %{}
       assert %{reference: %{name: "markets"}, state: :live} = canvas(view)
-      refute has_element?(view, "#system-layer-notice")
+      refute has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "a hidden canvas's frame dying is torn down with no call, and showing it again opens it anew",
@@ -3211,7 +3238,7 @@ defmodule PrismWeb.ShellCanvasTest do
         show_again!(view, hidden_by)
         assert %{reason: :not_ready, kept: "1.0.0"} = fallback(view)
         assert row(home.id).state == "revoked"
-        assert has_element?(view, ~s(#system-layer-notice button[phx-value-offer="kept"]))
+        assert has_element?(view, ~s(#system-layer-desktop-notice button[phx-value-offer="kept"]))
       end
     end
 
@@ -3228,7 +3255,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{reason: :not_ready} = fallback(view)
       assert rows() == []
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "a working version refused at its open for anything but its grant falls back", %{
@@ -3250,7 +3277,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{reason: :not_ready} = fallback(view)
       assert rows() == []
       assert assigns(view).grant_prompts == %{}
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "trying again opens the canvas as it stands, and one that dies again falls back with the same line",
@@ -3266,7 +3293,7 @@ defmodule PrismWeb.ShellCanvasTest do
       view |> notice("retry") |> render_click()
 
       assert assigns(view).fallbacks == %{}
-      refute has_element?(view, "#system-layer-notice")
+      refute has_element?(view, "#system-layer-desktop-notice")
       assert %{reference: %{name: "markets"}, state: :live} = again = canvas(view)
       refute again.id == home.id
 
@@ -3303,7 +3330,7 @@ defmodule PrismWeb.ShellCanvasTest do
                opened(view)
 
       assert assigns(view).fallbacks == %{}
-      refute has_element?(view, "#system-layer-notice")
+      refute has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "the person goes on arranging: a drag leaves the shipped canvas and the window standing, and its save keeps the fallback",
@@ -3335,7 +3362,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{id: dash_id, placement: {:window, %{x: 500, y: 600}}} = app_frame(view, "app-dash")
       assert dash_id == dash.id
       assert %{reason: :gone} = fallback(view)
-      assert has_element?(view, "#system-layer-notice")
+      assert has_element?(view, "#system-layer-desktop-notice")
     end
 
     test "in the hand the same line is drawn",
@@ -3366,7 +3393,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
 
       html = render(view)
-      [notice] = Regex.run(~r/<div[^>]*id="system-layer-notice"[^>]*>/, html)
+      [notice] = Regex.run(~r/<div[^>]*id="system-layer-desktop-notice"[^>]*>/, html)
       [devices] = Regex.run(~r/<button[^>]*id="shell-devices"[^>]*>/, html)
 
       classes = fn tag ->
@@ -3389,14 +3416,14 @@ defmodule PrismWeb.ShellCanvasTest do
       css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
 
       assert css =~
-               ~r/#shell:has\(#canvas-shelf\) #shell-devices,\s*#shell:has\(#canvas-shelf\) #system-layer-notice \{ bottom: calc\(\(var\(--canvas-shelf-height\) - 26px\) \/ 2\); \}/
+               ~r/#shell:has\(#canvas-shelf\) #shell-devices,\s*#shell:has\(#canvas-shelf\) #system-layer-desktop-notice \{ bottom: calc\(\(var\(--canvas-shelf-height\) - 26px\) \/ 2\); \}/
 
       # Its width is the room the chips' spacer widens by while it stands,
       # so nothing of the shelf is under it.
-      [_, width] = Regex.run(~r/#system-layer-notice \{ width: ([^;]+); \}/, css)
+      [_, width] = Regex.run(~r/#system-layer-desktop-notice \{ width: ([^;]+); \}/, css)
 
       assert css =~
-               "#shell:has(#system-layer-notice) .canvas-shelf-chips { width: calc(4.75rem + #{width}); }"
+               "#shell:has(#system-layer-desktop-notice) .canvas-shelf-chips { width: calc(4.75rem + #{width}); }"
 
       assert "left-[4.75rem]" in classes.(notice)
 
@@ -3456,7 +3483,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert assigns(view).fallbacks == %{}
       settle!(view, fn -> match?(%{reference: %{name: "markets-two"}}, canvas(view)) end)
       assert row(shipped_id).state == "revoked"
-      refute has_element?(view, "#system-layer-notice")
+      refute has_element?(view, "#system-layer-desktop-notice")
     end
   end
 
@@ -3494,7 +3521,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{_prompt, {{:activation, "home"}, "iframe_canvas"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{reference: %{name: "canvas"}, state: :live} = live = canvas(view)
@@ -4134,9 +4164,9 @@ defmodule PrismWeb.ShellCanvasTest do
       assert stored(user, athanor).revision == revision + 1
       assert assigns(view).layout_base.revision == revision
 
-      assert {:error, {:live_redirect, %{to: _dashboard}}} =
-               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
-
+      # The document ends.
+      # The test hears the view's end as a message, not as its own.
+      Process.flag(:trap_exit, true)
       GenServer.stop(view.pid, {:shutdown, :closed})
 
       # Written once more on the newer layout, the other screen's apps kept.
@@ -4146,27 +4176,20 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{placement: :tile} = stored_app(user, athanor, "side-dash")
     end
 
-    test "a window survives a switch to the Dashboard and back, even inside the write window",
+    test "a window survives a reload of the document, even inside the write window",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
       assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
       assert %{placement: {:window, geometry}, id: first_id} = app_frame(view, "loose-dash")
       assert assigns(view).pending != []
 
-      # The switch is the top bar's link; following it ends the shell's page.
-      assert {:error, {:live_redirect, %{to: dashboard}}} =
-               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
-
+      # The document ends, and the desktop with it.
+      # The test hears the view's end as a message, not as its own.
+      Process.flag(:trap_exit, true)
       GenServer.stop(view.pid, {:shutdown, :closed})
       assert row(first_id).state == "revoked"
       assert %{placement: :window, geometry: ^geometry} = stored_app(user, athanor, "loose-dash")
 
-      {:ok, dash, _html} = live(conn, dashboard)
-
-      assert {:error, {:live_redirect, %{to: back}}} =
-               dash |> find_live_child("topbar") |> element("#mode-canvas") |> render_click()
-
-      assert back =~ "/canvas"
       again = shell!(conn)
 
       assert %{placement: {:window, ^geometry}, state: :live, id: id} =
@@ -4234,7 +4257,10 @@ defmodule PrismWeb.ShellCanvasTest do
 
   # The system layer's dismissal of the prompt in front.
   defp dismiss!(view) do
-    view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+    view
+    |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+    |> render_click()
+
     _ = render(view)
   end
 end

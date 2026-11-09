@@ -627,8 +627,8 @@ async function showCanvas(page, id, { timeoutMs = 45_000 } = {}) {
 // The system layer's open prompt: its kind, description and offers.
 async function prompt(page) {
   return page.evaluate(() => {
-    const layer = document.getElementById("system-layer");
-    const dialog = document.getElementById("system-layer-dialog");
+    const layer = document.getElementById("system-layer-desktop");
+    const dialog = document.getElementById("system-layer-desktop-dialog");
     if (!layer || layer.dataset.open !== "true" || !dialog) return null;
     const text = (attribute) => {
       const id = dialog.getAttribute(attribute);
@@ -649,7 +649,7 @@ async function prompt(page) {
 // frame: its words and its offers, or null while none is drawn.
 async function notice(page) {
   return page.evaluate(() => {
-    const el = document.getElementById("system-layer-notice");
+    const el = document.getElementById("system-layer-desktop-notice");
     if (!el) return null;
     return {
       id: el.dataset.noticeId,
@@ -697,7 +697,7 @@ async function confirmRegrant(page, ref, { timeoutMs = 45_000, whileOpen = async
     return { refusal: refused ? refused.dataset.tinctureState : null, frame: iframe ? iframe.getAttribute("data-frame-state") : null };
   });
   const meanwhile = await whileOpen();
-  await page.locator('#system-layer-dialog [data-test="prompt-confirm"]').click({ timeout: timeoutMs });
+  await page.locator('#system-layer-desktop-dialog [data-test="prompt-confirm"]').click({ timeout: timeoutMs });
   await lib.waitFor(async () => {
     const p = await prompt(page);
     return !p || p.kind !== "grant" ? true : null;
@@ -851,12 +851,15 @@ async function stepTwoCanvases(page, name, viewport) {
     });
 }
 
-// A horizontal swipe along the shelf, from its empty right end: a touch
-// swipe in the hand, a pointer drag on the desk.
+// A horizontal swipe along the shelf, from the empty stretch at the left of
+// its right end, which holds the gear, the chat and AQUA (#shelf-end, the
+// shell's own and no part of the shelf): a touch swipe in the hand, a
+// pointer drag on the desk.
 async function swipe(page, viewport, direction) {
   const box = await page.$eval("#canvas-shelf", (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const end = await page.$eval("#shelf-end", (e) => e.getBoundingClientRect().x).catch(() => box.x + box.w);
   const y = box.y + box.h / 2;
-  const right = box.x + box.w - 24;
+  const right = Math.min(box.x + box.w, end) - 24;
   const left = right - 160;
   const [from, to] = direction === "leftward" ? [right, left] : [left, right];
   if (viewport.posture === "hand") {
@@ -1424,7 +1427,7 @@ async function stepCrashFallback(page, name, viewport) {
   // The kept version reads no stream, the crashed one's grant names one: its
   // restore waits for its own grant, and nothing is restored until the
   // person confirms it.
-  await page.click('#system-layer-notice button[phx-value-offer="kept"]');
+  await page.click('#system-layer-desktop-notice button[phx-value-offer="kept"]');
   const regrant = await confirmRegrant(page, `tincture:local.canvas-broken:${before.working}`, {
     whileOpen: () => versions("canvas-broken"),
   });
@@ -1613,7 +1616,7 @@ async function stepActivation(page, name) {
 // the shell's own page and nowhere in the canvas's document; it is
 // dismissed, and the timer's request raises no offer.
 const offerInCanvas = (frame) =>
-  frame.evaluate(() => document.querySelector('[data-kind="grant"], .consent-sheet, #system-layer-dialog') !== null).catch(() => null);
+  frame.evaluate(() => document.querySelector('[data-kind="grant"], .consent-sheet, #system-layer-desktop-dialog') !== null).catch(() => null);
 
 async function stepGrantControl(page, name) {
   const { shown, centers } = await marketsBound(page);
@@ -1631,10 +1634,10 @@ async function stepGrantControl(page, name) {
     const p = await prompt(page);
     return p && p.kind === "grant" ? p : null;
   }, { timeoutMs: 20_000, what: "the grant offer in the system layer" }).catch(() => null);
-  const names = offered !== null && /catalyst:local\.grant-target/.test(`${offered.title} ${offered.description} ${await page.$eval("#system-layer-dialog", (d) => d.textContent).catch(() => "")}`);
+  const names = offered !== null && /catalyst:local\.grant-target/.test(`${offered.title} ${offered.description} ${await page.$eval("#system-layer-desktop-dialog", (d) => d.textContent).catch(() => "")}`);
   const inCanvas = await offerInCanvas(shown.frame);
   if (offered) {
-    await page.click('#system-layer-dialog button[phx-click="dismiss"]');
+    await page.click('#system-layer-desktop-dialog button[phx-click="dismiss"]');
     await lib.waitFor(async () => ((await prompt(page)) === null ? true : null), { timeoutMs: 15_000, what: "the grant offer dismissed" });
   }
 
@@ -2167,7 +2170,7 @@ async function measurement(page) {
 
 async function recover(page) {
   await openShell(page).catch(() => null);
-  if (await notice(page)) await page.click('#system-layer-notice button[phx-value-offer="retry"]').catch(() => null);
+  if (await notice(page)) await page.click('#system-layer-desktop-notice button[phx-value-offer="retry"]').catch(() => null);
   await publish(page, layout()).catch(() => null);
   held.clear();
 }
@@ -2341,7 +2344,7 @@ async function main() {
   const homes = lib.readHomes();
   HOME = lib.homeOf(homes.homes);
   BASE = HOME.origin;
-  SHELL_URL = `${BASE}/a/${encodeURIComponent(segment)}/canvas`;
+  SHELL_URL = `${BASE}/a/${encodeURIComponent(segment)}`;
   const proxy = await lib.startProxy({ ...homes, receiver, bodies: false });
 
   let failure = null;

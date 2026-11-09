@@ -2,9 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.SharedThreadLiveTest do
-  # A shared thread's pane, opened from the chat at `?s=<thread>`: what its
-  # people said, the composer, and the header's controls, each through the
-  # gate's `shared_thread` tool under the person's own seat.
+  # A shared thread's pane, as the chat overlay opens it: what its people
+  # said, the composer, and the header's controls, each through the gate's
+  # `shared_thread` tool under the person's own seat; and the overlay moving
+  # on once the thread is no longer the person's.
   use PrismWeb.ConnCase, async: false
 
   import Prima.Test.Wait
@@ -30,16 +31,34 @@ defmodule PrismWeb.SharedThreadLiveTest do
     {:ok, alice: alice, bob: bob, thread: thread}
   end
 
+  # The thread's pane, mounted on its own.
   defp open!(conn, user, thread_id) do
     conn = log_in_user(conn, user)
-    {:ok, view, _html} = live(conn, PrismWeb.ChatLive.shared_path(thread_id))
-    pane = find_live_child(view, "shared-pane-" <> thread_id)
-    assert pane, "the chat opened no pane for #{thread_id}"
-    {view, pane}
+
+    {:ok, pane, _html} =
+      live_isolated(conn, PrismWeb.SharedThreadLive, session: %{"thread_id" => thread_id})
+
+    pane
   end
 
-  # What a person is told of their threads, heard by the test as the page
-  # and the pane hear it.
+  # The chat overlay opened on the thread: answers the overlay and the
+  # thread's pane inside it.
+  defp overlay!(conn, user, thread_id) do
+    conn = log_in_user(conn, user)
+    feed = PrismWeb.RoomFeed.topic("shared-thread-test-#{System.unique_integer([:positive])}")
+
+    {:ok, overlay, _html} =
+      live_isolated(conn, PrismWeb.ChatOverlayLive, session: %{"room_feed" => feed})
+
+    overlay |> element("#chat-button") |> render_click()
+    overlay |> element("#shared-thread-#{thread_id} button") |> render_click()
+    pane = find_live_child(overlay, "chat-thread-" <> thread_id)
+    assert pane, "the chat opened no pane for #{thread_id}"
+    {overlay, pane}
+  end
+
+  # What a person is told of their threads, heard by the test as the
+  # overlay and the pane hear it.
   defp listen!(user), do: :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(user.user_id))
 
   defp identifier, do: "per_" <> Prima.Digest.sha256_hex("stl-#{System.unique_integer()}")
@@ -51,8 +70,8 @@ defmodule PrismWeb.SharedThreadLiveTest do
         %{filename: "a.txt", media_type: "text/plain", bytes: "abc"}
       ])
 
-    {_alice_view, alice_pane} = open!(conn, alice, thread.id)
-    {_bob_view, bob_pane} = open!(build_conn(), bob, thread.id)
+    alice_pane = open!(conn, alice, thread.id)
+    bob_pane = open!(build_conn(), bob, thread.id)
 
     html = render(alice_pane)
     assert html =~ "hello from bob"
@@ -82,7 +101,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
 
   test "files attached in the composer are posted with the words, as bytes in the thread",
        %{conn: conn, alice: alice, bob: bob, thread: thread} do
-    {_view, pane} = open!(conn, alice, thread.id)
+    pane = open!(conn, alice, thread.id)
 
     pane
     |> file_input("#shared-composer", :files, [
@@ -116,7 +135,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
     waiting = identifier()
     {:ok, :added} = SharedThreads.add(alice.user_id, thread.id, identifier: waiting)
 
-    {view, pane} = open!(conn, alice, thread.id)
+    {overlay, pane} = overlay!(conn, alice, thread.id)
     assert has_element?(pane, "#shared-people", Sanctum.Tenancy.Users.display_name(bob.user_id))
     assert has_element?(pane, "#shared-people", waiting)
 
@@ -143,9 +162,9 @@ defmodule PrismWeb.SharedThreadLiveTest do
     assert {:ok, %{title: "Renamed"}} = SharedThreads.get(carol.user_id, thread.id)
 
     wait_until(
-      fn -> has_element?(view, "#shared-thread-#{thread.id}", "Renamed") end,
+      fn -> has_element?(overlay, "#shared-thread-#{thread.id}", "Renamed") end,
       5_000,
-      "the renamed thread in the rail"
+      "the renamed thread in the overlay's list"
     )
 
     pane |> element("#shared-invite") |> render_click()
@@ -161,7 +180,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
 
   test "a pair offers leave alone, and leaving ends it", %{conn: conn, alice: alice, bob: bob} do
     {:ok, pair} = SharedThreads.pair(alice.user_id, bob.user_id)
-    {view, pane} = open!(conn, alice, pair.id)
+    {overlay, pane} = overlay!(conn, alice, pair.id)
 
     assert has_element?(pane, "#shared-title", Sanctum.Tenancy.Users.display_name(bob.user_id))
     assert has_element?(pane, "#shared-leave")
@@ -182,8 +201,13 @@ defmodule PrismWeb.SharedThreadLiveTest do
     assert_receive %SharedThreadChanged{kind: :changed, user_id: ^alice_id, thread_id: ^pair_id},
                    5_000
 
-    assert_patch(view, "/chat", 5_000)
-    assert render(view) =~ "You are no longer in that thread."
+    wait_until(
+      fn -> render(overlay) =~ "You are no longer in that thread." end,
+      5_000,
+      "the overlay letting the pair go"
+    )
+
+    refute find_live_child(overlay, "chat-thread-" <> pair.id)
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -194,8 +218,8 @@ defmodule PrismWeb.SharedThreadLiveTest do
     bob: bob,
     thread: thread
   } do
-    {_alice_view, alice_pane} = open!(conn, alice, thread.id)
-    {bob_view, _bob_pane} = open!(build_conn(), bob, thread.id)
+    alice_pane = open!(conn, alice, thread.id)
+    {bob_overlay, _bob_pane} = overlay!(build_conn(), bob, thread.id)
     listen!(bob)
     bob_id = bob.user_id
     thread_id = thread.id
@@ -207,9 +231,14 @@ defmodule PrismWeb.SharedThreadLiveTest do
     assert_receive %SharedThreadChanged{kind: :changed, user_id: ^bob_id, thread_id: ^thread_id},
                    5_000
 
-    assert_patch(bob_view, "/chat", 5_000)
-    assert render(bob_view) =~ "This thread has been archived."
-    refute has_element?(bob_view, "#shared-thread-" <> thread.id)
+    wait_until(
+      fn -> render(bob_overlay) =~ "That thread has been archived." end,
+      5_000,
+      "bob's overlay letting the thread go"
+    )
+
+    refute has_element?(bob_overlay, "#shared-thread-" <> thread.id)
+    refute find_live_child(bob_overlay, "chat-thread-" <> thread.id)
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -218,7 +247,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
        %{conn: conn, alice: alice, bob: bob, thread: thread} do
     {:ok, _} = SharedThreads.post(bob.user_id, thread.id, "hello")
     {:ok, :added} = SharedThreads.add(alice.user_id, thread.id, identifier: identifier())
-    {_view, pane} = open!(conn, alice, thread.id)
+    pane = open!(conn, alice, thread.id)
     pane |> element("#shared-rename") |> render_click()
     html = render(pane)
 
@@ -229,7 +258,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
       |> MapSet.new()
 
     allowed =
-      MapSet.new(~w(toggle_rail toggle_rename invite_link archive leave withdraw remove
+      MapSet.new(~w(toggle_rename invite_link archive leave withdraw remove
                     cancel_upload post validate update_input add rename))
 
     assert MapSet.subset?(events, allowed),
@@ -243,7 +272,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
 
   test "a person taken out of the thread while its pane is open is told so, and reads nothing more",
        %{conn: conn, alice: alice, bob: bob, thread: thread} do
-    {_view, pane} = open!(build_conn() |> Map.merge(conn), bob, thread.id)
+    pane = open!(build_conn() |> Map.merge(conn), bob, thread.id)
     listen!(bob)
     bob_id = bob.user_id
     thread_id = thread.id

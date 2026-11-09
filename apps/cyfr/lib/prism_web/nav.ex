@@ -3,24 +3,20 @@
 
 defmodule PrismWeb.Nav do
   @moduledoc """
-  The pages of an athanor, once: what the sidebar (dev), the drawer (both
-  modes) and the command palette list, and in which mode.
+  The Dashboard's pages of an athanor, once: what the sidebar (dev), the
+  drawer (both UI modes) and the command palette list, and in which UI
+  mode. Each opens as an overlay over the person's desktop
+  (`PrismWeb.Layouts`); the desktop itself (`desktop_path/0`, the
+  athanor's own address) is no page of the list and is shown in every UI
+  mode (`shown?/2`).
 
-  `lite` is the chat and a drawer off it — AQUA, files, the Vault,
-  schedules, webhooks, programs, settings, legal. `dev` adds the
-  ops surfaces, sectioned. Keys are the pages' `active_nav` values; the
-  DOM id a surface renders is `<prefix>-<key>` with underscores as hyphens.
-  These are the Dashboard's pages; the Canvas (`canvas_path/0`) is no page
-  of the nav, and the mode switch on the top bar shows it in either mode
-  (`shown?/2`).
-
-  Two scopes. An `:athanor` page lives under `/a/<athanor>` — the
-  workbench, focused on one athanor. A `:global` page has no athanor in its
-  address — the chat.
-  Which is which is `global_pages/0`, the one list: an item's `scope` is
-  derived from it, never written by hand, and `href/2` is the one place a
-  path becomes a link, so no surface has to know. `page?/1` is where a
-  link the assistant proposes is checked against what the router serves.
+  `lite` is AQUA, files, the Vault, schedules, webhooks, programs,
+  settings and legal. `dev` adds the ops surfaces, sectioned. Keys are the
+  pages' `active_nav` values; the DOM id a surface renders is
+  `<prefix>-<key>` with underscores as hyphens. Every page lives under
+  `/a/<athanor>`, and `href/2` is the one place a path becomes a link.
+  `page?/1` is where a link the assistant proposes is checked against what
+  the router serves.
   """
 
   alias Prism.Labels
@@ -31,23 +27,17 @@ defmodule PrismWeb.Nav do
           path: String.t(),
           icon: String.t(),
           section: atom(),
-          modes: [String.t()],
-          scope: :athanor | :global
+          modes: [String.t()]
         }
 
   @both ~w(lite dev)
   @dev ~w(dev)
 
-  # The pages with no athanor in their address, the chat alone; every
-  # other page lives under `/a/<athanor>`.
-  @global_pages ~w(/chat)
-
-  # The Canvas mode's page, under `/a/<athanor>`.
-  @canvas_path "/canvas"
+  # The desktop, the athanor's own address under `/a/<athanor>`.
+  @desktop_path "/"
 
   # In dev order; the lite order is its own list below.
   @items [
-    %{key: "chat", label: "Chat", path: "/chat", icon: "play", section: :top, modes: @both},
     %{key: "aqua", label: "AQUA", path: "/aqua", icon: "user", section: :top, modes: @both},
     %{key: "files", label: "Files", path: "/files", icon: "folder", section: :top, modes: @both},
     %{
@@ -164,7 +154,7 @@ defmodule PrismWeb.Nav do
     }
   ]
 
-  @lite_order ~w(chat aqua files vault schedules webhooks programs settings legal)
+  @lite_order ~w(aqua files vault schedules webhooks programs settings legal)
 
   @sections [
     {:top, nil},
@@ -210,52 +200,35 @@ defmodule PrismWeb.Nav do
     end
   end
 
-  @doc "The DOM id a surface gives a page's link: `nav-api-keys`, `drawer-nav-chat`."
+  @doc "The DOM id a surface gives a page's link: `nav-api-keys`, `drawer-nav-files`."
   @spec dom_id(String.t(), String.t()) :: String.t()
   def dom_id(prefix, key), do: prefix <> "-" <> String.replace(key, "_", "-")
 
   @doc """
   The link for a page — an item, or a bare page path (query string
-  allowed): a global page is its own address; an athanor page is focused
-  on `athanor_route` (`PrismWeb.Focus.path/2`).
+  allowed), focused on `athanor_route` (`PrismWeb.Focus.path/2`).
   """
   @spec href(item() | String.t(), String.t() | nil) :: String.t()
   def href(%{path: path}, athanor_route), do: href(path, athanor_route)
+  def href(path, athanor_route) when is_binary(path), do: PrismWeb.Focus.path(athanor_route, path)
 
-  def href(path, athanor_route) when is_binary(path) do
-    if global?(path),
-      do: path,
-      else: PrismWeb.Focus.path(athanor_route, path)
-  end
-
-  @doc "The Canvas mode's page path, focused on an athanor as any athanor page is."
-  @spec canvas_path() :: String.t()
-  def canvas_path, do: @canvas_path
+  @doc "The desktop's path, focused on an athanor as any athanor page is."
+  @spec desktop_path() :: String.t()
+  def desktop_path, do: @desktop_path
 
   @doc """
   Whether `mode` shows the page at `path` (query string allowed): one of
-  its items, or a record under one, or the Canvas, which the mode switch
-  shows in either mode.
+  its items, or a record under one, or the desktop, shown in every UI
+  mode.
   """
   @spec shown?(String.t(), String.t()) :: boolean()
   def shown?(path, mode) when is_binary(path) do
     base = path |> String.split("?", parts: 2) |> hd()
 
-    base == @canvas_path or
+    base == @desktop_path or
       Enum.any?(items(mode), fn %{path: page} ->
         base == page or String.starts_with?(base, page <> "/")
       end)
-  end
-
-  @doc "The paths of the pages that have no athanor in their address."
-  @spec global_pages() :: [String.t()]
-  def global_pages, do: @global_pages
-
-  @doc "Whether `path` (query string allowed) is a global page's."
-  @spec global?(String.t()) :: boolean()
-  def global?(path) when is_binary(path) do
-    base = path |> String.split("?", parts: 2) |> hd()
-    base in @global_pages
   end
 
   @doc """
@@ -286,7 +259,5 @@ defmodule PrismWeb.Nav do
   defp resolve(%{label: noun} = item, mode) when is_atom(noun),
     do: resolve(%{item | label: Labels.label(noun, mode)}, mode)
 
-  defp resolve(item, _mode), do: Map.put(item, :scope, scope(item.path))
-
-  defp scope(path), do: if(global?(path), do: :global, else: :athanor)
+  defp resolve(item, _mode), do: item
 end

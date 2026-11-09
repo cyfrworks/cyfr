@@ -14,13 +14,31 @@ defmodule PrismWeb.SystemLayer do
   Each view that asks for a grant or a sensitive change mounts it once,
   with the view's `context`, beside its `PrismWeb.SystemLayer.Hook`,
   and acts under that context alone: the
-  shell, the chat and each console page that asks, as `id:
-  "system-layer"` (`layer_id/0`); the person's own panel, which sits on
-  every page beside the page's own layer, as `id: "system-layer-panel"`.
-  The component's id is its DOM id and the id every update names. A layer
-  mounted with `listen: false` opens no stream, so the records the page's
-  own layer shows are never drawn twice. `athanor_route` and
-  `athanor_name` name the athanor a grant lands in. A prompt
+  page that asks, as `id: "system-layer"` (`layer_id/0`); the desktop
+  (`PrismWeb.ShellLive`), which stands in the same document beside every
+  page, as `id: "system-layer-desktop"` (`desktop_layer_id/0`); and the
+  person's own panel, nested in the desktop, as `id: "system-layer-panel"`.
+  The component's id is its DOM id and the id every update names.
+
+  Each layer draws what its own view asks for. The person's confirmations,
+  the other clients' requests and the restore checklist are drawn by the
+  page's layer, which listens (`listen: true`, the default). The panel's
+  layer mounts with `listen: false` and opens no stream. The desktop's
+  mounts with `listen: :own`: it hears the facts of the records its own
+  changes asked for, so its own prompts follow them, but opens no prompt
+  for any other record and draws no restore checklist. A record one of
+  the desktop's own changes waits on is therefore drawn twice in that
+  document, in the desktop's prompt and in the page's as another client's
+  request (`shows_others?/1`); both follow the one record, so a decision
+  in either clears both. `athanor_route` and
+  `athanor_name` name the athanor a grant lands in. `covered` (false by
+  default) is the desktop's while a Dashboard page covers it: the layer
+  then draws none of its prompts and nothing of it is modal, whatever
+  raised the prompt, while each keeps its place and what it holds (a
+  grant's walk, a credential entry's waiting record) and the facts of its
+  records are still taken, so it is drawn again as it stands once the
+  layer is uncovered. The browser clears a prompt's forms as it closes, so
+  a typed value is typed again. A prompt
   (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
   `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`; `prompt:
   nil` clears the open one. A prompt that arrives while another is open
@@ -240,6 +258,10 @@ defmodule PrismWeb.SystemLayer do
   @doc "The id the layer is mounted under on a page that holds one."
   @spec layer_id() :: String.t()
   def layer_id, do: @layer_id
+
+  @doc "The DOM id of the desktop's own layer, beside the page's in the same document."
+  @spec desktop_layer_id() :: String.t()
+  def desktop_layer_id, do: "system-layer-desktop"
 
   @doc "The stream the layer listens on."
   @spec stream() :: String.t()
@@ -712,6 +734,7 @@ defmodule PrismWeb.SystemLayer do
        current: nil,
        queue: [],
        error: nil,
+       covered: false,
        listen: true,
        listening: nil,
        panels: %{},
@@ -809,7 +832,7 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # The view's own assigns: its context, which may have moved to another
-  # athanor (the chat page opening another), so a grant planned in the one
+  # athanor (a page focused on another), so a grant planned in the one
   # it left ends here.
   def update(assigns, socket) do
     socket = assign(socket, assigns)
@@ -871,12 +894,15 @@ defmodule PrismWeb.SystemLayer do
   defp listen(socket), do: socket
 
   # The person's records already open, each shown as an opened fact would
-  # show it: those the layer holds no panel for yet.
+  # show it: those the layer holds no panel for yet, and none in a layer
+  # that hears only its own.
+  defp refresh(%{assigns: %{listen: :own}} = socket), do: socket
+
   defp refresh(socket) do
     case pending_entries(socket) do
       {:ok, entries} ->
         Enum.reduce(entries, socket, fn entry, socket ->
-          if Map.has_key?(socket.assigns.panels, entry.ref),
+          if Map.has_key?(socket.assigns.panels, entry.ref) or not shows_others?(socket),
             do: socket,
             else: open_entry(socket, entry)
         end)
@@ -886,6 +912,18 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  # Whether the layer draws a record no change of its own asked for: a
+  # listening layer does, the page's. The desktop's does not, yet a record
+  # its own change waits on is still drawn by the page's layer beside it,
+  # as another client's request. That duplicate is accepted: the desktop
+  # and the page are root views of their own, and short of a relay between
+  # their processes no layer can draw for both. It is rare (a frame's
+  # credential entry or a pairing change that asks for a fresh
+  # confirmation), and both prompts follow the one record, so a proof or a
+  # cancel in either ends the wait in both.
+  defp shows_others?(%{assigns: %{listen: true}}), do: true
+  defp shows_others?(_socket), do: false
+
   defp listenable?(%Context{plane: :external, authenticated: true} = ctx),
     do: present?(ctx.user_id) and present?(ctx.athanor_id)
 
@@ -893,12 +931,19 @@ defmodule PrismWeb.SystemLayer do
 
   defp present?(value), do: is_binary(value) and value != ""
 
-  # A fact of the stream: what happened to one record of the person's.
+  # A fact of the stream: what happened to one record of the person's. A
+  # layer that hears only its own records (`listen: :own`) opens no prompt
+  # for another.
   defp on_fact(socket, %{"ref" => ref, "kind" => kind}) when is_binary(ref) do
     case Map.get(socket.assigns.panels, ref) do
-      nil when kind == :opened -> open_from_stream(socket, ref)
-      nil -> socket
-      panel -> fact(socket, ref, panel, kind)
+      nil when kind == :opened ->
+        if shows_others?(socket), do: open_from_stream(socket, ref), else: socket
+
+      nil ->
+        socket
+
+      panel ->
+        fact(socket, ref, panel, kind)
     end
   end
 
@@ -2158,7 +2203,7 @@ defmodule PrismWeb.SystemLayer do
   # hears no record's confirmation, so it could not repeat a re-enable,
   # and the page's own layer draws the checklist once. A read the store
   # does not answer leaves the checklist unread, for the next update.
-  defp read_checklist(%{assigns: %{listen: false}} = socket), do: socket
+  defp read_checklist(%{assigns: %{listen: listen}} = socket) when listen != true, do: socket
 
   defp read_checklist(
          %{assigns: %{restore_checklist: :unread, context: %Context{} = context}} = socket
@@ -2351,16 +2396,23 @@ defmodule PrismWeb.SystemLayer do
 
   @impl true
   def render(assigns) do
-    may = assigns.current && may_confirm?(assigns[:context], assigns.current)
+    # The prompt drawn, `shown`: the open one, or none while the layer is
+    # covered, when it keeps its place and state and is drawn again as it
+    # stands. Derived on every render from `covered` and `current`
+    # together, so the browser sees the dialog open again once the layer is
+    # uncovered, though `current` itself never moved.
+    shown = if assigns.covered, do: nil, else: assigns.current
+    may = shown && may_confirm?(assigns[:context], shown)
 
     panel =
-      case panel_of(assigns.panels, assigns.current) do
+      case panel_of(assigns.panels, shown) do
         {ref, panel} -> Map.put(panel, :ref, ref)
         nil -> nil
       end
 
     assigns =
       assign(assigns,
+        shown: shown,
         may: may,
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
@@ -2375,8 +2427,8 @@ defmodule PrismWeb.SystemLayer do
       id={@id}
       phx-hook="SystemLayer"
       class="contents"
-      data-open={to_string(not is_nil(@current))}
-      data-prompt-id={@current && @current.id}
+      data-open={to_string(not is_nil(@shown))}
+      data-prompt-id={@shown && @shown.id}
     >
       <dialog
         id={"#{@id}-dialog"}
@@ -2387,18 +2439,18 @@ defmodule PrismWeb.SystemLayer do
         aria-describedby={"#{@id}-description"}
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
-        <div :if={@current} class="space-y-4" data-kind={@current.kind}>
+        <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
           <h2 id={"#{@id}-title"} class="text-lg font-semibold">
-            {title(@current)}
+            {title(@shown)}
           </h2>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">
-            {description(@current)}
+            {description(@shown)}
           </p>
 
-          <.standing prompt={@current} may={@may} />
+          <.standing prompt={@shown} may={@may} />
 
           <.body
-            prompt={@current}
+            prompt={@shown}
             may={@may}
             myself={@myself}
             id={@id}
@@ -2421,7 +2473,7 @@ defmodule PrismWeb.SystemLayer do
             <span class="font-semibold">Not done:</span> {@error}
           </p>
 
-          <.controls prompt={@current} may={@may} myself={@myself} id={@id} panel={@panel} />
+          <.controls prompt={@shown} may={@may} myself={@myself} id={@id} panel={@panel} />
 
           <p :if={@queue != []} class="text-xs text-gray-400">
             {waiting(@queue)}

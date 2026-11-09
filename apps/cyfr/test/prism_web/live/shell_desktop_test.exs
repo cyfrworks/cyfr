@@ -178,7 +178,7 @@ defmodule PrismWeb.ShellDesktopTest do
   # ---- the shell ------------------------------------------------------------
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
 
     wait_until(
       fn ->
@@ -647,16 +647,59 @@ defmodule PrismWeb.ShellDesktopTest do
       assert dropped(view) == 1
     end
 
-    test "settings opens a page from Prism's own list, and nothing else", %{conn: conn} do
+    test "settings opens a page from Prism's own list over the desktop, the canvas still held, and nothing else",
+         %{conn: conn, athanor: athanor} do
       view = shell!(conn)
       home = canvas(view).id
 
       verb!(view, home, :settings, %{"page" => "no_such_page"})
       assert dropped(view) == 1
+      refute_push_event(view, "navigate", _)
 
       verb!(view, home, :settings, %{"page" => "schedules"})
-      {path, _flash} = assert_redirect(view)
-      assert path =~ "/schedules"
+      to = "/a/#{Sanctum.Tenancy.Athanors.route_slug(athanor)}/schedules"
+      assert_push_event(view, "navigate", %{to: ^to})
+
+      # The page moves under the desktop's own hook; the desktop stays, its
+      # canvas held and live.
+      assert Process.alive?(view.pid)
+      assert %{id: ^home, state: :live} = canvas(view)
+    end
+
+    test "settings of aqua, an approval's destination, opens AQUA's panel in place",
+         %{conn: conn} do
+      view = shell!(conn)
+      home = canvas(view).id
+      panel = find_live_child(view, "aqua-panel")
+      render(panel)
+      _ = render(view)
+      refute has_element?(panel, "#aqua-panel-sheet")
+
+      verb!(view, home, :settings, %{"page" => "aqua"})
+      _ = render(view)
+
+      assert has_element?(panel, "#aqua-panel-sheet")
+      refute_push_event(view, "navigate", _)
+      assert %{id: ^home, state: :live} = canvas(view)
+    end
+
+    test "settings of chat opens the chat overlay in place",
+         %{conn: conn} do
+      view = shell!(conn)
+      home = canvas(view).id
+      chat = find_live_child(view, "chat-overlay")
+      # The overlay has reported in once it rendered connected.
+      render(chat)
+      _ = render(view)
+      refute has_element?(chat, "#chat-sheet")
+
+      verb!(view, home, :settings, %{"page" => "chat"})
+      _ = render(view)
+
+      assert has_element?(chat, "#chat-sheet")
+      assert has_element?(chat, ~s(#chat-button[aria-expanded="true"]))
+      refute_push_event(view, "navigate", _)
+      assert %{id: ^home, state: :live} = canvas(view)
     end
 
     test "open carries a subject of a kind the app declares to its handshake, and refuses any other",

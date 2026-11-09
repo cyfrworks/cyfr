@@ -6,7 +6,7 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import IframeBridge from "./hooks/iframe_bridge"
 import CommandPalette from "./hooks/command_palette"
-import ModeSwitch from "./hooks/mode_switch"
+import ShellPage from "./hooks/shell_page"
 import PageLoadingIndicator from "./hooks/page_loading_indicator"
 import OptimisticNav from "./hooks/optimistic_nav"
 import Thread from "./hooks/thread"
@@ -31,7 +31,7 @@ let csrfToken = document.querySelector("meta[name='csrf-token']")?.getAttribute(
 let Hooks = {}
 Hooks.IframeBridge = IframeBridge
 Hooks.CommandPalette = CommandPalette
-Hooks.ModeSwitch = ModeSwitch
+Hooks.ShellPage = ShellPage
 Hooks.PageLoadingIndicator = PageLoadingIndicator
 Hooks.OptimisticNav = OptimisticNav
 Hooks.Thread = Thread
@@ -112,7 +112,9 @@ function safeAreas() {
 
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: () => ({_csrf_token: csrfToken, ...appearance()}),
+  // `_path`, the page's address at each join, tells the desktop whether a
+  // Dashboard page is drawn over it (PrismWeb.ShellLive).
+  params: () => ({_csrf_token: csrfToken, _path: window.location.pathname, ...appearance()}),
   hooks: Hooks
 })
 
