@@ -404,9 +404,11 @@ defmodule Emissary.Web.FrameSocket do
     end
   end
 
-  # A refusal made here, before the gate: recorded once, under the frame's
-  # context once one is established, then answered.
+  # A refusal made here, before the gate, is an admission's: recorded
+  # once, under the frame's context once one is established, then
+  # answered.
   defp refuse(sub, refusal, state, ctx \\ nil) do
+    refusal = %{refusal | stage: :admission}
     record(state, refusal, ctx || (state.caller && state.caller.ctx))
     {:push, [text(TinctureWire.ended(sub, refusal))], idle_if_empty(state)}
   end

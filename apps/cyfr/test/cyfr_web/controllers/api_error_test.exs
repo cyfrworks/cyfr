@@ -73,9 +73,17 @@ defmodule CyfrWeb.ApiErrorTest do
       assert ApiError.status(class) >= 500 == name in no_answer, name
     end
 
-    refused = for %{"answer" => %{"error" => %{"class" => class}}} <- cases, do: class
-    assert Enum.any?(refused, &(&1 in no_answer))
-    assert Enum.any?(refused, &(&1 not in no_answer))
+    # Each rejection the socket answers is at its class's status here, a
+    # 5xx just where the SDK's reading is `unavailable`.
+    refused = for %{"answer" => %{"error" => error}, "rejects" => r} <- cases, do: {error, r}
+    assert Enum.any?(refused, fn {%{"class" => class}, _} -> class in no_answer end)
+    assert Enum.any?(refused, fn {%{"class" => class}, _} -> class not in no_answer end)
+
+    for {%{"class" => class, "message" => message}, rejects} <- refused do
+      assert ApiError.status(String.to_existing_atom(class)) >= 500 ==
+               (rejects == %{"class" => "unavailable", "message" => message}),
+             class
+    end
   end
 
   test "a refusal answers at its class's status with its class and sentence" do

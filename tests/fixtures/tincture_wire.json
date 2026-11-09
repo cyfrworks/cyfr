@@ -359,7 +359,7 @@
     ]
   },
   "stream_rejections": {
-    "comment": "How the SDK rejects a subscription that opens no stream, for each answer it can get. One that got no answer on it, `answer` null (the connection could not open, or broke or closed before an answer), or a refusal whose class is one of `no_answer_classes` (those a request is answered with a server error for, apps/cyfr/test/cyfr_web/controllers/api_error_test.exs), rejects as `unavailable` with no stage, keeping the endpoint's sentence when it sent one, so the page may open it again later; any other refusal, an `ended` carrying `error` before `subscribed`, rejects as that refusal, its class, sentence and stage. A page opening it again meets that refusal again until something changes. The SDK's client test answers each and holds the rejection to `rejects`, and the shipped canvas's test (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) holds the page to opening again on each `unavailable` and showing every other refusal.",
+    "comment": "How the SDK rejects a subscription that opens no stream, for each answer it can get, `why` naming the rejection. One that got no answer on it, `answer` null (the connection could not open, or broke or closed before an answer), or a refusal whose class is one of `no_answer_classes` (those a request is answered with a server error for, apps/cyfr/test/cyfr_web/controllers/api_error_test.exs), rejects as `unavailable` with no stage, keeping the endpoint's sentence when it sent one, so the page may open it again later; any other refusal, an `ended` carrying `error` before `subscribed`, rejects as that refusal, its class, sentence and stage. A page opening it again meets that refusal again until something changes. The SDK's client test answers each and holds the rejection to `rejects`, and the shipped canvas's test (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) holds the page to opening again on each `unavailable` and showing every other refusal.",
     "no_answer_classes": [
       "cancelled",
       "corrupt",
@@ -371,6 +371,7 @@
     ],
     "cases": [
       {
+        "why": "no answer: the connection could not open, broke, or closed before the answer, a message of the frame's over max_message_bytes among them (the endpoint closes the connection, 1009)",
         "answer": null,
         "rejects": {
           "class": "unavailable",
@@ -378,6 +379,7 @@
         }
       },
       {
+        "why": "the store could not answer",
         "answer": {
           "v": 1,
           "type": "ended",
@@ -394,6 +396,7 @@
         }
       },
       {
+        "why": "the call timed out",
         "answer": {
           "v": 1,
           "type": "ended",
@@ -410,6 +413,7 @@
         }
       },
       {
+        "why": "the endpoint failed",
         "answer": {
           "v": 1,
           "type": "ended",
@@ -426,6 +430,7 @@
         }
       },
       {
+        "why": "the frame is suspended",
         "answer": {
           "v": 1,
           "type": "ended",
@@ -443,6 +448,7 @@
         }
       },
       {
+        "why": "the tincture's grant does not name what its version declares",
         "answer": {
           "v": 1,
           "type": "ended",
@@ -460,6 +466,7 @@
         }
       },
       {
+        "why": "the connection carries max_subscriptions subscriptions already",
         "answer": {
           "v": 1,
           "type": "ended",
@@ -473,6 +480,78 @@
         "rejects": {
           "class": "rate_limited",
           "message": "Too many open streams — close one and retry",
+          "stage": "admission"
+        }
+      },
+      {
+        "why": "a stream the tincture does not declare",
+        "answer": {
+          "v": 1,
+          "type": "ended",
+          "sub": 1,
+          "error": {
+            "class": "forbidden",
+            "message": "This tincture does not declare that stream.",
+            "stage": "admission"
+          }
+        },
+        "rejects": {
+          "class": "forbidden",
+          "message": "This tincture does not declare that stream.",
+          "stage": "admission"
+        }
+      },
+      {
+        "why": "another frame's credential on a connection bound to one frame",
+        "answer": {
+          "v": 1,
+          "type": "ended",
+          "sub": 1,
+          "error": {
+            "class": "forbidden",
+            "message": "This connection carries one frame's streams (frame_connection_mismatch)",
+            "stage": "admission"
+          }
+        },
+        "rejects": {
+          "class": "forbidden",
+          "message": "This connection carries one frame's streams (frame_connection_mismatch)",
+          "stage": "admission"
+        }
+      },
+      {
+        "why": "a canvas's connection presented another frame's credential",
+        "answer": {
+          "v": 1,
+          "type": "ended",
+          "sub": 1,
+          "error": {
+            "class": "forbidden",
+            "message": "This frame credential opens only its own frame's data path (frame_path_mismatch)",
+            "stage": "admission"
+          }
+        },
+        "rejects": {
+          "class": "forbidden",
+          "message": "This frame credential opens only its own frame's data path (frame_path_mismatch)",
+          "stage": "admission"
+        }
+      },
+      {
+        "why": "the frame's request rate, charged once as the connection binds",
+        "answer": {
+          "v": 1,
+          "type": "ended",
+          "sub": 1,
+          "error": {
+            "class": "rate_limited",
+            "message": "Too many requests; retry in 3 s.",
+            "stage": "admission"
+          }
+        },
+        "rejects": {
+          "class": "rate_limited",
+          "message": "Too many requests; retry in 3 s.",
           "stage": "admission"
         }
       }

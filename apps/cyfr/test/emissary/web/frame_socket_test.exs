@@ -92,6 +92,7 @@ defmodule Emissary.Web.FrameSocketTest do
   end
 
   @version "1.0.0"
+  @wire Path.expand("../../../../../tests/fixtures/tincture_wire.json", __DIR__)
   @origin "api.flows.example"
 
   # How long an admission or a delivery may take on a loaded host. Each
@@ -207,6 +208,17 @@ defmodule Emissary.Web.FrameSocketTest do
     :ok = Cyfr.Bus.broadcast(actor, topic(source), Cyfr.Bus.McpServers.new(actor, :changed))
   end
 
+  # The wire's vector of the rejection `why` names (`stream_rejections`):
+  # the refusal the SDK reads, which the socket answers word for word.
+  defp vector_error(why) do
+    @wire
+    |> File.read!()
+    |> Jason.decode!()
+    |> get_in(["stream_rejections", "cases"])
+    |> Enum.find(&(&1["why"] == why))
+    |> get_in(["answer", "error"])
+  end
+
   defp answer(socket, sub) do
     assert_receive {:socket, ^socket, %{"sub" => ^sub} = message}, @answer_ms
     message
@@ -271,8 +283,8 @@ defmodule Emissary.Web.FrameSocketTest do
 
     Socket.subscribe(socket, max + 1, frame.bearer, "mcp_servers.changes")
 
-    assert %{"type" => "ended", "error" => %{"class" => "rate_limited"}} =
-             answer(socket, max + 1)
+    assert %{"type" => "ended", "error" => over} = answer(socket, max + 1)
+    assert over == vector_error("the connection carries max_subscriptions subscriptions already")
 
     # A closed stream's place is free for the very next subscribe: no
     # timeout, and its forwarder gone with it.
@@ -435,10 +447,10 @@ defmodule Emissary.Web.FrameSocketTest do
     second = frame!(source, app, app!(source, app, [%{"name" => "mcp_servers.changes"}]))
     Socket.subscribe(socket, 2, second.bearer, "mcp_servers.changes")
 
-    assert %{"type" => "ended", "error" => %{"class" => "forbidden", "message" => message}} =
-             answer(socket, 2)
+    assert %{"type" => "ended", "error" => mismatch} = answer(socket, 2)
 
-    assert message =~ "frame_connection_mismatch"
+    assert mismatch ==
+             vector_error("another frame's credential on a connection bound to one frame")
 
     # A canvas's credential on the shared connection, and another person's
     # frame, open nothing either.
@@ -464,8 +476,10 @@ defmodule Emissary.Web.FrameSocketTest do
 
     socket = Socket.connect({:canvas, mine.frame_id})
     Socket.subscribe(socket, 1, other.bearer, "mcp_servers.changes")
-    assert %{"type" => "ended", "error" => %{"message" => message}} = answer(socket, 1)
-    assert message =~ "frame_path_mismatch"
+    assert %{"type" => "ended", "error" => mismatch} = answer(socket, 1)
+
+    assert mismatch ==
+             vector_error("a canvas's connection presented another frame's credential")
 
     socket = Socket.connect({:canvas, an_app.frame_id})
     Socket.subscribe(socket, 1, an_app.bearer, "mcp_servers.changes")
@@ -515,7 +529,12 @@ defmodule Emissary.Web.FrameSocketTest do
 
     over = Socket.connect({:canvas, other.frame_id})
     Socket.subscribe(over, 1, other.bearer, "mcp_servers.changes")
-    assert %{"type" => "ended", "error" => %{"class" => "rate_limited"}} = answer(over, 1)
+    assert %{"type" => "ended", "error" => rated} = answer(over, 1)
+
+    # The vector's sentence, its retry seconds this window's.
+    vector = vector_error("the frame's request rate, charged once as the connection binds")
+    assert Map.delete(rated, "message") == Map.delete(vector, "message")
+    assert rated["message"] =~ ~r/\AToo many requests; retry in \d+ s\.\z/
 
     # With the canvas's version moved, this open's bearer is refused on
     # another open's path for the path, its version unread, and on its own
@@ -547,10 +566,8 @@ defmodule Emissary.Web.FrameSocketTest do
         ] do
       Socket.subscribe(socket, sub, frame.bearer, stream, subject)
 
-      assert %{"type" => "ended", "error" => %{"class" => "forbidden", "message" => message}} =
-               answer(socket, sub)
-
-      assert message =~ "does not declare that stream"
+      assert %{"type" => "ended", "error" => undeclared} = answer(socket, sub)
+      assert undeclared == vector_error("a stream the tincture does not declare")
     end
 
     assert Socket.state(socket).subs == %{}
