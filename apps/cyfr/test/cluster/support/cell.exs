@@ -142,21 +142,37 @@ defmodule Cyfr.Cluster.Cell do
   def ensure! do
     case Process.whereis(@name) do
       nil ->
+        unless :persistent_term.get({__MODULE__, :cookie}, nil), do: start_run!()
         {:ok, _pid} = GenServer.start(__MODULE__, [], name: @name)
-        # The cell outlives every case, so the run is what ends it. Two
-        # operating-system processes left behind would hold this run's
-        # node names against the next one. Registered once per run: a cell
-        # started after an earlier one exited is ended by the same call.
-        unless :persistent_term.get({__MODULE__, :shutdown_registered}, false) do
-          ExUnit.after_suite(fn _results -> shutdown() end)
-          :persistent_term.put({__MODULE__, :shutdown_registered}, true)
-        end
-
         GenServer.call(@name, :members, @boot_timeout_ms)
 
       _running ->
         GenServer.call(@name, :members, @boot_timeout_ms)
     end
+  end
+
+  # What the run sets up once, before its first cell: a cell started after
+  # an earlier one exited repeats none of it. The run's cookie, minted
+  # last, is the mark that it has been done.
+  defp start_run! do
+    # A second S3 guard on the run's prefix would delete, at its cleanup,
+    # the markers the first one checks for.
+    Store.ready!()
+    # The cell outlives every case, so the run is what ends it. Two
+    # operating-system processes left behind would hold this run's node
+    # names against the next one. Registered after the store's guard, so
+    # the members stop writing before the prefix is cleaned.
+    ExUnit.after_suite(fn _results -> shutdown() end)
+
+    unless linux?() do
+      IO.puts(
+        "    the members' host API ports are not claimed on this host: abstract " <>
+          "sockets are Linux-only, so another run here could take a down member's port"
+      )
+    end
+
+    _minted = cookie()
+    :ok
   end
 
   @doc "Stop every member and forget the cell."
@@ -325,7 +341,6 @@ defmodule Cyfr.Cluster.Cell do
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
-    Store.ready!()
 
     members =
       for {{id, worker}, port} <-
@@ -829,22 +844,12 @@ defmodule Cyfr.Cluster.Cell do
   # refused, and has no owner that ends with the process. There a port is
   # picked free with no claim, as a run picked it before claims existed,
   # so two runs on one such host can still meet on a down member's port.
+  # The run says so once (`start_run!/0`).
   defp claim(port) do
-    if match?({:unix, :linux}, :os.type()), do: claim_abstract(port), else: unclaimed(port)
+    if linux?(), do: claim_abstract(port), else: Cyfr.Cluster.Boot.port_free?(port)
   end
 
-  defp unclaimed(port) do
-    unless :persistent_term.get({__MODULE__, :unclaimed_said}, false) do
-      IO.puts(
-        "    the members' host API ports are not claimed on this host: abstract " <>
-          "sockets are Linux-only, so another run here could take a down member's port"
-      )
-
-      :persistent_term.put({__MODULE__, :unclaimed_said}, true)
-    end
-
-    Cyfr.Cluster.Boot.port_free?(port)
-  end
+  defp linux?, do: match?({:unix, :linux}, :os.type())
 
   defp claim_abstract(port) do
     case :gen_tcp.listen(0, ifaddr: {:local, claim_name(port)}) do

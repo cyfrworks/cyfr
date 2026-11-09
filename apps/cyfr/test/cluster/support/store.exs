@@ -60,18 +60,11 @@ defmodule Cyfr.Cluster.Store do
   # `Cyfr.Cluster.Cell.ensure!/0` registers the cell's shutdown after this,
   # and ExUnit runs the last registered `after_suite` callback first, so
   # the members have stopped writing before the prefix is cleaned.
-  # Once per run: a cell started after an earlier one exited reuses the
-  # prefix, and a second guard's cleanup would delete the markers the
-  # first one checks for.
   defp guard! do
-    unless :persistent_term.get({__MODULE__, :guarded}, false) do
-      _guard =
-        Arca.Test.S3Env.guard!(prefix(), fn clean ->
-          ExUnit.after_suite(fn _results -> clean.() end)
-        end)
-
-      :persistent_term.put({__MODULE__, :guarded}, true)
-    end
+    _guard =
+      Arca.Test.S3Env.guard!(prefix(), fn clean ->
+        ExUnit.after_suite(fn _results -> clean.() end)
+      end)
 
     :ok
   end
