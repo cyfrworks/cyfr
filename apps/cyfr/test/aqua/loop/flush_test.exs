@@ -164,6 +164,45 @@ defmodule Aqua.Loop.FlushTest do
     end
   end
 
+  # A program home reset while the flush runs forgets the thread's session
+  # and moves its generation on: the session the flush answers with lived
+  # in the home that is gone, so the thread keeps none of it, while the
+  # turn still runs to its end.
+  test "an answered flush's session is not kept once the thread's generation moved", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    allow_keep!(ctx, thread)
+    turn = accept_large!(ctx, thread)
+    actor = Sanctum.Context.actor(ctx)
+
+    script!([
+      Map.put(round_one(), "session", "brain-chat"),
+      %{"entries" => []},
+      {:probe, self()},
+      Map.put(flush_reply([keep("n1", "plan", "a note")]), "session", "brain-flush"),
+      reply("the story so far"),
+      reply("done")
+    ])
+
+    task = run(ctx, turn)
+    assert_receive {:scripted_probe, worker, _}, 60_000
+
+    assert {:ok, %{brain_session: "brain-chat", brain_generation: 0}} =
+             Threads.get(actor, thread.id)
+
+    assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+    send(worker, :continue)
+
+    assert :completed = Task.await(task, 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert ["chat", "flush", "compaction", "chat"] =
+             for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
+
+    assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, thread.id)
+  end
+
   test "a flush in the round that reads the room neither sends nor keeps the room's lines", %{
     ctx: ctx
   } do

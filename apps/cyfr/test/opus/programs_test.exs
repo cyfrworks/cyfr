@@ -33,6 +33,7 @@ defmodule Opus.ProgramsTest do
   @destination %{"hosts" => ["api.example.com"]}
 
   import ExUnit.CaptureLog
+  require Ecto.Query
 
   alias Arca.JobClaims
   alias Cyfr.Test.ScriptedBackends, as: Scripted
@@ -1164,6 +1165,81 @@ defmodule Opus.ProgramsTest do
     entry.id
   end
 
+  # A crew member `harness` whose brain, a catalyst with one login need of
+  # the program `claude`, mounts the login entry `entry`: bound on the
+  # catalyst's own consent and selected on the member's edge into it, as a
+  # person's walk binds it. Answers the context, under a storage root of
+  # the test's own.
+  defp harness_member!(ctx, entry) do
+    root = Path.join(System.tmp_dir!(), "programs_member_#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(root) end)
+    Prima.Test.Env.put_app_env(:arca, :base_path, root)
+    ctx = %{ctx | origin: :interactive}
+    actor = Sanctum.Context.actor(ctx)
+    ref = "catalyst:local.harnessbrain"
+
+    unit =
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harnessbrain", "0.1.0",
+        manifest: %{
+          "name" => "harnessbrain",
+          "type" => "catalyst",
+          "version" => "0.1.0",
+          "publisher" => "local",
+          "needs" => %{
+            "claude" => %{
+              "type" => "login",
+              "program" => "claude",
+              "reason" => "to run the harness on your own plan",
+              "required" => true
+            }
+          }
+        },
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+      )
+
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+    :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\n---\n\nsoul\n")
+
+    :ok =
+      Arca.put(
+        actor,
+        Compendium.AquaPath.crew_file("harness"),
+        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n\nYou run the harness.\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry}]})
+
+    commit!(ctx, Prima.AgentRef.ref("harness"), %{
+      selections: [%{dep: ref, need: "claude", entry_id: entry}]
+    })
+
+    ctx
+  end
+
+  defp commit!(ctx, ref, over) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = Map.merge(%{ref: ref}, over)
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  # The session a brain's answer left on the thread (`Arca.TurnStorage`
+  # keeps it there).
+  defp keep_session!(thread, session) do
+    {1, _} =
+      Ecto.Query.from(t in Arca.Schemas.Thread, where: t.id == ^thread.id)
+      |> Arca.Repo.update_all(set: [brain_session: session])
+  end
+
   describe "sessions" do
     # The scripted service keys, ends and idles sessions as Locus does.
     defp held(ctx, fake, name) do
@@ -1560,6 +1636,80 @@ defmodule Opus.ProgramsTest do
                  "action" => "reset_home",
                  "entry" => "vlt_none"
                })
+    end
+
+    # The session a member's brain kept lived in the home: after a reset its
+    # next request resumes nothing that is gone. A thread whose agent's
+    # brain runs elsewhere keeps its own.
+    test "reset_home forgets the brain session of every thread whose agent's brain mounts the home",
+         %{ctx: ctx, admin: admin, entry: entry} do
+      ctx = harness_member!(ctx, entry)
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, room} = Arca.ThreadStorage.create(actor)
+      {:ok, member} = Arca.ThreadStorage.crew_thread(actor, room.id, "harness")
+      {:ok, other} = Arca.ThreadStorage.crew_thread(actor, room.id, "elsewhere")
+      keep_session!(member, "claude-session-1")
+      keep_session!(other, "other-session-1")
+
+      assert {:ok, %{reset: ^entry}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "reset_home",
+                 "entry" => entry
+               })
+
+      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _}, 2_000
+
+      # The next request reads the thread's session (`Aqua.Loop`), and there
+      # is none.
+      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
+      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
+
+      # A retire forgets it too.
+      keep_session!(member, "claude-session-2")
+      assert :ok = Programs.home(ctx.athanor_id, entry, :retire)
+      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
+      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
+    end
+
+    # A mount reads the brain edge's unnamed binding alone: a named account
+    # bound beside it is not where the brain runs, so its reset leaves the
+    # session the default home keeps.
+    test "reset_home of a named account's home keeps the session of the default's",
+         %{ctx: ctx, admin: admin, entry: named_home} do
+      default_home = login_entry(ctx, "default-login", "claude")
+      ctx = harness_member!(ctx, default_home)
+      brain = "catalyst:local.harnessbrain"
+
+      commit!(ctx, brain, %{
+        bindings: [
+          %{need: "claude", entry_id: default_home},
+          %{need: "claude", entry_id: named_home, name: "spare"}
+        ]
+      })
+
+      commit!(ctx, Prima.AgentRef.ref("harness"), %{
+        selections: [
+          %{dep: brain, need: "claude", entry_id: default_home},
+          %{dep: brain, need: "claude", entry_id: named_home, name: "spare"}
+        ]
+      })
+
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, room} = Arca.ThreadStorage.create(actor)
+      {:ok, member} = Arca.ThreadStorage.crew_thread(actor, room.id, "harness")
+      keep_session!(member, "default-home-session")
+
+      assert {:ok, %{reset: ^named_home}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "reset_home",
+                 "entry" => named_home
+               })
+
+      assert {:ok, %{brain_session: "default-home-session"}} =
+               Arca.ThreadStorage.get(actor, member.id)
+
+      assert :ok = Programs.home(ctx.athanor_id, default_home, :reset)
+      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, member.id)
     end
 
     test "a retire that does not land is sent again on every tick until it does",

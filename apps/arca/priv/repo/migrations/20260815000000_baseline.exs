@@ -2486,6 +2486,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :parent_id, :string
       # The brain's own session for the thread, opaque.
       add :brain_session, :text
+      # Raised each time the session is forgotten (its program home reset or
+      # retired): a turn keeps a session only under the generation it read.
+      add :brain_generation, :integer, null: false, default: 0
       # When a child thread was retired: it admits nothing more, and the
       # next request to its member opens a new one.
       add :archived_at, :utc_datetime_usec

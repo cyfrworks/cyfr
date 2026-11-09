@@ -472,7 +472,8 @@ defmodule Cyfr.Boundaries do
           "(`Sanctum.Vault.disclosed?/2`) before it unseals any, and a sign-in whose " <>
           "command exited 0 makes its login entry active again (`Sanctum.Mount.signed_in/2`); a " <>
           "catalyst's pipe mounts its login need through `Sanctum.Mount.resolve/4` " <>
-          "(`Opus.Host.Pipe`). `Sanctum` bare is the domain's own " <>
+          "(`Opus.Host.Pipe`), and a reset or retired home forgets the sessions of the " <>
+          "agents whose brain runs there (`Sanctum.Mount.agents_mounting/2`). `Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
@@ -2165,6 +2166,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Mount" => [
+      agents_mounting: 2,
       home_of: 2,
       login_entries: 1,
       login_entry: 3,

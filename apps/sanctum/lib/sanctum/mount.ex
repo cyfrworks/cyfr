@@ -35,10 +35,11 @@ defmodule Sanctum.Mount do
        consumes a `once` binding for this root, so a mount refused by any
        check above consumes nothing.
 
-  `login_entry/3`, `home_of/2` and `login_entries/1` are the reads the
-  programs controller and its surfaces make of the same entries: the
-  entry a person names for a program's sign-in or reset, the home a
-  deleted entry leaves behind, and the homes of an archived athanor.
+  `login_entry/3`, `home_of/2`, `login_entries/1` and `agents_mounting/2`
+  are the reads the programs controller and its surfaces make of the same
+  entries: the entry a person names for a program's sign-in or reset, the
+  home a deleted entry leaves behind, the homes of an archived athanor,
+  and the agents whose brain runs in a home it resets or retires.
   """
 
   alias Prima.Authority
@@ -287,6 +288,35 @@ defmodule Sanctum.Mount do
       {:ok, %{kind: @login, id: id}} -> {:ok, id}
       {:ok, _another_kind} -> :none
       {:error, :not_found} -> :none
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  The names of the agents of `athanor_id`, the soul's included, whose
+  brain runs in the kept home of the login entry `entry_id`: the agent's
+  head binds the entry on its own edge to its brain (the catalyst its
+  index row names), or selects there a profile of that brain whose own
+  ingress binds it (`Arca.ConsentStorage.head_edges_binding/2`). An edge
+  to a hand is no brain's. `{:error, :unavailable}` when the store cannot
+  answer.
+  """
+  @spec agents_mounting(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, :unavailable}
+  def agents_mounting(athanor_id, entry_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(entry_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    with {:ok, edges} <- Arca.ConsentStorage.head_edges_binding(actor, entry_id),
+         {:ok, agents} <- Arca.AgentStorage.list(actor) do
+      {:ok,
+       for(
+         %{name: name, catalyst_ref: brain} when is_binary(brain) <- agents,
+         {:ok, brain} <- [Prima.ComponentRef.to_name_ref(brain)],
+         source = Prima.AgentRef.ref(name),
+         {source, source, brain} in edges,
+         do: name
+       )}
+    else
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end

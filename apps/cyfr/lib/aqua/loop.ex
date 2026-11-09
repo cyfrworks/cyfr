@@ -741,7 +741,7 @@ defmodule Aqua.Loop do
       # turn would.
       {:error, %{"type" => type} = error}
       when type in @recoverable and retries < length(@retry_delays_ms) ->
-        closed = refused(error, type)
+        closed = refused(state, error, type)
         _ = Tape.close_step(guest(state), state.turn, step, "error", closed)
         Process.sleep(Enum.at(@retry_delays_ms, retries))
         state = %{state | session: closed[:session] || state.session}
@@ -760,7 +760,7 @@ defmodule Aqua.Loop do
             state.turn,
             step,
             "error",
-            refused(error, error["message"])
+            refused(state, error, error["message"])
           )
 
         announce(state, :consent_required, %{
@@ -771,7 +771,9 @@ defmodule Aqua.Loop do
         {:halt, {:failed, :setup_required}, state}
 
       {:error, %{"type" => _type, "message" => message} = error} ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(error, message))
+        _ =
+          Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, message))
+
         _ = system_row(state, "The model could not answer: #{message}")
         {:halt, {:failed, message}, state}
 
@@ -790,14 +792,20 @@ defmodule Aqua.Loop do
 
   # A refused model step closes with the brain's session its refusal
   # names, kept on the thread as a response's is (`Prima.Model`), so the
-  # next request continues it. A session off the contract is not kept,
-  # and the refusal ends the turn as it would.
-  defp refused(error, text) do
+  # next request continues it, under the thread's generation the turn read
+  # (`generation/1`). A session off the contract is not kept, and the
+  # refusal ends the turn as it would.
+  defp refused(%State{} = state, error, text) do
     case Prima.Model.response_session(error) do
-      {:ok, session} -> %{error: text, session: session}
+      {:ok, session} -> %{error: text, session: session, generation: generation(state)}
       {:error, _invalid} -> %{error: text}
     end
   end
+
+  # The thread's session generation as the turn was built: a session the
+  # brain answers with is kept only while the thread is still at it, so a
+  # forget since (a reset program home) keeps it out (`Arca.TurnStorage`).
+  defp generation(%State{spec: %{thread: thread}}), do: thread.brain_generation
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
@@ -929,6 +937,7 @@ defmodule Aqua.Loop do
              usage: usage,
              stop_reason: data["stop_reason"],
              session: session,
+             generation: generation(state),
              tool_calls: tool_calls
            }) do
       state = count_usage(%{state | session: session || state.session}, usage)
@@ -2183,7 +2192,7 @@ defmodule Aqua.Loop do
   # The reply's text is not the turn's and is not recorded; its calls are.
   # The flush continues the brain's session, so the session its answer or
   # its refusal names is kept as a chat round's is (`on_response/3`,
-  # `refused/2`), and the next request continues it: a brain that counts
+  # `refused/3`), and the next request continues it: a brain that counts
   # its usage against the session it is handed counts the flush once.
   defp keep_notes(%State{} = state, step, request) do
     case model_call(state, step, request, nil) do
@@ -2198,6 +2207,7 @@ defmodule Aqua.Loop do
                  usage: usage,
                  stop_reason: data["stop_reason"],
                  session: session,
+                 generation: generation(state),
                  tool_calls: tool_calls
                }) do
           state = count_usage(%{state | session: session || state.session}, usage)
@@ -2222,7 +2232,7 @@ defmodule Aqua.Loop do
         superseded
 
       {:error, %{"type" => _} = error} ->
-        closed = refused(error, describe(error))
+        closed = refused(state, error, describe(error))
         _ = Tape.close_step(guest(state), state.turn, step, "error", closed)
         {:skipped, %{state | session: closed[:session] || state.session}}
 
