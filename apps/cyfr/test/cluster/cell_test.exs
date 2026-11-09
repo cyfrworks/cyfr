@@ -267,6 +267,49 @@ defmodule Cyfr.Cluster.CellTest do
 
   defp node_of(id), do: Cell.member(id).node
 
+  describe "the members' host API ports" do
+    # A member keeps its host API port for the run, so the port has to
+    # stay out of every other listener's way while its member is down:
+    # every bind to port 0 and every outgoing connection on this host
+    # draws from the kernel's ephemeral range.
+    test "each member's port is its own, below the range the kernel hands out" do
+      ports = Enum.map(Cell.ensure!(), & &1.host_api_port)
+
+      assert length(Enum.uniq(ports)) == 2
+      low = ephemeral_low()
+      assert Enum.all?(ports, &(&1 < low)), "#{inspect(ports)} not all below #{low}"
+    end
+
+    test "a boot finding its port held waits for the release, and is refused naming the port " <>
+           "when it does not come" do
+      %{host_api_port: port, worker: worker} = Cell.member(:b)
+      # Whatever this case leaves of member b, the next one boots afresh.
+      on_exit(fn -> Cell.kill(:b) end)
+
+      :ok = Cell.call(:b, Cyfr.Cluster.Boot, :stop!, [])
+      {:ok, holder} = :gen_tcp.listen(port, ip: {127, 0, 0, 1}, reuseaddr: true)
+
+      {elapsed_us, refused} =
+        :timer.tc(fn -> Cell.call(:b, Cyfr.Cluster.Boot, :start!, [worker], 60_000) end)
+
+      assert refused == {:error, {:host_api_port_held, port}}
+      # Refused after the boot's wait for the release, not at the bind.
+      assert elapsed_us >= 10_000_000
+
+      :ok = :gen_tcp.close(holder)
+      assert Cell.call(:b, Cyfr.Cluster.Boot, :start!, [worker], 60_000) == :ok
+    end
+  end
+
+  # The low end of the kernel's ephemeral port range.
+  defp ephemeral_low do
+    case File.read("/proc/sys/net/ipv4/ip_local_port_range") do
+      {:ok, range} -> range |> String.split() |> hd() |> String.to_integer()
+      # IANA's dynamic range, which BSD and macOS hand out from.
+      {:error, _} -> 49_152
+    end
+  end
+
   # The member the cell proposes for `subject`, and the one it does not.
   defp proposed(one, other, subject) do
     if Cell.call(one, Cyfr.Cell, :mine?, [subject]), do: {one, other}, else: {other, one}

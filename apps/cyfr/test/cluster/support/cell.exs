@@ -323,9 +323,8 @@ defmodule Cyfr.Cluster.Cell do
     Store.ready!()
 
     members =
-      for {id, worker} <- [{:a, "wrk_cell_a"}, {:b, "wrk_cell_b"}] do
-        port = free_port()
-
+      for {{id, worker}, port} <-
+            Enum.zip([{:a, "wrk_cell_a"}, {:b, "wrk_cell_b"}], host_api_ports(2)) do
         %{
           id: id,
           node: node_name(id),
@@ -713,15 +712,43 @@ defmodule Cyfr.Cluster.Cell do
   # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp node_name(id), do: :"#{Map.fetch!(node_names(), id)}@127.0.0.1"
 
-  # A loopback port nothing holds, for a member to bind and to advertise.
-  # The socket is closed before the member starts, which is the usual
-  # small race and is safe here: the cell is started once, serially, for
-  # the whole run.
-  defp free_port do
-    {:ok, socket} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, reuseaddr: true])
-    {:ok, {_ip, port}} = :inet.sockname(socket)
-    :ok = :gen_tcp.close(socket)
-    port
+  # A loopback port for each member to bind and to advertise, distinct
+  # and free now. A member keeps its port across every reboot of the run,
+  # and while it is down nothing holds the port for it, so the port is
+  # taken from below the kernel's ephemeral range: every bind to port 0
+  # on this host (a member's distribution listener, its endpoint, a
+  # scripted worker, a wire) and every outgoing connection draw from that
+  # range, and one of them could otherwise take a down member's port
+  # before it boots again. What remains is a listener of another program
+  # on a fixed port, which a boot is refused naming (`Cyfr.Cluster.Boot`).
+  @port_floor 20_000
+
+  defp host_api_ports(count) do
+    ceiling = ephemeral_low() - 1
+
+    if ceiling - @port_floor < 1_000 do
+      raise "the ephemeral port range starts at #{ceiling + 1}, leaving no room below it " <>
+              "from #{@port_floor} for the members' host API ports"
+    end
+
+    ports =
+      Stream.repeatedly(fn -> Enum.random(@port_floor..ceiling) end)
+      |> Stream.take(100)
+      |> Stream.uniq()
+      |> Stream.filter(&Cyfr.Cluster.Boot.port_free?/1)
+      |> Enum.take(count)
+
+    if length(ports) < count, do: raise("no free host API ports below #{ceiling + 1}")
+    ports
+  end
+
+  # The low end of the kernel's ephemeral port range: Linux's own setting,
+  # else IANA's dynamic range, which BSD and macOS hand out from.
+  defp ephemeral_low do
+    case File.read("/proc/sys/net/ipv4/ip_local_port_range") do
+      {:ok, range} -> range |> String.split() |> hd() |> String.to_integer()
+      {:error, _} -> 49_152
+    end
   end
 
   defp all_nodes, do: Enum.map([:a, :b], &node_name/1)
