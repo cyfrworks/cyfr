@@ -190,8 +190,18 @@
     let everOpened = false;
     let current = null;
     let timer;
+    // The open in flight, until it has its answer: a request the page has
+    // sent cannot be called back, so it counts against the five until then.
+    let pending = null;
 
-    async function open() {
+    function open() {
+      const run = opening();
+      pending = run;
+      const settle = () => { if (pending === run) pending = null; };
+      run.then(settle, settle);
+      return run;
+    }
+    async function opening() {
       const n = ++opens;
       const stream = await sdk.stream(name, subject, ({ data }) => {
         if (!stopped && n === opens && isItem(data)) onItem(data, n);
@@ -222,15 +232,19 @@
     }
     return {
       first: open().catch((e) => failed(e, 0)),
+      // Stops the stream; answers the open still in flight, if one is, which
+      // settles once its request has its answer and is closed.
       stop() {
         stopped = true;
         clearTimeout(timer);
         if (current) current.close();
         current = null;
+        return pending ? pending.then(() => {}, () => {}) : null;
       },
       // Opens the stream again now, its refresh first.
       again() {
-        if (stopped) return;
+        // An open in flight already brings the current state first.
+        if (stopped || pending) return;
         const was = current;
         current = null;
         if (was) was.close();
@@ -283,13 +297,25 @@
   // Opens each stream a part that is on needs, up to five, and closes one
   // no part that is on needs any more.
   let api = null;
+  // The opens of stopped streams still in flight: each counts against the
+  // five until its request has its answer, and then the page looks again.
+  const draining = new Set();
   function sync() {
     if (!api) return;
     const keep = wanted().slice(0, MOST);
-    for (const [key, held] of followers) if (!keep.includes(key)) { held.stop(); followers.delete(key); }
+    for (const [key, held] of followers) {
+      if (keep.includes(key)) continue;
+      followers.delete(key);
+      const settling = held.stop();
+      if (settling) {
+        draining.add(settling);
+        settling.then(() => { draining.delete(settling); sync(); });
+      }
+    }
     changed('refusals');
     for (const key of keep) {
       if (followers.has(key)) continue;
+      if (followers.size + draining.size >= MOST) break;
       const feed = key.startsWith('feed:') ? key.slice(5) : null;
       followers.set(key, feed
         ? follow(api, 'feed.results', feed, (item) => foldFeed(feed, item), () => {}, (error) => refused(key, error))

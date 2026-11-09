@@ -213,6 +213,79 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert "dist/third-party-notices.json" in built
   end
 
+  test "the switchboard desktop is 0.1.0 on the vanilla template, reads what it declares and passes the publish check" do
+    board = SeedBundle.local_unit!("tinctures", "switchboard")
+    assert board.ref == "tincture:local.switchboard"
+    assert board.version == "0.1.0"
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), board.rel)
+
+    assert Prima.Manifest.validate(board.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(board.manifest)
+    assert Prima.Manifest.Tincture.canvas?(declaration)
+
+    # The vanilla template's page: index.html, no build and no lockfile.
+    assert Compendium.tincture_entry(board.manifest) == {:ok, "index.html"}
+    refute Compendium.tincture_lockfile_required?(board.manifest)
+
+    # What its parts read, the weather feed by name among them; the page
+    # opens at most five of these at once.
+    assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
+             {"attention.changes", nil},
+             {"threads.changes", nil},
+             {"components.changes", nil},
+             {"runs.changes", nil},
+             {"schedules.changes", nil},
+             {"vault.changes", nil},
+             {"activity.changes", nil},
+             {"feed.results", "weather"}
+           ]
+
+    assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
+    assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+
+    # Its levers pause and resume a schedule, picked from the schedules it
+    # reads; nothing else is pressed through a control.
+    assert Enum.map(declaration.desktop.controls, &{&1.id, &1.operation}) == [
+             {"pause-schedule", "schedule.pause"},
+             {"resume-schedule", "schedule.resume"}
+           ]
+
+    # Each part is a widget the person pulls, fits or moves.
+    assert declaration.desktop.prefs.widgets |> Map.keys() |> Enum.sort() ==
+             ~w(apps calls components crew runs schedules threads vault weather)
+
+    assert {:ok, tokens} =
+             Compendium.tincture_check_chrome(declaration, &File.read(Path.join(dir, &1)))
+
+    assert %{"font" => "Saira Semi Condensed", "glyphs" => "square", "radius" => 4} = tokens
+    assert [_font] = tokens["fonts"]
+    assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: Path.relative_to(path, dir)
+
+    assert Enum.sort(files) ==
+             ~w(board.js chrome.css cords.js cyfr-manifest.json fonts/doto-800.woff2
+                fonts/michroma-400.woff2 fonts/saira-semi-condensed-500.woff2
+                fonts/saira-semi-condensed-600.woff2 fonts/saira-semi-condensed-700.woff2
+                index.html main.js model.js plain.js style.css)
+
+    # Its page loads its own files alone and reads nothing but its streams.
+    for name <- ~w(index.html board.js cords.js main.js model.js plain.js style.css) do
+      source = File.read!(Path.join(dir, name))
+      refute source =~ ~r{https?://(?!www\.w3\.org/2000/svg)}, name
+      refute source =~ ~r/\b(fetch|XMLHttpRequest|WebSocket|localStorage)\b/, name
+    end
+
+    for key <- ~w(actions connect streams),
+        do: refute(Map.has_key?(board.manifest["tincture"], key), key)
+
+    refute Map.has_key?(board.manifest, "caps")
+    refute Map.has_key?(board.manifest, "dependencies")
+  end
+
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"

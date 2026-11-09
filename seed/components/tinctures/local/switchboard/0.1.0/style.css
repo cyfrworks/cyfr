@@ -278,7 +278,7 @@ html[data-theme='dark'] .line:hover { background-color: rgba(255, 255, 255, .05)
 .lever-wrap { display: flex; align-items: center; gap: 2px; }
 .lever-l { font: 700 10.5px/1 var(--f-label); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); opacity: .7; }
 .sch[data-status='active'] .lever-l:last-child, .sch[data-status='paused'] .lever-l:first-child { color: var(--ink); opacity: 1; }
-.lever { all: unset; cursor: pointer; position: relative; width: 44px; height: 40px; }
+.lever { all: unset; cursor: pointer; position: relative; width: 44px; height: 44px; }
 .lever:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; border-radius: 50%; }
 .lever-base { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #8c9088, #2a2d28 72%); box-shadow: 0 0 0 3px var(--graphite), 0 2px 4px rgba(0, 0, 0, .4); }
 .lever-arm {
