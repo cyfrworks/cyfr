@@ -6,7 +6,7 @@ defmodule Emissary.Web.CanvasControllerTest do
   A canvas's page (`/_c/v1/<asset credential>/<frame id>`): the version's
   own entry, served only for a standing asset credential and a standing
   frame of its person, athanor and version, while its release digest is
-  the credential's, for a version whose placement is `canvas`, and 404
+  the credential's, for a version that declares the desktop block, and 404
   with no body otherwise, a missing entry included; CYFR's prefix (a
   doctype, its `<base>` and the SDK's script) followed by the entry's
   bytes as published, which the HTML parser reads with CYFR's two
@@ -134,7 +134,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       ctx,
       name,
       Map.merge(
-        %{"frame" => %{"placement" => "canvas"}, "streams" => [%{"name" => "runs.changes"}]},
+        %{"desktop" => %{"data" => ["runs.changes"]}},
         tincture
       )
     )
@@ -732,7 +732,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       plants = [
         {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
         {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
-        {"off-canvas", %{"frame" => %{"placement" => "canvas"}, "entry" => "main.js"}}
+        {"off-canvas", %{"desktop" => %{}, "entry" => "main.js"}}
       ]
 
       scripts = %{"main.js" => ~s|const t = "<head></head>";\n|}
@@ -768,6 +768,26 @@ defmodule Emissary.Web.CanvasControllerTest do
         style = served(credential, name, "style.css")
         assert {name, style.status, style.resp_body} == {name, 200, "body { margin: 0; }"}
       end
+    end
+  end
+
+  describe "a desktop's chrome declaration" do
+    test "is never served, while the version's other styles are", %{source: source} do
+      tincture = %{"entry" => "index.html", "desktop" => %{"chrome" => "chrome.css"}}
+      credential = asset!(source, put_version!(source, "dressed", tincture))
+
+      lay!(source, "dressed", [
+        {"index.html", "<html><head></head><body>Dressed</body></html>"},
+        {"style.css", "body { margin: 0; }"},
+        {"chrome.css", ":root { --chrome-radius: 8px; }"}
+      ])
+
+      chrome = served(credential, "dressed", "chrome.css")
+      absent = served(credential, "dressed", "absent.css")
+      assert json_response(chrome, 404)["code"] == "not_found"
+      assert {chrome.status, chrome.resp_body} == {absent.status, absent.resp_body}
+
+      assert served(credential, "dressed", "style.css").status == 200
     end
   end
 

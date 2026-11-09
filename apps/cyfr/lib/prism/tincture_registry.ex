@@ -10,10 +10,14 @@ defmodule Prism.TinctureRegistry do
   cyfr-manifest.json files with `"type": "tincture"` and provides lookup APIs
   for the shell and public tincture controllers. Each row carries the
   athanor's route segment (`athanor_segment`) so callers can build public
-  URLs without a lookup per render, and the frame its manifest declares
-  (`frame`: capabilities, placement, background, or nil for a declaration
-  the rules refuse), read through the frame's rules
-  (`Compendium.tincture_declaration/1`), which the shell grants from.
+  URLs without a lookup per render, the frame its manifest declares
+  (`frame`: capabilities, background and size hint, or nil for a
+  declaration the rules refuse), read through the frame's rules
+  (`Compendium.tincture_declaration/1`), which the shell grants from, and
+  a desktop's chrome (`chrome`): the tokens its chrome declaration reads
+  as, from the version's own files through the check publish ran
+  (`Compendium.tincture_check_chrome/2`), nil for a tincture that names
+  none or whose chrome no longer holds, which then wears the default.
 
   Reads go straight to a protected ETS table owned by the GenServer, so
   lookups never queue behind a `reload/1` scan (which walks Arca and can be
@@ -426,6 +430,7 @@ defmodule Prism.TinctureRegistry do
               media_previews: media_previews,
               entry: entry,
               frame: declared_frame(manifest, manifest_segs),
+              chrome: declared_chrome(ctx, manifest, version_segs, manifest_segs),
               segments: version_segs,
               manifest: manifest
             }
@@ -466,8 +471,8 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # The declared frame — its capabilities, placement and whether it runs
-  # in the background — as the frame's rules read it
+  # The declared frame — its capabilities, whether it runs in the
+  # background and its size hint — as the frame's rules read it
   # (`Compendium.tincture_declaration/1`), for the shell to grant from; nil
   # when the rules refuse the declaration. Such a tincture is still listed:
   # the publish check keeps it from being installed, and the shell opening
@@ -484,6 +489,38 @@ defmodule Prism.TinctureRegistry do
         )
 
         nil
+    end
+  end
+
+  # A desktop's chrome tokens, read from the version's files as publish
+  # read them; nil when it names no chrome, and nil, logged, when the
+  # declaration or the chrome no longer holds to today's rules.
+  defp declared_chrome(ctx, manifest, version_segs, manifest_segs) do
+    actor = Sanctum.Context.actor(ctx)
+
+    read = fn path ->
+      case Arca.get(actor, version_segs ++ String.split(path, "/")) do
+        {:ok, bytes} -> {:ok, bytes}
+        {:error, _} -> :error
+      end
+    end
+
+    # A declaration the rules refuse is `declared_frame/2`'s to log.
+    with {:ok, declaration} <- Compendium.tincture_declaration(manifest) do
+      case Compendium.tincture_check_chrome(declaration, read) do
+        {:ok, tokens} ->
+          tokens
+
+        {:error, {:invalid_tincture, refused}} ->
+          Logger.warning(
+            "[TinctureRegistry] tincture at #{Enum.join(manifest_segs, "/")} wears the default " <>
+              "chrome: #{refused}"
+          )
+
+          nil
+      end
+    else
+      {:error, _refused} -> nil
     end
   end
 

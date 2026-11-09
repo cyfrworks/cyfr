@@ -24,10 +24,10 @@ defmodule Sanctum.Streams do
   A stream that declares a shape is what a canvas reads. A frame opens one
   only when its version reads as a canvas: once every check above has
   admitted the caller, the gate reads the frame's version from the
-  registry and its placement under today's frame rules, through the
+  registry and what it is under today's frame rules, through the
   component-facts port (`Sanctum.Consent.Components`), since the gate
-  names no domain. Only the placement `canvas` admits; any other
-  placement, a declaration today's rules refuse, a version the registry
+  names no domain. Only a desktop admits; an app, a declaration today's
+  rules refuse, a version the registry
   does not hold and a read that fails each refuse `forbidden`
   (`canvas_stream`). A context without a frame is no frame's read: a
   session, an MCP key and a paired device open such a stream on the
@@ -158,9 +158,9 @@ defmodule Sanctum.Streams do
   end
 
   # A stream that declares a shape is a canvas's read. For a frame, the
-  # version it opened is read from the registry and its placement asked
+  # version it opened is read from the registry and what it is asked
   # under today's frame rules, the verdict the public-profile refusal
-  # reads; only `canvas` admits. A placement that cannot be read is never
+  # reads; only a desktop admits. A verdict that cannot be read is never
   # taken for a canvas's: a refused declaration, a row the registry does
   # not hold, an outage and any other answer refuse, so a version installed
   # before a rules change opens nothing a canvas's frame alone may. One
@@ -172,7 +172,7 @@ defmodule Sanctum.Streams do
     %{publisher: publisher, name: tincture, version: version} = frame.reference
 
     with {:ok, row} <- Components.get_component(ctx, tincture, version, publisher, "tincture"),
-         {:ok, "canvas"} <- Components.tincture_placement(ctx, row) do
+         {:ok, :desktop} <- Components.tincture_kind(ctx, row) do
       :ok
     else
       _not_a_canvas ->

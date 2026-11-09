@@ -83,9 +83,8 @@ defmodule PrismWeb.CanvasChromeTest do
 
   defp installed!(ctx) do
     lay!(ctx, "markets", %{
-      "frame" => %{"placement" => "canvas"},
       "entry" => "index.html",
-      "streams" => []
+      "desktop" => %{}
     })
 
     {:ok, _} =

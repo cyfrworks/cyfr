@@ -97,7 +97,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # The canvas reads a run's stored error as its sentence alone, so it
     # matches these two whole; a third grant sentence, or a reworded one,
     # fails here until the canvas's list is changed with it.
-    model = read!("seed/components/tinctures/local/canvas/0.3.0/src/model.ts")
+    model = read!("seed/components/tinctures/local/canvas/0.4.0/src/model.ts")
 
     [list] =
       Regex.run(~r/export const GRANT_SENTENCES = \[(.*?)\];/s, model, capture: :all_but_first)

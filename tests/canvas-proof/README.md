@@ -80,7 +80,7 @@ token, answers `answer-N.json`.
 
 ## The tinctures and the canvases
 
-- **The shipped canvas** `tincture:local.canvas` (0.3.0), the layout's
+- **The shipped canvas** `tincture:local.canvas` (0.4.0), the layout's
   first canvas, placed under the id `start`: its React page draws the day
   in one sentence, what needs attention grouped by cause, the recent runs,
   a launcher for each installed tincture (`button.app` with the name in

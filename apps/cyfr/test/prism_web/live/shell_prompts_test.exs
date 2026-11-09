@@ -135,9 +135,8 @@ defmodule PrismWeb.ShellPromptsTest do
       ctx,
       name,
       %{
-        "frame" => %{"placement" => "canvas"},
         "entry" => "index.html",
-        "streams" => []
+        "desktop" => %{}
       },
       [{"index.html", "<html><head></head><body>canvas</body></html>"}]
     )

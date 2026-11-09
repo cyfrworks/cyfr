@@ -46,7 +46,8 @@ defmodule Prima.ConsentPreview do
       alone when the ask names every tool and the grant is the whole ask.
     * `tool_servers` — `name`, `digest`, `tool_patterns`. One row per server.
     * `limits` — the seven fields of `Prima.Limits`, as `Prima.Limits.to_map/1` writes them.
-    * `frame` — a tincture's `capabilities`, `placement` (absent for the
+    * `frame` — a tincture's `capabilities`, `placement` (`canvas` for a
+      desktop, one that declares the `tincture.desktop` block; absent for the
       shell's default) and `background`.
     * `streams` — `name` and `subject` (a literal, `"*"`, or absent). One
       row per stream and subject, so one stream declared under two

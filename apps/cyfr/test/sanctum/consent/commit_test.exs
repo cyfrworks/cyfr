@@ -48,7 +48,7 @@ defmodule Sanctum.Consent.CommitTest do
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
 
     @impl true
-    def tincture_placement(_ctx, _row), do: {:error, :component_facts_unavailable}
+    def tincture_kind(_ctx, _row), do: {:error, :component_facts_unavailable}
   end
 
   # Runs `grant` with the table's tool-action reads counted, wherever the
@@ -120,9 +120,8 @@ defmodule Sanctum.Consent.CommitTest do
   # A canvas's row: a vanilla canvas, its page its entry.
   defp canvas!(ctx, name) do
     tincture_row!(ctx, name, %{
-      "frame" => %{"placement" => "canvas"},
       "entry" => "index.html",
-      "streams" => [%{"name" => "mcp_servers.changes"}]
+      "desktop" => %{"data" => ["mcp_servers.changes"]}
     })
   end
 
@@ -1289,9 +1288,8 @@ defmodule Sanctum.Consent.CommitTest do
         {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
         {"off-canvas",
          %{
-           "frame" => %{"placement" => "canvas"},
            "entry" => "main.js",
-           "streams" => [%{"name" => "mcp_servers.changes"}]
+           "desktop" => %{"data" => ["mcp_servers.changes"]}
          }}
       ]
 

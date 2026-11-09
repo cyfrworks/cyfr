@@ -186,9 +186,8 @@ defmodule Emissary.Web.HeldFrameStreamDeadlineTest do
       "version" => "1.0.0",
       "publisher" => "local",
       "tincture" => %{
-        "frame" => %{"placement" => "canvas"},
         "entry" => "index.html",
-        "streams" => [%{"name" => "mcp_servers.changes"}]
+        "desktop" => %{"data" => ["mcp_servers.changes"]}
       }
     }
 

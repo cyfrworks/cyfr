@@ -155,22 +155,30 @@ defmodule Compendium do
   @doc """
   Whether every stream a declaration opens is one a provider declares, with
   a subject it takes (`Compendium.Tincture.Rules.check_streams/2`). A
-  stream with a shape is a canvas's alone: a declaration of another
-  placement naming one is refused.
+  stream with a shape is a desktop's alone: a declaration without the
+  desktop block naming one is refused.
   """
   @spec tincture_check_streams(Prima.Manifest.Tincture.t(), [Prima.Provider.Stream.t()]) ::
           :ok | {:error, Rules.refusal()}
   defdelegate tincture_check_streams(declaration, streams), to: Rules, as: :check_streams
 
   @doc """
-  Whether every stream a canvas's declaration opens is one a canvas may
-  read (`Compendium.Tincture.Rules.check_canvas_streams/2`).
+  Whether a desktop's controls run only what it may offer and each pick
+  reads what the desktop reads (`Compendium.Tincture.Rules.check_desktop/2`).
   """
-  @spec tincture_check_canvas_streams(Prima.Manifest.Tincture.t(), [Prima.Provider.Stream.t()]) ::
+  @spec tincture_check_desktop(Prima.Manifest.Tincture.t(), [Prima.Provider.Stream.t()]) ::
           :ok | {:error, Rules.refusal()}
-  defdelegate tincture_check_canvas_streams(declaration, streams),
-    to: Rules,
-    as: :check_canvas_streams
+  defdelegate tincture_check_desktop(declaration, streams), to: Rules, as: :check_desktop
+
+  @doc """
+  A desktop's chrome declaration held to its grammar and the files it
+  names, answered as its tokens (`Compendium.Tincture.Rules.check_chrome/2`).
+  """
+  @spec tincture_check_chrome(
+          Prima.Manifest.Tincture.t(),
+          (String.t() -> {:ok, binary()} | :error)
+        ) :: {:ok, Prima.Manifest.Chrome.tokens() | nil} | {:error, Rules.refusal()}
+  defdelegate tincture_check_chrome(declaration, read), to: Rules, as: :check_chrome
 
   @doc """
   Whether a canvas version's files hold its page, its entry

@@ -480,7 +480,7 @@ defmodule Emissary.Web.TinctureControllerTest do
         public_version!(
           "canvas-dash",
           %{
-            "frame" => %{"placement" => "canvas"},
+            "desktop" => %{},
             "entry" => "index.html"
           },
           [
@@ -509,7 +509,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       plants = [
         {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
         {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
-        {"off-canvas", %{"frame" => %{"placement" => "canvas"}, "entry" => "main.js"}}
+        {"off-canvas", %{"desktop" => %{}, "entry" => "main.js"}}
       ]
 
       for {name, tincture} <- plants do

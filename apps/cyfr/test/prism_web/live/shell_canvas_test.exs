@@ -149,18 +149,14 @@ defmodule PrismWeb.ShellCanvasTest do
          ctx,
          name,
          version \\ "1.0.0",
-         streams \\ [%{"name" => "runs.changes"}],
+         desktop \\ %{"data" => ["runs.changes"]},
          opts \\ []
        ) do
     lay!(
       ctx,
       name,
       version,
-      %{
-        "frame" => %{"placement" => "canvas"},
-        "entry" => "index.html",
-        "streams" => streams
-      },
+      %{"entry" => "index.html", "desktop" => desktop},
       [{"index.html", "<html><head></head><body>#{name}</body></html>"}],
       opts
     )
@@ -779,12 +775,12 @@ defmodule PrismWeb.ShellCanvasTest do
       assert render(view) =~ ~r/data-canvas-place="validation"[^>]*inert/
       refute render(view) =~ ~s(id="shell-picker")
 
-      %{"version" => version, "tincture" => %{"streams" => streams}} = seed_manifest()
+      %{"version" => version, "tincture" => %{"desktop" => %{"data" => data}}} = seed_manifest()
       reply = handshake!(view, trial.id)
       assert reply["canvas"]["mode"] == "validation"
 
-      assert reply["canvas"]["streams"] ==
-               Enum.map(streams, &%{"name" => &1["name"], "subject" => &1["subject"]})
+      # The handshake names the streams the desktop block's data derives.
+      assert reply["canvas"]["streams"] == Enum.map(data, &%{"name" => &1, "subject" => nil})
 
       canvas_verb!(view, trial.id, :ready)
 
@@ -1719,7 +1715,7 @@ defmodule PrismWeb.ShellCanvasTest do
         ctx,
         "markets",
         "1.0.1",
-        [%{"name" => "runs.changes"}, %{"name" => "mcp_servers.changes"}],
+        %{"data" => ["runs.changes", "mcp_servers.changes"]},
         granted: false
       )
 
@@ -1750,7 +1746,7 @@ defmodule PrismWeb.ShellCanvasTest do
         ctx,
         "markets",
         "1.0.1",
-        [%{"name" => "runs.changes"}, %{"name" => "mcp_servers.changes"}],
+        %{"data" => ["runs.changes", "mcp_servers.changes"]},
         granted: false
       )
 
@@ -2721,10 +2717,7 @@ defmodule PrismWeb.ShellCanvasTest do
     end
 
     setup %{ctx: ctx, user: user, athanor: athanor} do
-      canvas!(ctx, "markets", "1.0.0", [
-        %{"name" => "feed.results", "subject" => "btc"},
-        %{"name" => "runs.changes"}
-      ])
+      canvas!(ctx, "markets", "1.0.0", %{"data" => ["runs.changes"], "feeds" => ["btc"]})
 
       canvas!(ctx, "notes-canvas")
       versions!(ctx, "markets", %{working: "1.0.0"})

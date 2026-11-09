@@ -435,7 +435,7 @@ defmodule Sanctum.Consent.Commit do
 
   A canvas has no public profile, so its staging is refused as an invalid
   argument, as is every public preview and commit of one, and so is a
-  tincture whose declaration today's rules refuse, since its placement
+  tincture whose declaration today's rules refuse, since what it is
   cannot be read.
   """
   @spec stage_publish(Context.t(), map()) :: {:ok, map()} | {:error, term()}
@@ -523,16 +523,16 @@ defmodule Sanctum.Consent.Commit do
   # preparation is made for one, so neither a staging nor a commit replaying
   # its plan can mint a public profile of it. A stored manifest or
   # declaration that does not parse is a damaged row, classed as
-  # `ShapeDerivation` classes it. The placement itself is the frame's
+  # `ShapeDerivation` classes it. Whether it is a desktop is the frame's
   # rules' verdict, and those rules sit above this app (`Compendium`), so a
   # tincture's is asked through the component-facts port: only a
-  # declaration today's rules read, placed anywhere but a canvas, is
-  # published, and one they refuse is held as a canvas.
+  # declaration today's rules read as an app is published, and one they
+  # refuse is held as a desktop.
   defp check_publishable(ctx, :public, component, source_ref) do
     tincture? = to_string(Map.get(component, :component_type)) == "tincture"
 
     with :ok <- check_declaration_parses(component, source_ref, tincture?) do
-      if tincture?, do: check_public_placement(ctx, component), else: :ok
+      if tincture?, do: check_public_kind(ctx, component), else: :ok
     end
   end
 
@@ -560,11 +560,11 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # An outage is the components unavailable, as the closure's reads are;
-  # every other answer but a placement that is no canvas refuses.
-  defp check_public_placement(ctx, component) do
-    case Components.tincture_placement(ctx, component) do
-      {:ok, "canvas"} -> {:error, {:invalid_argument, @canvas_not_public}}
-      {:ok, _placed} -> :ok
+  # every other answer but an app refuses.
+  defp check_public_kind(ctx, component) do
+    case Components.tincture_kind(ctx, component) do
+      {:ok, :desktop} -> {:error, {:invalid_argument, @canvas_not_public}}
+      {:ok, :app} -> :ok
       {:error, outage} when Components.is_outage(outage) -> {:error, {:unavailable, "Components"}}
       {:error, _refused} -> {:error, {:invalid_argument, @declaration_refused}}
     end
