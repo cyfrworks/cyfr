@@ -129,6 +129,7 @@ defmodule Cyfr.Bus do
         "PrismWeb.ComponentDetailLive",
         "PrismWeb.RegistryLive",
         "PrismWeb.SchedulesLive",
+        "Aqua.Status",
         "stream:components.changes"
       ],
       reason:
@@ -259,7 +260,7 @@ defmodule Cyfr.Bus do
       match: {:exact, "bus:vault_entries"},
       template: "tenant:<athanor_id>:bus:vault_entries",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["stream:vault.changes"],
+      consumers: ["Aqua.Status", "stream:vault.changes"],
       reason:
         "a vault entry of the athanor as a committed write left it, for its canvases: its " <>
           "name, credential kind and standing, never material, fields or a last use"

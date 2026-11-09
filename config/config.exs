@@ -76,7 +76,9 @@ config :sanctum,
     Cyfr.Providers.Attention,
     # `cyfr`: a person's recent files and the offers waiting for them, the
     # stream a canvas reads; no tool (the files are `Arca.Providers.Files`').
-    Cyfr.Providers.Files
+    Cyfr.Providers.Files,
+    # `aqua`: how the person's CYFR stands, the stream a canvas reads; no tool.
+    Aqua.Providers.Status
   ]
 
 # The proxies whose forwarded headers the proxy listener trusts
