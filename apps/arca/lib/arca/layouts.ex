@@ -38,6 +38,10 @@ defmodule Arca.Layouts do
   @type refusal ::
           FencedPublication.refusal() | :no_athanor | :no_person | {:storage, term()}
 
+  @doc "Whether `user_id` names a person as a layout's key spells one."
+  @spec person?(term()) :: boolean()
+  def person?(user_id), do: is_binary(user_id) and Regex.match?(@person, user_id)
+
   @doc "The fenced document key of `user_id`'s layout."
   @spec key(String.t()) :: String.t()
   def key(user_id) when is_binary(user_id), do: @prefix <> user_id
@@ -156,7 +160,7 @@ defmodule Arca.Layouts do
   end
 
   defp person(user_id) do
-    if is_binary(user_id) and Regex.match?(@person, user_id),
+    if person?(user_id),
       do: :ok,
       else: {:error, :no_person}
   end
