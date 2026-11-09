@@ -963,6 +963,7 @@ function ariaFor(e) {
   }
 }
 
+let labelsHtml = '';
 function plaqueTime() { return `${dateOf(0, { weekday: 'long', day: 'numeric', month: 'long' })} · ${clock(now())}`; }
 function renderLabels() {
   const s = L.scale;
@@ -993,7 +994,10 @@ function renderLabels() {
     html.push(nightPlate('later', 'Later', dayItems('later'), (L.vx1 - 3) * s, (L.paveY - 3) * s, 'right'));
   }
   html.push(`<span class="blind" id="blind" style="left:${L.nowX * s}px;top:${(L.roadY - 21) * s - 5}px">${clock(now())}</span>`);
-  labels.innerHTML = html.join('');
+  const next = html.join('');
+  if (next === labelsHtml) return;
+  labelsHtml = next;
+  labels.innerHTML = next;
   placePlates();
   labels.querySelectorAll('.hit').forEach((el) => {
     el.addEventListener('click', () => select(el.dataset.id));
@@ -1240,6 +1244,8 @@ function scrubSign() {
     acts: [act('Back to now', endScrub, 'go')],
   };
 }
+let boardHtml = '';
+let boardActs = [];
 function renderBoard() {
   if (!L) return;
   const e = selected && (selected === 'earlier' || selected === 'later' ? { id: selected, kind: 'days' } : ents.find((x) => x.id === selected));
@@ -1249,8 +1255,13 @@ function renderBoard() {
   const list = L.posture === 'phone' && !e && !scrub ? phoneList() : '';
   const acts = sign.acts.map((a, i) => `<button class="btn ${a.cls}" data-act="${i}" ${a.disabled ? 'disabled' : ''}>${esc(a.label)}</button>`).join('');
   const back = e ? '<button class="btn" data-back>Close</button>' : '';
-  boardEl.innerHTML = `<div class="say"><h2>${esc(sign.title)}</h2>${facts ? `<p class="facts">${facts}</p>` : ''}${said ? `<p class="said">${esc(said)}</p>` : ''}${picks}${list}</div><div class="acts">${acts}${back}</div>`;
-  boardEl.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => sign.acts[+b.dataset.act].fn()));
+  const html = `<div class="say"><h2>${esc(sign.title)}</h2>${facts ? `<p class="facts">${facts}</p>` : ''}${said ? `<p class="said">${esc(said)}</p>` : ''}${picks}${list}</div><div class="acts">${acts}${back}</div>`;
+  boardActs = sign.acts;
+  // The same board is not written again: a tap landing while a stream's event redraws would be lost.
+  if (html === boardHtml) return;
+  boardHtml = html;
+  boardEl.innerHTML = html;
+  boardEl.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => boardActs[+b.dataset.act].fn()));
   boardEl.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => select(b.dataset.pick)));
   const bk = boardEl.querySelector('[data-back]'); if (bk) bk.addEventListener('click', () => select(selected));
 }
