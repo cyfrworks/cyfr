@@ -38,27 +38,20 @@ defmodule Opus.ProviderRetryTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "retry_tool_#{System.unique_integer([:positive])}")
-    keys = [cyfr: :locus_runtime_workers, arca: :base_path]
-    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    configured = Application.get_env(:cyfr, :locus_runtime_workers)
 
-    Application.put_env(
+    Prima.Test.Env.put_app_env(
       :cyfr,
       :locus_runtime_workers,
-      ScriptedWorker.workers(@reference, prev[{:cyfr, :locus_runtime_workers}])
+      ScriptedWorker.workers(@reference, configured)
     )
 
-    Application.put_env(:arca, :base_path, test_path)
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
     ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
-
-      for {{app, key}, value} <- prev do
-        if value,
-          do: Application.put_env(app, key, value),
-          else: Application.delete_env(app, key)
-      end
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
