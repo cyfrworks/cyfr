@@ -403,6 +403,98 @@
           "ref": "c:local.openai"
         }
       }
+    },
+    {
+      "verb": "press",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "pause-digest"
+        }
+      }
+    },
+    {
+      "verb": "press",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "vpn-connect",
+          "value": "lisbon-1"
+        }
+      }
+    },
+    {
+      "verb": "prefs",
+      "message": {
+        "v": 1,
+        "verb": "prefs",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "document": {
+            "widgets": {
+              "runs": {
+                "on": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "verb": "ask",
+      "message": {
+        "v": 1,
+        "verb": "ask",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "widget": "runs"
+        }
+      }
+    },
+    {
+      "verb": "settings",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "page": "schedules"
+        }
+      }
+    },
+    {
+      "verb": "open",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "t:local.runs",
+          "subject": {
+            "kind": "run",
+            "id": "exec_0190f3a2-7b1c-7d2e-8f3a-1b2c3d4e5f60"
+          }
+        }
+      }
+    },
+    {
+      "verb": "open",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "t:local.files",
+          "subject": {
+            "kind": "file",
+            "id": "notes/today.md"
+          }
+        }
+      }
     }
   ],
   "shell_invalid": [
@@ -554,10 +646,202 @@
           "reason": "runs failed"
         }
       }
+    },
+    {
+      "why": "a press naming a control and a binding",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "pause-digest",
+          "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+        }
+      }
+    },
+    {
+      "why": "a press naming a control outside the id grammar",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "Pause Digest"
+        }
+      }
+    },
+    {
+      "why": "a press with an empty value",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "vpn-connect",
+          "value": ""
+        }
+      }
+    },
+    {
+      "why": "a press with a value past 256 code points",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "vpn-connect",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "why": "a press with a value carrying a control character",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "vpn-connect",
+          "value": "lisbon\n1"
+        }
+      }
+    },
+    {
+      "why": "a press with a value that is not a string",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "control": "vpn-connect",
+          "value": 1
+        }
+      }
+    },
+    {
+      "why": "prefs whose document is not an object",
+      "message": {
+        "v": 1,
+        "verb": "prefs",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "document": []
+        }
+      }
+    },
+    {
+      "why": "prefs with a revision of their own",
+      "message": {
+        "v": 1,
+        "verb": "prefs",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "document": {},
+          "revision": 2
+        }
+      }
+    },
+    {
+      "why": "prefs without a document",
+      "message": {
+        "v": 1,
+        "verb": "prefs",
+        "frame": "frm_01a09fee2e4f",
+        "args": {}
+      }
+    },
+    {
+      "why": "an ask naming a widget outside the id grammar",
+      "message": {
+        "v": 1,
+        "verb": "ask",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "widget": "Runs"
+        }
+      }
+    },
+    {
+      "why": "an ask carrying text",
+      "message": {
+        "v": 1,
+        "verb": "ask",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "widget": "runs",
+          "text": "why did this fail?"
+        }
+      }
+    },
+    {
+      "why": "settings naming a path, not a page's key",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "page": "/a/@ada/schedules"
+        }
+      }
+    },
+    {
+      "why": "settings naming no page",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {}
+      }
+    },
+    {
+      "why": "an open on a subject of an unknown kind",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "t:local.runs",
+          "subject": {
+            "kind": "url",
+            "id": "https"
+          }
+        }
+      }
+    },
+    {
+      "why": "an open on a subject whose id is outside the grammar",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "t:local.runs",
+          "subject": {
+            "kind": "run",
+            "id": "<script>"
+          }
+        }
+      }
+    },
+    {
+      "why": "an open on a subject with another key",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "t:local.runs",
+          "subject": {
+            "kind": "run",
+            "id": "exec_1",
+            "label": "x"
+          }
+        }
+      }
     }
   ],
   "canvas": {
-    "comment": "A canvas frame's part of the tincture wire. `verbs` are the shell verbs the shell takes from a canvas alone. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. `to_frame` are the messages the bridge posts to a canvas over its port, each exactly v, verb, frame and args, read by the SDK. An `installed` tincture is exactly ref, name, icon (an emoji of 1 to 16 code points, or null) and open (a boolean). A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream route. Every invalid row is refused for the reason `why` gives.",
+    "comment": "A canvas frame's part of the tincture wire. `verbs` are the shell verbs the shell takes from a canvas alone. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. A canvas block is exactly mode, data_path, streams, prefs (exactly document, an object, and revision, a whole number from 0), appearance (exactly mode, light or dark; accent, lowercase #rrggbb; locale, a language tag; time_zone, a zone name; and safe_areas, exactly top, right, bottom and left, whole CSS pixels to 512) and person (exactly name, 1 to 128 code points with no control character, or null). `to_frame` are the messages the bridge posts to a frame over its port, each exactly v, verb, frame and args, read by the SDK: a canvas's open, what the shell tells it, its answers `pressed` (exactly control and outcome, accepted, refused or cancelled, with reason, a refusal's class, exactly when refused) and `prefs` (exactly outcome, saved, stale, refused or cancelled, document and revision, with reason exactly when refused), and an app's `subject`. An `installed` tincture is exactly ref, name, icon (an emoji of 1 to 16 code points, or null) and open (a boolean). A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream route. Every invalid row is refused for the reason `why` gives.",
     "stages": [
       "load",
       "runtime"
@@ -565,7 +849,10 @@
     "verbs": [
       "press",
       "failed",
-      "grant"
+      "grant",
+      "prefs",
+      "ask",
+      "settings"
     ],
     "handshake": {
       "valid": [
@@ -589,7 +876,44 @@
                   "name": "runs.changes",
                   "subject": null
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -857,7 +1181,29 @@
                   "name": "feed.results",
                   "subject": "feed-64"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -868,7 +1214,90 @@
             "canvas": {
               "mode": "validation",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          }
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "validation",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "light",
+                "accent": "#0a0b0c",
+                "locale": "pt",
+                "time_zone": "UTC",
+                "safe_areas": {
+                  "top": 47,
+                  "right": 0,
+                  "bottom": 34,
+                  "left": 512
+                }
+              },
+              "person": {
+                "name": null
+              }
             }
           }
         }
@@ -882,7 +1311,29 @@
             "canvas": {
               "mode": "debug",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -894,7 +1345,29 @@
             "canvas": {
               "mode": "live",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -906,7 +1379,29 @@
             "canvas": {
               "mode": "live",
               "data_path": "/_f/v1/o/frm_00aa11bb22/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -918,7 +1413,29 @@
             "canvas": {
               "mode": "live",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -930,7 +1447,29 @@
             "canvas": {
               "mode": "live",
               "data_path": "https://cyfr.example/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -941,7 +1480,29 @@
             "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
             "canvas": {
               "mode": "live",
-              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/"
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -959,7 +1520,29 @@
                   "subject": "btc",
                   "filter": "feed"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -975,7 +1558,29 @@
                 {
                   "name": "runs.changes"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -992,7 +1597,29 @@
                   "name": "feed",
                   "subject": "btc"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1009,7 +1636,29 @@
                   "name": "feed.results",
                   "subject": 7
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1034,7 +1683,29 @@
                   "name": "feed.results",
                   "subject": "btc"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1307,7 +1978,29 @@
                   "name": "feed.results",
                   "subject": "feed-65"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1322,6 +2015,28 @@
               "streams": {
                 "name": "feed.results",
                 "subject": "btc"
+              },
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
               }
             }
           }
@@ -1335,7 +2050,29 @@
               "mode": "live",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
               "streams": [],
-              "extra": 1
+              "extra": 1,
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1347,10 +2084,1228 @@
             "canvas": {
               "mode": "live",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             },
             "extra": 1
           }
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                }
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "prefs lacking its revision"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": -1
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a negative prefs revision"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 1.5
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a prefs revision that is not a whole number"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": [],
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a prefs document that is not an object"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3,
+                "digest": "sha256:00"
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "prefs with a field they do not take"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "sepia",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "an appearance mode outside light and dark"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366F1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "an accent that is not lowercase #rrggbb"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#636",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "an accent of three digits"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en_GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a locale outside the language-tag shape"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "../etc/passwd",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a time zone outside the zone-name shape"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 513,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a safe area past 512 pixels"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 1.5
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a safe area that is not a whole number"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "safe areas lacking a side"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "an appearance lacking its locale"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada",
+                "id": "usr_01"
+              }
+            }
+          },
+          "why": "a person carrying an identifier"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": ""
+              }
+            }
+          },
+          "why": "an empty person name"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+              }
+            }
+          },
+          "why": "a person name past 128 code points"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada\u0007"
+              }
+            }
+          },
+          "why": "a person name with a control character"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              }
+            }
+          },
+          "why": "a canvas block lacking its person"
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
+            }
+          },
+          "why": "a canvas block lacking its prefs"
         }
       ]
     },
@@ -1377,7 +3332,44 @@
                   "name": "runs.changes",
                   "subject": null
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1646,7 +3638,29 @@
                   "name": "feed.results",
                   "subject": "feed-64"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1658,7 +3672,29 @@
             "args": {
               "mode": "validation",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1773,6 +3809,127 @@
               "state": "frozen"
             }
           }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "outcome": "accepted"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "outcome": "refused",
+              "reason": "not_found"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "vpn-connect",
+              "outcome": "cancelled"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "saved",
+              "document": {
+                "widgets": {
+                  "runs": {
+                    "on": true,
+                    "rect": {
+                      "x": 0,
+                      "y": 0,
+                      "w": 5000,
+                      "h": 4000
+                    }
+                  },
+                  "apps": {
+                    "on": false
+                  }
+                },
+                "desktop": {
+                  "compact": false
+                }
+              },
+              "revision": 4
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "stale",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 7
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "refused",
+              "reason": "invalid_argument",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 0
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "cancelled",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 0
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "subject",
+            "frame": "frm_01a09fee2e4f",
+            "args": {
+              "kind": "thread",
+              "id": "thr_0190f3a2"
+            }
+          }
         }
       ],
       "invalid": [
@@ -1870,7 +4027,29 @@
             "args": {
               "mode": "debug",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1883,7 +4062,29 @@
             "args": {
               "mode": "live",
               "data_path": "/_f/v1/o/frm_00aa11bb22/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1896,7 +4097,29 @@
             "args": {
               "mode": "live",
               "data_path": "/_f/v1/o/frm_8f3c2a1b9d",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1909,7 +4132,29 @@
             "args": {
               "mode": "live",
               "data_path": "https://cyfr.example/_f/v1/o/frm_8f3c2a1b9d/",
-              "streams": []
+              "streams": [],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1921,7 +4166,29 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "mode": "live",
-              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/"
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1940,7 +4207,29 @@
                   "subject": "btc",
                   "filter": "feed"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1957,7 +4246,29 @@
                 {
                   "name": "runs.changes"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1975,7 +4286,29 @@
                   "name": "feed",
                   "subject": "btc"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -1993,7 +4326,29 @@
                   "name": "feed.results",
                   "subject": 7
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -2019,7 +4374,29 @@
                   "name": "feed.results",
                   "subject": "btc"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -2293,7 +4670,29 @@
                   "name": "feed.results",
                   "subject": "feed-65"
                 }
-              ]
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
+              }
             }
           }
         },
@@ -2309,6 +4708,28 @@
               "streams": {
                 "name": "feed.results",
                 "subject": "btc"
+              },
+              "prefs": {
+                "document": {
+                  "widgets": {},
+                  "desktop": {}
+                },
+                "revision": 0
+              },
+              "appearance": {
+                "mode": "dark",
+                "accent": "#6366f1",
+                "locale": "en-GB",
+                "time_zone": "Europe/Lisbon",
+                "safe_areas": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0,
+                  "left": 0
+                }
+              },
+              "person": {
+                "name": "Ada"
               }
             }
           }
@@ -3003,6 +5424,124 @@
               "state": "paused"
             }
           }
+        },
+        {
+          "why": "a refused press without its reason",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "outcome": "refused"
+            }
+          }
+        },
+        {
+          "why": "an accepted press with a reason",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "outcome": "accepted",
+              "reason": "internal"
+            }
+          }
+        },
+        {
+          "why": "a press outcome outside the wire's",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "pause-digest",
+              "outcome": "queued"
+            }
+          }
+        },
+        {
+          "why": "a pressed control outside the id grammar",
+          "message": {
+            "v": 1,
+            "verb": "pressed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "control": "../x",
+              "outcome": "accepted"
+            }
+          }
+        },
+        {
+          "why": "a prefs answer with a negative revision",
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "saved",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": -1
+            }
+          }
+        },
+        {
+          "why": "a prefs answer whose document is not an object",
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "saved",
+              "document": "{}",
+              "revision": 1
+            }
+          }
+        },
+        {
+          "why": "a refused prefs answer without its reason",
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "refused",
+              "document": {
+                "widgets": {},
+                "desktop": {}
+              },
+              "revision": 1
+            }
+          }
+        },
+        {
+          "why": "a prefs answer lacking its document",
+          "message": {
+            "v": 1,
+            "verb": "prefs",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "stale",
+              "revision": 1
+            }
+          }
+        },
+        {
+          "why": "a subject of an unknown kind",
+          "message": {
+            "v": 1,
+            "verb": "subject",
+            "frame": "frm_01a09fee2e4f",
+            "args": {
+              "kind": "url",
+              "id": "x"
+            }
+          }
         }
       ]
     },
@@ -3039,5 +5578,58 @@
         }
       ]
     }
+  },
+  "app_handshake": {
+    "comment": "The shell's answer to an app frame's handshake, built by Prism.Frames with Prima.TinctureWire.frame_handshake/2 and read by the console's bridge: exactly the frame credential, and the subject the app was opened on when it was opened on one. Every invalid row is refused for the reason `why` gives.",
+    "valid": [
+      {
+        "reply": {
+          "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw"
+        }
+      },
+      {
+        "reply": {
+          "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+          "subject": {
+            "kind": "schedule",
+            "id": "sch_0190f3a2"
+          }
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "why": "an empty credential",
+        "reply": {
+          "credential": ""
+        }
+      },
+      {
+        "why": "a subject of an unknown kind",
+        "reply": {
+          "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+          "subject": {
+            "kind": "url",
+            "id": "x"
+          }
+        }
+      },
+      {
+        "why": "a subject lacking its id",
+        "reply": {
+          "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+          "subject": {
+            "kind": "run"
+          }
+        }
+      },
+      {
+        "why": "a handshake with a field it does not take",
+        "reply": {
+          "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+          "canvas": {}
+        }
+      }
+    ]
   }
 }

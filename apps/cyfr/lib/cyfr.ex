@@ -21,6 +21,7 @@ defmodule Cyfr do
       Admission,
       Bus,
       Bus.ApiKeys,
+      Bus.AquaAsk,
       Bus.AthanorArchived,
       Bus.Attention,
       Bus.Build,

@@ -8,11 +8,12 @@
 // pins both sides; the SDK's tests read it.
 //
 // Beside it, the messages the shell sends the frame over the port: its port
-// and its credential, and to a canvas its open (`canvas`) and what the
-// shell tells it (`posture`, `covered`, `installed`, `state`). They pass
-// only between the shell's bridge and the SDK, so they are defined here,
-// once; the canvas's are pinned by the fixture's `canvas` section, whose
-// `handshake` rows are the server's reply the bridge reads them from.
+// and its credential, an app's subject, and to a canvas its open
+// (`canvas`), what the shell tells it (`posture`, `covered`, `installed`,
+// `state`) and its answers (`pressed`, `prefs`). They pass only between
+// the shell's bridge and the SDK, so they are defined here, once; the
+// canvas's are pinned by the fixture's `canvas` section, whose `handshake`
+// rows are the server's reply the bridge reads them from.
 
 export const VERSION = 1
 
@@ -24,11 +25,34 @@ export const ROUTES = Object.freeze({
   stream_open: "/_f/v1/stream"
 })
 
-export const VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed", "grant"])
+export const VERBS = Object.freeze([
+  "open",
+  "close",
+  "title",
+  "ready",
+  "credential",
+  "press",
+  "failed",
+  "grant",
+  "prefs",
+  "ask",
+  "settings"
+])
 
 // The verbs only a canvas sends: from any other frame the SDK sends none
 // of them, and the shell drops them.
-export const CANVAS_VERBS = Object.freeze(["press", "failed", "grant"])
+export const CANVAS_VERBS = Object.freeze(["press", "failed", "grant", "prefs", "ask", "settings"])
+
+// The verbs a canvas sends for the person, which the shell honours only
+// within moments of the person's own input, one per input.
+export const PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings"])
+
+// The kinds of subject an app is opened on (`Prima.Manifest.Tincture`).
+export const SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"])
+
+// What a control's press, and a write of the preferences, come to.
+export const PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"])
+export const PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"])
 
 // Where a frame that posts `failed` failed: before its `ready`, or after.
 export const STAGES = Object.freeze(["load", "runtime"])
@@ -66,6 +90,21 @@ const TINCTURE_REF = /^(t|tincture):\S+$/
 // tincture, in full or by its shorthand (`Prima.ComponentRef`).
 const COMPONENT_REF = /^(c|catalyst|r|reagent|f|formula|t|tincture):\S+$/
 const MAX_TITLE = 120
+// A desktop control's or widget's id (`Prima.TinctureWire.control?/1`).
+const DESKTOP_ID = /^[a-z][a-z0-9_-]{0,62}$/
+// A page's key, as Prism names its pages (`Prima.TinctureWire.page?/1`).
+const PAGE = /^[a-z][a-z0-9_]{0,31}$/
+// What an app is opened on (`Prima.TinctureWire.subject_id?/1`).
+const SUBJECT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/
+const MAX_PRESS_VALUE = 256
+const ACCENT = /^#[0-9a-f]{6}$/
+const LOCALE = /^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,7}$/
+const TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]{0,31}(\/[A-Za-z0-9][A-Za-z0-9_+-]{0,31}){0,2}$/
+const APPEARANCE_MODES = ["light", "dark"]
+const MAX_SAFE_AREA = 512
+const MAX_PERSON_NAME = 128
+// A refusal's class, as the server names its classes (`Prima.Refusal`).
+const REFUSAL_CLASS = /^[a-z][a-z_]{0,63}$/
 // `Prima.Feed.binding_id?/1`.
 const BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 // `Prima.Feed.name?/1`: a feed's name, and an action's.
@@ -91,6 +130,30 @@ const sameKeys = (object, keys) => {
 const isText = (value) => typeof value === "string" && !LONE_SURROGATE.test(value)
 
 const isTinctureRef = (ref) => typeof ref === "string" && TINCTURE_REF.test(ref)
+
+const codePointCount = (value) => Array.from(value).length
+
+// A C0 or C1 control character, or DEL.
+const isControl = (character) => {
+  const code = character.codePointAt(0)
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
+}
+
+// Text of 1 to `max` code points with no control character.
+const isBoundedText = (value, max) =>
+  isText(value) && value !== "" && codePointCount(value) <= max && !Array.from(value).some(isControl)
+
+export const isDesktopId = (id) => typeof id === "string" && DESKTOP_ID.test(id)
+
+export const isPressValue = (value) => isBoundedText(value, MAX_PRESS_VALUE)
+
+// What an app is opened on: exactly a kind the apps accept and an id.
+export const isSubject = (subject) =>
+  isObject(subject) &&
+  sameKeys(subject, ["kind", "id"]) &&
+  SUBJECT_KINDS.includes(subject.kind) &&
+  typeof subject.id === "string" &&
+  SUBJECT_ID.test(subject.id)
 
 export function isFrameId(id) {
   return typeof id === "string" && FRAME_ID.test(id)
@@ -298,7 +361,11 @@ function argsError(verb, args) {
   const keys = Object.keys(args)
   switch (verb) {
     case "open":
-      return keys.length === 1 && isTinctureRef(args.ref) ? null : "open names a tincture reference"
+      if (!isTinctureRef(args.ref)) return "open names a tincture reference"
+      if (keys.length === 1) return null
+      return keys.length === 2 && isSubject(args.subject)
+        ? null
+        : "open's subject is exactly a kind the apps accept and an id"
     case "title":
       return keys.length === 1 &&
         typeof args.title === "string" &&
@@ -311,13 +378,29 @@ function argsError(verb, args) {
         ? null
         : "credential names a vault entry"
     case "press":
-      return sameKeys(args, ["binding", "action"]) &&
-        typeof args.binding === "string" &&
-        BINDING_ID.test(args.binding) &&
-        typeof args.action === "string" &&
-        ACTION_NAME.test(args.action)
+      if (sameKeys(args, ["binding", "action"])) {
+        return typeof args.binding === "string" &&
+          BINDING_ID.test(args.binding) &&
+          typeof args.action === "string" &&
+          ACTION_NAME.test(args.action)
+          ? null
+          : "press names a binding id and an action"
+      }
+      if (sameKeys(args, ["control"])) return isDesktopId(args.control) ? null : "press names a control by its id"
+      if (sameKeys(args, ["control", "value"])) {
+        return isDesktopId(args.control) && isPressValue(args.value)
+          ? null
+          : `a press names a control and a value of 1 to ${MAX_PRESS_VALUE} code points`
+      }
+      return "press names a binding id and an action, or a control"
+    case "prefs":
+      return sameKeys(args, ["document"]) && isObject(args.document) ? null : "prefs carries exactly a document"
+    case "ask":
+      return sameKeys(args, ["widget"]) && isDesktopId(args.widget) ? null : "ask names a widget by its id"
+    case "settings":
+      return sameKeys(args, ["page"]) && typeof args.page === "string" && PAGE.test(args.page)
         ? null
-        : "press names a binding id and an action"
+        : "settings names a page by its key"
     case "failed":
       return sameKeys(args, ["stage"]) && STAGES.includes(args.stage) ? null : "failed names a stage"
     case "grant":
@@ -352,11 +435,29 @@ export function streamPath(frame) {
 // version trialled in a hidden frame).
 export const MODES = Object.freeze(["live", "validation"])
 
-// Shell to a canvas, over its port: its open, then what the shell tells it.
-export const TO_FRAME_VERBS = Object.freeze(["canvas", "posture", "covered", "installed", "state"])
+// Shell to a frame, over its port: a canvas's open, what the shell tells
+// it, its answers, and an app's subject.
+export const TO_FRAME_VERBS = Object.freeze([
+  "canvas",
+  "posture",
+  "covered",
+  "installed",
+  "state",
+  "pressed",
+  "prefs",
+  "subject"
+])
 
-// What the shell tells a canvas, which its page hears through `cyfr.on`.
-export const CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state"])
+// What the shell tells a canvas, held as the latest of each and posted
+// again after its handshake.
+export const TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"])
+
+// The shell's answers to a canvas's press and write, each posted once.
+export const ANSWER_VERBS = Object.freeze(["pressed", "prefs"])
+
+// What a canvas's page hears through `cyfr.on`: what the shell tells it,
+// and `desktop`, its preferences, appearance and person.
+export const CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop"])
 
 const POSTURES = ["desk", "hand"]
 const SHELL_STATES = ["live", "frozen"]
@@ -406,19 +507,79 @@ const isInstalled = (tincture) =>
   isIcon(tincture.icon) &&
   typeof tincture.open === "boolean"
 
+const isRevision = (revision) => Number.isInteger(revision) && revision >= 0
+
+const isPrefs = (prefs) =>
+  isObject(prefs) && sameKeys(prefs, ["document", "revision"]) && isObject(prefs.document) && isRevision(prefs.revision)
+
+const SIDES = ["top", "right", "bottom", "left"]
+
+const isSafeAreas = (areas) =>
+  isObject(areas) &&
+  sameKeys(areas, SIDES) &&
+  SIDES.every((side) => Number.isInteger(areas[side]) && areas[side] >= 0 && areas[side] <= MAX_SAFE_AREA)
+
+const isAppearance = (appearance) =>
+  isObject(appearance) &&
+  sameKeys(appearance, ["mode", "accent", "locale", "time_zone", "safe_areas"]) &&
+  APPEARANCE_MODES.includes(appearance.mode) &&
+  typeof appearance.accent === "string" &&
+  ACCENT.test(appearance.accent) &&
+  typeof appearance.locale === "string" &&
+  appearance.locale.length <= 64 &&
+  LOCALE.test(appearance.locale) &&
+  typeof appearance.time_zone === "string" &&
+  TIME_ZONE.test(appearance.time_zone) &&
+  isSafeAreas(appearance.safe_areas)
+
+const isPerson = (person) =>
+  isObject(person) &&
+  sameKeys(person, ["name"]) &&
+  (person.name === null || isBoundedText(person.name, MAX_PERSON_NAME))
+
+const CANVAS_KEYS = ["mode", "data_path", "streams", "prefs", "appearance", "person"]
+
 // A canvas block, as the handshake reply carries it and the `canvas`
-// message's args are: the open's mode, its frame's data path and the
-// version's declared streams.
+// message's args are: the open's mode, its frame's data path, the
+// version's declared streams, and the desktop's preferences, appearance
+// and person.
 function canvasError(block, frame) {
-  if (!isObject(block) || !sameKeys(block, ["mode", "data_path", "streams"])) {
-    return "a canvas is exactly mode, data_path and streams"
+  if (!isObject(block) || !sameKeys(block, CANVAS_KEYS)) {
+    return "a canvas is exactly mode, data_path, streams, prefs, appearance and person"
   }
   if (!MODES.includes(block.mode)) return "a canvas's mode is live or validation"
   if (block.data_path !== dataPath(frame)) return "a canvas's data path is its frame's"
   if (!isStreams(block.streams)) {
     return `a canvas names at most ${MAX_STREAMS} distinct streams of name and subject`
   }
+  if (!isPrefs(block.prefs)) return "a canvas's prefs are exactly a document and its revision"
+  if (!isAppearance(block.appearance)) {
+    return "a canvas's appearance is exactly mode, accent, locale, time_zone and safe_areas"
+  }
+  if (!isPerson(block.person)) return "a canvas's person is exactly a name, or none"
   return null
+}
+
+// An answer's outcome, with a reason exactly when it was refused.
+const isOutcome = (args, outcomes) =>
+  outcomes.includes(args.outcome) &&
+  (args.outcome === "refused"
+    ? typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason)
+    : !("reason" in args))
+
+function pressedError(args) {
+  const keys = args.outcome === "refused" ? ["control", "outcome", "reason"] : ["control", "outcome"]
+  return sameKeys(args, keys) && isDesktopId(args.control) && isOutcome(args, PRESS_OUTCOMES)
+    ? null
+    : "pressed is exactly a control and its outcome, with a reason when refused"
+}
+
+function prefsAnswerError(args) {
+  const keys =
+    args.outcome === "refused" ? ["outcome", "document", "revision", "reason"] : ["outcome", "document", "revision"]
+  return sameKeys(args, keys) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES)
+    ? null
+    : "prefs is exactly an outcome, a document and its revision, with a reason when refused"
 }
 
 function toFrameArgsError(verb, args, frame) {
@@ -437,6 +598,12 @@ function toFrameArgsError(verb, args, frame) {
         : `installed names at most ${MAX_TINCTURES} tinctures of ref, name, icon and open`
     case "state":
       return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen"
+    case "pressed":
+      return pressedError(args)
+    case "prefs":
+      return prefsAnswerError(args)
+    case "subject":
+      return isSubject(args) ? null : "subject is exactly a kind and an id"
     default:
       return "unknown verb"
   }
@@ -467,6 +634,20 @@ export function toFrameMessage(verb, frame, args) {
   const decoded = decodeToFrame(message)
   if (!decoded.ok) throw new TypeError("not a message to a canvas: " + decoded.error)
   return message
+}
+
+// The shell's reply to an app frame's handshake read back: `{ok: true,
+// credential, subject}`, the subject null when it was opened on none, or
+// `{ok: false, error}`.
+export function decodeFrameHandshake(reply) {
+  if (!isObject(reply) || typeof reply.credential !== "string" || reply.credential === "") {
+    return {ok: false, error: "a frame's handshake carries the frame credential"}
+  }
+  if (sameKeys(reply, ["credential"])) return {ok: true, credential: reply.credential, subject: null}
+  if (sameKeys(reply, ["credential", "subject"]) && isSubject(reply.subject)) {
+    return {ok: true, credential: reply.credential, subject: reply.subject}
+  }
+  return {ok: false, error: "a frame's handshake is exactly a credential and a subject"}
 }
 
 // The shell's reply to a canvas frame's handshake read back, for the frame

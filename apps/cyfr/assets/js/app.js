@@ -88,9 +88,31 @@ Hooks.ScrollBottom = {
   }
 }
 
+// What the person's browser says of how they read the screen, which the
+// shell tells a desktop in its handshake (`Prism.Appearance`): the
+// language, the time zone and the safe-area insets, read when the socket
+// connects and held to their grammar on the server.
+function appearance() {
+  const {locale, timeZone} = Intl.DateTimeFormat().resolvedOptions()
+  return {locale: navigator.language || locale, time_zone: timeZone, safe_areas: safeAreas()}
+}
+
+function safeAreas() {
+  const probe = document.createElement("div")
+  probe.style.cssText =
+    "position:fixed;visibility:hidden;pointer-events:none;" +
+    "padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)"
+  document.body.appendChild(probe)
+  const style = getComputedStyle(probe)
+  const inset = (side) => Math.round(parseFloat(style.getPropertyValue(`padding-${side}`)) || 0)
+  const areas = {top: inset("top"), right: inset("right"), bottom: inset("bottom"), left: inset("left")}
+  probe.remove()
+  return areas
+}
+
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: {_csrf_token: csrfToken},
+  params: () => ({_csrf_token: csrfToken, ...appearance()}),
   hooks: Hooks
 })
 

@@ -250,6 +250,43 @@ defmodule Compendium do
   defdelegate canvas_versions(ctx, name), to: Compendium.Canvas, as: :versions
 
   @doc """
+  The call a desktop's control `id` makes when the person presses it with
+  `value`, or its refusal (`Compendium.Desktop.control/4`): checked
+  against the served version's declaration, the direct rule and, for a
+  pick, the stream's current state. Nothing is run.
+  """
+  @spec desktop_control(
+          Context.t(),
+          Prima.Manifest.Tincture.Desktop.t() | nil,
+          String.t(),
+          String.t() | nil
+        ) :: {:ok, Compendium.Desktop.call()} | {:error, term()}
+  defdelegate desktop_control(ctx, desktop, id, value), to: Compendium.Desktop, as: :control
+
+  @doc """
+  The caller's preferences for their canvas `canvas_id`, reduced to the
+  desktop's schema, with their revision (`Compendium.Desktop.prefs/3`).
+  """
+  @spec desktop_prefs(Context.t(), String.t(), Prima.Manifest.Tincture.Desktop.t()) ::
+          {:ok, Compendium.Desktop.stored_prefs()} | {:error, term()}
+  defdelegate desktop_prefs(ctx, canvas_id, desktop), to: Compendium.Desktop, as: :prefs
+
+  @doc """
+  Write the caller's preferences for their canvas `canvas_id` over the
+  revision they hold (`Compendium.Desktop.put_prefs/5`).
+  """
+  @spec put_desktop_prefs(
+          Context.t(),
+          String.t(),
+          Prima.Manifest.Tincture.Desktop.t(),
+          map(),
+          non_neg_integer()
+        ) :: {:ok, Compendium.Desktop.stored_prefs()} | {:error, term()}
+  defdelegate put_desktop_prefs(ctx, canvas_id, desktop, incoming, revision),
+    to: Compendium.Desktop,
+    as: :put_prefs
+
+  @doc """
   The versions this install's seed bundle ships for the local component
   `name` of `type`, newest first (`Compendium.Provenance.shipped_versions/2`):
   what the fallback's shipped canvas is read from.

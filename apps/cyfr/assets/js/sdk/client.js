@@ -14,7 +14,10 @@ import {
   decodeAnswer,
   decodeCredentialClosed,
   decodeToFrame,
+  isDesktopId,
   isFrameId,
+  isPressValue,
+  isSubject,
   pairKey,
   publicIdentity,
   request,
@@ -25,6 +28,15 @@ import {
 
 const HANDSHAKE_TIMEOUT_MS = 30000
 const MAX_QUEUED_VERBS = 32
+// How long a press of a control or a write of the preferences waits for
+// the shell's answer before it settles as uncertain: the shell answers at
+// once, so only a socket that went away leaves one unanswered.
+const ANSWER_TIMEOUT_MS = 30000
+
+// `Prima.Feed.binding_id?/1` and `Prima.Feed.name?/1`: a press whose first
+// argument is a binding id presses a feed's action.
+const BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const ACTION_NAME = /^[a-z0-9][a-z0-9-]{0,47}$/
 
 // No failure: the two messages, whole, that browsers report when a
 // ResizeObserver callback resizes what it observes (Chromium, Firefox and
@@ -38,6 +50,9 @@ const BENIGN_ERRORS = Object.freeze([
 // The value a page hears, through `on`, of what the shell told its canvas.
 const heard = (verb, args) =>
   verb === "covered" ? args.rects : verb === "installed" ? args.tinctures : verb === "posture" ? args.posture : args.state
+
+const UNCERTAIN = Object.freeze({outcome: "refused", reason: "uncertain"})
+const CANCELLED = Object.freeze({outcome: "cancelled"})
 
 // A refusal or a failure, as a frame reads it: the sentence as the message,
 // the class as `code`, and the stage when the endpoint named one.
@@ -89,8 +104,18 @@ const unanswered = (status, rejection) =>
 //
 // A canvas's page learns it is one from the first message on its port,
 // `canvas`, which comes before its credential and names its open's mode,
-// data path and declared streams; any other frame's first message is its
-// credential. Until the first of the two, shell verbs wait, since what
+// data path and declared streams, and the desktop's preferences,
+// appearance and person (`desktop`, and the `desktop` event); any other
+// frame's first message is its credential, or the subject it was opened
+// on before it (`subject`).
+//
+// A canvas presses a control it declares (`press`) and writes its
+// preferences (`prefs`), each answered by the shell with its outcome: the
+// promise each answers settles with it, and one the shell never answers
+// settles as refused `uncertain` after a while, never tried again. A
+// write's answer carries the document and the revision the shell now
+// holds, which `desktop` and its event follow, so a stale write is
+// answered with the document to write over. Until the first of the two, shell verbs wait, since what
 // reaches the shell depends on which the page is. A canvas's streams go to
 // its data path's stream route, only the pairs it declares and only once
 // the shell has told it `state` `live`; what the shell tells it after
@@ -124,6 +149,14 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   const handlers = new Map(CANVAS_EVENTS.map((event) => [event, new Set()]))
   // The resolvers of a canvas's stream opens waiting for it to be shown.
   const unshown = []
+  // A canvas's preferences, appearance and person, from its open and the
+  // shell's answers to its writes; an app's subject.
+  let desktop = null
+  let subject = null
+  // The presses waiting for their answer, by control, and the writes, in
+  // the order sent.
+  const presses = new Map()
+  const writes = []
 
   let settle
   const credentialArrived = new Promise((resolve) => {
@@ -159,6 +192,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
       return
     }
 
+
     if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return
     if (typeof data.credential !== "string" || data.credential === "") return
     const first = credential === null
@@ -171,17 +205,71 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // tells a canvas after it is held as the latest of its kind and handed
   // to the page.
   function onTold({verb: told, args}) {
+    if (told === "subject") {
+      if (kind === null && subject === null) subject = Object.freeze({kind: args.kind, id: args.id})
+      return
+    }
     if (told === "canvas") {
       if (kind !== null) return
       canvas = {streams: new Set(args.streams.map(pairKey))}
-      return known("canvas")
+      desktop = {prefs: args.prefs, appearance: args.appearance, person: args.person}
+      known("canvas")
+      return tellDesktop()
     }
     if (kind !== "canvas") return
+    if (told === "pressed") return answered(presses.get(args.control), answerOf(args))
+    if (told === "prefs") {
+      desktop = {...desktop, prefs: {document: args.document, revision: args.revision}}
+      tellDesktop()
+      return answered(writes, answerOf(args))
+    }
 
     const value = heard(told, args)
     latest.set(told, value)
     if (told === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve()
     for (const entry of handlers.get(told)) deliver(told, entry, value)
+  }
+
+  function tellDesktop() {
+    const value = desktopValue()
+    latest.set("desktop", value)
+    for (const entry of handlers.get("desktop")) deliver("desktop", entry, value)
+  }
+
+  function desktopValue() {
+    return desktop === null ? null : Object.freeze({...desktop})
+  }
+
+  // An answer as the page reads it: the outcome, its reason when refused,
+  // and for a write the document and revision the shell holds.
+  function answerOf(args) {
+    const answer = {outcome: args.outcome}
+    if ("reason" in args) answer.reason = args.reason
+    if ("document" in args) Object.assign(answer, {document: args.document, revision: args.revision})
+    return Object.freeze(answer)
+  }
+
+  // The oldest waiting of `queue` settles with `answer`.
+  function answered(queue, answer) {
+    const waiting = queue ? queue.shift() : undefined
+    if (waiting) waiting(answer)
+  }
+
+  // A press or a write waits for its answer, a bounded while.
+  function awaitAnswer(queue, name, args) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const at = queue.indexOf(done)
+        if (at !== -1) queue.splice(at, 1)
+        resolve(UNCERTAIN)
+      }, ANSWER_TIMEOUT_MS)
+      const done = (answer) => {
+        clearTimeout(timer)
+        resolve(answer)
+      }
+      queue.push(done)
+      verb(name, args)
+    })
   }
 
   // Settles once the shell's last word on this canvas is `live`. The
@@ -211,9 +299,14 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   }
 
   // What reaches the shell: a canvas that failed to load sends no `ready`,
-  // and a page that is no canvas sends no `press` and no `failed`.
+  // and a page that is no canvas sends none of a canvas's verbs, so a
+  // press of a control or a write it asked for did not run.
   function send(name, args) {
-    if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) return
+    if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) {
+      if (name === "press" && "control" in args) answered(presses.get(args.control), CANCELLED)
+      if (name === "prefs") answered(writes, CANCELLED)
+      return
+    }
     post(name, args)
   }
 
@@ -391,6 +484,23 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     },
 
     /**
+     * On a canvas, its desktop as the shell told it: `prefs` (the person's
+     * preferences document for this canvas and its `revision`),
+     * `appearance` (`mode`, `accent`, `locale`, `time_zone`, `safe_areas`)
+     * and `person` (`name`, their display name, or null). Null until the
+     * canvas's open arrives; `cyfr.on("desktop", …)` hears it then and
+     * after each write.
+     */
+    get desktop() {
+      return desktopValue()
+    },
+
+    /** On an app opened on a subject, that subject, `{kind, id}`, or null. */
+    get subject() {
+      return subject
+    },
+
+    /**
      * Run an operation of a component the tincture declares.
      * @param {string} ref - a component reference, e.g. "c:local.weather:1.0.0"
      * @param {string} operation - the operation's name
@@ -441,22 +551,79 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     },
 
     /**
-     * Ask the shell to open a tincture: a tincture reference, e.g. "t:local.weather".
-     * From a canvas the shell acts on it only within moments of the person's
-     * own input, never from a script on its own.
+     * Ask the shell to open a tincture: a tincture reference, e.g.
+     * "t:local.weather", and optionally what to open it on, `{kind, id}`,
+     * a kind the app declares in `tincture.subjects` (run, thread,
+     * schedule, component or file). The app is handed the subject at its
+     * open (`cyfr.subject`); opening it does nothing more. From a canvas
+     * the shell acts on it only for an input of the person's, never from a
+     * script on its own.
      */
-    open(ref) {
-      verb("open", {ref})
+    open(ref, on = null) {
+      if (on !== null && !isSubject(on)) return
+      verb("open", on === null ? {ref} : {ref, subject: on})
     },
 
     /**
-     * On a canvas, press a feed's action: the binding id a `feed.results`
-     * event carries, and the action's name. The shell acts on it only within
-     * moments of the person's own input, never from a script on its own, and
-     * only for a feed the canvas declares.
+     * On a canvas, press a control it declares: the control's id, and for
+     * a control with a pick the value picked, one the picked stream
+     * publishes. The shell runs it as the person, only for an input of the
+     * person's, and answers its outcome: `{outcome: "accepted"}`,
+     * `{outcome: "refused", reason}` with the refusal's class, or
+     * `{outcome: "cancelled"}` when no input of the person's carried it or
+     * the canvas was not shown. Nothing is tried again.
+     *
+     * Its first argument a binding id (as a `feed.results` event carries
+     * one) and its second an action's name, it presses that feed's action
+     * instead, answering nothing.
+     * @returns {Promise<{outcome: string, reason?: string}> | undefined}
      */
-    press(binding, action) {
-      verb("press", {binding, action})
+    press(control, value = null) {
+      if (typeof control === "string" && BINDING_ID.test(control) && typeof value === "string" && ACTION_NAME.test(value)) {
+        verb("press", {binding: control, action: value})
+        return undefined
+      }
+      if (!isDesktopId(control)) return invalid("a control is named by its id")
+      if (value !== null && !isPressValue(value)) return invalid("a pressed value is text of 1 to 256 code points")
+      if (!framed) return Promise.resolve(CANCELLED)
+      if (!presses.has(control)) presses.set(control, [])
+      return awaitAnswer(presses.get(control), "press", value === null ? {control} : {control, value})
+    },
+
+    /**
+     * On a canvas, write the person's preferences for it: `document`,
+     * `{widgets: {<id>: {on, rect, <field>…}}, desktop: {<field>…}}`, each
+     * widget it names replacing that widget's whole entry, over the
+     * revision the canvas holds. Answers `{outcome, document, revision}`:
+     * `saved`, `stale` (another write came first; the document is the
+     * current one, to write over), `refused` with its `reason`, or
+     * `cancelled` when no input of the person's carried it.
+     * @returns {Promise<{outcome: string, document: object, revision: number, reason?: string}>}
+     */
+    prefs(document) {
+      if (document === null || typeof document !== "object" || Array.isArray(document)) {
+        return invalid("preferences are an object")
+      }
+      if (!framed) return Promise.resolve(CANCELLED)
+      return awaitAnswer(writes, "prefs", {document})
+    },
+
+    /**
+     * On a canvas, ask AQUA about one of its widgets, by the widget's id:
+     * AQUA's panel opens with a sentence CYFR writes naming the widget and
+     * the desktop, after the person's draft, and sends nothing. Only for
+     * an input of the person's.
+     */
+    ask(widget) {
+      verb("ask", {widget})
+    },
+
+    /**
+     * On a canvas, open one of CYFR's own pages by its key, e.g.
+     * "schedules" or "vault". Only for an input of the person's.
+     */
+    settings(page) {
+      verb("settings", {page})
     },
 
     /**
@@ -474,13 +641,15 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      * On a canvas, hear what the shell tells it: `installed` (the installed
      * tinctures, `[{ref, name, icon, open}]`), `posture` (`desk` or
      * `hand`), `covered` (the rects of it, `{x, y, width, height}` in its
-     * own pixels, that the shown apps cover) or `state` (`live` or
-     * `frozen`). The latest value, if one has come, is handed to a new
-     * handler first.
+     * own pixels, that the shown apps cover), `state` (`live` or
+     * `frozen`) or `desktop` (as `cyfr.desktop` reads it). The latest
+     * value, if one has come, is handed to a new handler first.
      * @returns {function} stops the handler hearing more
      */
     on(event, handler) {
-      if (!CANVAS_EVENTS.includes(event)) throw new TypeError("cyfr.on takes installed, posture, covered or state")
+      if (!CANVAS_EVENTS.includes(event)) {
+        throw new TypeError("cyfr.on takes installed, posture, covered, state or desktop")
+      }
       if (typeof handler !== "function") throw new TypeError("cyfr.on takes a function")
       const entry = {handler}
       handlers.get(event).add(entry)

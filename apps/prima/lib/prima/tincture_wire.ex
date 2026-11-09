@@ -59,7 +59,10 @@ defmodule Prima.TinctureWire do
   Messages over the frame's `MessagePort`, each `{"v", "verb", "frame",
   "args"}`, `frame` the frame id the shell minted:
 
-    * `open` — open a tincture: `args.ref`, a tincture reference;
+    * `open` — open a tincture: `args.ref`, a tincture reference, and
+      optionally `args.subject`, exactly `kind` (one of
+      `Prima.Manifest.Tincture.subject_kinds/0`) and `id` (`subject_id?/1`),
+      what the app is opened on;
     * `title` — set the frame's title: `args.title`;
     * `credential` — ask the person for a secret through the shell's own
       prompt: `args.name`, the vault entry name to store it under, a
@@ -68,7 +71,16 @@ defmodule Prima.TinctureWire do
       closed and whether an entry was saved;
     * `press` — press a feed's action: `args.binding`, a binding id
       (`Prima.Feed.binding_id?/1`), and `args.action`, the action's name
-      (`Prima.Feed.name?/1`), exactly those two;
+      (`Prima.Feed.name?/1`), exactly those two; or press a control the
+      desktop declares: `args.control`, its id (`control?/1`), and, for a
+      control with a pick, `args.value`, the picked string
+      (`press_value?/1`);
+    * `prefs` — write the desktop's preferences: `args.document`, an
+      object (what it may hold is `Prima.CanvasPrefs`');
+    * `ask` — ask AQUA about a widget: `args.widget`, a widget id
+      (`widget?/1`). The sentence AQUA's panel opens with is Prism's;
+    * `settings` — open one of Prism's pages: `args.page`, a page's key
+      (`page?/1`); which pages exist is Prism's;
     * `grant` — ask for the person's grant to a component: `args.ref`, a
       component reference (`Prima.ComponentRef`) of a catalyst, reagent,
       formula or tincture, at a version or none, and nothing else. Which
@@ -80,8 +92,11 @@ defmodule Prima.TinctureWire do
 
   No verb places, sizes or raises a frame: which frame is shown is the
   shell's and the person's. Which verbs the shell acts on is the shell's,
-  by the frame's kind: `press`, `failed` and `grant` only from a canvas
-  (`canvas_verbs/0`).
+  by the frame's kind: `press`, `failed`, `grant`, `prefs`, `ask` and
+  `settings` only from a canvas (`canvas_verbs/0`).
+
+  An app opened with a subject is answered it at its handshake beside its
+  credential, `frame_handshake/2`: exactly `credential` and `subject`.
 
   ## A canvas
 
@@ -93,15 +108,28 @@ defmodule Prima.TinctureWire do
   `Prima.TinctureUrl`'s served prefix.
 
   The shell answers a canvas frame's handshake with
-  `canvas_handshake/4`: exactly `credential`, the frame credential, and
+  `canvas_handshake/5`: exactly `credential`, the frame credential, and
   `canvas`, exactly `mode` (`live` or `validation`, `canvas_modes/0`),
-  `data_path`, the frame's own, and `streams`, the version's declared
+  `data_path`, the frame's own, `streams`, the version's declared
   streams, at most `max_canvas_streams/0` distinct objects of exactly
   `name` (a stream name, as `stream_open` holds it) and `subject` (a
-  string or null). Prism builds `streams` from the stored declaration of
-  the version it serves, never from anything a frame or a page sends. The
+  string or null), `prefs`, exactly `document` (an object) and
+  `revision` (a whole number from 0), `appearance`, exactly `mode`
+  (`appearance_modes/0`), `accent` (`#rrggbb`), `locale` (`locale?/1`),
+  `time_zone` (`time_zone?/1`) and `safe_areas` (exactly `top`, `right`,
+  `bottom` and `left`, whole CSS pixels to `max_safe_area/0`), and
+  `person`, exactly `name`, the person's display name of 1 to
+  `max_person_name/0` code points or null, never an identifier. Prism
+  builds `streams` from the stored declaration of the version it serves,
+  never from anything a frame or a page sends. The
   shell's later messages to a canvas over its port (`canvas`, `posture`,
-  `covered`, `installed` and `state`) are JavaScript on both ends;
+  `covered`, `installed`, `state`, `pressed` and `prefs`) are JavaScript
+  on both ends; `pressed` answers a control's press, exactly `control`
+  and `outcome` (`press_outcomes/0`), with `reason`, a refusal's class
+  (`Prima.Refusal.classes/0`), exactly when refused; `prefs` answers a
+  `prefs` write, exactly `outcome` (`prefs_outcomes/0`), `document` and
+  `revision` (the stored document as the shell now holds it), with
+  `reason` exactly when refused;
   `installed` names at most `max_installed/0` tinctures, each exactly the
   keys `installed_keys/0`: its `ref`, a tincture reference; its `name`, 1
   to `max_installed_name/0` code points; its `icon`, an emoji of 1 to
@@ -125,8 +153,8 @@ defmodule Prima.TinctureWire do
     stream_open: "/_f/v1/stream"
   }
 
-  @verbs ~w(open close title ready credential press failed grant)a
-  @canvas_verbs ~w(press failed grant)a
+  @verbs ~w(open close title ready credential press failed grant prefs ask settings)a
+  @canvas_verbs ~w(press failed grant prefs ask settings)a
   @stages ~w(load runtime)
 
   @stream_content_type "text/event-stream"
@@ -143,16 +171,42 @@ defmodule Prima.TinctureWire do
   @max_installed_icon 16
   @installed_keys ~w(icon name open ref)
 
+  @appearance_modes ~w(light dark)
+  @max_safe_area 512
+  @max_person_name 128
+  @max_press_value 256
+  @press_outcomes ~w(accepted refused cancelled)
+  @prefs_outcomes ~w(saved stale refused cancelled)
+
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
   @athanor_segment ~r/\A@[a-z0-9]+(-[a-z0-9]+)*\z/
   @component_operation ~r/\A[a-z][a-z0-9_-]{0,62}\z/
+  # A control's or a widget's id, as the desktop block spells them.
+  @desktop_id ~r/\A[a-z][a-z0-9_-]{0,62}\z/
+  @page ~r/\A[a-z][a-z0-9_]{0,31}\z/
+  @subject_id ~r/\A[A-Za-z0-9][A-Za-z0-9_.:@\/-]{0,255}\z/
+  @accent ~r/\A#[0-9a-f]{6}\z/
+  @locale ~r/\A[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,7}\z/
+  @time_zone ~r/\A[A-Za-z][A-Za-z0-9_+-]{0,31}(\/[A-Za-z0-9][A-Za-z0-9_+-]{0,31}){0,2}\z/
+  @control_characters ~r/[\x{0}-\x{1F}\x{7F}-\x{9F}]/u
   @max_title 120
 
   @typedoc "A request the frame makes of the endpoint."
   @type kind :: :invoke | :action | :stream_open
 
   @typedoc "A message the frame sends the shell."
-  @type verb :: :open | :close | :title | :ready | :credential | :press | :failed | :grant
+  @type verb ::
+          :open
+          | :close
+          | :title
+          | :ready
+          | :credential
+          | :press
+          | :failed
+          | :grant
+          | :prefs
+          | :ask
+          | :settings
 
   @typedoc "The public tincture a request names in place of a bearer."
   @type public_identity :: %{athanor: String.t(), publisher: String.t(), name: String.t()}
@@ -201,8 +255,9 @@ defmodule Prima.TinctureWire do
   def verbs, do: @verbs
 
   @doc """
-  The shell verbs the shell takes from a canvas alone, `press`, `failed`
-  and `grant`: from any other frame it drops them.
+  The shell verbs the shell takes from a canvas alone, `press`, `failed`,
+  `grant`, `prefs`, `ask` and `settings`: from any other frame it drops
+  them.
   """
   @spec canvas_verbs() :: [verb()]
   def canvas_verbs, do: @canvas_verbs
@@ -210,6 +265,85 @@ defmodule Prima.TinctureWire do
   @doc "The stages a `failed` message names: the page's load, or its run after it."
   @spec stages() :: [String.t()]
   def stages, do: @stages
+
+  @doc "Whether `id` is a desktop control's id, as the desktop block spells one."
+  @spec control?(term()) :: boolean()
+  def control?(id), do: is_binary(id) and Regex.match?(@desktop_id, id)
+
+  @doc "Whether `id` is a widget's id, as the desktop block's `prefs` spells one."
+  @spec widget?(term()) :: boolean()
+  def widget?(id), do: control?(id)
+
+  @doc "Whether `page` is a page's key as Prism names its pages: a lowercase name."
+  @spec page?(term()) :: boolean()
+  def page?(page), do: is_binary(page) and Regex.match?(@page, page)
+
+  @doc """
+  Whether `value` is a value a press picks: text of 1 to
+  #{@max_press_value} code points with no control character.
+  """
+  @spec press_value?(term()) :: boolean()
+  def press_value?(value), do: bounded_text?(value, @max_press_value)
+
+  @doc """
+  Whether `id` names what an app is opened on: 1 to 256 characters of
+  letters, digits and `_ . : @ / -`, the first a letter or a digit.
+  """
+  @spec subject_id?(term()) :: boolean()
+  def subject_id?(id), do: is_binary(id) and Regex.match?(@subject_id, id)
+
+  @doc """
+  Whether `subject` is what an app is opened on: exactly `kind`, one of
+  `Prima.Manifest.Tincture.subject_kinds/0`, and `id` (`subject_id?/1`).
+  """
+  @spec subject?(term()) :: boolean()
+  def subject?(%{"kind" => kind, "id" => id} = subject) when map_size(subject) == 2,
+    do: kind in Prima.Manifest.Tincture.subject_kinds() and subject_id?(id)
+
+  def subject?(_subject), do: false
+
+  @doc "Whether `locale` is a language tag: a BCP 47 shape of at most 8 subtags."
+  @spec locale?(term()) :: boolean()
+  def locale?(locale),
+    do: is_binary(locale) and byte_size(locale) <= 64 and Regex.match?(@locale, locale)
+
+  @doc "Whether `zone` is an IANA time zone's name, such as `Europe/Lisbon` or `UTC`."
+  @spec time_zone?(term()) :: boolean()
+  def time_zone?(zone), do: is_binary(zone) and Regex.match?(@time_zone, zone)
+
+  @doc "The modes a desktop's appearance names."
+  @spec appearance_modes() :: [String.t()]
+  def appearance_modes, do: @appearance_modes
+
+  @doc "The most CSS pixels a safe-area inset of the appearance names."
+  @spec max_safe_area() :: pos_integer()
+  def max_safe_area, do: @max_safe_area
+
+  @doc "The most code points the person's name in a canvas's handshake takes."
+  @spec max_person_name() :: pos_integer()
+  def max_person_name, do: @max_person_name
+
+  @doc "The most code points a pressed value takes."
+  @spec max_press_value() :: pos_integer()
+  def max_press_value, do: @max_press_value
+
+  @doc """
+  What a control's press comes to, as `pressed` tells the canvas: the gate
+  ran it (`accepted`), it was refused (`refused`, with the refusal's
+  class), or it did not run because no input of the person's carried it
+  or the desktop was not shown live (`cancelled`).
+  """
+  @spec press_outcomes() :: [String.t()]
+  def press_outcomes, do: @press_outcomes
+
+  @doc """
+  What a `prefs` write comes to, as `prefs` tells the canvas: written
+  (`saved`), not written because another write came first (`stale`, with
+  the stored document), refused (`refused`, with the refusal's class), or
+  not written for want of the person's input (`cancelled`).
+  """
+  @spec prefs_outcomes() :: [String.t()]
+  def prefs_outcomes, do: @prefs_outcomes
 
   @doc "Whether `id` is a frame id: 8 to 64 URL-safe characters."
   @spec frame_id?(term()) :: boolean()
@@ -547,17 +681,21 @@ defmodule Prima.TinctureWire do
   @doc """
   The shell's answer to canvas frame `frame_id`'s handshake: exactly
   `credential` and `canvas`, which holds exactly `mode`, the frame's own
-  `data_path` and `streams`, each stream exactly `name` and `subject`.
+  `data_path`, `streams`, each stream exactly `name` and `subject`, and
+  the desktop's `prefs`, `appearance` and `person` from `desktop`
+  (string-keyed, as the module doc spells them).
 
   Every argument is CYFR's own, so one outside the wire raises an
   `ArgumentError` whose sentence names no value, since the credential is
   one: a credential that is not a non-empty string, a mode that is not
-  one of `canvas_modes/0`, a frame id outside `frame_id?/1`, or streams
+  one of `canvas_modes/0`, a frame id outside `frame_id?/1`, streams
   that are not a list of at most `max_canvas_streams/0` distinct
-  `%{"name", "subject"}` objects, each a stream name and a string or nil.
+  `%{"name", "subject"}` objects, each a stream name and a string or nil,
+  or a `desktop` whose `prefs`, `appearance` or `person` is not the
+  wire's.
   """
-  @spec canvas_handshake(String.t(), String.t(), String.t(), [map()]) :: map()
-  def canvas_handshake(frame_id, credential, mode, streams) do
+  @spec canvas_handshake(String.t(), String.t(), String.t(), [map()], map()) :: map()
+  def canvas_handshake(frame_id, credential, mode, streams, desktop) do
     unless is_binary(credential) and credential != "",
       do: raise(ArgumentError, "a canvas's handshake carries the frame credential")
 
@@ -572,10 +710,143 @@ defmodule Prima.TinctureWire do
             "each exactly a stream name and a subject"
         )
 
-    %{
-      "credential" => credential,
-      "canvas" => %{"mode" => mode, "data_path" => data_path(frame_id), "streams" => streams}
-    }
+    case desktop do
+      %{"prefs" => prefs, "appearance" => appearance, "person" => person}
+      when map_size(desktop) == 3 ->
+        unless prefs?(prefs),
+          do: raise(ArgumentError, "a canvas's prefs are exactly a document and its revision")
+
+        unless appearance?(appearance),
+          do:
+            raise(
+              ArgumentError,
+              "a canvas's appearance is exactly mode, accent, locale, time_zone and safe_areas"
+            )
+
+        unless person?(person),
+          do: raise(ArgumentError, "a canvas's person is exactly a name, or none")
+
+        %{
+          "credential" => credential,
+          "canvas" => %{
+            "mode" => mode,
+            "data_path" => data_path(frame_id),
+            "streams" => streams,
+            "prefs" => prefs,
+            "appearance" => appearance,
+            "person" => person
+          }
+        }
+
+      _other ->
+        raise ArgumentError, "a canvas's handshake carries exactly prefs, appearance and person"
+    end
+  end
+
+  @doc """
+  The shell's answer to an app frame's handshake: its credential, and the
+  subject it was opened on when it was opened on one. A credential that
+  is not a non-empty string, or a subject outside `subject?/1`, raises.
+  """
+  @spec frame_handshake(String.t(), map() | nil) :: map()
+  def frame_handshake(credential, subject) do
+    unless is_binary(credential) and credential != "",
+      do: raise(ArgumentError, "a frame's handshake carries the frame credential")
+
+    cond do
+      is_nil(subject) -> %{"credential" => credential}
+      subject?(subject) -> %{"credential" => credential, "subject" => subject}
+      true -> raise ArgumentError, "a frame's subject is exactly a kind and an id"
+    end
+  end
+
+  @doc """
+  The `pressed` message's arguments: control `control`'s press came to
+  `outcome`, with the refusal's class `reason` exactly when refused. A
+  value outside the wire raises.
+  """
+  @spec pressed(String.t(), String.t(), String.t() | nil) :: map()
+  def pressed(control, outcome, reason \\ nil) do
+    unless control?(control), do: raise(ArgumentError, "pressed names a control id")
+
+    %{"control" => control, "outcome" => outcome}
+    |> answered(outcome, reason, @press_outcomes)
+  end
+
+  @doc """
+  The `prefs` message's arguments: a write came to `outcome`, and the
+  shell now holds `document` at `revision`, with the refusal's class
+  `reason` exactly when refused. A value outside the wire raises.
+  """
+  @spec prefs_answer(String.t(), map(), non_neg_integer(), String.t() | nil) :: map()
+  def prefs_answer(outcome, document, revision, reason \\ nil) do
+    unless prefs?(%{"document" => document, "revision" => revision}),
+      do: raise(ArgumentError, "a prefs answer carries a document and its revision")
+
+    %{"outcome" => outcome, "document" => document, "revision" => revision}
+    |> answered(outcome, reason, @prefs_outcomes)
+  end
+
+  defp answered(args, outcome, reason, outcomes) do
+    classes = Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+
+    cond do
+      outcome not in outcomes ->
+        raise ArgumentError, "an outcome is one of #{Enum.join(outcomes, ", ")}"
+
+      outcome == "refused" and reason in classes ->
+        Map.put(args, "reason", reason)
+
+      outcome == "refused" ->
+        raise ArgumentError, "a refused outcome names its refusal's class"
+
+      is_nil(reason) ->
+        args
+
+      true ->
+        raise ArgumentError, "only a refused outcome names a reason"
+    end
+  end
+
+  defp prefs?(%{"document" => document, "revision" => revision} = prefs)
+       when map_size(prefs) == 2,
+       do: is_map(document) and not is_struct(document) and is_integer(revision) and revision >= 0
+
+  defp prefs?(_prefs), do: false
+
+  defp appearance?(
+         %{
+           "mode" => mode,
+           "accent" => accent,
+           "locale" => locale,
+           "time_zone" => zone,
+           "safe_areas" => areas
+         } = appearance
+       )
+       when map_size(appearance) == 5 do
+    mode in @appearance_modes and is_binary(accent) and Regex.match?(@accent, accent) and
+      locale?(locale) and time_zone?(zone) and safe_areas?(areas)
+  end
+
+  defp appearance?(_appearance), do: false
+
+  defp safe_areas?(%{"top" => _, "right" => _, "bottom" => _, "left" => _} = areas)
+       when map_size(areas) == 4,
+       do: Enum.all?(Map.values(areas), &(is_integer(&1) and &1 in 0..@max_safe_area))
+
+  defp safe_areas?(_areas), do: false
+
+  defp person?(%{"name" => nil} = person) when map_size(person) == 1, do: true
+
+  defp person?(%{"name" => name} = person) when map_size(person) == 1,
+    do: bounded_text?(name, @max_person_name)
+
+  defp person?(_person), do: false
+
+  # Text of 1 to `max` code points with no control character.
+  defp bounded_text?(text, max) do
+    is_binary(text) and String.valid?(text) and String.length(text) > 0 and
+      length(String.codepoints(text)) <= max and not Regex.match?(@control_characters, text)
   end
 
   defp frame!(frame_id) do
@@ -644,10 +915,19 @@ defmodule Prima.TinctureWire do
 
   defp frame(id), do: if(frame_id?(id), do: :ok, else: {:error, "frame must be a frame id"})
 
-  defp shell_args(:open, %{"ref" => ref} = args) when map_size(args) == 1 do
-    case Prima.ComponentRef.parse(ref) do
-      {:ok, %{type: "tincture"}} -> {:ok, args}
-      _ -> {:error, "open names a tincture reference"}
+  defp shell_args(:open, %{"ref" => ref} = args) when map_size(args) in [1, 2] do
+    cond do
+      not match?({:ok, %{type: "tincture"}}, Prima.ComponentRef.parse(ref)) ->
+        {:error, "open names a tincture reference"}
+
+      map_size(args) == 1 ->
+        {:ok, args}
+
+      subject?(Map.get(args, "subject")) ->
+        {:ok, args}
+
+      true ->
+        {:error, "open's subject is exactly a kind the apps accept and an id"}
     end
   end
 
@@ -677,7 +957,35 @@ defmodule Prima.TinctureWire do
     end
   end
 
-  defp shell_args(:press, _args), do: {:error, "press names a binding id and an action"}
+  defp shell_args(:press, %{"control" => control} = args) when map_size(args) in [1, 2] do
+    cond do
+      not control?(control) -> {:error, "press names a control by its id"}
+      map_size(args) == 1 -> {:ok, args}
+      press_value?(Map.get(args, "value")) -> {:ok, args}
+      true -> {:error, "a press's value is text of 1 to #{@max_press_value} code points"}
+    end
+  end
+
+  defp shell_args(:press, _args),
+    do: {:error, "press names a binding id and an action, or a control"}
+
+  defp shell_args(:prefs, %{"document" => document} = args)
+       when map_size(args) == 1 and is_map(document),
+       do: {:ok, args}
+
+  defp shell_args(:prefs, _args), do: {:error, "prefs carries exactly a document, an object"}
+
+  defp shell_args(:ask, %{"widget" => widget} = args) when map_size(args) == 1 do
+    if widget?(widget), do: {:ok, args}, else: {:error, "ask names a widget by its id"}
+  end
+
+  defp shell_args(:ask, _args), do: {:error, "ask names a widget by its id"}
+
+  defp shell_args(:settings, %{"page" => page} = args) when map_size(args) == 1 do
+    if page?(page), do: {:ok, args}, else: {:error, "settings names a page by its key"}
+  end
+
+  defp shell_args(:settings, _args), do: {:error, "settings names a page by its key"}
 
   defp shell_args(:grant, %{"ref" => ref} = args) when map_size(args) == 1 do
     case Prima.ComponentRef.parse(ref) do

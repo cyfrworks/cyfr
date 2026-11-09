@@ -623,6 +623,15 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # The host page opened another thread: the shared thread this pane reads changed.
+  # The page beside the panel asked about something it shows: Prism's
+  # sentence goes after the person's draft, which it never replaces, and
+  # nothing is sent.
+  def handle_info({:aqua_ask, sentence}, socket) when is_binary(sentence) do
+    draft = String.trim_trailing(socket.assigns.input)
+    input = if draft == "", do: sentence, else: draft <> "\n\n" <> sentence
+    {:noreply, assign(socket, :input, input)}
+  end
+
   def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
     do: {:noreply, assign(socket, :room, room)}
 

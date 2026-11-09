@@ -282,7 +282,7 @@ describe("shell verbs go over the port", () => {
 
     for (const {verb, message} of fixture.shell.filter(({verb}) => !CANVAS_VERBS.includes(verb))) {
       const received = nextMessage(shell)
-      if (verb === "open") api.open(message.args.ref)
+      if (verb === "open") api.open(message.args.ref, message.args.subject ?? null)
       else if (verb === "title") api.title(message.args.title)
       else if (verb === "credential") api.credential(message.args.name)
       else api[verb]()
@@ -610,6 +610,7 @@ describe("a canvas's streams go to its open's data path", () => {
     shell.postMessage(toFrameMessage("canvas", CANVAS, {...OPEN.canvas, streams: [{name: "executions.deltas", subject: null}]}))
     shell.postMessage(
       toFrameMessage("canvas", "frm_00aa11bb22", {
+        ...OPEN.canvas,
         mode: "live",
         data_path: "/_f/v1/o/frm_00aa11bb22/",
         streams: [{name: "executions.deltas", subject: null}]

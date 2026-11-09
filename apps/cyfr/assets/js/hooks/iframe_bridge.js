@@ -2,11 +2,15 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {
+  ANSWER_VERBS,
   CREDENTIAL,
   HANDSHAKE,
+  PERSON_VERBS,
+  TOLD_VERBS,
   VERSION,
   credentialClosed,
   decodeCanvasHandshake,
+  decodeFrameHandshake,
   decodeShellMessage,
   toFrameMessage
 } from "../sdk/wire.js"
@@ -23,17 +27,13 @@ import {
 // What a canvas's frame may send the shell, by its open's mode: a
 // validation frame only whether it came up.
 const FROM_CANVAS = Object.freeze({
-  live: Object.freeze(["ready", "failed", "open", "press", "grant"]),
+  live: Object.freeze(["ready", "failed", ...PERSON_VERBS]),
   validation: Object.freeze(["ready", "failed"])
 })
 
-// The verbs of a canvas that act for the person, forwarded only within
-// moments of the person's own input, on the shown canvas.
-const PERSON_VERBS = Object.freeze(["open", "press", "grant"])
-
 // What the shell tells a canvas after its open, the latest of each held
 // and posted again after its handshake, in this order.
-const TOLD = Object.freeze(["posture", "covered", "installed", "state"])
+const TOLD = TOLD_VERBS
 
 /**
  * IframeBridge hook — the shell's end of a tincture frame's MessagePort.
@@ -58,18 +58,38 @@ const TOLD = Object.freeze(["posture", "covered", "installed", "state"])
  * then its credential as every frame is, then the latest `posture`,
  * `covered`, `installed` and `state` the shell told it, and each one
  * after as it comes: the canvas hook's (`cyfr:to-canvas`), and each change
- * of its shell state. A value the wire refuses is never posted. From a
- * canvas only `ready`, `failed`, `open`, `press` and `grant` reach the
- * view, and from a validation frame only `ready` and `failed`. A canvas's
- * `ready` and `failed` are forwarded whatever its shown state. Its `open`,
- * `press` or `grant` is forwarded only within moments of the person's own input,
- * never from a script on its own: while the shell document holds transient
- * user activation (which only the person's input gives it, never a
- * script), the canvas's frame is its active element, and the frame is
- * shown, live and not inert. Neither condition names the input as the
- * canvas's: a click elsewhere in the shell, or in a sibling frame,
- * followed by the canvas focusing itself within the activation window
- * passes. Several inside one activation are each forwarded.
+ * of its shell state. The shell's answers to its press of a control and
+ * its write of its preferences (`pressed`, `prefs`) are posted once as
+ * they come, never held for a later handshake. A value the wire refuses
+ * is never posted. An app's frame opened on a subject is posted it
+ * (`subject`) before its credential.
+ *
+ * From a canvas only `ready`, `failed` and the person's verbs (`open`,
+ * `press`, `grant`, `prefs`, `ask`, `settings`) reach the view, and from
+ * a validation frame only `ready` and `failed`. A canvas's `ready` and
+ * `failed` are forwarded whatever its shown state, needing no input.
+ *
+ * A person's verb is forwarded once per input of the person's in the
+ * frame, never from a script on its own. The bridge sees no input made
+ * inside a frame; it sees the frame take focus, and every input the
+ * shell's own page hears. So an input in the frame is the frame taking
+ * focus while the shell document holds transient user activation (which
+ * only the person's input gives it) and either the pointer is over the
+ * frame or the person moved focus into it with the Tab key; that arms
+ * the frame for one verb. The verb is forwarded only while the frame is
+ * armed, is the document's active element, and is shown, live and not
+ * inert, and it carries the input's ordinal (`input`), by which the view
+ * honours one verb per input too. Forwarding one disarms the frame and
+ * takes focus off it, so the person's next press in it is a new input.
+ * Any input the shell's own page hears (a pointer press, a key) disarms
+ * every frame, as does focus leaving it: a click in the chrome followed by
+ * the frame focusing itself arms nothing, since the pointer is not over
+ * it. A person's verb dropped for want of input is counted, and a press
+ * of a control or a write of the preferences is answered `cancelled`
+ * over the port. What stays open: a frame that focuses itself again while
+ * the pointer rests on it, within the activation the person's last input
+ * gave, is armed again; and a person working by keyboard moves focus back
+ * into the frame with Tab after each verb.
  *
  * A later load (a reload, or the frame navigating itself) gets no second
  * handshake: the port is closed and the frame is spent until the person
@@ -126,6 +146,64 @@ const IframeBridge = {
 
     this._onBearer = (event) => this._replace(event.detail && event.detail.credential)
     this.el.addEventListener(FRAME_BEARER_EVENT, this._onBearer)
+
+    // The person's input: the ordinal of the last one that armed the
+    // frame, whether it is unspent, where the pointer is, and a Tab whose
+    // focus has not landed yet.
+    this._input = 0
+    this._armed = false
+    this._inside = false
+    this._tabbed = false
+    // The preferences the frame holds as the shell last told it, for a
+    // write the bridge answers itself.
+    this._prefs = null
+    if (this._canvas) this._listen()
+  },
+
+  _listen() {
+    const win = typeof window === "undefined" ? null : window
+    this._onPointerEnter = () => (this._inside = true)
+    this._onPointerLeave = () => (this._inside = false)
+    this._onFocus = () => this._focused()
+    this._onBlur = () => (this._armed = false)
+    this.el.addEventListener("pointerenter", this._onPointerEnter)
+    this.el.addEventListener("pointerleave", this._onPointerLeave)
+    this.el.addEventListener("focus", this._onFocus)
+    this.el.addEventListener("blur", this._onBlur)
+
+    if (!win || typeof win.addEventListener !== "function") return
+    this._onChromePointer = () => this._chromeInput(false)
+    this._onChromeKey = (event) => this._chromeInput(event && event.key === "Tab")
+    this._onFocusIn = (event) => this._focusMoved(event && event.target)
+    this._onWindowBlur = () => this._focusMoved(win.document && win.document.activeElement)
+    win.addEventListener("pointerdown", this._onChromePointer, true)
+    win.addEventListener("keydown", this._onChromeKey, true)
+    win.addEventListener("focusin", this._onFocusIn, true)
+    win.addEventListener("blur", this._onWindowBlur)
+  },
+
+  // An input the shell's own page heard: it is not the frame's.
+  _chromeInput(tab) {
+    this._armed = false
+    this._tabbed = tab
+  },
+
+  // Focus moved to `target` on the shell's page: into this frame, or
+  // elsewhere, where a Tab landed and is spent.
+  _focusMoved(target) {
+    if (target === this.el) this._focused()
+    else this._tabbed = false
+  },
+
+  // The frame took focus: an input of the person's in it when the
+  // document holds activation and the pointer is over the frame or a Tab
+  // moved focus into it.
+  _focused() {
+    const tabbed = this._tabbed
+    this._tabbed = false
+    if (this._armed || !activated() || !(this._inside || tabbed)) return
+    this._input += 1
+    this._armed = true
   },
 
   _replace(credential) {
@@ -144,17 +222,31 @@ const IframeBridge = {
   },
 
   // Hold what the shell tells a canvas as the latest of its kind, and post
-  // it once the canvas has its open; one the wire refuses is neither.
+  // it once the canvas has its open; post an answer once, holding nothing
+  // but the preferences it carries. One the wire refuses is neither.
   _tell(verb, args) {
-    if (!this._canvas || !TOLD.includes(verb)) return
+    if (!this._canvas || !(TOLD.includes(verb) || ANSWER_VERBS.includes(verb))) return
     let message
     try {
       message = toFrameMessage(verb, this._frameId, args)
     } catch (_error) {
       return
     }
-    this._told.set(verb, message)
+    if (verb === "prefs") this._prefs = {document: args.document, revision: args.revision}
+    if (TOLD.includes(verb)) this._told.set(verb, message)
     if (this._port && this._mode !== null) this._port.postMessage(message)
+  },
+
+  // A person's verb the bridge dropped: a press of a control and a write
+  // of the preferences are told they did not run.
+  _cancelled(message) {
+    if (!this._canvas || !this._port || this._mode === null) return
+    const {verb, args} = message
+    if (verb === "press" && "control" in args) {
+      this._tell("pressed", {control: args.control, outcome: "cancelled"})
+    } else if (verb === "prefs" && this._prefs) {
+      this._tell("prefs", {outcome: "cancelled", ...this._prefs})
+    }
   },
 
   _handshake() {
@@ -170,13 +262,18 @@ const IframeBridge = {
       const frame = this.el.contentWindow
       if (!reply || !frame || this._loads !== 1) return
       if (this._canvas) this._handOverCanvas(frame, reply)
-      else if (typeof reply.credential === "string") this._handOver(frame, reply.credential)
+      else this._handOver(frame, reply)
     })
   },
 
-  _handOver(frame, credential) {
+  // An app's frame is handed its port, the subject it was opened on, if
+  // any, and its credential.
+  _handOver(frame, reply) {
+    const decoded = decodeFrameHandshake(reply)
+    if (!decoded.ok) return
     this._openPort(frame)
-    this._sendCredential(credential)
+    if (decoded.subject) this._port.postMessage(toFrameMessage("subject", this._frameId, decoded.subject))
+    this._sendCredential(decoded.credential)
   },
 
   // A canvas's frame is handed its port, its open, its credential and the
@@ -188,6 +285,7 @@ const IframeBridge = {
 
     this._openPort(frame)
     this._mode = decoded.canvas.mode
+    this._prefs = decoded.canvas.prefs
     this._port.postMessage(toFrameMessage("canvas", this._frameId, decoded.canvas))
     this._sendCredential(decoded.credential)
     for (const verb of TOLD) {
@@ -214,19 +312,37 @@ const IframeBridge = {
   _receive(data) {
     const decoded = decodeShellMessage(data)
 
-    if (!decoded.ok || decoded.message.frame !== this._frameId || !this._forwards(decoded.message.verb)) {
+    if (!decoded.ok || decoded.message.frame !== this._frameId) {
       this._drop()
       return
     }
 
-    this.pushEvent("frame_verb", {frame: this._frameId, message: decoded.message})
+    const {message} = decoded
+    const person = this._canvas && PERSON_VERBS.includes(message.verb)
+
+    if (!this._forwards(message.verb)) {
+      this._drop()
+      if (person) this._cancelled(message)
+      return
+    }
+
+    if (!person) {
+      this.pushEvent("frame_verb", {frame: this._frameId, message})
+      return
+    }
+
+    // One input, one verb: the input is spent, and focus leaves the frame
+    // so the person's next press in it is an input of its own.
+    this._armed = false
+    this.pushEvent("frame_verb", {frame: this._frameId, message, input: this._input})
+    if (typeof this.el.blur === "function") this.el.blur()
   },
 
   // Whether a verb this frame posted reaches the view, which it can only
   // while the socket is up: every verb of a live tincture's frame; of a
   // canvas's, those its mode sends, `ready` and `failed` whether it is
-  // shown or hidden, and an `open`, a `press` or a `grant` only within
-  // moments of the person's input, on the shown, live canvas.
+  // shown or hidden, and a person's verb only for an input of the
+  // person's in it, on the shown, live canvas.
   _forwards(verb) {
     if (!this._standing.connected) return false
     if (!this._canvas) return acting(this._standing)
@@ -244,14 +360,12 @@ const IframeBridge = {
     return wrapper !== null && wrapper.dataset.canvasShown === "true" && el.closest("[inert]") === null
   },
 
-  // The person gave input within the activation window: the shell document
-  // holds transient user activation, which no script can give it, and the
-  // frame is its active element. Reading the activation consumes nothing.
-  // Where the browser has no activation API, nothing counts.
+  // An input of the person's in the frame is unspent: the frame is armed,
+  // the shell document still holds the activation it gave, and the frame
+  // is its active element. Reading the activation consumes nothing.
   _personActed() {
-    if (typeof window === "undefined") return false
-    const {navigator, document: doc} = window
-    if (!navigator || !navigator.userActivation || navigator.userActivation.isActive !== true) return false
+    if (!this._armed || !activated()) return false
+    const doc = typeof window === "undefined" ? null : window.document
     return Boolean(doc) && doc.activeElement === this.el
   },
 
@@ -274,6 +388,17 @@ const IframeBridge = {
   },
 
   destroyed() {
+    const win = typeof window === "undefined" ? null : window
+    if (this._canvas && win && typeof win.removeEventListener === "function") {
+      win.removeEventListener("pointerdown", this._onChromePointer, true)
+      win.removeEventListener("keydown", this._onChromeKey, true)
+      win.removeEventListener("focusin", this._onFocusIn, true)
+      win.removeEventListener("blur", this._onWindowBlur)
+    }
+    this.el.removeEventListener("pointerenter", this._onPointerEnter)
+    this.el.removeEventListener("pointerleave", this._onPointerLeave)
+    this.el.removeEventListener("focus", this._onFocus)
+    this.el.removeEventListener("blur", this._onBlur)
     this.el.removeEventListener("load", this._onLoad)
     this.el.removeEventListener(FRAME_STATE_EVENT, this._onState)
     this.el.removeEventListener(CREDENTIAL_CLOSED_EVENT, this._onCredentialClosed)
@@ -281,6 +406,15 @@ const IframeBridge = {
     this.el.removeEventListener(FRAME_BEARER_EVENT, this._onBearer)
     this._closePort()
   }
+}
+
+// Whether the shell document holds transient user activation, which only
+// the person's input gives it. Where the browser has no activation API,
+// nothing counts.
+function activated() {
+  if (typeof window === "undefined") return false
+  const {navigator} = window
+  return Boolean(navigator && navigator.userActivation && navigator.userActivation.isActive === true)
 }
 
 export default IframeBridge

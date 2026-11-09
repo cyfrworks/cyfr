@@ -994,7 +994,7 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "pick from a stream the desktop reads, at a list of strings or an enum, into an argument" do
+    test "pick from a stream the desktop reads, at a string, a list of strings or an enum, into an argument" do
       tags = %Prima.Provider.Stream{
         name: "tags.changes",
         topic: :tags,
@@ -1028,20 +1028,21 @@ defmodule Compendium.Tincture.RulesTest do
 
       both = %{"data" => ["runs.changes", "tags.changes"], "feeds" => ["vpn"]}
 
-      # An enum, nested under a nullable object, and a list of strings.
+      # An enum, nested under a nullable object, a list of strings, and a
+      # string, whose choices are the values the stream publishes there.
       assert check.(%{"field" => "/kind"}, both) == :ok
       assert check.(%{"field" => "/error/class"}, both) == :ok
       assert check.(%{"stream" => "tags.changes", "field" => "/tags"}, both) == :ok
+      assert check.(%{"field" => "/execution_id"}, both) == :ok
+      assert check.(%{"stream" => "tags.changes", "field" => "/name"}, both) == :ok
 
       where = "tincture.desktop.controls c1: the pick"
 
       for {fields, block, sentence} <- [
-            {%{"field" => "/execution_id"}, both,
-             "#{where}'s field /execution_id is a string in the stream's shape: a pick takes a list of strings or an enum"},
             {%{"stream" => "tags.changes", "field" => "/counts"}, both,
-             "#{where}'s field /counts is a list in the stream's shape: a pick takes a list of strings or an enum"},
+             "#{where}'s field /counts is a list in the stream's shape: a pick takes a string, a list of strings or an enum"},
             {%{"field" => "/error"}, both,
-             "#{where}'s field /error is an object in the stream's shape: a pick takes a list of strings or an enum"},
+             "#{where}'s field /error is an object in the stream's shape: a pick takes a string, a list of strings or an enum"},
             {%{"field" => "/nothing"}, both,
              "#{where}'s field /nothing names no field of the stream's shape"},
             {%{"field" => "/kind/deeper"}, both,
