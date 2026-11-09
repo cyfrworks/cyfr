@@ -1104,7 +1104,7 @@ defmodule Compendium.CanvasTest do
                ~w(asked_by id kind member since status title)
 
       assert Enum.sort(Map.keys(thread_fields)) ==
-               ~w(id kind last_activity people title waits_on_you)
+               ~w(id kind last_activity people title unread waits_on_you)
 
       assert Enum.sort(Map.keys(schedule_fields)) ==
                ~w(cron_expression error_count kind last_run_at name next_run_at reference run_count schedule_id status)
