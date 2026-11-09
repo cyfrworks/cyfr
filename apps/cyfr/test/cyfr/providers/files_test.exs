@@ -224,6 +224,15 @@ defmodule Cyfr.Providers.FilesTest do
       refute_receive %FileListed{}, 200
     end
 
+    test "data/ deleted whole is removed as data", %{actor: actor} do
+      write!(actor, "data/a.txt")
+      assert_receive %FileListed{kind: :file, id: "data/a.txt"}
+
+      :ok = Arca.delete_tree(actor, ["data"])
+      assert_receive %FileListed{kind: :removed} = left
+      assert removed?(left, "data")
+    end
+
     test "a write outside data/ tells nothing", %{actor: actor} do
       :ok = Arca.put(actor, ["threads", "thr_files", "m.json"], "{}")
       refute_receive %FileListed{}, 200

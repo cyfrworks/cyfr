@@ -107,12 +107,12 @@ defmodule Cyfr.Providers.Files do
   # ---------------------------------------------------------------------------
 
   @doc """
-  What the path `path` (a console path under `data/`) names in the
+  What the path `path` (`data/` or a console path under it) names in the
   actor's athanor now: its file's item, or `removed` by the path when no
   file is settled there, a folder deleted whole among them.
   """
   @spec file(Prima.Actor.t(), String.t()) :: {:ok, [item()]} | {:error, term()}
-  def file(%Prima.Actor{} = actor, "data/" <> _ = path) do
+  def file(%Prima.Actor{} = actor, "data" <> _ = path) do
     case Arca.ObjectRevisions.changed_at(actor, String.split(path, "/")) do
       {:ok, changed_at} -> {:ok, [file_item(path, changed_at)]}
       {:error, :not_found} -> {:ok, [removed(path)]}

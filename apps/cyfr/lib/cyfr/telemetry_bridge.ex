@@ -401,7 +401,7 @@ defmodule Cyfr.TelemetryBridge do
   # the message is delivered.
   defp messages([:cyfr, :arca, :file, :changed], _measurements, %{
          athanor_id: athanor_id,
-         path: "data/" <> _ = path
+         path: "data" <> _ = path
        })
        when is_binary(athanor_id) and athanor_id != "" do
     [files(fn -> {:ok, athanor_id} end, &Cyfr.Providers.Files.file(&1, path))]
