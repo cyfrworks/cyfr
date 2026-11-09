@@ -1275,11 +1275,12 @@ defmodule Prism.Frames do
   end
 
   # A canvas frame opens only a canvas, and nothing else opens one.
-  defp opened_as_declared(declaration, {kind, _id}) do
-    case {Prima.Manifest.Tincture.canvas?(declaration), kind in [:canvas, :validation]} do
+  defp opened_as_declared(declaration, key) do
+    canvas_frame? = match?({kind, _id} when kind in [:canvas, :validation], key)
+
+    case {Prima.Manifest.Tincture.canvas?(declaration), canvas_frame?} do
       {same, same} -> :ok
-      {_canvas?, true} -> {:error, {:canvas, true}}
-      {_canvas?, false} -> {:error, {:canvas, false}}
+      {_canvas?, wanted} -> {:error, {:canvas, wanted}}
     end
   end
 

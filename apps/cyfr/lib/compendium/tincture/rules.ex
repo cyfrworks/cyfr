@@ -686,18 +686,18 @@ defmodule Compendium.Tincture.Rules do
   end
 
   defp data_stream({:error, :undeclared_stream}, name),
-    do: desktop_refuse("tincture.desktop.data names #{name}, which no provider declares")
+    do: refuse("tincture.desktop.data names #{name}, which no provider declares")
 
   defp data_stream({:ok, %Prima.Provider.Stream{shape: nil}}, name),
     do:
-      desktop_refuse(
+      refuse(
         "tincture.desktop.data names #{name}, which a desktop cannot read: " <>
           "the stream declares no shape"
       )
 
   defp data_stream({:ok, %Prima.Provider.Stream{filter: filter}}, name) when not is_nil(filter),
     do:
-      desktop_refuse(
+      refuse(
         "tincture.desktop.data names #{name}, which is read by name: " <>
           "a desktop names each feed in tincture.desktop.feeds"
       )
@@ -706,9 +706,7 @@ defmodule Compendium.Tincture.Rules do
     if subject_taken?(stream, nil),
       do: :ok,
       else:
-        desktop_refuse(
-          "tincture.desktop.data names #{name}, whose subject a desktop would have to name"
-        )
+        refuse("tincture.desktop.data names #{name}, whose subject a desktop would have to name")
   end
 
   defp feed_stream(_found, []), do: :ok
@@ -717,13 +715,13 @@ defmodule Compendium.Tincture.Rules do
        when not is_nil(shape) and not is_nil(filter) do
     case Enum.find(feeds, &(not Prima.Provider.Stream.admits?(stream, &1))) do
       nil -> :ok
-      feed -> desktop_refuse("tincture.desktop.feeds names #{feed}, which is no feed's name")
+      feed -> refuse("tincture.desktop.feeds names #{feed}, which is no feed's name")
     end
   end
 
   defp feed_stream(_unread, _feeds),
     do:
-      desktop_refuse(
+      refuse(
         "tincture.desktop.feeds names feeds, and no provider declares #{Tincture.feed_results()} " <>
           "for a desktop to read them"
       )
@@ -764,7 +762,7 @@ defmodule Compendium.Tincture.Rules do
   end
 
   defp control_operation(nil, operation, where),
-    do: desktop_refuse("#{where} runs #{operation}, which no provider declares")
+    do: refuse("#{where} runs #{operation}, which no provider declares")
 
   defp control_operation(%Prima.Operation{} = declared, operation, where) do
     cond do
@@ -772,22 +770,22 @@ defmodule Compendium.Tincture.Rules do
         {:ok, declared}
 
       operation in @persons_controls or not is_nil(declared.consent) ->
-        desktop_refuse(
+        refuse(
           "#{where} runs #{operation}, which is the person's own act: a desktop cannot ask " <>
             "the person for it yet"
         )
 
       declared.scope == :platform or declared.permission == :admin ->
-        desktop_refuse("#{where} runs #{operation}, which is an administrator's")
+        refuse("#{where} runs #{operation}, which is an administrator's")
 
       :external not in declared.planes ->
-        desktop_refuse("#{where} runs #{operation}, which runs only inside a run")
+        refuse("#{where} runs #{operation}, which runs only inside a run")
 
       declared.kind == :write ->
         {:ok, declared}
 
       true ->
-        desktop_refuse(
+        refuse(
           "#{where} runs #{operation}, which is #{kind_sentence(declared.kind)}: " <>
             "a control runs a write or #{@feed_press}"
         )
@@ -812,13 +810,13 @@ defmodule Compendium.Tincture.Rules do
       if Enum.any?(declared.args, &(&1.name == pick.arg)),
         do: :ok,
         else:
-          desktop_refuse(
+          refuse(
             "#{where} fills #{pick.arg}, which #{declared.tool}.#{declared.action} takes " <>
               "no argument named"
           )
     else
       {:error, :undeclared_stream} ->
-        desktop_refuse("#{where} reads #{pick.stream}, which no provider declares")
+        refuse("#{where} reads #{pick.stream}, which no provider declares")
 
       {:error, _} = refusal ->
         refusal
@@ -839,7 +837,7 @@ defmodule Compendium.Tincture.Rules do
 
   defp picked_refuse(where, stream),
     do:
-      desktop_refuse(
+      refuse(
         "#{where} reads #{stream}, which the desktop does not: a pick reads a stream in " <>
           "tincture.desktop.data, or #{Tincture.feed_results()} with a feed in tincture.desktop.feeds"
       )
@@ -847,7 +845,7 @@ defmodule Compendium.Tincture.Rules do
   defp pointer({:ok, segments}, _where), do: {:ok, segments}
 
   defp pointer(:error, where),
-    do: desktop_refuse("#{where}'s field is no RFC 6901 pointer")
+    do: refuse("#{where}'s field is no RFC 6901 pointer")
 
   # A pointer walks an object's fields. It resolves where it ends on a
   # list of strings or an enum, and where it reaches a `json` node, which
@@ -860,7 +858,7 @@ defmodule Compendium.Tincture.Rules do
 
   defp resolves(%{"type" => type}, [], field, where),
     do:
-      desktop_refuse(
+      refuse(
         "#{where}'s field #{field} is #{article(type)} #{type} in the stream's shape: " <>
           "a pick takes a list of strings or an enum"
       )
@@ -868,12 +866,12 @@ defmodule Compendium.Tincture.Rules do
   defp resolves(%{"type" => "object", "fields" => fields}, [segment | rest], field, where) do
     case Map.fetch(fields, segment) do
       {:ok, shape} -> resolves(shape, rest, field, where)
-      :error -> desktop_refuse("#{where}'s field #{field} names no field of the stream's shape")
+      :error -> refuse("#{where}'s field #{field} names no field of the stream's shape")
     end
   end
 
   defp resolves(_shape, _segments, field, where),
-    do: desktop_refuse("#{where}'s field #{field} names no field of the stream's shape")
+    do: refuse("#{where}'s field #{field} names no field of the stream's shape")
 
   defp article(type) when type in ~w(enum integer object), do: "an"
   defp article(_type), do: "a"
@@ -910,14 +908,14 @@ defmodule Compendium.Tincture.Rules do
   defp read_file(read, path, where) do
     case read.(path) do
       {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
-      _absent -> desktop_refuse("#{where} is not among the version's files")
+      _absent -> refuse("#{where} is not among the version's files")
     end
   end
 
   defp parsed({:ok, tokens}, _where), do: {:ok, tokens}
 
   defp parsed({:error, {line, sentence}}, where),
-    do: desktop_refuse("#{where} line #{line}: #{sentence}")
+    do: refuse("#{where} line #{line}: #{sentence}")
 
   defp textures(tokens, read, where) do
     %{bytes: cap} = Prima.Manifest.Chrome.file_caps()
@@ -950,10 +948,10 @@ defmodule Compendium.Tincture.Rules do
   defp within(bytes, cap, _where) when byte_size(bytes) <= cap, do: :ok
 
   defp within(bytes, cap, where),
-    do: desktop_refuse("#{where} is #{byte_size(bytes)} bytes, over the cap of #{cap}")
+    do: refuse("#{where} is #{byte_size(bytes)} bytes, over the cap of #{cap}")
 
   defp woff2(<<"wOF2", _rest::binary>>, _where), do: :ok
-  defp woff2(_bytes, where), do: desktop_refuse("#{where} is not a WOFF2 font")
+  defp woff2(_bytes, where), do: refuse("#{where} is not a WOFF2 font")
 
   defp licence(path, read, where) do
     dir = Path.dirname(path)
@@ -963,8 +961,7 @@ defmodule Compendium.Tincture.Rules do
 
     if Enum.any?(beside, &match?({:ok, _}, read.(&1))),
       do: :ok,
-      else:
-        desktop_refuse("#{where} has no licence beside it: #{Enum.join(@licence_names, ", ")}")
+      else: refuse("#{where} has no licence beside it: #{Enum.join(@licence_names, ", ")}")
   end
 
   defp dimensions(
@@ -975,7 +972,7 @@ defmodule Compendium.Tincture.Rules do
        ),
        do: within_pixels(width, height, where)
 
-  defp dimensions(".png", _bytes, where), do: desktop_refuse("#{where} is not a PNG image")
+  defp dimensions(".png", _bytes, where), do: refuse("#{where} is not a PNG image")
 
   defp dimensions(".svg", bytes, where) do
     with [_, attributes] <- Regex.run(~r/<svg\b([^>]*)>/, bytes),
@@ -984,9 +981,7 @@ defmodule Compendium.Tincture.Rules do
       within_pixels(String.to_integer(width), String.to_integer(height), where)
     else
       _ ->
-        desktop_refuse(
-          "#{where}: an SVG texture's root element says its width and height in pixels"
-        )
+        refuse("#{where}: an SVG texture's root element says its width and height in pixels")
     end
   end
 
@@ -995,10 +990,7 @@ defmodule Compendium.Tincture.Rules do
 
     if width in 1..cap and height in 1..cap,
       do: :ok,
-      else:
-        desktop_refuse(
-          "#{where} is #{width} by #{height} pixels; a texture is at most #{cap} a side"
-        )
+      else: refuse("#{where} is #{width} by #{height} pixels; a texture is at most #{cap} a side")
   end
 
   defp each(list, check) do
