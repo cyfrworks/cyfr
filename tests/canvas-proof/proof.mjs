@@ -752,7 +752,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.4.0" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.5.0" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -932,8 +932,8 @@ async function stepAppOverCanvas(page, name) {
 
 // attention_moves: the shipped canvas moves "Needs attention" out from
 // under a window and nothing else. Its runs stream is answered with three
-// failures a grant fixes and one long unrelated failure, so the card holds
-// both kinds; a window is reported covering the card. On the desk the card
+// failures a grant fixes and one unrelated failure, so the card holds both
+// kinds; a window is reported covering the card. On the desk the card
 // moves to the other column and Recent runs, Apps and Schedules stand
 // exactly where they stood; in the hand every section stands in one
 // column. The stream is answered as usual again afterwards.
@@ -943,10 +943,9 @@ function attentionFailures(route) {
   let body = null;
   try { body = route.request().postDataJSON(); } catch (_error) { body = null; }
   if (!body || body.stream !== "runs.changes") return route.continue();
-  const grant = "This account is not granted to the component; grant it first.";
   const events = [
-    ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "internal", message: grant } })),
-    { kind: "failed", execution_id: "attention_long", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", message: "The model provider answered with an error the runner could not read, so this run stopped before it finished; the provider may be down, or the reply may have been too large to hold at once." } },
+    ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
+    { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
   ];
   return route.fulfill({
     status: 200,

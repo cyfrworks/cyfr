@@ -80,7 +80,7 @@ token, answers `answer-N.json`.
 
 ## The tinctures and the canvases
 
-- **The shipped canvas** `tincture:local.canvas` (0.4.0), the layout's
+- **The shipped canvas** `tincture:local.canvas` (0.5.0), the layout's
   first canvas, placed under the id `start`: its React page draws the day
   in one sentence, what needs attention grouped by cause, the recent runs,
   a launcher for each installed tincture (`button.app` with the name in
@@ -141,7 +141,7 @@ received is read once it has handled the verbs the click sent.
 | step | what holds, and how it is seen |
 |---|---|
 | `two_canvases` | the switcher lists the shipped canvas (`start`) and a written one (`markets`); the shipped canvas's working version is shown live drawing its launchers, and the written one is validated (its validation frame's `ready`, one), activated (working 0.1.0) and shown live, and the canvas left is frozen |
-| `attention_moves` | the shipped canvas, its runs stream answered with three failures a grant fixes and one long unrelated failure, moves Needs attention to the other column when a window is reported over it, and Recent runs, Apps and Schedules stand exactly where they stood; in the hand every section stands in one column |
+| `attention_moves` | the shipped canvas, its runs stream answered with three failures a grant fixes and one unrelated failure, moves Needs attention to the other column when a window is reported over it, and Recent runs, Apps and Schedules stand exactly where they stood; in the hand every section stands in one column |
 | `switch` | the shelf's switcher, `Ctrl+Alt+1` (from markets, whose window on the desk is the active app, which the arrows would tile), `Ctrl+Alt+ArrowLeft` and `Ctrl+Alt+ArrowRight` (at `start`, which has no active app), and a swipe each way along the shelf (a touch swipe in the hand, a pointer drag on the desk) each move the shown canvas, resuming the frame a canvas held; the canvas left is frozen and inert; leftward at the first canvas does nothing, so nothing wraps |
 | `written_canvas` | a canvas written with `canvas.write` at 0.1.0 is validated in its own frame (ending on `ready`), activated (working 0.1.0, nothing failed) and opened live at that version, drawing its version |
 | `feed_chart` | the feed `candles`' fixed result is drawn by the probe page as six candles at the accepted revision; the observation says the result is fixed and no run executed |
