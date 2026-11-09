@@ -272,16 +272,11 @@ defmodule Emissary.Web.FrameSocket do
   defp received({:error, sentence}, state), do: unreadable(state, sentence)
 
   # A message no subscription can be told of: recorded as the connection's
-  # refusal, which closes it.
+  # refusal, its sentence in the record, and the connection closes.
   defp unreadable(state, sentence) do
     refusal = Prima.Refusal.classify({:invalid_argument, sentence})
     record(state, refusal, state.caller && state.caller.ctx)
-    {:stop, :normal, {TinctureWire.close_code(:unreadable), close_reason(sentence)}, state}
-  end
-
-  # A WebSocket close reason is at most 123 bytes.
-  defp close_reason(sentence) do
-    if byte_size(sentence) <= 123, do: sentence, else: binary_part(sentence, 0, 120) <> "…"
+    {:stop, :normal, {TinctureWire.close_code(:unreadable), "unreadable"}, state}
   end
 
   # ---------------------------------------------------------------------------
