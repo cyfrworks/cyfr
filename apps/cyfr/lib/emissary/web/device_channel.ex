@@ -240,7 +240,7 @@ defmodule Emissary.Web.DeviceChannel do
   @behaviour Phoenix.Socket.Transport
 
   alias Cyfr.Bus.{AthanorArchived, Session}
-  alias Emissary.Web.DeviceChannel.Forwarder
+  alias Emissary.Web.StreamForwarder, as: Forwarder
   alias Prima.{Device, DeviceCert, StreamGrant}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
@@ -821,7 +821,14 @@ defmodule Emissary.Web.DeviceChannel do
     topic = Cyfr.Bus.granted_topic(actor, grant)
 
     with {:ok, forwarder} <-
-           Forwarder.start(self(), grant.grant_id, actor, topic, payload_struct(grant)) do
+           Forwarder.start(
+             self(),
+             __MODULE__,
+             grant.grant_id,
+             actor,
+             topic,
+             payload_struct(grant)
+           ) do
       case refreshed(name, ctx, grant) do
         {:ok, items} ->
           deliver_grant(id, name, grant, forwarder, items, state)
@@ -1265,90 +1272,4 @@ defmodule Emissary.Web.DeviceChannel do
   defp wire(message), do: message |> Device.encode() |> Jason.encode!()
 
   defp now, do: System.system_time(:millisecond)
-end
-
-defmodule Emissary.Web.DeviceChannel.Forwarder do
-  @moduledoc false
-  # One granted stream of a device channel: subscribed to the one topic
-  # its grant admits, it hands each fact of the grant's payload struct to
-  # the channel under the grant's id, so a channel holding several grants
-  # knows which a fact belongs to. It ends with the channel, or when the
-  # channel ends the grant. It reaches no store.
-
-  @ready_ms 5_000
-
-  @doc false
-  # Started subscribed: the grant is answered only once its topic is heard.
-  # A forwarder that could not start, could not subscribe or did not say so
-  # in time is `{:error, reason}`, and none is left running.
-  @spec start(pid(), String.t(), Prima.Actor.t(), String.t(), module()) ::
-          {:ok, pid()} | {:error, term()}
-  def start(channel, grant_id, actor, topic, payload) do
-    ready = make_ref()
-
-    case start_child(fn -> run(channel, ready, grant_id, actor, topic, payload) end) do
-      {:ok, pid} ->
-        receive do
-          {^ready, :subscribed} ->
-            {:ok, pid}
-
-          {^ready, {:error, reason}} ->
-            {:error, reason}
-        after
-          @ready_ms ->
-            Task.Supervisor.terminate_child(Emissary.Web.TaskSupervisor, pid)
-            {:error, :not_subscribed}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-
-      _not_started ->
-        {:error, :not_started}
-    end
-  end
-
-  # The supervisor itself may be gone, or restarting.
-  defp start_child(fun) do
-    Task.Supervisor.start_child(Emissary.Web.TaskSupervisor, fun)
-  catch
-    :exit, _reason -> {:error, :unavailable}
-  end
-
-  @doc false
-  @spec stop(pid()) :: :ok
-  def stop(pid) do
-    send(pid, {__MODULE__, :stop})
-    :ok
-  end
-
-  defp run(channel, ready, grant_id, actor, topic, payload) do
-    monitor = Process.monitor(channel)
-
-    case Cyfr.Bus.subscribe(actor, topic) do
-      :ok ->
-        send(channel, {ready, :subscribed})
-        loop(channel, monitor, grant_id, payload)
-
-      {:error, reason} ->
-        send(channel, {ready, {:error, reason}})
-    end
-  end
-
-  defp loop(channel, monitor, grant_id, payload) do
-    receive do
-      {:DOWN, ^monitor, :process, _pid, _reason} ->
-        :ok
-
-      {__MODULE__, :stop} ->
-        :ok
-
-      %{__struct__: ^payload} = message ->
-        send(channel, {Emissary.Web.DeviceChannel, :fact, grant_id, message})
-        loop(channel, monitor, grant_id, payload)
-
-      _other ->
-        loop(channel, monitor, grant_id, payload)
-    end
-  end
 end

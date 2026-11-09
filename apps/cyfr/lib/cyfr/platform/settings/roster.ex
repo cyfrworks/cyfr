@@ -352,8 +352,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       "Concurrent execution-event streams per caller (athanor and credential).",
     "opus_events_max_ms" =>
       "How long one execution-event stream lives before the client reconnects, in milliseconds.",
-    "frame_stream_max_concurrent" =>
-      "Concurrent streams one tincture frame holds open (per frame credential).",
     "session_ttl_hours" => "Hours a session may sit idle before it ends; 0 never ends one.",
     "webhook_max_skew_seconds" =>
       "How far a delivery's timestamp may sit from now before it is refused as a replay: how long a captured delivery stays replayable.",
@@ -540,13 +538,6 @@ defmodule Cyfr.Platform.Settings.Roster do
         "CYFR_OPUS_EVENTS_MAX_MS",
         1_800_000,
         window(),
-        :streams
-      ),
-      limit(
-        :frame_stream_max_concurrent,
-        "CYFR_FRAME_STREAM_MAX_CONCURRENT",
-        8,
-        whole(1..1_000_000, "streams"),
         :streams
       ),
 

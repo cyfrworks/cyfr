@@ -93,6 +93,7 @@ defmodule Cyfr.App.MixProject do
       {:opentelemetry_phoenix, "~> 2.0"},
       {:opentelemetry_bandit, "~> 0.2"},
       {:bandit, "~> 1.11"},
+      {:websock_adapter, "~> 0.6"},
       {:finch, "~> 0.19"},
       # Prism deps
       {:phoenix_html, "~> 4.2"},

@@ -271,9 +271,10 @@ defmodule Compendium.Tincture.Rules do
 
   @doc """
   The entry page's `Content-Security-Policy` header value, derived from
-  the manifest's declaration: `connect-src` names the endpoint's origin
-  and the manifest's `tincture.connect` domains (over `https`), never
-  `'self'`; `script-src` admits `'self'`, the page's nonce and
+  the manifest's declaration: `connect-src` names the endpoint's origin,
+  its WebSocket origin (`ws` or `wss` as the endpoint is `http` or
+  `https`) for the frame's stream connection, and the manifest's
+  `tincture.connect` domains (over `https`), never `'self'`; `script-src` admits `'self'`, the page's nonce and
   `'wasm-unsafe-eval'`, and `style-src` `'self'` and inline styles;
   `worker-src` admits `'self'` and `blob:`; `frame-ancestors` names the
   shell (the endpoint unless `shell:` says otherwise); and `form-action`
@@ -310,7 +311,7 @@ defmodule Compendium.Tincture.Rules do
       "img-src 'self' #{endpoint} data: blob:",
       "font-src 'self' #{endpoint}",
       "media-src 'self' #{endpoint} blob:",
-      Enum.join(["connect-src", endpoint | connect], " "),
+      Enum.join(["connect-src", endpoint, socket_origin(endpoint) | connect], " "),
       "object-src 'none'",
       "base-uri 'self'",
       "frame-ancestors #{shell}",
@@ -363,12 +364,19 @@ defmodule Compendium.Tincture.Rules do
 
   def connect_origins(_manifest), do: []
 
+  # The endpoint's WebSocket origin, where a frame's stream connection is:
+  # a host-source of `http` admits no `ws` URL, so it is named apart.
+  defp socket_origin("https://" <> rest), do: "wss://" <> rest
+  defp socket_origin("http://" <> rest), do: "ws://" <> rest
+
   @doc """
   A canvas page's `Content-Security-Policy` header value, the one policy
   of its page and of the workers the page starts, which inherit it. With
   `F` the version's files under the asset credential (`E/_s/A/`,
-  `Prima.TinctureUrl`), `D` the open's data path (`E/_f/v1/o/<frame id>/`,
-  `Prima.TinctureWire.data_path/1`) and `S` the shell:
+  `Prima.TinctureUrl`), `D` the open's data path over the endpoint's
+  WebSocket origin (`ws` or `wss` as `E` is `http` or `https`,
+  `W/_f/v1/o/<frame id>/`, `Prima.TinctureWire.data_path/1`), where its
+  stream connection is, and `S` the shell:
 
       default-src 'none'; script-src F E<sdk path>; style-src F 'unsafe-inline';
       worker-src blob: F; img-src F data: blob:; font-src F; media-src F;
@@ -379,8 +387,8 @@ defmodule Compendium.Tincture.Rules do
   and no inline script runs. Styles may be inline, since CSS reaches the
   network only through an `@import`, which `style-src` bounds, and images
   and fonts, which `img-src` and `font-src` bound, and each of the three
-  names `F` alone of the network. The page connects to its open's data
-  path and its own files and nothing else, a `<base>` it writes names
+  names `F` alone of the network. The page connects to its open's stream
+  connection and its own files and nothing else, a `<base>` it writes names
   only its own files, and the policy carries the canvas sandbox
   (`canvas_sandbox_tokens/0`).
 
@@ -411,7 +419,7 @@ defmodule Compendium.Tincture.Rules do
       do: raise(ArgumentError, "the SDK's path is an absolute path of plain segments")
 
     files = "#{endpoint}/#{Prima.TinctureUrl.asset_prefix()}/#{credential}/"
-    data = endpoint <> Prima.TinctureWire.data_path(frame_id)
+    data = socket_origin(endpoint) <> Prima.TinctureWire.data_path(frame_id)
 
     [
       "default-src 'none'",
