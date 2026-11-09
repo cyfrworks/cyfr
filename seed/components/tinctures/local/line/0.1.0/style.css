@@ -188,6 +188,12 @@ h1.q-title{font-size:24px;line-height:32px;font-weight:500;letter-spacing:-.015e
 .plain ul{margin:0;padding-left:20px}
 
 /* the carried screen first; the desk; the phone */
+@media (min-width:700px) and (max-width:1199px){
+  .q-row{min-height:56px;padding:6px 0}
+  .near{padding-bottom:10px}
+  .q-more{margin-top:4px}
+  .w-near{margin-top:18px}
+}
 @media (min-width:1200px){
   :root{--near-w:440px;--pad:28px}
   .near{padding-top:24px}.far{padding-top:24px}

@@ -35,7 +35,7 @@
   const DEFAULT_ON = {
     phone: ["apps", "threads", "weather", "vpn", "schedules", "today"],
     carried: ["apps", "weather", "vpn", "schedules", "today"],
-    desk: ["apps", "threads", "weather", "vpn", "schedules", "today", "vault", "day"],
+    desk: ["apps", "threads", "weather", "vpn", "schedules", "today", "day"],
   };
   // How many rows a list shows before "all", per size.
   const CAP = { phone: 6, carried: 4, desk: 6 };
@@ -44,6 +44,11 @@
   const MAX_RUNS = 20;
   const MAX_SCHEDULE_RUNS = 40;
   const RETRY_MS = [2000, 5000, 15000, 60000];
+  // How long one open waits for the one before it, and how long the first
+  // draw waits for the opens before the page tells the shell it is ready,
+  // well inside the ten seconds the shell gives it.
+  const OPEN_STEP_MS = 1500;
+  const READY_MS = 6000;
   const NOTE_MS = 4000;
   // The refusal classes a grant can fix, and the cause a run's error reads
   // as for them, as the shipped canvas reads them.
@@ -62,7 +67,6 @@
     scheduleRuns: [], // newest first
     activity: new Map(), // job id -> {item, open}
     threads: new Map(), // id -> {item, open}
-    components: new Map(), // ref -> {item, open}
     vault: new Map(), // name -> {item, open}
     feeds: { weather: null, vpn: null },
     refusals: {},
@@ -140,6 +144,7 @@
   const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const nf = () => new Intl.NumberFormat(zone().locale);
   const duration = (ms) => (typeof ms === "number" && Number.isFinite(ms) ? (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`) : "");
+  const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d/;
   const human = (key) => capital(String(key).replace(/[_-]+/g, " "));
 
   // "formula:local.digest:1.0.0" without its version.
@@ -170,20 +175,25 @@
   const lastFailure = (reference) => S.runs.find((r) => r.kind === "failed" && text(r.reference) === reference) || null;
   const cause = (error) => (isItem(error) ? CAUSES[error.cause] || text(error.class) : "");
 
-  // The streams this page opens, and how each item folds into the state.
+  // The streams this page opens, how each item folds into the state, and
+  // the widgets that read each: a stream no shown widget reads stays closed,
+  // since CYFR holds a desktop to a few open streams at once
+  // (`frame_stream_max_concurrent`, eight unless the operator says
+  // otherwise), and each size's default widgets read at most eight. The
+  // queue, the schedules and the runs are always read.
   const STREAMS = [
     { name: "attention.changes", subject: null, item: attentionItem, opened: (n) => prune(S.attention, n) },
     { name: "runs.changes", subject: null, item: runItem },
     { name: "schedules.changes", subject: null, item: keyed(S.schedules, "schedule_id", (i) => i.kind === "removed"), opened: (n) => prune(S.schedules, n) },
-    { name: "schedule_runs.changes", subject: null, item: scheduleRunItem },
-    { name: "activity.changes", subject: null, item: keyed(S.activity, "id", (i) => i.kind === "ended"), opened: (n) => prune(S.activity, n) },
-    { name: "threads.changes", subject: null, item: keyed(S.threads, "id", (i) => i.kind === "removed"), opened: (n) => prune(S.threads, n) },
-    { name: "components.changes", subject: null, item: componentItem, opened: (n) => prune(S.components, n) },
-    { name: "vault.changes", subject: null, item: keyed(S.vault, "name", (i) => i.kind === "removed"), opened: (n) => prune(S.vault, n) },
-    { name: "feed.results", subject: "weather", item: feedItem("weather") },
-    { name: "feed.results", subject: "vpn", item: feedItem("vpn") },
+    { name: "threads.changes", subject: null, for: ["threads"], item: keyed(S.threads, "id", (i) => i.kind === "removed"), opened: (n) => prune(S.threads, n) },
+    { name: "feed.results", subject: "weather", for: ["weather"], item: feedItem("weather") },
+    { name: "feed.results", subject: "vpn", for: ["vpn"], item: feedItem("vpn") },
+    { name: "schedule_runs.changes", subject: null, for: ["today", "day"], item: scheduleRunItem },
+    { name: "activity.changes", subject: null, for: ["today", "day"], item: keyed(S.activity, "id", (i) => i.kind === "ended"), opened: (n) => prune(S.activity, n) },
+    { name: "vault.changes", subject: null, for: ["vault"], item: keyed(S.vault, "name", (i) => i.kind === "removed"), opened: (n) => prune(S.vault, n) },
   ];
   const label = (stream) => (stream.subject ? `${stream.name}:${stream.subject}` : stream.name);
+  const LIMITED = "Your desktop reads as many things at once as CYFR allows. Turn another widget off to show this one.";
 
   // An item kept as its key's latest state; `gone` says it left.
   function keyed(map, key, gone) {
@@ -233,14 +243,6 @@
       .slice(0, MAX_SCHEDULE_RUNS);
   }
 
-  function componentItem(item, open) {
-    if (item.kind === "changed") return void restart("components.changes");
-    const ref = text(item.ref);
-    if (!ref) return;
-    if (item.kind === "removed") S.components.delete(ref);
-    else S.components.set(ref, { item, open });
-  }
-
   function feedItem(name) {
     return (item) => {
       const held = S.feeds[name];
@@ -260,6 +262,7 @@
   // endpoint gave no answer on is tried again.
   function follow(stream) {
     let stopped = false, opens = 0, everOpened = false, current = null, timer;
+    const follower = { refused: false };
     async function open() {
       const n = ++opens;
       const handle = await sdk.stream(stream.name, stream.subject, ({ data }) => {
@@ -283,7 +286,8 @@
     function failed(error, attempt) {
       if (stopped) return;
       if (!everOpened && !(error && error.code === "unavailable")) {
-        S.refusals[label(stream)] = (error && error.message) || "This could not be read.";
+        follower.refused = true;
+        S.refusals[label(stream)] = error && error.code === "rate_limited" ? LIMITED : (error && error.message) || "This could not be read.";
         changed();
       } else retry(attempt);
     }
@@ -292,22 +296,50 @@
       clearTimeout(timer);
       timer = setTimeout(() => open().catch((e) => failed(e, Math.min(attempt + 1, RETRY_MS.length - 1))), RETRY_MS[attempt]);
     }
-    const follower = {
-      first: open().catch((e) => failed(e, 0)),
-      restart() {
-        const was = current;
-        current = null;
-        if (was) was.close();
-        open().catch((e) => failed(e, 0));
-      },
+    follower.first = open().catch((e) => failed(e, 0));
+    follower.stop = () => {
+      stopped = true;
+      clearTimeout(timer);
+      if (current) current.close();
+      current = null;
+      delete S.refusals[label(stream)];
     };
-    followers.set(label(stream), follower);
     return follower;
   }
-  const restart = (name) => {
-    const f = followers.get(name);
-    if (f) setTimeout(() => f.restart(), 0);
-  };
+
+  // Opens what the shown widgets read and closes what none reads, one open
+  // after another in the order the widgets stand (each waits for the one
+  // before it a moment at most), so when CYFR's bound is reached it is the
+  // last widget that says so. A stream refused before
+  // is opened again, since turning a widget off may have made room.
+  let opening = Promise.resolve();
+  function sync() {
+    const on = new Set([...shown("near"), ...shown("far")]);
+    const order = [...shown("near"), ...shown("far")];
+    const rank = (s) => (s.for ? Math.min(...s.for.map((id) => (on.has(id) ? order.indexOf(id) : Infinity))) : -1);
+    const wanted = STREAMS.filter((s) => rank(s) !== Infinity).sort((a, b) => rank(a) - rank(b));
+    for (const s of STREAMS) {
+      const held = followers.get(label(s));
+      if (held && (!wanted.includes(s) || held.refused)) {
+        held.stop();
+        followers.delete(label(s));
+      }
+    }
+    for (const s of wanted) {
+      if (followers.has(label(s))) continue;
+      const placeholder = { refused: false, stop() { this.cancelled = true; } };
+      followers.set(label(s), placeholder);
+      opening = opening.then(() => {
+        if (placeholder.cancelled || followers.get(label(s)) !== placeholder) return;
+        const follower = follow(s);
+        followers.set(label(s), follower);
+        return Promise.race([follower.first, pause(OPEN_STEP_MS)]);
+      });
+    }
+    return opening;
+  }
+  const reading = (name) => followers.has(name);
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   // ------------------------------------------------- preferences, by size
 
@@ -396,7 +428,7 @@
       if (run && grantable(run.error)) return { label: "Grant", act: "grant", ref: componentRef(text(a.id)), primary: true };
     }
     const dest = isItem(a.destination) ? a.destination : null;
-    if (dest && dest.kind === "page" && PAGE_ACT[dest.page]) return { label: PAGE_ACT[dest.page], act: "page", page: dest.page, primary: a.kind === "failed_run" };
+    if (dest && dest.kind === "page" && PAGE_ACT[dest.page]) return { label: PAGE_ACT[dest.page], act: "page", page: dest.page, primary: false };
     return null;
   }
   const bySince = (a, b) => (date(a.since) || Infinity) - (date(b.since) || Infinity);
@@ -433,12 +465,7 @@
   const R = {
     apps() {
       const apps = S.installed;
-      const updates = [...S.components.values()].map((h) => h.item)
-        .filter((c) => c.type === "tincture" && c.update_available === true)
-        .map((c) => text(c.name)).filter(Boolean);
-      const meta = updates.length
-        ? pageLink("components", `${updates.join(", ")} ${plural(updates.length, "has an update", "have updates")}`, "updates")
-        : apps.length ? `${apps.length} installed` : "";
+      const meta = apps.length ? `${apps.length} installed` : "";
       const body = apps.length === 0 ? `<p class="empty">No apps yet. Ask AQUA to make you one.</p>`
         : `<ul class="apps">${apps.map((a) => `<li><button class="app" data-act="open" data-ref="${esc(a.ref)}" data-key="app-${esc(a.ref)}" aria-label="Open ${esc(a.name)}${a.open ? " (open)" : ""}">
             <span class="app-ic">${esc(appMark(a))}</span><span class="app-name">${a.open ? '<span class="app-open" aria-hidden="true"></span>' : ""}${esc(a.name)}</span></button></li>`).join("")}</ul>`;
@@ -506,7 +533,7 @@
         meta: S.runs.length ? `${S.runs.length} ${plural(S.runs.length, "run", "runs")} · ${failed} failed` : "",
         refusal: S.refusals["runs.changes"],
         body: rows.length === 0 ? `<p class="empty">No runs yet. A run shows here as it happens.</p>`
-          : `<ul class="rows">${rows.slice(0, cap).map((r) => r.html(r.at ? esc(when(r.at)) : "·")).join("")}</ul>${rows.length > cap ? `<p class="more">${pageLink("executions", `All runs`, "all-runs")}</p>` : ""}`,
+          : `<ul class="rows">${rows.slice(0, cap).map((r) => r.html(r.at ? esc(when(r.at)) : "")).join("")}</ul>${rows.length > cap ? `<p class="more">${pageLink("executions", `All runs`, "all-runs")}</p>` : ""}`,
       };
     },
     vault() {
@@ -586,19 +613,23 @@
     const tools = refresh ? `<button class="ib" data-act="feed" data-feed="${name}" data-action="refresh" data-key="fr-${name}" aria-label="Refresh ${esc(name)}" title="${esc(text(refresh.label) || "Refresh")}"${busy ? ' aria-disabled="true"' : ""}>${ic("refresh")}</button>` : "";
     const meta = [text(f.label), busy ? "Refreshing" : f.at ? `at ${when(f.at)}` : ""].filter(Boolean).map(esc).join(" · ");
     const result = isItem(f.result) ? f.result : { value: f.result };
-    let hero = null;
+    // The hero is the number of the largest size, so a temperature stands
+    // over its wind and a price over its change.
+    const numbers = Object.entries(result).filter(([, v]) => typeof v === "number" && Number.isFinite(v));
+    const hero = numbers.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0] || null;
     const plain = [], lists = [];
     for (const [k, v] of Object.entries(result)) {
-      if (typeof v === "number" && Number.isFinite(v) && hero === null) hero = [k, v];
-      else if (["string", "number", "boolean"].includes(typeof v)) plain.push([k, v]);
+      if (hero && k === hero[0]) continue;
+      if (["string", "number", "boolean"].includes(typeof v)) plain.push([k, v]);
       else if (Array.isArray(v) && v.length) lists.push([k, v]);
     }
-    const value = (v) => (typeof v === "boolean" ? (v ? "yes" : "no") : typeof v === "number" ? nf().format(v) : text(v));
     const list = lists[0];
+    const value = (v) => (typeof v === "boolean" ? (v ? "yes" : "no") : typeof v === "number" ? nf().format(v)
+      : typeof v === "string" && ISO_TIME.test(v) ? when(v) : text(v));
     const pieces = (v) => (isItem(v) ? Object.values(v).filter((x) => ["string", "number"].includes(typeof x)).slice(0, 2).map(value) : [value(v)]);
     const body = [
       hero ? `<p class="f-hero"><span class="f-big">${esc(value(hero[1]))}</span><span class="f-key">${esc(human(hero[0]))}</span></p>` : "",
-      plain.length ? `<dl class="kv">${plain.slice(0, hero ? 2 : 4).map(([k, v]) => `<dt>${esc(human(k))}</dt><dd>${esc(value(v))}</dd>`).join("")}</dl>` : "",
+      plain.length ? `<dl class="kv">${plain.slice(0, list ? 2 : 4).map(([k, v]) => `<dt>${esc(human(k))}</dt><dd>${esc(value(v))}</dd>`).join("")}</dl>` : "",
       list ? `<ol class="f-list" aria-label="${esc(human(list[0]))}">${list[1].slice(0, 4).map((v) => `<li>${pieces(v).map((c, i) => `<span class="${i ? "" : "muted "}num">${esc(c)}</span>`).join("")}</li>`).join("")}</ol>` : "",
       others.length ? `<div class="f-acts">${others.slice(0, 3).map((a) => `<button class="btn" data-act="feed" data-feed="${name}" data-action="${esc(a.name)}" data-key="fa-${name}-${esc(a.name)}"${busy ? ' aria-disabled="true"' : ""}>${esc(text(a.label) || human(a.name))}</button>`).join("")}</div>` : "",
     ].join("");
@@ -627,10 +658,10 @@
 
   function farHead() {
     const active = [...S.schedules.values()].filter((h) => h.item.status === "active").length;
-    const crew = S.activity.size;
+    const crew = reading("activity.changes") ? ` · crew: ${S.activity.size ? `${S.activity.size} at work` : "idle"}` : "";
     const sub = S.note ? `<span class="note">${esc(S.note)}</span>`
       : S.arranging ? (S.saved ? `Saved to your preferences at ${esc(hm(S.saved))}` : "Drag a widget by its title, or use the arrows")
-      : `${active} ${plural(active, "schedule", "schedules")} running · crew: ${crew ? `${crew} at work` : "idle"}`;
+      : `${active} ${plural(active, "schedule", "schedules")} running${crew}`;
     const off = DEFAULT_ORDER.filter((id) => !isOn(id));
     return `<div class="far-head"><div><h2 id="far-title">Running on its own</h2><p class="far-sub">${sub}</p></div>
         <button class="btn${S.arranging ? " primary" : ""}" data-act="arrange" data-key="arrange">${S.arranging ? "Done" : "Arrange"}</button></div>
@@ -838,6 +869,7 @@
   addEventListener("resize", () => {
     if (size() !== lastSize) {
       lastSize = size();
+      if (started) sync();
       render();
     } else clearCovered();
   });
@@ -851,10 +883,12 @@
     S.person = isItem(value.person) && typeof value.person.name === "string" && value.person.name ? value.person.name : null;
     doc.dataset.theme = S.appearance.mode === "dark" ? "dark" : "light";
     if (S.appearance.locale) doc.lang = S.appearance.locale;
+    if (started) sync();
     changed();
   }
 
   let tick = null;
+  let started = false;
   function state(value) {
     S.live = value !== "frozen";
     clearInterval(tick);
@@ -884,8 +918,8 @@
     sdk.on("state", state);
     state("live");
     render();
-    const firsts = STREAMS.map((s) => follow(s).first);
-    Promise.allSettled(firsts).then(() => {
+    started = true;
+    Promise.race([sync(), pause(READY_MS)]).then(() => {
       render();
       sdk.ready();
     });

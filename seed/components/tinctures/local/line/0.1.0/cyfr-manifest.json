@@ -3,7 +3,7 @@
   "type": "tincture",
   "version": "0.1.0",
   "publisher": "local",
-  "description": "A desktop split by one line: on your side, what waits on your tap, oldest first, each with the one thing to do; on the other, what your CYFR runs on its own, its schedules, today's runs and crew, your feeds and your vault. A settled item crosses the line into today's log. Arrange turns each widget off or on and moves it, and is remembered per screen size.",
+  "description": "A desktop split by one line: on your side, what waits on your tap, oldest first, each with the one thing to do; on the other, what your CYFR runs on its own, its schedules, today's runs and crew, your feeds and, when you turn it on, your vault. A settled item crosses the line into today's log. Arrange turns each widget off or on and moves it, and is remembered per screen size.",
   "tags": ["canvas", "desktop"],
   "category": "utility",
   "tincture": {
@@ -18,7 +18,6 @@
         "schedule_runs.changes",
         "activity.changes",
         "threads.changes",
-        "components.changes",
         "vault.changes"
       ],
       "feeds": ["weather", "vpn"],
