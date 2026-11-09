@@ -597,7 +597,6 @@ defmodule Prima.ManifestTinctureTest do
                  manifest(
                    widget.(%{
                      "a" => %{"type" => "integer"},
-                     "b" => %{"type" => "number"},
                      "c" => %{"type" => "string"},
                      "d" => %{"type" => "string", "max" => 1},
                      "e" => %{"type" => "enum", "values" => Enum.map(1..64, &"v#{&1}")}
@@ -628,7 +627,13 @@ defmodule Prima.ManifestTinctureTest do
       assert refused(widget.(%{"e" => %{"type" => "enum"}})) =~ "1 to 64 strings"
 
       assert refused(widget.(%{"t" => %{"type" => "time"}})) =~
-               "type is one of boolean, integer, number, string, enum"
+               "type is one of boolean, integer, string, enum"
+
+      # The canonical JSON encoder refuses floats, so the document has no
+      # number field: a whole number is an integer.
+      assert refused(widget.(%{"b" => %{"type" => "number"}})) ==
+               "tincture.desktop.prefs.widgets.weather.fields.b must be an object whose type " <>
+                 "is one of boolean, integer, string, enum"
 
       assert refused(widget.(%{"b" => %{"type" => "boolean", "max" => 1}})) =~
                "unknown key(s): max"
