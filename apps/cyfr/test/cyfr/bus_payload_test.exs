@@ -511,7 +511,7 @@ defmodule Cyfr.BusPayloadTest do
 
       assert fields ==
                Enum.sort(
-                 ~w(athanor_id kind schedule_id name reference cron_expression status next_run_at last_run_at run_count error_count)a
+                 ~w(athanor_id kind revision at schedule_id name reference cron_expression status next_run_at last_run_at run_count error_count)a
                )
 
       assert Schedules.kinds() == [:changed, :removed]
@@ -533,7 +533,7 @@ defmodule Cyfr.BusPayloadTest do
 
       assert fields ==
                Enum.sort(
-                 ~w(athanor_id kind schedule_id occurrence_id execution_id scheduled_for reason)a
+                 ~w(athanor_id kind revision at schedule_id occurrence_id execution_id scheduled_for reason)a
                )
 
       assert ScheduleRun.kinds() == [:fired, :failed]

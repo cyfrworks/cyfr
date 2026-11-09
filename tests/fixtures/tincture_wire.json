@@ -561,7 +561,7 @@
   "stream_events": {
     "runs.changes": [
       {
-        "why": "a run still running: when it started, no end and no error",
+        "why": "a run still running: when it started, no end and no error; its revision and at, when the change was told",
         "event": {
           "kind": "started",
           "execution_id": "exec_vector_running",
@@ -571,11 +571,13 @@
           "duration_ms": null,
           "started_at": "2026-11-09T10:00:00.000001Z",
           "ended_at": null,
-          "error": null
+          "error": null,
+          "revision": 1794218400000002,
+          "at": "2026-11-09T10:00:00.000002Z"
         }
       },
       {
-        "why": "a run that ended failed: when it started and ended, and its error's class and cause, never its sentence",
+        "why": "a run that ended failed: when it started and ended, and its error's class and cause, never its sentence; its revision and at, when the change was told",
         "event": {
           "kind": "failed",
           "execution_id": "exec_vector_failed",
@@ -588,13 +590,15 @@
           "error": {
             "class": "timeout",
             "cause": "timed_out"
-          }
+          },
+          "revision": 1794218401500002,
+          "at": "2026-11-09T10:00:01.500002Z"
         }
       }
     ],
     "threads.changes": [
       {
-        "why": "a shared thread: its title, its people by the names a reader outside CYFR may see, when it last moved, and how many messages someone else posted after the person last had it open",
+        "why": "a shared thread: its title, its people by the names a reader outside CYFR may see, when it last moved, how many messages someone else posted after the person last had it open; its revision and at, when the change was told",
         "event": {
           "kind": "shared",
           "id": "sth_vector_shared",
@@ -602,7 +606,9 @@
           "people": ["Ada", "Bob"],
           "last_activity": "2026-11-09T10:00:00.000001Z",
           "unread": 2,
-          "waits_on_you": false
+          "waits_on_you": false,
+          "revision": 1794218400000003,
+          "at": "2026-11-09T10:00:00.000003Z"
         }
       },
       {
@@ -614,7 +620,9 @@
           "people": ["Ada"],
           "last_activity": "2026-11-09T09:30:00.000001Z",
           "unread": null,
-          "waits_on_you": true
+          "waits_on_you": true,
+          "revision": 1794216600000002,
+          "at": "2026-11-09T09:30:00.000002Z"
         }
       }
     ]
@@ -6201,6 +6209,294 @@
         "reply": {
           "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
           "canvas": {}
+        }
+      }
+    ]
+  },
+  "delivery": {
+    "comment": "The delivery contract (Compendium.Canvas.catalog/1) on a canvas's stream connection. `to_frame` are the endpoint's messages on one connection in order: subscription 1 to `schedules.changes` is handed its picture (an item marked refresh, then `snapshot` with the time its read began), a change of that item with a higher revision, the item's removal (its `kind` the stream's `removal`), a fresh picture (`resync`, its items, `snapshot`) and `stale` once a read again at the stream's bound failed; subscription 2 ends after `subscribed` with a refusal, the stream's denial; subscription 3 ends after `subscribed` with a refusal of a class `stream_rejections.no_answer_classes` names, for want of an answer. `heard` is what a canvas's handler hears of each, `{id, event, data, revision, at}` per event in order, and the handle's `state` after: a change carries its revision and time, `snapshot` and `stale` their `at`, `denied` the refusal and `unavailable` `retry_at`, the time the SDK opens the stream again (any time: `retry_at` is a placeholder here), when a new `subscribe` of the same stream goes (`reopens`). `refused` are messages the SDK does not read. Prima.TinctureWire builds each message of `to_frame`.",
+    "to_frame": [
+      {
+        "v": 1,
+        "type": "subscribed",
+        "sub": 1
+      },
+      {
+        "v": 1,
+        "type": "event",
+        "sub": 1,
+        "stream": "schedules.changes",
+        "subject": null,
+        "id": null,
+        "data": {
+          "kind": "changed",
+          "schedule_id": "sch_digest",
+          "status": "active",
+          "revision": 1794304800000000,
+          "at": "2026-11-10T10:00:00.000000Z",
+          "refresh": true
+        }
+      },
+      {
+        "v": 1,
+        "type": "snapshot",
+        "sub": 1,
+        "at": "2026-11-10T10:00:00.500000Z"
+      },
+      {
+        "v": 1,
+        "type": "event",
+        "sub": 1,
+        "stream": "schedules.changes",
+        "subject": null,
+        "id": null,
+        "data": {
+          "kind": "changed",
+          "schedule_id": "sch_digest",
+          "status": "paused",
+          "revision": 1794304805000000,
+          "at": "2026-11-10T10:00:05.000000Z"
+        }
+      },
+      {
+        "v": 1,
+        "type": "event",
+        "sub": 1,
+        "stream": "schedules.changes",
+        "subject": null,
+        "id": null,
+        "data": {
+          "kind": "removed",
+          "schedule_id": "sch_digest",
+          "status": null,
+          "revision": 1794304809000000,
+          "at": "2026-11-10T10:00:09.000000Z"
+        }
+      },
+      {
+        "v": 1,
+        "type": "resync",
+        "sub": 1
+      },
+      {
+        "v": 1,
+        "type": "event",
+        "sub": 1,
+        "stream": "schedules.changes",
+        "subject": null,
+        "id": null,
+        "data": {
+          "kind": "changed",
+          "schedule_id": "sch_backup",
+          "status": "active",
+          "revision": 1794305700000000,
+          "at": "2026-11-10T10:15:00.000000Z",
+          "refresh": true
+        }
+      },
+      {
+        "v": 1,
+        "type": "snapshot",
+        "sub": 1,
+        "at": "2026-11-10T10:15:00.500000Z"
+      },
+      {
+        "v": 1,
+        "type": "stale",
+        "sub": 1,
+        "at": "2026-11-10T10:15:00.500000Z"
+      },
+      {
+        "v": 1,
+        "type": "subscribed",
+        "sub": 2
+      },
+      {
+        "v": 1,
+        "type": "ended",
+        "sub": 2,
+        "error": {
+          "class": "forbidden",
+          "message": "This tincture changed since its frame opened — open it again",
+          "stage": "execution"
+        }
+      },
+      {
+        "v": 1,
+        "type": "subscribed",
+        "sub": 3
+      },
+      {
+        "v": 1,
+        "type": "ended",
+        "sub": 3,
+        "error": {
+          "class": "unavailable",
+          "message": "The store could not answer — retry shortly",
+          "stage": "execution"
+        }
+      }
+    ],
+    "heard": [
+      {
+        "sub": 1,
+        "events": [
+          {
+            "id": null,
+            "event": "schedules.changes",
+            "data": {
+              "kind": "changed",
+              "schedule_id": "sch_digest",
+              "status": "active",
+              "revision": 1794304800000000,
+              "at": "2026-11-10T10:00:00.000000Z",
+              "refresh": true
+            },
+            "revision": 1794304800000000,
+            "at": "2026-11-10T10:00:00.000000Z"
+          },
+          {
+            "id": null,
+            "event": "snapshot",
+            "data": null,
+            "revision": null,
+            "at": "2026-11-10T10:00:00.500000Z"
+          },
+          {
+            "id": null,
+            "event": "schedules.changes",
+            "data": {
+              "kind": "changed",
+              "schedule_id": "sch_digest",
+              "status": "paused",
+              "revision": 1794304805000000,
+              "at": "2026-11-10T10:00:05.000000Z"
+            },
+            "revision": 1794304805000000,
+            "at": "2026-11-10T10:00:05.000000Z"
+          },
+          {
+            "id": null,
+            "event": "schedules.changes",
+            "data": {
+              "kind": "removed",
+              "schedule_id": "sch_digest",
+              "status": null,
+              "revision": 1794304809000000,
+              "at": "2026-11-10T10:00:09.000000Z"
+            },
+            "revision": 1794304809000000,
+            "at": "2026-11-10T10:00:09.000000Z"
+          },
+          {
+            "id": null,
+            "event": "resync",
+            "data": null,
+            "revision": null,
+            "at": null
+          },
+          {
+            "id": null,
+            "event": "schedules.changes",
+            "data": {
+              "kind": "changed",
+              "schedule_id": "sch_backup",
+              "status": "active",
+              "revision": 1794305700000000,
+              "at": "2026-11-10T10:15:00.000000Z",
+              "refresh": true
+            },
+            "revision": 1794305700000000,
+            "at": "2026-11-10T10:15:00.000000Z"
+          },
+          {
+            "id": null,
+            "event": "snapshot",
+            "data": null,
+            "revision": null,
+            "at": "2026-11-10T10:15:00.500000Z"
+          },
+          {
+            "id": null,
+            "event": "stale",
+            "data": null,
+            "revision": null,
+            "at": "2026-11-10T10:15:00.500000Z"
+          }
+        ],
+        "state": "stale",
+        "reopens": false
+      },
+      {
+        "sub": 2,
+        "events": [
+          {
+            "id": null,
+            "event": "denied",
+            "data": {
+              "class": "forbidden",
+              "message": "This tincture changed since its frame opened — open it again",
+              "stage": "execution"
+            },
+            "revision": null,
+            "at": null
+          }
+        ],
+        "state": "denied",
+        "reopens": false
+      },
+      {
+        "sub": 3,
+        "events": [
+          {
+            "id": null,
+            "event": "unavailable",
+            "data": {
+              "retry_at": "retry_at"
+            },
+            "revision": null,
+            "at": null
+          }
+        ],
+        "state": "unavailable",
+        "reopens": true
+      }
+    ],
+    "refused": [
+      {
+        "why": "a snapshot without its time",
+        "message": {
+          "v": 1,
+          "type": "snapshot",
+          "sub": 1
+        }
+      },
+      {
+        "why": "a snapshot whose time is no time",
+        "message": {
+          "v": 1,
+          "type": "snapshot",
+          "sub": 1,
+          "at": "soon"
+        }
+      },
+      {
+        "why": "a stale carrying more",
+        "message": {
+          "v": 1,
+          "type": "stale",
+          "sub": 1,
+          "at": "2026-11-10T10:15:00.500000Z",
+          "retry_at": "2026-11-10T10:15:00.500000Z"
+        }
+      },
+      {
+        "why": "a resync carrying a time",
+        "message": {
+          "v": 1,
+          "type": "resync",
+          "sub": 1,
+          "at": "2026-11-10T10:15:00.500000Z"
         }
       }
     ]

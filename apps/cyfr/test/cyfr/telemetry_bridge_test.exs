@@ -523,7 +523,10 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       assert_receive %ScheduleRun{} = run
 
-      assert Map.from_struct(run) == %{
+      # Its delivery stamp is the time the bridge told it.
+      assert run.revision == DateTime.to_unix(run.at, :microsecond)
+
+      assert Map.drop(Map.from_struct(run), [:revision, :at]) == %{
                athanor_id: @athanor,
                kind: :fired,
                schedule_id: "s_due",

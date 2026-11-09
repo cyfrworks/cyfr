@@ -59,7 +59,11 @@ defmodule Aqua.Providers.StatusTest do
       assert stream.topic == :system
 
       assert stream.projection ==
-               ~w(kind health storage_used storage_cap model_connected crew_ready crew_total version update_available)
+               ~w(kind health storage_used storage_cap model_connected crew_ready crew_total version update_available revision at)
+
+      # One item, the status, and its picture read again every five minutes.
+      assert {stream.key, stream.removal, stream.reread, stream.stale_after} ==
+               {nil, nil, [], 300}
 
       assert {stream.subject, stream.bind, stream.filter} == {nil, nil, nil}
       assert stream.deadline_bound == 86_400
@@ -70,16 +74,18 @@ defmodule Aqua.Providers.StatusTest do
       assert Enum.sort(stream.shape["required"]) == Enum.sort(stream.projection)
       assert :ok = Shape.check(stream.shape, Shape.fixture(stream.shape))
 
-      # The payload's own fields, in the projection's order.
+      # The payload's own fields, in the projection's order, then the
+      # delivery fields.
       assert stream.projection ==
-               ["kind" | Enum.map(Bus.SystemStatus.fields(), &Atom.to_string/1)]
+               ["kind" | Enum.map(Bus.SystemStatus.fields(), &Atom.to_string/1)] ++
+                 Prima.Provider.Stream.delivery_fields()
 
       fields = stream.shape["fields"]
       assert fields["kind"]["values"] == ["changed"]
       assert fields["health"]["values"] == ["ok", "degraded", "low_storage"]
       assert fields["version"]["nullable"] == false
 
-      for field <- Enum.reject(stream.projection, &(&1 in ["kind", "version"])),
+      for field <- Enum.reject(stream.projection, &(&1 in ["kind", "version", "revision", "at"])),
           do: assert(fields[field]["nullable"] == true, field)
 
       assert {Provider, :status} = stream.refresh
@@ -183,6 +189,8 @@ defmodule Aqua.Providers.StatusTest do
     Enum.map(items, &read_as/1)
   end
 
+  # A status as a canvas reads it, held to the shape, its delivery fields
+  # (its revision, its time in microseconds) checked and set aside.
   defp read_as(payload) do
     {:ok, {Provider, stream}} = Sanctum.Catalog.lookup_stream(@stream)
 
@@ -197,6 +205,8 @@ defmodule Aqua.Providers.StatusTest do
     data = grant |> Prima.StreamGrant.project(payload) |> Jason.encode!() |> Jason.decode!()
     assert :ok = Shape.check(stream.shape, data), inspect(data)
     assert Enum.sort(Map.keys(data)) == Enum.sort(stream.projection)
-    data
+    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
+    assert data["revision"] == DateTime.to_unix(at, :microsecond)
+    Map.drop(data, ~w(revision at))
   end
 end

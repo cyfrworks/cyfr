@@ -17,7 +17,12 @@ defmodule Emissary.Web.FrameSocketTest do
   a standing announcement about its person when revalidation refuses, and
   the next revalidation once its credential stops standing unannounced;
   a connection that falls too far behind ends every subscription with the
-  overflow refusal; a newer connection of the frame replaces the older,
+  overflow refusal, and hands a canvas-readable stream a fresh picture
+  instead; such a stream keeps the delivery contract: its picture ends
+  with a snapshot no item of it outranks, a change of a reread kind is
+  answered with one fresh picture, at its bound the picture is read again
+  and a read that fails is told stale once, and a resync is read only
+  under the frame's context established again; a newer connection of the frame replaces the older,
   an idle one closes; each subscribe's bearer is read as a request's,
   while an admitted subscription is held to the row up to its own bound;
   a stream's refresh comes first, marked, and one that cannot be read
@@ -89,6 +94,124 @@ defmodule Emissary.Web.FrameSocketTest do
     end
 
     def broken(_ctx, _subject), do: {:error, :database_error}
+  end
+
+  # A provider of three canvas-readable streams on the schedules topic,
+  # each item a schedule by its id, whose picture the case sets
+  # (`picture/1`, a list of items or an error the read answers, kept in
+  # the application's environment through `Prima.Test.Env`):
+  # `pictured.changes` delivers each change, `pictured.rereads` answers a
+  # `changed` with a fresh picture, and `pictured.brief`'s picture stands a
+  # second.
+  defmodule Pictured do
+    @moduledoc false
+    @behaviour Prima.Provider
+
+    @impl true
+    def service, do: "pictured"
+
+    @impl true
+    def tools, do: []
+
+    @impl true
+    def handle(_tool, _ctx, _args), do: {:error, :unreachable}
+
+    @impl true
+    def streams do
+      {:ok, shape} =
+        Prima.Canvas.Shape.validate(%{
+          "type" => "object",
+          "fields" => %{
+            "kind" => %{"type" => "enum", "values" => ["changed", "removed"]},
+            "schedule_id" => %{"type" => "string"},
+            "status" => %{"type" => "string", "nullable" => true}
+          },
+          "required" => ["kind", "schedule_id"]
+        })
+
+      for {name, reread, stale_after} <- [
+            {"pictured.changes", [], 60},
+            {"pictured.rereads", ["changed"], 60},
+            {"pictured.brief", [], 1}
+          ] do
+        %Prima.Provider.Stream{
+          name: name,
+          topic: :schedules,
+          projection: ["kind", "schedule_id", "status", "revision", "at"],
+          deadline_bound: 600,
+          shape: Prima.Provider.Stream.delivered(shape),
+          refresh: {__MODULE__, :refresh},
+          key: "schedule_id",
+          removal: "removed",
+          reread: reread,
+          stale_after: stale_after
+        }
+      end
+    end
+
+    def picture(picture), do: Prima.Test.Env.put_app_env(:cyfr, __MODULE__, picture)
+
+    # `{:stall, owner}` tells `owner` the read began, by the process that
+    # reads, and answers nothing until that process hears `:release`.
+    def refresh(_ctx, nil) do
+      case Application.get_env(:cyfr, __MODULE__, []) do
+        items when is_list(items) ->
+          {:ok, items}
+
+        {:error, _} = unread ->
+          unread
+
+        {:stall, owner} ->
+          send(owner, {:read_began, self()})
+
+          receive do
+            :release -> {:ok, []}
+          end
+      end
+    end
+  end
+
+  # `feed.results` as a canvas reads it, under a name of its own, whose
+  # refresh tells the case it began, by the process that reads, and reads
+  # the feed `paused.feed` names only once that process hears `:continue`.
+  defmodule PausedFeed do
+    @moduledoc false
+    @behaviour Prima.Provider
+
+    @impl true
+    def service, do: "paused"
+
+    @impl true
+    def tools, do: []
+
+    @impl true
+    def handle(_tool, _ctx, _args), do: {:error, :unreachable}
+
+    @impl true
+    def streams do
+      [results | _] = Opus.Providers.Feed.streams()
+
+      [
+        %{
+          results
+          | name: "paused.results",
+            subject: nil,
+            filter: nil,
+            refresh: {__MODULE__, :refresh}
+        }
+      ]
+    end
+
+    def pause(owner, feed), do: Prima.Test.Env.put_app_env(:cyfr, __MODULE__, {owner, feed})
+
+    def refresh(ctx, nil) do
+      {owner, feed} = Application.fetch_env!(:cyfr, __MODULE__)
+      send(owner, {:read_began, self()})
+
+      receive do
+        :continue -> Opus.Feeds.latest(ctx, feed)
+      end
+    end
   end
 
   @version "1.0.0"
@@ -428,6 +551,292 @@ defmodule Emissary.Web.FrameSocketTest do
     end
 
     assert Socket.state(socket).subs == %{}
+  end
+
+  # ---------------------------------------------------------------------------
+  # The delivery contract
+  # ---------------------------------------------------------------------------
+
+  describe "a canvas-readable stream keeps the delivery contract" do
+    setup %{source: source} do
+      Pictured.picture([item("sch_one", "active")])
+      %{actor: Sanctum.Context.actor(source)}
+    end
+
+    defp item(id, status, at \\ DateTime.utc_now()),
+      do: %{kind: :changed, schedule_id: id, status: status, revision: micro(at), at: at}
+
+    defp micro(at), do: DateTime.to_unix(at, :microsecond)
+
+    defp told!(actor, kind, id, status) do
+      :ok =
+        Cyfr.Bus.broadcast(
+          actor,
+          Cyfr.Bus.schedules(actor),
+          Cyfr.Bus.Schedules.new(actor, kind, schedule_id: id, status: status)
+        )
+    end
+
+    defp pictured(source, stream, fun) do
+      Sanctum.Catalog.with_providers([Pictured], fn ->
+        frame = canvas_frame!(source, %{"data" => [stream, "mcp_servers.changes"]})
+        socket = Socket.connect({:canvas, frame.frame_id})
+        fun.(socket, frame)
+      end)
+    end
+
+    # The picture a subscription is handed: its items, then the snapshot
+    # and the time it names.
+    defp picture!(socket, sub, count) do
+      items = for _ <- 1..count//1, do: answer(socket, sub)
+      assert %{"type" => "snapshot", "at" => at} = answer(socket, sub)
+      {:ok, at, 0} = DateTime.from_iso8601(at)
+      {Enum.map(items, & &1["data"]), at}
+    end
+
+    test "its picture ends with a snapshot, no item stamped later than the read began, and each change follows with a higher revision",
+         %{source: source, actor: actor} do
+      # An owner that stamped its item after the read began.
+      Pictured.picture([item("sch_one", "active", DateTime.add(DateTime.utc_now(), 3600))])
+
+      pictured(source, "pictured.changes", fn socket, frame ->
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.changes")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[read], at} = picture!(socket, 1, 1)
+
+        assert %{"refresh" => true, "schedule_id" => "sch_one", "revision" => revision} = read
+        assert revision == micro(at)
+        assert read["at"] == DateTime.to_iso8601(at)
+
+        told!(actor, :changed, "sch_one", "paused")
+
+        assert %{"type" => "event", "data" => %{"status" => "paused", "revision" => later}} =
+                 changed = answer(socket, 1)
+
+        refute Map.has_key?(changed["data"], "refresh")
+        assert later > revision
+
+        told!(actor, :removed, "sch_one", nil)
+        assert %{"data" => %{"kind" => "removed", "schedule_id" => "sch_one"}} = answer(socket, 1)
+      end)
+    end
+
+    test "a feed accepted during a snapshot read is not stamped after the snapshot",
+         %{source: source} do
+      PausedFeed.pause(self(), "price")
+
+      Sanctum.Catalog.with_providers([PausedFeed], fn ->
+        frame = canvas_frame!(source, %{"data" => ["paused.results"]})
+        socket = Socket.connect({:canvas, frame.frame_id})
+        Socket.subscribe(socket, 1, frame.bearer, "paused.results")
+        assert_receive {:read_began, reader}, @answer_ms
+
+        # Accepted after the read began and before it reads the feed: its
+        # envelope carries its time as text.
+        assert %{"at" => at} = accepted!(source, "price", 42)
+        assert is_binary(at)
+        send(reader, :continue)
+
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[data], began} = picture!(socket, 1, 1)
+        assert data["result"] == %{"price" => 42}
+        {:ok, at, 0} = DateTime.from_iso8601(data["at"])
+        assert DateTime.compare(at, began) != :gt
+      end)
+    end
+
+    test "a later change still outranks the prior change when the next member clock is behind",
+         %{source: source, actor: actor} do
+      pictured(source, "pictured.changes", fn socket, frame ->
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.changes")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[_], _at} = picture!(socket, 1, 1)
+
+        # Told first by a member ten seconds ahead, then by one on time.
+        ahead = DateTime.add(DateTime.utc_now(), 10)
+
+        for {status, at} <- [{"paused", ahead}, {"active", DateTime.utc_now()}] do
+          payload =
+            Cyfr.Bus.Schedules.new(actor, :changed,
+              schedule_id: "sch_one",
+              status: status,
+              at: at
+            )
+
+          :ok = Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), payload)
+        end
+
+        assert %{"data" => %{"status" => "paused", "revision" => first}} = answer(socket, 1)
+        assert %{"data" => %{"status" => "active", "revision" => second}} = answer(socket, 1)
+        assert second > first
+
+        # The same change heard twice keeps its revision.
+        duplicate =
+          Cyfr.Bus.Schedules.new(actor, :changed, schedule_id: "sch_two", status: "paused")
+
+        for _ <- 1..2, do: :ok = Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), duplicate)
+        assert %{"data" => %{"schedule_id" => "sch_two", "revision" => once}} = answer(socket, 1)
+        assert %{"data" => %{"schedule_id" => "sch_two", "revision" => ^once}} = answer(socket, 1)
+      end)
+    end
+
+    test "a stalled reread still reports stale at the freshness bound, and the connection keeps answering",
+         %{source: source} do
+      fresh_for_the_case!()
+
+      pictured(source, "pictured.brief", fn socket, frame ->
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.brief")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[_], first} = picture!(socket, 1, 1)
+
+        Pictured.picture({:stall, self()})
+        assert_receive {:read_began, reader}, @answer_ms
+
+        try do
+          # Told stale at the bound from the last picture, whatever the read does.
+          assert %{"type" => "stale", "at" => at} = answer(socket, 1)
+          assert at == DateTime.to_iso8601(first)
+
+          # Meanwhile the connection takes another subscription and its end.
+          Socket.subscribe(socket, 2, frame.bearer, "mcp_servers.changes")
+          assert %{"type" => "subscribed"} = answer(socket, 2)
+          Socket.unsubscribe(socket, 2)
+          wait_until(fn -> Map.keys(Socket.state(socket).subs) == [1] end, @answer_ms)
+
+          # Past its deadline the read is stopped, and an answer it would
+          # have given is never applied.
+          wait_until(fn -> not Process.alive?(reader) end, @answer_ms)
+          refute_received {:socket, ^socket, %{"sub" => 1, "type" => "resync"}}
+        after
+          send(reader, :release)
+        end
+      end)
+    end
+
+    test "a read running when its subscription or its connection ends is stopped",
+         %{source: source} do
+      pictured(source, "pictured.changes", fn socket, frame ->
+        Pictured.picture({:stall, self()})
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.changes")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        assert_receive {:read_began, first}, @answer_ms
+        Socket.unsubscribe(socket, 1)
+        wait_until(fn -> not Process.alive?(first) end, @answer_ms)
+
+        Socket.subscribe(socket, 2, frame.bearer, "pictured.changes")
+        assert %{"type" => "subscribed"} = answer(socket, 2)
+        assert_receive {:read_began, second}, @answer_ms
+        Socket.stop(socket)
+        wait_until(fn -> not Process.alive?(second) end, @answer_ms)
+      end)
+    end
+
+    test "a change of a reread kind is answered with one fresh picture in its place, a burst of them with one",
+         %{source: source, actor: actor} do
+      pictured(source, "pictured.rereads", fn socket, frame ->
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.rereads")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[_first], _at} = picture!(socket, 1, 1)
+
+        Pictured.picture([item("sch_one", "paused"), item("sch_two", "active")])
+        for status <- ~w(paused active paused), do: told!(actor, :changed, "sch_one", status)
+
+        assert %{"type" => "resync"} = answer(socket, 1)
+        {items, _at} = picture!(socket, 1, 2)
+
+        assert Enum.map(items, &{&1["schedule_id"], &1["status"]}) == [
+                 {"sch_one", "paused"},
+                 {"sch_two", "active"}
+               ]
+
+        refute_receive {:socket, ^socket, %{"sub" => 1}}, 600
+
+        # A removal is not a reread kind: it is delivered.
+        told!(actor, :removed, "sch_two", nil)
+        assert %{"type" => "event", "data" => %{"kind" => "removed"}} = answer(socket, 1)
+      end)
+    end
+
+    test "before its bound a picture is read again as a resync; past it with no fresh picture it is told stale once and keeps the stream",
+         %{source: source} do
+      fresh_for_the_case!()
+
+      pictured(source, "pictured.brief", fn socket, frame ->
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.brief")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[_], first} = picture!(socket, 1, 1)
+
+        # Read again at half the bound, so the resync, not stale, comes next.
+        assert %{"type" => "resync"} = answer(socket, 1)
+        {[_], second} = picture!(socket, 1, 1)
+        assert DateTime.diff(second, first, :millisecond) >= 500
+
+        Pictured.picture({:error, :database_error})
+        assert %{"type" => "stale", "at" => at} = answer(socket, 1)
+        assert at == DateTime.to_iso8601(second)
+        refute_receive {:socket, ^socket, %{"sub" => 1}}, 1_500
+        assert Map.keys(Socket.state(socket).subs) == [1]
+
+        Pictured.picture([item("sch_one", "active")])
+        assert %{"type" => "resync"} = answer(socket, 1)
+        {[_], _third} = picture!(socket, 1, 1)
+      end)
+    end
+
+    test "a connection that falls too far behind hands a canvas-readable stream a fresh picture and ends the other",
+         %{source: source} do
+      pictured(source, "pictured.changes", fn socket, frame ->
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.changes")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[_], _at} = picture!(socket, 1, 1)
+        Socket.subscribe(socket, 2, frame.bearer, "mcp_servers.changes")
+        assert %{"type" => "subscribed"} = answer(socket, 2)
+
+        :erlang.suspend_process(socket)
+
+        try do
+          for _ <- 1..1_100, do: changed(source)
+
+          wait_until(
+            fn -> elem(Process.info(socket, :message_queue_len), 1) > 1_000 end,
+            @answer_ms
+          )
+        after
+          :erlang.resume_process(socket)
+        end
+
+        ended = Jason.decode!(Jason.encode!(TinctureWire.ended(2, FrameSocket.overflow())))
+        assert answer(socket, 2) == ended
+        assert %{"type" => "resync"} = answer(socket, 1)
+        {[_], _at} = picture!(socket, 1, 1)
+        assert Map.keys(Socket.state(socket).subs) == [1]
+      end)
+    end
+
+    test "a resync is read only under the frame's context established again: a credential that no longer stands ends the stream, handing nothing",
+         %{source: source, actor: actor} do
+      fresh_for_the_case!()
+
+      pictured(source, "pictured.rereads", fn socket, frame ->
+        Socket.subscribe(socket, 1, frame.bearer, "pictured.rereads")
+        assert %{"type" => "subscribed"} = answer(socket, 1)
+        {[_], _at} = picture!(socket, 1, 1)
+
+        # Revoked behind the shell's back, within the context's freshness.
+        {1, _} =
+          Arca.Repo.update_all(
+            from(f in Arca.Schemas.FrameCredential, where: f.id == ^frame.id),
+            set: [state: "revoked"]
+          )
+
+        told!(actor, :changed, "sch_one", "paused")
+
+        assert %{"type" => "ended", "error" => %{"class" => "unauthenticated"}} =
+                 answer(socket, 1)
+
+        refute_receive {:socket, ^socket, %{"sub" => 1}}, 300
+      end)
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -835,6 +1244,7 @@ defmodule Emissary.Web.FrameSocketTest do
 
     assert %{"type" => "event", "subject" => "btc", "data" => refreshed} = answer(socket, 1)
     assert refreshed == btc |> Jason.encode!() |> Jason.decode!() |> Map.put("refresh", true)
+    assert %{"type" => "snapshot"} = answer(socket, 1)
 
     # The subscription hears the athanor's one feeds topic and no topic
     # built from its subject.
@@ -1026,6 +1436,8 @@ defmodule Emissary.Web.FrameSocketTest do
     assert %{"type" => "subscribed"} = answer(socket, 1)
     fixture = Shape.fixture(shape)
     assert %{"type" => "event", "stream" => ^shaped, "data" => ^fixture} = answer(socket, 1)
+    assert %{"revision" => 0, "at" => "1970-01-01T00:00:00Z"} = fixture
+    assert answer(socket, 1) == TinctureWire.snapshot(1, ~U[1970-01-01 00:00:00Z])
     assert %{"type" => "ended"} = answer(socket, 1)
 
     Socket.subscribe(socket, 2, frame.bearer, "mcp_servers.changes")
@@ -1071,11 +1483,13 @@ defmodule Emissary.Web.FrameSocketTest do
     assert event["data"] == envelope |> Jason.encode!() |> Jason.decode!()
     assert Shape.check(binding.result_shape, event["data"]["result"]) == :ok
     refute Enum.any?(~w(operation args reference), &Map.has_key?(event["data"], &1))
+    assert TinctureWire.snapshot(1, ~U[1970-01-01 00:00:00Z]) == answer(socket, 1)
     assert TinctureWire.ended(1, nil) == answer(socket, 1)
 
     # A name the canvas declares and the athanor does not bind: no event.
     Socket.subscribe(socket, 2, frame.bearer, "feed.results", "eth")
     assert %{"type" => "subscribed"} = answer(socket, 2)
+    assert TinctureWire.snapshot(2, ~U[1970-01-01 00:00:00Z]) == answer(socket, 2)
     assert TinctureWire.ended(2, nil) == answer(socket, 2)
 
     # A name the canvas does not declare is refused by its declaration.

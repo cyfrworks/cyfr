@@ -32,7 +32,9 @@ defmodule Cyfr.Providers.Attention do
   deleted thread's approval, and `resolved` for every other end. A
   waiting item's `outcome` is nil. An approval that a
   cancel, a pause or an archive of its turn invalidates is announced to
-  no one (`Arca.TurnStorage`), so it leaves at the next refresh.
+  no one (`Arca.TurnStorage`), so it leaves at the next refresh, which
+  the delivery contract (`Compendium.Canvas.catalog/1`) makes within five
+  minutes: an item is keyed by its `id`.
 
   An athanor is one person's, so its threads' approvals wait for its
   owner, and an offer waits for its recipient in their own athanor; a
@@ -58,6 +60,10 @@ defmodule Cyfr.Providers.Attention do
   # A day: the longest a grant on the stream lives.
   @deadline_bound 86_400
 
+  # Five minutes: how long a picture stands before it is read again, the
+  # bound on an approval that left untold (the moduledoc's).
+  @stale_after 300
+
   # The failed runs a refresh lists, newest first.
   @failed_runs 20
 
@@ -65,6 +71,8 @@ defmodule Cyfr.Providers.Attention do
 
   @typedoc "One waiting item: the stream's payload fields with its kind."
   @type item :: %{
+          optional(:revision) => non_neg_integer(),
+          optional(:at) => DateTime.t(),
           kind: Cyfr.Bus.Attention.kind(),
           id: String.t(),
           label: String.t() | nil,
@@ -89,12 +97,17 @@ defmodule Cyfr.Providers.Attention do
       %Prima.Provider.Stream{
         name: "attention.changes",
         topic: :attention,
-        projection: ["kind", "id", "label", "since", "destination", "outcome"],
+        projection:
+          ["kind", "id", "label", "since", "destination", "outcome"] ++
+            Prima.Provider.Stream.delivery_fields(),
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
         deadline_bound: @deadline_bound,
-        shape: shape(),
-        refresh: {__MODULE__, :waiting}
+        shape: Prima.Provider.Stream.delivered(shape()),
+        refresh: {__MODULE__, :waiting},
+        key: "id",
+        removal: "removed",
+        stale_after: @stale_after
       }
     ]
   end
@@ -121,7 +134,10 @@ defmodule Cyfr.Providers.Attention do
       items =
         Enum.map(confirmations, &confirmation/1) ++ approvals ++ offers ++ runs ++ schedules
 
-      {:ok, Enum.sort_by(items, & &1.since, DateTime)}
+      {:ok,
+       items
+       |> Enum.sort_by(& &1.since, DateTime)
+       |> Enum.map(&Prima.Provider.Stream.stamped(&1, now))}
     end
   end
 

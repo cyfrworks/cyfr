@@ -7,6 +7,7 @@ import {describe, test} from "node:test"
 
 import {
   BEARER_HEADER,
+  CLOSE_CODES,
   NO_ANSWER_CLASSES,
   ROUTES,
   SOCKET_PATH,
@@ -136,6 +137,30 @@ describe("the stream connection agrees with the fixture", () => {
     for (const message of refused) {
       assert.deepEqual(decodeConnectionMessage(message), {ok: false}, JSON.stringify(message))
     }
+  })
+})
+
+describe("the delivery contract's messages agree with the fixture", () => {
+  const delivery = fixture.delivery
+
+  test("every message the endpoint sends a canvas-readable stream decodes", () => {
+    assert.deepEqual(
+      [...new Set(delivery.to_frame.map(({type}) => type))].sort(),
+      ["ended", "event", "resync", "snapshot", "stale", "subscribed"]
+    )
+    for (const message of delivery.to_frame) {
+      assert.deepEqual(decodeConnectionMessage(message), {ok: true, message}, JSON.stringify(message))
+    }
+  })
+
+  test("a delivery message the wire does not shape does not decode", () => {
+    for (const {why, message} of delivery.refused) {
+      assert.deepEqual(decodeConnectionMessage(message), {ok: false}, why)
+    }
+  })
+
+  test("the close codes are the connection's", () => {
+    assert.deepEqual({...CLOSE_CODES}, fixture.connection.close_codes)
   })
 })
 

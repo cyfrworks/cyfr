@@ -11,7 +11,9 @@ defmodule Aqua.Providers.Status do
   takes no subject. Its refresh is the status read now under the
   subscriber's context, which also has the watch (`Aqua.Status`) keep the
   athanor, so every later change is told live; `Aqua.Status` reads each
-  field from its source.
+  field from its source. Under the delivery contract
+  (`Compendium.Canvas.catalog/1`) the stream is one item, the status, and
+  names no key.
 
   It lives in the assistant's domain because the brains are read there:
   the host (`Cyfr`) depends on the identity domain and storage alone, and
@@ -27,6 +29,11 @@ defmodule Aqua.Providers.Status do
 
   # A day: the longest a grant on the stream lives.
   @deadline_bound 86_400
+
+  # Five minutes: how long a picture stands before it is read again. The
+  # watch tells a change within its minute's tick, and a read again also
+  # keeps the athanor watched.
+  @stale_after 300
 
   @impl true
   def service, do: "aqua"
@@ -53,11 +60,12 @@ defmodule Aqua.Providers.Status do
           "crew_ready",
           "crew_total",
           "version",
-          "update_available"
+          "update_available" | Prima.Provider.Stream.delivery_fields()
         ],
         deadline_bound: @deadline_bound,
-        shape: shape(),
-        refresh: {__MODULE__, :status}
+        shape: Prima.Provider.Stream.delivered(shape()),
+        refresh: {__MODULE__, :status},
+        stale_after: @stale_after
       }
     ]
   end

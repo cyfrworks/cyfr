@@ -50,7 +50,10 @@ defmodule Compendium.Providers.ComponentsStreamTest do
              {:components, nil, nil, nil, {Component, :installed}}
 
     assert stream.projection ==
-             ~w(kind ref type name icon version update_available grant_current)
+             ~w(kind ref type name icon version update_available grant_current revision at)
+
+    assert {stream.key, stream.removal, stream.reread, stream.stale_after} ==
+             {"ref", "removed", ~w(installed pushed changed), 900}
 
     assert stream.shape["fields"]["kind"]["values"] ==
              Enum.map(Components.kinds(), &Atom.to_string/1)
@@ -65,8 +68,20 @@ defmodule Compendium.Providers.ComponentsStreamTest do
   test "the refresh is every installed version as the listing reads it", %{ctx: ctx} do
     publish!(ctx, "fetch", "1.0.0")
 
+    began = DateTime.utc_now()
     assert {:ok, items} = Component.installed(ctx, nil)
     read = Enum.map(items, &read_as/1)
+
+    # Each stamped with the time the read began, no later.
+    for %{"revision" => revision, "at" => at} <- read do
+      {:ok, at, 0} = DateTime.from_iso8601(at)
+      assert revision == DateTime.to_unix(at, :microsecond)
+
+      assert DateTime.compare(at, began) != :lt and
+               DateTime.compare(at, DateTime.utc_now()) != :gt
+    end
+
+    read = Enum.map(read, &Map.drop(&1, ~w(revision at)))
 
     assert %{
              "kind" => "installed",
@@ -135,7 +150,9 @@ defmodule Compendium.Providers.ComponentsStreamTest do
     actor = Prima.Actor.in_athanor("ath_components_stream")
     data = read_as(Components.new(actor, :changed))
     assert data["kind"] == "changed"
-    assert Enum.all?(Map.delete(data, "kind"), fn {_field, value} -> is_nil(value) end)
+    assert is_integer(data["revision"]) and is_binary(data["at"])
+
+    assert Enum.all?(Map.drop(data, ~w(kind revision at)), fn {_field, value} -> is_nil(value) end)
   end
 
   # A refresh item or a live payload as a canvas reads it.

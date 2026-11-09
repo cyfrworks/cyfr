@@ -74,7 +74,8 @@ defmodule Aqua.StatusTest do
     Arca.StorageReserve.put(:depleted)
     tick(watch)
     assert_received %SystemStatus{kind: :changed, health: "low_storage"} = told
-    assert told == %{opened | health: "low_storage"}
+    assert said(told) == said(%{opened | health: "low_storage"})
+    assert told.revision > opened.revision
 
     tick(watch)
     refute_received %SystemStatus{}
@@ -82,7 +83,8 @@ defmodule Aqua.StatusTest do
     Arca.StorageReserve.put(:ok)
     tick(watch)
     assert_received %SystemStatus{} = back
-    assert back == opened
+    assert said(back) == said(opened)
+    assert back.revision > told.revision
   end
 
   test "a burst of vault entries or components is read once, a second after it began", %{
@@ -118,8 +120,12 @@ defmodule Aqua.StatusTest do
     Arca.StorageReserve.put(:ok)
     :ok = Bus.broadcast(actor, Bus.components(actor), Components.new(actor, :changed))
     assert_receive %SystemStatus{} = back, 5_000
-    assert back == opened
+    assert said(back) == said(opened)
   end
+
+  # What a status says, its delivery stamp aside: every read stamps the
+  # time it began.
+  defp said(status), do: Map.drop(status, [:revision, :at])
 
   test "a later refresh that read a newer status tells the earlier subscribers", %{ctx: ctx} do
     start_supervised!(Aqua.Status)

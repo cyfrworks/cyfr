@@ -160,29 +160,43 @@ defmodule Compendium.Providers.CanvasTest do
       person = ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z"
       feed = ~S"\A[a-z0-9][a-z0-9-]{0,47}\z"
 
+      # Each with its delivery: the field an item is keyed by, the kind it
+      # leaves as, the kinds answered with a fresh picture, and the seconds
+      # a picture stands.
       assert streams ==
                for(
-                 {name, subject, filter} <- [
-                   {"activity.changes", nil, nil},
-                   {"attention.changes", person, nil},
-                   {"components.changes", nil, nil},
-                   {"feed.results", feed, "feed"},
-                   {"files.changes", nil, nil},
-                   {"runs.changes", nil, nil},
-                   {"schedule_runs.changes", nil, nil},
-                   {"schedules.changes", nil, nil},
-                   {"system.changes", nil, nil},
-                   {"threads.changes", person, nil},
-                   {"vault.changes", nil, nil}
+                 {name, subject, filter, {key, removal, reread, stale_after}} <- [
+                   {"activity.changes", nil, nil, {"id", "ended", [], 900}},
+                   {"attention.changes", person, nil, {"id", "removed", [], 300}},
+                   {"components.changes", nil, nil,
+                    {"ref", "removed", ~w(installed pushed changed), 900}},
+                   {"feed.results", feed, "feed", {"binding", nil, [], 900}},
+                   {"files.changes", nil, nil, {"id", "removed", ["removed"], 900}},
+                   {"runs.changes", nil, nil, {"execution_id", nil, [], 900}},
+                   {"schedule_runs.changes", nil, nil, {"occurrence_id", nil, [], 900}},
+                   {"schedules.changes", nil, nil, {"schedule_id", "removed", [], 900}},
+                   {"system.changes", nil, nil, {nil, nil, [], 300}},
+                   {"threads.changes", person, nil, {"id", "removed", [], 900}},
+                   {"vault.changes", nil, nil, {"name", "removed", [], 900}}
                  ],
                  do: %{
                    name: name,
                    subject: subject,
                    shape: shape.(name),
                    filter: filter,
-                   refresh: true
+                   refresh: true,
+                   key: key,
+                   removal: removal,
+                   reread: reread,
+                   stale_after: stale_after
                  }
                )
+
+      # Every one carries a revision and a time, and no other field more.
+      for %{shape: %{"fields" => fields}} <- streams do
+        assert fields["revision"] == %{"type" => "integer", "nullable" => false}
+        assert fields["at"] == %{"type" => "time", "nullable" => false}
+      end
     end
 
     test "write, versions and restore answer through the tool", %{ctx: ctx} do

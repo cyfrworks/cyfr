@@ -249,9 +249,22 @@ export function decodeAnswer(kind, body) {
 // An app's stream connection; a canvas's is `socketPath/1`.
 export const SOCKET_PATH = "/_f/v1/socket"
 
+// The WebSocket close codes a stream connection ends with
+// (`Prima.TinctureWire.close_code/1`).
+export const CLOSE_CODES = Object.freeze({unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1000})
+
 // The name of the last event an open stream's handler hears when the
 // endpoint ended it with a refusal, its data the refusal's projection.
 export const REFUSAL_EVENT = "refusal"
+
+// What a canvas's stream handler hears beside its changes, by the delivery
+// contract (`Compendium.Canvas.catalog/1`): its picture is whole
+// (`snapshot`), a fresh picture follows (`resync`), it cannot be read now
+// (`unavailable`), it is older than its bound (`stale`), or its grant no
+// longer covers it (`denied`). The last three, and `live` and `ended`, are
+// the states a canvas's stream handle is in.
+export const DELIVERY_EVENTS = Object.freeze(["snapshot", "resync", "unavailable", "stale", "denied"])
+export const STREAM_STATES = Object.freeze(["live", "unavailable", "stale", "denied", "ended"])
 
 // The refusal classes that leave a subscription unanswered: those a request
 // is answered with a server error for. A subscription refused with one
@@ -282,11 +295,15 @@ const isEvent = ({stream, subject, id}) =>
   (subject === null || typeof subject === "string") &&
   (id === null || (Number.isInteger(id) && id >= 0))
 
+// An ISO 8601 time, as the endpoint stamps a picture.
+const isTime = (at) => typeof at === "string" && at !== "" && !Number.isNaN(Date.parse(at))
+
 // What the endpoint sends over the stream connection read back: `{ok: true,
-// message}` for exactly a `subscribed`, an `event` or an `ended`, the last
-// with `error`, a refusal's projection, when the endpoint said why;
-// `{ok: false}` for anything else. A subscription's number has a call's
-// grammar (`Prima.TinctureWire.subscription?/1`).
+// message}` for exactly a `subscribed`, an `event`, a `snapshot` or a
+// `stale` with its `at`, a `resync` or an `ended`, the last with `error`, a
+// refusal's projection, when the endpoint said why; `{ok: false}` for
+// anything else. A subscription's number has a call's grammar
+// (`Prima.TinctureWire.subscription?/1`).
 export function decodeConnectionMessage(message) {
   if (!isObject(message) || message.v !== VERSION || !isCall(message.sub)) return {ok: false}
   const head = ["v", "type", "sub"]
@@ -297,6 +314,13 @@ export function decodeConnectionMessage(message) {
       break
     case "event":
       read = sameKeys(message, [...head, "stream", "subject", "id", "data"]) && isEvent(message)
+      break
+    case "snapshot":
+    case "stale":
+      read = sameKeys(message, [...head, "at"]) && isTime(message.at)
+      break
+    case "resync":
+      read = sameKeys(message, head)
       break
     case "ended":
       read = sameKeys(message, head) || (sameKeys(message, [...head, "error"]) && isRefusal(message.error))

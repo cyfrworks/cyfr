@@ -6,9 +6,9 @@ defmodule Prima.ProviderTest do
   A provider's stream declarations: read through `Prima.Provider.streams/1`
   (none when it exports none), refused at the read when malformed, found
   by name among every provider's, and a subject admitted only by the
-  stream's grammar whole. A canvas-readable stream's shape, refresh and
-  filter are held to their forms. Beside them, what a stream grant
-  forwards.
+  stream's grammar whole. A canvas-readable stream's shape, refresh,
+  filter and delivery contract are held to their forms. Beside them, what
+  a stream grant forwards.
   """
 
   use ExUnit.Case, async: true
@@ -95,7 +95,7 @@ defmodule Prima.ProviderTest do
         %Prima.Provider.Stream{
           name: "executions.deltas",
           topic: :execution_events,
-          projection: ["seq", "delta"],
+          projection: ["seq", "delta", "revision", "at"],
           subject: ~S"\Aexec_[A-Za-z0-9-]{1,64}\z",
           deadline_bound: 600,
           shape: %{
@@ -103,12 +103,16 @@ defmodule Prima.ProviderTest do
             "nullable" => false,
             "fields" => %{
               "seq" => %{"type" => "integer", "nullable" => false},
-              "delta" => %{"type" => "json", "nullable" => false}
+              "delta" => %{"type" => "json", "nullable" => false},
+              "revision" => %{"type" => "integer", "nullable" => false},
+              "at" => %{"type" => "time", "nullable" => false}
             },
-            "required" => []
+            "required" => ["at", "revision"]
           },
           refresh: {__MODULE__, :latest},
-          filter: "seq"
+          filter: "seq",
+          key: "seq",
+          stale_after: 60
         }
       ]
   end
@@ -200,32 +204,50 @@ defmodule Prima.ProviderTest do
       {:ok, shape} =
         Prima.Canvas.Shape.validate(%{
           "type" => "object",
-          "fields" => %{"seq" => %{"type" => "integer"}, "delta" => %{"type" => "json"}}
+          "fields" => %{
+            "kind" => %{"type" => "enum", "values" => ["changed", "removed", "moved"]},
+            "seq" => %{"type" => "integer"},
+            "delta" => %{"type" => "json"}
+          }
         })
 
-      %{shape: shape}
+      shape = ProviderStream.delivered(shape)
+
+      canvas = %{
+        @deltas
+        | projection: ["kind", "seq", "delta" | ProviderStream.delivery_fields()],
+          shape: shape,
+          stale_after: 60
+      }
+
+      %{shape: shape, canvas: canvas}
     end
 
-    test "carries none of shape, refresh and filter by default" do
-      assert %ProviderStream{shape: nil, refresh: nil, filter: nil} = @deltas
+    test "carries none of shape, refresh, filter and the delivery contract by default" do
+      assert %ProviderStream{
+               shape: nil,
+               refresh: nil,
+               filter: nil,
+               key: nil,
+               removal: nil,
+               reread: [],
+               stale_after: nil
+             } = @deltas
     end
 
     test "declares a normalized object shape whose fields are exactly its projection",
-         %{shape: shape} do
-      assert ProviderStream.valid?(%{@deltas | shape: shape})
+         %{shape: shape, canvas: canvas} do
+      assert ProviderStream.valid?(canvas)
+      canvas = %{canvas | projection: ["kind", "seq", "delta", "revision", "at"]}
+      assert ProviderStream.valid?(canvas)
 
       refute ProviderStream.valid?(%{
-               @deltas
+               canvas
                | shape: %{"type" => "object", "fields" => shape["fields"]}
              })
 
-      {:ok, fewer} =
-        Prima.Canvas.Shape.validate(%{
-          "type" => "object",
-          "fields" => %{"seq" => %{"type" => "integer"}}
-        })
-
-      refute ProviderStream.valid?(%{@deltas | shape: fewer})
+      fewer = update_in(shape, ["fields"], &Map.delete(&1, "delta"))
+      refute ProviderStream.valid?(%{canvas | shape: fewer})
 
       more =
         put_in(shape, ["fields", "credential"], %{
@@ -234,21 +256,52 @@ defmodule Prima.ProviderTest do
           "max" => 256
         })
 
-      refute ProviderStream.valid?(%{@deltas | shape: more})
+      refute ProviderStream.valid?(%{canvas | shape: more})
 
       {:ok, list} = Prima.Canvas.Shape.validate(%{"type" => "list", "of" => shape})
-      refute ProviderStream.valid?(%{@deltas | shape: list})
+      refute ProviderStream.valid?(%{canvas | shape: list})
 
       refute ProviderStream.valid?(%{
-               @deltas
+               canvas
                | shape: %{"type" => "object", "fields" => %{"seq" => 1, "delta" => 2}}
              })
 
-      refute ProviderStream.valid?(%{@deltas | shape: "object"})
+      refute ProviderStream.valid?(%{canvas | shape: "object"})
     end
 
-    test "declares its refresh as a {module, function} pair" do
-      assert ProviderStream.valid?(%{@deltas | refresh: {Streaming, :streams}})
+    test "carries the delivery contract: a revision and a time, a key, a removal, rereads and a bound",
+         %{shape: shape, canvas: canvas} do
+      assert ProviderStream.valid?(%{canvas | key: "seq", removal: "removed", reread: ["moved"]})
+      assert shape["required"] == ["at", "revision"]
+      assert ProviderStream.delivered(shape) == shape
+
+      # Each part held to its form: the two fields exactly as the contract
+      # spells them and required, a projected key, kinds of the shape's own.
+      for {why, bad} <- [
+            {"no revision",
+             %{canvas | shape: update_in(shape, ["fields"], &Map.delete(&1, "revision"))}},
+            {"a nullable time",
+             %{canvas | shape: put_in(shape, ["fields", "at", "nullable"], true)}},
+            {"an optional revision", %{canvas | shape: %{shape | "required" => ["at"]}}},
+            {"no bound", %{canvas | stale_after: nil}},
+            {"a bound of zero", %{canvas | stale_after: 0}},
+            {"an unprojected key", %{canvas | key: "credential"}},
+            {"a removal no kind names", %{canvas | removal: "deleted"}},
+            {"a reread no kind names", %{canvas | reread: ["deleted"]}},
+            {"a reread twice", %{canvas | reread: ["moved", "moved"]}},
+            {"a reread that is no list", %{canvas | reread: "moved"}}
+          ] do
+        refute ProviderStream.valid?(bad), why
+      end
+
+      # A stream without a shape declares none of it.
+      refute ProviderStream.valid?(%{@deltas | stale_after: 60})
+      refute ProviderStream.valid?(%{@deltas | key: "seq"})
+      refute ProviderStream.valid?(%{@deltas | reread: ["moved"]})
+    end
+
+    test "declares its refresh as a {module, function} pair", %{canvas: canvas} do
+      assert ProviderStream.valid?(%{canvas | refresh: {Streaming, :streams}})
 
       for refresh <- [
             Streaming,
@@ -263,7 +316,7 @@ defmodule Prima.ProviderTest do
             {Streaming, true},
             {Streaming, false}
           ] do
-        refute ProviderStream.valid?(%{@deltas | refresh: refresh}), inspect(refresh)
+        refute ProviderStream.valid?(%{canvas | refresh: refresh}), inspect(refresh)
       end
     end
 
@@ -275,15 +328,17 @@ defmodule Prima.ProviderTest do
     end
 
     test "is not well formed missing any field, and the check reads none it lacks",
-         %{shape: shape} do
+         %{canvas: canvas} do
       # Each field read from a struct that lacks it raised a KeyError whose
       # report printed the struct, this subject grammar included.
       readable = %{
-        @deltas
+        canvas
         | subject: ~S"\Ac4n4ry-stream-3b9f\z",
-          shape: shape,
           refresh: {Streaming, :streams},
-          filter: "seq"
+          filter: "seq",
+          key: "seq",
+          removal: "removed",
+          reread: ["moved"]
       }
 
       assert ProviderStream.valid?(readable)
@@ -293,9 +348,16 @@ defmodule Prima.ProviderTest do
       end
     end
 
-    test "is read whole through the provider's declaration", %{shape: shape} do
-      assert [%ProviderStream{shape: ^shape, refresh: {Readable, :latest}, filter: "seq"}] =
-               Provider.streams(Readable)
+    test "is read whole through the provider's declaration" do
+      assert [
+               %ProviderStream{
+                 shape: %{"type" => "object"},
+                 refresh: {Readable, :latest},
+                 filter: "seq",
+                 key: "seq",
+                 stale_after: 60
+               }
+             ] = Provider.streams(Readable)
 
       assert_raise ArgumentError, ~r/well-formed/, fn -> Provider.streams(Misshapen) end
     end

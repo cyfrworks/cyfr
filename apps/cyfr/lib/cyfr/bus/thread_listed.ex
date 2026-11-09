@@ -19,13 +19,15 @@ defmodule Cyfr.Bus.ThreadListed do
   @fields [:id, :title, :people, :last_activity, :waits_on_you, :unread]
 
   @enforce_keys [:athanor_id, :kind]
-  defstruct [:athanor_id, :kind | @fields]
+  defstruct [:athanor_id, :kind, :revision, :at | @fields]
 
   @type kind :: :own | :shared | :removed
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
           kind: kind(),
+          revision: non_neg_integer(),
+          at: DateTime.t(),
           id: String.t() | nil,
           title: String.t() | nil,
           people: [String.t()] | nil,
@@ -44,7 +46,7 @@ defmodule Cyfr.Bus.ThreadListed do
   """
   @spec new(Prima.Actor.t(), kind(), map() | keyword()) :: t()
   def new(%Prima.Actor{} = actor, kind, fields \\ %{}) do
-    Payload.build(__MODULE__, @fields, fields, %{
+    Payload.build(__MODULE__, [:revision, :at | @fields], Payload.stamped(fields), %{
       athanor_id: Payload.athanor!(actor),
       kind: Payload.kind!(__MODULE__, kind, @kinds)
     })

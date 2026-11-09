@@ -96,6 +96,11 @@ defmodule Aqua.Providers.Thread do
   # A day: the longest a grant on either stream lives.
   @deadline_bound 86_400
 
+  # Fifteen minutes: how long a picture of either stream stands before it
+  # is read again. Each change is announced, so a read only mends one the
+  # bus lost.
+  @stale_after 900
+
   @doc """
   The streams a canvas reads: `threads.changes` and `activity.changes`,
   each with its shape and refresh (the moduledoc's).
@@ -106,20 +111,30 @@ defmodule Aqua.Providers.Thread do
       %Prima.Provider.Stream{
         name: "threads.changes",
         topic: :threads,
-        projection: ["kind", "id", "title", "people", "last_activity", "waits_on_you", "unread"],
+        projection:
+          ["kind", "id", "title", "people", "last_activity", "waits_on_you", "unread"] ++
+            Prima.Provider.Stream.delivery_fields(),
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
         deadline_bound: @deadline_bound,
-        shape: threads_shape(),
-        refresh: {Aqua.ThreadList, :listed}
+        shape: Prima.Provider.Stream.delivered(threads_shape()),
+        refresh: {Aqua.ThreadList, :listed},
+        key: "id",
+        removal: "removed",
+        stale_after: @stale_after
       },
       %Prima.Provider.Stream{
         name: "activity.changes",
         topic: :crew_activity,
-        projection: ["kind", "id", "member", "asked_by", "title", "since", "status"],
+        projection:
+          ["kind", "id", "member", "asked_by", "title", "since", "status"] ++
+            Prima.Provider.Stream.delivery_fields(),
         deadline_bound: @deadline_bound,
-        shape: activity_shape(),
-        refresh: {Aqua.Crew.Activity, :open}
+        shape: Prima.Provider.Stream.delivered(activity_shape()),
+        refresh: {Aqua.Crew.Activity, :open},
+        key: "id",
+        removal: "ended",
+        stale_after: @stale_after
       }
     ]
   end

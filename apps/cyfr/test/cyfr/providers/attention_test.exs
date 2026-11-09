@@ -77,7 +77,11 @@ defmodule Cyfr.Providers.AttentionTest do
       assert Prima.Provider.Stream.valid?(stream)
       assert stream.name == @stream
       assert stream.topic == :attention
-      assert stream.projection == ~w(kind id label since destination outcome)
+      assert stream.projection == ~w(kind id label since destination outcome revision at)
+
+      assert {stream.key, stream.removal, stream.reread, stream.stale_after} ==
+               {"id", "removed", [], 300}
+
       assert stream.bind == :holder
       assert stream.subject == ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z"
       assert stream.filter == nil
@@ -615,7 +619,9 @@ defmodule Cyfr.Providers.AttentionTest do
   end
 
   # A refresh item or a live payload as a canvas reads it: projected by the
-  # grant, passed through JSON, and held to the declared shape.
+  # grant, passed through JSON, and held to the declared shape, its
+  # delivery fields (its revision, its time in microseconds) checked and
+  # set aside.
   defp read_as(payload) do
     {:ok, {Provider, stream}} = Sanctum.Catalog.lookup_stream(@stream)
 
@@ -630,7 +636,9 @@ defmodule Cyfr.Providers.AttentionTest do
     data = grant |> Prima.StreamGrant.project(payload) |> Jason.encode!() |> Jason.decode!()
     assert :ok = Shape.check(stream.shape, data), inspect(data)
     assert Enum.sort(Map.keys(data)) == Enum.sort(stream.projection)
-    data
+    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
+    assert data["revision"] == DateTime.to_unix(at, :microsecond)
+    Map.drop(data, ~w(revision at))
   end
 
   defp removed?(payload, id, outcome) do

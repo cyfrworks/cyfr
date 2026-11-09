@@ -996,7 +996,11 @@ defmodule Compendium.CanvasTest do
             subject: stream.subject,
             shape: shape,
             filter: stream.filter,
-            refresh: stream.refresh != nil
+            refresh: stream.refresh != nil,
+            key: stream.key,
+            removal: stream.removal,
+            reread: stream.reread,
+            stale_after: stream.stale_after
           }
         end
 
@@ -1091,36 +1095,35 @@ defmodule Compendium.CanvasTest do
              ] = streams
 
       assert Enum.sort(Map.keys(component_fields)) ==
-               ~w(grant_current icon kind name ref type update_available version)
+               ~w(at grant_current icon kind name ref revision type update_available version)
 
-      assert Enum.sort(Map.keys(vault_fields)) == ~w(kind name status type)
+      assert Enum.sort(Map.keys(vault_fields)) == ~w(at kind name revision status type)
 
-      assert Enum.sort(Map.keys(file_fields)) == ~w(changed_at from id kind name type)
+      assert Enum.sort(Map.keys(file_fields)) == ~w(at changed_at from id kind name revision type)
 
       assert Enum.sort(Map.keys(system_fields)) ==
-               ~w(crew_ready crew_total health kind model_connected storage_cap storage_used update_available version)
+               ~w(at crew_ready crew_total health kind model_connected revision storage_cap storage_used update_available version)
 
       assert Enum.sort(Map.keys(activity_fields)) ==
-               ~w(asked_by id kind member since status title)
+               ~w(asked_by at id kind member revision since status title)
 
       assert Enum.sort(Map.keys(thread_fields)) ==
-               ~w(id kind last_activity people title unread waits_on_you)
+               ~w(at id kind last_activity people revision title unread waits_on_you)
 
       assert Enum.sort(Map.keys(schedule_fields)) ==
-               ~w(cron_expression error_count kind last_run_at name next_run_at reference run_count schedule_id status)
+               ~w(at cron_expression error_count kind last_run_at name next_run_at reference revision run_count schedule_id status)
 
       assert Enum.sort(Map.keys(schedule_run_fields)) ==
-               ~w(execution_id kind occurrence_id reason schedule_id scheduled_for)
+               ~w(at execution_id kind occurrence_id reason revision schedule_id scheduled_for)
 
       assert Enum.sort(Map.keys(feed_fields)) ==
                ~w(actions at binding feed label result revision)
 
       assert Enum.sort(Map.keys(attention_fields)) ==
-               ~w(destination id kind label outcome since)
+               ~w(at destination id kind label outcome revision since)
 
       assert Enum.sort(Map.keys(run_fields)) ==
-               ~w(component_type duration_ms ended_at error execution_id kind parent_execution_id
-                  reference started_at)
+               ~w(at component_type duration_ms ended_at error execution_id kind parent_execution_id reference revision started_at)
 
       assert length(Sanctum.Catalog.streams()) > length(streams)
     end
