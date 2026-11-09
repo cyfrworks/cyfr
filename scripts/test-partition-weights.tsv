@@ -449,9 +449,7 @@
 0.5	apps/cyfr/test/emissary/web/controllers/execution_events_controller_test.exs
 0.1	apps/cyfr/test/emissary/web/controllers/execution_events_slot_release_test.exs
 4.6	apps/cyfr/test/emissary/web/controllers/execution_events_stream_test.exs
-4.0	apps/cyfr/test/emissary/web/controllers/frame_stream_slot_test.exs
 1.3	apps/cyfr/test/emissary/web/controllers/health_controller_test.exs
-5.3	apps/cyfr/test/emissary/web/controllers/held_frame_stream_deadline_test.exs
 0.8	apps/cyfr/test/emissary/web/controllers/mcp_confirmation_repeat_test.exs
 3.9	apps/cyfr/test/emissary/web/controllers/mcp_controller_test.exs
 0.2	apps/cyfr/test/emissary/web/controllers/mcp_listen_slot_release_test.exs
