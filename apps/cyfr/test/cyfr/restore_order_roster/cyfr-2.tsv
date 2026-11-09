@@ -46,12 +46,10 @@ apps/cyfr/test/emissary/mcp/router_tenancy_test.exs	4	pending
 apps/cyfr/test/emissary/web/controllers/canvas_controller_test.exs	3	pending
 apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs	1	pending
 apps/cyfr/test/emissary/web/controllers/health_controller_test.exs	2	pending
-apps/cyfr/test/emissary/web/controllers/held_frame_stream_deadline_test.exs	1	pending
 apps/cyfr/test/emissary/web/controllers/mcp_confirmation_repeat_test.exs	4	pending
 apps/cyfr/test/emissary/web/controllers/mcp_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/oauth_callback_controller_test.exs	1	pending
 apps/cyfr/test/emissary/web/controllers/tincture_controller_test.exs	2	pending
-apps/cyfr/test/emissary/web/controllers/tincture_data_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/webhook_controller_test.exs	7	pending
 apps/cyfr/test/emissary/web/device_channel_test.exs	3	pending
 apps/cyfr/test/emissary/web/pulled_tincture_test.exs	2	pending
