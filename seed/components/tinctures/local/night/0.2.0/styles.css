@@ -389,8 +389,15 @@ html:not(.js) .ripples li { position: static; transform: none; }
   [data-light="out"] .tube, [data-light="out"] { animation-duration: .2s !important; }
 }
 
-/* ---------- what the live street adds: unbound feeds, refusals, empty parts ---------- */
-.refused { margin: .3rem .45rem; font-size: .78rem; color: #ffb4a8; }
+/* ---------- what the live street adds: unbound feeds, a part's streams not live, empty parts ---------- */
+.refused { display: block; margin: .3rem .45rem; font-size: .78rem; color: #ffb4a8; }
+.refused--stale { color: var(--pane-hi); }
+.refused--unavailable { color: #ffd08a; }
+/* a tired picture: the part's light dims until a fresh one comes */
+.part[data-line="stale"] { filter: saturate(.35) brightness(.78); }
+.part--apps .refused { position: absolute; z-index: 2; left: .5rem; bottom: .5rem; margin: 0; padding: .2rem .5rem; border-radius: 6px; background: rgba(5,6,11,.88); }
+.junction .refused { margin: 0; white-space: normal; }
+.plate__acts .btn { position: relative; }
 .roofsign--dark, .mast--dark .mastbox { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: .35rem; padding: .6rem .8rem; }
 .mast--dark { justify-content: flex-end; }
 .unbound__head { font-weight: 400; font-size: 1.2rem; }
@@ -415,7 +422,6 @@ noscript p { padding: 1rem; color: var(--pane); }
 .board { overflow: hidden; }
 .board__more { margin: .25rem .45rem 0; font-size: .74rem; color: #ffb4a8; }
 .awning .tube { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.jl--refused { white-space: normal; color: #ffb4a8; }
 .puddle--tight .ripple .meta { display: none; }
 @media (min-width: 600px) {
   .puddle--scroll .ripples { display: flex; gap: 8px; align-items: flex-end; overflow-x: auto; scrollbar-width: none; padding: 0 12px .5rem; }

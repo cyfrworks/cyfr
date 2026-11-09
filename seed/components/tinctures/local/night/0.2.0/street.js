@@ -10,16 +10,11 @@
   const $$ = (q, el) => [...(el || document).querySelectorAll(q)];
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const OUT_MS = 1400;
-  // Pauses before opening an ended stream again, growing while opens fail.
+  // Pauses before opening a stream again, growing while opens fail.
   const RETRY_MS = [2000, 5000, 15000, 60000];
-  // How long a reopened stream's refresh has to name what still stands.
-  const SETTLE_MS = 1500;
-  const OPEN_WAIT_MS = 8000;
-  const WAITING = 'Waiting for room to read this: cut another part in Parts to light it.';
-  const HELD = 'The street reads five things at once: cut a part in Parts to light this one.';
 
   const state = N.EMPTY();
-  const ui = { now: Date.now(), going: {}, gone: {}, working: {}, fuse: false, note: null, selected: null, live: true, plateNote: null };
+  const ui = { now: Date.now(), going: {}, gone: {}, working: {}, fuse: false, note: null, selected: null, live: true };
   const els = {};
 
   // ---------- what the shell tells the page ----------
@@ -53,121 +48,64 @@
     if (window.Scene) Scene.setLive(ui.live);
   }
 
-  // ---------- the streams the parts that are on read ----------
+  // ---------- every stream the street reads, open from the start ----------
+  // Each declared stream opens once at start and stays open whatever part
+  // is on. The SDK opens an opened stream again by itself after a lost
+  // connection; the street opens one again only when its first open got no
+  // answer, or when the endpoint ended it with no refusal.
   const followers = new Map();
-  // Per stream, the open that last named each item, so a reopen can drop
-  // what was removed while it was closed.
-  const heldBy = new Map();
-
-  // `onDrained` hears when an open still in flight at its stop has
-  // settled: the SDK hands no stream to close until its open answers, so
-  // until then the request still holds its connection.
-  function follow(key, onDrained) {
+  function follow(key) {
     const [name, subject] = key.startsWith('feed:') ? ['feed.results', key.slice(5)] : [key, null];
-    let stopped = false, opens = 0, everOpened = false, current = null, timer, settle, pending = false;
-    heldBy.set(key, new Map());
-    async function open() {
-      const n = ++opens;
-      // An open the browser holds back (it keeps few connections to a host
-      // over plain HTTP) says so on its sign until it opens.
-      const slow = setTimeout(() => changed(() => { if (!everOpened) state.refusals[key] = WAITING; }), OPEN_WAIT_MS);
-      let stream;
-      pending = true;
-      try {
-        stream = await sdk.stream(name, subject, ({ data }) => {
-          if (stopped || !N.isItem(data)) return;
-          changed(() => {
-            N.fold(state, key, data, Date.now());
-            const k = N.keyOf(key, data);
-            if (k) heldBy.get(key).set(k, n);
-            if (key === 'runs.changes' && data.refresh !== true && data.kind === 'completed') landed('board');
-            if (key.startsWith('feed:') && data.refresh !== true) { ui.working[key.slice(5)] = false; landed(key.slice(5)); }
-          });
-          });
-      } catch (error) {
-        clearTimeout(slow); pending = false;
-        if (stopped) { onDrained(); return; }
-        throw error;
-      }
-      clearTimeout(slow); pending = false;
-      if (stopped) { stream.close(); onDrained(); return; }
-      everOpened = true; current = stream;
-      if (state.refusals[key] === WAITING) changed(() => delete state.refusals[key]);
-      clearTimeout(settle);
-      if (n > 1) settle = setTimeout(() => changed(() => {
-        const held = heldBy.get(key);
-        N.refreshed(state, key, new Set([...held].filter(([, at]) => at >= n).map(([k]) => k)));
-      }), SETTLE_MS);
-      stream.closed.catch(() => {}).then(() => { current = null; retry(0); });
+    const f = { handle: null, opening: false, tries: 0, timer: 0, first: null };
+    const pause = () => RETRY_MS[Math.min(f.tries++, RETRY_MS.length - 1)];
+    function open() {
+      if (f.opening) return f.first;
+      f.opening = true;
+      clearTimeout(f.timer);
+      N.opening(state, key);
+      f.first = sdk.stream(name, subject, (ev) => heard(key, f, ev)).then((handle) => {
+        f.opening = false; f.handle = handle;
+        // Ended with no refusal (as at the grant's day-long bound): open it again.
+        handle.closed.catch(() => {}).then(() => { if (f.handle === handle && handle.state === 'ended') f.timer = setTimeout(open, pause()); });
+      }, (error) => {
+        f.opening = false;
+        const code = error && error.code;
+        if (code === 'unavailable') {
+          const wait = pause();
+          changed(() => { N.refused(state, key, code, Date.now() + wait); return 'state'; });
+          f.timer = setTimeout(open, wait);
+        } else changed(() => { N.refused(state, key, code); return 'picture'; });
+      });
+      return f.first;
     }
-    function failed(error, attempt) {
-      if (stopped) return;
-      if (state.refusals[key] === WAITING) delete state.refusals[key];
-      const code = error && error.code;
-      // A refusal before the stream ever opened is final; no answer is tried again.
-      if (!everOpened && code !== 'unavailable') {
-        changed(() => {
-          state.refusals[key] = code === 'stream_limit' ? 'Too many parts are lit at once: cut one in Parts to light this.'
-            : key.startsWith('feed:') && code === 'not_found' ? '' : (error && error.message) || 'This could not be read.';
-          if (!state.refusals[key]) delete state.refusals[key];
-        });
-      } else retry(attempt);
-    }
-    function retry(attempt) {
-      if (stopped) return;
-      timer = setTimeout(() => open().catch((e) => failed(e, Math.min(attempt + 1, RETRY_MS.length - 1))), RETRY_MS[attempt]);
-    }
-    const first = open().catch((e) => failed(e, 0));
-    return {
-      first,
-      // Answers whether an open is still in flight.
-      stop() {
-        stopped = true; clearTimeout(timer); clearTimeout(settle);
-        if (current) current.close();
-        return pending;
-      },
-    };
+    followers.set(key, f);
+    open();
+  }
+  function heard(key, f, ev) {
+    if (!N.isItem(ev)) return;
+    if (ev.event === 'snapshot') f.tries = 0;
+    changed(() => {
+      const moved = N.hear(state, key, ev);
+      if (moved === 'change' && key === 'runs.changes' && ev.data.kind === 'completed') landed('board');
+      if (moved === 'change' && key.startsWith('feed:')) { ui.working[key.slice(5)] = false; landed(key.slice(5)); }
+      return moved;
+    });
   }
 
-  // The stopped followers whose open is still in flight.
-  const draining = new Set();
-  // Opens what the parts that are on read and closes what none reads, so a
-  // part turned off frees its stream. A stopped open still in flight counts
-  // against the budget until it settles, so no more than N.STREAMS
-  // requests are ever in flight; what waits for it opens then.
-  function reconcile() {
-    const { open, held } = N.wantedStreams(state.prefs);
-    for (const [key, f] of followers) if (!open.includes(key)) { followers.delete(key); dropStream(key); if (f.stop()) draining.add(f); }
-    for (const key of open) {
-      if (state.refusals[key] === HELD) delete state.refusals[key];
-      if (followers.has(key) || followers.size + draining.size >= N.STREAMS) continue;
-      const f = follow(key, () => { draining.delete(f); reconcile(); schedule(); });
-      followers.set(key, f);
-    }
-    for (const key of held) state.refusals[key] = HELD;
-  }
-  function dropStream(key) {
-    delete state.refusals[key];
-    if (key === 'runs.changes') state.runs = [];
-    else if (key.startsWith('feed:')) state.feeds[key.slice(5)] = null;
-    else {
-      const field = { 'threads.changes': 'threads', 'schedules.changes': 'schedules', 'activity.changes': 'activity', 'components.changes': 'components', 'vault.changes': 'vault' }[key];
-      if (field) state[field].clear();
-    }
-  }
-
-  // ---------- a change: fold, notice what switched off, draw ----------
+  // ---------- a change: hold it, notice what switched off, draw ----------
+  // `fn` answers 'picture' when a picture replaced what was held: what it
+  // no longer names is simply gone, and only a live answer switches a light off.
   let shownIds = new Map();
   function changed(fn) {
-    fn();
+    const quiet = fn() === 'picture';
     const now = N.waiting(state, null);
     const ids = new Map(now.map((w) => [w.id, w]));
     for (const [id, w] of shownIds) {
-      if (!ids.has(id) && !ui.going[id]) {
-        ui.going[id] = Date.now(); ui.gone[id] = w;
-        if (ui.selected && ui.selected.att === id) closePlate();
-        setTimeout(() => { delete ui.going[id]; delete ui.gone[id]; schedule(); }, reduced ? 200 : OUT_MS);
-      }
+      if (ids.has(id) || ui.going[id]) continue;
+      if (ui.selected && ui.selected.att === id) closePlate();
+      if (quiet) continue;
+      ui.going[id] = Date.now(); ui.gone[id] = w;
+      setTimeout(() => { delete ui.going[id]; delete ui.gone[id]; schedule(); }, reduced ? 200 : OUT_MS);
     }
     shownIds = ids;
     schedule();
@@ -285,13 +223,20 @@
     const out = { ref, hue: lit ? lit.hue : null, att: lit ? lit.id : null, kind: lit ? lit.word + (lit.since ? ' · since ' + C.hm(lit.since) : '') : '', title: '', lines: [], acts: [] };
     const ask = (widget) => out.acts.push({ label: 'Ask AQUA', act: 'ask', widget });
     const page = (label, key, primary) => out.acts.push({ label, act: 'settings', page: key, primary });
+    // Where a waiting item is acted on: the page its destination names.
+    const dest = lit && lit.item && N.isItem(lit.item.destination) && lit.item.destination.kind === 'page' ? N.text(lit.item.destination.page) : '';
     if (kind === 'thread') {
       const t = state.threads.get(id) || {};
       const last = N.time(t.last_activity);
+      const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       out.title = N.text(t.title) || (lit ? lit.label : 'Thread');
-      out.lines.push(t.kind === 'own' ? 'Your thread with AQUA' : Array.isArray(t.people) ? t.people.length + ' people' : '', last ? 'last activity ' + C.when(last, Date.now()) : '');
-      if (lit) out.lines.push('An approval waits for you here.');
-      page(lit ? 'Open the approval' : 'Open the chat', 'chat', true);
+      out.lines.push(t.kind === 'own' ? 'Your thread with AQUA' : Array.isArray(t.people) ? t.people.length + ' people' : '', [last ? 'last activity ' + C.when(last, Date.now()) : '', unread ? unread + ' unread' : ''].filter(Boolean).join(' · '));
+      if (lit) out.lines.push('An approval waits for you in AQUA.');
+      // An approval opens where it waits, a shared thread the chat and an
+      // own thread AQUA's panel; neither opens at the thread itself.
+      if (lit) page('Open the approval', dest || 'aqua', true);
+      else if (t.kind === 'shared') page('Open in chat', 'chat', true);
+      else if (t.kind === 'own') page('Open in AQUA', 'aqua', true);
       ask('threads');
     } else if (kind === 'schedule') {
       const x = state.schedules.get(id);
@@ -303,19 +248,23 @@
         if (x.status === 'paused') out.acts.push({ label: 'Resume', act: 'press', control: 'resume-schedule', value: id, primary: true });
       }
       if (lit) out.lines.push('Its last run failed.');
-      page('Open schedules', 'schedules', !x);
+      page('Open schedules', dest || 'schedules', !x);
       ask('board');
     } else if (kind === 'failed' || kind === 'run') {
-      const r = kind === 'run' ? state.runs.find((x) => x.item.execution_id === id) : state.runs.find((x) => x.item.reference === id && x.item.kind === 'failed');
-      const item = r ? r.item : null;
+      // A failure that waits names its run by the destination's ref.
+      const runId = kind === 'run' ? id : lit && N.isItem(lit.item.destination) ? N.text(lit.item.destination.ref) : '';
+      const item = state.runs.get(runId) || null;
       const reference = item ? N.text(item.reference) : id;
-      out.title = N.compName(reference) + (r && r.at ? ' at ' + C.hm(r.at) : lit && lit.since ? ' at ' + C.hm(lit.since) : '');
+      const started = item ? N.time(item.started_at) : null, ended = item ? N.time(item.ended_at) : null;
+      out.title = N.compName(reference) + (started ? ' at ' + C.hm(started) : lit && lit.since ? ' at ' + C.hm(lit.since) : '');
       const err = item && N.isItem(item.error) ? item.error : null;
-      out.lines.push(reference, item ? (item.kind === 'failed' ? (err ? N.words(err.class) + ' · ' + N.words(err.cause) : 'failed') : item.kind === 'started' ? 'running' : item.kind === 'completed' ? 'finished' + (typeof item.duration_ms === 'number' ? ' in ' + (item.duration_ms / 1000).toFixed(1) + ' s' : '') : N.words(item.kind)) : 'failed');
-      page('Open runs', 'executions', true);
+      out.lines.push(reference, item ? (item.kind === 'failed' ? (err ? N.words(err.class) + ' · ' + N.words(err.cause) : 'failed') : item.kind === 'started' ? 'running' + (started ? ' since ' + C.hm(started) : '') : item.kind === 'completed' ? 'finished' + (typeof item.duration_ms === 'number' ? ' in ' + (item.duration_ms / 1000).toFixed(1) + ' s' : '') : N.words(item.kind)) + (ended ? ' · ended ' + C.hm(ended) : '') : 'failed');
+      // Only a failed root run the street holds runs again: the shell checks the id against the runs it reads.
+      if (item && item.kind === 'failed' && !item.parent_execution_id) out.acts.push({ label: 'Retry', act: 'press', control: 'retry-run', value: runId, primary: true });
+      page('Open runs', dest || 'executions', !out.acts.length);
       ask('board');
     } else if (kind === 'feed') {
-      const f = state.feeds[id];
+      const f = N.feedOf(state, id);
       if (f) {
         const acts = Array.isArray(f.actions) ? f.actions.filter((a) => N.isItem(a) && typeof a.name === 'string').slice(0, 3) : [];
         if (id === 'weather') { const w = N.weatherOf(f); out.title = 'Weather' + (w.place ? ' in ' + w.place : ''); out.lines.push([w.temp !== undefined ? Math.round(w.temp) + '°' : '', w.sky].filter(Boolean).join(' · ')); }
@@ -329,7 +278,7 @@
       out.title = 'Crew';
       const jobs = [...state.activity.values()];
       if (!jobs.length) out.lines.push('No one is at work.');
-      for (const j of jobs.slice(0, 4)) { const at = N.time(j.since); out.lines.push(N.text(j.member) + ' · ' + N.words(j.status) + (j.asked_by ? ' · for ' + N.text(j.asked_by) : '') + (at ? ' · since ' + C.hm(at) : '')); }
+      for (const j of jobs.slice(0, 4)) { const at = N.time(j.since); out.lines.push(N.text(j.member) + ' · ' + (N.text(j.title) || N.words(j.status)) + (j.asked_by ? ' · for ' + N.text(j.asked_by) : '') + (at ? ' · since ' + C.hm(at) : '')); }
       ask('crew');
     } else if (kind === 'app') {
       const app = state.installed.find((a) => N.versionless(a.ref) === id);
@@ -340,15 +289,24 @@
       if (app) out.acts.push({ label: 'Open ' + app.name, act: 'open', app: app.ref, primary: !lit });
       ask('apps');
     } else if (kind === 'offer') {
-      const o = state.attention.get(id);
-      out.title = o ? N.text(o.label) : 'A file';
-      out.lines.push('offered to you' + (o && N.time(o.since) ? ' at ' + C.hm(N.time(o.since)) : ''));
+      const o = state.files.get(id), a = state.attention.get(id);
+      out.title = o ? N.text(o.name) : a ? N.text(a.label) : 'A file';
+      const at = N.time(o ? o.changed_at : a && a.since);
+      out.lines.push('offered to you' + (o && N.text(o.from) ? ' by ' + N.text(o.from) : '') + (at ? ' at ' + C.hm(at) : ''));
+      page('Open files', dest || 'files', true);
+      ask('files');
+    } else if (kind === 'file') {
+      const f = state.files.get(id) || {};
+      const at = N.time(f.changed_at);
+      out.title = N.text(f.name) || id;
+      out.lines.push([N.text(f.type), at ? 'changed ' + C.when(at, Date.now()) : ''].filter(Boolean).join(' · '));
       page('Open files', 'files', true);
       ask('files');
     } else if (kind === 'cyfr') {
-      const comps = [...state.components.values()];
-      out.title = 'CYFR';
-      out.lines.push(comps.length + ' components installed', comps.filter((c) => c.update_available === true).length + ' with an update');
+      const y = N.sysOf(state);
+      const st = y ? N.storage(y) : null;
+      out.title = 'CYFR' + (y && N.text(y.version) ? ' ' + N.text(y.version) : '');
+      if (y) out.lines.push(N.systemLines(y).map((l) => l[1]).concat(st ? [st.text + ' used'] : []).join(' · '), y.update_available === true ? 'An update is available.' : '');
       if (lit) out.lines.push('CYFR asks you to confirm ' + lit.label + ': its own prompt shows it.');
       page('Open settings', 'settings', true);
       ask('cyfr');
@@ -366,23 +324,28 @@
   // ---------- the plate: a sign's actions, hung beside it ----------
   function openPlate(ref, anchor) {
     const info = aboutTarget(ref);
-    ui.selected = { ref, att: info.att };
-    ui.plateNote = null;
+    // `busy`: the act whose press waits for its answer; `note`: what the last answer said.
+    ui.selected = { ref, att: info.att, info, busy: -1, note: '' };
     const p = els.plate;
     p.style.setProperty('--hue', info.hue || 'var(--accent)');
     p.dataset.lit = info.hue ? '1' : '';
-    p.innerHTML = '<div class="plate__in">' +
-      (info.kind ? '<p class="plate__kind">' + N.esc(info.kind) + '</p>' : '') +
-      '<h2 id="plate-title">' + N.esc(info.title) + '</h2>' + info.lines.map((l) => '<p class="meta">' + N.esc(l) + '</p>').join('') +
-      '<p class="plate__note" role="status"></p>' +
-      '<div class="plate__acts">' + info.acts.map((a, i) => '<button class="btn' + (a.primary ? ' btn--go' : '') + '" data-plate="' + i + '">' + (a.act === 'ask' ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c3 4 6 7 6 11a6 6 0 0 1-12 0c0-4 3-7 6-11z"/></svg>' : '') + N.esc(a.label) + '</button>').join('') + '</div>' +
-      '<button class="plate__x" data-act="plate-close" aria-label="Close">×</button></div>';
-    p._acts = info.acts;
+    drawPlate();
     p.hidden = false;
     placePlate(anchor);
     $$('[aria-expanded="true"][data-target]').forEach((e) => e.removeAttribute('aria-expanded'));
     anchor.setAttribute('aria-expanded', 'true');
     const first = $('.btn', p); if (first) first.focus({ preventScroll: true });
+  }
+  // A press waiting for its answer chases lights round its button, which takes no second tap.
+  function drawPlate() {
+    const { info, busy, note } = ui.selected;
+    els.plate.innerHTML = '<div class="plate__in">' +
+      (info.kind ? '<p class="plate__kind">' + N.esc(info.kind) + '</p>' : '') +
+      '<h2 id="plate-title">' + N.esc(info.title) + '</h2>' + info.lines.map((l) => '<p class="meta">' + N.esc(l) + '</p>').join('') +
+      '<p class="plate__note" role="status">' + N.esc(note) + '</p>' +
+      '<div class="plate__acts">' + info.acts.map((a, i) => '<button class="btn' + (a.primary ? ' btn--go' : '') + (busy === i ? ' is-working' : '') + '" data-plate="' + i + '"' + (busy === i ? ' disabled aria-busy="true"' : '') + '>' + (a.act === 'ask' ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c3 4 6 7 6 11a6 6 0 0 1-12 0c0-4 3-7 6-11z"/></svg>' : '') + N.esc(a.label) + (busy === i ? N.chase() : '') + '</button>').join('') + '</div>' +
+      '<button class="plate__x" data-act="plate-close" aria-label="Close">×</button></div>';
+    els.plate._acts = info.acts;
   }
   function placePlate(anchor) {
     const p = els.plate, box = els.root.getBoundingClientRect(), r = anchor.getBoundingClientRect();
@@ -399,12 +362,25 @@
     els.plate.hidden = true; ui.selected = null;
     $$('[aria-expanded="true"][data-target]').forEach((e) => e.removeAttribute('aria-expanded'));
   }
-  function plateSays(sentence) { const n = $('.plate__note', els.plate); if (n) n.textContent = sentence; }
-
   const SPENT = 'That tap was not taken. Tap again.';
   // A tap within a few seconds of the last one is dropped (`too_soon`).
   const TOO_SOON = 'Too soon after your last tap. Wait a moment, then tap again.';
   const notTaken = (answer) => (answer.reason === 'too_soon' ? TOO_SOON : SPENT);
+  // What a Retry's refusal says, by its class.
+  const SOON = 'CYFR cannot run it now. Try again shortly.';
+  const RETRY_REFUSED = {
+    conflict: 'This run cannot run again: only a failed run a schedule or a feed started can, under the grant it ran with.',
+    invalid_argument: 'It is no longer among the latest runs.',
+    not_found: 'That run is gone.',
+    forbidden: 'That run is not yours to run again.',
+    unavailable: SOON, rate_limited: SOON, timeout: SOON,
+    uncertain: 'No answer came. Look at your runs before trying again.',
+  };
+  function answered(control, answer) {
+    if (answer.outcome === 'cancelled') return answer.reason === 'too_soon' ? TOO_SOON : control === 'retry-run' ? 'That tap was not taken, so nothing ran.' : SPENT;
+    if (control !== 'retry-run') return 'Refused · ' + N.words(answer.reason || 'refused');
+    return answer.outcome === 'accepted' ? 'Running it again.' : RETRY_REFUSED[answer.reason] || 'It could not be run again.';
+  }
   // One tap, one verb: each act sends exactly one of the shell's verbs.
   function runPlateAct(a) {
     if (a.act === 'ask') { sdk.ask(a.widget); closePlate(); }
@@ -413,10 +389,18 @@
     else if (a.act === 'grant') { sdk.grant(a.ref); closePlate(); }
     else if (a.act === 'feed') { sdk.press(a.binding, a.action); ui.working[a.feed] = true; schedule(); closePlate(); }
     else if (a.act === 'press') {
-      plateSays('…');
+      const sel = ui.selected;
+      if (!sel || sel.busy >= 0) return;
+      sel.busy = sel.info.acts.indexOf(a); sel.note = '';
+      drawPlate();
       sdk.press(a.control, a.value).then((answer) => {
-        if (answer.outcome === 'accepted') closePlate();
-        else plateSays(answer.outcome === 'cancelled' ? notTaken(answer) : 'Refused · ' + N.words(answer.reason || 'refused'));
+        if (ui.selected !== sel) return;
+        sel.busy = -1;
+        // A pause or resume shows on the board; a retry says so and stays to be read.
+        if (answer.outcome === 'accepted' && a.control !== 'retry-run') return closePlate();
+        sel.note = answered(a.control, answer);
+        drawPlate();
+        const again = $('[data-plate="' + sel.info.acts.indexOf(a) + '"]', els.plate); if (again) again.focus({ preventScroll: true });
       });
     }
   }
@@ -429,7 +413,6 @@
       if (answer.outcome === 'stale') ui.note = 'Another screen changed your parts first. Flip it again.';
       else if (answer.outcome === 'refused') ui.note = 'Not kept · ' + N.words(answer.reason || 'refused');
       else if (answer.outcome === 'cancelled') ui.note = notTaken(answer);
-      reconcile();
       render({ flip: true });
       if (after) after();
     });
@@ -491,13 +474,13 @@
     document.documentElement.classList.add('js');
     if (!sdk || typeof sdk.stream !== 'function') { els.puddle.innerHTML = '<p class="calm">Open this desktop in CYFR to light the street.</p>'; return; }
     takeDesktop(sdk.desktop);
-    sdk.on('desktop', (d) => { takeDesktop(d); reconcile(); schedule(); });
+    sdk.on('desktop', (d) => { takeDesktop(d); schedule(); });
     sdk.on('installed', (list) => changed(() => takeInstalled(list)));
     sdk.on('covered', (list) => setCovered(list));
     sdk.on('posture', (p) => { els.root.dataset.posture = p === 'hand' ? 'hand' : 'desk'; schedule(); });
     sdk.on('state', setLive);
     render();
-    reconcile();
+    for (const key of N.OPEN) follow(key);
     if (!reduced) { els.root.classList.add('striking'); setTimeout(() => els.root.classList.remove('striking'), 1800); }
     document.addEventListener('click', onTap);
     document.addEventListener('keydown', (e) => {

@@ -193,8 +193,8 @@
         sctx.fillStyle = g; sctx.fillRect(x - rr, y - rr, rr * 2, rr * 2);
       }
     }
-    const wf = st && st.feeds.weather;
-    const skyWord = wf && window.Night ? String(Night.weatherOf(wf).sky) : '';
+    const wf = st && window.Night ? Night.feedOf(st, 'weather') : null;
+    const skyWord = wf ? String(Night.weatherOf(wf).sky) : '';
     if (/rain|drizzle|shower|storm/.test(skyWord)) {
       sctx.strokeStyle = 'rgba(170,190,230,.28)'; sctx.lineWidth = 1; sctx.beginPath();
       const r = rng(Math.floor(t / 33));
