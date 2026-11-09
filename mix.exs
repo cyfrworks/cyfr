@@ -7,7 +7,7 @@ defmodule Cyfr.MixProject do
     [
       apps_path: "apps",
       apps: [:prima, :arca, :sanctum, :cyfr, :locus],
-      version: "0.6.0-alpha.12",
+      version: "0.6.0-alpha.13",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
