@@ -846,7 +846,14 @@ defmodule PrismWeb.TopbarLive do
       >
         <span :if={@dot_class} class={["h-2 w-2 rounded-full", @dot_class]} />
         <.icon :if={@icon} name={@icon} class="h-3.5 w-3.5" />
-        <span :if={@label} class="text-xs font-medium">{@label}</span>
+        <%!-- A label truncates, and the person's name gives way to its icon
+              on a phone, so the bar never runs wider than the screen. --%>
+        <span
+          :if={@label}
+          class={["max-w-[9rem] truncate text-xs font-medium", @name == "user" && "max-sm:hidden"]}
+        >
+          {@label}
+        </span>
       </button>
 
       <div
