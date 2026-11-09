@@ -125,11 +125,17 @@ outside it is refused.
 <!-- tincture:declaration -->
 | Block | Keys |
 |---|---|
-| `frame` | `background`, `capabilities`, `placement`, `size` |
-| `frame.placement` | one of `canvas` |
+| `frame` | `background`, `capabilities`, `size` |
 | `frame.size` | `aspect`, `min`, `preferred`, `tile`: `min` and `preferred` each `w` and `h`, 100 to 4000 CSS pixels; `aspect` `w` and `h`, whole numbers 1 to 100; `tile` one of `left`, `right` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |
+| `subjects[]` | one of `run`, `thread`, `schedule`, `component`, `file` |
+| `desktop` | `chrome`, `controls`, `data`, `feeds`, `prefs`, each optional |
+| `desktop.data[]`, `desktop.feeds[]` | at most 32 each: a stream's name, a feed's name |
+| `desktop.controls[]` | `args`, `id`, `label`, `operation`, `pick`: at most 32; `label` 1 to 32 code points |
+| `desktop.controls[].pick` | `arg`, `field`, `stream`, `subject` |
+| `desktop.prefs` | `desktop`, `widgets`: at most 32 widgets, each section at most 16 `fields` of `boolean`, `integer`, `number`, `string`, `enum`; `string` `max` 1 to 256; `enum` 1 to 64 `values`; never a widget field `on`, `rect` |
+| `desktop.chrome` | a relative path to a `.css` file in the version |
 <!-- /tincture:declaration -->
 
 A frame gets scripts and nothing else unless it declares a capability:

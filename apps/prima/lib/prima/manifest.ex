@@ -333,7 +333,7 @@ defmodule Prima.Manifest do
 
   defp validate_tincture_block(_), do: :ok
 
-  # The frame, streams and actions blocks are held to their shapes
+  # The frame, streams, actions and desktop blocks are held to their shapes
   # here, at every write; the rules over the names they use are the
   # component domain's publish check.
   defp declaration(manifest) do

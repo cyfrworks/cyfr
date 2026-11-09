@@ -204,33 +204,32 @@ defmodule PrismWeb.AquaApprovalCardTest do
       end
     end
 
-    write = fn streams ->
+    write = fn desktop ->
       card(%{
         "action_kind" => "write",
         "proposal" => %{
           "tool" => "canvas",
           "action" => "write",
-          "args" => %{
-            "name" => "markets",
-            "template" => "vanilla",
-            "files" => %{"index.html" => "<html></html>"},
-            "streams" => streams
-          }
+          "args" =>
+            %{
+              "name" => "markets",
+              "template" => "vanilla",
+              "files" => %{"index.html" => "<html></html>"}
+            }
+            |> Map.merge(desktop)
         }
       })
     end
 
     named =
-      streams_of.(
-        write.([
-          %{"name" => "runs.changes"},
-          %{"name" => "feed.results", "subject" => "btc"}
-        ])
-      )
+      streams_of.(write.(%{"data" => ["runs.changes"], "feeds" => ["btc"]}))
 
     assert named =~ "this page will read:"
     assert named =~ "runs.changes, feed.results (btc)"
-    assert streams_of.(write.([])) =~ "this page reads no stream"
+    assert streams_of.(write.(%{})) =~ "this page reads no stream"
+    assert streams_of.(write.(%{"data" => [], "feeds" => []})) =~ "this page reads no stream"
+    assert streams_of.(write.(%{"data" => "runs.changes"})) =~ "a stream entry the write refuses"
+    assert streams_of.(write.(%{"feeds" => [7]})) =~ "a stream entry the write refuses"
     assert streams_of.(card(%{"action_kind" => "write"})) == nil
   end
 
@@ -252,8 +251,7 @@ defmodule PrismWeb.AquaApprovalCardTest do
             "args" => %{
               "name" => "markets",
               "template" => "vanilla",
-              "files" => %{"index.html" => "<html></html>"},
-              "streams" => []
+              "files" => %{"index.html" => "<html></html>"}
             }
           }
         },

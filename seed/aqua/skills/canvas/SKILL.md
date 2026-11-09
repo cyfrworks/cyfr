@@ -5,9 +5,12 @@ description: "Write a canvas, one page of the person's screen, from the shapes o
 
 # Canvas
 
-A canvas is a tincture whose placement is `canvas`: one page of the
-person's screen, written in HTML, CSS and JavaScript on the `vanilla`
-template or in React on the `react` template. CYFR puts its SDK,
+A canvas is a tincture whose manifest carries the `tincture.desktop`
+block: one page of the person's screen, written in HTML, CSS and
+JavaScript on the `vanilla` template or in React on the `react` template.
+The Tincture Guide's "App or Desktop" and "The canvas declaration" give
+every key of the block, its bounds and the chrome grammar; the write
+takes the keys as its arguments. CYFR puts its SDK,
 `cyfr`, in the page before the page's own scripts run. The page reads
 only the streams its version declares and changes nothing: it runs no
 component, takes no action and fetches nothing but its own files and
@@ -24,8 +27,13 @@ streams.
 - Draw every value as text: `textContent`, or a value in React's braces.
   Never put what a stream carries into `innerHTML` or
   `dangerouslySetInnerHTML`.
-- Declare each feed by name: a feed's results are the stream
-  `feed.results`, with the feed's name as its subject. Never `*`.
+- Every key of the block is optional. Pass only the ones the page uses:
+  `data` for the streams it opens, `feeds` for the feeds it reads, and
+  `controls`, `prefs` or `chrome` only when the person asked for them.
+- Declare each feed by name in `feeds`: the page reads a feed's results
+  from the stream `feed.results`, with the feed's name as its subject.
+- A control runs `feed.press` or a write the person makes directly, on
+  the person's tap; publish refuses any other, naming why.
 - `canvas.write` asks the person first, and its card names the streams
   the version reads. Write what the person asked for, and declare only
   the streams the page opens.
@@ -42,15 +50,16 @@ streams.
    person, likewise theirs), `activity.changes` (the crew's jobs beginning
    and ending), `components.changes` (the installed components),
    `vault.changes` (the vault's entries by name and standing, never a
-   value) and `feed.results`. `feed(action: "list")` — the
-   feeds the person
-   bound, with their result shapes and actions.
+   value) and `feed.results`. `feed(action: "list")` — the feeds the
+   person bound, with their result shapes and actions.
 2. Write the page's files, as the page and the SDK below say.
-3. `canvas(action: "write", name: "...", template: "vanilla", files: {...}, streams: [...])` —
+3. `canvas(action: "write", name: "...", template: "vanilla", files: {...}, data: [...], feeds: [...], controls: [...], prefs: {...}, chrome: "...")` —
    `template` is `vanilla` or `react`; `files` maps each file's relative
-   path to its text; `streams` lists every stream the page opens, each
-   `{"name": ...}` or `{"name": "feed.results", "subject": "<feed name>"}`.
-   The person approves the call before it runs. Each write is the next
+   path to its text; `data` lists every stream the page opens but a
+   feed's, by name, and `feeds` the name of every feed it reads;
+   `controls`, `prefs` and `chrome` (the path of its `chrome.css` among
+   `files`) are as the Tincture Guide gives them. Leave out every one the
+   page does not use. The person approves the call before it runs. Each write is the next
    version, whole; nothing is ever edited in place.
 4. For a new canvas, `layout(action: "get")` and then `layout.edit` with
    the canvas added, from the revision `get` answered. `write` answers a
@@ -159,4 +168,4 @@ cyfr
 ```
 
 With these two files and `style.css`, the call is
-`canvas(action: "write", name: "runs", template: "vanilla", files: {"index.html": "...", "app.js": "...", "style.css": "..."}, streams: [{"name": "runs.changes"}])`.
+`canvas(action: "write", name: "runs", template: "vanilla", files: {"index.html": "...", "app.js": "...", "style.css": "..."}, data: ["runs.changes"])`.

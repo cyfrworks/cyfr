@@ -178,9 +178,9 @@ for published in \
 done
 
 # The shipped canvas is installed by the seed; its page reads three bus
-# streams, so the person grants it (version 0.3.0) before the proof shows
+# streams, so the person grants it (version 0.4.0) before the proof shows
 # it, as they grant every canvas.
-server_fixture "$CELL" grant "$TOKEN" canvas 0.3.0 >/dev/null
+server_fixture "$CELL" grant "$TOKEN" canvas 0.4.0 >/dev/null
 
 source_answer="$(canvas_fixture source "$TOKEN" candles)"
 [ -n "$source_answer" ] || fail "the feed's source was not published"
@@ -245,10 +245,10 @@ accepted="$(accept_fixed candles "$(candles BTC)")"
 printf '%s' "$accepted" | grep -q '"revision"' || fail "no fixed result was accepted for candles: $accepted"
 
 step "the written canvases, through canvas.write"
-READS_CANDLES='[{"name":"feed.results","subject":"candles"}]'
-for written in "markets $READS_CANDLES" "measure []"; do
-  read -r canvas streams <<<"$written"
-  answer="$(canvas_fixture write "$TOKEN" "$canvas" "$canvas" "$streams")"
+READS_CANDLES='{"feeds":["candles"]}'
+for written in "markets $READS_CANDLES" "measure {}"; do
+  read -r canvas desktop <<<"$written"
+  answer="$(canvas_fixture write "$TOKEN" "$canvas" "$canvas" "$desktop")"
   printf '%s' "$answer" | grep -q '"ok"' || fail "canvas $canvas was not written: $answer"
   server_fixture "$CELL" grant "$TOKEN" "$canvas" "$(field "$answer" ok version)" >/dev/null
 done
@@ -285,7 +285,7 @@ answer_ask() {
       # shell's prompt, before the proof shows it: a write whose version is
       # left ungranted answers the grant's failure instead.
       arg="$(asked "$ask" canvas)"
-      ANSWER="$(canvas_fixture write "$TOKEN" "$arg" "$(asked "$ask" kind)" "$(asked "$ask" streams)")"
+      ANSWER="$(canvas_fixture write "$TOKEN" "$arg" "$(asked "$ask" kind)" "$(asked "$ask" desktop)")"
       if printf '%s' "$ANSWER" | grep -q '"ok"' &&
         ! server_fixture "$CELL" grant "$TOKEN" "$arg" "$(field "$ANSWER" ok version)" >/dev/null; then
         ANSWER="{\"error\":\"the written version of $arg was not granted\"}"

@@ -34,9 +34,48 @@ A tincture is private unless it has an active public consent profile. Publish on
 
 ---
 
+## App or Desktop
+
+A tincture is an app or a desktop, and its manifest says which: the `tincture.desktop` block makes it a desktop, which the shell and the `canvas` tool call a canvas, and a tincture without the block is an app. An app opens over a desktop as a window, a tile or full, and reaches what its grant names: components, system actions, streams without a shape and origins of its own. A desktop is the person's own page beneath the apps: it fills the screen, reads the canvas-readable streams and feeds its block names, offers the controls its block declares, and reaches nothing of its own. Make an app for a tool that does something, and a desktop for a page that shows what is happening, with a few controls on it. `canvas.catalog` lists what a desktop may read; a desktop's block names only what its page opens.
+
+| Field | App | Desktop | What it does | Bounds |
+|---|---|---|---|---|
+| `tincture.entry` | yes | yes | the page the frame opens | a safe relative path; a desktop's is `index.html`, or `dist/index.html` when it is built |
+| `tincture.build` | yes | yes | `{"tool": "vite"}`: the version is built from its lockfile | a desktop's only with `dist/index.html` |
+| `tincture.frame.capabilities` | yes | no | browser features delegated to the frame ([Frame capabilities](#frame-capabilities)) | at most 16, from that table |
+| `tincture.frame.background` | yes | no | keeps the frame active while hidden | `true` or `false` |
+| `tincture.frame.size` | yes | no | the size hint ([Sizes and placements](#sizes-and-placements)) | 100 to 4000 CSS pixels; `aspect` 1 to 100 |
+| `tincture.streams` | yes | no | the streams the app may open | at most 32; never one that declares a shape |
+| `tincture.actions` | yes | no | the system actions the app may run | at most 64 operation names; never the person's ([The declaration](#the-declaration)) |
+| `tincture.connect` | yes | no | origins the page may connect to | bare domains |
+| `caps.egress` | yes | no | where the app's runs may reach ([Integration Guide](integration-guide.md)) | its grammar |
+| `dependencies` | yes | no | the components the app may invoke | its grammar |
+| `tincture.subjects` | yes | no | the kinds of subject the app is opened with | each of `run`, `thread`, `schedule`, `component`, `file`, once |
+| `tincture.desktop.data` | no | yes | the canvas-readable streams the page reads | at most 32 names `canvas.catalog` lists, each once |
+| `tincture.desktop.feeds` | no | yes | the bound feeds the page reads, by name | at most 32 feed names, each once |
+| `tincture.desktop.controls` | no | yes | controls the shell runs as the person on the person's tap | at most 32; `feed.press` or a direct write ([The canvas declaration](#the-canvas-declaration)) |
+| `tincture.desktop.prefs` | no | yes | the schema of the desktop's preferences document | 32 widgets, 16 fields each |
+| `tincture.desktop.chrome` | no | yes | the chrome declaration, read as tokens ([The chrome declaration](#the-chrome-declaration)) | a `.css` file in the version, at most 16,384 bytes |
+
+Every key of the desktop block is optional. An app's grant covers its frame's capabilities and background, its streams and its actions; a desktop's covers its `data`, its `feeds` and its `controls`. A version that declares more asks again, and one that changes only a size hint, its subjects, its `prefs` or its `chrome` asks nothing again.
+
+The smallest app and the smallest desktop that reads something:
+
+```json
+{"type": "tincture", "name": "viewer", "version": "0.1.0",
+ "tincture": {"entry": "index.html", "frame": {"size": {"tile": "right"}}, "subjects": ["file"]}}
+```
+
+```json
+{"type": "tincture", "name": "markets", "version": "0.1.0",
+ "tincture": {"entry": "index.html", "desktop": {"data": ["runs.changes"], "feeds": ["btc"]}}}
+```
+
+---
+
 ## The Canvas
 
-The shell — the **Canvas** mode on the top bar, at `/a/<athanor>/canvas` — shows the person's canvases and the tinctures opened over them. A **canvas** is a tincture whose `frame.placement` is `canvas`: the person's own page, written in HTML, CSS and JavaScript like any tincture, that shows what it reads.
+The shell — the **Canvas** mode on the top bar, at `/a/<athanor>/canvas` — shows the person's canvases and the tinctures opened over them. A **canvas** is a tincture whose manifest carries the `tincture.desktop` block, a desktop ([App or Desktop](#app-or-desktop)): the person's own page, written in HTML, CSS and JavaScript like any tincture, that shows what it reads.
 
 The person's **layout** (`layout.get`, `layout.edit`) is a version-3 document: their canvases in order, at most eight, each with an `id`, the canvas tincture it runs (each canvas its own) and, per posture — `hand` under 768 CSS pixels wide, `desk` otherwise — the tinctures placed over it. A person has one layout in each athanor. A posture a canvas does not name places nothing. The layout names tinctures and where each stands and nothing else, so editing it can only arrange, and no canvas edits it. A person who never arranged one has the shipped layout: one canvas, `home`, running the shipped `tincture:local.canvas`, which shows their day in one sentence, what needs their attention grouped by cause (with a grant where one fixes it), their recent runs, their apps and their schedules with the week ahead. A layout is published only through the `layout` tool's `edit`. The CLI, the API and a device paired with the person call it for the person, and so does the assistant, whose shipped policy asks the person first. No tincture declares `layout.edit`, and no component but an agent that names it exactly is granted it. The shell calls it too, as the person, once their gestures on an app settle ([Sizes and placements](#sizes-and-placements)), writing the whole layout over the revision it last read; when a newer one was published meanwhile, it reads that one and makes on it each gesture that still applies. Every shell the person has open reads the layout again when an edit is announced, or on its next posture change or reconnect when the announcement does not go out.
 
@@ -44,7 +83,7 @@ The canvas the browser shows is the **visible canvas**, the layout's first when 
 
 ### Sizes and placements
 
-A tincture's `frame.placement` says what it is: with none it opens as an app, and `canvas` makes it a canvas. Over each canvas, per posture, the layout places apps, each in one of three placements:
+A tincture's `tincture.desktop` block says what it is: without it the tincture opens as an app, and with it the tincture is a canvas. Over each canvas, per posture, the layout places apps, each in one of three placements:
 
 | Placement | What is drawn |
 |---|---|
@@ -58,7 +97,14 @@ An app may say how it would like to stand with a size hint, `frame.size`, which 
 
 ### The canvas declaration
 
-A tincture is a canvas when it names `frame.placement: "canvas"`. It names its page as `tincture.entry`, on one of two templates: `vanilla`, `index.html` with no build, or `react`, `dist/index.html` built by `vite`, with `package-lock.json` beside `package.json`; its npm packages are bundled at build and never loaded from another origin. A canvas changes nothing in CYFR, so it declares no `tincture.connect` origin, `caps.egress`, component dependency (static or dynamic), frame capability, `frame.background` or action. It declares the streams it reads, each one a stream that declares a shape, naming each feed it reads ([Streams and feeds](#streams-and-feeds)). Its entry is among the version's files, and of its `.html` files only the entry is ever a page.
+A tincture is a canvas when its manifest carries the `tincture.desktop` block. Every key of the block is optional: `"desktop": {}` is a canvas that reads nothing, offers no control, keeps no preferences and wears Prism's default chrome, and a canvas adds only the keys it uses. It names its page as `tincture.entry`, on one of two templates: `vanilla`, `index.html` with no build, or `react`, `dist/index.html` built by `vite`, with `package-lock.json` beside `package.json`; its npm packages are bundled at build and never loaded from another origin. A canvas reaches nothing of its own, so it declares no `tincture.connect` origin, `caps.egress`, component dependency (static or dynamic), frame capability, `frame.background`, `frame.size`, action or `tincture.subjects`, and no `tincture.streams`: its block's `data` and `feeds` are its streams. Its entry is among the version's files, and of its `.html` files only the entry is ever a page. A manifest that names `frame.placement` is refused: the block is what makes a canvas.
+
+- `data` names the streams the page reads, each one `canvas.catalog` lists (a stream that declares a shape) and that takes no subject; `feeds` names each bound feed it reads, whose results it reads from `feed.results` with the feed's name ([Streams and feeds](#streams-and-feeds)). At most 32 of each, each once.
+- `controls` are what the shell runs as the person on the person's tap: each an `id` (lowercase letters, digits, `_` and `-`, unique in the block), a `label` of 1 to 32 code points, an `operation` (`tool.action`), its fixed `args` (an object), and at most one `pick`, the one argument the person chooses: from a stream the canvas reads (`stream`, a name in `data`, or `feed.results` with a `subject` in `feeds`), at an RFC 6901 pointer `field` into that stream's shape that is a list of strings or an enum, filling the operation's argument `arg`. A pointer that reaches a `json` value, such as a feed's `result`, or anything beneath one, is refused, since the stream's shape declares nothing there to choose from. Publish admits a control only when its operation is `feed.press` or a write the person makes directly. It refuses, naming which, an operation no provider declares; a person's own act (`schedule.create`, `schedule.update`, `feed.bind`, `feed.remove`, `layout.edit`, and every operation that asks for the person's confirmation, a grant among them); an administrator's; one that runs only inside a run; and every read, every other execute, and every destructive and external operation. The shell does not run controls yet; publish holds them to these rules.
+- `prefs` is the schema of the canvas's preferences document: `widgets`, at most 32 widget ids (lowercase letters, digits, `_` and `-`), each with up to 16 typed `fields`, and `desktop`, the canvas's own fields under the same grammar. A field's `type` is `boolean`, `integer`, `number`, `string` (with `max`, 1 to 256, default 256) or `enum` (with 1 to 64 distinct `values` of 1 to 256 code points). Every widget also carries the fields `on` and `rect`, which its schema does not declare. Prism does not keep the document yet.
+- `chrome` is the path of the canvas's chrome declaration among the version's files ([The chrome declaration](#the-chrome-declaration)).
+
+What the canvas reads and runs, its `data`, `feeds` and `controls`, is in its grant: a version that changes them asks again. Its `prefs` and `chrome` carry no authority, so a version that changes only them asks nothing again.
 
 ```json
 {
@@ -67,15 +113,51 @@ A tincture is a canvas when it names `frame.placement: "canvas"`. It names its p
   "version": "0.1.0",
   "tincture": {
     "entry": "index.html",
-    "frame": {"placement": "canvas"},
-    "streams": [{"name": "runs.changes"}, {"name": "feed.results", "subject": "btc"}]
+    "desktop": {
+      "data": ["runs.changes", "schedules.changes"],
+      "feeds": ["btc"],
+      "controls": [
+        {"id": "pause-digest", "label": "Pause", "operation": "schedule.pause", "args": {"schedule_id": "sch_1"}}
+      ],
+      "prefs": {"widgets": {"btc": {"fields": {"currency": {"type": "enum", "values": ["usd", "eur"]}}}}},
+      "chrome": "chrome.css"
+    }
   }
+}
+```
+
+### The chrome declaration
+
+A canvas's chrome declaration says how Prism's chrome looks while the canvas is shown. It is read at publish as a strict grammar into tokens and never as a stylesheet: the version's file routes never serve it, and the tokens are kept with the version (`Prism.TinctureRegistry`). Prism does not apply them yet. The file is at most 16,384 bytes of ASCII text, with at most one `:root` rule and any number of `@font-face` rules:
+
+| Declared | Value |
+|---|---|
+| `--chrome-ground`, `--chrome-surface`, `--chrome-ink`, `--chrome-accent`, and each with `-dark` | a colour, `#rgb` or `#rrggbb`; a mode's four together, its ink at least 4.5 to 1 and its accent at least 3 to 1 against its ground |
+| `--chrome-radius` | 0 to 24px |
+| `--chrome-border` | 0 to 4px |
+| `--chrome-edge` | 4 to 16px |
+| `--chrome-title-height` | 28 to 56px |
+| `--chrome-controls` | `left` or `right` |
+| `--chrome-title-align` | `left` or `center` |
+| `--chrome-glyphs` | `plain`, `round`, `square` or `pixel` |
+| `--chrome-font` | `system`, or the quoted family a `@font-face` of the file declares |
+| `--chrome-texture-title`, `--chrome-texture-shelf` | `url()` of a PNG or an SVG in the version, at most 524,288 bytes and 2048 pixels a side; an SVG's root element says its `width` and `height` |
+| `@font-face` | exactly `font-family`, a quoted family of letters, digits, spaces, `_` and `-`, and `src`, `url()` of a WOFF2 in the version, at most 524,288 bytes, optionally with `format("woff2")` |
+
+A length is a whole number of `px`. A `url()`, quoted with `"` or not, names a path relative to the chrome file's directory, of plain segments: never `..`, an absolute path or another origin. Each declaration ends with `;` and is declared once. A font is shipped under its author's licence, and keeping to it is the author's: CYFR asks for no licence file, and a version that ships a font its licence does not let it carry is its author's to withdraw. Anything else, another selector, property or at-rule, a comment, an escape, `!important`, an uppercase name or a value outside its bound, refuses the publish, naming the file and the line, and nothing of the version is installed.
+
+```css
+:root {
+  --chrome-radius: 12px;
+  --chrome-title-height: 34px;
+  --chrome-controls: right;
+  --chrome-font: system;
 }
 ```
 
 ### The canvas page
 
-The shell frames a canvas at `GET /_c/v1/<asset credential>/<frame id>`, one page for one open, never cached. It is the version's entry document with two things first in its `<head>`: a `<base>` naming the version's served files, so the page's relative URLs (`app.js` beside a vanilla `index.html`, `./assets/…` from Vite's `base: "./"`) load its own files, and then the SDK, loaded by `<script src>` from CYFR's one fixed path. CYFR's `<base>` comes first, so one the page writes is ignored. Every refusal is a 404 with an empty body — an asset credential that does not stand, a frame id naming no standing frame of the credential's person, athanor and version, a release digest that moved, or a placement other than `canvas` — and a store that cannot say answers 503. The path carries the asset credential, so no proxy may log `/_c/v1/` paths either.
+The shell frames a canvas at `GET /_c/v1/<asset credential>/<frame id>`, one page for one open, never cached. It is the version's entry document with two things first in its `<head>`: a `<base>` naming the version's served files, so the page's relative URLs (`app.js` beside a vanilla `index.html`, `./assets/…` from Vite's `base: "./"`) load its own files, and then the SDK, loaded by `<script src>` from CYFR's one fixed path. CYFR's `<base>` comes first, so one the page writes is ignored. Every refusal is a 404 with an empty body — an asset credential that does not stand, a frame id naming no standing frame of the credential's person, athanor and version, a release digest that moved, or a version that declares no desktop block — and a store that cannot say answers 503. The path carries the asset credential, so no proxy may log `/_c/v1/` paths either.
 
 The page's policy (`Compendium.Tincture.Rules.canvas_page_csp/1` holds its directives) admits:
 
@@ -119,7 +201,7 @@ A canvas holds a window, so what it reads can leave the browser like any app's: 
 
 ### Streams and feeds
 
-A canvas reads only the streams it declares, and only a stream whose provider declares a shape for it; `canvas.catalog` lists them with their shapes. A field with finitely many values, such as a run's `error.cause`, is an `enum` whose `labels` give each value its readable sentence, so a canvas shows the sentence for the value it reads. Such a stream is a canvas's alone: publish refuses one in any other declaration, and an open from any other tincture's frame is refused `forbidden` (`canvas_stream`). Each is handed its current state first, each item marked `refresh: true`, and then its live events; an event that races the current state may arrive twice, so a canvas takes a feed's result once per `revision`, a run's change once per `execution_id` and `kind`, a schedule run once per `occurrence_id` and `kind`, and a schedule's change as that schedule's latest state; every other stream's item is that item's latest state, keyed as the [Integration Guide](integration-guide.md) says.
+A canvas reads only the streams its block declares, its `data` and its `feeds`, and only a stream whose provider declares a shape for it; `canvas.catalog` lists them with their shapes. A field with finitely many values, such as a run's `error.cause`, is an `enum` whose `labels` give each value its readable sentence, so a canvas shows the sentence for the value it reads. Such a stream is a canvas's alone: publish refuses one in any other declaration, and an open from any other tincture's frame is refused `forbidden` (`canvas_stream`). Each is handed its current state first, each item marked `refresh: true`, and then its live events; an event that races the current state may arrive twice, so a canvas takes a feed's result once per `revision`, a run's change once per `execution_id` and `kind`, a schedule run once per `occurrence_id` and `kind`, and a schedule's change as that schedule's latest state; every other stream's item is that item's latest state, keyed as the [Integration Guide](integration-guide.md) says.
 
 | Stream | Subject | What a canvas reads |
 |---|---|---|
@@ -133,7 +215,7 @@ A canvas reads only the streams it declares, and only a stream whose provider de
 | `vault.changes` | — | each standing vault entry as its `kind` (`changed` or `removed`), `name`, `type` and `status` (`fine` or `needs_reauthorisation`), after every standing entry; never a value |
 | `threads.changes` | the holder's own user id | each thread of the person's list as its `kind` (`own`, `shared`, or `removed`), `id`, `title`, `people`, `last_activity` and `waits_on_you`, after the whole list |
 
-A canvas names every feed it reads: one `feed.results` entry per feed, the feed's name its literal subject — never `"*"` and never none — and each name once. A feed is bound with the `feed` tool, by the person or by the assistant with the person's approval (the [Integration Guide](integration-guide.md) lists it); a canvas's code has no verb that binds, changes or refreshes one. From a canvas, a feed's action runs only on a press the shell forwards within moments of the person's own input, never from a script on its own, and sends to `feed.press`; the CLI and the API reach `feed.press` as they reach any external operation, and no chain does. The canvas's data path admits only that open's credential and has no invoke and no action route. Each stream a canvas reads is its own open, so `frame_stream_max_concurrent` bounds how many it reads at once.
+A canvas names every feed it reads in `feeds`, each name once, and reads its results from `feed.results` with the feed's name as the subject. A feed is bound with the `feed` tool, by the person or by the assistant with the person's approval (the [Integration Guide](integration-guide.md) lists it); a canvas's code has no verb that binds, changes or refreshes one. From a canvas, a feed's action runs only on a press the shell forwards within moments of the person's own input, never from a script on its own, and sends to `feed.press`; the CLI and the API reach `feed.press` as they reach any external operation, and no chain does. The canvas's data path admits only that open's credential and has no invoke and no action route. Each stream a canvas reads is its own open, so `frame_stream_max_concurrent` bounds how many it reads at once.
 
 ### Validation and the kept version
 
@@ -261,27 +343,35 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 | `public` | boolean | `false` | Metadata hint. Public access is an active public consent profile (`profile.publish`) |
 | `connect` | string[] | `[]` | Bare external domains added to the page's `connect-src` over `https` (e.g. `["api.example.com"]`). Each origin is an exit of the frame: what the frame reads may reach it only through a flow your `caps.flows` declares to that origin as spelled here, from each source class the frame's reads may carry. The consent shows each origin with its flows, and a data request whose classes have no flow to every origin is refused |
 | `media` | object | — | Overrides for the auto-discovered media; the `public/media/` convention needs none |
-| `frame` | object | — | The frame's capabilities, placement, background flag and size hint (below) |
-| `streams` | object[] | `[]` | The streams the tincture may open (below) |
-| `actions` | string[] | `[]` | The system actions the tincture may run, as `tool.action` |
+| `frame` | object | — | The frame's capabilities, background flag and size hint (below) |
+| `streams` | object[] | `[]` | The streams an app may open (below) |
+| `actions` | string[] | `[]` | The system actions an app may run, as `tool.action` |
+| `subjects` | string[] | `[]` | The kinds of subject an app is opened with: `run`, `thread`, `schedule`, `component`, `file` |
+| `desktop` | object | — | Makes the tincture a desktop, a canvas, every key optional ([The canvas declaration](#the-canvas-declaration)) |
 
 ### The declaration
 
-`frame`, `streams` and `actions` are the tincture's declaration. It is held to the rules at publish and read again at every open and every request, and it is never the grant: a version opens only under its owner profile's grant whose shape names what the version declares, so a tincture with no grant, or a version that declares more than its grant names, opens nothing and the shell asks the person for the grant instead. Anything a frame asks for outside its declaration is refused before it is dispatched.
+`frame`, `streams`, `actions` and `desktop` are the tincture's declaration. It is held to the rules at publish and read again at every open and every request, and it is never the grant: a version opens only under its owner profile's grant whose shape names what the version declares, so a tincture with no grant, or a version that declares more than its grant names, opens nothing and the shell asks the person for the grant instead. Anything a frame asks for outside its declaration is refused before it is dispatched.
 
 <!-- tincture:declaration -->
 | Block | Keys |
 |---|---|
-| `frame` | `background`, `capabilities`, `placement`, `size` |
-| `frame.placement` | one of `canvas` |
+| `frame` | `background`, `capabilities`, `size` |
 | `frame.size` | `aspect`, `min`, `preferred`, `tile`: `min` and `preferred` each `w` and `h`, 100 to 4000 CSS pixels; `aspect` `w` and `h`, whole numbers 1 to 100; `tile` one of `left`, `right` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |
+| `subjects[]` | one of `run`, `thread`, `schedule`, `component`, `file` |
+| `desktop` | `chrome`, `controls`, `data`, `feeds`, `prefs`, each optional |
+| `desktop.data[]`, `desktop.feeds[]` | at most 32 each: a stream's name, a feed's name |
+| `desktop.controls[]` | `args`, `id`, `label`, `operation`, `pick`: at most 32; `label` 1 to 32 code points |
+| `desktop.controls[].pick` | `arg`, `field`, `stream`, `subject` |
+| `desktop.prefs` | `desktop`, `widgets`: at most 32 widgets, each section at most 16 `fields` of `boolean`, `integer`, `number`, `string`, `enum`; `string` `max` 1 to 256; `enum` 1 to 64 `values`; never a widget field `on`, `rect` |
+| `desktop.chrome` | a relative path to a `.css` file in the version |
 <!-- /tincture:declaration -->
 
 - `frame.capabilities` names capabilities from the table below; `frame.background: true` keeps the frame active while hidden; `frame.size` is the size hint, which declares nothing ([Sizes and placements](#sizes-and-placements)).
 - A stream's `name` is a stream a provider declares (two or more dotted names, such as `mcp_servers.changes`); its `subject` is a literal, `"*"` for any subject that stream's grammar admits, or absent for a stream that takes none.
-- A stream that declares a shape (each one `canvas.catalog` lists, such as `runs.changes` or `feed.results`) is a canvas's alone: publish refuses it in any other declaration, whatever its subject, and an open from any other tincture's frame is refused `forbidden` (`canvas_stream`) ([Streams and feeds](#streams-and-feeds)).
+- A stream that declares a shape (each one `canvas.catalog` lists, such as `runs.changes` or `feed.results`) is a canvas's alone, named in its desktop block: publish refuses it in an app's `streams`, whatever its subject, and an open from any other tincture's frame is refused `forbidden` (`canvas_stream`) ([Streams and feeds](#streams-and-feeds)).
 - An action is an operation name, `tool.action`. No tincture declares `feed.bind`, `feed.remove` or `feed.press`, which are the person's, or `layout.edit`: the layout is the person's arrangement, and no tincture writes it ([The Canvas](#the-canvas)). Nor does any declare `schedule.create` or `schedule.update`: no tincture schedules itself or anything else.
 
 ### Frame capabilities

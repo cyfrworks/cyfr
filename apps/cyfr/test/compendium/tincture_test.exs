@@ -125,9 +125,9 @@ defmodule Compendium.TinctureTest do
     end
 
     test "holds the declaration to the frame's rules" do
-      manifest = %{"tincture" => %{"frame" => %{"placement" => "sideways"}}}
+      manifest = %{"tincture" => %{"frame" => %{"placement" => "canvas"}}}
       assert {:error, message} = Tincture.check_version(manifest, [{"index.html", 1}])
-      assert message =~ "placement"
+      assert message == "tincture.frame declares unknown key(s): placement"
 
       declared = %{"tincture" => %{"frame" => %{"capabilities" => ["fullscreen", "gamepad"]}}}
       assert {:ok, 1} = Tincture.check_version(declared, [{"index.html", 1}])
@@ -229,8 +229,7 @@ defmodule Compendium.TinctureTest do
         "type" => "tincture",
         "name" => "home",
         "version" => "0.2.0",
-        "tincture" =>
-          Map.merge(%{"frame" => %{"placement" => "canvas"}, "entry" => "index.html"}, tincture)
+        "tincture" => Map.merge(%{"desktop" => %{}, "entry" => "index.html"}, tincture)
       }
     end
 
@@ -259,7 +258,7 @@ defmodule Compendium.TinctureTest do
 
       for files <- [[{"app.js", 10}], [{"dist/index.html", 1}], []] do
         assert {:error,
-                "tincture.frame.placement canvas: its page index.html is not among the " <>
+                "tincture.desktop: its page index.html is not among the " <>
                   "version's files"} = Tincture.check_version(canvas(), files)
       end
 
@@ -276,7 +275,7 @@ defmodule Compendium.TinctureTest do
       ]
 
       assert {:error,
-              "tincture.frame.placement canvas: its page dist/index.html is not among the " <>
+              "tincture.desktop: its page dist/index.html is not among the " <>
                 "version's files"} = Tincture.check_version(canvas(@react), sources)
 
       built = sources ++ [{"dist/index.html", 1}, {"dist/assets/index-abc.js", 1}]
@@ -308,25 +307,44 @@ defmodule Compendium.TinctureTest do
       assert {:error, message} =
                Tincture.check_version(canvas(%{"entry" => "canvas.js"}), [{"canvas.js", 1}])
 
-      assert message =~ "tincture.frame.placement canvas: a canvas declares tincture.entry"
+      assert message =~ "tincture.desktop: a desktop declares tincture.entry"
 
       assert {:error, message} =
                Tincture.check_version(canvas(%{"actions" => ["execution.list"]}), [
                  {"index.html", 1}
                ])
 
-      assert message == "tincture.frame.placement canvas: a canvas declares no system action"
+      assert message == "tincture.desktop: a desktop declares no system action"
 
       # A stream every tincture may declare, but none whose declaration
       # carries a shape: a canvas cannot read it.
       shapeless = %{"name" => "mcp_servers.changes"}
 
       assert {:error, message} =
-               Tincture.check_version(canvas(%{"streams" => [shapeless]}), [{"index.html", 1}])
+               Tincture.check_version(
+                 canvas(%{"desktop" => %{"data" => ["mcp_servers.changes"]}}),
+                 [{"index.html", 1}]
+               )
 
       assert message ==
-               "tincture.frame.placement canvas: tincture.streams names mcp_servers.changes, " <>
-                 "which a canvas cannot read: the stream declares no shape"
+               "tincture.desktop.data names mcp_servers.changes, " <>
+                 "which a desktop cannot read: the stream declares no shape"
+
+      # A control outside the direct rule is refused at publish, naming why.
+      assert {:error, message} =
+               Tincture.check_version(
+                 canvas(%{
+                   "desktop" => %{
+                     "controls" => [
+                       %{"id" => "go", "label" => "Go", "operation" => "schedule.create"}
+                     ]
+                   }
+                 }),
+                 [{"index.html", 1}]
+               )
+
+      assert message =~
+               "tincture.desktop.controls go runs schedule.create, which is the person's own act"
 
       # The same stream on a tincture that is no canvas is admitted.
       assert {:ok, 1} =
@@ -336,13 +354,75 @@ defmodule Compendium.TinctureTest do
 
       # Which streams exist is still the providers' to say.
       assert {:error, message} =
-               Tincture.check_version(canvas(%{"streams" => [%{"name" => "vault.entries"}]}), [
+               Tincture.check_version(canvas(%{"desktop" => %{"data" => ["vault.entries"]}}), [
                  {"index.html", 1}
                ])
 
       assert message =~ "vault.entries, which no provider declares"
 
-      assert {:ok, 1} = Tincture.check_version(canvas(%{"streams" => []}), [{"index.html", 1}])
+      assert {:ok, 1} = Tincture.check_version(canvas(), [{"index.html", 1}])
+
+      # A desktop that also lists streams is refused.
+      assert {:error, message} =
+               Tincture.check_version(canvas(%{"streams" => []}), [{"index.html", 1}])
+
+      assert message =~ "a tincture.desktop lists no tincture.streams"
+    end
+
+    test "holds a desktop's chrome at publish, through either entry point, and installs nothing it refuses" do
+      chrome = fn css ->
+        [
+          {[ComponentPath.manifest_name()],
+           Jason.encode!(canvas(%{"desktop" => %{"chrome" => "chrome.css"}}))},
+          {["index.html"], "<html></html>"},
+          {["chrome.css"], css}
+        ]
+      end
+
+      assert {:ok, %{digest: _}} =
+               Compendium.TinctureValidator.validate_from_pairs(
+                 chrome.(":root { --chrome-edge: 8px; }")
+               )
+
+      assert {:error,
+              "tincture.desktop.chrome chrome.css line 2: !important is not part of the chrome grammar"} =
+               Compendium.TinctureValidator.validate_from_pairs(
+                 chrome.(":root {\n  --chrome-edge: 8px !important;\n}")
+               )
+
+      assert {:error, "tincture.desktop.chrome chrome.css is not among the version's files"} =
+               Compendium.TinctureValidator.validate_from_pairs(Enum.drop(chrome.(""), -1))
+
+      # The directory entry point reads the version's files as the pairs do.
+      dir = Path.join(System.tmp_dir!(), "chrome-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      for {[path], bytes} <- chrome.(":root { color: red; }"),
+          do: File.write!(Path.join(dir, path), bytes)
+
+      assert {:error,
+              "tincture.desktop.chrome chrome.css line 1: \"color\" is not a property" <> _} =
+               Compendium.TinctureValidator.validate(dir)
+
+      File.write!(Path.join(dir, "chrome.css"), ":root { --chrome-edge: 8px; }")
+      assert {:ok, %{digest: _}} = Compendium.TinctureValidator.validate(dir)
+    end
+
+    # Review of A1, finding 4: ruled that a font needs no licence file
+    # beside it; the guide states the author's duty.
+    test "a WOFF2 within its cap publishes without a licence file" do
+      css = ~s|@font-face { font-family: "Inter"; src: url("fonts/inter.woff2"); }|
+
+      pairs = [
+        {[ComponentPath.manifest_name()],
+         Jason.encode!(canvas(%{"desktop" => %{"chrome" => "chrome.css"}}))},
+        {["index.html"], "<html></html>"},
+        {["chrome.css"], css},
+        {["fonts", "inter.woff2"], "wOF2" <> :binary.copy(<<0>>, 524_284)}
+      ]
+
+      assert {:ok, %{digest: _}} = Compendium.TinctureValidator.validate_from_pairs(pairs)
     end
   end
 end

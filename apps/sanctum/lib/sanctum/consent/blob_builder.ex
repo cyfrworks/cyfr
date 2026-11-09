@@ -1410,7 +1410,9 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # A tincture's frame, streams and system actions, from the
   # declaration the shape digest binds (`Prima.Manifest.Tincture`); none
-  # for a manifest that declares none. Never narrowed.
+  # for a manifest that declares none. Never narrowed. A desktop's frame
+  # row says `placement` `canvas`, the preview's word for a frame that is
+  # the person's page, and its streams rows are its data and feeds.
   defp tincture_rows(node_key, manifest) do
     if Tincture.declared?(manifest) do
       case Tincture.from_manifest(manifest) do
@@ -1423,7 +1425,10 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp declaration_rows(node_key, canonical) do
-    frame = Map.take(canonical["frame"], ~w(capabilities background placement))
+    frame =
+      if canonical["desktop"],
+        do: Map.put(canonical["frame"], "placement", "canvas"),
+        else: canonical["frame"]
 
     actions =
       case canonical["actions"] do

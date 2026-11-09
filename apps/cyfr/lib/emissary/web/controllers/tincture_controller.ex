@@ -18,7 +18,7 @@ defmodule Emissary.Web.TinctureController do
 
   A canvas is never public: it is the person's own data page, so its
   address and its files answer as a tincture that is not public does. A
-  version whose placement cannot be read, its declaration refused by
+  version whose declaration cannot be read, refused by
   today's rules, is held as a canvas and answers the same.
 
   The bytes and their headers are `Emissary.Web.TinctureAssets`'. A
@@ -221,15 +221,15 @@ defmodule Emissary.Web.TinctureController do
   end
 
   # Only a version whose declaration the frame's rules read
-  # (`Compendium.tincture_declaration/1`), placed anywhere but a canvas, is
-  # served here. A canvas, and a version whose declaration today's rules
-  # refuse, held as a canvas, is not found whatever public profile it
+  # (`Compendium.tincture_declaration/1`) as an app is served here. A
+  # desktop, and a version whose declaration today's rules refuse, held as
+  # a desktop, is not found whatever public profile it
   # holds: the same refusal as a tincture that is not public, so the route
   # never tells them apart.
   defp not_canvas(tincture) do
     case Compendium.tincture_declaration(tincture.manifest) do
-      {:ok, %{frame: %{placement: placement}}} when placement != "canvas" -> :ok
-      _canvas_or_unread -> {:error, :not_found}
+      {:ok, %{desktop: nil}} -> :ok
+      _desktop_or_unread -> {:error, :not_found}
     end
   end
 end

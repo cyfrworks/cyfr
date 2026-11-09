@@ -144,14 +144,15 @@ defmodule Prism.FramesTest do
       canvas = %{
         manifest: %{
           "tincture" => %{
-            "frame" => %{"placement" => "canvas"},
+            "desktop" => %{},
             "entry" => "index.html"
           }
         }
       }
 
       assert Frames.canvas?(canvas)
-      refute Frames.canvas?(card("d", %{"placement" => "sidebar"}))
+      refute Frames.canvas?(card("d", %{"placement" => "canvas"}))
+      refute Frames.canvas?(card("d", %{}))
       refute Frames.canvas?(%{manifest: nil})
     end
 
@@ -564,7 +565,7 @@ defmodule Prism.FramesTest do
       assert Frames.refusal(:not_owner) == :unavailable
       assert Frames.refusal({:undeclared_capability, ["camera"]}) == :undeclared
       assert Frames.refusal({:invalid_tincture, "no"}) == :undeclared
-      assert Frames.refusal({:placement, "canvas"}) == :undeclared
+      assert Frames.refusal({:canvas, true}) == :undeclared
       assert Frames.refusal(:unregistered) == :unregistered
       assert Frames.refusal(:ungranted) == :ungranted
       assert Frames.refusal(:revoked) == :refused

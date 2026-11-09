@@ -54,7 +54,7 @@ defmodule Compendium.Providers.CanvasTest do
 
   defp write_args(overrides \\ %{}) do
     Map.merge(
-      %{"name" => "markets", "template" => "vanilla", "files" => @files, "streams" => []},
+      %{"name" => "markets", "template" => "vanilla", "files" => @files},
       overrides
     )
   end
@@ -98,20 +98,22 @@ defmodule Compendium.Providers.CanvasTest do
       end
     end
 
-    test "each takes the arguments the table names, all required, and JSON as a JSON value" do
+    test "each takes the arguments the table names, the desktop block's parts optional, and JSON as a JSON value" do
       args = fn action -> Map.new(operations()[action].args, &{&1.name, &1}) end
 
       assert args.("catalog") == %{}
       assert Map.keys(args.("versions")) == ["canvas"]
-      assert Enum.sort(Map.keys(args.("write"))) == ~w(files name streams template)
+      desktop = Prima.Manifest.Tincture.desktop_keys()
+      assert Enum.sort(Map.keys(args.("write"))) == Enum.sort(~w(files name template) ++ desktop)
       assert Enum.sort(Map.keys(args.("activate"))) == ~w(canvas frame outcome version)
       assert Map.keys(args.("restore")) == ["canvas"]
 
-      for action <- ~w(versions write activate restore), {_name, arg} <- args.(action) do
-        assert arg.required, "#{action}.#{arg.name} is required"
+      for action <- ~w(versions write activate restore), {name, arg} <- args.(action) do
+        assert arg.required == name not in desktop, "#{action}.#{arg.name}"
       end
 
-      assert args.("write")["streams"].type == :json
+      for key <- ~w(data feeds controls prefs), do: assert(args.("write")[key].type == :json)
+      assert args.("write")["chrome"].type == :string
       assert args.("write")["template"].enum == ~w(vanilla react)
 
       # An object from each file's path to its text, every text bulk
@@ -209,8 +211,11 @@ defmodule Compendium.Providers.CanvasTest do
             write_args(%{"template" => "vite"}),
             write_args(%{"files" => %{"app.js" => "// no page"}}),
             write_args(%{"files" => Map.put(@files, "big.js", String.duplicate("a", 524_288))}),
-            write_args(%{"streams" => [%{"name" => "x"}]}),
-            write_args(%{"streams" => "runs.changes"})
+            write_args(%{"data" => ["x"]}),
+            write_args(%{"data" => "runs.changes"}),
+            write_args(%{
+              "controls" => [%{"id" => "c", "label" => "Go", "operation" => "layout.edit"}]
+            })
           ] do
         assert class.(call(ctx, "write", args)) == :invalid_argument
       end
@@ -261,7 +266,7 @@ defmodule Compendium.Providers.CanvasTest do
                  "canvas",
                  ctx,
                  Map.put(
-                   write_args(%{"streams" => [%{"name" => "mcp_servers.changes"}]}),
+                   write_args(%{"data" => ["mcp_servers.changes"]}),
                    "action",
                    "write"
                  )
@@ -270,7 +275,7 @@ defmodule Compendium.Providers.CanvasTest do
       assert %Prima.Refusal{class: :invalid_argument, message: ^sentence} =
                Prima.Refusal.classify(unreadable)
 
-      assert sentence =~ "mcp_servers.changes, which a canvas cannot read"
+      assert sentence =~ "mcp_servers.changes, which a desktop cannot read"
     end
   end
 end

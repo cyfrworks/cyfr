@@ -78,7 +78,7 @@ defmodule Emissary.Web.TinctureDataController do
 
   ## A canvas
 
-  A canvas (a tincture whose placement is `canvas`) reads its streams on
+  A canvas (a tincture that declares the `tincture.desktop` block) reads its streams on
   its own open's data path alone (`Prima.TinctureWire.stream_path/1`), and
   no route there invokes or acts. On that path the bearer is established
   first and refused `forbidden` (`frame_path_mismatch`) unless it is the
@@ -127,10 +127,9 @@ defmodule Emissary.Web.TinctureDataController do
 
   @slot_tag :frame_stream
 
-  # The placement a canvas declares, and the stream a canvas reads a
-  # feed's results on, by the feed's name as its subject.
-  @canvas "canvas"
-  @feed_stream "feed.results"
+  # The stream a canvas reads a feed's results on, by the feed's name as
+  # its subject.
+  @feed_stream Prima.Manifest.Tincture.feed_results()
 
   # A validation answer's feed envelope is the binding's first revision at
   # the epoch: a fixture, never a result the feed produced.
@@ -464,7 +463,9 @@ defmodule Emissary.Web.TinctureDataController do
     if canvas?(declaration), do: :ok, else: {:error, not_a_canvas()}
   end
 
-  defp canvas?(%{frame: %{placement: @canvas}}), do: true
+  defp canvas?(%Prima.Manifest.Tincture{} = declaration),
+    do: Prima.Manifest.Tincture.canvas?(declaration)
+
   defp canvas?(_declaration), do: false
 
   # The invocation rate, charged per request, per frame credential (per

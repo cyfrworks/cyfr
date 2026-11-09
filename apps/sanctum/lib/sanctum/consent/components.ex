@@ -10,8 +10,9 @@ defmodule Sanctum.Consent.Components do
   means reading what the athanor actually holds: the activation a ref
   resolves to, the verified graph and its digest, the registry row a ref
   names, the athanor's enabled agents, what the install media ships at
-  a row's path, the newer version it ships of a row's component, and the
-  placement a tincture's declaration names under the frame's rules. None of that is identity's to know, and all of it
+  a row's path, the newer version it ships of a row's component, and
+  whether a tincture's declaration reads as a desktop or an app under the
+  frame's rules. None of that is identity's to know, and all of it
   lives in the component domain — so the contract is written here, in the
   domain that depends on it, and the component domain implements it
   (`Compendium.ConsentFacts`).
@@ -139,14 +140,13 @@ defmodule Sanctum.Consent.Components do
   @callback newer_shipped(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
 
   @doc """
-  The placement a tincture row's declaration names under the frame's
-  rules: `{:ok, placement}`, nil for a tincture that names none, or
-  `{:error, :refused}` when those rules refuse the declaration. The rules
-  are the component domain's, so consent asks for this verdict rather
-  than reading a placement from the raw manifest.
+  What a tincture row's declaration is under the frame's rules:
+  `{:ok, :desktop}` for one that declares the desktop block, `{:ok, :app}`
+  for any other, or `{:error, :refused}` when those rules refuse the
+  declaration. The rules are the component domain's, so consent asks for
+  this verdict rather than reading the raw manifest.
   """
-  @callback tincture_placement(Context.t(), map()) ::
-              {:ok, String.t() | nil} | {:error, term()}
+  @callback tincture_kind(Context.t(), map()) :: {:ok, :desktop | :app} | {:error, term()}
 
   @doc """
   Fill `athanor` with its components, acting as `acting_ctx` (the
@@ -247,15 +247,15 @@ defmodule Sanctum.Consent.Components do
     do: call(& &1.newer_shipped(ctx, row))
 
   @doc """
-  The placement a tincture row's declaration names under the frame's
-  rules, or `{:error, :refused}` when they refuse it.
+  What a tincture row's declaration is under the frame's rules, a
+  desktop or an app, or `{:error, :refused}` when they refuse it.
   `{:error, :component_facts_unavailable}` when no implementation is
-  installed: a placement that cannot be asked is never read as one that
+  installed: a verdict that cannot be asked is never read as one that
   was answered.
   """
-  @spec tincture_placement(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
-  def tincture_placement(%Context{} = ctx, row) when is_map(row),
-    do: call(& &1.tincture_placement(ctx, row))
+  @spec tincture_kind(Context.t(), map()) :: {:ok, :desktop | :app} | {:error, term()}
+  def tincture_kind(%Context{} = ctx, row) when is_map(row),
+    do: call(& &1.tincture_kind(ctx, row))
 
   @doc """
   Fill `athanor`, as `c:fill/3` describes. Raises

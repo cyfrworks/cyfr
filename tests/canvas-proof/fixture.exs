@@ -33,11 +33,11 @@
 #       not granted, which no frame opens, for the markets canvas's grant
 #       control to ask for. Answers the reference.
 #
-#   write TOKEN CANVAS KIND STREAMS_JSON
+#   write TOKEN CANVAS KIND DESKTOP_JSON
 #       A new version of the canvas CANVAS written with `canvas.write`,
 #       through `console`: its page the files KIND names (below), on the
-#       vanilla template, and STREAMS_JSON the streams it reads. Answers the
-#       console's answer.
+#       vanilla template, and DESKTOP_JSON the parts of its desktop block
+#       (what it reads). Answers the console's answer.
 #
 #   accept TOKEN BINDING DATA_JSON
 #       A fixed result accepted for the feed BINDING through the accept
@@ -458,15 +458,15 @@ fn args ->
 
       answer.(%{reference: Prima.ComponentRef.build("catalyst", "local", name)})
 
-    ["write", token, canvas, kind, streams] ->
+    ["write", token, canvas, kind, desktop] ->
       {template, files} = {"vanilla", canvas_files.(kind)}
 
-      arguments = %{
-        "name" => canvas,
-        "template" => template,
-        "files" => files,
-        "streams" => Jason.decode!(streams)
-      }
+      arguments =
+        Map.merge(Jason.decode!(desktop), %{
+          "name" => canvas,
+          "template" => template,
+          "files" => files
+        })
 
       answer.(console.(token, "canvas/write", arguments))
 

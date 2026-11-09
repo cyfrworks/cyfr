@@ -84,12 +84,39 @@ defmodule Compendium.CanvasTest do
   # ---------------------------------------------------------------------------
 
   describe "write" do
+    test "writes the desktop block of the parts it is given, its chrome among the files",
+         %{ctx: ctx} do
+      block = %{
+        "data" => ["runs.changes"],
+        "feeds" => ["btc"],
+        "controls" => [
+          %{
+            "id" => "pause",
+            "label" => "Pause",
+            "operation" => "schedule.pause",
+            "args" => %{"schedule_id" => "sch_1"}
+          }
+        ],
+        "prefs" => %{"desktop" => %{"fields" => %{"compact" => %{"type" => "boolean"}}}},
+        "chrome" => "chrome.css"
+      }
+
+      files = Map.put(@files, "chrome.css", ":root { --chrome-radius: 8px; }")
+
+      assert {:ok, %{version: "0.1.0"}} =
+               Canvas.write(ctx, Map.merge(write_args(files: files), block))
+
+      {manifest, written} = Map.pop!(version_files!(ctx, "0.1.0"), "cyfr-manifest.json")
+      assert written == files
+      assert Jason.decode!(manifest)["tincture"]["desktop"] == block
+    end
+
     test "writes a vanilla version whole in one commit and registers it, and activates nothing",
          %{ctx: ctx} do
-      streams = [%{"name" => "runs.changes"}]
+      data = ["runs.changes"]
 
       assert {:ok, %{canvas: @name, version: "0.1.0", reference: reference}} =
-               Canvas.write(ctx, write_args(streams: streams))
+               Canvas.write(ctx, write_args(data: data))
 
       assert reference == "tincture:local.markets:0.1.0"
 
@@ -103,9 +130,8 @@ defmodule Compendium.CanvasTest do
                "name" => @name,
                "version" => "0.1.0",
                "tincture" => %{
-                 "frame" => %{"placement" => "canvas"},
                  "entry" => "index.html",
-                 "streams" => streams
+                 "desktop" => %{"data" => data}
                }
              }
 
@@ -185,11 +211,22 @@ defmodule Compendium.CanvasTest do
         {write_args(files: Map.put(@files, "LICENSE", "x")), "LICENSE"},
         {write_args(files: Map.put(@files, "cyfr-manifest.json", "{}")), "manifest"},
         {write_args(files: Map.put(@files, "data/cyfr-manifest.json", "{}")), "manifest"},
-        {write_args(streams: "runs.changes"), "streams"},
-        {write_args(streams: [%{"name" => 7}]), nil},
-        {write_args(streams: [%{"name" => "runs.changes", "extra" => true}]), nil},
-        {write_args(streams: [%{"name" => "vault.entries"}]), "vault.entries"},
-        {write_args(streams: [%{"name" => "mcp_servers.changes"}]), "mcp_servers.changes"}
+        {write_args(data: "runs.changes"), "tincture.desktop.data"},
+        {write_args(data: [7]), "tincture.desktop.data"},
+        {write_args(data: ["vault.entries"]), "vault.entries"},
+        {write_args(data: ["mcp_servers.changes"]), "mcp_servers.changes"},
+        {write_args(feeds: ["BTC"]), "tincture.desktop.feeds"},
+        {write_args(
+           controls: [%{"id" => "c1", "label" => "Go", "operation" => "schedule.delete"}]
+         ), "schedule.delete, which is destructive"},
+        {write_args(
+           prefs: %{"widgets" => %{"w" => %{"fields" => %{"on" => %{"type" => "boolean"}}}}}
+         ), "every widget carries already"},
+        {write_args(chrome: "chrome.css"), "tincture.desktop.chrome chrome.css is not among"},
+        {write_args(
+           files: Map.put(@files, "chrome.css", ":root { color: red; }"),
+           chrome: "chrome.css"
+         ), "tincture.desktop.chrome chrome.css line 1"}
       ]
 
       unsafe =
@@ -207,9 +244,9 @@ defmodule Compendium.CanvasTest do
       end
 
       assert {:error, {:invalid_argument, sentence}} =
-               Canvas.write(ctx, write_args(streams: [%{"name" => "mcp_servers.changes"}]))
+               Canvas.write(ctx, write_args(data: ["mcp_servers.changes"]))
 
-      assert sentence =~ "mcp_servers.changes, which a canvas cannot read"
+      assert sentence =~ "mcp_servers.changes, which a desktop cannot read"
 
       assert {:error, {:invalid_argument, _}} =
                Canvas.write(ctx, Map.delete(write_args(), "files"))
@@ -324,7 +361,7 @@ defmodule Compendium.CanvasTest do
           "public/data.json" => "{}"
         })
 
-      streams = [%{"name" => "runs.changes"}, %{"name" => "schedules.changes"}]
+      data = ["runs.changes", "schedules.changes"]
 
       built = %{
         "index.html" =>
@@ -339,7 +376,7 @@ defmodule Compendium.CanvasTest do
 
       writer =
         Task.async(fn ->
-          Canvas.write(ctx, write_args(template: "react", files: sources, streams: streams))
+          Canvas.write(ctx, write_args(template: "react", files: sources, data: data))
         end)
 
       # While the build runs, nothing is allocated and nothing written.
@@ -372,10 +409,9 @@ defmodule Compendium.CanvasTest do
                |> Map.merge(Map.new(built, fn {path, bytes} -> {"dist/" <> path, bytes} end))
 
       assert Jason.decode!(manifest)["tincture"] == %{
-               "frame" => %{"placement" => "canvas"},
                "entry" => "dist/index.html",
                "build" => %{"tool" => "vite"},
-               "streams" => streams
+               "desktop" => %{"data" => data}
              }
 
       assert commits!(ctx, "0.1.0") == [nil]
@@ -929,10 +965,7 @@ defmodule Compendium.CanvasTest do
     test "answers the document and its revision, the empty one for a canvas installed without " <>
            "one, and not_found for a name with no installed canvas",
          %{ctx: ctx} do
-      install!(ctx, "weather", "1.0.0", %{
-        "frame" => %{"placement" => "canvas"},
-        "entry" => "index.html"
-      })
+      install!(ctx, "weather", "1.0.0", %{"desktop" => %{}, "entry" => "index.html"})
 
       assert {:ok, %{canvas: "weather", document: document, revision: 0}} =
                Canvas.versions(ctx, "weather")
@@ -1081,7 +1114,7 @@ defmodule Compendium.CanvasTest do
 
   defp write_args(overrides \\ []) do
     Map.merge(
-      %{"name" => @name, "template" => "vanilla", "files" => @files, "streams" => []},
+      %{"name" => @name, "template" => "vanilla", "files" => @files},
       Map.new(overrides, fn {key, value} -> {Atom.to_string(key), value} end)
     )
   end
@@ -1165,9 +1198,8 @@ defmodule Compendium.CanvasTest do
       "name" => @name,
       "version" => version,
       "tincture" => %{
-        "frame" => %{"placement" => "canvas"},
         "entry" => "index.html",
-        "streams" => []
+        "desktop" => %{}
       }
     }
   end
@@ -1176,7 +1208,7 @@ defmodule Compendium.CanvasTest do
   # `tincture` as its manifest's block.
   defp install!(ctx, name, version, tincture) do
     files =
-      if get_in(tincture, ["frame", "placement"]) == "canvas",
+      if Map.has_key?(tincture, "desktop"),
         do: [{"index.html", "<html><head></head><body>installed</body></html>"}],
         else: [{"index.html", "<html></html>"}]
 

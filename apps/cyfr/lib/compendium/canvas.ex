@@ -8,8 +8,9 @@ defmodule Compendium.Canvas do
   versions document and the catalog of what a canvas may read. The
   `canvas` tool (`Compendium.Providers.Canvas`) is their one door.
 
-  A canvas is the tincture `tincture:local.<name>` whose placement is
-  `canvas`. Which of its versions a glass opens is its versions document
+  A canvas is the tincture `tincture:local.<name>` that declares the
+  `tincture.desktop` block (`Prima.Manifest.Tincture.canvas?/1`). Which
+  of its versions a glass opens is its versions document
   (`Arca.CanvasVersions`), one fenced document per canvas in its athanor:
   every change here publishes it at the revision it read, and a document
   published since answers `conflict` with nothing merged.
@@ -56,7 +57,9 @@ defmodule Compendium.Canvas do
   @type_name "tincture"
   @first_version "0.1.0"
   @outcomes ~w(ready not_ready died)
-  @placement "canvas"
+
+  # The desktop block's parts `write/2` takes, each as an argument.
+  @desktop_keys Prima.Manifest.Tincture.desktop_keys()
 
   # What one write may carry: the tool's own bounds, apart from the
   # athanor's storage cap, which the commit is held to as well.
@@ -121,9 +124,12 @@ defmodule Compendium.Canvas do
 
   @doc """
   Write a new version of the canvas `name` from `args`: `"name"`,
-  `"template"` (one of `templates/0`), `"files"` (an
-  object from each file's relative path to its UTF-8 text) and
-  `"streams"` (a list of `{name, subject}` objects, the streams it reads).
+  `"template"` (one of `templates/0`), `"files"` (an object from each
+  file's relative path to its UTF-8 text) and the desktop block's parts,
+  each optional: `"data"` (the canvas-readable streams it reads),
+  `"feeds"` (the feeds it reads, by name), `"controls"`, `"prefs"` and
+  `"chrome"` (the path of its chrome declaration among `files`), as
+  `Prima.Manifest.Tincture.Desktop` reads them.
 
   The files are at most #{@max_files}, of at most #{@max_bytes} bytes
   together; each path is a safe relative one and none is the manifest,
@@ -134,12 +140,13 @@ defmodule Compendium.Canvas do
   template's own files, which are the React scaffold's
   (`Compendium.Scaffold.react_template_files/1`).
 
-  The manifest (`frame.placement` `canvas`, the template's entry and
-  build, and the streams) is held to the manifest's grammar, the tincture
-  rules and the streams a canvas may read, a name some installed version
-  of which is not a canvas is a `conflict`, and a React canvas is built
-  (`Compendium.Builds.build_staged/3`), its build's refusal answered as
-  it stands; then the whole version is held to the publish check. All of
+  The manifest (the desktop block of the parts given, the template's
+  entry and build) is held to the manifest's grammar, the tincture rules,
+  the streams a canvas may read and the operations its controls run, a
+  name some installed version of which is not a canvas is a `conflict`,
+  and a React canvas is built (`Compendium.Builds.build_staged/3`), its
+  build's refusal answered as it stands; then the whole version, its
+  chrome among it, is held to the publish check. All of
   that comes before anything is allocated, so a refused write allocates
   nothing. Then the next version is allocated and its directory created
   whole in one commit, exactly the files, for React the template's files
@@ -157,21 +164,25 @@ defmodule Compendium.Canvas do
     with {:ok, name} <- name(Map.get(args, "name")),
          {:ok, template} <- template(Map.get(args, "template")),
          {:ok, files} <- files(Map.get(args, "files"), template, template_files(name, template)),
-         {:ok, streams} <- streams(Map.get(args, "streams")),
-         :ok <- declaration(manifest(name, @first_version, template, streams)),
+         desktop = desktop(args),
+         :ok <- declaration(manifest(name, @first_version, template, desktop)),
          {:ok, _installed} <- canvas_name(ctx, name),
          {:ok, version_files} <- version_files(ctx, name, template, files),
-         :ok <- publishable(manifest(name, @first_version, template, streams), version_files),
+         :ok <- publishable(manifest(name, @first_version, template, desktop), version_files),
          {:ok, version} <- allocate(ctx, name),
          :ok <-
-           commit(ctx, name, version, manifest(name, version, template, streams), version_files),
+           commit(ctx, name, version, manifest(name, version, template, desktop), version_files),
          :ok <- register(ctx, name, version) do
       {:ok, %{canvas: name, version: version, reference: reference(name, version)}}
     end
   end
 
   def write(%Context{}, _args),
-    do: {:error, {:invalid_argument, "write takes name, template, files and streams"}}
+    do:
+      {:error,
+       {:invalid_argument,
+        "write takes name, template, files and the desktop block's " <>
+          Enum.join(@desktop_keys, ", ")}}
 
   @doc """
   Activate, or record the failure of, the canvas version a glass trialled:
@@ -407,13 +418,16 @@ defmodule Compendium.Canvas do
       else: invalid("files holds no #{@page}, the canvas's page")
   end
 
-  defp streams(streams) when is_list(streams), do: {:ok, streams}
-
-  defp streams(_streams),
+  # The desktop block of the parts `args` names; the manifest's grammar
+  # holds each to its shape.
+  defp desktop(args),
     do:
-      {:error,
-       {:invalid_argument,
-        "streams is a list of the streams the canvas reads, each {name} or {name, subject}"}}
+      for(
+        {key, value} <- Map.take(args, @desktop_keys),
+        not is_nil(value),
+        into: %{},
+        do: {key, value}
+      )
 
   defp version(version) do
     if CanvasVersions.version?(version),
@@ -439,12 +453,8 @@ defmodule Compendium.Canvas do
   # The declaration
   # ---------------------------------------------------------------------------
 
-  defp manifest(name, version, template, streams) do
-    tincture = %{
-      "frame" => %{"placement" => @placement},
-      "entry" => template.entry,
-      "streams" => streams
-    }
+  defp manifest(name, version, template, desktop) do
+    tincture = %{"desktop" => desktop, "entry" => template.entry}
 
     %{
       "type" => @type_name,
@@ -474,15 +484,15 @@ defmodule Compendium.Canvas do
   end
 
   # What publish holds a canvas version to, before anything is allocated:
-  # the manifest's grammar, the rules, and the streams a canvas reads. The
-  # version is the one thing it does not read.
+  # the manifest's grammar, the rules, the streams a canvas reads and what
+  # its controls run. The version is the one thing it does not read.
   defp declaration(manifest) do
     table = Sanctum.Catalog.streams()
 
     with :ok <- grammar(manifest),
          {:ok, declaration} <- Compendium.tincture_declaration(manifest),
          :ok <- Compendium.tincture_check_streams(declaration, table),
-         :ok <- Compendium.tincture_check_canvas_streams(declaration, table) do
+         :ok <- Compendium.tincture_check_desktop(declaration, table) do
       :ok
     else
       {:error, {:invalid_tincture, sentence}} -> {:error, {:invalid_argument, sentence}}
@@ -508,7 +518,7 @@ defmodule Compendium.Canvas do
   # ---------------------------------------------------------------------------
 
   # Every installed version of `tincture:local.<name>`, once the
-  # component projection reflects the tree, with its placement.
+  # component projection reflects the tree, and whether it is a canvas.
   defp installed(ctx, name) do
     with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
          {:ok, rows} <-
@@ -518,19 +528,19 @@ defmodule Compendium.Canvas do
              component_type: @type_name,
              limit: :none
            ) do
-      {:ok, Enum.map(rows, &%{version: &1.version, placement: placement(&1.manifest)})}
+      {:ok, Enum.map(rows, &%{version: &1.version, canvas?: canvas_manifest?(&1.manifest)})}
     else
       {:error, reason} -> unavailable("Components", reason)
     end
   end
 
-  # A stored manifest that does not decode is damage: it places nothing,
-  # so the version is refused as a canvas.
-  defp placement(manifest) do
+  # A stored manifest that does not decode is damage: it declares no
+  # desktop block, so the version is refused as a canvas.
+  defp canvas_manifest?(manifest) do
     case Prima.Manifest.decode_strict(manifest) do
-      {:ok, %{"tincture" => %{"frame" => %{"placement" => placement}}}} -> placement
-      {:ok, _places_nothing} -> nil
-      {:error, :malformed_manifest} -> nil
+      {:ok, %{"tincture" => %{"desktop" => %{}}}} -> true
+      {:ok, _no_desktop} -> false
+      {:error, :malformed_manifest} -> false
     end
   end
 
@@ -555,7 +565,7 @@ defmodule Compendium.Canvas do
   end
 
   defp canvas_only(name, installed) do
-    if Enum.all?(installed, &(&1.placement == @placement)),
+    if Enum.all?(installed, & &1.canvas?),
       do: :ok,
       else:
         {:error,
@@ -565,7 +575,7 @@ defmodule Compendium.Canvas do
   end
 
   defp some_canvas(name, installed) do
-    if Enum.any?(installed, &(&1.placement == @placement)),
+    if Enum.any?(installed, & &1.canvas?),
       do: :ok,
       else: {:error, {:not_found, "Canvas", name}}
   end
@@ -573,7 +583,7 @@ defmodule Compendium.Canvas do
   # A kept version is restored only while it is an installed canvas
   # version.
   defp still_installed(installed, name, kept) do
-    if Enum.any?(installed, &(&1.version == kept and &1.placement == @placement)),
+    if Enum.any?(installed, &(&1.version == kept and &1.canvas?)),
       do: :ok,
       else: not_a_canvas_version(name, kept)
   end
@@ -607,7 +617,7 @@ defmodule Compendium.Canvas do
   defp release_digest(ctx, name, version) do
     case Compendium.Component.inspect_component(ctx, reference(name, version)) do
       {:ok, %{"release_digest" => "sha256:" <> _ = digest} = component} ->
-        if placement(component["manifest"]) == @placement,
+        if canvas_manifest?(component["manifest"]),
           do: {:ok, digest},
           else: not_a_canvas_version(name, version)
 

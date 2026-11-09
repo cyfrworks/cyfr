@@ -28,7 +28,8 @@ defmodule Compendium.TinctureValidator do
   1. cyfr-manifest.json exists and type == "tincture"
   2. Entry file exists (manifest tincture.entry or default index.html)
   3. The publish check (`Compendium.Tincture.check_version/2`): the
-     declaration, the served types and the decompressed size
+     declaration, the served types and the decompressed size; then a
+     desktop's chrome (`Compendium.Tincture.check_chrome/2`)
   4. A `package.json` ships with its lockfile
   5. Computes digest from all shipped files (sorted, deterministic).
 
@@ -44,7 +45,8 @@ defmodule Compendium.TinctureValidator do
          :ok <- check_entry(directory_path, manifest),
          :ok <- check_reserved_dirs(directory_path),
          :ok <- check_no_symlinks(directory_path, directory_path),
-         :ok <- check_version(manifest, file_sizes(directory_path)) do
+         :ok <- check_version(manifest, file_sizes(directory_path)),
+         :ok <- Compendium.Tincture.check_chrome(manifest, &read_version_file(directory_path, &1)) do
       {digest, size} = compute_digest(directory_path)
       # exports always [] — tinctures have no WASM exports; the answer has
       # Prima.Wasm's shape, so Registry reads either validator's alike
@@ -69,7 +71,8 @@ defmodule Compendium.TinctureValidator do
          :ok <- check_type(manifest),
          :ok <- check_entry_in_pairs(files, manifest),
          :ok <- check_reserved_dirs_in_pairs(files),
-         :ok <- check_version(manifest, Enum.map(files, fn {k, v} -> {k, byte_size(v)} end)) do
+         :ok <- check_version(manifest, Enum.map(files, fn {k, v} -> {k, byte_size(v)} end)),
+         :ok <- Compendium.Tincture.check_chrome(manifest, &Map.fetch(files, &1)) do
       {digest, size} = Prima.Digest.file_set(files)
       {:ok, %{digest: digest, size: size, exports: []}}
     end
@@ -114,6 +117,16 @@ defmodule Compendium.TinctureValidator do
     directory_path
     |> list_files_recursive()
     |> Enum.map(&{Path.relative_to(&1, directory_path), File.stat!(&1).size})
+  end
+
+  # arca:bypass-ok=D — a file of the tar-extract tmp dir the chrome
+  # declaration names; the path is the chrome grammar's, plain segments
+  # under the version, and the directory holds no symlink by then.
+  defp read_version_file(directory_path, relative) do
+    case File.read(Path.join(directory_path, relative)) do
+      {:ok, bytes} -> {:ok, bytes}
+      {:error, _} -> :error
+    end
   end
 
   # arca:bypass-ok=D — operates on the tar-extract tmp dir set up by
