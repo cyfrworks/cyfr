@@ -213,6 +213,68 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert "dist/third-party-notices.json" in built
   end
 
+  test "the shipped night desktop is a vanilla page that reads what it declares and passes the publish check" do
+    night = SeedBundle.local_unit!("tinctures", "night")
+    assert night.ref == "tincture:local.night"
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), night.rel)
+
+    assert Prima.Manifest.validate(night.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(night.manifest)
+    assert Prima.Manifest.Tincture.canvas?(declaration)
+
+    # The vanilla template's page: index.html, no build and no lockfile.
+    assert Compendium.tincture_entry(night.manifest) == {:ok, "index.html"}
+    refute Compendium.tincture_lockfile_required?(night.manifest)
+
+    # It reads what waits, the threads, runs, schedules, crew, components
+    # and vault, and two feeds by name; it presses only the schedules'
+    # pause and resume, picked from the schedules it reads.
+    assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
+    assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+    assert declaration.desktop.feeds == ["weather", "vpn"]
+
+    assert Enum.map(declaration.desktop.controls, &{&1.id, &1.operation}) == [
+             {"pause-schedule", "schedule.pause"},
+             {"resume-schedule", "schedule.resume"}
+           ]
+
+    # Each part of the street is a widget the person turns off or moves.
+    assert declaration.desktop.prefs.widgets |> Map.keys() |> Enum.sort() ==
+             Enum.sort(~w(threads board weather crew vpn vault cyfr apps files))
+
+    assert {:ok, tokens} =
+             Compendium.tincture_check_chrome(declaration, &File.read(Path.join(dir, &1)))
+
+    assert tokens["font"] == "Tilt Neon"
+    assert tokens["glyphs"] == "round"
+
+    assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: {Path.relative_to(path, dir), File.stat!(path).size}
+
+    assert {:ok, _size} = Compendium.Tincture.check_version(night.manifest, files)
+
+    assert files |> Enum.map(&elem(&1, 0)) |> Enum.sort() ==
+             ~w(chrome.css cyfr-manifest.json fonts/doto-latin.woff2 fonts/tilt-neon-latin.woff2
+                index.html model.js scene.js shelf.svg street.js styles.css)
+
+    # Its page loads its own files alone and reads nothing but its streams.
+    for name <- ~w(index.html model.js scene.js street.js styles.css) do
+      source = File.read!(Path.join(dir, name))
+      refute source =~ ~r{https?://(?!www\.w3\.org/2000/svg)}, name
+      refute source =~ ~r/\b(fetch|XMLHttpRequest|WebSocket|localStorage)\b/, name
+    end
+
+    for key <- ~w(actions connect streams),
+        do: refute(Map.has_key?(night.manifest["tincture"], key), key)
+
+    refute Map.has_key?(night.manifest, "caps")
+    refute Map.has_key?(night.manifest, "dependencies")
+  end
+
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"
