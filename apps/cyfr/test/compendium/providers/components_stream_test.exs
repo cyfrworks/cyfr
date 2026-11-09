@@ -24,10 +24,8 @@ defmodule Compendium.Providers.ComponentsStreamTest do
       Path.join(System.tmp_dir!(), "cyfr_components_stream_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(test_dir)
-    prev_base = Application.fetch_env!(:arca, :base_path)
-    on_exit(fn -> Application.put_env(:arca, :base_path, prev_base) end)
     on_exit(fn -> File.rm_rf!(test_dir) end)
-    Application.put_env(:arca, :base_path, test_dir)
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_dir)
 
     ctx = Sanctum.TestContext.local()
     actor = Context.actor(ctx)

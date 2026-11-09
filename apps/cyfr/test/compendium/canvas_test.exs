@@ -188,7 +188,7 @@ defmodule Compendium.CanvasTest do
         {write_args(streams: "runs.changes"), "streams"},
         {write_args(streams: [%{"name" => 7}]), nil},
         {write_args(streams: [%{"name" => "runs.changes", "extra" => true}]), nil},
-        {write_args(streams: [%{"name" => "vault.changes"}]), "vault.changes"},
+        {write_args(streams: [%{"name" => "vault.entries"}]), "vault.entries"},
         {write_args(streams: [%{"name" => "mcp_servers.changes"}]), "mcp_servers.changes"}
       ]
 
