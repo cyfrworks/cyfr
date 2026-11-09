@@ -63,13 +63,11 @@ const D = {
   activity: new Map(),    // id -> {item, open}
   schedules: new Map(),   // schedule_id -> {item, open}
   runs: new Map(),        // execution_id -> {run, t, seq}
-  occ: new Map(),         // occurrence_id -> {item, seq}
   apps: [],               // the installed apps, as the shell tells them
   refused: {},            // stream -> the sentence it was refused with
 };
 let seq = 0;
 const MAX_RUNS = 40;
-const MAX_OCC = 40;
 let person = null;
 let posture = null;
 let coveredRects = [];
@@ -117,31 +115,20 @@ function foldRun(run, open, live) {
   if (held && held.run.kind !== 'started' && run.kind === 'started') return;
   let t = held ? held.t : null;
   if (t == null && live) t = now() - (run.kind !== 'started' && typeof run.duration_ms === 'number' ? run.duration_ms / MINUTE : 0);
-  if (t == null) for (const o of D.occ.values()) if (o.item.execution_id === id) t = mins(o.item.scheduled_for);
   D.runs.set(id, { run, t, seq: ++seq });
   if (D.runs.size > MAX_RUNS) {
     const oldest = [...D.runs.entries()].sort((a, b) => a[1].seq - b[1].seq)[0];
     D.runs.delete(oldest[0]);
   }
 }
-function foldOcc(item) {
-  const id = item.occurrence_id;
-  if (typeof id !== 'string') return;
-  D.occ.set(id, { item, seq: ++seq });
-  const run = typeof item.execution_id === 'string' && D.runs.get(item.execution_id);
-  if (run && run.t == null) run.t = mins(item.scheduled_for);
-  if (D.occ.size > MAX_OCC) {
-    const oldest = [...D.occ.entries()].sort((a, b) => a[1].seq - b[1].seq)[0];
-    D.occ.delete(oldest[0]);
-  }
-}
+// Each stream belongs to the part that shows it and is open only while that part is on: five at most,
+// since a browser keeps six connections to one host over HTTP/1.1 and each open stream holds one.
 const STREAMS = [
-  { name: 'attention.changes', fold: foldAttention, sweep: D.attention },
-  { name: 'threads.changes', fold: foldKeyed(D.threads, 'id', (i) => i.kind === 'removed'), sweep: D.threads },
-  { name: 'activity.changes', fold: foldKeyed(D.activity, 'id', (i) => i.kind === 'ended'), sweep: D.activity },
-  { name: 'schedules.changes', fold: foldKeyed(D.schedules, 'schedule_id', (i) => i.kind === 'removed'), sweep: D.schedules },
-  { name: 'schedule_runs.changes', fold: foldOcc },
-  { name: 'runs.changes', fold: foldRun },
+  { name: 'attention.changes', part: 'waiting', fold: foldAttention, sweep: D.attention },
+  { name: 'threads.changes', part: 'houses', fold: foldKeyed(D.threads, 'id', (i) => i.kind === 'removed'), sweep: D.threads },
+  { name: 'activity.changes', part: 'crew', fold: foldKeyed(D.activity, 'id', (i) => i.kind === 'ended'), sweep: D.activity },
+  { name: 'schedules.changes', part: 'stops', fold: foldKeyed(D.schedules, 'schedule_id', (i) => i.kind === 'removed'), sweep: D.schedules },
+  { name: 'runs.changes', part: 'lamps', fold: foldRun, sweep: D.runs },
 ];
 
 // Pauses before opening an ended stream again, growing while opens fail.
@@ -680,13 +667,11 @@ let ents = [];
 let selected = null;
 const leaving = new Map();     // attention id -> {from, start, dur, ent, done}
 
-// The runs as lamps want them: each with a state and a time, the runs stream first, then the scheduled
-// occurrences whose run it no longer holds.
+// The runs as lamps want them, each with a state and a time: the time it was heard of, or, for a failure
+// that waits on the person, when it failed. A run from the stream's refresh carries no time.
 function lampRuns() {
   const out = [];
-  const seen = new Set();
   for (const { run, t } of D.runs.values()) {
-    seen.add(run.execution_id);
     let at = t;
     if (at == null && run.kind === 'failed' && typeof run.reference === 'string') {
       const waiting = D.attention.get(run.reference);
@@ -697,15 +682,6 @@ function lampRuns() {
       id: run.execution_id, ref: text(run.reference), t: at,
       state: run.kind === 'completed' ? 'ok' : run.kind === 'failed' ? 'failed' : run.kind === 'cancelled' ? 'cancelled' : 'running',
       ms: run.duration_ms, cause: error ? text(error.cause) : '',
-    });
-  }
-  for (const { item } of D.occ.values()) {
-    if (typeof item.execution_id === 'string' && seen.has(item.execution_id)) continue;
-    const s = D.schedules.get(item.schedule_id);
-    const reason = isItem(item.reason) ? item.reason : null;
-    out.push({
-      id: item.occurrence_id, ref: s ? text(s.item.name) || text(s.item.reference) : 'a schedule', t: mins(item.scheduled_for),
-      state: item.kind === 'failed' ? 'failed' : 'ok', ms: null, cause: reason ? text(reason.cause) : '', scheduled: true,
     });
   }
   return out;
@@ -724,6 +700,7 @@ const looksFor = (id) => LOOKS[[...id].reduce((h, c) => h + c.charCodeAt(0), 0) 
 
 function rebuild() {
   if (root.classList.contains('plain')) { renderFallback(); return; }
+  syncStreams();
   if (!L) return;
   timeScale();
   ents = [];
@@ -1444,9 +1421,21 @@ function listen() {
     if (live()) startLoop(); else stopLoop();
   });
 }
-function openStreams() {
+// Opens the streams of the parts that are on and closes those of the parts that are off; what a closed
+// stream held is let go, and opened again it starts with its refresh.
+const following = new Map();
+function syncStreams() {
   if (!sdk || typeof sdk.stream !== 'function') return;
-  for (const spec of STREAMS) follow(spec);
+  for (const spec of STREAMS) {
+    const want = on(spec.part);
+    if (want && !following.has(spec.name)) following.set(spec.name, follow(spec));
+    else if (!want && following.has(spec.name)) {
+      following.get(spec.name)();
+      following.delete(spec.name);
+      spec.sweep.clear();
+      delete D.refused[spec.name];
+    }
+  }
 }
 let readied = false;
 function ready() {
@@ -1463,7 +1452,7 @@ function boot() {
   } catch (err) {
     fallBack(err);
   }
-  openStreams();
+  syncStreams();
   ready();
 }
 const fontsReady = document.fonts && document.fonts.ready ? Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]) : Promise.resolve();
