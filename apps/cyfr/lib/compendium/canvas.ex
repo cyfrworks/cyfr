@@ -9,7 +9,8 @@ defmodule Compendium.Canvas do
   `canvas` tool (`Compendium.Providers.Canvas`) is their one door.
 
   A canvas is the tincture `tincture:local.<name>` that declares the
-  `tincture.desktop` block (`Prima.Manifest.Tincture.canvas?/1`). Which of its versions a glass opens is its versions document
+  `tincture.desktop` block (`Prima.Manifest.Tincture.canvas?/1`). Which
+  of its versions a glass opens is its versions document
   (`Arca.CanvasVersions`), one fenced document per canvas in its athanor:
   every change here publishes it at the revision it read, and a document
   published since answers `conflict` with nothing merged.
@@ -141,11 +142,11 @@ defmodule Compendium.Canvas do
 
   The manifest (the desktop block of the parts given, the template's
   entry and build) is held to the manifest's grammar, the tincture rules,
-  the streams a canvas may read and the operations its controls run, and
-  the whole version, its chrome among it, to the publish check, a name some installed version
-  of which is not a canvas is a `conflict`, and a React canvas is built
-  (`Compendium.Builds.build_staged/3`), its build's refusal answered as
-  it stands; then the whole version is held to the publish check. All of
+  the streams a canvas may read and the operations its controls run, a
+  name some installed version of which is not a canvas is a `conflict`,
+  and a React canvas is built (`Compendium.Builds.build_staged/3`), its
+  build's refusal answered as it stands; then the whole version, its
+  chrome among it, is held to the publish check. All of
   that comes before anything is allocated, so a refused write allocates
   nothing. Then the next version is allocated and its directory created
   whole in one commit, exactly the files, for React the template's files

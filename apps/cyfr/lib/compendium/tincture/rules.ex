@@ -997,7 +997,6 @@ defmodule Compendium.Tincture.Rules do
     Enum.reduce_while(list, :ok, fn item, :ok ->
       case check.(item) do
         :ok -> {:cont, :ok}
-        {:ok, _} -> {:cont, :ok}
         refusal -> {:halt, refusal}
       end
     end)

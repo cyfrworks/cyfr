@@ -116,7 +116,7 @@ defmodule Emissary.Web.TinctureAssets do
         type == "text/html" and not holds_pages?(tincture) ->
           not_found(conn)
 
-        chrome?(tincture, path) ->
+        type == "text/css" and chrome?(tincture, path) ->
           not_found(conn)
 
         entry_document?(tincture, path) ->

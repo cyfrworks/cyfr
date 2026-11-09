@@ -88,7 +88,7 @@ defmodule Prima.Manifest.Chrome do
   @url ~r/\Aurl\((?:"([^"]*)"|([^"\s()]*))\)\z/
   @src ~r/\A(url\([^)]*\))(?:\s+format\("woff2"\))?\z/
   @segment ~r/\A[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}\z/
-  @property ~r/\A--?[a-z][a-z0-9-]*\z|\A[a-z][a-z0-9-]*\z/
+  @property ~r/\A(--)?[a-z][a-z0-9-]*\z/
   @text ~r/\A[\x20-\x7E\t\r\n]*\z/
 
   @typedoc """
