@@ -1048,7 +1048,7 @@ defmodule Compendium.CanvasTest do
 
       assert Enum.sort(Map.keys(vault_fields)) == ~w(kind name status type)
 
-      assert Enum.sort(Map.keys(activity_fields)) == ~w(asked_by kind member since status)
+      assert Enum.sort(Map.keys(activity_fields)) == ~w(asked_by id kind member since status)
 
       assert Enum.sort(Map.keys(thread_fields)) ==
                ~w(id kind last_activity people title waits_on_you)

@@ -299,9 +299,18 @@ defmodule Sanctum.Consent do
           {:ok, %{revoked: [String.t()]}} | {:error, :unavailable | :no_athanor}
   def revoke_source(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
     case Arca.ProfileStorage.revoke_for_source(Sanctum.Context.actor(ctx), source_ref) do
-      {:ok, ids} -> {:ok, %{revoked: ids}}
-      {:error, :no_athanor} -> {:error, :no_athanor}
-      {:error, _unreadable} -> {:error, :unavailable}
+      {:ok, []} ->
+        {:ok, %{revoked: []}}
+
+      {:ok, ids} ->
+        Sanctum.Telemetry.consent_changed(ctx.athanor_id, source_ref)
+        {:ok, %{revoked: ids}}
+
+      {:error, :no_athanor} ->
+        {:error, :no_athanor}
+
+      {:error, _unreadable} ->
+        {:error, :unavailable}
     end
   end
 end

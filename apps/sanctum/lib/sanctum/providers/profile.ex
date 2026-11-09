@@ -501,9 +501,12 @@ defmodule Sanctum.Providers.Profile do
   end
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "profile_id" => profile_id}) do
+    actor = Sanctum.Context.actor(ctx)
+
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
-         :ok <-
-           Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), profile_id, :any, "revoked") do
+         {:ok, profile} <- Arca.ProfileStorage.get(actor, profile_id),
+         :ok <- Arca.ProfileStorage.transition(actor, profile_id, :any, "revoked") do
+      Sanctum.Telemetry.consent_changed(ctx.athanor_id, profile.source_ref)
       {:ok, %{status: "revoked", profile_id: profile_id}}
     else
       {:error, reason} -> {:error, fmt(reason)}

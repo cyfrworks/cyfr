@@ -1861,8 +1861,10 @@ defmodule Compendium.Providers.Component do
   riding the athanor's components topic (`Cyfr.Bus.Components`): each
   installed version by its versionless `ref`, `type`, `name` and
   `version`, `installed`, `removed` or `pushed` as the registry's own
-  events name it, and `changed`, naming no version, when an operation
-  changed the registry in a way a reader takes by opening the stream again.
+  events name it, and `changed` when a reader should open the stream
+  again: naming the component when its grant was committed or revoked,
+  so whether its grant is current moved, and naming none after any other
+  operation that changed the registry.
   Its refresh is every installed version as the `list` action reads it,
   each `installed`, with its `icon` (a tincture's declared icon hint),
   whether a newer shipped version exists (`update_available`) and whether

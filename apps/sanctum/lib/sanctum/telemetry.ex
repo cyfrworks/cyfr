@@ -54,6 +54,7 @@ defmodule Sanctum.Telemetry do
     posted: [:cyfr, :sanctum, :shared_thread, :posted]
   }
   @vault_entry_event [:cyfr, :sanctum, :vault, :entry_changed]
+  @consent_changed_event [:cyfr, :sanctum, :consent, :changed]
   @athanor_archived_event [:cyfr, :sanctum, :athanor, :archived]
   @api_keys_event [:cyfr, :sanctum, :api_keys, :changed]
   @webhooks_event [:cyfr, :sanctum, :webhooks, :changed]
@@ -194,6 +195,21 @@ defmodule Sanctum.Telemetry do
       meta: meta
     })
   end
+
+  @doc """
+  The grant of the component `source_ref` in `athanor_id` moved: a
+  consent revision committed (a grant or a re-consent), or a profile of it
+  was revoked, after the write committed. It carries the component's
+  reference and nothing of the grant.
+  """
+  @spec consent_changed(String.t(), String.t()) :: :ok
+  def consent_changed(athanor_id, source_ref)
+      when is_binary(athanor_id) and is_binary(source_ref),
+      do:
+        :telemetry.execute(@consent_changed_event, %{count: 1}, %{
+          athanor_id: athanor_id,
+          source_ref: source_ref
+        })
 
   @doc """
   An athanor was archived: whatever serves it from outside any tenant

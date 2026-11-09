@@ -11,7 +11,9 @@ defmodule Cyfr.Bus.Components do
   `update_available` and `grant_current` are what the listing reads for
   a version, carried only where a reader of the listing built the
   payload (`components.changes`' refresh), and nil on the bridge's live
-  events. `changed` names no version and asks a reader to read again.
+  events. `changed` asks a reader to read again: after a grant of a
+  component moved it names that component (`ref`, `type`, `name`), and
+  after any other registry change it names none.
   """
 
   alias Cyfr.Bus.Payload

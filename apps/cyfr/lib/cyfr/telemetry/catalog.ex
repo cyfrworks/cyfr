@@ -132,6 +132,12 @@ defmodule Cyfr.Telemetry.Catalog do
         "a shared thread took a message: told to each of its people, and its last activity " <>
           "to the list of threads in each one's athanor"
     },
+    [:cyfr, :sanctum, :consent, :changed] => %{
+      consumers: [:bridge],
+      note:
+        "a component's grant moved, committed or revoked: the components topic tells its " <>
+          "readers to read whether the grant is current again"
+    },
     [:cyfr, :sanctum, :vault, :entry_changed] => %{
       consumers: [:bridge],
       note:

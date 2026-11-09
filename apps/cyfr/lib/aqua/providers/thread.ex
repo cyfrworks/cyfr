@@ -116,7 +116,7 @@ defmodule Aqua.Providers.Thread do
       %Prima.Provider.Stream{
         name: "activity.changes",
         topic: :crew_activity,
-        projection: ["kind", "member", "asked_by", "since", "status"],
+        projection: ["kind", "id", "member", "asked_by", "since", "status"],
         deadline_bound: @deadline_bound,
         shape: activity_shape(),
         refresh: {Aqua.Crew.Activity, :open}
@@ -151,12 +151,13 @@ defmodule Aqua.Providers.Thread do
       "type" => "object",
       "fields" => %{
         "kind" => %{"type" => "enum", "values" => ["started", "ended"]},
+        "id" => %{"type" => "string"},
         "member" => %{"type" => "string"},
         "asked_by" => %{"type" => "string", "max" => 4096, "nullable" => true},
         "since" => %{"type" => "time", "nullable" => true},
         "status" => %{"type" => "enum", "values" => Prima.TurnState.statuses()}
       },
-      "required" => ["kind", "member", "asked_by", "since", "status"]
+      "required" => ["kind", "id", "member", "asked_by", "since", "status"]
     })
   end
 

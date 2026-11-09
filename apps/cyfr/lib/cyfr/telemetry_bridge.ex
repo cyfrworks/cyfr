@@ -240,6 +240,21 @@ defmodule Cyfr.TelemetryBridge do
 
   defp messages([:cyfr, :schedules, :completed], _measurements, %{kind: "feed"}), do: []
 
+  # A grant moved: the component it is for is named, so a reader of the
+  # registry reads whether its grant is current again.
+  defp messages([:cyfr, :sanctum, :consent, :changed], _measurements, meta) do
+    fields =
+      case Prima.ComponentRef.parse(meta[:source_ref] || "") do
+        {:ok, %{type: type, namespace: namespace, name: name}} ->
+          %{ref: Prima.ComponentRef.build(type, namespace, name), type: type, name: name}
+
+        _unparsed ->
+          %{}
+      end
+
+    [tenant(meta, &Bus.components/1, &Components.new(&1, :changed, fields))]
+  end
+
   defp messages([:cyfr, :compendium, :component, action], _measurements, meta)
        when action in [:install, :remove, :push] do
     kind = %{install: :installed, remove: :removed, push: :pushed}[action]

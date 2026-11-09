@@ -111,6 +111,7 @@ defmodule Aqua.Crew.Activity do
 
   defp payload(actor, kind, turn) do
     CrewActivity.new(actor, kind,
+      id: turn.id,
       member: turn.agent,
       asked_by: asked_by(turn),
       since: turn.accepted_at,

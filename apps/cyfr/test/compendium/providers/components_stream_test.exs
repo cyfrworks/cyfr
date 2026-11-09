@@ -108,6 +108,29 @@ defmodule Compendium.Providers.ComponentsStreamTest do
     end
   end
 
+  test "grant revocation updates the component stream" do
+    ctx = Sanctum.TestContext.local(:prism)
+    ref = "tincture:local.board"
+    profile_id = Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, ref)
+    refute_received %Components{}
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Provider.handle("profile", ctx, %{
+               "action" => "revoke",
+               "profile_id" => profile_id
+             })
+
+    assert_receive %Components{kind: :changed} = payload
+
+    assert %{"kind" => "changed", "ref" => ^ref, "type" => "tincture", "name" => "board"} =
+             read_as(payload)
+
+    # Revoking what a removal takes with it moves the stream the same way.
+    _ = Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.other")
+    assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "tincture:local.other")
+    assert_receive %Components{kind: :changed, ref: "tincture:local.other"}
+  end
+
   test "a bare change asks the reader to read again, and still fits the shape" do
     actor = Prima.Actor.in_athanor("ath_components_stream")
     data = read_as(Components.new(actor, :changed))

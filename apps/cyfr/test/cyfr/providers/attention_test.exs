@@ -346,6 +346,20 @@ defmodule Cyfr.Providers.AttentionTest do
       assert refreshed(ctx) == []
     end
 
+    test "deleting a thread removes its waiting approval from attention",
+         %{ctx: ctx, actor: actor} do
+      thread = thread!(actor, "Gone soon")
+      approval = approval!(actor, thread)
+      assert [%{"kind" => "approval", "id" => id}] = refreshed(ctx)
+      assert id == approval.id
+
+      assert {:ok, _deleted} = Aqua.Tape.delete_thread(ctx, thread.id)
+
+      assert_receive %Attention{kind: :removed, id: ^id} = left
+      assert removed?(left, id)
+      assert refreshed(ctx) == []
+    end
+
     test "an approval decided before its announcement is read no more, and enters nothing", %{
       actor: actor
     } do

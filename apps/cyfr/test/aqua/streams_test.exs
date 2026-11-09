@@ -72,7 +72,7 @@ defmodule Aqua.StreamsTest do
 
       assert {activity.topic, activity.subject, activity.bind} == {:crew_activity, nil, nil}
       assert activity.refresh == {Activity, :open}
-      assert activity.projection == ~w(kind member asked_by since status)
+      assert activity.projection == ~w(kind id member asked_by since status)
       assert activity.shape["fields"]["kind"]["values"] == ["started", "ended"]
       assert activity.shape["fields"]["status"]["values"] == Prima.TurnState.statuses()
     end
@@ -352,6 +352,28 @@ defmodule Aqua.StreamsTest do
       assert_receive %CrewActivity{kind: :ended, member: "scout"} = deleted
       assert %{"status" => "cancelled"} = read_as(deleted)
       refute_receive %CrewActivity{}, 200
+    end
+
+    test "the documented activity key preserves simultaneous jobs", %{ada: ada, planner: planner} do
+      {:ok, other_room} = Threads.create(ada.actor)
+      {:ok, other_planner} = Threads.crew_thread(ada.actor, other_room.id, "planner")
+      {:ok, %{turn: first}} = job!(ada, planner, "planner")
+      {:ok, %{turn: second}} = job!(ada, other_planner, "planner")
+
+      assert {:ok, items} = Activity.open(ada.ctx, nil)
+      jobs = items |> Enum.map(&read_as/1) |> Enum.filter(&(&1["member"] == "planner"))
+      assert length(jobs) == 2
+
+      # The guide keys a crew job by its `id`, which the stream carries, so
+      # one member's two jobs at once stay two.
+      guide = File.read!(Path.expand("../../../../integration-guide.md", __DIR__))
+      assert guide =~ "a crew job's by `id`"
+      assert map_size(Map.new(jobs, &{&1["id"], &1})) == 2
+      assert Enum.sort(Enum.map(jobs, & &1["id"])) == Enum.sort([first.id, second.id])
+
+      assert_receive %CrewActivity{kind: :started, id: id_one}
+      assert_receive %CrewActivity{kind: :started, id: id_two}
+      assert Enum.sort([id_one, id_two]) == Enum.sort([first.id, second.id])
     end
 
     test "the refresh is every open job, oldest first, and no job once it ended", %{

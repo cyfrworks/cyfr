@@ -644,18 +644,47 @@ defmodule Aqua.Tape do
   def delete_thread(%Context{} = ctx, thread_id) do
     actor = Sanctum.Context.actor(ctx)
 
-    open =
+    children =
       case Threads.children(actor, thread_id) do
-        children when is_list(children) -> open_jobs(ctx, Enum.map(children, & &1.id))
+        children when is_list(children) -> Enum.map(children, & &1.id)
         {:error, _unread} -> []
       end
+
+    open = open_jobs(ctx, children)
+    waiting = waiting_approvals(actor, [thread_id | children])
 
     with {:ok, %{cancelled: cancelled}} = deleted <-
            Threads.delete(actor, thread_id, standing(%{}, :retiring)) do
       ThreadList.removed(ctx, thread_id)
       Activity.cancelled(ctx, open, cancelled)
+      withdrawn(ctx, waiting)
       deleted
     end
+  end
+
+  # The approvals still waiting in the threads a delete removes, read
+  # before it: their rows go with the threads, so nothing can be read of
+  # them after. A read that fails announces none of them.
+  defp waiting_approvals(actor, thread_ids) do
+    case TurnStorage.waiting_approvals(actor, DateTime.utc_now()) do
+      {:ok, approvals} -> Enum.filter(approvals, &(&1.thread_id in thread_ids))
+      {:error, _unread} -> []
+    end
+  end
+
+  # A deleted thread's approvals wait for no one: each is announced
+  # resolved, `withdrawn`, after the delete committed, so what lists it
+  # as waiting (`attention.changes`) lets it go.
+  defp withdrawn(ctx, approvals) do
+    for %{id: approval_id, thread_id: thread_id} <- approvals do
+      Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_resolved, %{
+        thread_id: thread_id,
+        approval_id: approval_id,
+        decision: "withdrawn"
+      })
+    end
+
+    :ok
   end
 
   # The open turns a write that may cancel them leaves no row of after it:
