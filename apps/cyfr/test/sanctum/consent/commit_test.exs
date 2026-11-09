@@ -120,9 +120,8 @@ defmodule Sanctum.Consent.CommitTest do
   # A canvas's row: a vanilla canvas, its page its entry.
   defp canvas!(ctx, name) do
     tincture_row!(ctx, name, %{
-      "frame" => %{"placement" => "canvas"},
       "entry" => "index.html",
-      "streams" => [%{"name" => "mcp_servers.changes"}]
+      "desktop" => %{"data" => ["mcp_servers.changes"]}
     })
   end
 
@@ -1289,9 +1288,8 @@ defmodule Sanctum.Consent.CommitTest do
         {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
         {"off-canvas",
          %{
-           "frame" => %{"placement" => "canvas"},
            "entry" => "main.js",
-           "streams" => [%{"name" => "mcp_servers.changes"}]
+           "desktop" => %{"data" => ["mcp_servers.changes"]}
          }}
       ]
 

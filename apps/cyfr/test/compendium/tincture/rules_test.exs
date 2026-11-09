@@ -7,8 +7,8 @@ defmodule Compendium.Tincture.RulesTest do
   opens in the sandbox and the permissions policy (never a forbidden
   token), the entry page's policy derived against the frame facts
   `tests/browser/README.md` records, the templates and the lockfile rule,
-  and the declaration grammar — a capability or a placement the rules do
-  not list, a stream no provider declares, and a feed's write or the
+  and the declaration grammar — a capability the rules do not list, a
+  placement, a stream no provider declares, and a feed's write or the
   layout's among the system actions each refused. A canvas is its
   version's own page on the vanilla or the react template, and is held
   tighter: its policy is the one string the plan names, naming only its
@@ -41,6 +41,12 @@ defmodule Compendium.Tincture.RulesTest do
   )
 
   @runs "reagent:local.runs"
+
+  # The tincture block of an app, or of a desktop on the vanilla template.
+  defp app_or_desktop(tincture, false), do: tincture
+
+  defp app_or_desktop(tincture, true),
+    do: Map.merge(tincture, %{"desktop" => %{}, "entry" => "index.html"})
 
   defp manifest(tincture),
     do: %{
@@ -276,7 +282,7 @@ defmodule Compendium.Tincture.RulesTest do
                Rules.validate_declaration(manifest(%{"entry" => "index.html"}))
     end
 
-    test "a capability or a placement the rules do not list is refused" do
+    test "a capability the rules do not list, or any placement, is refused" do
       for frame <- [
             %{"capabilities" => ["camera"]},
             %{"capabilities" => ["background"]},
@@ -287,12 +293,11 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "the one placement is canvas, and float and a desktop are refused by the placement sentence" do
-      assert Rules.placements() == ~w(canvas)
-
-      for placement <- ["float", "desktop"] do
+    test "frame.placement is refused whatever it names: a desktop is a declaration with the block" do
+      for placement <- ["canvas", "float", "desktop"] do
         assert Rules.validate_declaration(manifest(%{"frame" => %{"placement" => placement}})) ==
-                 {:error, {:invalid_tincture, "tincture.frame.placement is one of canvas"}},
+                 {:error,
+                  {:invalid_tincture, "tincture.frame declares unknown key(s): placement"}},
                placement
       end
     end
@@ -317,26 +322,18 @@ defmodule Compendium.Tincture.RulesTest do
     end
 
     for action <- ~w(feed.bind feed.remove feed.press) do
-      test "#{action} among the system actions is refused, for every placement" do
+      test "#{action} among the system actions is refused, for an app and a desktop" do
         action = unquote(action)
 
         sentence =
           "tincture.actions names #{action}: a tincture never binds, removes or presses a feed; the person does"
 
-        for placement <- [nil | Rules.placements()] do
-          tincture = %{
-            "frame" => %{"placement" => placement},
-            "actions" => ["execution.list", action]
-          }
-
-          tincture =
-            if placement == "canvas",
-              do: Map.put(tincture, "entry", "index.html"),
-              else: tincture
+        for desktop? <- [false, true] do
+          tincture = app_or_desktop(%{"actions" => ["execution.list", action]}, desktop?)
 
           assert Rules.validate_declaration(%{"type" => "tincture", "tincture" => tincture}) ==
                    {:error, {:invalid_tincture, sentence}},
-                 inspect(placement)
+                 inspect(desktop?)
         end
 
         # Reading the feeds is not one of them.
@@ -347,22 +344,15 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "layout.edit among the system actions is refused, for every placement and for an app" do
+    test "layout.edit among the system actions is refused, for an app and a desktop" do
       sentence = "tincture.actions names layout.edit: a tincture never writes the person's layout"
 
-      for placement <- [nil | Rules.placements()] do
-        frame = if placement, do: %{"placement" => placement}, else: %{}
-        tincture = %{"frame" => frame, "actions" => ["execution.list", "layout.edit"]}
-
-        tincture =
-          if placement == "canvas",
-            do: Map.put(tincture, "entry", "index.html"),
-            else: tincture
-
+      for desktop? <- [false, true] do
+        tincture = app_or_desktop(%{"actions" => ["execution.list", "layout.edit"]}, desktop?)
         manifest = %{"type" => "tincture", "tincture" => tincture}
 
         assert Rules.validate_declaration(manifest) == {:error, {:invalid_tincture, sentence}},
-               inspect(placement)
+               inspect(desktop?)
 
         assert Compendium.tincture_declaration(manifest) ==
                  {:error, {:invalid_tincture, sentence}}
@@ -376,25 +366,18 @@ defmodule Compendium.Tincture.RulesTest do
     end
 
     for action <- ["schedule.create", "schedule.update"] do
-      test "#{action} among the system actions is refused, for every placement and for an app" do
+      test "#{action} among the system actions is refused, for an app and a desktop" do
         action = unquote(action)
 
         sentence =
           "tincture.actions names #{action}: a tincture never creates or changes a schedule"
 
-        for placement <- [nil | Rules.placements()] do
-          frame = if placement, do: %{"placement" => placement}, else: %{}
-          tincture = %{"frame" => frame, "actions" => ["execution.list", action]}
-
-          tincture =
-            if placement == "canvas",
-              do: Map.put(tincture, "entry", "index.html"),
-              else: tincture
-
+        for desktop? <- [false, true] do
+          tincture = app_or_desktop(%{"actions" => ["execution.list", action]}, desktop?)
           manifest = %{"type" => "tincture", "tincture" => tincture}
 
           assert Rules.validate_declaration(manifest) == {:error, {:invalid_tincture, sentence}},
-                 inspect(placement)
+                 inspect(desktop?)
 
           assert Compendium.tincture_declaration(manifest) ==
                    {:error, {:invalid_tincture, sentence}}
@@ -633,20 +616,20 @@ defmodule Compendium.Tincture.RulesTest do
   describe "a canvas" do
     @vanilla %{"entry" => "index.html"}
     @react %{"entry" => "dist/index.html", "build" => %{"tool" => "vite"}}
-    @template_sentence "a canvas declares tincture.entry index.html with no tincture.build, " <>
+    @template_sentence "a desktop declares tincture.entry index.html with no tincture.build, " <>
                          "or tincture.entry dist/index.html with tincture.build.tool vite"
 
     defp canvas(tincture \\ %{}, extra \\ %{}) do
       %{
         "type" => "tincture",
-        "tincture" => Map.merge(Map.put(@vanilla, "frame", %{"placement" => "canvas"}), tincture)
+        "tincture" => Map.merge(Map.put(@vanilla, "desktop", %{}), tincture)
       }
       |> Map.merge(extra)
     end
 
     defp canvas_refused(manifest, sentence) do
       assert Rules.validate_declaration(manifest) ==
-               {:error, {:invalid_tincture, "tincture.frame.placement canvas: " <> sentence}}
+               {:error, {:invalid_tincture, "tincture.desktop: " <> sentence}}
 
       assert Compendium.tincture_declaration(manifest) == Rules.validate_declaration(manifest)
     end
@@ -683,25 +666,21 @@ defmodule Compendium.Tincture.RulesTest do
       ]
     end
 
-    defp streams_of(entries) do
-      {:ok, declaration} =
-        Rules.validate_declaration(canvas(%{"streams" => entries}))
-
+    defp desktop_of(block) do
+      {:ok, declaration} = Rules.validate_declaration(canvas(%{"desktop" => block}))
       declaration
     end
 
     test "a vanilla canvas and a react canvas that keep the rules are answered as the struct" do
-      streams = [%{"name" => "feed.results", "subject" => "btc"}]
-
       for template <- [@vanilla, @react] do
         assert {:ok, %Tincture{} = decl} =
-                 Rules.validate_declaration(canvas(Map.put(template, "streams", streams)))
+                 Rules.validate_declaration(
+                   canvas(Map.put(template, "desktop", %{"feeds" => ["btc"]}))
+                 )
 
-        assert decl.frame.placement == "canvas"
+        assert Tincture.canvas?(decl)
         assert decl.streams == [%Tincture.Stream{name: "feed.results", subject: "btc"}]
       end
-
-      assert "canvas" in Rules.placements()
 
       # A react canvas is built, so it ships its lockfile; a vanilla one is not.
       assert Rules.lockfile_required?(canvas(@react))
@@ -738,22 +717,20 @@ defmodule Compendium.Tincture.RulesTest do
     test "each declaration a canvas may not make is refused with its own sentence" do
       refusals = [
         {canvas(%{"connect" => ["api.example.com"]}),
-         "a canvas declares no tincture.connect origin"},
+         "a desktop declares no tincture.connect origin"},
         {canvas(%{}, %{"caps" => %{"egress" => %{"domains" => ["api.example.com"]}}}),
-         "a canvas declares no caps.egress"},
+         "a desktop declares no caps.egress"},
         {canvas(%{}, %{"dependencies" => %{"static" => ["reagent:local.runs"]}}),
-         "a canvas declares no component dependency, static or dynamic"},
+         "a desktop declares no component dependency, static or dynamic"},
         {canvas(%{}, %{"dependencies" => %{"dynamic" => %{"discover" => true}}}),
-         "a canvas declares no component dependency, static or dynamic"},
-        {canvas(%{"frame" => %{"placement" => "canvas", "capabilities" => ["fullscreen"]}}),
-         "a canvas declares no frame capability"},
-        {canvas(%{"actions" => ["execution.list"]}), "a canvas declares no system action"},
-        {canvas(%{
-           "frame" => %{
-             "placement" => "canvas",
-             "size" => %{"preferred" => %{"w" => 400, "h" => 640}}
-           }
-         }), "a canvas declares no size: it fills the screen"}
+         "a desktop declares no component dependency, static or dynamic"},
+        {canvas(%{"frame" => %{"capabilities" => ["fullscreen"]}}),
+         "a desktop declares no frame capability"},
+        {canvas(%{"actions" => ["execution.list"]}), "a desktop declares no system action"},
+        {canvas(%{"frame" => %{"size" => %{"preferred" => %{"w" => 400, "h" => 640}}}}),
+         "a desktop declares no size: it fills the screen"},
+        {canvas(%{"subjects" => ["run"]}),
+         "a desktop declares no tincture.subjects: it is never opened with one"}
       ]
 
       for {manifest, sentence} <- refusals, do: canvas_refused(manifest, sentence)
@@ -778,55 +755,50 @@ defmodule Compendium.Tincture.RulesTest do
 
     test "a canvas declaring background is refused" do
       canvas_refused(
-        canvas(%{"frame" => %{"placement" => "canvas", "background" => true}}),
-        "a canvas declares no background: hidden, it reads and acts on nothing"
+        canvas(%{"frame" => %{"background" => true}}),
+        "a desktop declares no background: hidden, it reads and acts on nothing"
       )
 
       assert {:ok, %Tincture{frame: %{background: false}}} =
-               Rules.validate_declaration(
-                 canvas(%{"frame" => %{"placement" => "canvas", "background" => false}})
-               )
+               Rules.validate_declaration(canvas(%{"frame" => %{"background" => false}}))
     end
 
-    test "a canvas reads only streams that declare a shape, each feed by its name, once" do
+    test "a desktop's data are streams that declare a shape and take no subject; its feeds are read by name" do
       table = canvas_table()
 
-      ok =
-        streams_of([%{"name" => "runs.changes"}, %{"name" => "feed.results", "subject" => "btc"}])
-
-      assert Rules.check_canvas_streams(ok, table) == :ok
+      ok = desktop_of(%{"data" => ["runs.changes"], "feeds" => ["btc", "eth"]})
       assert Rules.check_streams(ok, table) == :ok
-      assert Compendium.tincture_check_canvas_streams(ok, table) == :ok
+      assert Compendium.tincture_check_streams(ok, table) == :ok
+      assert Rules.check_desktop(ok, table) == :ok
+      assert Compendium.tincture_check_desktop(ok, table) == :ok
 
-      two_feeds =
-        streams_of([
-          %{"name" => "feed.results", "subject" => "btc"},
-          %{"name" => "feed.results", "subject" => "eth"}
-        ])
+      subjected = %Prima.Provider.Stream{
+        name: "notes.changes",
+        topic: :notes,
+        projection: ["name"],
+        subject: ~S"\A[a-z]{1,8}\z",
+        deadline_bound: 600,
+        shape: object_shape(["name"])
+      }
 
-      assert Rules.check_canvas_streams(two_feeds, table) == :ok
-
-      for {entries, sentence} <- [
-            {[%{"name" => "executions.deltas", "subject" => "*"}],
-             "tincture.streams names executions.deltas, which a canvas cannot read: " <>
+      for {block, table, sentence} <- [
+            {%{"data" => ["executions.deltas"]}, table,
+             "tincture.desktop.data names executions.deltas, which a desktop cannot read: " <>
                "the stream declares no shape"},
-            {[%{"name" => "builds.progress"}],
-             "tincture.streams names builds.progress, which no provider declares"},
-            {[%{"name" => "feed.results"}],
-             "tincture.streams feed.results: a canvas names the feed it reads as the subject"},
-            {[%{"name" => "feed.results", "subject" => "*"}],
-             "tincture.streams feed.results: a canvas names each feed it reads, never \"*\" for any"},
-            {[%{"name" => "feed.results", "subject" => "BTC:usd"}],
-             "tincture.streams feed.results: the subject must be a feed's name"},
-            {[
-               %{"name" => "feed.results", "subject" => "btc"},
-               %{"name" => "feed.results", "subject" => "btc"}
-             ], "tincture.streams declares a stream twice"},
-            {[%{"name" => "runs.changes"}, %{"name" => "runs.changes"}],
-             "tincture.streams declares a stream twice"}
+            {%{"data" => ["builds.progress"]}, table,
+             "tincture.desktop.data names builds.progress, which no provider declares"},
+            {%{"data" => ["feed.results"]}, table,
+             "tincture.desktop.data names feed.results, which is read by name: " <>
+               "a desktop names each feed in tincture.desktop.feeds"},
+            {%{"data" => ["notes.changes"]}, [subjected | table],
+             "tincture.desktop.data names notes.changes, whose subject a desktop would have to name"},
+            {%{"feeds" => ["btc"]}, Enum.reject(table, &(&1.name == "feed.results")),
+             "tincture.desktop.feeds names feeds, and no provider declares feed.results for a " <>
+               "desktop to read them"}
           ] do
-        assert Rules.check_canvas_streams(streams_of(entries), table) ==
-                 {:error, {:invalid_tincture, "tincture.frame.placement canvas: " <> sentence}}
+        assert Rules.check_streams(desktop_of(block), table) ==
+                 {:error, {:invalid_tincture, sentence}},
+               inspect(block)
       end
     end
 
@@ -854,7 +826,7 @@ defmodule Compendium.Tincture.RulesTest do
         assert Rules.check_canvas_files(manifest, paths) ==
                  {:error,
                   {:invalid_tincture,
-                   "tincture.frame.placement canvas: its page #{entry} is not among the " <>
+                   "tincture.desktop: its page #{entry} is not among the " <>
                      "version's files"}}
       end
 
@@ -883,7 +855,7 @@ defmodule Compendium.Tincture.RulesTest do
         {:error,
          {:invalid_tincture,
           "tincture.streams names #{name}, which declares a shape: " <>
-            "a stream that declares a shape is read by a canvas alone"}}
+            "a stream that declares a shape is read by a desktop alone, in tincture.desktop.data"}}
 
     test "is refused in an app, framed or not, whatever its subject" do
       table = canvas_table()
@@ -918,20 +890,20 @@ defmodule Compendium.Tincture.RulesTest do
       table = Sanctum.Catalog.streams()
 
       for name <- ["schedules.changes", "schedule_runs.changes"] do
-        assert Rules.check_streams(streams_of([%{"name" => name}]), table) == :ok, name
+        assert Rules.check_streams(desktop_of(%{"data" => [name]}), table) == :ok, name
 
         for frame <- [%{"capabilities" => ["pointer_lock"]}, %{}] do
           assert Rules.check_streams(declared(frame, [%{"name" => name}]), table) ==
                    shaped_refusal(name)
-        end
 
-        for subject <- ["sch_1", "*"] do
-          assert {:error, {:invalid_tincture, _}} =
-                   Rules.check_streams(
-                     streams_of([%{"name" => name, "subject" => subject}]),
-                     table
-                   ),
-                 "#{name} took the subject #{subject}"
+          for subject <- ["sch_1", "*"] do
+            assert {:error, {:invalid_tincture, _}} =
+                     Rules.check_streams(
+                       declared(frame, [%{"name" => name, "subject" => subject}]),
+                       table
+                     ),
+                   "#{name} took the subject #{subject}"
+          end
         end
       end
     end
@@ -939,9 +911,7 @@ defmodule Compendium.Tincture.RulesTest do
     test "is a canvas's to declare, and a stream without one stays any tincture's" do
       table = canvas_table()
 
-      canvas =
-        streams_of([%{"name" => "runs.changes"}, %{"name" => "feed.results", "subject" => "btc"}])
-
+      canvas = desktop_of(%{"data" => ["runs.changes"], "feeds" => ["btc"]})
       assert Rules.check_streams(canvas, table) == :ok
 
       for frame <- [%{"capabilities" => ["pointer_lock"]}, %{}] do
@@ -949,6 +919,308 @@ defmodule Compendium.Tincture.RulesTest do
                  declared(frame, [%{"name" => "executions.deltas", "subject" => "*"}]),
                  table
                ) == :ok
+      end
+    end
+  end
+
+  describe "a desktop's controls" do
+    defp controls_of(controls, block \\ %{}) do
+      {:ok, declaration} =
+        Rules.validate_declaration(%{
+          "type" => "tincture",
+          "tincture" => %{
+            "entry" => "index.html",
+            "desktop" => Map.merge(%{"data" => ["runs.changes"], "controls" => controls}, block)
+          }
+        })
+
+      declaration
+    end
+
+    defp control(operation, extra \\ %{}),
+      do: Map.merge(%{"id" => "c1", "label" => "Go", "operation" => operation}, extra)
+
+    defp control_check(controls, block \\ %{}, streams \\ Sanctum.Catalog.streams()),
+      do: Rules.check_desktop(controls_of(controls, block), streams)
+
+    test "run feed.press or a write the person makes directly" do
+      for operation <- ["feed.press", "schedule.pause", "schedule.resume", "file.write"] do
+        assert control_check([control(operation)]) == :ok, operation
+      end
+
+      assert Compendium.tincture_check_desktop(controls_of([control("schedule.pause")]), []) ==
+               :ok
+
+      # A declaration with no desktop block holds nothing here.
+      {:ok, app} = Rules.validate_declaration(manifest(%{}))
+      assert Rules.check_desktop(app, []) == :ok
+    end
+
+    test "never run an unknown, person-only, administrator's or in-run operation, or any other kind" do
+      for {operation, why} <- [
+            {"nothing.here", "which no provider declares"},
+            {"schedule.create",
+             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"schedule.update",
+             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"feed.bind",
+             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"feed.remove",
+             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"layout.edit",
+             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"profile.grant",
+             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"vault.create",
+             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"settings.set", "which is an administrator's"},
+            {"key.create", "which is an administrator's"},
+            {"source.write", "which runs only inside a run"},
+            {"athanor.get", "which is a read: a control runs a write or feed.press"},
+            {"execution.run", "which is an execute: a control runs a write or feed.press"},
+            {"schedule.delete", "which is destructive: a control runs a write or feed.press"},
+            {"registry.legal_accept", "which is external: a control runs a write or feed.press"}
+          ] do
+        assert control_check([control("schedule.pause", %{"id" => "ok"}), control(operation)]) ==
+                 {:error,
+                  {:invalid_tincture, "tincture.desktop.controls c1 runs #{operation}, #{why}"}},
+               operation
+      end
+
+      # Every tool only an agent asks for is among the person's.
+      for tool <- Prima.Manifest.Caps.agent_only_tools() do
+        assert {:error, {:invalid_tincture, sentence}} = control_check([control(tool)])
+        assert sentence =~ "the person's own act", tool
+      end
+    end
+
+    test "pick from a stream the desktop reads, at a list of strings or an enum, into an argument" do
+      tags = %Prima.Provider.Stream{
+        name: "tags.changes",
+        topic: :tags,
+        projection: ["tags", "name"],
+        deadline_bound: 600,
+        shape:
+          (fn ->
+             {:ok, shape} =
+               Prima.Canvas.Shape.validate(%{
+                 "type" => "object",
+                 "fields" => %{
+                   "tags" => %{"type" => "list", "of" => %{"type" => "string"}},
+                   "counts" => %{"type" => "list", "of" => %{"type" => "integer"}},
+                   "name" => %{"type" => "string"}
+                 }
+               })
+
+             shape
+           end).()
+      }
+
+      streams = [tags | Sanctum.Catalog.streams()]
+
+      pick = fn fields ->
+        %{"pick" => Map.merge(%{"stream" => "runs.changes", "arg" => "schedule_id"}, fields)}
+      end
+
+      check = fn fields, block ->
+        control_check([control("schedule.pause", pick.(fields))], block, streams)
+      end
+
+      both = %{"data" => ["runs.changes", "tags.changes"], "feeds" => ["vpn"]}
+
+      # An enum, nested under a nullable object; a list of strings; a
+      # feed's result, a json node beneath which the stream says nothing.
+      assert check.(%{"field" => "/kind"}, both) == :ok
+      assert check.(%{"field" => "/error/class"}, both) == :ok
+      assert check.(%{"stream" => "tags.changes", "field" => "/tags"}, both) == :ok
+
+      assert control_check(
+               [
+                 control("feed.press", %{
+                   "pick" => %{
+                     "stream" => "feed.results",
+                     "subject" => "vpn",
+                     "field" => "/result/servers",
+                     "arg" => "action_name"
+                   }
+                 })
+               ],
+               both,
+               streams
+             ) == :ok
+
+      where = "tincture.desktop.controls c1: the pick"
+
+      for {fields, block, sentence} <- [
+            {%{"field" => "/execution_id"}, both,
+             "#{where}'s field /execution_id is a string in the stream's shape: a pick takes a list of strings or an enum"},
+            {%{"stream" => "tags.changes", "field" => "/counts"}, both,
+             "#{where}'s field /counts is a list in the stream's shape: a pick takes a list of strings or an enum"},
+            {%{"field" => "/error"}, both,
+             "#{where}'s field /error is an object in the stream's shape: a pick takes a list of strings or an enum"},
+            {%{"field" => "/nothing"}, both,
+             "#{where}'s field /nothing names no field of the stream's shape"},
+            {%{"field" => "/kind/deeper"}, both,
+             "#{where}'s field /kind/deeper names no field of the stream's shape"},
+            {%{"stream" => "tags.changes", "field" => "/tags"}, %{},
+             "#{where} reads tags.changes, which the desktop does not: a pick reads a stream in " <>
+               "tincture.desktop.data, or feed.results with a feed in tincture.desktop.feeds"},
+            {%{"stream" => "feed.results", "subject" => "weather", "field" => "/result"}, both,
+             "#{where} reads feed.results, which the desktop does not: a pick reads a stream in " <>
+               "tincture.desktop.data, or feed.results with a feed in tincture.desktop.feeds"},
+            {%{"stream" => "feed.results", "field" => "/result"}, both,
+             "#{where} reads feed.results, which the desktop does not: a pick reads a stream in " <>
+               "tincture.desktop.data, or feed.results with a feed in tincture.desktop.feeds"},
+            {%{"field" => "/kind", "arg" => "server"}, both,
+             "#{where} fills server, which schedule.pause takes no argument named"}
+          ] do
+        assert check.(fields, block) == {:error, {:invalid_tincture, sentence}}, inspect(fields)
+      end
+    end
+
+    # The plan's example fills `server`, which feed.press does not take:
+    # the rule as written refuses it.
+    test "the plan's vpn example is refused: feed.press takes no server argument" do
+      assert {:error, {:invalid_tincture, sentence}} =
+               control_check(
+                 [
+                   control("feed.press", %{
+                     "args" => %{"binding" => "fb_1", "action" => "connect"},
+                     "pick" => %{
+                       "stream" => "feed.results",
+                       "subject" => "vpn",
+                       "field" => "/result/servers",
+                       "arg" => "server"
+                     }
+                   })
+                 ],
+                 %{"feeds" => ["vpn"]}
+               )
+
+      assert sentence =~ "fills server, which feed.press takes no argument named"
+    end
+  end
+
+  describe "a desktop's chrome" do
+    @licence "SIL Open Font License 1.1"
+
+    defp chrome_of(path) do
+      {:ok, declaration} =
+        Rules.validate_declaration(%{
+          "type" => "tincture",
+          "tincture" => %{"entry" => "index.html", "desktop" => %{"chrome" => path}}
+        })
+
+      declaration
+    end
+
+    defp reader(files), do: &Map.fetch(files, &1)
+
+    defp png(width, height, pad \\ 0),
+      do:
+        <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 13::32, "IHDR", width::32, height::32, 8, 6, 0, 0,
+          0>> <>
+          :binary.copy(<<0>>, pad)
+
+    defp svg(attributes),
+      do: ~s|<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" #{attributes}></svg>|
+
+    defp woff2(pad \\ 0), do: "wOF2" <> :binary.copy(<<0>>, pad)
+
+    defp chrome_check(css, files, path \\ "chrome.css"),
+      do: Rules.check_chrome(chrome_of(path), reader(Map.put(files, path, css)))
+
+    test "answers the tokens, nil for a desktop that names none and for an app" do
+      assert {:ok, %{"radius" => 8}} = chrome_check(":root { --chrome-radius: 8px; }", %{})
+
+      assert Compendium.tincture_check_chrome(
+               chrome_of("chrome.css"),
+               reader(%{"chrome.css" => ""})
+             ) == {:ok, %{"fonts" => []}}
+
+      {:ok, bare} =
+        Rules.validate_declaration(%{"tincture" => %{"entry" => "index.html", "desktop" => %{}}})
+
+      assert Rules.check_chrome(bare, reader(%{})) == {:ok, nil}
+      {:ok, app} = Rules.validate_declaration(manifest(%{}))
+      assert Rules.check_chrome(app, reader(%{})) == {:ok, nil}
+    end
+
+    test "a file that is absent, or outside the grammar, is refused naming the file and its line" do
+      assert Rules.check_chrome(chrome_of("chrome.css"), reader(%{})) ==
+               {:error,
+                {:invalid_tincture,
+                 "tincture.desktop.chrome chrome.css is not among the version's files"}}
+
+      assert chrome_check(":root {\n  --chrome-radius: 30px;\n}", %{}, "themes/night.css") ==
+               {:error,
+                {:invalid_tincture,
+                 "tincture.desktop.chrome themes/night.css line 2: --chrome-radius is a whole number of px from 0 to 24"}}
+    end
+
+    test "a texture is a PNG or an SVG in the version, at most 512 KiB and 2048 pixels a side" do
+      cap = Prima.Manifest.Chrome.file_caps()
+      assert cap.bytes == 524_288 and cap.texture_pixels == 2048
+      css = ":root { --chrome-texture-title: url(t.png); --chrome-texture-shelf: url(s.svg); }"
+      fits = %{"t.png" => png(2048, 1), "s.svg" => svg(~s(width="2048px" height="64"))}
+
+      assert {:ok, %{"texture-title" => "t.png", "texture-shelf" => "s.svg"}} =
+               chrome_check(css, fits)
+
+      at_cap = png(16, 16)
+      at_cap = at_cap <> :binary.copy(<<0>>, cap.bytes - byte_size(at_cap))
+      assert {:ok, _} = chrome_check(css, %{fits | "t.png" => at_cap})
+
+      where = "tincture.desktop.chrome chrome.css"
+
+      for {files, sentence} <- [
+            {Map.delete(fits, "t.png"), "#{where}: t.png is not among the version's files"},
+            {%{fits | "t.png" => at_cap <> <<0>>},
+             "#{where}: t.png is 524289 bytes, over the cap of 524288"},
+            {%{fits | "t.png" => png(2049, 16)},
+             "#{where}: t.png is 2049 by 16 pixels; a texture is at most 2048 a side"},
+            {%{fits | "t.png" => png(16, 0)},
+             "#{where}: t.png is 16 by 0 pixels; a texture is at most 2048 a side"},
+            {%{fits | "t.png" => "GIF89a"}, "#{where}: t.png is not a PNG image"},
+            {%{fits | "s.svg" => svg(~s(width="4096" height="64"))},
+             "#{where}: s.svg is 4096 by 64 pixels; a texture is at most 2048 a side"},
+            {%{fits | "s.svg" => svg(~s(viewBox="0 0 10 10"))},
+             "#{where}: s.svg: an SVG texture's root element says its width and height in pixels"},
+            {%{fits | "s.svg" => svg(~s(width="100%" height="64"))},
+             "#{where}: s.svg: an SVG texture's root element says its width and height in pixels"}
+          ] do
+        assert chrome_check(css, files) == {:error, {:invalid_tincture, sentence}}, sentence
+      end
+    end
+
+    test "a font is a WOFF2 in the version, at most 512 KiB, with a licence beside it" do
+      css = ~s|@font-face { font-family: "Inter"; src: url("fonts/inter.woff2"); }|
+      assert Rules.licence_names() == ~w(LICENSE LICENSE.txt LICENSE.md OFL.txt)
+
+      for licence <- Rules.licence_names() do
+        assert {:ok, %{"fonts" => [%{"src" => "fonts/inter.woff2"}]}} =
+                 chrome_check(css, %{
+                   "fonts/inter.woff2" => woff2(),
+                   "fonts/#{licence}" => @licence
+                 }),
+               licence
+      end
+
+      where = "tincture.desktop.chrome chrome.css: fonts/inter.woff2"
+
+      for {files, sentence} <- [
+            {%{"fonts/inter.woff2" => woff2()},
+             "#{where} has no licence beside it: LICENSE, LICENSE.txt, LICENSE.md, OFL.txt"},
+            # A licence elsewhere in the version is not beside the font.
+            {%{"fonts/inter.woff2" => woff2(), "LICENSE" => @licence},
+             "#{where} has no licence beside it: LICENSE, LICENSE.txt, LICENSE.md, OFL.txt"},
+            {%{"fonts/inter.woff2" => "wOFF" <> "rest", "fonts/OFL.txt" => @licence},
+             "#{where} is not a WOFF2 font"},
+            {%{"fonts/inter.woff2" => woff2(524_285), "fonts/OFL.txt" => @licence},
+             "#{where} is 524289 bytes, over the cap of 524288"},
+            {%{"fonts/OFL.txt" => @licence}, "#{where} is not among the version's files"}
+          ] do
+        assert chrome_check(css, files) == {:error, {:invalid_tincture, sentence}}, sentence
       end
     end
   end

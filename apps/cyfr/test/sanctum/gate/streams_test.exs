@@ -268,9 +268,8 @@ defmodule Sanctum.Gate.StreamsTest do
   # A canvas reading both canvas-readable streams, one feed by its name.
   defp canvas_row!(ctx, name) do
     tincture_row!(ctx, name, %{
-      "frame" => %{"placement" => "canvas"},
       "entry" => "index.html",
-      "streams" => [%{"name" => "runs.changes"}, %{"name" => "feed.results", "subject" => "btc"}]
+      "desktop" => %{"data" => ["runs.changes"], "feeds" => ["btc"]}
     })
   end
 

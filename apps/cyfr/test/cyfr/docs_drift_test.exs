@@ -1890,18 +1890,32 @@ defmodule Cyfr.DocsDriftTest do
 
     pixels_from..pixels_to//_ = Prima.Manifest.Tincture.size_pixels()
     parts_from..parts_to//_ = Prima.Manifest.Tincture.aspect_parts()
+    bounds = Prima.Manifest.Tincture.desktop_bounds()
+    string_from..string_to//_ = bounds.string_max
+    values_from..values_to//_ = bounds.enum_values
 
     [
       "| Block | Keys |",
       "|---|---|",
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
-      "| `frame.placement` | one of #{list.(Compendium.Tincture.Rules.placements())} |",
       "| `frame.size` | #{list.(Enum.sort(Prima.Manifest.Tincture.size_keys()))}: `min` and " <>
         "`preferred` each `w` and `h`, #{pixels_from} to #{pixels_to} CSS pixels; `aspect` " <>
         "`w` and `h`, whole numbers #{parts_from} to #{parts_to}; `tile` one of " <>
         "#{list.(Prima.Manifest.Tincture.tiles())} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
-      "| `actions[]` | an operation name, `tool.action` |"
+      "| `actions[]` | an operation name, `tool.action` |",
+      "| `subjects[]` | one of #{list.(Prima.Manifest.Tincture.subject_kinds())} |",
+      "| `desktop` | #{list.(keys.(%Prima.Manifest.Tincture.Desktop{}))}, each optional |",
+      "| `desktop.data[]`, `desktop.feeds[]` | at most #{bounds.names} each: a stream's name, " <>
+        "a feed's name |",
+      "| `desktop.controls[]` | #{list.(keys.(%Prima.Manifest.Tincture.Control{id: "", label: "", operation: ""}))}: " <>
+        "at most #{bounds.controls}; `label` 1 to #{bounds.label_points} code points |",
+      "| `desktop.controls[].pick` | #{list.(keys.(%Prima.Manifest.Tincture.Pick{stream: "", field: "", arg: ""}))} |",
+      "| `desktop.prefs` | `desktop`, `widgets`: at most #{bounds.widgets} widgets, each section " <>
+        "at most #{bounds.fields} `fields` of #{list.(Prima.Manifest.Tincture.field_types())}; " <>
+        "`string` `max` #{string_from} to #{string_to}; `enum` #{values_from} to #{values_to} " <>
+        "`values`; never a widget field #{list.(Prima.Manifest.Tincture.widget_fixed_fields())} |",
+      "| `desktop.chrome` | a relative path to a `.css` file in the version |"
     ]
   end
 

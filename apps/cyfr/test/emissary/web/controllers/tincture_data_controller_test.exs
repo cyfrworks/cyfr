@@ -204,19 +204,19 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     })
   end
 
-  # A canvas version in the source's athanor declaring `streams`, put as
-  # any version's row is: a canvas declaring a stream no provider declares
-  # yet is refused at publish, not at this row. Answers its release digest.
-  defp canvas!(ctx, name, streams) do
+  # A canvas version in the source's athanor with the desktop block
+  # `desktop`, put as any version's row is: a canvas declaring a stream no
+  # provider declares yet is refused at publish, not at this row. Answers
+  # its release digest.
+  defp canvas!(ctx, name, desktop) do
     put_version!(ctx, name, %{
       "name" => name,
       "type" => "tincture",
       "version" => @version,
       "publisher" => "local",
       "tincture" => %{
-        "frame" => %{"placement" => "canvas"},
         "entry" => "index.html",
-        "streams" => streams
+        "desktop" => desktop
       }
     })
   end
@@ -1442,7 +1442,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       assert action(frame.bearer, "system.status").status == 200
 
-      canvas = canvas!(source, "flow-canvas", [%{"name" => "mcp_servers.changes"}])
+      canvas = canvas!(source, "flow-canvas", %{"data" => ["mcp_servers.changes"]})
       grant!(source, "flow-canvas", :owner, [])
       mine = frame!(source, "flow-canvas", canvas, 1)
 
@@ -1531,7 +1531,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
   describe "a canvas path" do
     setup %{source: source} do
-      digest = canvas!(source, "home-canvas", [%{"name" => "mcp_servers.changes"}])
+      digest = canvas!(source, "home-canvas", %{"data" => ["mcp_servers.changes"]})
       {:ok, digest: digest, mine: frame!(source, "home-canvas", digest)}
     end
 
@@ -1745,10 +1745,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     } do
       with_streams(fn ->
         digest =
-          canvas!(source, "trial-canvas", [
-            %{"name" => "probe.shaped"},
-            %{"name" => "mcp_servers.changes"}
-          ])
+          canvas!(source, "trial-canvas", %{"data" => ["probe.shaped", "mcp_servers.changes"]})
 
         trial = validation!(source, "trial-canvas", digest)
         Cyfr.Test.Settings.put("frame_invocation_max", 3)
@@ -1807,10 +1804,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     test "a feed fixture follows the binding's result shape", %{source: source} do
       with_streams(fn ->
         digest =
-          canvas!(source, "feed-canvas", [
-            %{"name" => "feed.results", "subject" => "btc"},
-            %{"name" => "feed.results", "subject" => "eth"}
-          ])
+          canvas!(source, "feed-canvas", %{"feeds" => ["btc", "eth"]})
 
         trial = validation!(source, "feed-canvas", digest)
         binding = feed_binding("btc")
@@ -1859,7 +1853,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     } do
       with_streams(fn ->
         digest =
-          canvas!(source, "outage-canvas", [%{"name" => "feed.results", "subject" => "btc"}])
+          canvas!(source, "outage-canvas", %{"feeds" => ["btc"]})
 
         trial = validation!(source, "outage-canvas", digest)
 
@@ -1896,7 +1890,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       # The first bearer lives four seconds; its renewal, an hour.
       Cyfr.Test.Settings.put("frame_credential_deadline_s", 4)
-      digest = canvas!(source, "renewed-stream", [%{"name" => "mcp_servers.changes"}])
+      digest = canvas!(source, "renewed-stream", %{"data" => ["mcp_servers.changes"]})
       frame = frame!(source, "renewed-stream", digest)
 
       stream =

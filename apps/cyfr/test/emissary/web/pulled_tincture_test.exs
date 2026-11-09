@@ -126,7 +126,7 @@ defmodule Emissary.Web.PulledTinctureTest do
 
     canvas =
       manifest("pulled-swap", %{
-        "frame" => %{"placement" => "canvas"},
+        "desktop" => %{},
         "entry" => "index.html",
         "connect" => ["api.example.com"]
       })
@@ -149,7 +149,7 @@ defmodule Emissary.Web.PulledTinctureTest do
            "installed the supplied manifest unchecked; its page is served as #{inspect(served)}"
 
     {:error, message} = result
-    assert message =~ "a canvas declares no tincture.connect origin"
+    assert message =~ "a desktop declares no tincture.connect origin"
     assert {:error, :not_found} = Compendium.Registry.get(ctx, "pulled-swap", "1.0.0")
   end
 end

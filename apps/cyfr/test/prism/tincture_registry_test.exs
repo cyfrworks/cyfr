@@ -674,7 +674,6 @@ defmodule Prism.TinctureRegistryTest do
       row = rows["declares-frame"]
       assert row.frame == declared.frame
       assert Enum.sort(row.frame.capabilities) == ~w(audio_autoplay fullscreen pointer_lock)
-      assert row.frame.placement == nil
       assert row.frame.background == true
 
       assert row.frame.size == %Prima.Manifest.Tincture.Size{
@@ -687,16 +686,15 @@ defmodule Prism.TinctureRegistryTest do
       assert rows["test-dash"].frame.background == false
     end
 
-    test "a canvas is listed with its placement, its page as its entry" do
+    test "a canvas is listed with its frame and its page as its entry, and wears no chrome it names none of" do
       manifest = %{
         "name" => "home-canvas",
         "type" => "tincture",
         "version" => "1.0.0",
         "publisher" => "local",
         "tincture" => %{
-          "frame" => %{"placement" => "canvas"},
           "entry" => "index.html",
-          "streams" => [%{"name" => "runs.changes"}]
+          "desktop" => %{"data" => ["runs.changes"]}
         }
       }
 
@@ -705,8 +703,46 @@ defmodule Prism.TinctureRegistryTest do
       ])
 
       row = listed(:test_canvas_row)["home-canvas"]
-      assert %{placement: "canvas", background: false, capabilities: []} = row.frame
+      assert %{background: false, capabilities: []} = row.frame
       assert row.entry == "index.html"
+      assert row.chrome == nil
+    end
+
+    test "a desktop's chrome is kept on its row as the tokens publish read, never the file" do
+      manifest = fn version ->
+        %{
+          "name" => "dressed",
+          "type" => "tincture",
+          "version" => version,
+          "publisher" => "local",
+          "tincture" => %{"entry" => "index.html", "desktop" => %{"chrome" => "chrome.css"}}
+        }
+      end
+
+      lay!("ath_test", "local", "dressed", "1.0.0", manifest.("1.0.0"), [
+        {"index.html", "<html><head></head><body></body></html>"},
+        {"chrome.css", ":root {\n  --chrome-radius: 4px;\n  --chrome-controls: left;\n}\n"}
+      ])
+
+      row = listed(:test_chrome_row)["dressed"]
+      assert row.chrome == %{"fonts" => [], "radius" => 4, "controls" => "left"}
+    end
+
+    test "a desktop whose chrome no longer reads wears the default, nil on its row" do
+      manifest = %{
+        "name" => "undressed",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html", "desktop" => %{"chrome" => "chrome.css"}}
+      }
+
+      lay!("ath_test", "local", "undressed", "1.0.0", manifest, [
+        {"index.html", "<html><head></head><body></body></html>"},
+        {"chrome.css", ":root { --chrome-radius: 99px; }"}
+      ])
+
+      assert listed(:test_chrome_refused_row)["undressed"].chrome == nil
     end
 
     test "a tincture whose declaration the rules refuse is listed with no frame to grant" do
