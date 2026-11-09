@@ -540,6 +540,27 @@ defmodule PrismWeb.ComponentsLiveTest do
       })
   end
 
+  test "a grant announced on the registry's topic leaves the expanded row as it reads",
+       %{conn: conn, ctx: ctx} do
+    {view, html} = expanded_html(conn)
+    assert html =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
+
+    actor = Sanctum.Context.actor(ctx)
+
+    :ok =
+      Cyfr.Bus.broadcast(
+        actor,
+        Cyfr.Bus.components(actor),
+        Cyfr.Bus.Components.new(actor, :changed, ref: @ref, type: "reagent", name: "shelf-tool")
+      )
+
+    # Heard and handled before the render below answers.
+    _ = :sys.get_state(view.pid)
+    assert render(view) =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   describe "a setup plan the call is refused" do
     # A refused `setup_plan` call is said in its own sentence where the
     # plan, its badge and the grant would be, on the expand and on the

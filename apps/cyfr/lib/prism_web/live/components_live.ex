@@ -461,6 +461,13 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
+  # A `changed` naming a component says its grant moved, which changes no
+  # row of the registry: the page reads a plan again on the grant it makes
+  # itself, and a re-list here would collapse the row that grant was made
+  # from.
+  def handle_info(%Cyfr.Bus.Components{kind: :changed, ref: ref}, socket) when is_binary(ref),
+    do: {:noreply, socket}
+
   def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, fetch_components(socket)}
   end
