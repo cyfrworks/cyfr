@@ -394,7 +394,7 @@ defmodule Cyfr.TelemetryBridge do
       user_id <- told(kind, sender, recipient),
       do: {:global, Bus.file_offers(user_id), payload}
     ) ++
-      offer_attention(kind, offer_id, recipient) ++ offer_files(kind, offer_id, recipient)
+      offer_waits(kind, offer_id, recipient)
   end
 
   # A path under an athanor's data/ changed: what it names now, read when
@@ -404,7 +404,7 @@ defmodule Cyfr.TelemetryBridge do
          path: "data" <> _ = path
        })
        when is_binary(athanor_id) and athanor_id != "" do
-    [files(fn -> {:ok, athanor_id} end, &Cyfr.Providers.Files.file(&1, path))]
+    [files(athanor_id, &Cyfr.Providers.Files.file(&1, path))]
   end
 
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})
@@ -645,39 +645,37 @@ defmodule Cyfr.TelemetryBridge do
   defp approval_attention(_meta), do: []
 
   # An offer waits for its recipient in their own athanor, wherever its
-  # sender is; a receipt's landing or failure is not a wait.
-  defp offer_attention(kind, offer_id, recipient) when kind == :offered or kind in @offer_ends do
+  # sender is, among what waits for them and among their files: one
+  # message, so a denial that ends thousands of offers reads each
+  # recipient's athanor once per transition. A receipt's landing or
+  # failure is not a wait.
+  defp offer_waits(kind, offer_id, recipient) when kind == :offered or kind in @offer_ends do
     [
-      attention(fn ->
-        with {:ok, athanor_id} <- Cyfr.Providers.Attention.own_athanor(recipient) do
-          if kind == :offered do
-            %{Prima.Actor.in_athanor(athanor_id) | user_id: recipient}
-            |> Cyfr.Providers.Attention.file_offer(offer_id)
-            |> waiting(athanor_id, recipient)
-          else
-            {:ok, [{athanor_id, recipient, :removed, %{id: offer_id}}]}
-          end
-        end
-      end)
+      {:offer_wait,
+       fn ->
+         with {:ok, athanor_id} <- Cyfr.Providers.Attention.own_athanor(recipient) do
+           actor = Prima.Actor.in_athanor(athanor_id)
+
+           if kind == :offered do
+             with {:ok, waits} <-
+                    %{actor | user_id: recipient}
+                    |> Cyfr.Providers.Attention.file_offer(offer_id)
+                    |> waiting(athanor_id, recipient),
+                  {:ok, files} <- Cyfr.Providers.Files.offer(actor, recipient, offer_id),
+                  do: {:ok, actor, waits, files}
+           else
+             {:ok, actor, [{athanor_id, recipient, :removed, %{id: offer_id}}],
+              [Cyfr.Providers.Files.removed(offer_id)]}
+           end
+         end
+       end}
     ]
   end
 
-  defp offer_attention(_kind, _offer_id, _recipient), do: []
+  defp offer_waits(_kind, _offer_id, _recipient), do: []
 
-  # The same wait among the recipient's files, in their own athanor.
-  defp offer_files(kind, offer_id, recipient) when kind == :offered or kind in @offer_ends do
-    where = fn -> Cyfr.Providers.Attention.own_athanor(recipient) end
-
-    if kind == :offered,
-      do: [files(where, &Cyfr.Providers.Files.offer(&1, recipient, offer_id))],
-      else: [files(where, fn _actor -> {:ok, [Cyfr.Providers.Files.removed(offer_id)]} end)]
-  end
-
-  defp offer_files(_kind, _offer_id, _recipient), do: []
-
-  # Read when delivered, the athanor first, so a read that fails costs
-  # this message alone.
-  defp files(where, read), do: {:files, where, read}
+  # Read when delivered, so a read that fails costs this message alone.
+  defp files(athanor_id, read), do: {:files, Prima.Actor.in_athanor(athanor_id), read}
 
   # A confirmation is its announcement's item: the record is the identity
   # domain's, and the announcement carries what the item names.
@@ -763,16 +761,26 @@ defmodule Cyfr.TelemetryBridge do
     end)
   end
 
-  defp deliver(event, {:files, where, read}) do
+  defp deliver(event, {:files, actor, read}) do
     publish(event, fn ->
-      with {:ok, athanor_id} <- where.(),
-           actor = Prima.Actor.in_athanor(athanor_id),
-           {:ok, items} <- read.(actor) do
-        Enum.reduce_while(items, :ok, &list_file(actor, &1, &2))
-      else
-        # No athanor to tell: a recipient this server holds none for.
-        :none -> :ok
-        {:error, reason} -> {:error, reason}
+      with {:ok, items} <- read.(actor),
+           do: Enum.reduce_while(items, :ok, &list_file(actor, &1, &2))
+    end)
+  end
+
+  defp deliver(event, {:offer_wait, read}) do
+    publish(event, fn ->
+      case read.() do
+        {:ok, actor, waits, files} ->
+          with :ok <- Enum.reduce_while(waits, :ok, &tell/2),
+               do: Enum.reduce_while(files, :ok, &list_file(actor, &1, &2))
+
+        # No person to tell: a recipient this server holds no athanor for.
+        :none ->
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end)
   end
