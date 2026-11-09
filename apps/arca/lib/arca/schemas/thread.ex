@@ -21,7 +21,9 @@ defmodule Arca.Schemas.Thread do
   per member per room while it stands; `archived_at` is when a child
   thread was retired, after which it admits nothing and the next request
   to its member opens a new one. `brain_session` is the brain's own
-  opaque session for the thread.
+  opaque session for the thread, and `brain_generation` how many times it
+  was forgotten: a turn keeps a session only under the generation it read
+  (`Arca.TurnStorage`).
   """
 
   use Ecto.Schema
@@ -42,6 +44,7 @@ defmodule Arca.Schemas.Thread do
     field :kind, :string, default: "own"
     field :parent_id, :string
     field :brain_session, :string
+    field :brain_generation, :integer, default: 0
     field :archived_at, :utc_datetime_usec
     field :title, :string, default: "New thread"
     field :created_by, :string

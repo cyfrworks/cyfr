@@ -1445,8 +1445,8 @@ defmodule Arca.TurnStorage do
   rows, every call becomes a `proposed` step, and one event records it.
   `response`: `:text`, `:usage`, `:stop_reason`, `:session` (the
   brain's session, kept on the thread as `brain_session` for its next
-  request, `keep_session!/4`), `:sent_session` (the session the request
-  carried, none when absent), `:tool_calls` — each
+  request) with `:generation` (the thread's `brain_generation` the turn
+  read; required with a session), `:tool_calls` — each
   `%{tool_call_id, name, tool, action, arguments, provider_data, kind,
   recovery, child_execution_id}`; `:fence`. The model step must be a
   `model` step of this turn (`{:error, :step_not_found}` otherwise), and
@@ -1620,9 +1620,8 @@ defmodule Arca.TurnStorage do
   row; omitted for a step that produced none), `:execution_id`, `:error`,
   `:fence`, `:sources`, the `Prima.Source`s the result carries, joined
   into the turn's in the same transaction, and `:session`, the brain's
-  session a model step's refusal named, with `:sent_session`, the one its
-  request carried, kept on the thread as `record_response/4` keeps a
-  response's. `:launched` (`%{reference, reached_outside}`, the
+  session a model step's refusal named, with `:generation`, kept on the
+  thread as `record_response/4` keeps a response's. `:launched` (`%{reference, reached_outside}`, the
   latter from the launch's completion result) names a component the step
   launched: outside, under its reference, unless `reached_outside` is
   `false`. A step closes from `dispatched`, or from
@@ -3245,27 +3244,28 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # The brain's own session, kept on the thread for its next request,
-  # only while the thread still keeps the one the request carried
-  # (`:sent_session`, none when absent): a turn whose session was
-  # forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/2`) does not
-  # bring it back.
+  # The brain's own session, kept on the thread for its next request only
+  # under the generation the turn read (`:generation`): a turn whose
+  # session was forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/2`
+  # raises the generation) keeps nothing it answers with afterwards, the
+  # session it resumed or one it opened in the home the forget emptied. A
+  # session without a generation is refused, as a write without a fence is.
   # arca:db-raise-ok inside the caller's transaction
   defp keep_session!(athanor_id, %Thread{id: thread_id, brain_session: current}, attrs) do
     session = Map.get(attrs, :session)
-    sent = Map.get(attrs, :sent_session)
+    generation = Map.get(attrs, :generation)
+
+    if session != nil and not is_integer(generation),
+      do: Arca.Repo.rollback(:generation_required)
 
     if is_binary(session) and session != "" and session != current do
       # The comparison is the statement's own, so a forget committed after
       # the thread was read still holds.
-      kept =
-        if sent,
-          do: dynamic([c], c.brain_session == ^sent),
-          else: dynamic([c], is_nil(c.brain_session))
-
       {_kept_or_not, _} =
-        from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread_id)
-        |> where(^kept)
+        from(c in Thread,
+          where: c.athanor_id == ^athanor_id and c.id == ^thread_id,
+          where: c.brain_generation == ^generation
+        )
         |> Arca.Repo.update_all(set: [brain_session: session])
     end
 

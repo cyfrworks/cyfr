@@ -783,15 +783,20 @@ defmodule Aqua.Loop do
 
   # A refused model step closes with the brain's session its refusal
   # names, kept on the thread as a response's is (`Prima.Model`), so the
-  # next request continues it, beside the one its request carried
-  # (`state.session`). A session off the contract is not kept, and the
+  # next request continues it, under the thread's generation the turn read
+  # (`generation/1`). A session off the contract is not kept, and the
   # refusal ends the turn as it would.
-  defp refused(%State{session: sent}, error, text) do
+  defp refused(%State{} = state, error, text) do
     case Prima.Model.response_session(error) do
-      {:ok, session} -> %{error: text, session: session, sent_session: sent}
+      {:ok, session} -> %{error: text, session: session, generation: generation(state)}
       {:error, _invalid} -> %{error: text}
     end
   end
+
+  # The thread's session generation as the turn was built: a session the
+  # brain answers with is kept only while the thread is still at it, so a
+  # forget since (a reset program home) keeps it out (`Arca.TurnStorage`).
+  defp generation(%State{spec: %{thread: thread}}), do: thread.brain_generation
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
@@ -923,7 +928,7 @@ defmodule Aqua.Loop do
              usage: usage,
              stop_reason: data["stop_reason"],
              session: session,
-             sent_session: state.session,
+             generation: generation(state),
              tool_calls: tool_calls
            }) do
       state = count_usage(%{state | session: session || state.session}, usage)

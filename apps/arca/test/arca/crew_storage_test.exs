@@ -671,6 +671,7 @@ defmodule Arca.CrewStorageTest do
           usage: %{},
           stop_reason: "end_turn",
           session: "brain-session-1",
+          generation: 0,
           tool_calls: []
         })
 
@@ -695,7 +696,8 @@ defmodule Arca.CrewStorageTest do
         TurnStorage.close_step(actor, step.id, "error", %{
           fence: turn.fence,
           error: "interrupted",
-          session: "brain-session-1"
+          session: "brain-session-1",
+          generation: 0
         })
 
       assert {:ok, %{brain_session: "brain-session-1"}} = Threads.get(actor, room.id)
@@ -712,32 +714,28 @@ defmodule Arca.CrewStorageTest do
 
     # A home reset forgets the session while a turn that resumed it still
     # runs; that turn's late answer, or its refusal, does not bring it back,
-    # and a turn whose request carried what the thread keeps writes as ever.
+    # and a turn begun after the forget keeps its own.
     test "a session forgotten under a running turn is not restored by its late answer", %{
       actor: actor,
       room: room
     } do
-      {:ok, %{turn: turn}} =
-        TurnStorage.accept_message(actor, room.id, %{
-          message: %{author: actor.user_id, sent_by: "person", content: "go"},
-          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
-        })
-
-      turn = start!(actor, turn)
+      turn = running!(actor, room)
       step = model_step!(actor, turn, "model:1")
 
       {1, _} =
         from(t in Arca.Schemas.Thread, where: t.id == ^room.id)
         |> Arca.Repo.update_all(set: [brain_session: "old-session"])
 
+      assert {:ok, %{brain_generation: 0}} = Threads.get(actor, room.id)
       assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
 
       {:ok, _} =
         TurnStorage.record_response(actor, turn.id, step.id, %{
           fence: turn.fence,
           text: "late answer",
           session: "old-session",
-          sent_session: "old-session",
+          generation: 0,
           tool_calls: []
         })
 
@@ -751,37 +749,80 @@ defmodule Arca.CrewStorageTest do
           fence: turn.fence,
           error: "interrupted",
           session: "old-session",
-          sent_session: "old-session"
+          generation: 0
         })
 
       assert {:ok, %{brain_session: nil}} = Threads.get(actor, room.id)
 
-      # A request that carried none, on a thread that keeps none, keeps
-      # the session it opened; the next, which carried it, keeps its own.
-      fresh = model_step!(actor, turn, "model:3")
+      # A turn built after the forget reads the new generation and keeps the
+      # session it opens, then the next it answers with.
+      for {key, session} <- [{"model:3", "new-session"}, {"model:4", "newer-session"}] do
+        fresh = model_step!(actor, turn, key)
 
-      {:ok, _} =
-        TurnStorage.record_response(actor, turn.id, fresh.id, %{
-          fence: turn.fence,
-          text: "new",
-          session: "new-session",
-          tool_calls: []
-        })
+        {:ok, _} =
+          TurnStorage.record_response(actor, turn.id, fresh.id, %{
+            fence: turn.fence,
+            text: "on",
+            session: session,
+            generation: 1,
+            tool_calls: []
+          })
 
-      assert {:ok, %{brain_session: "new-session"}} = Threads.get(actor, room.id)
-      next = model_step!(actor, turn, "model:4")
-
-      {:ok, _} =
-        TurnStorage.record_response(actor, turn.id, next.id, %{
-          fence: turn.fence,
-          text: "on",
-          session: "newer-session",
-          sent_session: "new-session",
-          tool_calls: []
-        })
-
-      assert {:ok, %{brain_session: "newer-session"}} = Threads.get(actor, room.id)
+        assert {:ok, %{brain_session: ^session}} = Threads.get(actor, room.id)
+      end
     end
+
+    # A first request carries no session and opens one in the home; the
+    # home is reset before its answer lands, so what it answers with no
+    # longer exists and is not kept.
+    test "a reset during a turn's first request keeps no session it answers with", %{
+      actor: actor,
+      room: room
+    } do
+      turn = running!(actor, room)
+      step = model_step!(actor, turn, "model:first")
+      assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+
+      {:ok, _} =
+        TurnStorage.record_response(actor, turn.id, step.id, %{
+          fence: turn.fence,
+          text: "late answer",
+          session: "destroyed-first-session",
+          generation: 0,
+          tool_calls: []
+        })
+
+      assert {:ok, %{brain_session: nil}} = Threads.get(actor, room.id)
+    end
+
+    test "a session written without the generation its turn read is refused", %{
+      actor: actor,
+      room: room
+    } do
+      turn = running!(actor, room)
+      step = model_step!(actor, turn, "model:1")
+
+      assert {:error, :generation_required} =
+               TurnStorage.record_response(actor, turn.id, step.id, %{
+                 fence: turn.fence,
+                 text: "hi",
+                 session: "brain-session-1",
+                 tool_calls: []
+               })
+
+      assert {:ok, %{brain_session: nil}} = Threads.get(actor, room.id)
+    end
+  end
+
+  # A turn of the soul's in `room`, started.
+  defp running!(actor, room) do
+    {:ok, %{turn: turn}} =
+      TurnStorage.accept_message(actor, room.id, %{
+        message: %{author: actor.user_id, sent_by: "person", content: "go"},
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+      })
+
+    start!(actor, turn)
   end
 
   describe "child threads" do
@@ -832,9 +873,18 @@ defmodule Arca.CrewStorageTest do
       end
 
       assert {:ok, 1} = Threads.forget_sessions(actor, ["planner"])
-      assert {:ok, %{brain_session: nil}} = Threads.get(actor, planner.id)
-      assert {:ok, %{brain_session: "s-builder"}} = Threads.get(actor, builder.id)
-      assert {:ok, %{brain_session: "s-x"}} = Threads.get(elsewhere, theirs.id)
+      assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, planner.id)
+
+      assert {:ok, %{brain_session: "s-builder", brain_generation: 0}} =
+               Threads.get(actor, builder.id)
+
+      assert {:ok, %{brain_session: "s-x", brain_generation: 0}} =
+               Threads.get(elsewhere, theirs.id)
+
+      # A thread keeping no session moves on too: a turn of it may still
+      # be opening one.
+      assert {:ok, 1} = Threads.forget_sessions(actor, ["planner"])
+      assert {:ok, %{brain_generation: 2}} = Threads.get(actor, planner.id)
       assert {:ok, 0} = Threads.forget_sessions(actor, [])
     end
   end
