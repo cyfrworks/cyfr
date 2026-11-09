@@ -180,11 +180,10 @@ defmodule Prima.Manifest.Tincture do
   # The fields every widget's preferences carry, which its schema does
   # not declare.
   @widget_fixed_fields ~w(on rect)
-  @field_types ~w(boolean integer number string enum)
+  @field_types ~w(boolean integer string enum)
   @field_keys %{
     "boolean" => [],
     "integer" => [],
-    "number" => [],
     "string" => ~w(max),
     "enum" => ~w(values)
   }

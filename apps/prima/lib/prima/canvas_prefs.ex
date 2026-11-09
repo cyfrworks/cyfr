@@ -22,11 +22,10 @@ defmodule Prima.CanvasPrefs do
       declares, each optional; `desktop` names the desktop's declared
       fields, each optional.
     * A field's value is of its declared type: `boolean` true or false;
-      `integer` and `number` a JSON integer of magnitude at most
+      `integer` a JSON integer of magnitude at most
       `Prima.JCS.max_safe_integer/0`; `string` UTF-8 text of at most its
       `max` code points with no control character; `enum` one of its
-      `values`. Canonical JSON (`Prima.JCS`) carries no fraction, so a
-      `number` holds whole values alone.
+      `values`.
 
   `validate/2` holds what a desktop sends, `widgets`, `desktop` or both,
   to the schema. `merge/2` lays it over the stored document: each widget
@@ -220,9 +219,6 @@ defmodule Prima.CanvasPrefs do
 
   defp expected(%{"type" => "integer"}), do: whole_numbers()
 
-  defp expected(%{"type" => "number"}),
-    do: whole_numbers() <> " (the document keeps no fraction)"
-
   defp expected(%{"type" => "string", "max" => max}),
     do: "text of at most #{max} code points with no control character"
 
@@ -235,7 +231,7 @@ defmodule Prima.CanvasPrefs do
 
   # One rule per type, read by `validate/2` and `project/2` alike.
   defp admits?(%{"type" => "boolean"}, value), do: is_boolean(value)
-  defp admits?(%{"type" => type}, value) when type in ["integer", "number"], do: whole?(value)
+  defp admits?(%{"type" => "integer"}, value), do: whole?(value)
 
   defp admits?(%{"type" => "string", "max" => max}, value) do
     is_binary(value) and String.valid?(value) and not Regex.match?(@control, value) and

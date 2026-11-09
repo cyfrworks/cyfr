@@ -998,7 +998,7 @@ defmodule Compendium.Tincture.RulesTest do
       tags = %Prima.Provider.Stream{
         name: "tags.changes",
         topic: :tags,
-        projection: ["tags", "name"],
+        projection: ["tags", "name", "meta"],
         deadline_bound: 600,
         shape:
           (fn ->
@@ -1008,7 +1008,8 @@ defmodule Compendium.Tincture.RulesTest do
                  "fields" => %{
                    "tags" => %{"type" => "list", "of" => %{"type" => "string"}},
                    "counts" => %{"type" => "list", "of" => %{"type" => "integer"}},
-                   "name" => %{"type" => "string"}
+                   "name" => %{"type" => "string"},
+                   "meta" => %{"type" => "json"}
                  }
                })
 
@@ -1047,6 +1048,14 @@ defmodule Compendium.Tincture.RulesTest do
              "#{where}'s field /nothing names no field of the stream's shape"},
             {%{"field" => "/kind/deeper"}, both,
              "#{where}'s field /kind/deeper names no field of the stream's shape"},
+            # A json value declares nothing a pick can offer, at it or beneath
+            # it, on any stream but a feed's results.
+            {%{"stream" => "tags.changes", "field" => "/meta"}, both,
+             "#{where}'s field /meta reaches a json value in the stream's shape, which declares " <>
+               "no string, list of strings or enum: a pick takes one the shape declares"},
+            {%{"stream" => "tags.changes", "field" => "/meta/servers"}, both,
+             "#{where}'s field /meta/servers reaches a json value in the stream's shape, which " <>
+               "declares no string, list of strings or enum: a pick takes one the shape declares"},
             {%{"stream" => "tags.changes", "field" => "/tags"}, %{},
              "#{where} reads tags.changes, which the desktop does not: a pick reads a stream in " <>
                "tincture.desktop.data, or feed.results with a feed in tincture.desktop.feeds"},
@@ -1063,35 +1072,76 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    # Review of A1, finding 2: a json value declares nothing a pick can
-    # offer, at it or beneath it, so the pick is refused at publish.
-    test "json pick targets and their descendants refuse at publish" do
-      for field <- ["/result", "/result/servers", "/result/does/not/exist"] do
-        pick = %{
-          "stream" => "feed.results",
-          "subject" => "vpn",
-          "field" => field,
-          "arg" => "schedule_id"
-        }
-
-        block = %{
+    # A feed's result is the feed's own json value: publish admits a pick
+    # beneath /result/ by its pointer's form, and the press checks the
+    # value against the feed's current result.
+    test "a feed.results pick is admitted beneath /result/ and refused anywhere else" do
+      block = fn field, arg ->
+        %{
           "feeds" => ["vpn"],
-          "controls" => [control("schedule.pause", %{"pick" => pick})]
+          "controls" => [
+            control("schedule.pause", %{
+              "pick" => %{
+                "stream" => "feed.results",
+                "subject" => "vpn",
+                "field" => field,
+                "arg" => arg
+              }
+            })
+          ]
         }
+      end
 
-        assert {:error, {:invalid_tincture, sentence}} = control_check(block["controls"], block)
-        assert sentence =~ "the pick's field #{field} reaches a json value", field
-
+      publish = fn block ->
         manifest = %{
           "type" => "tincture",
           "tincture" => %{"entry" => "index.html", "desktop" => block}
         }
 
-        assert {:error, published} =
-                 Compendium.Tincture.check_version(manifest, [{"index.html", 1}])
-
-        assert published == sentence
+        Compendium.Tincture.check_version(manifest, [{"index.html", 1}])
       end
+
+      for field <- ["/result/servers", "/result/does/not/exist", "/result/", "/result/a~1b"] do
+        block = block.(field, "schedule_id")
+        assert control_check(block["controls"], block) == :ok, field
+        assert publish.(block) == {:ok, 1}, field
+      end
+
+      for field <- [
+            "/result",
+            "/feed",
+            "/label",
+            "/actions",
+            "/actions/0/name",
+            "/resultx/a",
+            "/result~1a"
+          ] do
+        block = block.(field, "schedule_id")
+
+        sentence =
+          "tincture.desktop.controls c1: the pick's field #{field} is outside /result/: a pick " <>
+            "from feed.results reads beneath the feed's result"
+
+        assert control_check(block["controls"], block) == {:error, {:invalid_tincture, sentence}},
+               field
+
+        assert publish.(block) == {:error, sentence}, field
+      end
+
+      # The pick is otherwise held as any other: a pointer by its form, and
+      # an argument the operation takes.
+      for field <- ["", "result/servers"] do
+        assert {:error, sentence} = publish.(block.(field, "schedule_id"))
+        assert sentence =~ "must be an RFC 6901 pointer", inspect(field)
+      end
+
+      block = block.("/result/servers", "server")
+
+      assert control_check(block["controls"], block) ==
+               {:error,
+                {:invalid_tincture,
+                 "tincture.desktop.controls c1: the pick fills server, which schedule.pause takes " <>
+                   "no argument named"}}
     end
 
     test "a feed.press pick fills its pick argument from an enum of a stream the desktop reads" do
@@ -1115,14 +1165,24 @@ defmodule Compendium.Tincture.RulesTest do
       assert {:ok, _size} = Compendium.Tincture.check_version(manifest, [{"index.html", 1}])
     end
 
-    # The plan's example picks from a feed's result, a json value, into
-    # feed.press's pick argument: refused for that reason alone, since
-    # feed.press takes `pick`.
-    test "the plan's vpn example is refused only because its field reaches a json value" do
+    # The plan's desktop block, its two controls among them: the vpn
+    # control picks a server from the feed's result into feed.press's pick
+    # argument.
+    test "the plan's vpn example publishes" do
       block = %{
-        "feeds" => ["vpn"],
+        "data" => ["runs.changes", "schedules.changes", "attention.changes"],
+        "feeds" => ["weather", "vpn"],
         "controls" => [
-          control("feed.press", %{
+          %{
+            "id" => "pause-digest",
+            "label" => "Pause",
+            "operation" => "schedule.pause",
+            "args" => %{"schedule_id" => "sch_1"}
+          },
+          %{
+            "id" => "vpn-connect",
+            "label" => "Connect",
+            "operation" => "feed.press",
             "args" => %{"binding" => "fb_1", "action_name" => "connect"},
             "pick" => %{
               "stream" => "feed.results",
@@ -1130,27 +1190,39 @@ defmodule Compendium.Tincture.RulesTest do
               "field" => "/result/servers",
               "arg" => "pick"
             }
-          })
-        ]
+          }
+        ],
+        "prefs" => %{
+          "widgets" => %{
+            "weather" => %{"fields" => %{"units" => %{"type" => "enum", "values" => ["c", "f"]}}}
+          },
+          "desktop" => %{"fields" => %{"compact" => %{"type" => "boolean"}}}
+        },
+        "chrome" => "chrome.css"
       }
 
-      assert control_check(block["controls"], block) ==
-               {:error,
-                {:invalid_tincture,
-                 "tincture.desktop.controls c1: the pick's field /result/servers reaches a json " <>
-                   "value in the stream's shape, which declares no string, list of strings or enum: a " <>
-                   "pick takes one the shape declares"}}
+      assert control_check(block["controls"], block) == :ok
 
       manifest = %{
         "type" => "tincture",
         "tincture" => %{"entry" => "index.html", "desktop" => block}
       }
 
-      assert {:error, published} =
-               Compendium.Tincture.check_version(manifest, [{"index.html", 1}])
+      chrome = ":root { --chrome-radius: 8px; }"
 
-      assert published =~ "reaches a json value"
-      refute published =~ "fills pick"
+      assert {:ok, _size} =
+               Compendium.Tincture.check_version(manifest, [
+                 {"index.html", 1},
+                 {"chrome.css", byte_size(chrome)}
+               ])
+
+      {:ok, declaration} = Compendium.tincture_declaration(manifest)
+
+      assert {:ok, %{"radius" => 8}} =
+               Compendium.tincture_check_chrome(
+                 declaration,
+                 &Map.fetch(%{"chrome.css" => chrome}, &1)
+               )
     end
   end
 
