@@ -710,6 +710,16 @@ function lampRuns() {
   }
   return out;
 }
+// Things that would stand on each other: the latest keeps its place and each earlier one steps back
+// (toward the earlier hours) until it stands clear, never past the left arch.
+function spread(list, gap) {
+  const floor = L.vx0 + L.depotW + 4;
+  list.sort((a, b) => b.x - a.x);
+  for (let i = 1; i < list.length; i++) {
+    const room = (gap(list[i]) + gap(list[i - 1])) / 2;
+    if (list[i - 1].x - list[i].x < room) list[i].x = Math.max(floor, list[i - 1].x - room);
+  }
+}
 const looksFor = (id) => LOOKS[[...id].reduce((h, c) => h + c.charCodeAt(0), 0) % LOOKS.length];
 
 function rebuild() {
@@ -751,9 +761,13 @@ function rebuild() {
     for (const { item: a } of D.attention.values()) {
       const t = mins(a.since);
       const at = t == null ? n : t;
-      add({ id: 'ask-' + a.id, kind: 'ask', part: 'waiting', t: at, x: X(at) + (a.kind === 'failed_run' || a.kind === 'failed_schedule' ? 4 : -4), a, look: looksFor(a.id) });
+      // The tram's body covers the last minutes of the street: what waits from then queues behind its tail.
+      const x = Math.min(L.nowX - 38, X(at) + (a.kind === 'failed_run' || a.kind === 'failed_schedule' ? 4 : -4));
+      add({ id: 'ask-' + a.id, kind: 'ask', part: 'waiting', t: at, x, a, look: looksFor(a.id) });
     }
   }
+  spread(ents.filter((e) => e.kind === 'thread'), (e) => e.w + 1);
+  spread(ents.filter((e) => e.kind === 'ask'), () => 8);
   for (const [id, lv] of leaving) if (!ents.some((e) => e.id === id)) ents.push(lv.ent);
   if (on('crew')) {
     let i = 0;
@@ -991,16 +1005,25 @@ function placePlates() {
   const bands = {};
   labels.querySelectorAll('.plate[data-band]').forEach((p) => { (bands[p.dataset.band] = bands[p.dataset.band] || []).push(p); });
   const blind = $('#blind');
-  for (const [band, plates] of Object.entries(bands)) {
+  const houses = [];
+  const ORDER = ['hill', 'house', 'street'];
+  for (const [band, plates] of Object.entries(bands).sort((a, b) => ORDER.indexOf(a[0]) - ORDER.indexOf(b[0]))) {
     const lanes = [[], [], []];
     if (band === 'street' && blind) { const r = blind.getBoundingClientRect(); lanes[0].push([r.left - box.left - 4, r.right - box.left + 4]); }
+    if (band === 'street') {
+      const base = (L.paveY - 7) * L.scale;
+      lanes.forEach((ivs, lane) => {
+        const bottom = base - lane * 40, top = bottom - 36;
+        for (const r of houses) if (r.bottom - box.top > top && r.top - box.top < bottom) ivs.push([r.left - box.left - 2, r.right - box.left + 2]);
+      });
+    }
     if (band === 'street') labels.querySelectorAll('.nightlist').forEach((n) => { const r = n.getBoundingClientRect(); for (const ln of lanes) ln.push([r.left - box.left, r.right - box.left]); });
     const items = plates.map((p) => {
       const hit = p.parentElement.getBoundingClientRect();
       return { p, hit, ax: hit.left - box.left + hit.width / 2, w: p.offsetWidth };
     }).sort((a, b) => a.ax - b.ax);
     const laneH = band === 'hill' ? 38 : 40;
-    const maxShift = band === 'hill' ? 40 : 90;
+    const maxShift = band === 'hill' ? 40 : band === 'street' ? 150 : 90;
     for (const it of items) {
       let want = it.ax - it.w / 2;
       want = Math.max(6, Math.min(L.W - 6 - it.w, want));
@@ -1012,10 +1035,11 @@ function placePlates() {
         const ok = cands.find((c) => Math.abs(c - want) <= maxShift && ivs.every((v) => c + it.w + 6 <= v[0] || c >= v[1] + 6));
         if (ok != null) { placed = { lane, x: ok }; ivs.push([ok, ok + it.w]); }
       }
-      if (!placed) placed = { lane: 2, x: want };
+      // A plate with no room in any lane is not drawn over another: its thing stays tappable, and the board lists it.
+      if (!placed) { it.p.hidden = true; continue; }
       it.p.style.left = (placed.x - (it.hit.left - box.left)) + 'px';
       it.p.style.transform = 'none';
-      if (band === 'house') it.p.style.top = (14 + placed.lane * 36) + 'px';
+      if (band === 'house') { it.p.style.top = (14 + placed.lane * 36) + 'px'; houses.push(it.p.getBoundingClientRect()); }
       else if (band === 'street') { // one baseline for the whole street, just over the heads
         const base = (L.paveY - 7) * L.scale - placed.lane * laneH;
         it.p.style.bottom = 'auto'; it.p.style.top = (base - it.p.offsetHeight - (it.hit.top - box.top)) + 'px';
