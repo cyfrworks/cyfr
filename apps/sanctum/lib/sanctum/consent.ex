@@ -265,6 +265,31 @@ defmodule Sanctum.Consent do
     do: Sanctum.Consent.Loader.row_binding(ctx, consent, ref)
 
   @doc """
+  The context's own person's confirmations of sensitive changes still
+  open in its athanor, oldest first, each as its public `ref`
+  (`Prima.Confirmation.ref/1`), the operation it confirms and when it
+  opened (`opened_at`), and nothing of the change: no secret, argument,
+  preview or asker, which a client of theirs reads through
+  `confirmation.pending` under its own session.
+
+  `{:error, :unavailable}` is a store that could not answer;
+  `{:error, :no_athanor}` is a context with no tenant or no person.
+  """
+  @spec waiting_confirmations(Sanctum.Context.t()) ::
+          {:ok, [%{ref: String.t(), operation: String.t(), opened_at: DateTime.t()}]}
+          | {:error, :unavailable | :no_athanor}
+  def waiting_confirmations(%Sanctum.Context{user_id: user_id} = ctx)
+      when is_binary(user_id) and user_id != "" do
+    case Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), user_id) do
+      {:ok, rows} -> {:ok, Enum.map(rows, &Map.take(&1, [:ref, :operation, :opened_at]))}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  def waiting_confirmations(%Sanctum.Context{}), do: {:error, :no_athanor}
+
+  @doc """
   Revoke every profile of a name-level `source_ref` in the caller's
   athanor, in one transaction — what removing the last version of a
   component does to the grants made for it. Consent history and vault

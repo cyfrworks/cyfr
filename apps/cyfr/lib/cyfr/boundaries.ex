@@ -2070,13 +2070,16 @@ defmodule Cyfr.Boundaries do
     # the grant held to that version by the decision a run is held to.
     # A component's setup plan reads whether each binding its grant carries
     # is still live, as a run's attach reads its lifetime, without using it.
+    # A person's attention stream lists their open confirmations by ref,
+    # operation and opening alone.
     "Sanctum.Consent" => [
       binding_live: 4,
       head_consent: 2,
       profiles: 2,
       revoke_source: 2,
       row_binding: 3,
-      tincture_grant: 2
+      tincture_grant: 2,
+      waiting_confirmations: 1
     ],
     # The assistant reads which named accounts an app's own ingress binds
     # and which entry a name resolves to, never a value, never a write.

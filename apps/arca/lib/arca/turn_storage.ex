@@ -2464,6 +2464,42 @@ defmodule Arca.TurnStorage do
 
   def expired_approvals(%Prima.Actor{}, _now), do: {:error, :no_athanor}
 
+  @doc """
+  The athanor's approvals still waiting on a decision at `now`, oldest
+  first: pending and not past an expiry, each as its id, the thread it
+  waits in, that thread's title and when it opened, and nothing of the
+  proposal. `approval_id:` narrows it to that one approval.
+  """
+  @spec waiting_approvals(Prima.Actor.t(), DateTime.t(), keyword()) ::
+          {:ok, [map()]} | {:error, term()}
+  def waiting_approvals(actor, now, opts \\ [])
+
+  def waiting_approvals(%Prima.Actor{athanor_id: athanor_id}, %DateTime{} = now, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.waiting_approvals", fn ->
+      query =
+        from(a in Approval,
+          join: t in Thread,
+          on: t.athanor_id == a.athanor_id and t.id == a.thread_id,
+          where: a.athanor_id == ^athanor_id and a.status == "pending",
+          where: is_nil(a.expires_at) or a.expires_at > ^now,
+          order_by: [asc: a.inserted_at, asc: a.id],
+          select: %{id: a.id, thread_id: a.thread_id, title: t.title, inserted_at: a.inserted_at}
+        )
+
+      query =
+        case Keyword.fetch(opts, :approval_id) do
+          {:ok, id} when is_binary(id) -> where(query, [a], a.id == ^id)
+          :error -> query
+        end
+
+      {:ok, Arca.Repo.all(query)}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def waiting_approvals(%Prima.Actor{}, _now, _opts), do: {:error, :no_athanor}
+
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------

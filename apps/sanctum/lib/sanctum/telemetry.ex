@@ -267,19 +267,22 @@ defmodule Sanctum.Telemetry do
   `ref` (`Prima.Confirmation.ref/1`) of `user_id` in `athanor_id`, for the
   operation it confirms (`tool.action`), was opened, confirmed, consumed,
   cancelled, voided or expired. Emits `[:cyfr, :sanctum, :confirmation,
-  kind]` with the athanor, the person, the ref, the operation and the
-  expiry, and nothing else: never the secret the asking request holds,
+  kind]` with the athanor, the person, the ref, the operation, the time
+  it opened and the expiry, and nothing else: never the secret the asking
+  request holds,
   the change's arguments or its preview, which a client reads under its
   own session. The host's bridge carries it to the person's own clients.
   """
   @spec confirmation(confirmation_kind(), String.t(), String.t(), %{
           ref: String.t(),
           operation: String.t(),
+          opened_at: DateTime.t(),
           expires_at: DateTime.t()
         }) :: :ok
   def confirmation(kind, athanor_id, user_id, %{
         ref: ref,
         operation: operation,
+        opened_at: %DateTime{} = opened_at,
         expires_at: %DateTime{} = expires_at
       })
       when is_map_key(@confirmation_events, kind) and is_binary(athanor_id) and
@@ -289,6 +292,7 @@ defmodule Sanctum.Telemetry do
       user_id: user_id,
       ref: ref,
       operation: operation,
+      opened_at: opened_at,
       expires_at: expires_at
     })
   end
