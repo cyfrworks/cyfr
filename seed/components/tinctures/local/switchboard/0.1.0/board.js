@@ -81,9 +81,12 @@
 
   const widgets = () => (isItem(state.prefs.document) && isItem(state.prefs.document.widgets) ? state.prefs.document.widgets : {});
   const entry = (id) => (isItem(widgets()[id]) ? widgets()[id] : {});
-  const isOn = (id) => entry(id).on !== false;
+  const isOn = (id) => window.SB.partOn(id);
   const orderOf = (id) => (Number.isInteger(entry(id).order) ? entry(id).order : ORDER[id]);
   const celsius = () => entry('weather').units !== 'f';
+  // A part that is on but whose stream found no room among the five.
+  const NO_LINE = 'No line free · pull a part to read this';
+  const unread = (key) => !window.SB.reading(key);
 
   let sdk = null;
   let root = null;
@@ -337,10 +340,10 @@
   }
   function renderWeather() {
     const f = state.feeds.weather;
-    const refusal = state.refusals['feed:weather'];
+    const refusal = state.refusals['feed:weather'] || (unread('feed:weather') ? NO_LINE : null);
     const r = f && f.result;
     $('.weather h2').textContent = (f && text(f.label)) || PARTS.weather.title;
-    $('.weather .mod-sub').textContent = f && parse(f.at) ? rel(f.at) : state.readAt['feed:weather'] ? `as of ${hm(state.readAt['feed:weather'])}` : '';
+    $('.weather .mod-sub').textContent = f && parse(f.at) ? rel(f.at) : '';
     const now = $('.wx-now'), hours = $('.wx-hours'), trunks = $('.trunk-row'), keys = $('.wx-keys');
     if (!f) {
       now.innerHTML = '<b class="wx-t wx-none">- -</b><span class="wx-line">no signal</span>';
@@ -463,30 +466,26 @@
   /* ---------- vault and crew: annunciator windows ---------- */
   function renderVault() {
     const list = window.SB.vault().sort((a, b) => text(a.name).localeCompare(text(b.name)));
-    const refusal = state.refusals['vault.changes'];
-    const at = state.readAt['vault.changes'];
-    $('.vault .mod-sub').textContent = refusal || (at ? hm(at) : '');
-    $('.vault .mod-sub').title = at ? `As of ${hm(at)}` : '';
+    const refusal = state.refusals['vault.changes'] || (unread('vault.changes') ? NO_LINE : null);
+    $('.vault .mod-sub').textContent = refusal || (list.length ? String(list.length) : '');
     $('.vault-annun').innerHTML = list.map((v) => {
       const fine = v.status === 'fine';
       const say = fine ? 'Fine' : 'Re-authorise';
       return `<button class="win" data-lamp="${fine ? 'green' : 'red'}" data-vault aria-label="${esc(v.name)}: ${say}. Open the vault"><span class="win-n">${esc(v.name)}</span><span class="win-s">${say}</span></button>`;
-    }).join('') || (refusal ? '' : '<p class="job-none">Nothing stored yet</p>');
+    }).join('') || `<p class="job-none">${esc(refusal || 'Nothing stored yet')}</p>`;
   }
   function renderCrew() {
     const jobs = window.SB.activity().sort((a, b) => text(a.since).localeCompare(text(b.since)));
-    const at = state.readAt['activity.changes'];
-    $('.crew .mod-sub').textContent = state.refusals['activity.changes'] || (jobs.length ? `${jobs.length} at work` : at ? hm(at) : '');
-    $('.crew .mod-sub').title = at ? `As of ${hm(at)}` : '';
+    $('.crew .mod-sub').textContent = state.refusals['activity.changes'] || (unread('activity.changes') ? NO_LINE : jobs.length ? `${jobs.length} at work` : '');
     $('.jobs').innerHTML = jobs.slice(0, 3).map((j) => `<div class="job" data-lamp="white"><span class="lamp"></span><span class="job-who">${esc(text(j.member))}</span><span class="job-since">for ${esc(text(j.asked_by))} · ${esc(rel(j.since))}</span><span class="job-t">${esc(text(j.status).replace(/_/g, ' '))}</span></div>`).join('')
-      || '<p class="job-none">No crew job running</p>';
+      || `<p class="job-none">${unread('activity.changes') ? NO_LINE : 'No crew job running'}</p>`;
   }
 
   /* ---------- the rack: parts on and off, and their order ---------- */
   // Each write names whole widget entries: the fields the board keeps.
   function entryWith(id, change) {
     const e = entry(id);
-    const out = { on: e.on !== false, order: orderOf(id) };
+    const out = { on: isOn(id), order: orderOf(id) };
     if (isItem(e.rect)) out.rect = e.rect;
     if (id === 'weather' && (e.units === 'c' || e.units === 'f')) out.units = e.units;
     return { ...out, ...change };
@@ -549,6 +548,9 @@
     const fit = t.closest('[data-fit]');
     if (fit) {
       const id = fit.dataset.fit;
+      // The page reads at most five streams at once: a part that would need
+      // a sixth waits until another is pulled.
+      if (window.SB.tooMany(id)) { tell(`${PARTS[id].title} needs a line the board has not got · pull a part first`, 6000); return; }
       const last = zoneIds(PARTS[id].zone).reduce((m, k) => Math.max(m, orderOf(k)), -1);
       save({ [id]: entryWith(id, { on: true, order: last + 1 }) }, `${PARTS[id].title} fitted`);
       return;
@@ -571,7 +573,6 @@
       const f = state.feeds.weather;
       wxWaiting = f.revision;
       sdk.press(f.binding, feedKey.dataset.feedkey);
-      window.SB.readSoon('feed:weather');
       tell(`${feedKey.textContent} pressed`);
       renderWeather();
       return;
