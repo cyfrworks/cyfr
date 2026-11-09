@@ -1,0 +1,57 @@
+{
+  "name": "street",
+  "type": "tincture",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "Your day as one pixel tram street: each thing stands at its hour and the tram's nose is now. What waits on you stands on the pavement and boards the tram once it is settled; your threads are houses, your runs lamp posts, your schedules tram stops you pause or resume with a tap, and the crew walks ahead of the tram. Drag the street to see what stood at an hour; the hill holds your apps; switch a part off or reorder the hill and it stays that way.",
+  "tags": ["canvas", "desktop"],
+  "category": "utility",
+  "tincture": {
+    "icon": "tram-front",
+    "tagline": "Your day as a tram street, now at the tram",
+    "entry": "index.html",
+    "desktop": {
+      "data": [
+        "attention.changes",
+        "threads.changes",
+        "runs.changes",
+        "schedules.changes",
+        "schedule_runs.changes",
+        "activity.changes"
+      ],
+      "controls": [
+        {
+          "id": "pause-schedule",
+          "label": "Pause",
+          "operation": "schedule.pause",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {
+          "id": "resume-schedule",
+          "label": "Resume",
+          "operation": "schedule.resume",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        }
+      ],
+      "prefs": {
+        "widgets": {
+          "sky": {},
+          "waiting": {},
+          "houses": {},
+          "lamps": {},
+          "stops": {},
+          "crew": {},
+          "apps": {},
+          "vault": {},
+          "castle": {}
+        },
+        "desktop": {
+          "fields": {
+            "hill": {"type": "string", "max": 256}
+          }
+        }
+      },
+      "chrome": "chrome.css"
+    }
+  }
+}
