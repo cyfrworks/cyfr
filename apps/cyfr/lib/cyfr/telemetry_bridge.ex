@@ -16,7 +16,9 @@ defmodule Cyfr.TelemetryBridge do
 
   Each event maps to one payload constructor, which takes only the
   metadata fields it names: telemetry metadata is whatever its emitter
-  attached, and the console is a trust boundary. A reason or an error is
+  attached, and the console is a trust boundary. A shared thread's change
+  alone reads beside its metadata: what each person it names now lists
+  of the thread (`Sanctum.SharedThreads.listings/2`). A reason or an error is
   classified here (`Sanctum.Refusals.classify/1`, which knows the identity
   domain's vocabulary the bus may not name) and carried as its class and
   public sentence, never an arbitrary term. A tenant
@@ -53,6 +55,7 @@ defmodule Cyfr.TelemetryBridge do
     Session,
     ShareChanged,
     SharedThreadChanged,
+    ThreadListed,
     Tinctures,
     VaultEntryChanged,
     Webhooks
@@ -268,15 +271,29 @@ defmodule Cyfr.TelemetryBridge do
        do: [{:global, Bus.frame_credentials(user_id), FrameCredential.new(change, user_id, id)}]
 
   # A shared thread's change, on the own topic of each person it names:
-  # its people, and anyone the change took from it.
+  # its people, and anyone the change took from it. And on each one's list
+  # of threads in their own athanor, the thread as it reads now or its
+  # removal (`Sanctum.SharedThreads.listings/2`): the one announcement here
+  # that reads, since a shared thread is no athanor's and its event names
+  # only who to tell.
   defp messages([:cyfr, :sanctum, :shared_thread, kind], _measurements, %{
          thread_id: thread_id,
          user_ids: user_ids
        })
        when is_binary(thread_id) and is_list(user_ids) do
-    for user_id <- user_ids, is_binary(user_id) and user_id != "" do
-      {:global, Bus.shared_threads(user_id), SharedThreadChanged.new(kind, user_id, thread_id)}
-    end
+    user_ids = for user_id <- user_ids, is_binary(user_id) and user_id != "", do: user_id
+
+    changed =
+      for user_id <- user_ids,
+          do:
+            {:global, Bus.shared_threads(user_id),
+             SharedThreadChanged.new(kind, user_id, thread_id)}
+
+    changed ++
+      for {user_id, athanor_id, listing} <- listings(thread_id, user_ids) do
+        actor = Prima.Actor.in_athanor(athanor_id)
+        {:tenant, actor, Bus.threads(actor, user_id), &listed(&1, thread_id, listing)}
+      end
   end
 
   # Two topics, one announcement: the athanor's own, and the deliberately
@@ -380,6 +397,24 @@ defmodule Cyfr.TelemetryBridge do
 
     %{ref: ref, type: type, name: meta[:name], version: meta[:version]}
   end
+
+  # What each person lists of a shared thread now. A read that fails costs
+  # the lists their update and never the change's own messages before it.
+  defp listings(thread_id, user_ids) do
+    Sanctum.SharedThreads.listings(thread_id, user_ids)
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[Cyfr.TelemetryBridge] the lists of threads of shared thread #{thread_id} not told: " <>
+          Prima.LogFilter.format_exception(kind, reason)
+      )
+
+      []
+  end
+
+  # A shared thread on one person's list, or its leaving it.
+  defp listed(actor, thread_id, :removed), do: ThreadListed.new(actor, :removed, id: thread_id)
+  defp listed(actor, _thread_id, listing), do: ThreadListed.new(actor, :shared, listing)
 
   # Who a file offer's message is for: a receipt, failed or landed, is its
   # recipient's; every other transition is both people's.

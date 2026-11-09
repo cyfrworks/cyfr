@@ -36,8 +36,11 @@ streams.
 ### Steps
 
 1. `canvas(action: "catalog")` — each stream a canvas may read, with its
-   shape: `runs.changes`, `schedules.changes`, `schedule_runs.changes`
-   and `feed.results`. `feed(action: "list")` — the feeds the person
+   shape: `runs.changes`, `schedules.changes`, `schedule_runs.changes`,
+   `threads.changes` (the person's own list of threads, whose subject is
+   theirs and supplied for them), `activity.changes` (the crew's jobs
+   beginning and ending) and `feed.results`. `feed(action: "list")` — the
+   feeds the person
    bound, with their result shapes and actions.
 2. Write the page's files, as the page and the SDK below say.
 3. `canvas(action: "write", name: "...", template: "vanilla", files: {...}, streams: [...])` —

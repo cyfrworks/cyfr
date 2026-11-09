@@ -386,8 +386,9 @@ defmodule Cyfr.Boundaries do
           "declares the assistant's virtual tools, which its hands, kinds and policy read. " <>
           "`Sanctum.SharedThreads` is the one place the person's own assistant meets a " <>
           "shared thread, under the person's own seat: the excerpt a turn reads of the " <>
-          "thread open beside it (`Aqua.RoomExcerpt`) and a line said aloud into one " <>
-          "(`Aqua.Aloud`). " <>
+          "thread open beside it (`Aqua.RoomExcerpt`), a line said aloud into one " <>
+          "(`Aqua.Aloud`), and the shared threads on the person's list of threads " <>
+          "(`Aqua.ThreadList`). " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -459,8 +460,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
         Sanctum.Mount
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
-        Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.Vault
-        Sanctum.VaultReader
+        Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
+        Sanctum.TinctureAccess Sanctum.Vault Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -488,7 +489,10 @@ defmodule Cyfr.Boundaries do
           "installs. `Sanctum.Gate` is the gate's admission entries: the admission roster " <>
           "names its heads, execution's in-chain calls pass it, and the root starts its " <>
           "supervisor. `Sanctum.Refusals` classifies and renders a refusal for execution " <>
-          "and for the bridge's announcements. " <>
+          "and for the bridge's announcements. `Sanctum.SharedThreads` is the bridge's " <>
+          "one read beside an event's metadata: what each person a shared thread's " <>
+          "change names now lists of it (`listings/2`), since the thread is no " <>
+          "athanor's and its event names only who to tell. " <>
           "`Sanctum.Provisioning` is the run gate's readiness question: `Opus.run_root/5` " <>
           "asks whether the athanor is filled before it admits a run, as a turn does, " <>
           "and the fill is asked for when it is not. The settings roster reads the " <>
@@ -2207,6 +2211,8 @@ defmodule Cyfr.Boundaries do
       attachment: 4,
       get: 2,
       limits: 0,
+      listed: 1,
+      listings: 2,
       people_in_threads_with: 1,
       post: 5,
       tail: 3
@@ -2236,6 +2242,7 @@ defmodule Cyfr.Boundaries do
       list_by_id: 1,
       own_athanor?: 2,
       prefs: 1,
+      public_name: 1,
       put_prefs: 2
     ],
     "Sanctum.TinctureAccess" => [get_private: 3, get_public: 3, public_context: 1],
