@@ -1555,6 +1555,7 @@ defmodule Arca.ExecutionAttempts do
 
   defp answered(_effect, {:ok, {true, {:confirmed, :ok} = written}}, holder, {:ok, mark}) do
     Arca.Usage.account(holder.actor, mark.segments, :settled, :ok)
+    Arca.ObjectRevisions.announce(holder.actor, mark.segments)
     written
   end
 

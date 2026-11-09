@@ -55,7 +55,10 @@ streams.
    person, likewise theirs), `activity.changes` (the crew's jobs beginning
    and ending), `components.changes` (the installed components),
    `vault.changes` (the vault's entries by name and standing, never a
-   value) and `feed.results`. `feed(action: "list")` — the feeds the
+   value), `files.changes` (the person's recent files and the offers
+   waiting for them, never a file's contents), `system.changes` (how
+   the CYFR stands: health, storage, model, crew and update) and
+   `feed.results`. `feed(action: "list")` — the feeds the
    person bound, with their result shapes and actions.
 2. Write the page's files, as the page and the SDK below say.
 3. `canvas(action: "write", name: "...", template: "vanilla", files: {...}, data: [...], feeds: [...], controls: [...], prefs: {...}, chrome: "...")` —

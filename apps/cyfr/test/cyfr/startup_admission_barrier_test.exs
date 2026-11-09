@@ -106,7 +106,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
        Aqua.ScheduleNotes,
        Aqua.Crew,
        {Aqua.WorkerTree, [Aqua.Loop.Worker, Aqua.TaskSupervisor]},
-       {Aqua.RunnerTree, [Aqua.RunnerRegistry, Aqua.RunnerSupervisor, Aqua.RunnerRecovery]}
+       {Aqua.RunnerTree, [Aqua.RunnerRegistry, Aqua.RunnerSupervisor, Aqua.RunnerRecovery]},
+       Aqua.Status
      ]},
     {Emissary.Supervisor,
      [
@@ -122,6 +123,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Opus.Schedules.Scheduler,
     Prism.TinctureRegistry,
     Prism.TaskSupervisor,
+    Cyfr.ReleaseChannel,
     Cyfr.SeedOffer
   ]
 
@@ -152,6 +154,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     CyfrWeb.Endpoint,
     Emissary.Web.TaskSupervisor,
     Cyfr.SeedOffer,
+    Cyfr.ReleaseChannel,
     Prism.TaskSupervisor,
     Prism.TinctureRegistry,
     Opus.Schedules.Scheduler,
@@ -160,6 +163,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Emissary.External.Reconciler,
     Emissary.External.ServerSupervisor,
     Emissary.External.ServerRegistry,
+    Aqua.Status,
     Aqua.RunnerSupervisor,
     Aqua.RunnerRegistry,
     Aqua.TaskSupervisor,

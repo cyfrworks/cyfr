@@ -1232,7 +1232,7 @@ Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive pro
 
 `cyfr` sends the credential `--token` names, else `CYFR_TOKEN`'s, else the session of the shell `cyfr login` started for that CYFR's address, which lives in that shell alone. A CI job or container passes one directly: `--token <cyfr_...>` on any command, or `CYFR_TOKEN` in the environment — a `cyfr_` API key minted with `cyfr key create`, or a session token. `~/.cyfr/config.json` keeps each context's address and the client id and certificate a CYFR gave this command line, never a session or any other credential.
 
-CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (no prompts), `CYFR_NO_UPDATE_CHECK=1` (no release check — air-gapped installs).
+CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (no prompts), `CYFR_NO_UPDATE_CHECK=1` (no release check — air-gapped installs; set in the CYFR's `.env`, the server makes none either).
 
 ## Glossary
 

@@ -167,9 +167,11 @@ defmodule Compendium.Providers.CanvasTest do
                    {"attention.changes", person, nil},
                    {"components.changes", nil, nil},
                    {"feed.results", feed, "feed"},
+                   {"files.changes", nil, nil},
                    {"runs.changes", nil, nil},
                    {"schedule_runs.changes", nil, nil},
                    {"schedules.changes", nil, nil},
+                   {"system.changes", nil, nil},
                    {"threads.changes", person, nil},
                    {"vault.changes", nil, nil}
                  ],

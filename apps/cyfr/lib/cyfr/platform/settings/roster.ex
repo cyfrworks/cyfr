@@ -292,7 +292,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   # this row to.
   @foreign [
     {"CYFR_TOKEN", "the Codex CLI: the session token its non-interactive path signs in with"},
-    {"CYFR_NO_UPDATE_CHECK", "the Codex CLI: turns off its release check"},
+    {"CYFR_NO_UPDATE_CHECK",
+     "the Codex CLI and the server: any value turns off both release checks, the terminal's and the one the server makes for a desktop's update notice"},
     {"CYFR_NO_INTERACTIVE", "the Codex CLI: turns off its prompts, as `--no-interactive` does"},
     {"CYFR_INSECURE_SKIP_VERIFY",
      "the installer (scripts/install.sh): skips verifying the download's checksum and signature"},

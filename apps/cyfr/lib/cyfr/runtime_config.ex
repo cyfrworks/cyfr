@@ -45,6 +45,16 @@ defmodule Cyfr.RuntimeConfig do
   @max_storage_reserve_bytes 1024 * 1024 * 1024 * 1024
 
   @doc """
+  Whether the server reads the release channel (`Cyfr.ReleaseChannel`):
+  false once `CYFR_NO_UPDATE_CHECK` holds any value, the rule the
+  terminal's own check applies (`apps/codex/cmd/version_check.go`), so
+  one name turns the release check off for both.
+  """
+  @spec release_check?(getenv) :: boolean()
+  def release_check?(getenv) when is_function(getenv, 1),
+    do: getenv.("CYFR_NO_UPDATE_CHECK") in [nil, ""]
+
+  @doc """
   Resolve the OpenID Connect issuer's three settings: `{:ok, nil}` when
   none is set, `{:ok, %{issuer:, client_id:, client_secret:}}` when all
   three are, and an error naming the missing ones for a partly set issuer.

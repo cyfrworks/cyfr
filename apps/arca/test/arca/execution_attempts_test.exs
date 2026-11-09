@@ -505,6 +505,30 @@ defmodule Arca.ExecutionAttemptsTest do
       refute File.exists?(Arca.Adapters.Local.build_path(actor, path))
     end
 
+    test "announces its path once its settlement commits, and nothing when it does not confirm",
+         %{actor: actor} do
+      w = writer!(actor)
+      id = {Arca.Test.Announced, make_ref()}
+      on_exit(fn -> :telemetry.detach(id) end)
+      :ok = Arca.Test.Announced.attach(id, actor)
+
+      # The store inside the hold announces nothing; the settlement does.
+      assert {:ok, {:confirmed, :ok}} =
+               held(w, put(["data", "n.txt"], "new", fn _mark -> send(self(), :stored) end))
+
+      assert_received :stored
+      assert_received {:announced, "data/n.txt", false, true}
+      refute_received {:announced, _path, _in_transaction, _settled}
+
+      :ok = Arca.put(actor, ["data", "u.txt"], "before", sources: [])
+      assert_received {:announced, "data/u.txt", false, true}
+
+      assert {:ok, {:uncertain, :hold_lost}} =
+               held(w, put(["data", "u.txt"], "after", fn _mark -> cancel!(w) end))
+
+      refute_received {:announced, _path, _in_transaction, _settled}
+    end
+
     test "whose hold ends while the store is in flight is uncertain, and its generation is never read",
          %{actor: actor} do
       w = writer!(actor)

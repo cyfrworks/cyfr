@@ -185,6 +185,14 @@ config :cyfr, schedule_notes_enabled: false
 # the same reason runs only where a test drains it by hand.
 config :cyfr, crew_delivery_enabled: false
 
+# The status watch reads the athanors it keeps on a timer, so it too runs
+# only where a test starts one.
+config :cyfr, status_watch_enabled: false
+
+# Nothing in the suite reaches GitHub: the release channel never reads, and
+# its own tests start one with a read of their own.
+config :cyfr, release_channel_enabled: false
+
 # The projection reconciler starts and attaches nothing: its recovery and
 # its notifications would reconcile from its own process, on a sandbox
 # connection no test owns. Every read's barrier reconciles in the reader,

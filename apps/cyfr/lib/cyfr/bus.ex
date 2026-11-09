@@ -56,6 +56,7 @@ defmodule Cyfr.Bus do
     ExecutionEvent,
     FeedPublished,
     FeedRun,
+    FileListed,
     FileOffer,
     FrameCredential,
     LayoutPublished,
@@ -73,6 +74,7 @@ defmodule Cyfr.Bus do
     SettingsChanged,
     ShareChanged,
     SharedThreadChanged,
+    SystemStatus,
     ThreadEvent,
     ThreadListed,
     Tinctures,
@@ -127,6 +129,7 @@ defmodule Cyfr.Bus do
         "PrismWeb.ComponentDetailLive",
         "PrismWeb.RegistryLive",
         "PrismWeb.SchedulesLive",
+        "Aqua.Status",
         "stream:components.changes"
       ],
       reason:
@@ -257,7 +260,7 @@ defmodule Cyfr.Bus do
       match: {:exact, "bus:vault_entries"},
       template: "tenant:<athanor_id>:bus:vault_entries",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["stream:vault.changes"],
+      consumers: ["Aqua.Status", "stream:vault.changes"],
       reason:
         "a vault entry of the athanor as a committed write left it, for its canvases: its " <>
           "name, credential kind and standing, never material, fields or a last use"
@@ -273,6 +276,30 @@ defmodule Cyfr.Bus do
       reason:
         "a crew member's job began or ended in the athanor, for its canvases; never the " <>
           "task's text"
+    },
+    %{
+      key: :files,
+      scope: :tenant,
+      struct: FileListed,
+      match: {:exact, "bus:files"},
+      template: "tenant:<athanor_id>:bus:files",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["stream:files.changes"],
+      reason:
+        "a file under the athanor's data/ as a committed write or delete left it, and an " <>
+          "offer waiting for its person, for its canvases; never a file's contents"
+    },
+    %{
+      key: :system,
+      scope: :tenant,
+      struct: SystemStatus,
+      match: {:exact, "bus:system"},
+      template: "tenant:<athanor_id>:bus:system",
+      producers: ["Aqua.Status"],
+      consumers: ["stream:system.changes"],
+      reason:
+        "how the athanor's CYFR stands, its health, storage, brains and release, for its " <>
+          "canvases, told when a fact of it moves"
     },
     %{
       key: :notify,
@@ -729,6 +756,14 @@ defmodule Cyfr.Bus do
   @doc "The athanor's crew jobs beginning and ending (`Cyfr.Bus.CrewActivity`)."
   @spec crew_activity(Actor.t()) :: String.t()
   def crew_activity(actor), do: prefix(actor) <> "bus:crew_activity"
+
+  @doc "The athanor's recent files and waiting offers (`Cyfr.Bus.FileListed`)."
+  @spec files(Actor.t()) :: String.t()
+  def files(actor), do: prefix(actor) <> "bus:files"
+
+  @doc "How the athanor's CYFR stands (`Cyfr.Bus.SystemStatus`)."
+  @spec system(Actor.t()) :: String.t()
+  def system(actor), do: prefix(actor) <> "bus:system"
 
   @doc "The athanor's tray fan-in (`Cyfr.Bus.Notify`)."
   @spec notify(Actor.t()) :: String.t()

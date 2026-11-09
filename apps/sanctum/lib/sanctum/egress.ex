@@ -11,7 +11,8 @@ defmodule Sanctum.Egress do
 
   It carries the control plane's own requests, each made by the module
   that owns it: registry, OCI, MCP, OAuth token, identity directory and
-  webhook notification requests, and those to the Locus backends service.
+  webhook notification requests, those to the Locus backends service, and
+  the release channel's listing (`Cyfr.ReleaseChannel`).
   A new outside service the control plane calls joins through this
   transport.
 

@@ -4,14 +4,15 @@
 defmodule Aqua.Supervisor do
   @moduledoc """
   The assistant's processes: the schedule notes, the crew's delivery,
-  the loop worker with the task supervisor its steps run on, and the thread runners with their
-  recovery. `rest_for_one`, because the loops run their steps on
+  the loop worker with the task supervisor its steps run on, the thread runners with their
+  recovery, and the status watch. `rest_for_one`, because the loops run their steps on
   `Aqua.TaskSupervisor`: a fresh worker tree restarts the runners whose
   loops held the old one.
 
   Options, given by the composition root, which reads the configuration:
   `thread_recovery` (whether the runners of the threads holding an open
-  turn are started once the tree is up).
+  turn are started once the tree is up) and `status_watch` (whether the
+  status watch, `Aqua.Status`, starts).
   """
 
   use Supervisor
@@ -54,7 +55,13 @@ defmodule Aqua.Supervisor do
           {Registry, keys: :unique, name: Aqua.RunnerRegistry},
           {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one}
           | thread_recovery(Keyword.fetch!(opts, :thread_recovery))
-        ])
+        ]),
+        # The status watch reads on the task supervisor above. Last, so its
+        # restart restarts no runner. 5 s: its stop, which holds no work in
+        # flight.
+        Supervisor.child_spec({Aqua.Status, enabled: Keyword.fetch!(opts, :status_watch)},
+          shutdown: 5_000
+        )
       ],
       strategy: :rest_for_one,
       max_restarts: 10,

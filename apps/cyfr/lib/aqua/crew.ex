@@ -226,12 +226,11 @@ defmodule Aqua.Crew do
   """
   @spec index(Context.t(), [map()]) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
   def index(%Context{} = ctx, roster) when is_list(roster) do
-    with {:ok, _listing} <- readable(Aqua.AgentConfig.catalyst_listing(ctx)) do
-      members = Enum.filter(roster, &Admission.member?(roster, &1["name"]))
-      status = Aqua.Models.model_status(ctx, members)
+    members = crew(roster)
 
+    with {:ok, status} <- brain_status(ctx, members) do
       {:ok,
-       for %{"name" => name} = member <- members, match?({:ready, _}, status[name]) do
+       for %{"name" => name} = member <- members, ready_brain?(status[name]) do
          %{
            "name" => name,
            "brain" => brain(member),
@@ -242,8 +241,49 @@ defmodule Aqua.Crew do
     end
   end
 
-  defp readable({:ok, _} = listed), do: listed
-  defp readable({:error, _unread}), do: {:error, {:unavailable, "The crew's readiness"}}
+  @typedoc "How the athanor's brains stand (`brains/1`)."
+  @type brains :: %{
+          model_connected: boolean(),
+          crew_ready: non_neg_integer(),
+          crew_total: non_neg_integer()
+        }
+
+  @doc """
+  How the athanor's brains stand: whether the soul's brain reads ready,
+  the rule the chat's empty state applies, and how many of the roster's
+  crew members read ready of all of them, by the readiness `index/2` and
+  `ready/2` apply. A roster or a catalyst listing that cannot be read is
+  `{:error, {:unavailable, _}}`, never a count of nobody.
+  """
+  @spec brains(Context.t()) :: {:ok, brains()} | {:error, {:unavailable, String.t()}}
+  def brains(%Context{} = ctx) do
+    with {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
+         soul = Enum.filter(roster, &Prima.AgentRef.soul?(&1["name"])),
+         members = crew(roster),
+         {:ok, status} <- brain_status(ctx, soul ++ members) do
+      {:ok,
+       %{
+         model_connected: Enum.any?(soul, &ready_brain?(status[&1["name"]])),
+         crew_ready: Enum.count(members, &ready_brain?(status[&1["name"]])),
+         crew_total: length(members)
+       }}
+    end
+  end
+
+  defp crew(roster), do: Enum.filter(roster, &Admission.member?(roster, &1["name"]))
+
+  # Each agent's brain (`Aqua.Models.model_status/2`), once the athanor's
+  # catalysts read: a listing that cannot be read tells nobody's.
+  defp brain_status(ctx, agents) do
+    case Aqua.AgentConfig.catalyst_listing(ctx) do
+      {:ok, _listing} -> {:ok, Aqua.Models.model_status(ctx, agents)}
+      {:error, _unread} -> {:error, {:unavailable, "The crew's readiness"}}
+    end
+  end
+
+  # The one readiness rule: a brain is ready when its status reads
+  # `{:ready, _}`, and anything else, no status at all included, is not.
+  defp ready_brain?(status), do: match?({:ready, _}, status)
 
   @typedoc """
   Why a crew member cannot take a job: no brain named, its catalyst not
@@ -282,11 +322,11 @@ defmodule Aqua.Crew do
   defp ready(ctx, roster, member) do
     if Admission.member?(roster, member) do
       entry = Enum.find(roster, &(&1["name"] == member))
+      status = Aqua.Models.model_status(ctx, [entry])[member]
 
-      case Aqua.Models.model_status(ctx, [entry])[member] do
-        {:ready, _} -> :ok
-        status -> {:error, {:crew_unready, member, unready(status)}}
-      end
+      if ready_brain?(status),
+        do: :ok,
+        else: {:error, {:crew_unready, member, unready(status)}}
     else
       {:error, :not_addressable}
     end

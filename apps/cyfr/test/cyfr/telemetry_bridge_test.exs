@@ -25,6 +25,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     Confirmation,
     Execution,
     FeedRun,
+    FileListed,
     FileOffer,
     FrameCredential,
     Notify,
@@ -120,7 +121,11 @@ defmodule Cyfr.TelemetryBridgeTest do
       {[:cyfr, :sanctum, :api_keys, :changed], tenant, Bus.api_keys(@actor),
        {ApiKeys, %{kind: :changed}}},
       {[:cyfr, :sanctum, :webhooks, :changed], tenant, Bus.webhooks(@actor),
-       {Webhooks, %{kind: :changed}}}
+       {Webhooks, %{kind: :changed}}},
+      # A path under data/ is read as it stands when its message is
+      # delivered (`Cyfr.Providers.FilesTest` holds a file and an offer).
+      {[:cyfr, :arca, :file, :changed], Map.put(tenant, :path, "data/gone.txt"),
+       Bus.files(@actor), {FileListed, %{kind: :removed, id: "data/gone.txt", name: nil}}}
     ] ++
       confirmation_cases(tenant) ++
       share_cases() ++ file_offer_cases()

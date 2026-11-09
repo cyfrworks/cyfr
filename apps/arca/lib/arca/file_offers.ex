@@ -270,9 +270,10 @@ defmodule Arca.FileOffers do
   @doc """
   The offers addressed to the actor's person still waiting for them at
   `now`, from any sender: offered and not past their expiry, one entry per
-  offer, oldest first, as its `offer_id`, its first file's name in name
-  order (`filename`) and when it was made (`inserted_at`), and nothing of
-  its content. `offer_id:` narrows it to that one offer.
+  offer, oldest first, as its `offer_id`, its sender (`sender_user_id`),
+  its first file's name in name order (`filename`) and when it was made
+  (`inserted_at`), and nothing of its content. `offer_id:` narrows it to
+  that one offer.
   """
   @spec awaiting(Prima.Actor.t(), DateTime.t(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
@@ -290,6 +291,7 @@ defmodule Arca.FileOffers do
           order_by: [asc: min(o.inserted_at), asc: o.offer_id],
           select: %{
             offer_id: o.offer_id,
+            sender_user_id: min(o.sender_user_id),
             filename: min(o.filename),
             inserted_at: type(min(o.inserted_at), :utc_datetime_usec)
           }

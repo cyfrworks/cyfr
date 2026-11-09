@@ -295,6 +295,65 @@ defmodule Arca.ObjectRevisions do
   end
 
   @doc """
+  The settled objects most recently changed, newest first: at most
+  `limit` of `%{path, changed_at}`, the path its console spelling
+  (`data/…`) and `changed_at` the row's `settled_at`, which every
+  settlement and every delete moves.
+  """
+  @spec recent(Prima.Actor.t(), pos_integer()) ::
+          {:ok, [%{path: String.t(), changed_at: DateTime.t()}]} | {:error, term()}
+  def recent(%Prima.Actor{} = actor, limit) when is_integer(limit) and limit > 0 do
+    with {:ok, athanor_id} <- athanor(actor) do
+      Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.recent", fn ->
+        {:ok,
+         Arca.Repo.all(
+           from(r in ObjectRevision,
+             where: r.athanor_id == ^athanor_id and not is_nil(r.settled_generation),
+             where: r.deleted == false,
+             order_by: [desc: r.settled_at, asc: r.path],
+             limit: ^limit,
+             select: %{path: r.path, changed_at: r.settled_at}
+           )
+         )}
+      end)
+    end
+  end
+
+  @doc """
+  When the settled object at `path` last changed (`recent/2`'s
+  `changed_at`), or `{:error, :not_found}` where nothing is settled.
+  """
+  @spec changed_at(Prima.Actor.t(), Arca.Storage.path()) ::
+          {:ok, DateTime.t()} | {:error, term()}
+  def changed_at(%Prima.Actor{} = actor, path) do
+    with {:ok, athanor_id} <- athanor(actor) do
+      case visible(athanor_id, key(path)) do
+        {:ok, %ObjectRevision{settled_at: changed_at}} -> {:ok, changed_at}
+        {:ok, nil} -> {:error, :not_found}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  @doc """
+  Announce, once its settlement or delete has committed, that what
+  `path` names under `data/` changed: `[:cyfr, :arca, :file, :changed]`
+  with the athanor and the path's console spelling, a file's or, for a
+  folder's delete, the folder's. The announcement names the path alone; a
+  reader reads what the path holds now.
+  """
+  @spec announce(Prima.Actor.t(), Arca.Storage.path()) :: :ok
+  def announce(%Prima.Actor{athanor_id: athanor_id}, [@root | _] = path)
+      when is_binary(athanor_id) and athanor_id != "" do
+    :telemetry.execute([:cyfr, :arca, :file, :changed], %{system_time: System.system_time()}, %{
+      athanor_id: athanor_id,
+      path: Enum.join(path, "/")
+    })
+  end
+
+  def announce(%Prima.Actor{}, _path), do: :ok
+
+  @doc """
   The visible files and bytes at or under `path`: a settled object counts
   one file of its generation's bytes; a pending, superseded or tombstoned
   generation counts nothing.

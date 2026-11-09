@@ -83,6 +83,23 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "the release check" do
+    test "runs unless CYFR_NO_UPDATE_CHECK holds a value, as the terminal's does" do
+      for {value, enabled} <- [
+            {nil, true},
+            {"", true},
+            {"1", false},
+            {"0", false},
+            {"yes", false}
+          ] do
+        with_env(%{"CYFR_DATABASE" => nil, "CYFR_NO_UPDATE_CHECK" => value}, fn ->
+          assert Keyword.fetch!(read_prod_config!()[:cyfr], :release_channel_enabled) == enabled,
+                 "CYFR_NO_UPDATE_CHECK=#{inspect(value)}"
+        end)
+      end
+    end
+  end
+
   describe "the prod branch evaluates" do
     test "with only the required secrets set" do
       with_env(%{"CYFR_DATABASE" => nil}, fn ->

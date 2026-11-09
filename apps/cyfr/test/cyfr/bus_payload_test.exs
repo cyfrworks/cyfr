@@ -26,6 +26,7 @@ defmodule Cyfr.BusPayloadTest do
     ExecutionEvent,
     FeedPublished,
     FeedRun,
+    FileListed,
     FileOffer,
     FrameCredential,
     LayoutPublished,
@@ -44,6 +45,7 @@ defmodule Cyfr.BusPayloadTest do
     SettingsChanged,
     ShareChanged,
     SharedThreadChanged,
+    SystemStatus,
     ThreadEvent,
     ThreadListed,
     Tinctures,
@@ -132,12 +134,28 @@ defmodule Cyfr.BusPayloadTest do
         since: ~U[2026-11-09 09:00:00Z],
         destination: %{kind: "page", page: "runs"}
       ),
+      FileListed.new(@actor, :file,
+        id: "data/reports/q3.csv",
+        name: "q3.csv",
+        type: "text/csv",
+        changed_at: ~U[2026-11-09 09:00:00Z]
+      ),
       ThreadListed.new(@actor, :own,
         id: "thr_payload",
         title: "Plans",
         people: ["Ada"],
         last_activity: ~U[2026-11-09 09:00:00Z],
         waits_on_you: false
+      ),
+      SystemStatus.new(@actor, :changed,
+        health: "ok",
+        storage_used: 1_024,
+        storage_cap: nil,
+        model_connected: true,
+        crew_ready: 1,
+        crew_total: 3,
+        version: "0.6.0",
+        update_available: false
       )
     ]
   end
