@@ -67,7 +67,7 @@ function fixtureAnswer(request) {
 
 // The fixture's stream connection: what the frame sends, what the endpoint
 // answers and what the page's handler hears of it.
-const {connection: CONNECTION} = fixture
+const CONNECTION = fixture.connection
 const SUBJECT = CONNECTION.from_frame[0].subject
 
 // The events of the fixture's first subscription, as its handler hears

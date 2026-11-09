@@ -84,7 +84,7 @@ describe("the wire agrees with the fixture", () => {
 })
 
 describe("the stream connection agrees with the fixture", () => {
-  const {connection} = fixture
+  const connection = fixture.connection
 
   test("an app's path, and the classes that leave a subscription unanswered", () => {
     assert.equal(SOCKET_PATH, connection.paths.app)

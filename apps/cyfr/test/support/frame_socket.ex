@@ -188,18 +188,39 @@ defmodule Cyfr.Test.FrameSocket do
 
   @doc "Send `payload` as one masked text frame, as a client sends it."
   @spec ws_send(:gen_tcp.socket(), binary()) :: :ok | {:error, term()}
-  def ws_send(socket, payload) do
+  def ws_send(socket, payload), do: :gen_tcp.send(socket, ws_frame(payload))
+
+  @doc """
+  Send `payload` as one text message split into masked frames of at most
+  `size` bytes each: a text frame, then continuation frames, the last
+  final.
+  """
+  @spec ws_send_fragments(:gen_tcp.socket(), binary(), pos_integer()) :: :ok | {:error, term()}
+  def ws_send_fragments(socket, payload, size) do
+    pieces = for <<piece::binary-size(^size) <- payload>>, do: piece
+    rest = binary_part(payload, length(pieces) * size, byte_size(payload) - length(pieces) * size)
+    pieces = if rest == "", do: pieces, else: pieces ++ [rest]
+    last = length(pieces) - 1
+
+    frames =
+      for {piece, i} <- Enum.with_index(pieces),
+          do: ws_frame(piece, if(i == last, do: 1, else: 0), if(i == 0, do: 1, else: 0))
+
+    :gen_tcp.send(socket, frames)
+  end
+
+  defp ws_frame(payload, fin \\ 1, opcode \\ 1) do
     mask = :crypto.strong_rand_bytes(4)
     length = byte_size(payload)
 
     header =
       cond do
-        length < 126 -> <<1::1, 0::3, 1::4, 1::1, length::7>>
-        length < 65_536 -> <<1::1, 0::3, 1::4, 1::1, 126::7, length::16>>
-        true -> <<1::1, 0::3, 1::4, 1::1, 127::7, length::64>>
+        length < 126 -> <<fin::1, 0::3, opcode::4, 1::1, length::7>>
+        length < 65_536 -> <<fin::1, 0::3, opcode::4, 1::1, 126::7, length::16>>
+        true -> <<fin::1, 0::3, opcode::4, 1::1, 127::7, length::64>>
       end
 
-    :gen_tcp.send(socket, [header, mask, masked(payload, mask)])
+    [header, mask, masked(payload, mask)]
   end
 
   defp masked(payload, mask) do

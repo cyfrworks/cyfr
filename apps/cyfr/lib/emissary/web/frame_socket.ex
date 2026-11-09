@@ -22,8 +22,9 @@ defmodule Emissary.Web.FrameSocket do
   binding closes every older connection of the same frame credential on
   this member (`replaced`). A connection carries at most
   `Prima.TinctureWire.max_subscriptions/0` subscriptions at once and takes
-  no message over `Prima.TinctureWire.max_message_bytes/0`; one that does
-  not read as the wire's closes it (`unreadable`), and a connection that
+  no message over `Prima.TinctureWire.max_message_bytes/0` payload bytes,
+  however many frames it arrives in (`too_big`); one that does not read as
+  the wire's closes it (`unreadable`), and a connection that
   has held no subscription for `Prima.TinctureWire.idle_ms/0` closes
   (`idle`). The endpoint pings it every 15 seconds, so a quiet connection
   never looks idle to an intermediary, and one that answers nothing for a
@@ -142,10 +143,19 @@ defmodule Emissary.Web.FrameSocket do
   @typedoc "Where the connection was opened: the shared route, or a canvas open's own path."
   @type path :: :shared | {:canvas, String.t()}
 
+  # The largest header a client's frame carries: two bytes, a 64-bit
+  # length and the mask. A frame's bound is the message bound with room
+  # for it, so a message exactly at the bound arrives in one frame.
+  @max_frame_header 14
+  @max_message_bytes TinctureWire.max_message_bytes()
+
   @doc """
-  Hand `conn`, a WebSocket upgrade on `path`, to a new stream connection.
-  The upgrade must be one (`WebSockAdapter.UpgradeValidation`); the
-  connection's read bound is the wire's message bound.
+  Hand `conn`, a WebSocket upgrade on `path` its caller has found to be
+  one (`WebSockAdapter.UpgradeValidation`), to a new stream connection. The wire's
+  message bound counts a message's payload bytes: the listener refuses a
+  message reassembled from fragments over it, and a frame too large to
+  carry it, and the connection refuses a whole message over it
+  (`handle_in/2`).
   """
   @spec upgrade(Plug.Conn.t(), path()) :: Plug.Conn.t()
   def upgrade(%Plug.Conn{} = conn, path) do
@@ -155,12 +165,18 @@ defmodule Emissary.Web.FrameSocket do
       request_id: conn.assigns[:request_id]
     }
 
-    conn
-    |> WebSockAdapter.upgrade(__MODULE__, state,
+    # The options go to the listener as given: Bandit reads
+    # `max_fragmented_message_size`, which WebSockAdapter's option type
+    # does not name.
+    opts = [
       timeout: @timeout_ms,
-      max_frame_size: TinctureWire.max_message_bytes(),
+      max_frame_size: @max_message_bytes + @max_frame_header,
+      max_fragmented_message_size: @max_message_bytes,
       compress: false
-    )
+    ]
+
+    conn
+    |> Plug.Conn.upgrade_adapter(:websocket, {__MODULE__, state, opts})
     |> Plug.Conn.halt()
   end
 
@@ -196,6 +212,10 @@ defmodule Emissary.Web.FrameSocket do
   end
 
   @impl WebSock
+  def handle_in({text, opcode: :text}, state)
+      when byte_size(text) > @max_message_bytes,
+      do: {:stop, :normal, {TinctureWire.close_code(:too_big), "too big"}, state}
+
   def handle_in({text, opcode: :text}, state) do
     case Jason.decode(text) do
       {:ok, message} -> message |> TinctureWire.decode_message() |> received(state)

@@ -39,8 +39,9 @@ defmodule Prima.TinctureWire do
   A frame reads every stream it opens over one WebSocket, its stream
   connection: at `socket_path/0` (`/_f/v1/socket`) for an app, and at
   `socket_path/1` (`/_f/v1/o/<frame id>/socket`), on its own data path
-  alone, for a canvas. Each message is one JSON text frame carrying `v`,
-  at most `max_message_bytes/0` from the frame. A public page holds no
+  alone, for a canvas. Each message is one JSON text message carrying `v`,
+  at most `max_message_bytes/0` payload bytes from the frame, counted
+  across every WebSocket frame it arrives in. A public page holds no
   frame credential and opens no stream.
 
   The frame sends (`decode_message/1`):
@@ -75,7 +76,8 @@ defmodule Prima.TinctureWire do
   once, each counted from its `subscribe` until it ends. A frame holds
   one connection: a newer one of the same frame credential closes the
   older. The connection closes (WebSocket close codes, `close_code/1`)
-  on a message that does not read as the wire's (`unreadable`, 4400),
+  on a message that does not read as the wire's (`unreadable`, 4400), on
+  one over `max_message_bytes/0` (`too_big`, 1009, the protocol's own),
   when replaced (`replaced`, 4409), and when it has held no subscription
   for `idle_ms/0` (`idle`, 1000); every subscription it carried ends
   with it, and a reconnect is a new connection whose subscriptions are
@@ -200,7 +202,7 @@ defmodule Prima.TinctureWire do
   @max_subscriptions 32
   @max_message_bytes 4_096
   @idle_ms 60_000
-  @close_codes %{unreadable: 4400, replaced: 4409, idle: 1000}
+  @close_codes %{unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1000}
 
   @verbs ~w(open close title ready credential press failed grant prefs ask settings)a
   @canvas_verbs ~w(press failed grant prefs ask settings)a
@@ -621,7 +623,10 @@ defmodule Prima.TinctureWire do
   @spec max_subscriptions() :: pos_integer()
   def max_subscriptions, do: @max_subscriptions
 
-  @doc "The most bytes of one message a frame sends over its stream connection."
+  @doc """
+  The most payload bytes of one message a frame sends over its stream
+  connection, whether it arrives in one WebSocket frame or several.
+  """
   @spec max_message_bytes() :: pos_integer()
   def max_message_bytes, do: @max_message_bytes
 
@@ -631,10 +636,11 @@ defmodule Prima.TinctureWire do
 
   @doc """
   The WebSocket close code a stream connection ends with: `unreadable`
-  (a message that does not read as the wire's), `replaced` (a newer
-  connection of the same frame) or `idle`.
+  (a message that does not read as the wire's), `too_big` (a message
+  over `max_message_bytes/0`), `replaced` (a newer connection of the same
+  frame) or `idle`.
   """
-  @spec close_code(:unreadable | :replaced | :idle) :: pos_integer()
+  @spec close_code(:unreadable | :too_big | :replaced | :idle) :: pos_integer()
   def close_code(reason) when is_map_key(@close_codes, reason),
     do: Map.fetch!(@close_codes, reason)
 

@@ -432,10 +432,11 @@ defmodule Cyfr.Bus do
       match: {:prefix, "sanctum:frame_credentials:"},
       template: "sanctum:frame_credentials:<user_id>",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["CyfrWeb.SSE"],
+      consumers: ["Emissary.Web.FrameSocket"],
       reason:
-        "the subject is the person whose frame it is: a stream held open under a " <>
-          "suspended or revoked frame credential ends at once on every member"
+        "the subject is the person whose frame it is: a frame's stream connection " <>
+          "ends its subscriptions at once on every member when its frame credential " <>
+          "is suspended or revoked"
     },
     %{
       key: :shared_threads,

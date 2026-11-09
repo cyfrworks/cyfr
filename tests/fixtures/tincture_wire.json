@@ -93,7 +93,7 @@
     }
   },
   "connection": {
-    "comment": "A frame's stream connection: one WebSocket per frame, at `paths.app` for an app and at a canvas open's `socket_path` (`canvas.paths`) for a canvas, one JSON text frame per message. `from_frame` are the messages a frame sends: a subscribe carries the subscription's number, the newest frame credential, the stream and its subject; an unsubscribe its number alone. `to_frame` are the endpoint's answers, in the order one connection sends them, and `heard` what the page's handler hears of them, `{id, event, data}` per event in order, then whether each subscription ended: an `ended` before `subscribed` is that subscription's refusal (see `stream_rejections`), and one after it carrying `error` is heard as a last event named `refusal`, its data the error. `refused` are frame messages the endpoint refuses, each for the reason `why` gives: `subscription` when the message's number reads, so only that subscription is refused (answered `ended` with an invalid_argument error), `connection` when it does not, so the connection closes with the code `unreadable`. A connection carries at most `max_subscriptions` subscriptions at once, takes no frame message over `max_message_bytes` bytes, and closes when it has held none for `idle_ms`.",
+    "comment": "A frame's stream connection: one WebSocket per frame, at `paths.app` for an app and at a canvas open's `socket_path` (`canvas.paths`) for a canvas, one JSON text frame per message. `from_frame` are the messages a frame sends: a subscribe carries the subscription's number, the newest frame credential, the stream and its subject; an unsubscribe its number alone. `to_frame` are the endpoint's answers, in the order one connection sends them, and `heard` what the page's handler hears of them, `{id, event, data}` per event in order, then whether each subscription ended: an `ended` before `subscribed` is that subscription's refusal (see `stream_rejections`), and one after it carrying `error` is heard as a last event named `refusal`, its data the error. `refused` are frame messages the endpoint refuses, each for the reason `why` gives: `subscription` when the message's number reads, so only that subscription is refused (answered `ended` with an invalid_argument error), `connection` when it does not, so the connection closes with the code `unreadable`. A connection carries at most `max_subscriptions` subscriptions at once, takes no frame message over `max_message_bytes` payload bytes, counted across every WebSocket frame it arrives in (closing with `too_big`), and closes when it has held none for `idle_ms`.",
     "paths": {
       "app": "/_f/v1/socket"
     },
@@ -102,6 +102,7 @@
     "idle_ms": 60000,
     "close_codes": {
       "unreadable": 4400,
+      "too_big": 1009,
       "replaced": 4409,
       "idle": 1000
     },
@@ -371,7 +372,7 @@
     ],
     "cases": [
       {
-        "why": "no answer: the connection could not open, broke, or closed before the answer, a message of the frame's over max_message_bytes among them (the endpoint closes the connection, 1009)",
+        "why": "no answer: the connection could not open, broke, or closed before the answer, a message of the frame's over max_message_bytes payload bytes among them, whole or reassembled from fragments (the endpoint closes the connection, too_big)",
         "answer": null,
         "rejects": {
           "class": "unavailable",

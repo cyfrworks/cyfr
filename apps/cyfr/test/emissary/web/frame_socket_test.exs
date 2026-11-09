@@ -214,7 +214,8 @@ defmodule Emissary.Web.FrameSocketTest do
     @wire
     |> File.read!()
     |> Jason.decode!()
-    |> get_in(["stream_rejections", "cases"])
+    |> Map.fetch!("stream_rejections")
+    |> Map.fetch!("cases")
     |> Enum.find(&(&1["why"] == why))
     |> get_in(["answer", "error"])
   end
@@ -1170,6 +1171,49 @@ defmodule Emissary.Web.FrameSocketTest do
 
       assert Enum.all?(opened, &(&1["type"] == "subscribed")), inspect(opened)
       assert opened |> Enum.map(& &1["sub"]) |> Enum.sort() == Enum.to_list(1..8)
+    end
+
+    # A valid subscription of exactly `bytes` bytes: its JSON, padded with
+    # the whitespace JSON allows after a value.
+    defp padded_subscribe(frame, bytes) do
+      body = Jason.encode!(TinctureWire.subscribe(1, frame.bearer, "mcp_servers.changes", nil))
+      body <> String.duplicate(" ", bytes - byte_size(body))
+    end
+
+    @tag :capture_log
+    test "the message-byte bound holds across WebSocket fragments", %{source: source, port: port} do
+      frame = canvas_frame!(source)
+      socket = Socket.ws_open(port, TinctureWire.socket_path(frame.frame_id))
+      on_exit(fn -> :gen_tcp.close(socket) end)
+
+      over = padded_subscribe(frame, TinctureWire.max_message_bytes() + 1)
+      :ok = Socket.ws_send_fragments(socket, over, 2_048)
+      assert {8, <<1009::16, _reason::binary>>} = Socket.ws_recv(socket)
+    end
+
+    test "a message exactly at the byte bound is accepted, whole or in fragments",
+         %{source: source, port: port} do
+      frame = canvas_frame!(source)
+      bytes = TinctureWire.max_message_bytes()
+
+      for send <- [&Socket.ws_send/2, &Socket.ws_send_fragments(&1, &2, 1_000)] do
+        socket = Socket.ws_open(port, TinctureWire.socket_path(frame.frame_id))
+        :ok = send.(socket, padded_subscribe(frame, bytes))
+        assert {1, json} = Socket.ws_recv(socket)
+        assert %{"type" => "subscribed", "sub" => 1} = Jason.decode!(json)
+        :gen_tcp.close(socket)
+      end
+    end
+
+    @tag :capture_log
+    test "a single frame one byte over the bound closes the connection",
+         %{source: source, port: port} do
+      frame = canvas_frame!(source)
+      socket = Socket.ws_open(port, TinctureWire.socket_path(frame.frame_id))
+      on_exit(fn -> :gen_tcp.close(socket) end)
+
+      :ok = Socket.ws_send(socket, padded_subscribe(frame, TinctureWire.max_message_bytes() + 1))
+      assert {8, <<1009::16, _reason::binary>>} = Socket.ws_recv(socket)
     end
 
     # The listener logs the frame it refused.
