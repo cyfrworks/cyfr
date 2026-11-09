@@ -285,6 +285,11 @@ if config_env() != :test do
   # the recorded attestation is checked again at execution time).
   config :cyfr, :require_signed_pulls, env_bool.("CYFR_REQUIRE_SIGNED_PULLS", false)
 
+  # Whether the server reads the release channel `cyfr update` reads, for
+  # the update a canvas shows (`Cyfr.ReleaseChannel`): off once
+  # CYFR_NO_UPDATE_CHECK holds any value, as the terminal's check is.
+  config :cyfr, :release_channel_enabled, Cyfr.RuntimeConfig.release_check?(getenv)
+
   # The Locus builds service every build is sent to
   # (`Compendium.Builds.Client`): CYFR_LOCUS_BUILDS_URL, the base URL of
   # its listener (compose: http://locus-builds:4100), and

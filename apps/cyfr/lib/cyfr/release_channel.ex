@@ -26,7 +26,9 @@ defmodule Cyfr.ReleaseChannel do
 
   Options: `:name`; `:fetch`, the read, a function answering as
   `Sanctum.Egress.pinned_request/5` does, or `false` for an instance that
-  never reads (the suite's, `:release_channel_enabled`); and `:clock`,
+  never reads (`:release_channel_enabled` false: the suite's, and a
+  server's whose `CYFR_NO_UPDATE_CHECK` holds a value, as the terminal's
+  check is off then, `Cyfr.RuntimeConfig.release_check?/1`); and `:clock`,
   the monotonic milliseconds its intervals are measured on.
   """
 

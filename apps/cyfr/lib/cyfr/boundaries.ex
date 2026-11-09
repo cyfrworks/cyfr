@@ -2656,7 +2656,6 @@ defmodule Cyfr.Boundaries do
     schedule_notes_enabled: :default,
     crew_delivery_enabled: :default,
     status_watch_enabled: :default,
-    release_channel_enabled: :default,
     execution_sweeper_enabled: :default,
     execution_archive_watch_enabled: :default,
     worker_watch_enabled: :default,
