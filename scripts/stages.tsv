@@ -38,9 +38,9 @@ handoff	setup-proof-test	scoped	600	tests/setup-proof/**	bash tests/setup-proof/
 handoff	tailnet-guard-tests	scoped	600	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
 handoff	dev-stack-test	scoped	284	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
 handoff	prebuilt-binaries-test	scoped	600	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
-handoff	ci-guards-test	scoped	600	scripts/ci/**,tests/ci-guards-test.sh	bash tests/ci-guards-test.sh
+handoff	ci-guards-test	scoped	600	scripts/ci/**,scripts/release.sh,tests/ci-guards-test.sh	bash tests/ci-guards-test.sh
 handoff	containerd-store-test	scoped	600	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh
-handoff	release-graph	scoped	600	.github/workflows/release.yml,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
+handoff	release-graph	scoped	600	.github/workflows/release.yml,scripts/release.sh,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
 handoff	security-scan-test	scoped	600	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh
 handoff	go-checks	scoped	1200	apps/codex/**	cd apps/codex && test -z "$(gofmt -l .)" && go vet ./... && go build ./...
 # The install proof's VM boots from the base image in the host's cache and

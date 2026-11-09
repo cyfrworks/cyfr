@@ -161,10 +161,12 @@ same worktree refuses, naming the run that holds it.
   `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or
   `scripts/heavy-check.sh bash -c 'cd apps/codex && go test ./... -race'`.
 - A release tag is cut on a tree its run on GitHub proved green, and
-  that run is the release's proof: `scripts/release.sh` reads HEAD's
+  that run is the release's proof: `scripts/release.sh`, which runs only
+  on origin's main head (a detached checkout of it will do), reads HEAD's
   check runs through `gh` before it tags HEAD, or HEAD plus a bump commit
   holding the version lines alone, which the tag's own workflow checks
-  again before it publishes. `--gate` is the fallback for a HEAD with no
+  again before it publishes; `--push` pushes main and the tag together,
+  by full refs, in one atomic push. `--gate` is the fallback for a HEAD with no
   run: it runs the release stage, the gate's close, here first. Right
   before it tags it runs the dependency audits again
   (`scripts/dependency-audit.sh`, the same ones CI runs), because the

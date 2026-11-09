@@ -749,12 +749,14 @@ export async function closeFrame(page, id) {
   await page.waitForFunction((frameId) => !document.getElementById(frameId), id, { timeout: 30_000 });
 }
 
+// `what` names the condition in the timeout's error: a string, or a
+// function read at the timeout.
 export async function waitFor(check, { timeoutMs = 30_000, stepMs = 25, what = "a condition" } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await check();
     if (value) return value;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${typeof what === "function" ? what() : what}`);
     await sleep(stepMs);
   }
 }
