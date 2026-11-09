@@ -22,16 +22,17 @@ defmodule Cyfr.Test.FrameSocket do
 
   @doc """
   A connection opened on `path` (`:shared` or `{:canvas, frame_id}`),
-  answering the calling process; it ends with it.
+  answering the calling process; it ends with it. Its upgrade's request id
+  is `request_id`, a fresh one by default.
   """
-  @spec connect(FrameSocket.path()) :: pid()
-  def connect(path \\ :shared) do
+  @spec connect(FrameSocket.path(), String.t()) :: pid()
+  def connect(path \\ :shared, request_id \\ Prima.UUID7.request_id()) do
     test = self()
 
     pid =
       spawn_link(fn ->
         {:ok, state} =
-          FrameSocket.init(%{path: path, client_ip: "127.0.0.1", request_id: "req_test"})
+          FrameSocket.init(%{path: path, client_ip: "127.0.0.1", request_id: request_id})
 
         loop(test, state)
       end)

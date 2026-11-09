@@ -104,7 +104,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {PrismWeb.PasskeyController, :complete} => :sign_in_passkey_ticket_unknown,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
     {Opus.Host.Children, :call} => :host_api_lost_attempt,
-    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven
+    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven,
+    {Emissary.Web.FrameSocket, :handle_in} => :frame_socket_no_credential
   }
 
   test "every roster row has one driver and every driver a row" do
@@ -686,6 +687,20 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # transport still delivers what arrives before the peer's close: more
   # frames record nothing, so the connection, counted by its request id,
   # holds that one decision.
+  # A subscription under a credential this CYFR did not sign: refused by
+  # its connection before anything of it is read, under no caller.
+  def frame_socket_no_credential(_conn, _ctx) do
+    request_id = Prima.UUID7.request_id()
+    socket = Cyfr.Test.FrameSocket.connect(:shared, request_id)
+    Cyfr.Test.FrameSocket.subscribe(socket, 1, "frm.v1.unsigned", "mcp_servers.changes")
+
+    assert_receive {:socket, ^socket,
+                    %{"sub" => 1, "type" => "ended", "error" => %{"class" => "unauthenticated"}}},
+                   10_000
+
+    {{:request, request_id}, refused("unauthenticated", :none)}
+  end
+
   def device_channel_unproven(_conn, _ctx) do
     {device_key, _device_private} = :crypto.generate_key(:eddsa, :ed25519)
     {_public, installation} = Sanctum.Cipher.installation_key()

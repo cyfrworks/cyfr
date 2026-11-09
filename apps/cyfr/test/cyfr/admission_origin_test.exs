@@ -86,7 +86,8 @@ defmodule Cyfr.AdmissionOriginTest do
     {Emissary.Web.WebhookController, :invoke} => :webhook_delivery,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire,
     {Opus.Host.Children, :call} => :host_tool_call,
-    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel
+    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel,
+    {Emissary.Web.FrameSocket, :handle_in} => :frame_socket
   }
 
   setup do
@@ -335,6 +336,23 @@ defmodule Cyfr.AdmissionOriginTest do
       {:ok, state} = DeviceChannel.init(state)
       state.ctx.origin
     end
+  end
+
+  # A subscription naming an origin is refused unread, building no
+  # context; the one the connection binds to is the frame's.
+  def frame_socket(_conn) do
+    source = frame_source!()
+    name = "origin-socket-#{System.unique_integer([:positive])}"
+    frame = frame!(source, name, declared!(source, name))
+    socket = Cyfr.Test.FrameSocket.connect(:shared)
+    named = TinctureWire.subscribe(1, frame.bearer, "mcp_servers.changes", nil)
+    Cyfr.Test.FrameSocket.send_text(socket, Map.put(named, "origin", "programmatic"))
+    assert_receive {:socket, ^socket, %{"sub" => 1, "type" => "ended"}}, 10_000
+    assert Cyfr.Test.FrameSocket.state(socket).caller == nil
+
+    Cyfr.Test.FrameSocket.subscribe(socket, 2, frame.bearer, "mcp_servers.changes")
+    assert_receive {:socket, ^socket, %{"sub" => 2, "type" => "subscribed"}}, 10_000
+    [Cyfr.Test.FrameSocket.state(socket).caller.ctx.origin]
   end
 
   # ==========================================================================

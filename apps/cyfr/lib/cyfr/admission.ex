@@ -90,6 +90,7 @@ defmodule Cyfr.Admission do
     "Emissary.Web.Plugs.MCPRequestMetadata",
     "Emissary.Web.TinctureController",
     "Emissary.Web.TinctureDataController",
+    "Emissary.Web.FrameSocket",
     "Emissary.Web.WebhookController",
     "Emissary.Web.ExecutionEventsController",
     "Emissary.Web.DirectoryController",
@@ -116,7 +117,9 @@ defmodule Cyfr.Admission do
                      "the console's LiveView socket dispatches, enters through the " <>
                      "gate's external heads, but at the entries that admit for " <>
                      "themselves and record their own decisions: a webhook's delivery, " <>
-                     "admitted under its row and run as its bound profile's root; an " <>
+                     "admitted under its row and run as its bound profile's root; a " <>
+                     "frame's stream connection, which admits each subscription under the " <>
+                     "frame credential it carries before the gate's stream entry opens it; an " <>
                      "execution's event stream, read under the caller's own standing; " <>
                      "and what no person of this CYFR admits: the identity directory, " <>
                      "whose writes the identifier's own chain authorizes (§9.1), the " <>
