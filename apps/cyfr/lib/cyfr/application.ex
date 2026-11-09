@@ -790,11 +790,12 @@ defmodule Cyfr.Application do
       # 10 s: its terminate cancelling the timers of every schedule it
       # holds, before a fire can reach a stopping tree.
       Supervisor.child_spec(Opus.Schedules.Scheduler, shutdown: 10_000),
-      # The console's: the tincture registry, and the task supervisor its
-      # pages start their asynchronous work on. 5 s: the registry's stop,
-      # which holds no work in flight; 30 s: the longest page task it lets
-      # finish.
+      # The console's: the tincture registry, the requests its shells hold
+      # (`Cyfr.Requests`), and the task supervisor its pages start their
+      # asynchronous work on. 5 s: each registry's stop, which holds no
+      # work in flight; 30 s: the longest page task it lets finish.
       Supervisor.child_spec(Prism.TinctureRegistry, shutdown: 5_000),
+      Supervisor.child_spec(Cyfr.Requests, shutdown: 5_000),
       Supervisor.child_spec({Task.Supervisor, name: Prism.TaskSupervisor}, shutdown: 30_000),
       # The release channel `cyfr update` reads, asked by the status a
       # canvas reads; it never reads in the test env. Last, so its restart

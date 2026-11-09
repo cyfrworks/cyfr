@@ -5652,6 +5652,29 @@ defmodule PrismWeb.SystemLayerTest do
   describe "a prompt's description" do
     setup :signed_in
 
+    defp request_prompt(id) do
+      {:ok, preview} =
+        Prima.Confirmation.Preview.new(
+          home: "https://cyfr.example",
+          athanor: "home",
+          operation: "schedule.update",
+          details: %{"schedule_id" => "sch_1", "name" => "renamed"}
+        )
+
+      %{
+        id: id,
+        kind: :request,
+        action: :approval,
+        subject: %{
+          operation: "schedule.update",
+          tool: "schedule/update",
+          args: %{"schedule_id" => "sch_1", "name" => "renamed"},
+          preview: Prima.Confirmation.Preview.encode(preview),
+          asker: %{name: "Planner", ref: "tincture:local.planner"}
+        }
+      }
+    end
+
     # The text of the open prompt's description, the element the dialog's
     # `aria-describedby` names, as assistive technology reads it.
     defp described(view) do
@@ -5696,8 +5719,28 @@ defmodule PrismWeb.SystemLayerTest do
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :pairing_revocation, subject: %{}},
            "Sign a device out of this CYFR"},
+        request: {request_prompt("k-request"), "Nothing runs until you approve."},
         confirmation: {confirmation, "A client of yours asked for a change"}
       }
+    end
+
+    test "a request prompt names exactly its call, CYFR's preview of it and the frame that asked" do
+      valid = request_prompt("r-1")
+      assert {:ok, ^valid} = Prompt.validate(valid)
+
+      for {why, broken} <- [
+            {"another action", %{valid | action: :grant}},
+            {"a tool that is not the operation's", put_in(valid.subject.tool, "schedule/delete")},
+            {"a preview of another operation",
+             put_in(valid.subject.preview["operation"], "schedule.delete")},
+            {"a preview that is not one", put_in(valid.subject.preview, %{"operation" => "x"})},
+            {"an asker without its reference", put_in(valid.subject.asker, %{name: "Planner"})},
+            {"an asker naming a catalyst",
+             put_in(valid.subject.asker.ref, "catalyst:local.markets")},
+            {"a field of its own", put_in(valid.subject[:label], "Rename it")}
+          ] do
+        assert Prompt.validate(broken) == {:error, :invalid_prompt}, why
+      end
     end
 
     test "every prompt kind's description begins with the prompt's own text",

@@ -50,6 +50,7 @@ defmodule Cyfr.ApplicationTest do
     Opus.Schedules.TaskSupervisor => 30_000,
     Opus.Schedules.Scheduler => 10_000,
     Prism.TinctureRegistry => 5_000,
+    Cyfr.Requests => 5_000,
     Prism.TaskSupervisor => 30_000,
     Cyfr.ReleaseChannel => 5_000,
     Emissary.Web.TaskSupervisor => 30_000,
@@ -251,6 +252,7 @@ defmodule Cyfr.ApplicationTest do
         Opus.Schedules.TaskSupervisor,
         Opus.Schedules.Scheduler,
         Prism.TinctureRegistry,
+        Cyfr.Requests,
         Prism.TaskSupervisor
       ]
 

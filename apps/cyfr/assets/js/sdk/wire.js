@@ -11,9 +11,10 @@
 // Beside it, the messages the shell sends the frame over the port: its port
 // and its credential, an app's subject, and to a canvas its open
 // (`canvas`), what the shell tells it (`posture`, `covered`, `installed`,
-// `state`) and its answers (`pressed`, `prefs`). They pass only between
+// `state`) and its answers (`pressed`, `prefs`), and to any frame the
+// answers to its request (`requested`, `decided`). They pass only between
 // the shell's bridge and the SDK, so they are defined here, once; the
-// canvas's are pinned by the fixture's `canvas` section, whose `handshake`
+// frame's are pinned by the fixture's `canvas` section, whose `handshake`
 // rows are the server's reply the bridge reads them from.
 
 export const VERSION = 1
@@ -36,16 +37,18 @@ export const VERBS = Object.freeze([
   "grant",
   "prefs",
   "ask",
-  "settings"
+  "settings",
+  "request"
 ])
 
 // The verbs only a canvas sends: from any other frame the SDK sends none
 // of them, and the shell drops them.
 export const CANVAS_VERBS = Object.freeze(["press", "failed", "grant", "prefs", "ask", "settings"])
 
-// The verbs a canvas sends for the person, which the shell honours only
-// within moments of the person's own input, one per input.
-export const PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings"])
+// The verbs a frame sends for the person, which the shell honours only
+// within moments of the person's own input, one per input: a canvas's, and
+// `request`, which any frame sends.
+export const PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings", "request"])
 
 // The kinds of subject an app is opened on (`Prima.Manifest.Tincture`).
 export const SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"])
@@ -56,6 +59,12 @@ export const PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cance
 // Why a press or a write was cancelled, when the answer says: `too_soon`,
 // sent while the activation its input gave was spent already.
 export const CANCEL_REASONS = Object.freeze(["too_soon"])
+// What a request comes to, as `decided` says: approved and run, refused
+// (`declined` by the person, or a refusal's class) or cancelled, perhaps
+// naming why: `too_soon`, `busy` (another request of the frame waited),
+// `expired` or `dismissed`.
+export const REQUEST_OUTCOMES = Object.freeze(["approved", "refused", "cancelled"])
+export const REQUEST_CANCEL_REASONS = Object.freeze(["too_soon", "busy", "expired", "dismissed"])
 
 // Where a frame that posts `failed` failed: before its `ready`, or after.
 export const STAGES = Object.freeze(["load", "runtime"])
@@ -99,6 +108,12 @@ const DESKTOP_ID = /^[a-z][a-z0-9_-]{0,62}$/
 const PAGE = /^[a-z][a-z0-9_]{0,31}$/
 // What an app is opened on (`Prima.TinctureWire.subject_id?/1`).
 const SUBJECT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/
+// An operation's name, `tool.action` (`Prima.Manifest.Tincture`), and the
+// operation a request for a grant names instead.
+const OPERATION = /^[a-z][a-z0-9_-]{0,62}\.[a-z][a-z0-9_-]{0,62}$/
+const GRANT_OPERATION = "grant"
+// `Prima.TinctureWire.request_id?/1`.
+const REQUEST_ID = /^req_[A-Za-z0-9_-]{16,64}$/
 const MAX_PRESS_VALUE = 256
 const MAX_CALL = 2147483647
 const ACCENT = /^#[0-9a-f]{6}$/
@@ -154,6 +169,17 @@ export const isPressValue = (value) => isBoundedText(value, MAX_PRESS_VALUE)
 // The number a frame gives a press or a write, which its answer carries
 // back (`Prima.TinctureWire.call?/1`).
 export const isCall = (call) => Number.isInteger(call) && call >= 1 && call <= MAX_CALL
+
+const isGrantArgs = (args) =>
+  isObject(args) && sameKeys(args, ["ref"]) && typeof args.ref === "string" && COMPONENT_REF.test(args.ref)
+
+// What a request may ask for by its form: `grant` with exactly a component
+// reference, or an operation's name with an object of arguments. Which the
+// shell asks the person for is the shell's.
+export const isRequest = (operation, args) =>
+  operation === GRANT_OPERATION
+    ? isGrantArgs(args)
+    : typeof operation === "string" && OPERATION.test(operation) && isObject(args)
 
 // What an app is opened on: exactly a kind the apps accept and an id.
 export const isSubject = (subject) =>
@@ -400,15 +426,19 @@ function argsError(verb, args) {
     case "ask":
       return sameKeys(args, ["widget"]) && isDesktopId(args.widget) ? null : "ask names a widget by its id"
     case "settings":
-      return sameKeys(args, ["page"]) && typeof args.page === "string" && PAGE.test(args.page)
+      if (typeof args.page !== "string" || !PAGE.test(args.page)) return "settings names a page by its key"
+      if (sameKeys(args, ["page"])) return null
+      return sameKeys(args, ["page", "ref"]) && typeof args.ref === "string" && SUBJECT_ID.test(args.ref)
         ? null
-        : "settings names a page by its key"
+        : "settings names a page by its key, and perhaps a record on it by its id"
+    case "request":
+      return sameKeys(args, ["operation", "args", "call"]) && isRequest(args.operation, args.args) && isCall(args.call)
+        ? null
+        : "request carries exactly grant or an operation, its args and its call"
     case "failed":
       return sameKeys(args, ["stage"]) && STAGES.includes(args.stage) ? null : "failed names a stage"
     case "grant":
-      return keys.length === 1 && typeof args.ref === "string" && COMPONENT_REF.test(args.ref)
-        ? null
-        : "grant names a component reference"
+      return isGrantArgs(args) ? null : "grant names a component reference"
     default:
       return keys.length === 0 ? null : verb + " takes no arguments"
   }
@@ -438,7 +468,8 @@ export function socketPath(frame) {
 export const MODES = Object.freeze(["live", "validation"])
 
 // Shell to a frame, over its port: a canvas's open, what the shell tells
-// it, its answers, and an app's subject.
+// it, its answers, the answers to any frame's request, and an app's
+// subject.
 export const TO_FRAME_VERBS = Object.freeze([
   "canvas",
   "posture",
@@ -447,6 +478,8 @@ export const TO_FRAME_VERBS = Object.freeze([
   "state",
   "pressed",
   "prefs",
+  "requested",
+  "decided",
   "subject"
 ])
 
@@ -454,10 +487,18 @@ export const TO_FRAME_VERBS = Object.freeze([
 // again after its handshake.
 export const TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"])
 
-// The shell's answers to a canvas's press of a control and write, each
-// posted once, by the verb each answers.
-export const ANSWER_OF = Object.freeze({press: "pressed", prefs: "prefs"})
-export const ANSWER_VERBS = Object.freeze(Object.values(ANSWER_OF))
+// The shell's answers, each posted once under the call it answers, by the
+// verb each answers: a request is answered `requested` once the person is
+// asked, then `decided`, or `decided` alone when it ended before; a
+// canvas's write `prefs`; and its press of a control `pressed`, or as a
+// request is when the person approves the control's operation first. Only
+// a request's answers reach a frame that is no canvas.
+export const ANSWER_OF = Object.freeze({
+  press: Object.freeze(["pressed", "requested", "decided"]),
+  prefs: Object.freeze(["prefs"]),
+  request: Object.freeze(["requested", "decided"])
+})
+export const ANSWER_VERBS = Object.freeze([...new Set(Object.values(ANSWER_OF).flat())])
 
 // What a page hears through `cyfr.on`: on a canvas what the shell tells
 // it and `desktop`, its preferences, appearance and person; on an app,
@@ -566,12 +607,12 @@ function canvasError(block, frame) {
 }
 
 // An answer's outcome, with a reason exactly when it was refused (the
-// refusal's class) and, when it was cancelled, perhaps one of
-// `CANCEL_REASONS`.
-const isOutcome = (args, outcomes) => {
+// refusal's class, or a request's `declined`) and, when it was cancelled,
+// perhaps one of `cancelReasons`.
+const isOutcome = (args, outcomes, cancelReasons = CANCEL_REASONS) => {
   if (!outcomes.includes(args.outcome)) return false
   if (args.outcome === "refused") return typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason)
-  if (args.outcome === "cancelled") return !("reason" in args) || CANCEL_REASONS.includes(args.reason)
+  if (args.outcome === "cancelled") return !("reason" in args) || cancelReasons.includes(args.reason)
   return !("reason" in args)
 }
 
@@ -595,6 +636,14 @@ function prefsAnswerError(args) {
     : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused or cancelled too soon"
 }
 
+function decidedError(args) {
+  return sameKeys(args, withReason(args, ["call", "outcome"])) &&
+    isCall(args.call) &&
+    isOutcome(args, REQUEST_OUTCOMES, REQUEST_CANCEL_REASONS)
+    ? null
+    : "decided is exactly a call and its outcome, with a reason when refused and perhaps when cancelled"
+}
+
 function toFrameArgsError(verb, args, frame) {
   switch (verb) {
     case "canvas":
@@ -615,6 +664,15 @@ function toFrameArgsError(verb, args, frame) {
       return pressedError(args)
     case "prefs":
       return prefsAnswerError(args)
+    case "requested":
+      return sameKeys(args, ["call", "request"]) &&
+        isCall(args.call) &&
+        typeof args.request === "string" &&
+        REQUEST_ID.test(args.request)
+        ? null
+        : "requested is exactly a call and its request's id"
+    case "decided":
+      return decidedError(args)
     case "subject":
       return isSubject(args) ? null : "subject is exactly a kind and an id"
     default:
@@ -622,7 +680,7 @@ function toFrameArgsError(verb, args, frame) {
   }
 }
 
-// A message the shell posts a canvas read back: `{ok: true, message}` for
+// A message the shell posts a frame read back: `{ok: true, message}` for
 // exactly `{v, verb, frame, args}` the wire takes, `{ok: false, error}` for
 // anything else.
 export function decodeToFrame(message) {
@@ -640,12 +698,12 @@ export function decodeToFrame(message) {
   return {ok: true, message: {v: VERSION, verb: message.verb, frame: message.frame, args: message.args}}
 }
 
-// The message the bridge posts a canvas for `verb`; one the wire refuses
+// The message the bridge posts a frame for `verb`; one the wire refuses
 // throws, with a sentence that names no value it carries.
 export function toFrameMessage(verb, frame, args) {
   const message = {v: VERSION, verb, frame, args}
   const decoded = decodeToFrame(message)
-  if (!decoded.ok) throw new TypeError("not a message to a canvas: " + decoded.error)
+  if (!decoded.ok) throw new TypeError("not a message to a frame: " + decoded.error)
   return message
 }
 

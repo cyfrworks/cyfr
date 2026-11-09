@@ -22,6 +22,7 @@ import {
   isDesktopId,
   isFrameId,
   isPressValue,
+  isRequest,
   isSubject,
   pairKey,
   publicIdentity,
@@ -39,10 +40,13 @@ const MAX_QUEUED_VERBS = 32
 // second, doubling with each try that brings no picture, to half a minute.
 const REOPEN_FIRST_MS = 1000
 const REOPEN_MOST_MS = 30000
-// How long a press of a control or a write of the preferences waits for
-// the shell's answer before it settles as uncertain: the shell answers at
-// once, so only a socket that went away leaves one unanswered.
+// How long a press of a control, a write of the preferences or a request
+// waits for the shell's answer before it settles as uncertain: the shell
+// answers at once, so only a socket that went away leaves one unanswered.
+// Once the shell says the person is asked (`requested`), it waits for
+// their decision as long as a person may take.
 const ANSWER_TIMEOUT_MS = 30000
+const DECISION_TIMEOUT_MS = 10 * 60 * 1000
 
 // `Prima.Feed.binding_id?/1` and `Prima.Feed.name?/1`: a press whose first
 // argument is a binding id presses a feed's action.
@@ -133,11 +137,13 @@ const SOCKET_SCHEMES = Object.freeze({"http:": "ws:", "https:": "wss:"})
 // on before it (`subject`).
 //
 // A canvas presses a control it declares (`press`) and writes its
-// preferences (`prefs`), each sent with a call number of its own and
-// answered by the shell, or its bridge, with its outcome and that number:
-// the promise each answers settles with the answer carrying its number,
-// whatever order answers arrive in, and one never answered
-// settles as refused `uncertain` after a while, never tried again. A
+// preferences (`prefs`), and any frame asks the person for an act
+// (`request`), each sent with a call number of its own and answered by the
+// shell, or its bridge, with its outcome and that number: the promise each
+// answers settles with the answer carrying its number, whatever order
+// answers arrive in, and one never answered settles as refused `uncertain`
+// after a while, never tried again; a request, or a press the person
+// approves first, waits longer once the shell says the person is asked. A
 // write's answer carries the document and the revision the shell now
 // holds, which `desktop` and its event follow, so a stale write is
 // answered with the document to write over. Until the first of the two, shell verbs wait, since what
@@ -188,9 +194,9 @@ export function createClient({
   // shell's answers to its writes; an app's subject.
   let desktop = null
   let subject = null
-  // The presses and writes waiting for their answer, by the call number
-  // each was sent with and its answer carries back, with the answer verb
-  // that settles it.
+  // The presses, writes and requests waiting for their answer, by the call
+  // number each was sent with and its answers carry back, with the answer
+  // verbs it hears.
   let nextCall = 1
   const calls = new Map()
 
@@ -256,6 +262,8 @@ export function createClient({
       known("canvas")
       return tellDesktop()
     }
+    if (told === "requested") return asked(args.call, args.request)
+    if (told === "decided") return answered(told, args.call, answerOf(args))
     if (kind !== "canvas") return
     if (told === "pressed") return answered(told, args.call, answerOf(args))
     if (told === "prefs") {
@@ -294,8 +302,8 @@ export function createClient({
   }
 
   // The call `call` waiting for a `verb` answer settles with `answer`; an
-  // answer to a call that waits no longer, or that waits for another verb's
-  // answer, settles nothing.
+  // answer to a call that waits no longer, or that hears no such verb,
+  // settles nothing.
   function answered(verb, call, answer) {
     const settle = take(verb, call)
     if (settle) settle(answer)
@@ -303,29 +311,59 @@ export function createClient({
 
   function take(verb, call) {
     const waiting = calls.get(call)
-    if (!waiting || waiting.answer !== verb) return null
+    if (!waiting || !waiting.answers.includes(verb)) return null
     calls.delete(call)
     return waiting.settle
   }
 
-  // A press or a write is sent with a call number of its own and waits, a
-  // bounded while, for the answer that carries it back.
-  function awaitAnswer(name, args) {
+  // The person is asked for the call `call`, as the request `request`: it
+  // waits on for their decision. Only the first such answer counts.
+  function asked(call, request) {
+    const waiting = calls.get(call)
+    if (!waiting || !waiting.answers.includes("requested") || waiting.asked) return
+    waiting.asked = true
+    waiting.requested(request)
+  }
+
+  // A press, a write or a request is sent with a call number of its own and
+  // waits, a bounded while, for the answer that carries it back;
+  // `onRequested` hears the request's id once the person is asked, or null
+  // once it settles without.
+  function awaitAnswer(name, args, onRequested = () => {}) {
     const call = nextCall++
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        calls.delete(call)
-        resolve(UNCERTAIN)
-      }, ANSWER_TIMEOUT_MS)
+      let timer = null
+      const settle = (answer) => {
+        clearTimeout(timer)
+        onRequested(null)
+        resolve(answer)
+      }
+      const wait = (ms) => {
+        clearTimeout(timer)
+        timer = setTimeout(() => {
+          calls.delete(call)
+          settle(UNCERTAIN)
+        }, ms)
+      }
+      wait(ANSWER_TIMEOUT_MS)
       calls.set(call, {
-        answer: ANSWER_OF[name],
-        settle: (answer) => {
-          clearTimeout(timer)
-          resolve(answer)
-        }
+        answers: ANSWER_OF[name],
+        asked: false,
+        requested: (request) => {
+          wait(DECISION_TIMEOUT_MS)
+          onRequested(request)
+        },
+        settle
       })
       verb(name, {...args, call})
     })
+  }
+
+  // A request's handle: its decision, carrying `requested`, the request's
+  // id once the person is asked, or null when it was decided without.
+  function requestHandle(decision, requested) {
+    decision.requested = requested
+    return decision
   }
 
   // Settles once the shell's last word on this canvas is `live`. The
@@ -810,8 +848,12 @@ export function createClient({
      * `{outcome: "refused", reason}` with the refusal's class, or
      * `{outcome: "cancelled"}` when no input of the person's carried it or
      * the canvas was not shown, with `reason: "too_soon"` when it came
-     * within a few seconds of the last spend of the activation. Nothing is
-     * tried again.
+     * within a few seconds of the last spend of the activation. A control
+     * whose operation the person approves first settles once they decide,
+     * as `cyfr.request` does: `{outcome: "approved"}`, `{outcome:
+     * "refused", reason}` (`declined` when the person refused it, or a
+     * refusal's class) or `{outcome: "cancelled"}`, perhaps with its
+     * `reason`. Nothing is tried again.
      *
      * Its first argument a binding id (as a `feed.results` event carries
      * one) and its second an action's name, it presses that feed's action
@@ -860,10 +902,43 @@ export function createClient({
 
     /**
      * On a canvas, open one of CYFR's own pages by its key, e.g.
-     * "schedules" or "vault". Only for an input of the person's.
+     * "schedules" or "vault", and optionally at one record on it, by its
+     * id, e.g. a thread's. Only for an input of the person's.
      */
-    settings(page) {
-      verb("settings", {page})
+    settings(page, ref = null) {
+      verb("settings", ref === null ? {page} : {page, ref})
+    },
+
+    /**
+     * Ask the person for an act only they may do: an operation by its
+     * name, "tool.action", with its arguments, or "grant" with `{ref}`, a
+     * component reference, e.g. "c:local.openai". The person decides in
+     * CYFR's own prompt, never in the frame, and the frame performs
+     * nothing: CYFR runs what they approve. Which operations a frame may
+     * ask for, and what the person is shown, are CYFR's. Only for an input
+     * of the person's, from any frame.
+     * @param {string} operation - "tool.action", or "grant"
+     * @param {object} [args] - its arguments; for "grant" exactly `{ref}`
+     * @returns {Promise<{outcome: string, reason?: string}> & {requested: Promise<string|null>}}
+     *   the decision: `{outcome: "approved"}` once it ran, `{outcome:
+     *   "refused", reason}` (`declined` when the person refused it, or a
+     *   refusal's class when CYFR did), or `{outcome: "cancelled"}`, as
+     *   when no input of the person's carried it, with `reason`
+     *   `too_soon`, `busy`, `expired` or `dismissed` when CYFR says why.
+     *   One that got no answer settles refused `uncertain`.
+     *   `requested` resolves with the request's id once the person is
+     *   asked, or with null when it was decided without asking them.
+     *   Arguments outside the wire reject `invalid_argument`.
+     */
+    request(operation, args = {}) {
+      if (!isRequest(operation, args)) {
+        const refused = invalid("a request names tool.action with an object of arguments, or grant with exactly a ref")
+        return requestHandle(refused, Promise.resolve(null))
+      }
+      if (!framed) return requestHandle(Promise.resolve(CANCELLED), Promise.resolve(null))
+      let heard
+      const requested = new Promise((resolve) => (heard = resolve))
+      return requestHandle(awaitAnswer("request", {operation, args}, heard), requested)
     },
 
     /**

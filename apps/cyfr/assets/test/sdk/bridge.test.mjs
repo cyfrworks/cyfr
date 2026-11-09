@@ -7,7 +7,7 @@ import {afterEach, describe, test} from "node:test"
 import IframeBridge from "../../js/hooks/iframe_bridge.js"
 import {createClient} from "../../js/sdk/client.js"
 import {FRAME_BEARER_EVENT} from "../../js/canvas/signals.js"
-import {CREDENTIAL, HANDSHAKE} from "../../js/sdk/wire.js"
+import {CREDENTIAL, HANDSHAKE, toFrameMessage} from "../../js/sdk/wire.js"
 import {credentialOf, eventually, fixture, frameWindow} from "./support.mjs"
 
 const FRAME = "frm_01a09fee2e4f"
@@ -93,14 +93,14 @@ describe("the handshake", () => {
     port.close()
   })
 
-  test("the bridge listens to no window message", () => {
+  test("the bridge listens to no window message, only the shell page's own inputs", () => {
     const added = []
     const previous = globalThis.window
     globalThis.window = {addEventListener: (type) => added.push(type)}
 
     try {
       mountBridge().load()
-      assert.deepEqual(added, [])
+      assert.deepEqual(added.sort(), ["keydown", "pointerdown", "pointerup", "touchend"])
     } finally {
       if (previous === undefined) delete globalThis.window
       else globalThis.window = previous
@@ -116,15 +116,37 @@ describe("what the port carries", () => {
     return {...bridge, port}
   }
 
-  test("each shell verb reaches the view as frame_verb for this frame", async () => {
+  // An app's request is the person's, held to their input
+  // (test/canvas/hook.test.mjs); every other verb of an app's needs none.
+  test("each shell verb but a request reaches the view as frame_verb for this frame", async () => {
     const {port, events} = await connected()
+    const verbs = fixture.shell.filter(({verb}) => verb !== "request")
 
-    for (const {message} of fixture.shell) port.postMessage(message)
+    for (const {message} of verbs) port.postMessage(message)
 
-    await eventually(() => events.length === 1 + fixture.shell.length)
+    await eventually(() => events.length === 1 + verbs.length)
     assert.deepEqual(
       events.slice(1),
-      fixture.shell.map(({message}) => ({event: "frame_verb", payload: {frame: FRAME, message}}))
+      verbs.map(({message}) => ({event: "frame_verb", payload: {frame: FRAME, message}}))
+    )
+    port.close()
+  })
+
+  test("a request with no input of the person's is dropped and told it did not run, under its call", async () => {
+    const {hook, port, events} = await connected()
+    const heard = []
+    port.onmessage = (event) => heard.push(event.data)
+    const requests = fixture.shell.filter(({verb}) => verb === "request").map(({message}) => message)
+    assert.ok(requests.length > 0)
+
+    for (const message of requests) port.postMessage(message)
+
+    await eventually(() => heard.length === requests.length)
+    assert.equal(hook.dropped, requests.length)
+    assert.equal(events.length, 1)
+    assert.deepEqual(
+      heard,
+      requests.map(({args: {call}}) => toFrameMessage("decided", FRAME, {call, outcome: "cancelled"}))
     )
     port.close()
   })

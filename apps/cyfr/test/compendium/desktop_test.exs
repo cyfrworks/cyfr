@@ -4,9 +4,11 @@
 defmodule Compendium.DesktopTest do
   @moduledoc """
   A desktop's control read at the press as the call it makes: the
-  declaration's own control, the direct rule read again, and a pick
-  checked against the strings the stream publishes there now, read under
-  the caller's context. Nothing is run here.
+  declaration's own control, the control rule read again, run directly
+  or once the person approves it on CYFR's preview, and a pick checked
+  against the strings the stream publishes there now, read under the
+  caller's context; and a frame's request read as what it asks the
+  person for. Nothing is run here.
   """
 
   use ExUnit.Case, async: false
@@ -57,7 +59,7 @@ defmodule Compendium.DesktopTest do
     digest = schedule!(ctx, "digest")
 
     assert Compendium.desktop_control(ctx, desktop, "pause", digest.id) ==
-             {:ok, {"schedule/pause", %{"schedule_id" => digest.id}}}
+             {:ok, {:direct, {"schedule/pause", %{"schedule_id" => digest.id}}}}
 
     assert {:error, {:invalid_argument, _}} =
              Compendium.desktop_control(ctx, desktop, "pause", "sched_not_published")
@@ -72,9 +74,10 @@ defmodule Compendium.DesktopTest do
              Compendium.desktop_control(ctx, desktop, "pause", elsewhere.id)
   end
 
-  test "a control the desktop does not declare, or one the direct rule refuses, makes no call", %{
-    ctx: ctx
-  } do
+  test "a control the desktop does not declare, or one the control rule refuses, makes no call",
+       %{
+         ctx: ctx
+       } do
     desktop =
       desktop([
         %{
@@ -83,12 +86,11 @@ defmodule Compendium.DesktopTest do
           "operation" => "schedule.pause",
           "args" => %{"schedule_id" => "s"}
         },
-        %{"id" => "make", "label" => "Make", "operation" => "schedule.create"},
         %{"id" => "list", "label" => "List", "operation" => "schedule.list"}
       ])
 
     assert Compendium.desktop_control(ctx, desktop, "fixed", nil) ==
-             {:ok, {"schedule/pause", %{"schedule_id" => "s"}}}
+             {:ok, {:direct, {"schedule/pause", %{"schedule_id" => "s"}}}}
 
     assert {:error, {:invalid_argument, _}} =
              Compendium.desktop_control(ctx, desktop, "fixed", "v")
@@ -96,13 +98,98 @@ defmodule Compendium.DesktopTest do
     assert {:error, {:invalid_argument, _}} =
              Compendium.desktop_control(ctx, desktop, "nowhere", nil)
 
-    for id <- ~w(make list) do
-      assert {:error, {:invalid_argument, sentence}} =
-               Compendium.desktop_control(ctx, desktop, id, nil)
+    assert {:error, {:invalid_argument, sentence}} =
+             Compendium.desktop_control(ctx, desktop, "list", nil)
 
-      assert sentence =~ "tincture.desktop.controls #{id}"
-    end
+    assert sentence =~ "tincture.desktop.controls list"
 
     assert {:error, {:invalid_argument, _}} = Compendium.desktop_control(ctx, nil, "fixed", nil)
+  end
+
+  test "a control of a person-only or destructive act asks, with the preview of exactly its call",
+       %{ctx: ctx} do
+    digest = schedule!(ctx, "digest")
+
+    desktop =
+      desktop([
+        %{
+          "id" => "make",
+          "label" => "Make",
+          "operation" => "schedule.create",
+          "args" => %{
+            "name" => "nightly",
+            "cron_expression" => "0 3 * * *",
+            "reference" => "reagent:local.nightly",
+            "profile_id" => "prof-default"
+          }
+        },
+        %{"id" => "drop", "label" => "Delete", "operation" => "schedule.delete", "pick" => @pick}
+      ])
+
+    assert {:ok, {:asks, ask}} = Compendium.desktop_control(ctx, desktop, "make", nil)
+    assert %{operation: "schedule.create", tool: "schedule/create"} = ask
+    assert ask.args["name"] == "nightly"
+
+    assert %Prima.Confirmation.Preview{operation: "schedule.create", details: details} =
+             ask.preview
+
+    assert details == %{
+             "name" => "nightly",
+             "cron_expression" => "0 3 * * *",
+             "reference" => "reagent:local.nightly",
+             "profile_id" => "prof-default"
+           }
+
+    # A pick is checked as a direct control's is before anything is asked.
+    assert {:ok, {:asks, %{tool: "schedule/delete", args: %{"schedule_id" => id}}}} =
+             Compendium.desktop_control(ctx, desktop, "drop", digest.id)
+
+    assert id == digest.id
+
+    assert {:error, {:invalid_argument, _}} =
+             Compendium.desktop_control(ctx, desktop, "drop", "sched_not_published")
+  end
+
+  describe "a frame's request" do
+    test "names a grant of an installed component, versionless", %{ctx: ctx} do
+      assert {:error, {:not_found, "Component", "c:local.nothing-here"}} =
+               Compendium.desktop_request(ctx, "grant", %{"ref" => "c:local.nothing-here"})
+    end
+
+    test "names a person-only act with arguments its declaration takes, previewed as it runs",
+         %{ctx: ctx} do
+      args = %{
+        "name" => "digest",
+        "cron_expression" => "0 8 * * *",
+        "reference" => "formula:local.digest",
+        "profile_id" => "prof-default",
+        "input" => %{"b" => [1, 2], "a" => "x"}
+      }
+
+      assert {:ok, {:asks, ask}} = Compendium.desktop_request(ctx, "schedule.create", args)
+      assert ask.tool == "schedule/create"
+      assert ask.args == args
+      assert ask.preview.details["input"] == ~s({"a":"x","b":[1,2]})
+      assert ask.preview.athanor != nil
+    end
+
+    test "refuses what is not the person's own act, what the declaration does not take, and secrets",
+         %{ctx: ctx} do
+      for {operation, args} <- [
+            {"schedule.pause", %{"schedule_id" => "s"}},
+            {"profile.grant", %{}},
+            {"schedule.list", %{}},
+            {"schedule.create", %{"name" => "x", "action" => "delete"}},
+            {"schedule.create", %{"nme" => "x"}},
+            {"feed.bind", %{"name" => "x", "api_key" => "sk-1"}},
+            {"schedule.create", %{"name" => String.duplicate("a", 2_000)}}
+          ] do
+        assert {:error, {:invalid_argument, sentence}} =
+                 Compendium.desktop_request(ctx, operation, args),
+               inspect({operation, args})
+
+        assert is_binary(sentence)
+      end
+    end
   end
 end

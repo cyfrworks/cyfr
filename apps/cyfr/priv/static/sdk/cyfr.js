@@ -40,14 +40,17 @@
     "grant",
     "prefs",
     "ask",
-    "settings"
+    "settings",
+    "request"
   ]);
   var CANVAS_VERBS = Object.freeze(["press", "failed", "grant", "prefs", "ask", "settings"]);
-  var PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings"]);
+  var PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings", "request"]);
   var SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"]);
   var PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"]);
   var PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"]);
   var CANCEL_REASONS = Object.freeze(["too_soon"]);
+  var REQUEST_OUTCOMES = Object.freeze(["approved", "refused", "cancelled"]);
+  var REQUEST_CANCEL_REASONS = Object.freeze(["too_soon", "busy", "expired", "dismissed"]);
   var STAGES = Object.freeze(["load", "runtime"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
@@ -60,8 +63,12 @@
   }
   var FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/;
   var TINCTURE_REF = /^(t|tincture):\S+$/;
+  var COMPONENT_REF = /^(c|catalyst|r|reagent|f|formula|t|tincture):\S+$/;
   var DESKTOP_ID = /^[a-z][a-z0-9_-]{0,62}$/;
   var SUBJECT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/;
+  var OPERATION = /^[a-z][a-z0-9_-]{0,62}\.[a-z][a-z0-9_-]{0,62}$/;
+  var GRANT_OPERATION = "grant";
+  var REQUEST_ID = /^req_[A-Za-z0-9_-]{16,64}$/;
   var MAX_PRESS_VALUE = 256;
   var MAX_CALL = 2147483647;
   var ACCENT = /^#[0-9a-f]{6}$/;
@@ -91,6 +98,8 @@
   var isDesktopId = (id) => typeof id === "string" && DESKTOP_ID.test(id);
   var isPressValue = (value) => isBoundedText(value, MAX_PRESS_VALUE);
   var isCall = (call) => Number.isInteger(call) && call >= 1 && call <= MAX_CALL;
+  var isGrantArgs = (args) => isObject(args) && sameKeys(args, ["ref"]) && typeof args.ref === "string" && COMPONENT_REF.test(args.ref);
+  var isRequest = (operation, args) => operation === GRANT_OPERATION ? isGrantArgs(args) : typeof operation === "string" && OPERATION.test(operation) && isObject(args);
   var isSubject = (subject) => isObject(subject) && sameKeys(subject, ["kind", "id"]) && SUBJECT_KINDS.includes(subject.kind) && typeof subject.id === "string" && SUBJECT_ID.test(subject.id);
   function isFrameId(id) {
     return typeof id === "string" && FRAME_ID.test(id);
@@ -213,11 +222,17 @@
     "state",
     "pressed",
     "prefs",
+    "requested",
+    "decided",
     "subject"
   ]);
   var TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"]);
-  var ANSWER_OF = Object.freeze({ press: "pressed", prefs: "prefs" });
-  var ANSWER_VERBS = Object.freeze(Object.values(ANSWER_OF));
+  var ANSWER_OF = Object.freeze({
+    press: Object.freeze(["pressed", "requested", "decided"]),
+    prefs: Object.freeze(["prefs"]),
+    request: Object.freeze(["requested", "decided"])
+  });
+  var ANSWER_VERBS = Object.freeze([...new Set(Object.values(ANSWER_OF).flat())]);
   var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"]);
   var POSTURES = ["desk", "hand"];
   var SHELL_STATES = ["live", "frozen"];
@@ -258,10 +273,10 @@
     if (!isPerson(block.person)) return "a canvas's person is exactly a name, or none";
     return null;
   }
-  var isOutcome = (args, outcomes) => {
+  var isOutcome = (args, outcomes, cancelReasons = CANCEL_REASONS) => {
     if (!outcomes.includes(args.outcome)) return false;
     if (args.outcome === "refused") return typeof args.reason === "string" && REFUSAL_CLASS.test(args.reason);
-    if (args.outcome === "cancelled") return !("reason" in args) || CANCEL_REASONS.includes(args.reason);
+    if (args.outcome === "cancelled") return !("reason" in args) || cancelReasons.includes(args.reason);
     return !("reason" in args);
   };
   var withReason = (args, keys) => "reason" in args ? [...keys, "reason"] : keys;
@@ -272,6 +287,9 @@
   function prefsAnswerError(args) {
     const keys = withReason(args, ["call", "outcome", "document", "revision"]);
     return sameKeys(args, keys) && isCall(args.call) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES) ? null : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused or cancelled too soon";
+  }
+  function decidedError(args) {
+    return sameKeys(args, withReason(args, ["call", "outcome"])) && isCall(args.call) && isOutcome(args, REQUEST_OUTCOMES, REQUEST_CANCEL_REASONS) ? null : "decided is exactly a call and its outcome, with a reason when refused and perhaps when cancelled";
   }
   function toFrameArgsError(verb, args, frame) {
     switch (verb) {
@@ -289,6 +307,10 @@
         return pressedError(args);
       case "prefs":
         return prefsAnswerError(args);
+      case "requested":
+        return sameKeys(args, ["call", "request"]) && isCall(args.call) && typeof args.request === "string" && REQUEST_ID.test(args.request) ? null : "requested is exactly a call and its request's id";
+      case "decided":
+        return decidedError(args);
       case "subject":
         return isSubject(args) ? null : "subject is exactly a kind and an id";
       default:
@@ -315,6 +337,7 @@
   var REOPEN_FIRST_MS = 1e3;
   var REOPEN_MOST_MS = 3e4;
   var ANSWER_TIMEOUT_MS = 3e4;
+  var DECISION_TIMEOUT_MS = 10 * 60 * 1e3;
   var BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   var ACTION_NAME = /^[a-z0-9][a-z0-9-]{0,47}$/;
   var BENIGN_ERRORS = Object.freeze([
@@ -416,6 +439,8 @@
         known("canvas");
         return tellDesktop();
       }
+      if (told2 === "requested") return asked(args.call, args.request);
+      if (told2 === "decided") return answered(told2, args.call, answerOf(args));
       if (kind !== "canvas") return;
       if (told2 === "pressed") return answered(told2, args.call, answerOf(args));
       if (told2 === "prefs") {
@@ -450,26 +475,49 @@
     }
     function take(verb2, call2) {
       const waiting = calls.get(call2);
-      if (!waiting || waiting.answer !== verb2) return null;
+      if (!waiting || !waiting.answers.includes(verb2)) return null;
       calls.delete(call2);
       return waiting.settle;
     }
-    function awaitAnswer(name, args) {
+    function asked(call2, request2) {
+      const waiting = calls.get(call2);
+      if (!waiting || !waiting.answers.includes("requested") || waiting.asked) return;
+      waiting.asked = true;
+      waiting.requested(request2);
+    }
+    function awaitAnswer(name, args, onRequested = () => {
+    }) {
       const call2 = nextCall++;
       return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          calls.delete(call2);
-          resolve(UNCERTAIN);
-        }, ANSWER_TIMEOUT_MS);
+        let timer = null;
+        const settle2 = (answer) => {
+          clearTimeout(timer);
+          onRequested(null);
+          resolve(answer);
+        };
+        const wait = (ms) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            calls.delete(call2);
+            settle2(UNCERTAIN);
+          }, ms);
+        };
+        wait(ANSWER_TIMEOUT_MS);
         calls.set(call2, {
-          answer: ANSWER_OF[name],
-          settle: (answer) => {
-            clearTimeout(timer);
-            resolve(answer);
-          }
+          answers: ANSWER_OF[name],
+          asked: false,
+          requested: (request2) => {
+            wait(DECISION_TIMEOUT_MS);
+            onRequested(request2);
+          },
+          settle: settle2
         });
         verb(name, __spreadProps(__spreadValues({}, args), { call: call2 }));
       });
+    }
+    function requestHandle(decision, requested) {
+      decision.requested = requested;
+      return decision;
     }
     function shown() {
       return latest.get("state") === "live" ? Promise.resolve() : new Promise((resolve) => unshown.push(resolve));
@@ -854,8 +902,12 @@
        * `{outcome: "refused", reason}` with the refusal's class, or
        * `{outcome: "cancelled"}` when no input of the person's carried it or
        * the canvas was not shown, with `reason: "too_soon"` when it came
-       * within a few seconds of the last spend of the activation. Nothing is
-       * tried again.
+       * within a few seconds of the last spend of the activation. A control
+       * whose operation the person approves first settles once they decide,
+       * as `cyfr.request` does: `{outcome: "approved"}`, `{outcome:
+       * "refused", reason}` (`declined` when the person refused it, or a
+       * refusal's class) or `{outcome: "cancelled"}`, perhaps with its
+       * `reason`. Nothing is tried again.
        *
        * Its first argument a binding id (as a `feed.results` event carries
        * one) and its second an action's name, it presses that feed's action
@@ -901,10 +953,42 @@
       },
       /**
        * On a canvas, open one of CYFR's own pages by its key, e.g.
-       * "schedules" or "vault". Only for an input of the person's.
+       * "schedules" or "vault", and optionally at one record on it, by its
+       * id, e.g. a thread's. Only for an input of the person's.
        */
-      settings(page) {
-        verb("settings", { page });
+      settings(page, ref = null) {
+        verb("settings", ref === null ? { page } : { page, ref });
+      },
+      /**
+       * Ask the person for an act only they may do: an operation by its
+       * name, "tool.action", with its arguments, or "grant" with `{ref}`, a
+       * component reference, e.g. "c:local.openai". The person decides in
+       * CYFR's own prompt, never in the frame, and the frame performs
+       * nothing: CYFR runs what they approve. Which operations a frame may
+       * ask for, and what the person is shown, are CYFR's. Only for an input
+       * of the person's, from any frame.
+       * @param {string} operation - "tool.action", or "grant"
+       * @param {object} [args] - its arguments; for "grant" exactly `{ref}`
+       * @returns {Promise<{outcome: string, reason?: string}> & {requested: Promise<string|null>}}
+       *   the decision: `{outcome: "approved"}` once it ran, `{outcome:
+       *   "refused", reason}` (`declined` when the person refused it, or a
+       *   refusal's class when CYFR did), or `{outcome: "cancelled"}`, as
+       *   when no input of the person's carried it, with `reason`
+       *   `too_soon`, `busy`, `expired` or `dismissed` when CYFR says why.
+       *   One that got no answer settles refused `uncertain`.
+       *   `requested` resolves with the request's id once the person is
+       *   asked, or with null when it was decided without asking them.
+       *   Arguments outside the wire reject `invalid_argument`.
+       */
+      request(operation, args = {}) {
+        if (!isRequest(operation, args)) {
+          const refused = invalid("a request names tool.action with an object of arguments, or grant with exactly a ref");
+          return requestHandle(refused, Promise.resolve(null));
+        }
+        if (!framed) return requestHandle(Promise.resolve(CANCELLED), Promise.resolve(null));
+        let heard2;
+        const requested = new Promise((resolve) => heard2 = resolve);
+        return requestHandle(awaitAnswer("request", { operation, args }, heard2), requested);
       },
       /**
        * On a canvas, ask the person to grant a component: a component

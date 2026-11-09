@@ -177,6 +177,48 @@ defmodule Cyfr.Providers.AttentionTest do
       refute inspect(item) =~ @private
     end
 
+    test "lists a frame's request by its id and operation while its shell holds it", %{
+      ctx: ctx,
+      other_ctx: other_ctx
+    } do
+      id = Prima.TinctureWire.request_id()
+      :ok = Cyfr.Requests.open(ctx, id, "schedule.create")
+
+      assert [item] = refreshed(ctx)
+
+      assert %{
+               "kind" => "grant_request",
+               "id" => ^id,
+               "label" => "schedule.create",
+               "destination" => %{"kind" => "ref", "page" => nil, "ref" => ^id},
+               "outcome" => nil
+             } = item
+
+      assert {:ok, []} = Provider.waiting(other_ctx, other_ctx.user_id)
+
+      :ok = Cyfr.Requests.close(ctx, id, :resolved)
+      assert refreshed(ctx) == []
+    end
+
+    test "lists a request no more once the shell that held it is gone", %{ctx: ctx} do
+      test = self()
+
+      holder =
+        spawn(fn ->
+          :ok = Cyfr.Requests.open(ctx, Prima.TinctureWire.request_id(), "feed.remove")
+          send(test, :held)
+          receive do: (:stop -> :ok)
+        end)
+
+      assert_receive :held
+      assert [%{"kind" => "grant_request"}] = refreshed(ctx)
+
+      ref = Process.monitor(holder)
+      send(holder, :stop)
+      assert_receive {:DOWN, ^ref, :process, ^holder, _reason}
+      Prima.Test.Wait.wait_until(fn -> refreshed(ctx) == [] end, 2_000, "the request left")
+    end
+
     test "lists the newest failed top-level run of a reference no later run ended after", %{
       ctx: ctx,
       actor: actor
@@ -282,11 +324,12 @@ defmodule Cyfr.Providers.AttentionTest do
       schedule = schedule!(actor, ctx.user_id, "s")
       occurrence!(actor, schedule.id, ~U[2026-01-02 00:00:00.000000Z], "failed")
       offer!(other_ctx, ctx.user_id, ["f.csv"])
+      :ok = Cyfr.Requests.open(ctx, Prima.TinctureWire.request_id(), "layout.edit")
 
       items = refreshed(ctx)
 
       assert items |> Enum.map(& &1["kind"]) |> Enum.sort() ==
-               ~w(approval confirmation failed_run failed_schedule file_offer)
+               ~w(approval confirmation failed_run failed_schedule file_offer grant_request)
 
       times = Enum.map(items, &elem(DateTime.from_iso8601(&1["since"]), 1))
       assert times == Enum.sort(times, DateTime)
@@ -434,6 +477,21 @@ defmodule Cyfr.Providers.AttentionTest do
         :ok = Sanctum.Telemetry.confirmation(stage, actor.athanor_id, ctx.user_id, fields)
         assert_receive %Attention{kind: :removed} = left
         assert removed?(left, ref, outcome), inspect(stage)
+      end
+    end
+
+    test "a request enters as it is asked, as the refresh lists it, and leaves as it ends", %{
+      ctx: ctx
+    } do
+      for outcome <- ~w(resolved expired withdrawn)a do
+        id = Prima.TinctureWire.request_id()
+        :ok = Cyfr.Requests.open(ctx, id, "schedule.update")
+        assert_receive %Attention{kind: :grant_request} = entered
+        assert [read_as(entered)] == refreshed(ctx)
+
+        :ok = Cyfr.Requests.close(ctx, id, outcome)
+        assert_receive %Attention{kind: :removed} = left
+        assert removed?(left, id, Atom.to_string(outcome))
       end
     end
 
@@ -598,6 +656,7 @@ defmodule Cyfr.Providers.AttentionTest do
     end
 
     test "no item names a person", %{ctx: ctx, actor: actor, other_ctx: other_ctx} do
+      :ok = Cyfr.Requests.open(ctx, Prima.TinctureWire.request_id(), "feed.bind")
       approval!(actor, thread!(actor, "t"))
       confirmation!(ctx)
       run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", DateTime.utc_now())

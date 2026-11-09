@@ -156,6 +156,87 @@ function told(frame) {
   return seen
 }
 
+// A frame drawn in its wrapper, a canvas's or an app's, whose bridge is
+// answered `reply` for its handshake: the window posts, the view's events,
+// and once loaded its end of the port and every message heard there.
+function connectBridge({reply, state = "live", frame, app = false}) {
+  const el = canvasFrame(frame, undefined, state)
+  if (app) delete el.dataset.frameKind
+  const posted = []
+  el.contentWindow = {postMessage: (data, origin, transfer) => posted.push({data, origin, transfer})}
+  const {hook, events} = mountBridge(el, reply)
+  const heard = []
+  let port = null
+  const load = () => {
+    el.dispatchEvent(new Event("load"))
+    if (posted.length > 0 && port === null) {
+      port = posted[0].transfer[0]
+      port.onmessage = (event) => heard.push(event.data)
+    }
+    return port
+  }
+  const close = () => {
+    hook.destroyed()
+    port?.close()
+  }
+  return {el, hook, events, posted, heard, load, close}
+}
+
+// Post `message` from the frame's end of the port and wait until the
+// bridge has forwarded or dropped it.
+async function send(bridge, port, message) {
+  const before = bridge.hook.dropped + bridge.events.length
+  port.postMessage(message)
+  await eventually(() => bridge.hook.dropped + bridge.events.length > before)
+}
+
+const forwarded = (events) => events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.message)
+
+// The shell's document as the bridge reads it: its active element, and
+// every listener anything adds to it, by type.
+let documentListeners
+function shellDocument() {
+  documentListeners = []
+  globalThis.window.document = {
+    activeElement: null,
+    addEventListener: (type) => documentListeners.push(type)
+  }
+}
+
+// The shell document's transient activation: active, inactive, or a
+// browser with no such API; and its active element.
+function activation(state) {
+  if (state === "absent") delete globalThis.window.navigator
+  else globalThis.window.navigator = {userActivation: {isActive: state === "active"}}
+}
+const focus = (element) => (globalThis.window.document.activeElement = element)
+
+// An input of the person's in the frame, as the shell's page sees one:
+// the page holding activation, with the frame its active element.
+function input(el) {
+  activation("active")
+  focus(el)
+}
+
+// An input the shell's own page hears: a press in its chrome.
+const chromePress = () => listeners.pointerdown({type: "pointerdown"})
+
+const stateEvent = (state) => new CustomEvent(FRAME_STATE_EVENT, {detail: {state}})
+
+// The frame live and shown with the socket up, then put in `standing`:
+// hidden (frozen, its wrapper not shown, as the layer holds a canvas it
+// does not show) or disconnected (the view's socket down).
+function stand(el, standing) {
+  el.dispatchEvent(stateEvent("reconnected"))
+  el.dispatchEvent(stateEvent("live"))
+  el.wrapper.dataset.canvasShown = "true"
+  if (standing === "hidden") {
+    el.dispatchEvent(stateEvent("frozen"))
+    el.wrapper.dataset.canvasShown = "false"
+  }
+  if (standing === "disconnected") el.dispatchEvent(stateEvent("disconnected"))
+}
+
 // A pointer event on the edge strip, or elsewhere in the canvas layer.
 function pointer(type, {x, y, pointerId = 1, onStrip = true}) {
   const event = new Event(type)
@@ -334,22 +415,36 @@ describe("what a canvas frame is told", () => {
     assert.deepEqual(elsewhere, [])
   })
 
-  test("the shell's answers reach only the canvas frame they name, and only answers", () => {
+  test("a canvas's answers reach only the canvas frame they name, a request's any frame they name, and only answers", () => {
     const frame = canvasFrame(FRAME)
     const app = frameElement(OTHER)
     const seen = told(frame)
     const elsewhere = told(app)
     const {handlers} = mountCanvas(canvasElement({frames: [frame, app]}))
     const args = {control: "pause-digest", outcome: "accepted"}
+    const prefs = {call: 2, outcome: "saved", document: {}, revision: 1}
+    const requested = {call: 3, request: "req_9fKd02LmQpZx7Yt1Rw5sVa"}
+    const decided = {call: 3, outcome: "approved"}
 
     seen.splice(0)
     handlers.canvas_answer({frame: FRAME, verb: "pressed", args})
     handlers.canvas_answer({frame: OTHER, verb: "pressed", args})
+    handlers.canvas_answer({frame: OTHER, verb: "prefs", args: prefs})
+    handlers.canvas_answer({frame: OTHER, verb: "requested", args: requested})
+    handlers.canvas_answer({frame: OTHER, verb: "decided", args: decided})
+    handlers.canvas_answer({frame: FRAME, verb: "decided", args: decided})
+    handlers.canvas_answer({frame: OTHER, verb: "subject", args: {kind: "run", id: "exec_1"}})
     handlers.canvas_answer({frame: FRAME, verb: "installed", args: {tinctures: []}})
     handlers.canvas_answer(null)
 
-    assert.deepEqual(seen, [{verb: "pressed", args}])
-    assert.deepEqual(elsewhere, [])
+    assert.deepEqual(seen, [
+      {verb: "pressed", args},
+      {verb: "decided", args: decided}
+    ])
+    assert.deepEqual(elsewhere, [
+      {verb: "requested", args: requested},
+      {verb: "decided", args: decided}
+    ])
   })
 })
 
@@ -490,85 +585,9 @@ describe("a canvas frame's bridge", () => {
   const OPEN = {ref: "tincture:local.vault"}
   const GRANT = fixture.shell.find((vector) => vector.verb === "grant").message.args
 
-  // A canvas frame whose bridge is answered `reply` for its handshake: the
-  // window posts, the view's events, and once loaded its end of the port
-  // and every message heard there.
-  function connect({reply = LIVE, state = "live", frame = CANVAS} = {}) {
-    const el = canvasFrame(frame, undefined, state)
-    const posted = []
-    el.contentWindow = {postMessage: (data, origin, transfer) => posted.push({data, origin, transfer})}
-    const {hook, events} = mountBridge(el, reply)
-    const heard = []
-    let port = null
-    const load = () => {
-      el.dispatchEvent(new Event("load"))
-      if (posted.length > 0 && port === null) {
-        port = posted[0].transfer[0]
-        port.onmessage = (event) => heard.push(event.data)
-      }
-      return port
-    }
-    const close = () => {
-      hook.destroyed()
-      port?.close()
-    }
-    return {el, hook, events, posted, heard, load, close}
-  }
+  const connect = ({reply = LIVE, state = "live", frame = CANVAS} = {}) => connectBridge({reply, state, frame})
 
-  // Post `message` from the frame's end of the port and wait until the
-  // bridge has forwarded or dropped it.
-  async function send(bridge, port, message) {
-    const before = bridge.hook.dropped + bridge.events.length
-    port.postMessage(message)
-    await eventually(() => bridge.hook.dropped + bridge.events.length > before)
-  }
-
-  const forwarded = (events) => events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.message)
-
-  // The shell's document as the bridge reads it: its active element, and
-  // every listener anything adds to it, by type.
-  let documentListeners
-  beforeEach(() => {
-    documentListeners = []
-    globalThis.window.document = {
-      activeElement: null,
-      addEventListener: (type) => documentListeners.push(type)
-    }
-  })
-
-  // The shell document's transient activation: active, inactive, or a
-  // browser with no such API; and its active element.
-  function activation(state) {
-    if (state === "absent") delete globalThis.window.navigator
-    else globalThis.window.navigator = {userActivation: {isActive: state === "active"}}
-  }
-  const focus = (element) => (globalThis.window.document.activeElement = element)
-
-  // An input of the person's in the frame, as the shell's page sees one:
-  // the page holding activation, with the frame its active element.
-  function input(el) {
-    activation("active")
-    focus(el)
-  }
-
-  // An input the shell's own page hears: a press in its chrome.
-  const chromePress = () => listeners.pointerdown({type: "pointerdown"})
-
-  const stateEvent = (state) => new CustomEvent(FRAME_STATE_EVENT, {detail: {state}})
-
-  // The frame live and shown with the socket up, then put in `standing`:
-  // hidden (frozen, its wrapper not shown, as the layer holds a canvas it
-  // does not show) or disconnected (the view's socket down).
-  function stand(el, standing) {
-    el.dispatchEvent(stateEvent("reconnected"))
-    el.dispatchEvent(stateEvent("live"))
-    el.wrapper.dataset.canvasShown = "true"
-    if (standing === "hidden") {
-      el.dispatchEvent(stateEvent("frozen"))
-      el.wrapper.dataset.canvasShown = "false"
-    }
-    if (standing === "disconnected") el.dispatchEvent(stateEvent("disconnected"))
-  }
+  beforeEach(shellDocument)
 
   test("each handshake reply the fixture takes is handed over: the port, the canvas message, the credential", async () => {
     for (const {frame, reply} of HANDSHAKES.valid) {
@@ -1126,6 +1145,203 @@ describe("a canvas frame's bridge", () => {
     assert.equal(bridge.posted.length, 1)
     bridge.close()
     port.close()
+  })
+})
+
+describe("a request, from an app's frame as from a canvas's", () => {
+  const [{frame: CANVAS, reply: LIVE}] = fixture.canvas.handshake.valid
+  const APP = {credential: "frm.v1.app"}
+  const KINDS = [
+    {kind: "app", frame: FRAME, reply: APP, app: true, opened: 1},
+    {kind: "canvas", frame: CANVAS, reply: LIVE, app: false, opened: 3}
+  ]
+  const [ASK] = fixture.shell.filter(({verb}) => verb === "request").map(({message}) => message.args)
+  const request = (frame, call) => ({v: 1, verb: "request", frame, args: {...ASK, call}})
+  const cancelled = (frame, call, reason = null) => ({
+    v: 1,
+    verb: "decided",
+    frame,
+    args: {call, outcome: "cancelled", ...(reason === null ? {} : {reason})}
+  })
+  // The answers to a request the frame heard over its port.
+  const answers = (bridge) => bridge.heard.filter(({verb}) => verb === "requested" || verb === "decided")
+  const inputs = (events) => events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.input)
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  beforeEach(shellDocument)
+
+  for (const {kind, frame, reply, app, opened} of KINDS) {
+    test(`a ${kind}'s reaches the view only under the shell's activation with the frame focused, live, shown and not inert; one dropped is told it did not run`, async () => {
+      const bridge = connectBridge({reply, frame, app})
+      const port = bridge.load()
+      bridge.hook.lifespan = 0
+      let call = 0
+      const ask = async () => {
+        const message = request(frame, ++call)
+        await send(bridge, port, message)
+        return message
+      }
+
+      try {
+        await eventually(() => bridge.heard.length === opened)
+        activation("inactive")
+        focus(bridge.el)
+        await ask()
+        activation("active")
+        focus({id: "another element"})
+        await ask()
+        focus(bridge.el)
+        stand(bridge.el, "hidden")
+        await ask()
+        stand(bridge.el, "disconnected")
+        await ask()
+        stand(bridge.el, "live")
+        bridge.el.wrapper.inert = true
+        await ask()
+        bridge.el.wrapper.inert = false
+        assert.deepEqual(forwarded(bridge.events), [])
+
+        // The positive control: an input of the person's in the frame.
+        const passed = await ask()
+        assert.deepEqual(forwarded(bridge.events), [passed])
+        assert.deepEqual(inputs(bridge.events), [1])
+        await eventually(() => answers(bridge).length === 5)
+        await sleep(20)
+        assert.deepEqual(answers(bridge), [1, 2, 3, 4, 5].map((dropped) => cancelled(frame, dropped)))
+      } finally {
+        bridge.close()
+      }
+    })
+
+    test(`a ${kind}'s within the lifespan of the last spend is dropped too_soon, and one under a call used already is dropped unanswered`, async () => {
+      const bridge = connectBridge({reply, frame, app})
+      const port = bridge.load()
+      bridge.hook.lifespan = 200
+
+      try {
+        await eventually(() => bridge.heard.length === opened)
+        input(bridge.el)
+        await send(bridge, port, request(frame, 1))
+        await send(bridge, port, request(frame, 2))
+        await send(bridge, port, request(frame, 2))
+        await send(bridge, port, request(frame, 1))
+        assert.equal(bridge.hook.dropped, 3)
+
+        // A press in the shell's chrome spends the activation too.
+        await sleep(220)
+        input(bridge.el)
+        chromePress()
+        await send(bridge, port, request(frame, 3))
+
+        await sleep(220)
+        input(bridge.el)
+        await send(bridge, port, request(frame, 4))
+        assert.deepEqual(forwarded(bridge.events), [request(frame, 1), request(frame, 4)])
+        assert.deepEqual(inputs(bridge.events), [1, 2])
+        await eventually(() => answers(bridge).length === 2)
+        await sleep(20)
+        assert.deepEqual(answers(bridge), [cancelled(frame, 2, "too_soon"), cancelled(frame, 3, "too_soon")])
+      } finally {
+        bridge.close()
+      }
+    })
+  }
+
+  test("an app's other verbs reach the view while it acts, with no input of the person's, and none while it is frozen", async () => {
+    const bridge = connectBridge({reply: APP, frame: FRAME, app: true})
+    const port = bridge.load()
+    const verbs = [
+      {v: 1, verb: "ready", frame: FRAME, args: {}},
+      {v: 1, verb: "title", frame: FRAME, args: {title: "Lisbon"}},
+      {v: 1, verb: "open", frame: FRAME, args: {ref: "t:local.weather"}}
+    ]
+
+    try {
+      activation("inactive")
+      for (const message of verbs) await send(bridge, port, message)
+      assert.deepEqual(forwarded(bridge.events), verbs)
+      assert.deepEqual(inputs(bridge.events), [undefined, undefined, undefined])
+
+      bridge.el.dispatchEvent(stateEvent("frozen"))
+      await send(bridge, port, verbs[0])
+      assert.equal(forwarded(bridge.events).length, verbs.length)
+      assert.equal(bridge.hook.dropped, 1)
+    } finally {
+      bridge.close()
+    }
+  })
+
+  test("the shell's requested and decided reach an app's frame once its port is open, and nothing else of a canvas's", async () => {
+    const bridge = connectBridge({reply: APP, frame: FRAME, app: true})
+    const tell = (verb, args) => bridge.el.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
+    const rows = fixture.canvas.to_frame.valid
+      .map(({message}) => message)
+      .filter(({verb, frame}) => frame === FRAME && (verb === "requested" || verb === "decided"))
+    assert.deepEqual(
+      rows.map(({verb}) => verb),
+      ["requested", "decided"]
+    )
+
+    // Before the handshake: posted nowhere, held for nothing.
+    tell(rows[0].verb, rows[0].args)
+    bridge.load()
+
+    try {
+      await eventually(() => bridge.heard.length === 1)
+      for (const {verb, args} of rows) tell(verb, args)
+      tell("pressed", {control: "pause-digest", call: 3, outcome: "accepted"})
+      tell("prefs", {call: 3, outcome: "saved", document: {}, revision: 1})
+      tell("posture", {posture: "desk"})
+      tell("decided", {call: 3, outcome: "approved", reason: "declined"})
+      bridge.el.dispatchEvent(stateEvent("frozen"))
+
+      await eventually(() => bridge.heard.length === 3)
+      await sleep(20)
+      assert.deepEqual(bridge.heard.slice(1), rows)
+    } finally {
+      bridge.close()
+    }
+  })
+
+  test("an app's page asks through the SDK: dropped, it settles cancelled; forwarded, the shell's answers settle it", async () => {
+    const el = canvasFrame(FRAME)
+    delete el.dataset.frameKind
+    const win = frameWindow()
+    const {api, onWindowMessage} = createClient({win, fetchFn: fetch, base: "http://127.0.0.1/"})
+    let port = null
+    el.contentWindow = {
+      postMessage: (data, _origin, transfer) => {
+        port = transfer[0]
+        onWindowMessage({source: win.parent, data, ports: transfer})
+      }
+    }
+    const {hook, events} = mountBridge(el, APP)
+    hook.lifespan = 0
+    const tell = (verb, args) => el.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
+
+    try {
+      el.dispatchEvent(new Event("load"))
+      await eventually(() => api.frame === FRAME)
+
+      activation("inactive")
+      const dropped = api.request(ASK.operation, ASK.args)
+      assert.deepEqual({...(await dropped)}, {outcome: "cancelled"})
+      assert.equal(await dropped.requested, null)
+
+      input(el)
+      const asking = api.request(ASK.operation, ASK.args)
+      await eventually(() => forwarded(events).length === 1)
+      const [message] = forwarded(events)
+      assert.deepEqual(message, request(FRAME, 2))
+
+      tell("requested", {call: 2, request: "req_9fKd02LmQpZx7Yt1Rw5sVa"})
+      assert.equal(await asking.requested, "req_9fKd02LmQpZx7Yt1Rw5sVa")
+      tell("decided", {call: 2, outcome: "approved"})
+      assert.deepEqual({...(await asking)}, {outcome: "approved"})
+    } finally {
+      hook.destroyed()
+      port?.close()
+    }
   })
 })
 

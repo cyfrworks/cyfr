@@ -289,6 +289,12 @@ defmodule PrismWeb.ChatOverlayLive do
   def handle_info(:open, socket),
     do: {:noreply, socket |> assign(:open, true) |> load() |> mark_read() |> announce()}
 
+  # The desktop opens the chat at a shared thread (an attention item's
+  # `chat` destination), read under the person's own seat: one they do not
+  # sit in opens the chat on its list, saying the thread cannot be opened.
+  def handle_info({:open, thread_id}, socket) when is_binary(thread_id),
+    do: {:noreply, socket |> assign(:open, true) |> load() |> open_shared(thread_id)}
+
   def handle_info(%Cyfr.Bus.SharedThreadChanged{kind: kind, thread_id: id}, socket) do
     socket =
       case socket.assigns.shared do

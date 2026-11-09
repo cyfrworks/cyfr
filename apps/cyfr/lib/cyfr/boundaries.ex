@@ -2018,7 +2018,10 @@ defmodule Cyfr.Boundaries do
     ],
     # `authorize_stream/2`: a desktop's control with a pick reads the
     # picked stream's current state at the press, admitted as the
-    # stream's open would be (`Compendium.Desktop`).
+    # stream's open would be (`Compendium.Desktop`). `validate_arguments/2`:
+    # a frame's request is held to its operation's declaration before the
+    # person is asked, so an approval never meets a refusal the request
+    # could have had.
     "Sanctum.Catalog" => [
       action_declaration: 1,
       authorize_stream: 2,
@@ -2035,7 +2038,8 @@ defmodule Cyfr.Boundaries do
       stream_entries: 0,
       streams: 0,
       tool_actions: 1,
-      tool_kind: 2
+      tool_kind: 2,
+      validate_arguments: 2
     ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
@@ -2045,11 +2049,14 @@ defmodule Cyfr.Boundaries do
     # A component's setup plan reads whether each binding its grant carries
     # is still live, as a run's attach reads its lifetime, without using it.
     # A person's attention stream lists their open confirmations by ref,
-    # operation and opening alone.
+    # operation and opening alone. A frame's request is shown the person
+    # on the preview the identity domain builds of exactly the call that
+    # runs once they approve it (`request_preview/4`).
     "Sanctum.Consent" => [
       binding_live: 4,
       head_consent: 2,
       profiles: 2,
+      request_preview: 4,
       revoke_source: 2,
       row_binding: 3,
       tincture_grant: 2,

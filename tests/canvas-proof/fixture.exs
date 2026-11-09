@@ -33,6 +33,21 @@
 #       not granted, which no frame opens, for the markets canvas's grant
 #       control to ask for. Answers the reference.
 #
+#   schedule TOKEN NAME
+#       A schedule NAME of the person's, paused so no fire of it ever runs,
+#       written as `Arca.CronSchedule` keeps one: the `request` step's
+#       canvas asks the person to rename it. Answers its id.
+#
+#   schedule_name TOKEN ID
+#       The schedule ID's name as its row reads now.
+#
+#   expire TOKEN
+#       Every request waiting on the person, its expiry come now: the
+#       shell that holds it (`Cyfr.Requests`, whose registration names it)
+#       is sent the message its own five-minute timer sends, so the
+#       request ends as an undecided one does, without the proof waiting
+#       five minutes. Answers the ids it expired.
+#
 #   write TOKEN CANVAS KIND DESKTOP_JSON
 #       A new version of the canvas CANVAS written with `canvas.write`,
 #       through `console`: its page the files KIND names (below), on the
@@ -85,9 +100,11 @@
 #
 #   markets       reads the feed `candles` and draws its candles as its own
 #                 SVG; a button the person presses calls `cyfr.press` on the
-#                 feed's binding, and `window.__canvas` offers the presses
-#                 the activation step drives from a timer and the self-focus
-#                 it records;
+#                 feed's binding, another `cyfr.request` to rename the
+#                 schedule the request step names, and `window.__canvas`
+#                 offers the presses the activation step drives from a
+#                 timer, the self-focus it records and each request's
+#                 decision;
 #   measure       one line of text: it reads no stream and becomes ready at
 #                 once (the measurement opens it);
 #   written       one line naming its own version, then ready;
@@ -177,7 +194,8 @@ fn args ->
       '<p><button id="press" type="button">Refresh</button>' +
       '<button id="press3" type="button">Refresh three</button>' +
       '<button id="later" type="button">Refresh later</button>' +
-      '<button id="grant" type="button">Grant grant-target</button></p>'
+      '<button id="grant" type="button">Grant grant-target</button>' +
+      '<button id="request" type="button">Request rename</button></p>'
     const chart = document.getElementById("chart")
     const seen = document.getElementById("seen")
     let binding = null
@@ -195,6 +213,23 @@ fn args ->
     document.getElementById("later").addEventListener("click", () => setTimeout(() => press(), 8000))
     const grant = () => cyfr.grant("catalyst:local.grant-target")
     document.getElementById("grant").addEventListener("click", () => grant())
+
+    // The request step names the schedule; each request's id and decision
+    // are kept, in the order they were asked.
+    let target = null
+    const decisions = []
+    document.getElementById("request").addEventListener("click", () => {
+      if (target === null) return
+      const asked = cyfr.request("schedule.update", { schedule_id: target.id, name: target.name })
+      const entry = { requested: null, decision: null }
+      decisions.push(entry)
+      asked.requested.then((id) => {
+        entry.requested = id
+      })
+      asked.then((decision) => {
+        entry.decision = decision
+      })
+    })
 
     function onEvent(event) {
       const data = event && event.data
@@ -240,6 +275,11 @@ fn args ->
       grantAfter: (ms) => {
         setTimeout(() => grant(), ms)
       },
+      // The schedule the request button renames, and the name it asks for.
+      target: (id, name) => {
+        target = { id, name }
+      },
+      decisions: () => decisions.map((d) => ({ requested: d.requested, decision: d.decision })),
       // The canvas focuses itself and then presses from a timer: the
       // activation step records what each browser does with a press that
       // follows a click elsewhere and the canvas's own focus.
@@ -457,6 +497,42 @@ fn args ->
         })
 
       answer.(%{reference: Prima.ComponentRef.build("catalyst", "local", name)})
+
+    ["schedule", token, name] ->
+      ctx = establish.(token)
+      actor = Sanctum.Context.actor(ctx)
+
+      {:ok, row} =
+        Arca.CronSchedule.create(actor, %{
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          name: name,
+          cron_expression: "0 3 * * *",
+          reference: "reagent:local.#{name}",
+          resolved_reference: "reagent:local.#{name}:1.0.0",
+          profile_id: "prof-#{name}",
+          next_run_at: DateTime.add(DateTime.utc_now(), 86_400, :second),
+          cap: 0
+        })
+
+      {:ok, _paused} = Arca.CronSchedule.update(actor, row.id, %{status: "paused"})
+      answer.(%{id: row.id})
+
+    ["schedule_name", token, id] ->
+      ctx = establish.(token)
+      {:ok, row} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), id)
+      answer.(%{name: row.name})
+
+    ["expire", token] ->
+      ctx = establish.(token)
+
+      expired =
+        for {shell, item} <- Registry.lookup(Cyfr.Requests, {ctx.athanor_id, ctx.user_id}) do
+          send(shell, {:request_expired, item.id})
+          item.id
+        end
+
+      answer.(%{expired: expired})
 
     ["write", token, canvas, kind, desktop] ->
       {template, files} = {"vanilla", canvas_files.(kind)}

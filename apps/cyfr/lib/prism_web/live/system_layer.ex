@@ -4,8 +4,8 @@
 defmodule PrismWeb.SystemLayer do
   @moduledoc """
   The system layer: what Prism alone draws above every frame — grant,
-  unlock, sign-in, credential-entry, sharing, pairing and confirmation prompts,
-  the fallback's notice, and the restore checklist. It presents a prompt
+  unlock, sign-in, credential-entry, sharing, pairing, request and
+  confirmation prompts, the fallback's notice, and the restore checklist. It presents a prompt
   and never
   decides one: the operation a confirmation dispatches is decided where
   the change is, in Sanctum, which checks the caller's standing and any
@@ -123,6 +123,16 @@ defmodule PrismWeb.SystemLayer do
       share is made, and shows a refusal's sentence and stays open
       otherwise;
     * pairing — `pairing.list` when it opens, and `pairing.revoke`;
+    * a frame's request — the call the prompt names (`tool` and `args`),
+      dispatched as the layer's own change once the person approves it,
+      with the preview CYFR built of exactly that call drawn first and
+      the frame that asked named beside it, never anything the frame
+      drew. Approving reports `:confirmed` once the call answers; one that
+      needs a fresh confirmation waits for its proof as any of the
+      layer's own changes does. Refusing reports `{:refused, :declined}`
+      and ends the prompt; a call the gate refuses reports its refusal
+      and stays open, saying it, with nothing left to approve, so a
+      decided request is never run again from it;
     * the fallback notice's kept version — `canvas.restore` of the canvas,
       under today's grant: a grant that waits for the person raises the
       grant prompt, and once that is confirmed the restore is asked again;
@@ -1409,6 +1419,34 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
+  # A frame's request: approving runs its call as the layer's own change,
+  # once, and only while nothing has decided it; refusing ends it.
+  def handle_event("request_approve", %{"id" => id}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open(socket, id, [:request]) do
+        {:ok, %{subject: %{refused: _decided}}} -> {:noreply, socket}
+        {:ok, prompt} -> {:noreply, request_run(socket, prompt)}
+        :none -> {:noreply, socket}
+      end
+    end)
+  end
+
+  def handle_event("request_refuse", %{"id" => id}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open(socket, id, [:request]) do
+        {:ok, %{subject: %{refused: _decided}}} ->
+          {:noreply, socket}
+
+        {:ok, _prompt} ->
+          report(id, {:refused, :declined})
+          {:noreply, socket |> drop_prompt_asks(id, cancel: true) |> advance()}
+
+        :none ->
+          {:noreply, socket}
+      end
+    end)
+  end
+
   # The value is read out of the event's parameters and handed to the
   # dispatch; nothing here assigns, renders or logs it. A credential that
   # needs a fresh confirmation is typed again by the browser, which keeps
@@ -2042,6 +2080,10 @@ defmodule PrismWeb.SystemLayer do
             {:share_create, args} = repeat
             share_create(socket, prompt, args)
 
+          %{id: ^prompt_id, kind: :request} = prompt ->
+            :request = repeat
+            request_run(socket, prompt)
+
           %{id: ^prompt_id, kind: :confirmation} = prompt ->
             {:restore_reenable, operation, id} = repeat
             reenable_again(socket, prompt, operation, id)
@@ -2153,6 +2195,28 @@ defmodule PrismWeb.SystemLayer do
     case layer_call(socket, prompt, {:share_create, args}, "share/create", args) do
       {:asked, socket} -> socket
       {:done, result, socket} -> dispatched(socket, prompt, result)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A frame's request
+  # ---------------------------------------------------------------------------
+
+  # The call the request names, as the person approved it. A refusal is
+  # reported and said, and marks the prompt decided: it offers nothing to
+  # approve again.
+  defp request_run(socket, %{subject: %{tool: tool, args: args}} = prompt) do
+    case layer_call(socket, prompt, :request, tool, args) do
+      {:asked, socket} ->
+        socket
+
+      {:done, {:ok, _result}, socket} ->
+        settle(socket, prompt, :confirmed)
+
+      {:done, {:error, reason}, socket} ->
+        socket
+        |> assign(:current, put_in(prompt.subject[:refused], true))
+        |> refuse(prompt, reason, Ops.error_message(reason))
     end
   end
 
@@ -2589,6 +2653,9 @@ defmodule PrismWeb.SystemLayer do
   # prompt arrived with and hands each walk it makes back to this layer.
   defp body(%{prompt: %{kind: :grant}} = assigns) do
     ~H"""
+    <p :if={@prompt.subject[:asker]} class="text-sm" data-test="request-asker">
+      Asked by {@prompt.subject.asker.name} ({@prompt.subject.asker.ref}).
+    </p>
     <div class="max-h-[60vh] overflow-y-auto" data-test="grant-sheet">
       <.live_component
         module={PrismWeb.ConsentSheetComponent}
@@ -2757,7 +2824,42 @@ defmodule PrismWeb.SystemLayer do
     """
   end
 
+  # A frame's request: CYFR's preview of the call that runs, and the frame
+  # that asked by its listing's name.
+  defp body(%{prompt: %{kind: :request}} = assigns) do
+    ~H"""
+    <section class="space-y-3" data-test="request" data-operation={@prompt.subject.operation}>
+      <.preview_list preview={@prompt.subject.preview} test="request-preview" />
+      <p class="text-sm" data-test="request-asker">
+        Asked by {@prompt.subject.asker.name} ({@prompt.subject.asker.ref}).
+      </p>
+    </section>
+    """
+  end
+
   defp body(assigns), do: ~H""
+
+  attr :preview, :map, required: true
+  attr :test, :string, required: true
+
+  # A preview's rows as CYFR stored or built it: the change, what it
+  # concerns, where, and each detail by its name.
+  defp preview_list(assigns) do
+    ~H"""
+    <dl class="grid grid-cols-3 gap-1 text-sm" data-test={@test}>
+      <dt class="text-gray-400">Change</dt>
+      <dd class="col-span-2 font-mono">{@preview["operation"]}</dd>
+      <dt :if={@preview["resource"]} class="text-gray-400">Concerning</dt>
+      <dd :if={@preview["resource"]} class="col-span-2">{@preview["resource"]}</dd>
+      <dt class="text-gray-400">In</dt>
+      <dd class="col-span-2">{@preview["athanor"]} at {@preview["home"]}</dd>
+      <%= for {name, value} <- Enum.sort(@preview["details"] || %{}) do %>
+        <dt class="text-gray-400">{name}</dt>
+        <dd class="col-span-2 break-all">{detail(value)}</dd>
+      <% end %>
+    </dl>
+    """
+  end
 
   attr :panel, :map, required: true
   attr :may, :boolean, required: true
@@ -2791,22 +2893,11 @@ defmodule PrismWeb.SystemLayer do
         {if @panel.own, do: "Confirm your request", else: "A request waits for your confirmation"}
       </h3>
 
-      <dl
+      <.preview_list
         :if={@entry && @entry[:preview]}
-        class="grid grid-cols-3 gap-1 text-sm"
-        data-test="confirmation-preview"
-      >
-        <dt class="text-gray-400">Change</dt>
-        <dd class="col-span-2 font-mono">{@entry.preview["operation"]}</dd>
-        <dt :if={@entry.preview["resource"]} class="text-gray-400">Concerning</dt>
-        <dd :if={@entry.preview["resource"]} class="col-span-2">{@entry.preview["resource"]}</dd>
-        <dt class="text-gray-400">In</dt>
-        <dd class="col-span-2">{@entry.preview["athanor"]} at {@entry.preview["home"]}</dd>
-        <%= for {name, value} <- Enum.sort(@entry.preview["details"] || %{}) do %>
-          <dt class="text-gray-400">{name}</dt>
-          <dd class="col-span-2 break-all">{detail(value)}</dd>
-        <% end %>
-      </dl>
+        preview={@entry.preview}
+        test="confirmation-preview"
+      />
 
       <p
         :if={is_nil(@entry) or is_nil(@entry[:preview])}
@@ -2888,6 +2979,32 @@ defmodule PrismWeb.SystemLayer do
         {dismiss_label(@prompt, @panel)}
       </button>
       <button
+        :if={
+          @may and @prompt.kind == :request and is_nil(@panel) and is_nil(@prompt.subject[:refused])
+        }
+        type="button"
+        phx-click="request_refuse"
+        phx-target={@myself}
+        phx-value-id={@prompt.id}
+        data-test="request-refuse"
+        class={button_class(false)}
+      >
+        Refuse
+      </button>
+      <button
+        :if={
+          @may and @prompt.kind == :request and is_nil(@panel) and is_nil(@prompt.subject[:refused])
+        }
+        type="button"
+        phx-click="request_approve"
+        phx-target={@myself}
+        phx-value-id={@prompt.id}
+        data-test="request-approve"
+        class={button_class(true)}
+      >
+        Approve
+      </button>
+      <button
         :if={@may and @prompt.kind in [:grant, :sign_in]}
         type="button"
         phx-click="confirm"
@@ -2951,6 +3068,9 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :pairing}), do: "Your devices"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
+  defp title(%{kind: :request, subject: %{asker: %{name: name}, operation: operation}}),
+    do: "#{name} asks you to approve #{operation}"
+
   defp description(%{kind: :grant}),
     do:
       "Approve what this app may use and reach, as listed below. Nothing is granted until you do."
@@ -2980,6 +3100,11 @@ defmodule PrismWeb.SystemLayer do
       "Sign a device out of this CYFR, which needs a fresh confirmation. Its key stays on " <>
         "your account: removing it there ends the device everywhere."
 
+  defp description(%{kind: :request}),
+    do:
+      "Nothing runs until you approve. This is what CYFR would run, as CYFR shows it: " <>
+        "the app that asked drew none of it."
+
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:
       "You asked for a change that needs a fresh confirmation. Nothing changes until you " <>
@@ -2996,6 +3121,8 @@ defmodule PrismWeb.SystemLayer do
   defp dismiss_label(%{kind: :confirmation}, %{own: true, status: :waiting}), do: "Cancel"
   defp dismiss_label(%{kind: :confirmation}, %{own: false, status: :pending}), do: "Not now"
   defp dismiss_label(%{kind: :confirmation}, _panel), do: "Close"
+  defp dismiss_label(%{kind: :request, subject: %{refused: true}}, _panel), do: "Close"
+  defp dismiss_label(%{kind: :request}, _panel), do: "Not now"
   defp dismiss_label(_prompt, _panel), do: "Dismiss"
 
   defp offer_label(%{offer: :retry}), do: "Try again"

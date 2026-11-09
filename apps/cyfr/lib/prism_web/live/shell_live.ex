@@ -108,11 +108,11 @@ defmodule PrismWeb.ShellLive do
   of a binding presses a feed's action through `feed.press` once the
   served version's declaration reads that feed, and `press` of a control
   runs the call the component domain reads it as
-  (`Compendium.desktop_control/4`) through the gate as the person;
-  `grant` offers the person's grant to an installed component through the
-  system layer's generic grant path, unless an offer for it is open or it
-  is granted with nothing its grant needs missing, and its outcome opens
-  no frame; `prefs` writes the person's preferences for the canvas over
+  (`Compendium.desktop_control/4`) through the gate as the person when
+  it runs directly, and asks the person for it as a request (below)
+  otherwise; `request` asks the person for one of their own acts
+  (below); `grant` is a request for a grant that asks for no answer;
+  `prefs` writes the person's preferences for the canvas over
   the revision this view handed the frame or last answered it
   (`Compendium.put_desktop_prefs/5`); `ask` opens AQUA's panel beside the
   page with Prism's own sentence naming a widget the version declares
@@ -121,7 +121,10 @@ defmodule PrismWeb.ShellLive do
   desktop: the view pushes `navigate` to its own hook (`ShellPage`, on
   `#shell-page`), which moves the page's LiveView there, so the canvas
   that asked keeps running under it; `chat` opens the chat overlay and
-  `aqua` AQUA's panel in place. A control's press and a write
+  `aqua` AQUA's panel in place, each at the thread a `ref` names when
+  the person's own seat reads it there (a shared thread they sit in, a
+  thread of their own), and a Dashboard page ignores a `ref`. A
+  control's press and a write
   are answered over the frame's port (`canvas_answer`) with their typed
   outcome, `cancelled` when this view did not act on them. Its bridge
   (`iframe_bridge.js`) forwards those verbs only while the page holds
@@ -248,6 +251,28 @@ defmodule PrismWeb.ShellLive do
   again once it is confirmed. The shell's `Devices` control opens the
   pairing prompt, where the person pairs or revokes a device.
 
+  ## Requests
+
+  A frame asks the person for one of their own acts with `request`, an
+  app's frame as a canvas's, only for an input of the person's in a frame
+  they see, and a canvas also by pressing a control that asks
+  (`Compendium.Tincture.Rules.control_runs/1`). The component domain
+  reads it (`Compendium.desktop_request/3`): a grant of an installed
+  component, offered through the generic grant path as `grant` is, or a
+  call with the preview CYFR built of exactly it, which the system
+  layer's request prompt shows above every frame naming the frame that
+  asked and runs as the person once they approve it. The frame performs
+  nothing. A request waits under the person (`Cyfr.Requests`, which their
+  attention lists) and is answered `requested` with its id, then
+  `decided` once the person approves, refuses or dismisses it, the gate
+  refuses its call, or it waits five minutes undecided (`expired`, its
+  prompt withdrawn). One request of a frame waits at a time: another
+  meanwhile is answered `cancelled` `busy` and asks nothing; one the
+  domain refuses is answered `refused` with its class, the person never
+  asked; one whose frame this view stops holding is withdrawn, told
+  nowhere. A decided request leaves this view, so no later report of its
+  prompt runs or answers anything.
+
   ## Frames
 
   The shell holds its frames as a `Prism.Frames` value in its assigns:
@@ -362,6 +387,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:credential_prompts, %{})
       |> assign(:grant_prompts, %{})
       |> assign(:grant_decisions, %{})
+      |> assign(:requests, %{})
       |> assign(:pairing_prompt, nil)
       |> assign(:prompt_seq, 0)
       |> assign(:tinctures, [])
@@ -625,9 +651,16 @@ defmodule PrismWeb.ShellLive do
       when is_binary(frame_id) do
     with {:ok, %{frame: ^frame_id} = decoded} <- Prima.TinctureWire.decode_shell_message(message),
          {:ok, %{key: key} = frame} <- reporting(socket.assigns.frames, frame_id, decoded.verb) do
-      if Frames.canvas_key?(key),
-        do: {:noreply, canvas_input(socket, frame, decoded, Map.get(params, "input"))},
-        else: {:noreply, shell_verb(socket, frame, decoded)}
+      cond do
+        Frames.canvas_key?(key) ->
+          {:noreply, canvas_input(socket, frame, decoded, Map.get(params, "input"))}
+
+        decoded.verb == :request ->
+          {:noreply, app_request(socket, frame, decoded, Map.get(params, "input"))}
+
+        true ->
+          {:noreply, shell_verb(socket, frame, decoded)}
+      end
     else
       _ -> {:noreply, drop_message(socket)}
     end
@@ -800,7 +833,10 @@ defmodule PrismWeb.ShellLive do
           not match?(%{id: ^id}, Frames.get(before, key)),
           do: frame
 
-    socket = Enum.reduce(ungranted, socket, &offer_grant(&2, &1))
+    socket =
+      ungranted
+      |> Enum.reduce(socket, &offer_grant(&2, &1))
+      |> drop_orphan_requests()
 
     # A canvas that failed while hidden is shown: it falls back, as its
     # failure would have had it been shown then.
@@ -971,7 +1007,7 @@ defmodule PrismWeb.ShellLive do
   # one input carries one verb, so a verb whose input this view has
   # already honoured, or that names none, is dropped (and a press or a
   # write told it did not run).
-  @person_verbs [:open, :press, :grant, :prefs, :ask, :settings]
+  @person_verbs [:open, :press, :grant, :prefs, :ask, :settings, :request]
 
   defp canvas_input(socket, frame, %{verb: verb} = decoded, input) when verb in @person_verbs do
     honoured = Map.get(socket.assigns.inputs, frame.id, 0)
@@ -1032,8 +1068,12 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
     do: press(socket, frame, args)
 
-  defp live_canvas_verb(socket, _frame, %{verb: :grant, args: %{"ref" => ref}}),
-    do: grant_from_canvas(socket, ref)
+  # `grant` is a request for a grant that asks for no answer.
+  defp live_canvas_verb(socket, frame, %{verb: :grant, args: args}),
+    do: request(socket, frame, %{"operation" => "grant", "args" => args, "call" => nil})
+
+  defp live_canvas_verb(socket, frame, %{verb: :request, args: args}),
+    do: request(socket, frame, args)
 
   defp live_canvas_verb(socket, frame, %{verb: :prefs, args: %{"document" => document} = args}),
     do: write_prefs(socket, frame, document, args["call"])
@@ -1041,8 +1081,8 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, frame, %{verb: :ask, args: %{"widget" => widget}}),
     do: ask(socket, frame, widget)
 
-  defp live_canvas_verb(socket, _frame, %{verb: :settings, args: %{"page" => page}}),
-    do: settings(socket, page)
+  defp live_canvas_verb(socket, _frame, %{verb: :settings, args: %{"page" => page} = args}),
+    do: settings(socket, page, Map.get(args, "ref"))
 
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
@@ -1053,6 +1093,9 @@ defmodule PrismWeb.ShellLive do
 
   defp not_run(socket, frame, %{verb: :prefs, args: %{"call" => call}}),
     do: answer_prefs(socket, frame, call, "cancelled")
+
+  defp not_run(socket, frame, %{verb: :request, args: %{"call" => call}}),
+    do: decided(socket, frame, call, "cancelled")
 
   defp not_run(socket, _frame, _decoded), do: socket
 
@@ -1065,27 +1108,43 @@ defmodule PrismWeb.ShellLive do
 
   # A declared control the person pressed: the component domain reads it as
   # the call it makes, against the served version's declaration, the
-  # direct rule and, for a pick, the stream's current state, and the call
-  # runs through the gate as the person, which decides whether they own
-  # what it reaches. Its outcome is told to the canvas as it came; nothing
-  # is tried again.
+  # control rule and, for a pick, the stream's current state. A direct
+  # call runs through the gate as the person, which decides whether they
+  # own what it reaches, and its outcome is told to the canvas as it came;
+  # nothing is tried again. Any other is a request of the person's, asked
+  # as a frame's request is and answered under the press's call.
   defp press_control(socket, frame, %{"control" => control, "call" => call} = args) do
-    outcome =
-      with {:ok, {tool, call_args}} <-
-             Compendium.desktop_control(
-               socket.assigns.context,
-               frame.desktop,
-               control,
-               Map.get(args, "value")
-             ),
-           {:ok, _ran} <- call_tool(socket, tool, call_args) do
-        Prima.TinctureWire.pressed(control, call, "accepted")
-      else
-        {:error, reason} ->
-          Prima.TinctureWire.pressed(control, call, "refused", refusal_class(reason))
-      end
+    case Compendium.desktop_control(
+           socket.assigns.context,
+           frame.desktop,
+           control,
+           Map.get(args, "value")
+         ) do
+      {:ok, {:direct, {tool, call_args}}} ->
+        outcome =
+          case call_tool(socket, tool, call_args) do
+            {:ok, _ran} ->
+              Prima.TinctureWire.pressed(control, call, "accepted")
 
-    answer(socket, frame, "pressed", outcome)
+            {:error, reason} ->
+              Prima.TinctureWire.pressed(control, call, "refused", refusal_class(reason))
+          end
+
+        answer(socket, frame, "pressed", outcome)
+
+      {:ok, {:asks, ask}} ->
+        if waiting?(socket, frame),
+          do: decided(socket, frame, call, "cancelled", "busy"),
+          else: ask_person(socket, frame, call, ask)
+
+      {:error, reason} ->
+        answer(
+          socket,
+          frame,
+          "pressed",
+          Prima.TinctureWire.pressed(control, call, "refused", refusal_class(reason))
+        )
+    end
   end
 
   defp refusal_class(reason),
@@ -1175,6 +1234,227 @@ defmodule PrismWeb.ShellLive do
     )
   end
 
+  # ---- a frame's requests -----------------------------------------------------
+
+  # How long a request waits for the person before it ends undecided.
+  @request_ttl_ms 300_000
+
+  # An app's request is the person's as a canvas's is: only for an input
+  # of the person's that this view has not honoured, from a frame they see.
+  defp app_request(socket, %{visible: true} = frame, decoded, input) do
+    honoured = Map.get(socket.assigns.inputs, frame.id, 0)
+
+    if is_integer(input) and input > honoured,
+      do:
+        socket |> update(:inputs, &Map.put(&1, frame.id, input)) |> request(frame, decoded.args),
+      else: socket |> drop_message() |> not_run(frame, decoded)
+  end
+
+  defp app_request(socket, frame, decoded, _input),
+    do: socket |> drop_message() |> not_run(frame, decoded)
+
+  # A frame asked the person for one of their own acts: the component
+  # domain reads it as a grant of an installed component or as a call
+  # with CYFR's preview of it, and the system layer asks the person above
+  # every frame, naming the frame. Nothing runs here until they decide.
+  # One request of a frame waits at a time; another meanwhile is
+  # cancelled `busy`, and one the domain refuses is refused with its
+  # class, the person never asked.
+  defp request(socket, frame, %{"operation" => operation, "args" => args} = request) do
+    call = request["call"]
+
+    if waiting?(socket, frame) do
+      unasked(socket, frame, call, "cancelled", "busy")
+    else
+      case Compendium.desktop_request(socket.assigns.context, operation, args) do
+        {:ok, {:grant, component}} -> request_grant(socket, frame, call, component)
+        {:ok, {:asks, ask}} -> ask_person(socket, frame, call, ask)
+        {:error, reason} -> unasked(socket, frame, call, "refused", refusal_class(reason))
+      end
+    end
+  end
+
+  defp waiting?(socket, %{id: frame_id}),
+    do: Enum.any?(socket.assigns.requests, fn {_id, request} -> request.frame == frame_id end)
+
+  # A grant is offered through the system layer's generic grant path (the
+  # one AQUA's own asks take: Sanctum's preview, which the person confirms
+  # or not). One offer of a component stands at a time, whatever raised
+  # it; a component granted with nothing its grant needs missing has
+  # nothing to ask (`conflict`). A grant with a connection it needs
+  # missing is offered again: its sheet asks the person to connect it.
+  defp request_grant(socket, frame, call, component) do
+    cond do
+      offering?(socket.assigns, component) ->
+        unasked(socket, frame, call, "cancelled", "busy")
+
+      granted_and_complete?(socket, component) ->
+        unasked(socket, frame, call, "refused", "conflict")
+
+      true ->
+        {prompt_id, socket} = next_prompt_id(socket, "request")
+
+        case PrismWeb.SystemLayer.grant_prompt(socket, prompt_id, component) do
+          {:ok, prompt} ->
+            show_prompt(put_in(prompt.subject[:asker], asker(socket, frame)))
+
+            socket
+            |> update(:grant_prompts, &Map.put(&1, prompt_id, {{:component, component}, nil}))
+            |> open_request(frame, call, prompt_id, :grant, component)
+
+          {:error, reason} ->
+            unasked(socket, frame, call, "refused", refusal_class(reason))
+        end
+    end
+  end
+
+  # One of the person's own acts, on the preview CYFR built of exactly the
+  # call that runs once they approve it, which the system layer runs.
+  defp ask_person(socket, frame, call, ask) do
+    {prompt_id, socket} = next_prompt_id(socket, "request")
+
+    show_prompt(%{
+      id: prompt_id,
+      kind: :request,
+      action: :approval,
+      subject: %{
+        operation: ask.operation,
+        tool: ask.tool,
+        args: ask.args,
+        preview: Prima.Confirmation.Preview.encode(ask.preview),
+        asker: asker(socket, frame)
+      }
+    })
+
+    open_request(socket, frame, call, prompt_id, :asks, ask.operation)
+  end
+
+  # The frame that asked, as the person's listing names its tincture.
+  defp asker(socket, frame) do
+    name =
+      case Enum.find(cards(socket), &(&1.id == frame.tincture_id)) do
+        %{name: name} when is_binary(name) and name != "" -> name
+        _unlisted -> frame.reference.name
+      end
+
+    %{name: String.slice(name, 0, 128), ref: Frames.ref_of(frame.reference)}
+  end
+
+  # The request waits: held under the person in the athanor it was asked
+  # in (`Cyfr.Requests`, which tells their attention), answered
+  # `requested`, and ended `expired` at its bound. It ends under the
+  # context it was opened with, wherever the view's focus has moved since.
+  defp open_request(socket, frame, call, prompt_id, kind, label) do
+    id = Prima.TinctureWire.request_id()
+    ctx = socket.assigns.context
+    :ok = Cyfr.Requests.open(ctx, id, label)
+    timer = Process.send_after(self(), {:request_expired, id}, @request_ttl_ms)
+
+    request = %{
+      id: id,
+      frame: frame.id,
+      call: call,
+      prompt: prompt_id,
+      kind: kind,
+      timer: timer,
+      ctx: ctx
+    }
+
+    socket
+    |> update(:requests, &Map.put(&1, id, request))
+    |> requested(frame, call, id)
+  end
+
+  defp request_of(socket, prompt_id),
+    do: Enum.find_value(socket.assigns.requests, fn {_id, r} -> r.prompt == prompt_id && r end)
+
+  # The system layer's report on a request's prompt. A grant's refused
+  # commit leaves its prompt open for the person to try again, so it
+  # decides nothing; a request's refusal decides it, as does every other
+  # outcome.
+  defp request_closed(socket, %{kind: :grant}, {:refused, reason})
+       when reason != :invalid_prompt,
+       do: socket
+
+  defp request_closed(socket, request, outcome) do
+    {outcome, reason} =
+      case outcome do
+        :confirmed -> {"approved", nil}
+        :dismissed -> {"cancelled", "dismissed"}
+        {:refused, :declined} -> {"refused", Prima.TinctureWire.declined()}
+        {:refused, reason} -> {"refused", refusal_class(reason)}
+      end
+
+    socket
+    |> end_request(request, :resolved)
+    |> decided_request(request, outcome, reason)
+  end
+
+  # A request that waited past its bound: its prompt withdrawn, unanswered
+  # by the person, and the frame told it expired.
+  defp request_expired(socket, id) do
+    case Map.fetch(socket.assigns.requests, id) do
+      {:ok, request} ->
+        withdraw_prompt(request.prompt)
+
+        socket
+        |> end_request(request, :expired)
+        |> decided_request(request, "cancelled", "expired")
+
+      :error ->
+        socket
+    end
+  end
+
+  # Requests whose frame this view no longer holds: their prompts
+  # withdrawn, nothing told, since no frame is left to tell.
+  defp drop_orphan_requests(socket) do
+    held = MapSet.new(Frames.list(socket.assigns.frames), & &1.id)
+
+    socket.assigns
+    |> Map.get(:requests, %{})
+    |> Map.values()
+    |> Enum.reject(&MapSet.member?(held, &1.frame))
+    |> Enum.reduce(socket, fn request, socket ->
+      withdraw_prompt(request.prompt)
+      end_request(socket, request, :withdrawn)
+    end)
+  end
+
+  defp end_request(socket, request, outcome) do
+    Process.cancel_timer(request.timer)
+    :ok = Cyfr.Requests.close(request.ctx, request.id, outcome)
+
+    socket
+    |> update(:requests, &Map.delete(&1, request.id))
+    |> update(:grant_prompts, &Map.delete(&1, request.prompt))
+  end
+
+  defp decided_request(socket, request, outcome, reason) do
+    case Enum.find(Frames.list(socket.assigns.frames), &(&1.id == request.frame)) do
+      %{} = frame -> decided(socket, frame, request.call, outcome, reason)
+      nil -> socket
+    end
+  end
+
+  # A request's answers, under its call. A `grant` asks for none: it names
+  # no call, and one that asked no one is counted as a dropped message.
+  defp requested(socket, _frame, nil, _id), do: socket
+
+  defp requested(socket, frame, call, id),
+    do: answer(socket, frame, "requested", Prima.TinctureWire.requested(call, id))
+
+  defp unasked(socket, _frame, nil, _outcome, _reason), do: drop_message(socket)
+
+  defp unasked(socket, frame, call, outcome, reason),
+    do: decided(socket, frame, call, outcome, reason)
+
+  defp decided(socket, frame, call, outcome, reason \\ nil)
+  defp decided(socket, _frame, nil, _outcome, _reason), do: socket
+
+  defp decided(socket, frame, call, outcome, reason),
+    do: answer(socket, frame, "decided", Prima.TinctureWire.decided(call, outcome, reason))
+
   # ---- asking AQUA, and Prism's pages -----------------------------------------
 
   # The person asked AQUA about one of the desktop's widgets: the panel
@@ -1201,22 +1481,26 @@ defmodule PrismWeb.ShellLive do
   defp ask(socket, _frame, _widget), do: drop_message(socket)
 
   # CYFR's own overlays on the desktop, which open in place, the canvas
-  # running under them: `chat` the chat, and `aqua` AQUA's panel, where an
-  # approval waits (the attention stream's `aqua` destination).
-  defp settings(%{assigns: %{chat_overlay: pid}} = socket, "chat") when is_pid(pid) do
-    send(pid, :open)
+  # running under them: `chat` the chat, at the shared thread `ref` names
+  # when the person sits in it, and `aqua` AQUA's panel, at the person's
+  # own thread `ref` names, where an approval waits (the attention
+  # stream's `aqua` destination). Each overlay reads the thread under the
+  # person's own seat.
+  defp settings(%{assigns: %{chat_overlay: pid}} = socket, "chat", ref) when is_pid(pid) do
+    send(pid, if(ref, do: {:open, ref}, else: :open))
     socket
   end
 
-  defp settings(%{assigns: %{aqua_panel: pid}} = socket, "aqua") when is_pid(pid) do
-    send(pid, :open)
+  defp settings(%{assigns: %{aqua_panel: pid}} = socket, "aqua", ref) when is_pid(pid) do
+    send(pid, if(ref, do: {:open, ref}, else: :open))
     socket
   end
 
   # One of Prism's own pages, by its key in the Dashboard's list for the
   # person's UI mode: it opens as the overlay over the desktop, the page's
   # LiveView moved there by this view's hook, so the canvas keeps running.
-  defp settings(socket, page) do
+  # A page opens at its top: no Dashboard page takes a record to open at.
+  defp settings(socket, page, _ref) do
     mode = Prism.Labels.mode(socket.assigns[:ui_mode])
 
     case Enum.find(PrismWeb.Nav.items(mode), &(&1.key == page)) do
@@ -1231,39 +1515,6 @@ defmodule PrismWeb.ShellLive do
   end
 
   defp ready?(socket, %{id: id}), do: MapSet.member?(socket.assigns.canvas_ready, id)
-
-  # The person asked, from the canvas, for their grant to an installed
-  # component: offered through the system layer's generic grant path (the
-  # one AQUA's own asks take: Sanctum's preview, which the person confirms
-  # or not), and its outcome waits on no frame, since the component is
-  # most often a catalyst with none. Dropped and counted, offering nothing,
-  # when the reference names nothing installed, when an offer for the
-  # component is already open, or when the component is granted and
-  # nothing its grant needs is missing. A grant with a connection it needs
-  # missing is offered again: its sheet asks the person to connect it.
-  defp grant_from_canvas(socket, ref) do
-    ctx = socket.assigns.context
-
-    with {:ok, component} <- installed_component(ctx, ref),
-         false <- offering?(socket.assigns, component),
-         false <- granted_and_complete?(socket, component),
-         {:ok, offered} <- grant_prompt(socket, {:component, component}, nil, component) do
-      offered
-    else
-      _refused -> drop_message(socket)
-    end
-  end
-
-  # The component `ref` names among the athanor's installed ones, versionless
-  # or at an installed version, as the grant names it: without its version.
-  defp installed_component(ctx, ref) do
-    with {:ok, %{"component_ref" => canonical}} <- Compendium.inspect_component(ctx, ref),
-         {:ok, parsed} <- Prima.ComponentRef.parse(canonical) do
-      {:ok, Prima.ComponentRef.to_string(%{parsed | version: nil})}
-    else
-      _none -> :error
-    end
-  end
 
   # Whether a grant offer for `component` is open, whatever raised it: a
   # canvas's request names the component; an app opened or a canvas shown
@@ -2549,6 +2800,9 @@ defmodule PrismWeb.ShellLive do
       socket.assigns
 
     cond do
+      request = request_of(socket, id) ->
+        request_closed(socket, request, outcome)
+
       canvas_id = fallen_back(fallbacks, id) ->
         case outcome do
           {:confirmed, offer} when offer in [:retry, :kept] -> leave_fallback(socket, canvas_id)
@@ -2837,6 +3091,8 @@ defmodule PrismWeb.ShellLive do
 
   def handle_info({:deliver, tag, message}, socket),
     do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
+
+  def handle_info({:request_expired, id}, socket), do: {:noreply, request_expired(socket, id)}
 
   def handle_info({:report_component, :submitted}, socket) do
     {:noreply, put_flash(socket, :info, "Report submitted. Thanks.")}

@@ -15,8 +15,9 @@ defmodule Compendium.Tincture.Rules do
   version's own page on the vanilla or the react template, its
   declaration reaches nothing of its own, it reads only canvas-readable
   streams, which no other declaration names (`check_streams/2`), its
-  controls run only what the person may run directly and its chrome holds
-  to its grammar (`check_desktop/2`, `check_chrome/2`), its frame's
+  controls run directly only what the person may run directly and ask the
+  person for the rest, and its chrome holds to its grammar
+  (`check_desktop/2`, `check_chrome/2`), its frame's
   sandbox is `allow-scripts` alone (`canvas_sandbox_tokens/0`), and its
   page's one policy, which its workers inherit, is `canvas_page_csp/1`.
 
@@ -144,19 +145,21 @@ defmodule Compendium.Tincture.Rules do
   @feed_press "feed.press"
   @persons_actions Enum.uniq(Caps.agent_only_tools() ++ [@feed_press])
 
-  # The one `execute` a desktop's control runs besides a feed's press,
-  # admitted by its exact name: a retry runs again a run the person
-  # already ran, with its component, input and the grant revision it ran
-  # under (`Opus.Provider`), so it composes nothing the person has not
-  # approved. Every other `execute` stays refused until a control can be
-  # previewed.
+  # The one `execute` a desktop's control runs directly besides a feed's
+  # press, by its exact name: a retry runs again a run the person already
+  # ran, with its component, input and the grant revision it ran under
+  # (`Opus.Provider`), so it composes nothing the person has not approved.
+  # Every other `execute` asks the person first.
   @execution_retry "execution.retry"
 
-  # The operations a desktop's control never runs while no frame can ask
-  # the person for them: each tool only an agent asks for, which binds or
-  # ends a feed, schedules or rearranges the screen. Every operation that
-  # asks for the person's own confirmation (a `consent` class: a grant
-  # among them) is refused beside them.
+  # The consent walk's own tool, whose operations a grant's prompt takes.
+  @consent_tool "profile."
+
+  # The person's own acts: each tool only an agent asks for, which binds
+  # or ends a feed, schedules or rearranges the screen, and, beside them,
+  # every operation that asks for the person's own confirmation (consent
+  # `interactive`). A frame never runs one; it asks the person, who
+  # decides on CYFR's preview (`control_runs/1`, `request_operation/1`).
   @persons_controls Caps.agent_only_tools()
 
   # The stream namespaces whose events carry a thread's or the notes'
@@ -741,17 +744,12 @@ defmodule Compendium.Tincture.Rules do
       )
 
   @doc """
-  Whether a desktop's controls are ones it may offer today, read against
-  the operation table (`Sanctum.Catalog.operations/0`) and `streams`, as
+  Whether a desktop's controls are ones it may offer, read against the
+  operation table (`Sanctum.Catalog.operations/0`) and `streams`, as
   `check_streams/2` takes them. Each control's operation is looked up by
-  name: `#{@feed_press}`, `#{@execution_retry}`, or a `write` the person
-  makes directly, is admitted; an operation the catalog does not hold, a person-only act (a
-  tool only an agent asks for, `#{Enum.join(@persons_controls, "`, `")}`,
-  or any operation that asks for the person's confirmation, a grant among
-  them), an administrator's (`scope: :platform` or the `admin`
-  permission), one reachable only inside a run, and every `read`, other
-  `execute`, `destructive` and `external` operation are refused, each
-  naming which. A control's `pick` names a stream the desktop reads (a
+  name and runs as `control_runs/1` reads it: directly, or once the
+  person approved it; an operation it refuses is refused here, naming
+  which. A control's `pick` names a stream the desktop reads (a
   name in `data`, or `#{"feed.results"}` with a feed in `feeds`), a
   `field` that resolves in that stream's shape to a string, a list of
   strings or an enum the shape declares (never a `json` value, beneath
@@ -774,8 +772,32 @@ defmodule Compendium.Tincture.Rules do
   defp control(%Tincture.Control{id: id, operation: operation, pick: pick}, desktop, streams) do
     where = "tincture.desktop.controls #{id}"
 
-    with {:ok, declared} <- control_operation(catalogued(operation), operation, where) do
+    with {:ok, declared, _runs} <- control_operation(catalogued(operation), operation, where) do
       pick(pick, declared, desktop, streams, where)
+    end
+  end
+
+  @doc """
+  How a desktop's control of `operation` runs, read against the operation
+  table: `{:ok, :direct}` when the shell runs it on the person's tap
+  (`#{@feed_press}`, `#{@execution_retry}`, or a `write` the person makes
+  directly), and `{:ok, :asks}` when the shell asks the person first, on
+  CYFR's preview of exactly what it runs, and runs it only once they
+  approve: every other `execute`, every `destructive` and `external`
+  operation, and every person-only act (a tool only an agent asks for,
+  `#{Enum.join(@persons_controls, "`, `")}`, or an operation that asks
+  for the person's own confirmation). Refused, naming which: an
+  operation no provider declares, a step of a grant's consent walk
+  (`consent: :staging`, or the `profile` tool's; a desktop asks for a
+  grant itself), an
+  administrator's (`scope: :platform` or the `admin` permission), one
+  reachable only inside a run, and every `read`.
+  """
+  @spec control_runs(String.t()) :: {:ok, :direct | :asks} | {:error, refusal()}
+  def control_runs(operation) when is_binary(operation) do
+    with {:ok, _declared, runs} <-
+           control_operation(catalogued(operation), operation, "a control") do
+      {:ok, runs}
     end
   end
 
@@ -785,35 +807,82 @@ defmodule Compendium.Tincture.Rules do
   defp control_operation(%Prima.Operation{} = declared, operation, where) do
     cond do
       operation in [@feed_press, @execution_retry] ->
-        {:ok, declared}
-
-      operation in @persons_controls or not is_nil(declared.consent) ->
-        refuse(
-          "#{where} runs #{operation}, which is the person's own act: a desktop cannot ask " <>
-            "the person for it yet"
-        )
-
-      declared.scope == :platform or declared.permission == :admin ->
-        refuse("#{where} runs #{operation}, which is an administrator's")
-
-      :external not in declared.planes ->
-        refuse("#{where} runs #{operation}, which runs only inside a run")
-
-      declared.kind == :write ->
-        {:ok, declared}
+        {:ok, declared, :direct}
 
       true ->
-        refuse(
-          "#{where} runs #{operation}, which is #{kind_sentence(declared.kind)}: " <>
-            "a control runs a write, #{@feed_press} or #{@execution_retry}"
-        )
+        with :ok <- askable(declared, operation, "#{where} runs #{operation}") do
+          if declared.kind == :write and not persons?(operation, declared),
+            do: {:ok, declared, :direct},
+            else: {:ok, declared, :asks}
+        end
     end
   end
 
-  defp kind_sentence(:read), do: "a read"
-  defp kind_sentence(:execute), do: "an execute"
-  defp kind_sentence(:destructive), do: "destructive"
-  defp kind_sentence(:external), do: "external"
+  @doc """
+  Whether a frame may ask the person for `operation` through a request
+  (`Prima.TinctureWire`'s `request`): one of the person's own acts, a tool
+  only an agent asks for (`#{Enum.join(@persons_controls, "`, `")}`) or
+  an operation that asks for the person's own confirmation, which is
+  neither a read, a step of a grant's consent walk, an administrator's
+  nor reachable only inside a run. Refused, naming which, otherwise. A
+  grant is asked for as `grant`, never by an operation of its walk.
+  """
+  @spec request_operation(String.t()) :: :ok | {:error, refusal()}
+  def request_operation(operation) when is_binary(operation) do
+    where = "a request for #{operation}"
+
+    case catalogued(operation) do
+      nil ->
+        refuse("#{where} names an operation no provider declares")
+
+      declared ->
+        with :ok <- askable(declared, operation, where) do
+          if persons?(operation, declared),
+            do: :ok,
+            else:
+              refuse(
+                "#{where} names an operation that is not the person's own act: a frame asks " <>
+                  "for #{Enum.join(@persons_controls, ", ")}, a grant, or an operation that " <>
+                  "asks for the person's confirmation"
+              )
+        end
+    end
+  end
+
+  # What the person may be asked for at all: an operation of their own,
+  # outside a run, that changes something, and not a step of the walk a
+  # grant's own prompt takes. The consent tool's operations are that walk
+  # whatever their class: a grant is previewed as Sanctum's typed rows in
+  # the grant prompt, and a frame naming a grant's bindings would show
+  # the person less than the grant it makes.
+  defp askable(declared, operation, where) do
+    cond do
+      declared.consent == :staging or String.starts_with?(operation, @consent_tool) ->
+        refuse(
+          "#{where}, a step of a grant's consent walk: a desktop asks for a grant itself, " <>
+            "and the person grants in CYFR's grant prompt"
+        )
+
+      declared.scope == :platform or declared.permission == :admin ->
+        refuse("#{where}, which is an administrator's")
+
+      :external not in declared.planes ->
+        refuse("#{where}, which runs only inside a run")
+
+      declared.kind == :read ->
+        refuse(
+          "#{where}, which is a read: a control runs a write, #{@feed_press} or " <>
+            "#{@execution_retry} directly, and asks the person before any other " <>
+            "execute, destructive or external operation and any of the person's own acts"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp persons?(operation, declared),
+    do: operation in @persons_controls or declared.consent == :interactive
 
   defp pick(nil, _declared, _desktop, _streams, _where), do: :ok
 

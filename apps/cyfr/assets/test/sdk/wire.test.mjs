@@ -9,6 +9,8 @@ import {
   BEARER_HEADER,
   CLOSE_CODES,
   NO_ANSWER_CLASSES,
+  REQUEST_CANCEL_REASONS,
+  REQUEST_OUTCOMES,
   ROUTES,
   SOCKET_PATH,
   STAGES,
@@ -221,6 +223,15 @@ describe("the canvas's part of the wire agrees with the fixture", () => {
       }
     }
     assert.ok(built > 0)
+  })
+
+  test("a request's outcomes and the reasons a cancelled one names are the fixture's decided answers'", () => {
+    const decided = canvas.to_frame.valid.map(({message}) => message).filter(({verb}) => verb === "decided")
+    assert.deepEqual([...new Set(decided.map(({args}) => args.outcome))].sort(), [...REQUEST_OUTCOMES].sort())
+    assert.deepEqual(
+      [...new Set(decided.filter(({args}) => args.outcome === "cancelled" && "reason" in args).map(({args}) => args.reason))].sort(),
+      [...REQUEST_CANCEL_REASONS].sort()
+    )
   })
 
   test("the canvas block a handshake carries is the canvas message's args", () => {
