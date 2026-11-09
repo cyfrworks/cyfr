@@ -59,9 +59,12 @@
   // what was removed while it was closed.
   const heldBy = new Map();
 
-  function follow(key) {
+  // `onDrained` hears when an open still in flight at its stop has
+  // settled: the SDK hands no stream to close until its open answers, so
+  // until then the request still holds its connection.
+  function follow(key, onDrained) {
     const [name, subject] = key.startsWith('feed:') ? ['feed.results', key.slice(5)] : [key, null];
-    let stopped = false, opens = 0, everOpened = false, current = null, timer, settle;
+    let stopped = false, opens = 0, everOpened = false, current = null, timer, settle, pending = false;
     heldBy.set(key, new Map());
     async function open() {
       const n = ++opens;
@@ -69,6 +72,7 @@
       // over plain HTTP) says so on its sign until it opens.
       const slow = setTimeout(() => changed(() => { if (!everOpened) state.refusals[key] = WAITING; }), OPEN_WAIT_MS);
       let stream;
+      pending = true;
       try {
         stream = await sdk.stream(name, subject, ({ data }) => {
           if (stopped || !N.isItem(data)) return;
@@ -80,8 +84,13 @@
             if (key.startsWith('feed:') && data.refresh !== true) { ui.working[key.slice(5)] = false; landed(key.slice(5)); }
           });
           });
-      } finally { clearTimeout(slow); }
-      if (stopped) { stream.close(); return; }
+      } catch (error) {
+        clearTimeout(slow); pending = false;
+        if (stopped) { onDrained(); return; }
+        throw error;
+      }
+      clearTimeout(slow); pending = false;
+      if (stopped) { stream.close(); onDrained(); return; }
       everOpened = true; current = stream;
       if (state.refusals[key] === WAITING) changed(() => delete state.refusals[key]);
       clearTimeout(settle);
@@ -111,21 +120,29 @@
     const first = open().catch((e) => failed(e, 0));
     return {
       first,
+      // Answers whether an open is still in flight.
       stop() {
         stopped = true; clearTimeout(timer); clearTimeout(settle);
         if (current) current.close();
+        return pending;
       },
     };
   }
 
+  // The stopped followers whose open is still in flight.
+  const draining = new Set();
   // Opens what the parts that are on read and closes what none reads, so a
-  // part turned off frees its stream.
+  // part turned off frees its stream. A stopped open still in flight counts
+  // against the budget until it settles, so no more than N.STREAMS
+  // requests are ever in flight; what waits for it opens then.
   function reconcile() {
     const { open, held } = N.wantedStreams(state.prefs);
-    for (const [key, f] of followers) if (!open.includes(key)) { f.stop(); followers.delete(key); dropStream(key); }
+    for (const [key, f] of followers) if (!open.includes(key)) { followers.delete(key); dropStream(key); if (f.stop()) draining.add(f); }
     for (const key of open) {
       if (state.refusals[key] === HELD) delete state.refusals[key];
-      if (!followers.has(key)) followers.set(key, follow(key));
+      if (followers.has(key) || followers.size + draining.size >= N.STREAMS) continue;
+      const f = follow(key, () => { draining.delete(f); reconcile(); schedule(); });
+      followers.set(key, f);
     }
     for (const key of held) state.refusals[key] = HELD;
   }
@@ -183,12 +200,41 @@
       if (el) el.setAttribute('aria-expanded', 'true');
     }
     if (ui.fuse) els.fuse.innerHTML = N.renderFusebox(state, ui);
+    fitBoard();
     if (before) flip(before);
     if (ui.covered) setCovered(ui.covered);
     if (window.Scene) Scene.relayout();
     requestAnimationFrame(placeRipples);
     if (before) setTimeout(placeRipples, 460);
     els.root.dataset.waiting = String(m.list.filter((w) => w.light !== 'out').length);
+  }
+  // The board shows the rows it has room for at full height: the newest
+  // runs that wait on nothing go first, then the later schedules, then the
+  // later failures, keeping one of each; its last line counts the failures
+  // it hid, which the puddle still lists.
+  function fitBoard() {
+    const board = $('.board');
+    if (!board) return;
+    const ranList = $('.rows--ran', board);
+    const ran = ranList ? $$(':scope > li', ranList) : [];
+    const nextList = $$('.rows', board).find((ul) => ul !== ranList);
+    const next = nextList ? $$(':scope > li', nextList) : [];
+    const more = $('.board__more', board);
+    const total = ranList ? Number(ranList.dataset.litTotal) || 0 : 0;
+    const shown = (list) => list.filter((li) => !li.classList.contains('row--unfit'));
+    const count = () => {
+      const hidden = total - shown(ran).filter((li) => li.dataset.lit).length;
+      more.hidden = hidden <= 0;
+      more.textContent = hidden > 0 ? 'and ' + hidden + ' more failed, in the puddle below' : '';
+    };
+    count();
+    while (board.scrollHeight > board.clientHeight + 1) {
+      const r = shown(ran), n = shown(next);
+      const victim = (r.length > 1 && [...r].reverse().find((li) => !li.dataset.lit)) || (n.length > 1 && n[n.length - 1]) || (r.length > 1 && r[r.length - 1]);
+      if (!victim) break;
+      victim.classList.add('row--unfit');
+      count();
+    }
   }
   const cssq = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   // Each reflection's label sits under its sign; labels push apart so none overlap.
@@ -459,7 +505,8 @@
       if (!els.plate.hidden) { const back = ui.selected && $('[data-target="' + cssq(ui.selected.ref) + '"]'); closePlate(); if (back) back.focus(); }
       else if (ui.fuse) doAct({ dataset: { act: 'fusebox' } });
     });
-    addEventListener('resize', () => { placeRipples(); if (!els.plate.hidden && ui.selected) { const a = $('[data-target="' + cssq(ui.selected.ref) + '"]'); if (a) placePlate(a); } });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
+    addEventListener('resize', () => { schedule(); if (!els.plate.hidden && ui.selected) { const a = $('[data-target="' + cssq(ui.selected.ref) + '"]'); if (a) placePlate(a); } });
     if (window.Scene) Scene.init(els.root, () => state);
     els.wall.addEventListener('scroll', () => { if (window.Scene) Scene.relayout(); placeRipples(); }, { passive: true });
     // Times on the street move on.

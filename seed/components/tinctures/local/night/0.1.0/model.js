@@ -300,13 +300,12 @@
       rows.push({ r, L });
     }
     for (const ref of failedRefs) if (!shownFor.has(ref)) rows.push({ r: null, L: lit.get('failed:' + ref), ref });
-    // At most four rows: the failures that wait first, then the newest others.
+    // The failures that wait first, then the newest others: the page hides
+    // what its board has no room for (street.js fitBoard), and its last
+    // line counts the failures it hid.
     const litRows = rows.filter((x) => x.L);
-    const keep = litRows.slice(0, 4).concat(rows.filter((x) => !x.L)).slice(0, 4);
-    const more = litRows.length - keep.filter((x) => x.L).length;
-    // A short screen shows three rows; its line counts from the third.
-    const moreShort = litRows.length - Math.min(3, keep.filter((x) => x.L).length);
-    const ran = rows.filter((x) => keep.includes(x)).map(({ r, L, ref }, i) => {
+    const keep = litRows.slice(0, 6).concat(rows.filter((x) => !x.L)).slice(0, Math.max(4, Math.min(6, litRows.length)));
+    const ran = rows.filter((x) => keep.includes(x)).map(({ r, L, ref }) => {
       const item = r ? r.item : null;
       const reference = item ? text(item.reference) : ref;
       const name = compName(reference);
@@ -315,7 +314,7 @@
       const out = kind === 'failed' ? (err ? words(err.class) + ' · ' + words(err.cause) : 'failed') : kind === 'started' ? 'running' : kind === 'cancelled' ? 'cancelled' : typeof item.duration_ms === 'number' ? (item.duration_ms / 1000).toFixed(1) + ' s' : 'done';
       const at = r && r.at ? C.hm(r.at) : L && L.since ? C.hm(L.since) : '--:--';
       const target = L ? 'failed:' + reference : 'run:' + text(item.execution_id);
-      return '<li' + (i === 3 ? ' class="row--fourth"' : '') + '><button class="row row--ran' + (kind === 'started' ? ' row--working' : '') + '" data-target="' + esc(target) + '"' + lightAttrs(L) + '>' +
+      return '<li' + (L ? ' data-lit="1"' : '') + '><button class="row row--ran' + (kind === 'started' ? ' row--working' : '') + '" data-target="' + esc(target) + '"' + lightAttrs(L) + '>' +
         '<span class="dot when">' + esc(at) + '</span>' +
         '<span class="dot what">' + (L ? tube(name, L.light) : esc(name)) + '</span>' +
         '<span class="row__meta">' + (L ? tube(out, 'burn') : esc(out)) + '</span>' +
@@ -324,9 +323,8 @@
     const none = (t) => '<li><p class="row row--none">' + esc(t) + '</p></li>';
     return '<div class="sign board"><h2 id="h-board" class="board__head">' + tube('Schedules') + '</h2>' + refusal(s, 'schedules.changes') +
       '<h3 class="board__sub">Next</h3><ul class="rows">' + (next || none('Nothing is scheduled.')) + '</ul>' + refusal(s, 'runs.changes') +
-      '<h3 class="board__sub">Lately</h3><ul class="rows">' + (ran || none('No runs yet.')) + '</ul>' +
-      (more > 0 ? '<p class="board__more board__more--tall">and ' + more + ' more failed, in the puddle below</p>' : '') +
-      (moreShort > 0 ? '<p class="board__more board__more--short">and ' + moreShort + ' more failed, in the puddle below</p>' : '') + '</div>';
+      '<h3 class="board__sub">Lately</h3><ul class="rows rows--ran" data-lit-total="' + litRows.length + '">' + (ran || none('No runs yet.')) + '</ul>' +
+      '<p class="board__more" hidden></p></div>';
   }
 
   // A feed's result is the feed's own shape: the sign reads the few fields a

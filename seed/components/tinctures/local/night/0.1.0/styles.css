@@ -182,7 +182,7 @@ button:disabled { cursor: default; opacity: .6; }
 .board__head { font-weight: 400; font-size: 1.1rem; }
 .board__sub { font-weight: 400; font-size: .76rem; color: var(--pane-lo); margin: .25rem 0 0 .45rem; }
 .rows { display: flex; flex-direction: column; gap: 1px; }
-.row { width: 100%; display: grid; grid-template-columns: 3.3rem minmax(0, 1fr) auto; grid-template-areas: "when what lamp" "when meta lamp"; align-items: center; column-gap: .6rem; padding: .08rem .45rem; border-radius: 4px; color: var(--led); transition: background .2s; }
+.row { width: 100%; min-height: 44px; display: grid; grid-template-columns: 3.3rem minmax(0, 1fr) auto; grid-template-areas: "when what lamp" "when meta lamp"; align-items: center; column-gap: .6rem; padding: .08rem .45rem; border-radius: 4px; color: var(--led); transition: background .2s; }
 .row:hover { background: #10131c; }
 .row .when { grid-area: when; align-self: start; padding-top: .1rem; }
 .row .what { grid-area: what; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -249,7 +249,7 @@ button:disabled { cursor: default; opacity: .6; }
 /* ---------- apps: shopfronts at street level ---------- */
 .shops { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .5rem; height: 100%; }
 .shop { display: flex; flex-direction: column; min-width: 0; }
-.awning { height: 1.9rem; flex: none; border-radius: 5px 5px 0 0; display: flex; align-items: center; justify-content: center; font-size: .92rem; padding: 0 .3rem; cursor: default; }
+.awning { height: 44px; flex: none; border-radius: 5px 5px 0 0; display: flex; align-items: center; justify-content: center; font-size: .92rem; padding: 0 .3rem; cursor: default; }
 .awning[data-light] { cursor: pointer; }
 .window { position: relative; flex: 1 1 auto; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem; border: 2px solid #1a1f2d; border-top: 0; border-radius: 0 0 4px 4px; background: #080a10; color: var(--pane); font-size: .8rem; }
 .shutter { position: absolute; inset: 0; background: repeating-linear-gradient(#131724 0 5px, #0c0f18 5px 7px); transition: transform .6s cubic-bezier(.3,.7,.3,1); }
@@ -290,7 +290,7 @@ button:disabled { cursor: default; opacity: .6; }
 .ripples li { position: absolute; bottom: .5rem; left: 50%; transform: translateX(-50%); }
 html:not(.js) .ripples { display: flex; justify-content: space-around; align-items: flex-end; padding-bottom: .5rem; }
 html:not(.js) .ripples li { position: static; transform: none; }
-.ripple { display: inline-flex; align-items: baseline; gap: .35rem; min-height: 32px; padding: .3rem .7rem; border-radius: 999px; background: rgba(5,6,10,.72); font-size: .82rem; color: var(--pane-hi); white-space: nowrap; transition: opacity .5s, transform .5s; }
+.ripple { display: inline-flex; align-items: center; gap: .35rem; min-height: 44px; padding: .3rem .7rem; border-radius: 999px; background: rgba(5,6,10,.72); font-size: .82rem; color: var(--pane-hi); white-space: nowrap; transition: opacity .5s, transform .5s; }
 .ripple b { font-weight: 400; color: color-mix(in srgb, var(--hue) 70%, #fff); text-shadow: 0 0 8px var(--hue); }
 .ripple .meta { font-size: .74rem; }
 .ripple[data-going] { opacity: 0; transform: translateY(8px); }
@@ -412,6 +412,7 @@ html:not(.js) .ripples li { position: static; transform: none; }
 .junction .tag { margin-left: auto; font-size: .85rem; }
 .junction[data-light] { border-radius: 6px; }
 noscript p { padding: 1rem; color: var(--pane); }
+.board { overflow: hidden; }
 .board__more { margin: .25rem .45rem 0; font-size: .74rem; color: #ffb4a8; }
 .awning .tube { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .jl--refused { white-space: normal; color: #ffb4a8; }
@@ -420,9 +421,4 @@ noscript p { padding: 1rem; color: var(--pane); }
   .puddle--scroll .ripples { display: flex; gap: 8px; align-items: flex-end; overflow-x: auto; scrollbar-width: none; padding: 0 12px .5rem; }
   .puddle--scroll .ripples li { position: static; transform: none !important; flex: none; }
 }
-.board__more--short { display: none; }
-@media (min-width: 600px) and (max-height: 700px) {
-  .row--fourth { display: none; }
-  .board__more--tall { display: none; }
-  .board__more--short { display: block; }
-}
+li.row--unfit { display: none; }
