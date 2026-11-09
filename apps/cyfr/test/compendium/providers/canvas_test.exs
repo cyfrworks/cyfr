@@ -155,43 +155,30 @@ defmodule Compendium.Providers.CanvasTest do
         stream.shape
       end
 
-      assert streams == [
-               %{
-                 name: "attention.changes",
-                 subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
-                 shape: shape.("attention.changes"),
-                 filter: nil,
-                 refresh: true
-               },
-               %{
-                 name: "feed.results",
-                 subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
-                 shape: shape.("feed.results"),
-                 filter: "feed",
-                 refresh: true
-               },
-               %{
-                 name: "runs.changes",
-                 subject: nil,
-                 shape: shape.("runs.changes"),
-                 filter: nil,
-                 refresh: true
-               },
-               %{
-                 name: "schedule_runs.changes",
-                 subject: nil,
-                 shape: shape.("schedule_runs.changes"),
-                 filter: nil,
-                 refresh: true
-               },
-               %{
-                 name: "schedules.changes",
-                 subject: nil,
-                 shape: shape.("schedules.changes"),
-                 filter: nil,
-                 refresh: true
-               }
-             ]
+      person = ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z"
+      feed = ~S"\A[a-z0-9][a-z0-9-]{0,47}\z"
+
+      assert streams ==
+               for(
+                 {name, subject, filter} <- [
+                   {"activity.changes", nil, nil},
+                   {"attention.changes", person, nil},
+                   {"components.changes", nil, nil},
+                   {"feed.results", feed, "feed"},
+                   {"runs.changes", nil, nil},
+                   {"schedule_runs.changes", nil, nil},
+                   {"schedules.changes", nil, nil},
+                   {"threads.changes", person, nil},
+                   {"vault.changes", nil, nil}
+                 ],
+                 do: %{
+                   name: name,
+                   subject: subject,
+                   shape: shape.(name),
+                   filter: filter,
+                   refresh: true
+                 }
+               )
     end
 
     test "write, versions and restore answer through the tool", %{ctx: ctx} do
