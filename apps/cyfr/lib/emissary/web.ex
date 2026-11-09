@@ -9,7 +9,8 @@ defmodule Emissary.Web do
   (`Emissary.Web.CanvasController`) and the identity directory's
   endpoints. The device channel
   (`Emissary.Web.DeviceChannel`) is the socket the endpoint mounts beside
-  them.
+  them, and a frame's stream connection (`Emissary.Web.FrameSocket`) the
+  socket its data routes upgrade to.
 
       use Emissary.Web, :controller
 
@@ -31,6 +32,7 @@ defmodule Emissary.Web do
       DeviceChannel,
       DirectoryController,
       ExecutionEventsController,
+      FrameSocket,
       HandleController,
       HealthController,
       MCPController,
