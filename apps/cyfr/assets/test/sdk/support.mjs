@@ -12,10 +12,8 @@ export const fixture = JSON.parse(
 export const credentialOf = (header) => header.replace(/^Bearer /, "")
 
 // A stand-in for the endpoint: records each request and answers it from
-// `answer(request)`, a `{status, body}` (the body JSON-encoded unless a
-// string), or a `{stream}` whose function writes a `text/event-stream`
-// answer itself: `stream(res, request)`. A request whose connection closes
-// is marked `closed`.
+// `answer(request)`, a `{status, body}`, the body JSON-encoded unless a
+// string.
 export async function stubServer(answer) {
   const requests = []
 
@@ -23,24 +21,11 @@ export async function stubServer(answer) {
     let raw = ""
     req.on("data", (chunk) => (raw += chunk))
     req.on("end", () => {
-      const request = {
-        method: req.method,
-        url: req.url,
-        headers: req.headers,
-        body: JSON.parse(raw),
-        closed: false
-      }
+      const request = {method: req.method, url: req.url, headers: req.headers, body: JSON.parse(raw)}
       requests.push(request)
-      res.on("close", () => (request.closed = true))
-      const {status = 200, body, stream} = answer(request)
-
-      if (stream) {
-        res.writeHead(200, {"content-type": "text/event-stream; charset=utf-8"})
-        stream(res, request)
-      } else {
-        res.writeHead(status, {"content-type": "application/json"})
-        res.end(typeof body === "string" ? body : JSON.stringify(body))
-      }
+      const {status = 200, body} = answer(request)
+      res.writeHead(status, {"content-type": "application/json"})
+      res.end(typeof body === "string" ? body : JSON.stringify(body))
     })
   })
 
@@ -52,6 +37,49 @@ export async function stubServer(answer) {
     requests,
     close: () => new Promise((resolve) => server.close(resolve))
   }
+}
+
+// A stand-in for the endpoint's stream connection: `socketFn`, as
+// createClient takes it, and every socket it made, in order. A socket
+// records what the frame sends on it (`sent`, each message parsed) and
+// answers each with `answer(message, socket)`, a list of the endpoint's
+// messages, each its own message event after it. It opens after the call
+// that made it, as a WebSocket does, unless `opens` is false, when the test
+// opens it (`open()`); `say(message)` sends the frame a message (a string
+// as it is), and `drop()` closes it from the endpoint's side. `sent()` is
+// every message every socket carried.
+export function stubSockets({answer = () => [], opens = true} = {}) {
+  const sockets = []
+  const socketFn = (url) => {
+    const socket = {
+      url,
+      sent: [],
+      readyState: 0,
+      send(data) {
+        if (socket.readyState === 0) throw new Error("a WebSocket sends nothing before it opens")
+        if (socket.readyState !== 1) return
+        const message = JSON.parse(data)
+        socket.sent.push(message)
+        for (const reply of answer(message, socket)) setTimeout(() => socket.say(reply), 0)
+      },
+      open() {
+        socket.readyState = 1
+        socket.onopen({type: "open"})
+      },
+      say(message) {
+        if (socket.readyState === 1) socket.onmessage({data: typeof message === "string" ? message : JSON.stringify(message)})
+      },
+      drop(code = 1006) {
+        if (socket.readyState === 3) return
+        socket.readyState = 3
+        socket.onclose({code})
+      }
+    }
+    sockets.push(socket)
+    if (opens) setTimeout(() => socket.readyState === 0 && socket.open(), 0)
+    return socket
+  }
+  return {socketFn, sockets, sent: () => sockets.flatMap((socket) => socket.sent)}
 }
 
 // A page's window: `parent` is the shell's window unless `framed` is false,

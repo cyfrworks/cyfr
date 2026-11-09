@@ -15,9 +15,11 @@
 
 import {createClient} from "./client.js"
 
+const Socket = window.WebSocket
 const client = createClient({
   win: window,
   fetchFn: window.fetch.bind(window),
+  socketFn: (url) => new Socket(url),
   base: document.baseURI
 })
 

@@ -8,11 +8,14 @@ import {
   CANVAS_VERBS,
   CREDENTIAL,
   HANDSHAKE,
+  NO_ANSWER_CLASSES,
+  REFUSAL_EVENT,
   ROUTES,
-  STREAM_CONTENT_TYPE,
+  SOCKET_PATH,
   VERSION,
   bearer,
   decodeAnswer,
+  decodeConnectionMessage,
   decodeCredentialClosed,
   decodeToFrame,
   isDesktopId,
@@ -23,8 +26,9 @@ import {
   publicIdentity,
   request,
   shellMessage,
-  sseParser,
-  streamPath
+  socketPath,
+  subscribeMessage,
+  unsubscribeMessage
 } from "./wire.js"
 
 const HANDSHAKE_TIMEOUT_MS = 30000
@@ -71,37 +75,49 @@ const isPlainObject = (value) =>
 
 const unreadable = () => new CyfrError("The endpoint's answer could not be read.", "invalid_answer")
 const unreachable = () => new CyfrError("The endpoint could not be reached.", "unavailable")
+const noFrame = () => new CyfrError("This page is not a frame the shell opened.", "no_frame")
 
-// A stream open the endpoint gave no answer on: it answered a server
-// error (5xx), whatever its body said, so the open may succeed later. It
-// rejects as an unreachable endpoint does, `unavailable` with no stage,
-// keeping the endpoint's own sentence when it sent a refusal. A read
-// replays safely; an invoke or an action is not read this way, since a
-// server error's class says what became of its run.
-const unanswered = (status, rejection) =>
-  status >= 500
-    ? new CyfrError(rejection.code === "invalid_answer" ? unreachable().message : rejection.message, "unavailable")
-    : rejection
+// How a subscription the endpoint ended before it opened rejects: as its
+// refusal, but as `unavailable` with no stage, keeping the endpoint's
+// sentence, when it got no answer, so it may open if asked for again later.
+// A read replays safely; an invoke or an action is not read this way, since
+// a server error's class says what became of its run.
+const refusedOpen = (error) =>
+  error === null
+    ? unreachable()
+    : NO_ANSWER_CLASSES.includes(error.class)
+      ? new CyfrError(error.message, "unavailable")
+      : new CyfrError(error.message, error.class, error.stage)
+
+const SOCKET_SCHEMES = Object.freeze({"http:": "ws:", "https:": "wss:"})
 
 // The SDK of one page. `win` is its window (its `parent` and `location`),
-// `fetchFn` its fetch and `base` the URL the endpoint's routes resolve
-// against (the document's).
+// `fetchFn` its fetch, `socketFn(url)` opens its WebSocket and `base` is
+// the URL the endpoint's routes resolve against (the document's).
 //
 // A frame's only peer for shell verbs is the shell that created it: the
 // shell posts one handshake from the parent window with a MessagePort, and
 // then the frame credential over that port. Every other window message is
 // ignored, and a second handshake too, so no other window can hand the
-// frame a port or a credential. Data goes to the endpoint under that
-// credential as a bearer; it never travels over the port or in a URL.
+// frame a port or a credential. Requests go to the endpoint under that
+// credential as a bearer, and each subscription to a stream carries it in
+// its `subscribe` message; it never travels over the port or in a URL.
 //
 // The shell renews the credential while the frame runs and sends each new
-// one over the same port: a later request is made under the newest, and a
-// request or a stream already sent keeps the one it was sent with.
+// one over the same port: a later request or subscription is made under
+// the newest, and one already sent keeps the one it was sent with.
+//
+// A frame reads every stream it opens over one WebSocket, its stream
+// connection, opened by the first subscription ready to send and reused
+// until it closes; the next subscription after that opens a new one. Each
+// subscription is numbered by the client, and the endpoint's answers name
+// it by that number. A closed connection ends every subscription it
+// carried.
 //
 // A page that is not a frame has no shell and no credential. A public
 // tincture's page (`/t/…`) names itself in each request instead
-// (`wire.publicIdentity/1`) and sends no bearer; any other page's data
-// calls are refused here as `no_frame`.
+// (`wire.publicIdentity/1`) and sends no bearer, and opens no stream; any
+// other page's data calls are refused here as `no_frame`.
 //
 // A canvas's page learns it is one from the first message on its port,
 // `canvas`, which comes before its credential and names its open's mode,
@@ -119,9 +135,9 @@ const unanswered = (status, rejection) =>
 // write's answer carries the document and the revision the shell now
 // holds, which `desktop` and its event follow, so a stale write is
 // answered with the document to write over. Until the first of the two, shell verbs wait, since what
-// reaches the shell depends on which the page is. A canvas's streams go to
-// its data path's stream route, only the pairs it declares and only once
-// the shell has told it `state` `live`; what the shell tells it after
+// reaches the shell depends on which the page is. A canvas's streams go
+// over its data path's stream connection, only the pairs it declares and
+// only once the shell has told it `state` `live`; what the shell tells it after
 // (`posture`, `covered`, `installed`, `state`) reaches the page through
 // `on`. A canvas reports its own failure once: an uncaught error or
 // unhandled rejection before `ready()` as `failed` at stage `load`, and a
@@ -129,7 +145,13 @@ const unanswered = (status, rejection) =>
 // failure, since a page error after the canvas started never costs the
 // person their canvas; nothing is reported. Any other page reports none,
 // and sends no `press`.
-export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS}) {
+export function createClient({
+  win,
+  fetchFn,
+  socketFn = (url) => new win.WebSocket(url),
+  base,
+  handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS
+}) {
   const framed = win.parent !== win && win.parent !== null && win.parent !== undefined
   const standalone = framed ? null : publicIdentity(win.location && win.location.pathname)
   let frame = null
@@ -150,8 +172,12 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   const queued = []
   const latest = new Map()
   const handlers = new Map(CANVAS_EVENTS.map((event) => [event, new Set()]))
-  // The resolvers of a canvas's stream opens waiting for it to be shown.
+  // The resolvers of a canvas's subscriptions waiting for it to be shown.
   const unshown = []
+  // The stream connection while it is not closed, and the number the next
+  // subscription takes.
+  let connection = null
+  let nextSubscription = 1
   // A canvas's preferences, appearance and person, from its open and the
   // shell's answers to its writes; an app's subject.
   let desktop = null
@@ -358,9 +384,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   function identity() {
     if (standalone) return Promise.resolve({public: standalone})
     if (credential !== null) return Promise.resolve({credential})
-    if (!framed) {
-      return Promise.reject(new CyfrError("This page is not a frame the shell opened.", "no_frame"))
-    }
+    if (!framed) return Promise.reject(noFrame())
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
@@ -374,44 +398,25 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     })
   }
 
-  // Where a request goes: its kind's route, but a canvas's streams go to
-  // its open's stream route, and only the pairs the canvas declares.
-  function routeOf(requestKind, fields) {
-    if (canvas === null || requestKind !== "stream_open") return ROUTES[requestKind]
-    if (!canvas.streams.has(pairKey({name: fields.stream, subject: fields.subject}))) {
-      throw new CyfrError("This canvas does not declare that stream.", "forbidden", "admission")
-    }
-    return streamPath(frame)
-  }
-
-  async function postRequest(requestKind, fields, signal) {
-    let who = await identity()
-    const path = routeOf(requestKind, fields)
-    if (canvas !== null && requestKind === "stream_open") {
-      // A hidden canvas reads nothing: it opens once shown, and the refresh it opens with covers what it missed.
-      await shown()
-      who = await identity()
-    }
+  async function call(requestKind, fields) {
+    const who = await identity()
     const headers = {"content-type": "application/json"}
     if (who.credential) headers[BEARER_HEADER] = bearer(who.credential)
 
+    let response
     try {
-      return await fetchFn(new URL(path, base).toString(), {
+      response = await fetchFn(new URL(ROUTES[requestKind], base).toString(), {
         method: "POST",
         headers,
         body: JSON.stringify(request(requestKind, fields, who.public || null)),
         credentials: "omit",
         cache: "no-store",
-        redirect: "error",
-        signal
+        redirect: "error"
       })
     } catch (_error) {
       throw unreachable()
     }
-  }
 
-  // A JSON answer read to its value, or thrown as its refusal.
-  async function answer(requestKind, response) {
     let body
     try {
       body = await response.json()
@@ -428,70 +433,157 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     throw unreadable()
   }
 
-  async function call(requestKind, fields) {
-    return answer(requestKind, await postRequest(requestKind, fields))
-  }
-
-  // The stream is the response body, read as it arrives: an EventSource
-  // cannot carry the bearer. It ends when the grant's deadline passes, when
-  // the endpoint closes it, or on `close()`, which aborts the request; a
-  // reconnect is a new `stream` call, a new open under the gate.
-  async function openStream(fields, onEvent) {
-    const controller = new AbortController()
-    const response = await postRequest("stream_open", fields, controller.signal)
-    const type = (response.headers.get("content-type") || "").split(";")[0].trim()
-
-    if (type !== STREAM_CONTENT_TYPE) {
-      // A refusal is thrown as itself; a JSON answer that is not one is not
-      // a stream; and a server error is no answer on the open.
-      let rejection = unreadable()
-      try {
-        await answer("stream_open", response)
-      } catch (error) {
-        rejection = error
-      } finally {
-        controller.abort()
-      }
-      throw unanswered(response.status, rejection)
-    }
-
-    const parser = sseParser((event) => {
-      try {
-        onEvent(event)
-      } catch (_error) {
-        // The page's handler failing ends nothing: the next event still comes.
-      }
-    })
-
-    let closing = false
-    const closed = (async () => {
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      try {
-        for (;;) {
-          const {done, value} = await reader.read()
-          if (done) break
-          parser.push(decoder.decode(value, {stream: true}))
-        }
-        parser.push(decoder.decode())
-      } catch (_error) {
-        if (!closing) throw unreachable()
-      } finally {
-        parser.end()
-      }
-    })()
+  // A subscription is `waiting` until it may be sent, `asked` once it is on
+  // the connection (its `subscribe` sent as soon as the connection opens),
+  // `open` once the endpoint answers `subscribed`, and `over` once it has
+  // ended, been refused or been closed.
+  function subscribe(name, subject, onEvent) {
+    const subscription = {name, subject, onEvent, state: "waiting", held: null, number: null, sent: false}
+    const opened = new Promise((resolve, reject) => Object.assign(subscription, {resolve, reject}))
+    const closed = new Promise((resolve, reject) => (subscription.closed = {resolve, reject}))
     // A broken stream the page never waits on is no failure of the page.
     closed.catch(() => {})
-
-    return {
+    const close = () => unsubscribe(subscription)
+    subscription.handle = {
       /** Settles when the stream ends; rejects if the connection broke. */
       closed,
-      /** End the stream: the request is aborted and no further event is delivered. */
-      close() {
-        closing = true
-        controller.abort()
-      }
+      /** End the stream: nothing more of it is delivered. */
+      close
     }
+    sendable(subscription).then(
+      () => attach(subscription),
+      (error) => refuse(subscription, error)
+    )
+    opened.close = close
+    return opened
+  }
+
+  // Resolves once `subscription` may be sent: the frame holds its
+  // credential and, on a canvas, the pair is declared and the canvas shown.
+  async function sendable({name, subject}) {
+    if (!framed) throw noFrame()
+    await identity()
+    if (canvas === null) return
+    if (!canvas.streams.has(pairKey({name, subject}))) {
+      throw new CyfrError("This canvas does not declare that stream.", "forbidden", "admission")
+    }
+    // A hidden canvas reads nothing: it subscribes once shown, and the refresh it opens with covers what it missed.
+    await shown()
+  }
+
+  function refuse(subscription, error) {
+    if (subscription.state !== "waiting") return
+    subscription.state = "over"
+    subscription.reject(error)
+  }
+
+  function attach(subscription) {
+    if (subscription.state !== "waiting") return
+    let held
+    try {
+      held = connect()
+    } catch (_error) {
+      return refuse(subscription, unreachable())
+    }
+    subscription.state = "asked"
+    subscription.held = held
+    subscription.number = nextSubscription++
+    held.subscriptions.set(subscription.number, subscription)
+    if (held.open) ask(held, subscription)
+  }
+
+  // The stream connection, opened at the frame's own path: a canvas's under
+  // its data path, any other frame's the app path.
+  function connect() {
+    if (connection !== null) return connection
+    const url = new URL(canvas !== null ? socketPath(frame) : SOCKET_PATH, base)
+    url.protocol = SOCKET_SCHEMES[url.protocol] || url.protocol
+    const held = {socket: socketFn(url.toString()), open: false, subscriptions: new Map()}
+    held.socket.onopen = () => {
+      held.open = true
+      for (const subscription of held.subscriptions.values()) ask(held, subscription)
+    }
+    held.socket.onmessage = (event) => onConnectionMessage(held, event.data)
+    held.socket.onclose = () => lost(held)
+    held.socket.onerror = () => lost(held)
+    connection = held
+    return held
+  }
+
+  // Sent under the newest credential, read now.
+  function ask(held, subscription) {
+    const {number, name, subject} = subscription
+    subscription.sent = true
+    held.socket.send(JSON.stringify(subscribeMessage(number, credential, name, subject)))
+  }
+
+  // What the endpoint says of a subscription the connection still carries;
+  // an answer that does not read, or names no such subscription, moves
+  // nothing.
+  function onConnectionMessage(held, data) {
+    let message
+    try {
+      message = JSON.parse(data)
+    } catch (_error) {
+      return
+    }
+    const decoded = decodeConnectionMessage(message)
+    const subscription = decoded.ok ? held.subscriptions.get(decoded.message.sub) : undefined
+    if (subscription === undefined) return
+
+    if (message.type === "subscribed") {
+      if (subscription.state !== "asked") return
+      subscription.state = "open"
+      subscription.resolve(subscription.handle)
+    } else if (message.type === "event") {
+      if (subscription.state === "open") hear(subscription, {id: message.id, event: message.stream, data: message.data})
+    } else {
+      held.subscriptions.delete(subscription.number)
+      end(subscription, "error" in message ? message.error : null, null)
+    }
+  }
+
+  // Every subscription a closed connection carried ends with it.
+  function lost(held) {
+    if (connection === held) connection = null
+    const carried = [...held.subscriptions.values()]
+    held.subscriptions.clear()
+    for (const subscription of carried) end(subscription, null, unreachable())
+  }
+
+  // A subscription ends by the endpoint's `ended`, `error` its refusal or
+  // null, or as its connection broke, `broke` the rejection. One not yet
+  // open is refused; an open one's handler hears the endpoint's refusal as
+  // its last event, and then its `closed` settles.
+  function end(subscription, error, broke) {
+    const was = subscription.state
+    subscription.state = "over"
+    if (was === "asked") return subscription.reject(broke || refusedOpen(error))
+    if (error !== null) hear(subscription, {id: null, event: REFUSAL_EVENT, data: error})
+    if (broke) subscription.closed.reject(broke)
+    else subscription.closed.resolve()
+  }
+
+  function hear(subscription, event) {
+    try {
+      subscription.onEvent(event)
+    } catch (_error) {
+      // The page's handler failing ends nothing: the next event still comes.
+    }
+  }
+
+  // Ends `subscription` from the page's side, at once: the endpoint is told
+  // only of one it was asked for.
+  function unsubscribe(subscription) {
+    const was = subscription.state
+    if (was === "over") return
+    subscription.state = "over"
+    if (subscription.held !== null) {
+      subscription.held.subscriptions.delete(subscription.number)
+      if (subscription.sent) subscription.held.socket.send(JSON.stringify(unsubscribeMessage(subscription.number)))
+    }
+    if (was === "open") subscription.closed.resolve()
+    else subscription.reject(new CyfrError("The stream was closed before it opened.", "cancelled"))
   }
 
   const invalid = (sentence) => Promise.reject(new CyfrError(sentence, "invalid_argument"))
@@ -553,20 +645,24 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     },
 
     /**
-     * Open a stream the tincture declares and deliver its events. On a
-     * canvas it opens on the canvas's data path, and a pair the canvas does
+     * Open a stream the tincture declares and deliver its events, over the
+     * frame's one stream connection. On a canvas, a pair the canvas does
      * not declare is refused as `forbidden` before anything is sent; asked
      * for while the canvas is hidden, it sends nothing and opens once the
-     * canvas is shown.
+     * canvas is shown. A page that is not a frame, a public page among
+     * them, opens no stream: it is refused as `no_frame`.
      * @param {string} name - the stream's name
      * @param {string|null} subject - a literal subject, or null for a stream that takes none
-     * @param {function} onEvent - called with {id, event, data} per event
-     * @returns {Promise<{close: function, closed: Promise}>} once the stream is open;
-     *   a refusal rejects with a CyfrError of its class. An open the endpoint
-     *   gave no answer on (it could not be reached, the connection broke or
-     *   timed out, or it answered a server error) rejects `unavailable`, and
-     *   may succeed if opened again later; opened again after any other
-     *   refusal, it meets the same refusal until something changes.
+     * @param {function} onEvent - called with {id, event, data} per event; a stream the
+     *   endpoint ends with a refusal delivers it last, as {id: null, event: "refusal", data}
+     * @returns {Promise<{close: function, closed: Promise}>} once the stream is open,
+     *   carrying `close()` itself, the handle's: closed before it opened, the
+     *   promise rejects `cancelled`. A refusal rejects with a CyfrError of
+     *   its class. An open that got no answer (the connection could not
+     *   open, or broke or closed before an answer, or the endpoint could not
+     *   answer) rejects `unavailable`, and may succeed if opened again later;
+     *   opened again after any other refusal, it meets the same refusal
+     *   until something changes.
      */
     stream(name, subject, onEvent) {
       if (typeof name !== "string" || name === "") return invalid("stream must be a stream name")
@@ -574,7 +670,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
         return invalid("subject must be a literal subject or null")
       }
       if (typeof onEvent !== "function") return invalid("onEvent must be a function")
-      return openStream({stream: name, subject}, onEvent)
+      return subscribe(name, subject, onEvent)
     },
 
     /**
@@ -715,9 +811,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      */
     credential(name) {
       if (typeof name !== "string" || name === "") return invalid("a vault entry has a name")
-      if (!framed) {
-        return Promise.reject(new CyfrError("This page is not a frame the shell opened.", "no_frame"))
-      }
+      if (!framed) return Promise.reject(noFrame())
       if (prompt !== null) {
         return Promise.reject(new CyfrError("A credential prompt is already open.", "pending"))
       }
