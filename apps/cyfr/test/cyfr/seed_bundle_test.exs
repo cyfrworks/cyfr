@@ -240,7 +240,9 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
-    assert Enum.map(declaration.desktop.controls, & &1.operation) == ~w(schedule.pause schedule.resume)
+
+    assert Enum.map(declaration.desktop.controls, & &1.operation) ==
+             ~w(schedule.pause schedule.resume)
 
     # Every widget but the queue keeps where it stands and, per screen
     # size, whether it is on.
