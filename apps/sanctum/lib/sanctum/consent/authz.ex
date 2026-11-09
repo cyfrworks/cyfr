@@ -805,13 +805,14 @@ defmodule Sanctum.Consent.Authz do
   defp tincture(_frame), do: nil
 
   @doc false
-  # The lifecycle announcement for a stored record: its ref, operation and
-  # expiry, and nothing else (`Sanctum.Telemetry.confirmation/4`).
+  # The lifecycle announcement for a stored record: its ref, operation,
+  # opening and expiry, and nothing else (`Sanctum.Telemetry.confirmation/4`).
   @spec announce(Sanctum.Telemetry.confirmation_kind(), map()) :: :ok
   def announce(kind, %{ref: ref, athanor_id: athanor_id, user_id: user_id} = row) do
     Sanctum.Telemetry.confirmation(kind, athanor_id, user_id, %{
       ref: ref,
       operation: row.operation,
+      opened_at: row.opened_at,
       expires_at: row.expires_at
     })
   end

@@ -1209,6 +1209,7 @@ defmodule Opus.Schedules.Scheduler do
                 %{
                   request_id: request_id,
                   schedule_id: schedule.id,
+                  kind: schedule.kind,
                   occurrence_id: occurrence.id,
                   reference: exec_reference,
                   execution_id: execution_id,
@@ -1557,6 +1558,7 @@ defmodule Opus.Schedules.Scheduler do
     %{
       request_id: fired.request_id,
       schedule_id: schedule.id,
+      kind: schedule.kind,
       occurrence_id: occurrence.id,
       reference: fired.reference,
       execution_id: fired.execution_id,

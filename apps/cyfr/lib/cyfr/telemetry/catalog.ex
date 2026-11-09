@@ -367,10 +367,12 @@ defmodule Cyfr.Telemetry.Catalog do
     # ——— schedules ———
     [:cyfr, :schedules, :fired] => %{consumers: [:bridge]},
     [:cyfr, :schedules, :completed] => %{
-      consumers: [:operator],
+      consumers: [:operator, :bridge],
       note:
-        "a schedule's occurrence completed, for operator metrics; what keeps the outcome as " <>
-          "a note is the committed `Cyfr.Bus.ScheduleCompleted` message, not this event"
+        "a schedule's or a feed's occurrence completed, for operator metrics, and a " <>
+          "schedule's run settling its failing for its person's attention stream; what " <>
+          "keeps the outcome as a note is the committed `Cyfr.Bus.ScheduleCompleted` " <>
+          "message, not this event"
     },
     [:cyfr, :schedules, :failed] => %{consumers: [:bridge]},
     [:cyfr, :schedules, :scheduler, :load_failed] => %{

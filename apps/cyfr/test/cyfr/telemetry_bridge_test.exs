@@ -18,6 +18,7 @@ defmodule Cyfr.TelemetryBridgeTest do
   alias Cyfr.Bus.{
     ApiKeys,
     AthanorArchived,
+    Attention,
     Build,
     CallerInvalidated,
     Components,
@@ -74,6 +75,11 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.schedule_runs(@actor), {ScheduleRun, %{kind: :fired, schedule_id: "s1"}}},
       {[:cyfr, :schedules, :failed], Map.merge(tenant, %{schedule_id: "s1", kind: "schedule"}),
        Bus.schedule_runs(@actor), {ScheduleRun, %{kind: :failed, schedule_id: "s1"}}},
+      # A schedule's completed run settles its failing on its person's own
+      # attention topic (`Cyfr.Providers.AttentionTest` holds every kind).
+      {[:cyfr, :schedules, :completed],
+       Map.merge(tenant, %{schedule_id: "s1", kind: "schedule", user_id: @user}),
+       Bus.attention(@actor, @user), {Attention, %{kind: :removed, id: "s1", label: nil}}},
       {[:cyfr, :compendium, :component, :install], Map.put(tenant, :name, "c"),
        Bus.components(@actor), {Components, %{kind: :installed, name: "c"}}},
       {[:cyfr, :compendium, :component, :remove], Map.put(tenant, :name, "c"),
@@ -155,6 +161,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         ref: @ref,
         id: @secret,
         operation: "vault.create",
+        opened_at: ~U[2026-09-30 12:00:00Z],
         expires_at: expires_at,
         arguments: %{"fields" => %{"API_KEY" => "sk-never-bridged"}}
       })
@@ -242,6 +249,12 @@ defmodule Cyfr.TelemetryBridgeTest do
   end
 
   describe "one struct per event" do
+    # What waits for a person is read again when its message is delivered.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
     test "each event lands on its topic as its payload" do
       for {event, metadata, topic, expected} <- cases() do
         listen(topic)
@@ -614,7 +627,13 @@ defmodule Cyfr.TelemetryBridgeTest do
     test "Sanctum's announcement of a confirmation is what the bridge carries, kind by kind" do
       listen(Bus.confirmations(@actor, @user))
       expires_at = ~U[2026-09-30 12:05:00Z]
-      fields = %{ref: @ref, operation: "vault.create", expires_at: expires_at}
+
+      fields = %{
+        ref: @ref,
+        operation: "vault.create",
+        opened_at: ~U[2026-09-30 12:00:00Z],
+        expires_at: expires_at
+      }
 
       for kind <- Cyfr.Bus.Confirmation.kinds() do
         :ok = Sanctum.Telemetry.confirmation(kind, @athanor, @user, fields)

@@ -971,10 +971,18 @@ defmodule Compendium.CanvasTest do
       assert Map.keys(catalog) == [:streams]
       assert streams == Enum.sort_by(shaped, & &1.name)
 
-      # A canvas reads exactly a feed's results, by the feed's name, the
-      # athanor's runs, its schedules and its schedules' runs; every other
-      # stream declares no shape.
+      # A canvas reads exactly what waits for its person, by their own id,
+      # a feed's results, by the feed's name, the athanor's runs, its
+      # schedules and its schedules' runs; every other stream declares no
+      # shape.
       assert [
+               %{
+                 name: "attention.changes",
+                 subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
+                 shape: %{"type" => "object", "fields" => attention_fields},
+                 filter: nil,
+                 refresh: true
+               },
                %{
                  name: "feed.results",
                  subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
@@ -1013,6 +1021,8 @@ defmodule Compendium.CanvasTest do
 
       assert Enum.sort(Map.keys(feed_fields)) ==
                ~w(actions at binding feed label result revision)
+
+      assert Enum.sort(Map.keys(attention_fields)) == ~w(destination id kind label since)
 
       assert Enum.sort(Map.keys(run_fields)) ==
                ~w(component_type duration_ms error execution_id kind parent_execution_id reference)

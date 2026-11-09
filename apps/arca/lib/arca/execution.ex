@@ -475,6 +475,67 @@ defmodule Arca.Execution do
 
   def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
 
+  @doc """
+  The person's failed runs no later run has settled, newest first: of each
+  reference `user_id` ran at the top of a chain (no parent) in the actor's
+  athanor, its failed run when no top-level run of the same reference by
+  the same person ended after it, completed or failed, so a reference has
+  at most one. Each is its `id`, `reference` and `completed_at`.
+
+  Options: `:reference` narrows it to one reference; `:limit` (default 20).
+  """
+  @spec unresolved_failures(Prima.Actor.t(), String.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def unresolved_failures(%Prima.Actor{athanor_id: athanor_id}, user_id, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Execution.unresolved_failures", fn ->
+      ended = ["completed", "failed"]
+
+      # A later end of the same reference by the same person, at the top
+      # of a chain; ties on `completed_at` go to the larger id, so of two
+      # failures ending together exactly one is the newest.
+      later =
+        from(l in Row,
+          where:
+            l.athanor_id == parent_as(:failed).athanor_id and
+              l.user_id == parent_as(:failed).user_id and
+              l.reference == parent_as(:failed).reference and
+              is_nil(l.parent_execution_id) and l.status in ^ended,
+          where:
+            l.completed_at > parent_as(:failed).completed_at or
+              (l.completed_at == parent_as(:failed).completed_at and
+                 l.id > parent_as(:failed).id),
+          select: 1
+        )
+
+      query =
+        from(e in Row,
+          as: :failed,
+          where: e.user_id == ^user_id and is_nil(e.parent_execution_id),
+          where: e.status == "failed" and not is_nil(e.completed_at),
+          where: not exists(later),
+          order_by: [desc: e.completed_at, desc: e.id],
+          limit: ^Keyword.get(opts, :limit, 20),
+          select: map(e, [:id, :reference, :completed_at])
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+
+      query =
+        case Keyword.fetch(opts, :reference) do
+          {:ok, reference} when is_binary(reference) ->
+            where(query, [e], e.reference == ^reference)
+
+          :error ->
+            query
+        end
+
+      {:ok, Arca.Repo.all(query)}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def unresolved_failures(%Prima.Actor{}, _user_id, _opts), do: {:error, :no_athanor}
+
   defp list_rows(athanor_id, opts) do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)

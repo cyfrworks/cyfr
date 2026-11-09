@@ -799,6 +799,54 @@ defmodule Arca.ScheduleOccurrences do
   def recent(%Prima.Actor{}, _opts), do: {:error, :no_athanor}
 
   @doc """
+  The live schedules (kind `schedule`, not deleted) `user_id` made in the
+  actor's athanor whose latest ended occurrence, by due time (the id
+  breaks a tie), is `failed` or `uncertain`, each as the schedule's `id`
+  and `name` and that occurrence's `scheduled_for`, oldest first. An
+  occurrence still claimed or started has not ended, so a failing
+  schedule running again still reads failing until its run ends.
+  `schedule_id:` narrows it to that one schedule. Read only while this
+  member holds its slot, as `recent/2` is.
+  """
+  @spec failing(Prima.Actor.t(), String.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :no_athanor | :not_owner | :database_error}
+  def failing(%Prima.Actor{athanor_id: athanor_id}, user_id, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_list(opts) do
+    later =
+      from(l in ScheduleOccurrence,
+        where:
+          l.athanor_id == parent_as(:latest).athanor_id and
+            l.schedule_id == parent_as(:latest).schedule_id and l.state in ^@terminal,
+        where:
+          l.scheduled_for > parent_as(:latest).scheduled_for or
+            (l.scheduled_for == parent_as(:latest).scheduled_for and l.id > parent_as(:latest).id),
+        select: 1
+      )
+
+    query =
+      from(o in ScheduleOccurrence,
+        as: :latest,
+        join: s in CronSchedule,
+        on: s.id == o.schedule_id and s.athanor_id == o.athanor_id,
+        where: o.athanor_id == ^athanor_id and s.athanor_id == ^athanor_id,
+        where: s.kind == "schedule" and s.status != "deleted" and s.user_id == ^user_id,
+        where: o.state in ["failed", "uncertain"] and not exists(later),
+        order_by: [asc: o.scheduled_for, asc: o.id],
+        select: %{id: s.id, name: s.name, scheduled_for: o.scheduled_for}
+      )
+
+    query =
+      case Keyword.fetch(opts, :schedule_id) do
+        {:ok, id} when is_binary(id) -> Ecto.Query.where(query, [o], o.schedule_id == ^id)
+        :error -> query
+      end
+
+    Arca.Repo.owned("ScheduleOccurrences.failing", fn -> {:ok, Arca.Repo.all(query)} end)
+  end
+
+  def failing(%Prima.Actor{}, _user_id, _opts), do: {:error, :no_athanor}
+
+  @doc """
   What a member may take over: the occurrences claimed and never invoked
   (their execution admission never happened, so they run once), and the
   started ones whose execution has ended or was swept while the occurrence

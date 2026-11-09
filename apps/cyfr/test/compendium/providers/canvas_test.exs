@@ -157,6 +157,13 @@ defmodule Compendium.Providers.CanvasTest do
 
       assert streams == [
                %{
+                 name: "attention.changes",
+                 subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
+                 shape: shape.("attention.changes"),
+                 filter: nil,
+                 refresh: true
+               },
+               %{
                  name: "feed.results",
                  subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
                  shape: shape.("feed.results"),

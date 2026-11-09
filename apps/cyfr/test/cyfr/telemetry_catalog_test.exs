@@ -165,10 +165,11 @@ defmodule Cyfr.TelemetryCatalogTest do
 
   # A completed schedule's note is kept from the committed bus message
   # (`Cyfr.Bus.ScheduleCompleted`), never from the telemetry event too: the
-  # old `:notes` consumer is gone, with nothing attached in its place.
+  # old `:notes` consumer is gone, and the bridge, which tells a schedule's
+  # person its failing is settled, keeps no note.
   test "a completed schedule's telemetry has no consumer that keeps a note" do
     assert Catalog.consumed_by(:notes) == []
-    assert Catalog.all()[[:cyfr, :schedules, :completed]].consumers == [:operator]
+    assert Catalog.all()[[:cyfr, :schedules, :completed]].consumers == [:operator, :bridge]
 
     ids =
       [:cyfr, :schedules, :completed] |> :telemetry.list_handlers() |> Enum.map(& &1.id)
