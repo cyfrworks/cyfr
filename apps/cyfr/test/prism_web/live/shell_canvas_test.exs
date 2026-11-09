@@ -35,7 +35,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
   alias Prism.Frames
 
-  # The shipped canvas, as the seed holds it: the one version it ships.
+  # The shipped canvas's versions, as the seed holds them.
   @seed_canvas Path.expand("../../../../../seed/components/tinctures/local/canvas", __DIR__)
 
   setup %{conn: conn} do
@@ -162,10 +162,9 @@ defmodule PrismWeb.ShellCanvasTest do
     )
   end
 
-  defp seed do
-    [dir] = Path.wildcard(Path.join(@seed_canvas, "*"))
-    dir
-  end
+  # The shipped canvas: the newest version the seed holds.
+  defp seed,
+    do: Path.join(@seed_canvas, Cyfr.Test.SeedBundle.local_unit!("tinctures", "canvas").version)
 
   defp seed_manifest,
     do: seed() |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()

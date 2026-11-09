@@ -100,15 +100,16 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.4.0 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.5.0 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.4.0"
+    assert canvas.version == "0.5.0"
 
-    # The seed ships this one version of the canvas.
+    # The seed ships it beside the version before it, which stays as it
+    # shipped.
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)
-    assert File.ls!(Path.dirname(dir)) == [canvas.version]
+    assert dir |> Path.dirname() |> File.ls!() |> Enum.sort() == ["0.4.0", canvas.version]
 
     # The default layout's one canvas, with nothing placed over it.
     assert [%{id: "home", tincture: ref, postures: postures}] = Prima.Layout.default().canvases
@@ -142,9 +143,25 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
 
-    # It declares the current look in its chrome, read as publish reads it,
-    # and offers no control.
-    assert declaration.desktop.controls == []
+    # It pauses and resumes a schedule, picked from the schedules it reads,
+    # keeps each section's on and off in its preferences, and declares the
+    # current look in its chrome, read as publish reads it.
+    pick = %Prima.Manifest.Tincture.Pick{
+      stream: "schedules.changes",
+      field: "/schedule_id",
+      arg: "schedule_id"
+    }
+
+    assert [
+             %{id: "pause-schedule", operation: "schedule.pause", args: %{}, pick: ^pick},
+             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick}
+           ] = declaration.desktop.controls
+
+    assert declaration.desktop.prefs == %{
+             widgets: Map.new(~w(attention runs apps schedules), &{&1, %{}}),
+             desktop: %{}
+           }
+
     assert declaration.desktop.chrome == "chrome.css"
 
     assert {:ok, tokens} =
