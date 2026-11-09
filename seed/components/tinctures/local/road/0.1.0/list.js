@@ -26,11 +26,12 @@ window.RoadList = (function () {
   const KIND = { failed_run: 'failed', failed_schedule: 'failed', approval: 'waits for your approval', confirmation: 'waits for your confirmation', file_offer: 'is offered to you' };
   function render() {
     if (!shown) return;
+    document.documentElement.dataset.mode = S.appearance && S.appearance.mode === 'dark' ? 'dark' : 'light';
     const v = (m) => R.values(m);
     const w = S.feeds.weather, vpn = S.feeds.vpn;
     root.replaceChildren(
       section('Waiting on you', v(S.attention).map((a) => [a.label + ' ' + (KIND[a.kind] || 'waits') + ', since ' + at(a.since), a.kind.startsWith('failed'), ...(a.page ? [button('Open', () => R.settings(a.page))] : [])]), 'Nothing waits on you.'),
-      section('Schedules', v(S.schedules).map((s) => [s.name + ': ' + (s.status === 'active' ? 'next ' + at(s.next) : s.status) + ', ' + s.runs + ' runs, ' + s.errors + ' errors', s.errors > 0,
+      section('Schedules', v(S.schedules).map((s) => [s.name + ': ' + (s.status === 'active' ? 'next ' + at(s.next) : s.status) + ', ' + s.runs + (s.runs === 1 ? ' run, ' : ' runs, ') + s.errors + (s.errors === 1 ? ' error' : ' errors'), s.errors > 0,
         ...(s.status === 'active' || s.status === 'paused' ? [button(s.status === 'active' ? 'Pause' : 'Resume', () => R.press(s.status === 'active' ? R.PAUSE : R.RESUME, s.id))] : [])]), 'No schedules.'),
       section('Schedule runs', v(S.scheduleRuns).sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, 10).map((r) => [((S.schedules.get(r.sid) || {}).value || { name: 'A schedule' }).name + ' ' + (r.kind === 'failed' ? 'failed' : 'ran') + ' at ' + at(r.at) + (r.cause ? ' (' + r.cause.replace(/_/g, ' ') + ')' : ''), r.kind === 'failed']), 'Nothing has fired lately.'),
       section('Threads', v(S.threads).map((t) => [t.title + (t.waits ? ', waits on you' : '') + ', ' + at(t.last), t.waits]), 'No threads.'),

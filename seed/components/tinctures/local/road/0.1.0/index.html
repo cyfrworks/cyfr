@@ -26,6 +26,8 @@
   #fallback button { font: inherit; font-size: 14px; padding: 2px 10px; border: 1px solid var(--ink); background: #fff8ec; color: var(--ink); cursor: pointer; }
   #lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0 32px; max-width: 1100px; }
   #fallback .bad { color: var(--red); font-weight: 600; }
+  html[data-mode="dark"] { --paper: #23324f; --ink: #f4ecd6; --red: #ff9d94; }
+  html[data-mode="dark"] #fallback button { background: #2c3e60; }
 </style>
 </head>
 <body>
