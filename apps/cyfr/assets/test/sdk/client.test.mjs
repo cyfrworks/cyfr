@@ -938,6 +938,27 @@ describe("a canvas's stream keeps the delivery contract", () => {
     await tick()
     assert.equal(sockets.length, 1)
   })
+
+  test("a stream opening again on a connection closed for a newer one ends too, its closed settled", async () => {
+    const block = {...OPEN.canvas, streams: [PICTURED]}
+    // The first connection answers the picture; the second never answers.
+    const {api, open, sockets} = await canvasClient({
+      block,
+      streams: (message, socket) =>
+        message.type === "subscribe" && socket === sockets[0] ? deliveryOf(1).slice(0, 3) : []
+    })
+    open(SHOWN)
+
+    const handle = await api.stream(PICTURED.name, PICTURED.subject, () => {})
+    sockets[0].drop()
+    await eventually(() => sockets.length === 2 && sockets[1].sent.length === 1, {tries: 40, stepMs: 50})
+    sockets[1].drop(fixture.connection.close_codes.replaced)
+
+    // Bounded: a closed that never settles fails here rather than hanging.
+    const never = new Promise((_resolve, reject) => setTimeout(() => reject(new Error("closed never settled")), 2000))
+    await assert.rejects(Promise.race([handle.closed, never]), {code: "unavailable"})
+    assert.equal(handle.state, "ended")
+  })
 })
 
 describe("a hidden canvas's stream opens once it is shown", () => {

@@ -67,10 +67,10 @@ defmodule Emissary.Web.FrameSocket do
   picture is read again and handed as a `resync` at the stream's
   `stale_after`, and once a change of a `reread` kind settles, in the
   change's place. A read again at the bound that fails leaves the
-  picture, told `stale` once, and is tried again at the bound or every
-  30 seconds, whichever is sooner; one
-  the frame holds a hole without, after a reread or an overflow, ends the
-  subscription with the refusal, which the frame opens again.
+  picture, told `stale` once, and is tried again after the bound or 30
+  seconds, whichever is sooner; one the frame holds a hole without,
+  after a reread or an overflow, ends the subscription with the refusal,
+  which the frame opens again.
 
   `unsubscribe` ends a subscription at once, its forwarder with it, and
   its place on the connection is free for the next `subscribe`.
@@ -119,10 +119,10 @@ defmodule Emissary.Web.FrameSocket do
 
   A reconnect is a new connection, and each of its subscriptions a new
   open under the gate: nothing published while the frame was away is kept
-  for it beyond the declared refresh. A resync is read under the
-  connection's context, established again first when it is past its
-  freshness, and projected and selected as the first picture was, so it
-  hands nothing the grant does not cover.
+  for it beyond the declared refresh. A resync is read under the frame's
+  context established again first, as an open's is, and projected and
+  selected as the first picture was, so it hands nothing the grant does
+  not cover.
   """
 
   @behaviour WebSock

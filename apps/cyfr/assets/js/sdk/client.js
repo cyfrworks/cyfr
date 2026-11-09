@@ -608,8 +608,13 @@ export function createClient({
     held.subscriptions.clear()
     const final = [CLOSE_CODES.unreadable, CLOSE_CODES.too_big, CLOSE_CODES.replaced].includes(code)
     for (const subscription of carried) {
-      if (final) subscription.opened = false
-      end(subscription, null, unreachable())
+      if (final && subscription.opened) {
+        // Open, or opening again: it ends as a broken stream does.
+        Object.assign(subscription, {state: "over", delivery: "ended"})
+        subscription.closed.reject(unreachable())
+      } else {
+        end(subscription, null, unreachable())
+      }
     }
   }
 
