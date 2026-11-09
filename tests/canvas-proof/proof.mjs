@@ -61,6 +61,8 @@ import { join } from "node:path";
 import { hostname, cpus } from "node:os";
 import { createSocket } from "node:dgram";
 import { request as httpRequest } from "node:http";
+import { connect as tcpConnect } from "node:net";
+import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 // Its asks and redaction only: lib.mjs loads without Playwright's library,
 // so the record check runs without a browser.
@@ -530,10 +532,28 @@ async function context(browser, name, base, cookie, viewport) {
   if (touch && name !== "firefox") options.isMobile = true;
   const ctx = await browser.newContext(options);
   await ctx.addInitScript(INSTRUMENT);
+  await ctx.addInitScript(SOCKET_SENDS);
   // As a sign-in on the site's https origin leaves it.
   await ctx.addCookies([{ name: "_cyfr_key", value: cookie, url: base, httpOnly: true, secure: true, sameSite: "Lax" }]);
   return ctx;
 }
+
+// What each frame's stream connection sends, kept in the frame as
+// `__socketSends` (`type` and `stream` of each message, never its
+// credential), so a step can say what a hidden canvas asked for.
+const SOCKET_SENDS = `(() => {
+  if (window.top === window || typeof WebSocket !== "function") return;
+  const sent = [];
+  Object.defineProperty(window, "__socketSends", { value: sent, configurable: true });
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    try {
+      const message = JSON.parse(data);
+      if (message && typeof message.type === "string") sent.push({ type: message.type, stream: message.stream || null });
+    } catch (_error) { /* not the wire's */ }
+    return send.call(this, data);
+  };
+})()`;
 
 let SHELL_URL = null;
 
@@ -961,21 +981,26 @@ async function stepAppOverCanvas(page, name) {
 // kinds; a window is reported covering the card. On the desk the card
 // moves to the other column and Recent runs, Apps and Schedules stand
 // exactly where they stood; in the hand every section stands in one
-// column. The stream is answered as usual again afterwards.
-const STREAM_ROUTE = "**/_f/v1/o/*/stream";
+// column. The answer is given on a page of its own, whose canvases' stream
+// connections pass through a route that answers their `runs.changes`
+// subscription and hands every other message to the endpoint; the page
+// closes with the step, since a WebSocket route outlives none of it.
+const canvasSocket = (url) => /\/_f\/v1\/o\/[^/]+\/socket$/.test(url.pathname);
 
-function attentionFailures(route) {
-  let body = null;
-  try { body = route.request().postDataJSON(); } catch (_error) { body = null; }
-  if (!body || body.stream !== "runs.changes") return route.continue();
-  const events = [
-    ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
-    { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
-  ];
-  return route.fulfill({
-    status: 200,
-    contentType: "text/event-stream",
-    body: events.map((data, i) => `id: ${i + 1}\nevent: message\ndata: ${JSON.stringify(data)}\n\n`).join(""),
+const ATTENTION_RUNS = [
+  ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
+  { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
+];
+
+function attentionFailures(ws) {
+  const server = ws.connectToServer();
+  ws.onMessage((message) => {
+    let sent = null;
+    try { sent = JSON.parse(message); } catch (_error) { sent = null; }
+    if (!sent || sent.type !== "subscribe" || sent.stream !== "runs.changes") return server.send(message);
+    ws.send(JSON.stringify({ v: 1, type: "subscribed", sub: sent.sub }));
+    ATTENTION_RUNS.forEach((data, i) =>
+      ws.send(JSON.stringify({ v: 1, type: "event", sub: sent.sub, stream: "runs.changes", subject: null, id: i + 1, data })));
   });
 }
 
@@ -985,9 +1010,9 @@ const sections = (frame) =>
     return [el.querySelector("h2").firstChild.textContent.trim(), { x: b.x, y: b.y, width: b.width, height: b.height }];
   }))).catch(() => null);
 
-async function stepAttentionMoves(page, name, viewport) {
-  const ctx = page.context();
-  await ctx.route(STREAM_ROUTE, attentionFailures);
+async function stepAttentionMoves(shell, name, viewport) {
+  const page = await shell.context().newPage();
+  await page.routeWebSocket(canvasSocket, attentionFailures);
   try {
     await openShell(page);
     held.clear();
@@ -1007,8 +1032,9 @@ async function stepAttentionMoves(page, name, viewport) {
     const stayed = after !== null && others.every((n) => after[n] && after[n].x === before[n].x && after[n].y === before[n].y);
     note("attention_moves", name, stayed, { covered: card, before, after });
   } finally {
-    await ctx.unroute(STREAM_ROUTE, attentionFailures).catch(() => null);
-    await openShell(page);
+    await page.close().catch(() => null);
+    held.clear();
+    await openShell(shell);
     held.clear();
   }
 }
@@ -1210,14 +1236,14 @@ async function showCanvasAway(page, id) {
 // hidden_canvas: a hidden canvas reads and acts on nothing. The probe is
 // shown and reading its stream, and tags each feed event with the state the
 // shell last told it; switched away, once it has heard `frozen` no stream
-// open of it reaches the server, a new feed result reaches it not, and a
+// open of it is sent over its stream connection, a new feed result reaches it not, and a
 // press it sends is dropped (counted in the frame's data-dropped, never
 // received by the shell), a count that outlives the next switch, which
 // draws every frame again, the hidden one's iframe included; switched
 // back, its stream refreshes to the new result, and no feed event it ever
 // read is tagged `frozen`. Nothing here reads the page's own timer as proof
 // it stopped.
-async function stepHiddenCanvas(page, name, proxy) {
+async function stepHiddenCanvas(page, name) {
   const probe = await showCanvas(page, "probe");
   const before = await until(probe.frame, probeState, (s) => s.stream.settled && s.stream.events >= 1 && s.candles === 6 && s.told === "live", "the probe reading its stream");
   const from = (await instrument(page)).receipts.length;
@@ -1227,7 +1253,7 @@ async function stepHiddenCanvas(page, name, proxy) {
   await showCanvas(page, "start");
   const frozen = await canvasFrame(page, probe.id);
   await until(frozen.frame, probeState, (s) => s.told === "frozen", "the hidden probe hearing it is frozen");
-  const proxyMark = proxy.seen.length;
+  const sentMark = await frozen.frame.evaluate(() => window.__socketSends.length);
 
   // A new result published while the probe is hidden reaches its closed
   // stream not.
@@ -1263,11 +1289,9 @@ async function stepHiddenCanvas(page, name, proxy) {
   const droppedAfterSwitch = Number((await canvasFrame(page, probe.id)).dropped);
 
   // The probe asks for its stream again on a timer while it is hidden; no
-  // open of it reached the server since it heard `frozen`.
-  const streamPath = `/_f/v1/o/${probe.id}/stream`;
-  const opensWhileHidden = proxy.seen.slice(proxyMark).filter((r) => {
-    try { return r.method === "POST" && new URL(r.url).pathname === streamPath; } catch { return false; }
-  }).length;
+  // subscription of it left the frame since it heard `frozen`.
+  const opensWhileHidden = await frozen.frame.evaluate((mark) =>
+    window.__socketSends.slice(mark).filter((m) => m.type === "subscribe").length, sentMark);
 
   // Switched back, its stream refreshes to the new result.
   const back = await showCanvas(page, "probe");
@@ -1289,7 +1313,7 @@ async function stepHiddenCanvas(page, name, proxy) {
         events: whileHidden.stream.events,
         revision: whileHidden.revision,
         stream_event_reached_it: whileHidden.stream.events !== before.stream.events,
-        stream_opens_reaching_the_server: opensWhileHidden,
+        stream_subscriptions_sent: opensWhileHidden,
         press_received: pressReceipts.length,
         press_dropped: droppedAfterPress - droppedBefore,
         press_forwarded: pressForwarded,
@@ -1753,14 +1777,15 @@ async function pagePolicy(path, origin, frameId) {
   };
   const esc = origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   // F, the version's files under the asset credential; K, the SDK's one
-  // path named by its digest; D, the open's own data path.
+  // path named by its digest; D, the open's own data path over the
+  // endpoint's WebSocket origin, where its stream connection is.
   const filesRe = new RegExp(`^${esc}/_s/[^/]+/$`);
   const sdkRe = new RegExp(`^${esc}/_c/v1/sdk/[^/]+\\.js$`);
   const scriptSrc = directive("script-src") || [];
   const connectSrc = directive("connect-src") || [];
   const filesPrefix = scriptSrc.find((t) => filesRe.test(t)) || null;
   const sdk = scriptSrc.find((t) => sdkRe.test(t)) || null;
-  const dataPath = `${origin}/_f/v1/o/${frameId}/`;
+  const dataPath = `${origin.replace(/^http/, "ws")}/_f/v1/o/${frameId}/`;
   return {
     status: answer.status,
     script_src_is_files_and_sdk: scriptSrc.length === 2 && !!filesPrefix && !!sdk,
@@ -1797,6 +1822,64 @@ function homeRequest({ method = "POST", path, bearer = null, body = "{}" }) {
     req.on("error", reject);
     req.write(body);
     req.end();
+  });
+}
+
+// One subscription over a stream connection to the home, as the front
+// forwards a browser's upgrade, under `bearer`: the type of the answer and
+// its refusal's sentence, for the data path's refusals. A WebSocket client
+// of its own, over a TCP socket, so the upgrade carries the forwarded
+// headers the home's proxy listener reads, as homeRequest's requests do.
+function homeSubscribe({ path, bearer, stream, subject }) {
+  const payload = Buffer.from(JSON.stringify({ v: 1, type: "subscribe", sub: 1, credential: bearer, stream, subject }));
+  const mask = randomBytes(4);
+  const masked = Buffer.from(payload.map((byte, i) => byte ^ mask[i % 4]));
+  const header = payload.length < 126
+    ? Buffer.from([0x81, 0x80 | payload.length])
+    : Buffer.from([0x81, 0x80 | 126, payload.length >> 8, payload.length & 0xff]);
+  const upgrade = [
+    `GET ${path} HTTP/1.1`, `Host: ${HOME.host}`, "Origin: null", "Upgrade: websocket", "Connection: Upgrade",
+    `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`, "Sec-WebSocket-Version: 13",
+    "X-Forwarded-For: 127.0.0.1", "X-Forwarded-Proto: https", `X-Forwarded-Host: ${HOME.host}`, "", "",
+  ].join("\r\n");
+  return new Promise((resolve, reject) => {
+    const socket = tcpConnect(HOME.port, "127.0.0.1", () => socket.write(upgrade));
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error("the stream connection gave no answer")); }, 30_000);
+    let buffer = Buffer.alloc(0);
+    let upgraded = false;
+    socket.on("data", (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!upgraded) {
+        const end = buffer.indexOf("\r\n\r\n");
+        if (end < 0) return;
+        if (!buffer.subarray(0, end).toString().startsWith("HTTP/1.1 101")) {
+          clearTimeout(timer);
+          socket.destroy();
+          return reject(new Error(`the upgrade was answered ${buffer.subarray(0, 12).toString()}`));
+        }
+        upgraded = true;
+        buffer = buffer.subarray(end + 4);
+        socket.write(Buffer.concat([header, mask, masked]));
+      }
+      // One unmasked text frame from the server, its length 7 or 16 bits.
+      while (buffer.length >= 2) {
+        const short = buffer[1] & 0x7f;
+        const offset = short === 126 ? 4 : 2;
+        const length = short === 126 ? buffer.readUInt16BE(2) : short;
+        if (buffer.length < offset + length) return;
+        const opcode = buffer[0] & 0x0f;
+        const body = buffer.subarray(offset, offset + length);
+        buffer = buffer.subarray(offset + length);
+        if (opcode !== 1) continue;
+        let answer = null;
+        try { answer = JSON.parse(body.toString()); } catch (_error) { answer = null; }
+        if (!answer || answer.sub !== 1) continue;
+        clearTimeout(timer);
+        socket.destroy();
+        return resolve({ type: answer.type, message: answer.error ? answer.error.message : null });
+      }
+    });
+    socket.on("error", (error) => { clearTimeout(timer); reject(error); });
   });
 }
 
@@ -1848,11 +1931,11 @@ async function stepPolicy(page, name, proxy, receiver, udp) {
   if (!minted || typeof minted.bearer !== "string" || !minted.bearer) throw new Error("the fixture minted no canvas credential");
   secrets.push(minted.bearer);
   const sharedInvoke = await homeRequest({ path: "/_f/v1/invoke", bearer: minted.bearer, body: JSON.stringify({ v: 1, ref: "c:local.x:1.0.0", operation: "run", args: {} }) });
-  const mismatch = await homeRequest({ path: `/_f/v1/o/${probe.id}/stream`, bearer: minted.bearer, body: JSON.stringify({ v: 1, stream: "feed.results", subject: "candles" }) });
+  const mismatch = await homeSubscribe({ path: `/_f/v1/o/${probe.id}/socket`, bearer: minted.bearer, stream: "feed.results", subject: "candles" });
   const ownInvoke = await homeRequest({ path: `/_f/v1/o/${probe.id}/invoke`, bearer: minted.bearer, body: JSON.stringify({ v: 1 }) });
   const routes = {
     shared_invoke: { status: sharedInvoke.status, canvas_path_required: sharedInvoke.body.includes("canvas_path_required") },
-    data_path_mismatch: { status: mismatch.status, frame_path_mismatch: mismatch.body.includes("frame_path_mismatch") },
+    data_path_mismatch: { answer: mismatch.type, frame_path_mismatch: (mismatch.message || "").includes("frame_path_mismatch") },
     own_data_path_invoke: { status: ownInvoke.status, no_route: ownInvoke.status === 404 },
   };
 
@@ -2144,7 +2227,7 @@ const STEP_FNS = {
   tile_narrows: async () => {},
   covered_windows: async () => {},
   frame_kept: (page, name, { viewport }) => stepFrameKept(page, name, viewport),
-  hidden_canvas: (page, name, { proxy }) => stepHiddenCanvas(page, name, proxy),
+  hidden_canvas: (page, name) => stepHiddenCanvas(page, name),
   activation: (page, name) => stepActivation(page, name),
   grant_control: (page, name) => stepGrantControl(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),
