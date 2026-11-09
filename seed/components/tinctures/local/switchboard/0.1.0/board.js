@@ -54,6 +54,8 @@
     waits_for_you: 'Waits for you', rate_limited: 'Rate limited', unavailable: 'Unavailable', bad_input: 'Bad input',
     not_found: 'Not found', uncertain: 'Uncertain',
   };
+  // The shell drops a second call within a few seconds of the last one.
+  const tooSoon = (answer) => Boolean(answer) && answer.outcome === 'cancelled' && answer.reason === 'too_soon';
   const cause = (error) => (isItem(error) && CAUSE[error.cause]) || 'Failed';
   const tilt = (t) => { let h = 0; for (const c of String(t)) h = (h * 31 + c.charCodeAt(0)) | 0; return ((h % 13) / 13) * 1.4 - 0.7; };
   const dymo = (t, cls = '') => `<span class="dymo ${cls}" style="--tilt:${tilt(t).toFixed(2)}deg">${esc(t)}</span>`;
@@ -441,7 +443,8 @@
     const answer = await sdk.press(action === 'pause' ? PAUSE : RESUME, id);
     if (answer && answer.outcome === 'accepted') return;
     pending.delete(id); delete el.dataset.pending;
-    tell(answer && answer.outcome === 'refused' ? `${name} · refused (${text(answer.reason) || 'no reason'})` : `${name} · not pressed: tap the lever again`, 6000);
+    tell(answer && answer.outcome === 'refused' ? `${name} · refused (${text(answer.reason) || 'no reason'})`
+      : tooSoon(answer) ? `${name} · too soon after the last tap: tap again in a moment` : `${name} · not pressed: tap the lever again`, 6000);
   }
 
   /* ---------- runs: the ticket printer ---------- */
@@ -496,7 +499,7 @@
     if (outcome === 'saved') tell(`${done} · saved`);
     else if (outcome === 'stale') tell('Another screen changed the rack first · tap again', 6000);
     else if (outcome === 'refused') tell(`Not saved (${text(answer.reason) || 'refused'})`, 6000);
-    else tell('Not saved: tap again', 6000);
+    else tell(tooSoon(answer) ? 'Too soon after the last tap · not saved: tap again in a moment' : 'Not saved: tap again', 6000);
   }
   function applyPrefs() {
     for (const id of Object.keys(PARTS)) {
