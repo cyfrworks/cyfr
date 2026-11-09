@@ -294,6 +294,22 @@ describe("the shell replaces the credential over the port", () => {
       [CREDENTIAL_VALUE, RENEWED]
     )
   })
+
+  test("a subscription waiting for its connection to open is sent under the credential the shell handed last", async () => {
+    const {api, handshake, sockets} = await frameClient({opens: false})
+    const shell = handshake()
+    const opened = api.stream("runs.changes", null, () => {})
+    await eventually(() => sockets.length === 1)
+
+    shell.postMessage(renewal())
+    await settled(api, shell)
+    sockets[0].open()
+    await (await opened).closed
+    assert.deepEqual(
+      sockets[0].sent.map((message) => message.credential),
+      [RENEWED]
+    )
+  })
 })
 
 describe("shell verbs go over the port", () => {
@@ -620,7 +636,7 @@ describe("a stream is delivered over the frame's stream connection", () => {
     }
   })
 
-  test("a message that does not read, or names no live subscription, moves nothing", async () => {
+  test("a message that does not read, names no live subscription, or comes before it opened, moves nothing", async () => {
     const {api} = await opened({
       streams: ({type, sub, stream, subject}) =>
         type !== "subscribe"
@@ -631,6 +647,7 @@ describe("a stream is delivered over the frame's stream connection", () => {
               {v: 1, type: "subscribed", sub: sub + 1},
               {v: 1, type: "subscribed", sub, origin: "elsewhere"},
               {v: 2, type: "subscribed", sub},
+              {v: 1, type: "event", sub, stream, subject, id: 0, data: {early: true}},
               {v: 1, type: "subscribed", sub},
               {v: 1, type: "event", sub, stream, subject, id: "1", data: {}},
               {v: 1, type: "ended", sub: sub + 1},
