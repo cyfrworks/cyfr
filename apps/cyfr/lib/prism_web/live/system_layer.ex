@@ -31,7 +31,14 @@ defmodule PrismWeb.SystemLayer do
   document, in the desktop's prompt and in the page's as another client's
   request (`shows_others?/1`); both follow the one record, so a decision
   in either clears both. `athanor_route` and
-  `athanor_name` name the athanor a grant lands in. A prompt
+  `athanor_name` name the athanor a grant lands in. `covered` (false by
+  default) is the desktop's while a Dashboard page covers it: the layer
+  then draws none of its prompts and nothing of it is modal, whatever
+  raised the prompt, while each keeps its place and what it holds (a
+  grant's walk, a credential entry's waiting record) and the facts of its
+  records are still taken, so it is drawn again as it stands once the
+  layer is uncovered. The browser clears a prompt's forms as it closes, so
+  a typed value is typed again. A prompt
   (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
   `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`; `prompt:
   nil` clears the open one. A prompt that arrives while another is open
@@ -727,6 +734,7 @@ defmodule PrismWeb.SystemLayer do
        current: nil,
        queue: [],
        error: nil,
+       covered: false,
        listen: true,
        listening: nil,
        panels: %{},
@@ -2388,6 +2396,9 @@ defmodule PrismWeb.SystemLayer do
 
   @impl true
   def render(assigns) do
+    # Covered, the layer draws no prompt: the open one keeps its place and
+    # state, drawn again as it stands once the layer is uncovered.
+    assigns = if assigns.covered, do: assign(assigns, :current, nil), else: assigns
     may = assigns.current && may_confirm?(assigns[:context], assigns.current)
 
     panel =

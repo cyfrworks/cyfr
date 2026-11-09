@@ -378,7 +378,6 @@ defmodule PrismWeb.ShellLive do
       |> assign(:chat_overlay, nil)
       |> assign(:aqua_panel, nil)
       |> assign(:covered, false)
-      |> assign(:grant_drawn, %{})
 
     socket =
       if connected?(socket) do
@@ -438,7 +437,7 @@ defmodule PrismWeb.ShellLive do
   # Whether a Dashboard page is drawn over the desktop now, as the
   # desktop's own hook reads the page's address after each move.
   def handle_event("page_shown", %{"desktop" => desktop?}, socket) when is_boolean(desktop?),
-    do: {:noreply, cover(socket, not desktop?)}
+    do: {:noreply, assign(socket, :covered, not desktop?)}
 
   def handle_event("focus_tincture", %{"index" => idx_str}, socket) do
     case Integer.parse(to_string(idx_str)) do
@@ -2433,28 +2432,13 @@ defmodule PrismWeb.ShellLive do
     withdraw_prompts(socket, hidden)
   end
 
-  # A Dashboard page drawn over the desktop covers it, and the grant
-  # prompts the desktop raises on its own, a canvas's or an app's, wait
-  # behind the page: drawn now, they would stand modal over the page's own
-  # asks, which the person is reading. They are taken out of the system
-  # layer as the page comes, which reports nothing for them, and kept here
-  # as they stand, and drawn again once the desktop is shown. One raised
-  # while the desktop is covered is drawn then too. The person's own asks
-  # of the desktop (a canvas's `grant`, the credential entry, the devices)
-  # come from an input on the desktop, so none is raised while it is
-  # covered.
-  defp cover(%{assigns: %{covered: covered}} = socket, covered), do: socket
-
-  defp cover(socket, covered) do
-    waiting = Map.take(socket.assigns.grant_drawn, Map.keys(socket.assigns.grant_prompts))
-
-    if covered,
-      do: Enum.each(Map.keys(waiting), &withdraw_prompt/1),
-      else: Enum.each(Map.values(waiting), &show_prompt/1)
-
-    socket |> assign(:covered, covered) |> assign(:grant_drawn, waiting)
-  end
-
+  # A Dashboard page drawn over the desktop covers it (`covered`, told by
+  # the desktop's hook as `page_shown`): its layer then draws none of its
+  # prompts, a grant, a frame's credential entry, the devices or any other,
+  # so nothing of the desktop's stands modal over the page's own asks. An
+  # app keeps running under the page and its bridge forwards a verb
+  # without the person's input, so the rule is the layer's, for every
+  # prompt alike, and none of the desktop's handlers decides it.
   # Whether the page's address at the desktop's join is a Dashboard page's:
   # anything but the desktop's own addresses, `/`, `/a` and `/a/<athanor>`.
   # A join that names none, as a test's, is the desktop's own.
@@ -2470,7 +2454,6 @@ defmodule PrismWeb.ShellLive do
 
     socket
     |> update(:grant_prompts, &Map.drop(&1, prompt_ids))
-    |> update(:grant_drawn, &Map.drop(&1, prompt_ids))
     |> update(:grant_decisions, &Map.drop(&1, prompt_ids))
   end
 
@@ -2498,12 +2481,11 @@ defmodule PrismWeb.ShellLive do
 
     case PrismWeb.SystemLayer.grant_prompt(socket, prompt_id, ref) do
       {:ok, prompt} ->
-        unless socket.assigns.covered, do: show_prompt(prompt)
+        show_prompt(prompt)
 
         {:ok,
          next
          |> update(:grant_prompts, &Map.put(&1, prompt_id, {key, tincture_id}))
-         |> update(:grant_drawn, &Map.put(&1, prompt_id, prompt))
          |> answering(prompt_id, key)}
 
       {:error, _unavailable} ->
@@ -2613,7 +2595,6 @@ defmodule PrismWeb.ShellLive do
     socket =
       socket
       |> update(:grant_prompts, &Map.delete(&1, id))
-      |> update(:grant_drawn, &Map.delete(&1, id))
       |> update(:grant_decisions, &Map.delete(&1, id))
 
     cond do
@@ -3192,12 +3173,15 @@ defmodule PrismWeb.ShellLive do
       <%!-- The desktop's own layer: its prompts above every frame, and the
            outcomes of the confirmations its own changes asked for. The
            person's confirmations are the page's layer's to draw, the
-           desktop page's included (`PrismWeb.DesktopLive`). --%>
+           desktop page's included (`PrismWeb.DesktopLive`). While a
+           Dashboard page covers the desktop it draws none of its prompts,
+           whatever raised them, and keeps each as it stands. --%>
       <.live_component
         module={PrismWeb.SystemLayer}
         id={PrismWeb.SystemLayer.desktop_layer_id()}
         context={@context}
         listen={:own}
+        covered={@covered}
         athanor_route={@athanor_route}
         athanor_name={@athanor && @athanor.name}
       />
