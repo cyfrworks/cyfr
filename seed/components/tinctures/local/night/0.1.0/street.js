@@ -16,6 +16,7 @@
   const SETTLE_MS = 1500;
   const OPEN_WAIT_MS = 8000;
   const WAITING = 'Waiting for room to read this: cut another part in Parts to light it.';
+  const HELD = 'The street reads five things at once: cut a part in Parts to light this one.';
 
   const state = N.EMPTY();
   const ui = { now: Date.now(), going: {}, gone: {}, working: {}, fuse: false, note: null, selected: null, live: true, plateNote: null };
@@ -120,9 +121,13 @@
   // Opens what the parts that are on read and closes what none reads, so a
   // part turned off frees its stream.
   function reconcile() {
-    const want = N.wantedStreams(state.prefs);
-    for (const [key, f] of followers) if (!want.has(key)) { f.stop(); followers.delete(key); dropStream(key); }
-    for (const key of want) if (!followers.has(key)) followers.set(key, follow(key));
+    const { open, held } = N.wantedStreams(state.prefs);
+    for (const [key, f] of followers) if (!open.includes(key)) { f.stop(); followers.delete(key); dropStream(key); }
+    for (const key of open) {
+      if (state.refusals[key] === HELD) delete state.refusals[key];
+      if (!followers.has(key)) followers.set(key, follow(key));
+    }
+    for (const key of held) state.refusals[key] = HELD;
   }
   function dropStream(key) {
     delete state.refusals[key];
@@ -356,7 +361,7 @@
     if (a.act === 'ask') { sdk.ask(a.widget); closePlate(); }
     else if (a.act === 'settings') { sdk.settings(a.page); closePlate(); }
     else if (a.act === 'open') { sdk.open(a.app); closePlate(); }
-    else if (a.act === 'grant') { sdk.grant(a.ref); ui.working.grant = true; closePlate(); }
+    else if (a.act === 'grant') { sdk.grant(a.ref); closePlate(); }
     else if (a.act === 'feed') { sdk.press(a.binding, a.action); ui.working[a.feed] = true; schedule(); closePlate(); }
     else if (a.act === 'press') {
       plateSays('…');

@@ -8,14 +8,15 @@
 
   // ---------- the parts along the street, each a widget of the preferences ----------
   // zone: the wall above or the street level below; size: how it stands on the
-  // wall; off: dark until the person lights it. The feeds start dark, since
-  // no feed of their names ships and each stream holds one of the few
-  // connections a browser keeps to a host over plain HTTP.
+  // wall; off: dark until the person lights it. The street reads at most
+  // STREAMS at once (each open stream holds one of the six connections a
+  // browser keeps to a host over plain HTTP), so the parts that start lit
+  // read five, and the feeds, the crew and the vault start dark.
   const PARTS = {
     threads: { label: 'Threads', zone: 'wall', size: 'tall', streams: ['threads.changes'] },
     board: { label: 'Schedules and runs', zone: 'wall', size: 'tall', streams: ['schedules.changes', 'runs.changes'] },
     weather: { label: 'Weather', zone: 'wall', size: 'half', streams: ['feed:weather'], off: true },
-    crew: { label: 'Crew at work', zone: 'wall', size: 'half', streams: ['activity.changes'] },
+    crew: { label: 'Crew at work', zone: 'wall', size: 'half', streams: ['activity.changes'], off: true },
     vpn: { label: 'VPN', zone: 'wall', size: 'tall', streams: ['feed:vpn'], off: true },
     vault: { label: 'Vault', zone: 'wall', size: 'tall', streams: ['vault.changes'], off: true },
     cyfr: { label: 'CYFR', zone: 'level', size: 'box', streams: ['components.changes'] },
@@ -23,6 +24,7 @@
     files: { label: 'Files', zone: 'level', size: 'box', streams: [] },
   };
   const ORDER = Object.keys(PARTS);
+  const STREAMS = 5;
 
   // ---------- the light: what waits on the person, by kind ----------
   const KINDS = {
@@ -145,11 +147,13 @@
     o.forEach((p, n) => { widgets[p] = { on: isOn(prefs, p), place: n }; });
     return { widgets };
   }
-  // The streams the parts that are on read; what waits is always read.
+  // The streams the parts that are on read, what waits first and then the
+  // parts in their order along the street: the first STREAMS are opened,
+  // and the rest are held until a part is cut.
   function wantedStreams(prefs) {
-    const want = new Set(['attention.changes']);
-    for (const id of ORDER) if (isOn(prefs, id)) for (const st of PARTS[id].streams) want.add(st);
-    return want;
+    const want = ['attention.changes'];
+    for (const id of order(prefs)) if (isOn(prefs, id)) for (const st of PARTS[id].streams) if (!want.includes(st)) want.push(st);
+    return { open: want.slice(0, STREAMS), held: want.slice(STREAMS) };
   }
 
   // ---------- words ----------
@@ -445,11 +449,11 @@
     const refused = s.refusals['components.changes'];
     return '<button class="sign junction" data-target="cyfr"' + lightAttrs(L) + '>' +
       '<span class="junction__head" id="h-cyfr">' + tube('CYFR') + tag(L) + '</span>' +
-      (refused ? '<span class="jl jl--refused">' + esc(refused) + '</span>' : '') +
-      '<span class="jl">' + lamp(comps.length ? 'ok' : 'off') + esc(comps.length) + ' installed</span>' +
-      '<span class="jl">' + lamp(updates ? 'warn' : 'ok') + (updates ? esc(updates) + ' update' + (updates > 1 ? 's' : '') : 'up to date') + '</span>' +
-      '<span class="jl">' + lamp(grants ? 'warn' : 'ok') + (grants ? esc(grants) + ' to grant' : 'all granted') + '</span>' +
-      '<span class="jl">' + lamp(crew ? 'work' : 'off') + (crew ? 'crew ' + esc(crew) + ' at work' : 'crew at rest') + '</span>' +
+      (refused ? '<span class="jl jl--refused">' + esc(refused) + '</span>' :
+        '<span class="jl">' + lamp(comps.length ? 'ok' : 'off') + esc(comps.length) + ' installed</span>' +
+        '<span class="jl">' + lamp(updates ? 'warn' : 'ok') + (updates ? esc(updates) + ' update' + (updates > 1 ? 's' : '') : 'up to date') + '</span>' +
+        '<span class="jl">' + lamp(grants ? 'warn' : 'ok') + (grants ? esc(grants) + ' to grant' : 'all granted') + '</span>') +
+      (isOn(s.prefs, 'crew') ? '<span class="jl">' + lamp(crew ? 'work' : 'off') + (crew ? 'crew ' + esc(crew) + ' at work' : 'crew at rest') + '</span>' : '') +
       '</button>';
   }
 
@@ -509,5 +513,5 @@
     return { header: renderHeader(s, list, ui, C), wall: zone('wall'), level: zone('level'), puddle: renderPuddle(s, list, ui, C), list, lit, C };
   }
 
-  root.Night = { PARTS, ORDER, KINDS, EMPTY, fold, refreshed, keyOf, isOn, order, flipDoc, moveDoc, wantedStreams, waiting, litTable, renderStreet, renderFusebox, clock, compName, versionless, time, text, words, isItem, esc, weatherOf };
+  root.Night = { PARTS, ORDER, STREAMS, KINDS, EMPTY, fold, refreshed, keyOf, isOn, order, flipDoc, moveDoc, wantedStreams, waiting, litTable, renderStreet, renderFusebox, clock, compName, versionless, time, text, words, isItem, esc, weatherOf };
 })(this);
