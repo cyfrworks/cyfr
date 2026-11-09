@@ -147,7 +147,8 @@
   var CLOSE_CODES = Object.freeze({ unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1e3 });
   var REFUSAL_EVENT = "refusal";
   var DELIVERY_EVENTS = Object.freeze(["snapshot", "resync", "unavailable", "stale", "denied"]);
-  var STREAM_STATES = Object.freeze(["live", "unavailable", "stale", "denied", "ended"]);
+  var STREAM_STATES = Object.freeze(["live", "unavailable", "suspended", "stale", "denied", "ended"]);
+  var ENDED_REASONS = Object.freeze(["frame_suspended"]);
   var NO_ANSWER_CLASSES = Object.freeze([
     "cancelled",
     "corrupt",
@@ -184,7 +185,7 @@
         read = sameKeys(message, head);
         break;
       case "ended":
-        read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error);
+        read = sameKeys(message, head) || sameKeys(message, [...head, "error"]) && isRefusal(message.error) || sameKeys(message, [...head, "error", "reason"]) && isRefusal(message.error) && ENDED_REASONS.includes(message.reason);
         break;
       default:
         read = false;
@@ -577,7 +578,8 @@
         close,
         /**
          * On a canvas, the stream's state: `live`, `unavailable` (it opens
-         * again at the time its last `unavailable` event named), `stale`,
+         * again at the time its last `unavailable` event named), `suspended`
+         * (the canvas is hidden; it opens again once shown), `stale`,
          * `denied` or `ended`.
          */
         get state() {
@@ -662,6 +664,7 @@
         if (subscription.state === "open") hear(subscription, heardEvent(message));
       } else if (message.type === "ended") {
         held.subscriptions.delete(subscription.number);
+        if (message.reason === "frame_suspended" && canvas !== null && subscription.opened) return suspend(subscription);
         end(subscription, "error" in message ? message.error : null, null);
       } else if (subscription.state === "open" && canvas !== null) {
         if (message.type === "snapshot") Object.assign(subscription, { delivery: "live", tries: 0 });
@@ -715,10 +718,16 @@
       subscription.closed.resolve();
     }
     function reopen(subscription) {
+      const wait = later(subscription, "unavailable");
+      told(subscription, "unavailable", { retry_at: new Date(Date.now() + wait).toISOString() });
+    }
+    function suspend(subscription) {
+      later(subscription, "suspended");
+    }
+    function later(subscription, delivery) {
       const wait = Math.min(REOPEN_FIRST_MS * 2 ** subscription.tries, REOPEN_MOST_MS);
       subscription.tries += 1;
-      Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false, delivery: "unavailable" });
-      told(subscription, "unavailable", { retry_at: new Date(Date.now() + wait).toISOString() });
+      Object.assign(subscription, { state: "waiting", held: null, number: null, sent: false, delivery });
       subscription.timer = setTimeout(() => {
         subscription.timer = null;
         if (subscription.state !== "waiting") return;
@@ -727,6 +736,7 @@
           (error) => refuse(subscription, error)
         );
       }, wait);
+      return wait;
     }
     function hear(subscription, event) {
       try {
@@ -815,7 +825,9 @@
        *   replaces it), `stale` (`at`, the picture's time), `unavailable` (`data.retry_at`,
        *   when the SDK opens it again, after a lost connection or an end for want of an
        *   answer) and `denied` (`data`, the refusal; the stream ended), each as
-       *   {id: null, event, data, revision: null, at}
+       *   {id: null, event, data, revision: null, at}. A stream open when the canvas is
+       *   hidden hears nothing while it is hidden, its handle's state `suspended`, and
+       *   opens again once the canvas is shown, its fresh picture announced by `resync`
        * @returns {Promise<{close: function, closed: Promise, state: string}>} once the stream is open,
        *   carrying `close()` itself, the handle's: closed before it opened, the
        *   promise rejects `cancelled`. A refusal rejects with a CyfrError of

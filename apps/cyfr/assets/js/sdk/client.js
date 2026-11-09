@@ -444,9 +444,10 @@ export function createClient({
   // `open` once the endpoint answers `subscribed`, and `over` once it has
   // ended, been refused or been closed. A canvas's stream that has opened
   // once is the page's until it is denied, ends or is closed: a lost
-  // connection, or an end for want of an answer, makes it `waiting` again
-  // and it opens again under a new number (`reopen`), its `delivery` the
-  // state the page reads (`STREAM_STATES`).
+  // connection, an end for want of an answer or an end because its frame
+  // is suspended makes it `waiting` again and it opens again under a new
+  // number (`reopen`, `suspend`), its `delivery` the state the page reads
+  // (`STREAM_STATES`).
   function subscribe(name, subject, onEvent) {
     const subscription = {
       name,
@@ -473,7 +474,8 @@ export function createClient({
       close,
       /**
        * On a canvas, the stream's state: `live`, `unavailable` (it opens
-       * again at the time its last `unavailable` event named), `stale`,
+       * again at the time its last `unavailable` event named), `suspended`
+       * (the canvas is hidden; it opens again once shown), `stale`,
        * `denied` or `ended`.
        */
       get state() {
@@ -575,6 +577,7 @@ export function createClient({
       if (subscription.state === "open") hear(subscription, heardEvent(message))
     } else if (message.type === "ended") {
       held.subscriptions.delete(subscription.number)
+      if (message.reason === "frame_suspended" && canvas !== null && subscription.opened) return suspend(subscription)
       end(subscription, "error" in message ? message.error : null, null)
     } else if (subscription.state === "open" && canvas !== null) {
       // `snapshot`, `resync` and `stale`, a canvas-readable stream's alone.
@@ -656,10 +659,29 @@ export function createClient({
   // when it opens again, and it opens then under a new number, its fresh
   // picture announced by `resync`.
   function reopen(subscription) {
+    const wait = later(subscription, "unavailable")
+    told(subscription, "unavailable", {retry_at: new Date(Date.now() + wait).toISOString()})
+  }
+
+  // A canvas's stream the endpoint ended because its frame is hidden and
+  // its credential suspended: no grant moved, so it is not denied. It
+  // waits, `suspended`, telling the page nothing, and opens again under a
+  // new number once the canvas is shown, its fresh picture announced by
+  // `resync`; opened again under a grant that no longer covers it, it is
+  // denied then. The shell suspends the credential before it tells the
+  // canvas `frozen`, so the end may come first: it waits its reopen wait
+  // before reading whether the canvas is shown.
+  function suspend(subscription) {
+    later(subscription, "suspended")
+  }
+
+  // `subscription` waits, its `delivery` `delivery`, a while that doubles
+  // with each try that brings no picture, and then opens again once it may
+  // be sent; answers the wait.
+  function later(subscription, delivery) {
     const wait = Math.min(REOPEN_FIRST_MS * 2 ** subscription.tries, REOPEN_MOST_MS)
     subscription.tries += 1
-    Object.assign(subscription, {state: "waiting", held: null, number: null, sent: false, delivery: "unavailable"})
-    told(subscription, "unavailable", {retry_at: new Date(Date.now() + wait).toISOString()})
+    Object.assign(subscription, {state: "waiting", held: null, number: null, sent: false, delivery})
     subscription.timer = setTimeout(() => {
       subscription.timer = null
       if (subscription.state !== "waiting") return
@@ -668,6 +690,7 @@ export function createClient({
         (error) => refuse(subscription, error)
       )
     }, wait)
+    return wait
   }
 
   function hear(subscription, event) {
@@ -769,7 +792,9 @@ export function createClient({
      *   replaces it), `stale` (`at`, the picture's time), `unavailable` (`data.retry_at`,
      *   when the SDK opens it again, after a lost connection or an end for want of an
      *   answer) and `denied` (`data`, the refusal; the stream ended), each as
-     *   {id: null, event, data, revision: null, at}
+     *   {id: null, event, data, revision: null, at}. A stream open when the canvas is
+     *   hidden hears nothing while it is hidden, its handle's state `suspended`, and
+     *   opens again once the canvas is shown, its fresh picture announced by `resync`
      * @returns {Promise<{close: function, closed: Promise, state: string}>} once the stream is open,
      *   carrying `close()` itself, the handle's: closed before it opened, the
      *   promise rejects `cancelled`. A refusal rejects with a CyfrError of

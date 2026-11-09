@@ -104,7 +104,7 @@ working, which is kept, and which validation last failed.
 - `cyfr.stream(name, subject, onEvent)` opens a declared stream
   (`subject` is `null` for one that takes none) and resolves once it is
   open with a handle whose `close()` ends it and whose `state` is
-  `live`, `unavailable`, `stale`, `denied` or `ended`; `onEvent` gets
+  `live`, `unavailable`, `suspended`, `stale`, `denied` or `ended`; `onEvent` gets
   `{id, event, data, revision, at}`. Every stream rides the page's one connection, so
   open every stream the page shows at once, up to 32. The returned
   promise has the same `close()`, which cancels an open still waiting.
@@ -143,7 +143,9 @@ stream's `removal` kind. A `resync` event means a fresh picture follows
 up to the next `snapshot` and replaces yours. `unavailable` (`data.retry_at`,
 the SDK opens it again by itself), `stale` (the picture is old; `at` is
 when it was read) and `denied` (it ended) are states to show, never
-errors to throw.
+errors to throw. A hidden canvas's streams are `suspended`, hearing
+nothing; shown again, the SDK opens each again and its handler hears
+`resync` and the fresh picture, so a page reopens nothing itself.
 
 ```html
 <!DOCTYPE html>
