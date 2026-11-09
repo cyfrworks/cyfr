@@ -821,18 +821,21 @@ defmodule Arca.ConsentStorage do
   def head_profiles_referencing(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
 
   @doc """
-  The sources, by name-level ref and each once, whose **head** revision
-  binds the vault entry `vault_entry_id`: on a binding of its own, or by
-  selecting on an edge to a target the labelled profile of that target
-  whose head binds it, which a run resolves to that entry
-  (`Sanctum.Consent.Loader`'s selections). A profile of any status is
-  read, so one blocked when the entry changed is still named.
+  The edges by which the **head** revisions of the actor's athanor reach
+  the vault entry `vault_entry_id`, each once, as `{source, node, target}`
+  name-level refs: the profile's source, the node whose edge it is and the
+  edge's target. An edge reaches the entry when it binds it, or when it
+  selects the labelled profile of its target whose head binds it on the
+  target's own ingress, the one binding a selection borrows
+  (`Sanctum.Consent.Loader`'s selections). A profile's own ingress is no
+  edge and is not answered. A profile of any status is read, so one
+  blocked when the entry changed is still named.
   """
-  @spec head_sources_binding(Prima.Actor.t(), String.t()) ::
-          {:ok, [String.t()]} | {:error, term()}
-  def head_sources_binding(%Prima.Actor{athanor_id: athanor_id}, vault_entry_id)
+  @spec head_edges_binding(Prima.Actor.t(), String.t()) ::
+          {:ok, [{String.t(), String.t(), String.t()}]} | {:error, term()}
+  def head_edges_binding(%Prima.Actor{athanor_id: athanor_id}, vault_entry_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(vault_entry_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_sources_binding", fn ->
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_edges_binding", fn ->
       heads =
         from(r in ConsentVaultRef,
           join: c in Consent,
@@ -842,42 +845,56 @@ defmodule Arca.ConsentStorage do
         )
         |> Arca.QueryHelpers.where_athanor(athanor_id)
 
-      lenders =
+      bound =
         from([r, _c, p] in heads,
           where: r.vault_entry_id == ^vault_entry_id,
-          distinct: true,
-          select: {p.source_ref, p.label}
+          select: {p.source_ref, p.label, r.binding_key}
         )
         |> Arca.Repo.all()
-        |> Enum.map(fn {source, label} -> {name_level(source), label} end)
+        |> Enum.map(fn {source, label, key} -> {name_level(source), label, edge(key)} end)
+
+      # A profile lends what its own node's ingress binds.
+      lenders =
+        for {source, label, {source, :ingress}} <- bound, source != nil, do: {source, label}
 
       labels = lenders |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
 
-      borrowers =
+      borrowed =
         from([r, _c, p] in heads,
           where: r.via_label in ^labels,
-          select: {p.source_ref, r.binding_key, r.via_label}
+          select: {p.source_ref, r.via_label, r.binding_key}
         )
         |> Arca.Repo.all()
-        |> Enum.filter(fn {_source, key, label} -> {selected(key), label} in lenders end)
+        |> Enum.map(fn {source, label, key} -> {name_level(source), label, edge(key)} end)
+        |> Enum.filter(fn {_source, label, edge} ->
+          match?({_node, target} when is_binary(target), edge) and
+            {elem(edge, 1), label} in lenders
+        end)
 
-      sources =
-        Enum.map(lenders, &elem(&1, 0)) ++ Enum.map(borrowers, &name_level(elem(&1, 0)))
+      edges =
+        for {source, _label, {node, target}} <- bound ++ borrowed,
+            is_binary(source) and is_binary(target),
+            uniq: true,
+            do: {source, node, target}
 
-      {:ok, sources |> Enum.reject(&is_nil/1) |> Enum.uniq()}
+      {:ok, edges}
     end)
     |> Arca.Data.project()
   end
 
-  def head_sources_binding(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
+  def head_edges_binding(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
 
-  # The target a selection's binding key names its lender by.
-  defp selected(binding_key) do
-    with {:ok, {_node, edge_key, _slot}} <- Prima.Authority.Blob.parse_binding_key(binding_key),
-         {:ok, target} <- Prima.Authority.Blob.edge_target(edge_key) do
-      name_level(target)
+  # The node a binding key's edge leaves and the target it names
+  # (`:ingress` for the node's own), name-level; nil for a key outside the
+  # grammar.
+  defp edge(binding_key) do
+    with {:ok, {node, edge_key, _slot}} <- Prima.Authority.Blob.parse_binding_key(binding_key) do
+      case Prima.Authority.Blob.edge_target(edge_key) do
+        :ingress -> {name_level(node), :ingress}
+        {:ok, target} -> {name_level(node), name_level(target)}
+      end
     else
-      _ingress_or_unparsed -> nil
+      :error -> nil
     end
   end
 

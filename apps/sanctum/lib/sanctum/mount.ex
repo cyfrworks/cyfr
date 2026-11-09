@@ -293,29 +293,31 @@ defmodule Sanctum.Mount do
   end
 
   @doc """
-  The names of the agents of `athanor_id` whose head consent binds the
-  login entry `entry_id`, the soul's included: on a binding of the agent's
-  own, or by selecting the profile of its brain that binds it
-  (`Arca.ConsentStorage.head_sources_binding/2`). `{:error, :unavailable}`
-  when the store cannot answer.
+  The names of the agents of `athanor_id`, the soul's included, whose
+  brain runs in the kept home of the login entry `entry_id`: the agent's
+  head binds the entry on its own edge to its brain (the catalyst its
+  index row names), or selects there a profile of that brain whose own
+  ingress binds it (`Arca.ConsentStorage.head_edges_binding/2`). An edge
+  to a hand is no brain's. `{:error, :unavailable}` when the store cannot
+  answer.
   """
   @spec agents_mounting(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, :unavailable}
   def agents_mounting(athanor_id, entry_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(entry_id) do
-    agent = Prima.AgentRef.type()
+    actor = Prima.Actor.in_athanor(athanor_id)
 
-    case Arca.ConsentStorage.head_sources_binding(Prima.Actor.in_athanor(athanor_id), entry_id) do
-      {:ok, sources} ->
-        {:ok,
-         for(
-           ref <- sources,
-           {:ok, %Prima.ComponentRef{type: ^agent, name: name}} <-
-             [Prima.ComponentRef.parse(ref)],
-           do: name
-         )}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
+    with {:ok, edges} <- Arca.ConsentStorage.head_edges_binding(actor, entry_id),
+         {:ok, agents} <- Arca.AgentStorage.list(actor) do
+      {:ok,
+       for(
+         %{name: name, catalyst_ref: brain} when is_binary(brain) <- agents,
+         {:ok, brain} <- [Prima.ComponentRef.to_name_ref(brain)],
+         source = Prima.AgentRef.ref(name),
+         {source, source, brain} in edges,
+         do: name
+       )}
+    else
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 

@@ -739,7 +739,7 @@ defmodule Aqua.Loop do
 
       {:error, %{"type" => type} = error}
       when type in @recoverable and retries < length(@retry_delays_ms) ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(error, type))
+        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, type))
         Process.sleep(Enum.at(@retry_delays_ms, retries))
 
         case open_model_step(state, "chat") do
@@ -754,7 +754,7 @@ defmodule Aqua.Loop do
             state.turn,
             step,
             "error",
-            refused(error, error["message"])
+            refused(state, error, error["message"])
           )
 
         announce(state, :consent_required, %{
@@ -765,7 +765,9 @@ defmodule Aqua.Loop do
         {:halt, {:failed, :setup_required}, state}
 
       {:error, %{"type" => _type, "message" => message} = error} ->
-        _ = Tape.close_step(guest(state), state.turn, step, "error", refused(error, message))
+        _ =
+          Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, message))
+
         _ = system_row(state, "The model could not answer: #{message}")
         {:halt, {:failed, message}, state}
 
@@ -781,11 +783,12 @@ defmodule Aqua.Loop do
 
   # A refused model step closes with the brain's session its refusal
   # names, kept on the thread as a response's is (`Prima.Model`), so the
-  # next request continues it. A session off the contract is not kept,
-  # and the refusal ends the turn as it would.
-  defp refused(error, text) do
+  # next request continues it, beside the one its request carried
+  # (`state.session`). A session off the contract is not kept, and the
+  # refusal ends the turn as it would.
+  defp refused(%State{session: sent}, error, text) do
     case Prima.Model.response_session(error) do
-      {:ok, session} -> %{error: text, session: session}
+      {:ok, session} -> %{error: text, session: session, sent_session: sent}
       {:error, _invalid} -> %{error: text}
     end
   end
@@ -920,6 +923,7 @@ defmodule Aqua.Loop do
              usage: usage,
              stop_reason: data["stop_reason"],
              session: session,
+             sent_session: state.session,
              tool_calls: tool_calls
            }) do
       state = count_usage(%{state | session: session || state.session}, usage)

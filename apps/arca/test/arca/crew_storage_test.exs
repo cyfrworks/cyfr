@@ -709,6 +709,79 @@ defmodule Arca.CrewStorageTest do
 
       assert {:ok, %{brain_session: "brain-session-1"}} = Threads.get(actor, room.id)
     end
+
+    # A home reset forgets the session while a turn that resumed it still
+    # runs; that turn's late answer, or its refusal, does not bring it back,
+    # and a turn whose request carried what the thread keeps writes as ever.
+    test "a session forgotten under a running turn is not restored by its late answer", %{
+      actor: actor,
+      room: room
+    } do
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, room.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      turn = start!(actor, turn)
+      step = model_step!(actor, turn, "model:1")
+
+      {1, _} =
+        from(t in Arca.Schemas.Thread, where: t.id == ^room.id)
+        |> Arca.Repo.update_all(set: [brain_session: "old-session"])
+
+      assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+
+      {:ok, _} =
+        TurnStorage.record_response(actor, turn.id, step.id, %{
+          fence: turn.fence,
+          text: "late answer",
+          session: "old-session",
+          sent_session: "old-session",
+          tool_calls: []
+        })
+
+      assert {:ok, %{brain_session: nil}} = Threads.get(actor, room.id)
+
+      refused = model_step!(actor, turn, "model:2")
+      {:ok, _} = TurnStorage.dispatch_step(actor, refused.id, %{fence: turn.fence})
+
+      {:ok, _} =
+        TurnStorage.close_step(actor, refused.id, "error", %{
+          fence: turn.fence,
+          error: "interrupted",
+          session: "old-session",
+          sent_session: "old-session"
+        })
+
+      assert {:ok, %{brain_session: nil}} = Threads.get(actor, room.id)
+
+      # A request that carried none, on a thread that keeps none, keeps
+      # the session it opened; the next, which carried it, keeps its own.
+      fresh = model_step!(actor, turn, "model:3")
+
+      {:ok, _} =
+        TurnStorage.record_response(actor, turn.id, fresh.id, %{
+          fence: turn.fence,
+          text: "new",
+          session: "new-session",
+          tool_calls: []
+        })
+
+      assert {:ok, %{brain_session: "new-session"}} = Threads.get(actor, room.id)
+      next = model_step!(actor, turn, "model:4")
+
+      {:ok, _} =
+        TurnStorage.record_response(actor, turn.id, next.id, %{
+          fence: turn.fence,
+          text: "on",
+          session: "newer-session",
+          sent_session: "new-session",
+          tool_calls: []
+        })
+
+      assert {:ok, %{brain_session: "newer-session"}} = Threads.get(actor, room.id)
+    end
   end
 
   describe "child threads" do

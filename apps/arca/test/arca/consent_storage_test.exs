@@ -1607,47 +1607,90 @@ defmodule Arca.ConsentStorageTest do
     _refused in Arca.Repo.Errors.db_errors() -> :refused
   end
 
-  describe "head_sources_binding/2" do
+  describe "head_edges_binding/2" do
+    # A binding of `entry_id` at `key`.
+    defp bound(key, entry_id), do: ref(entry_id, %{binding_key: key})
+
+    # A selection of the profile `label` of the edge's target at `key`.
+    defp lent(key, label),
+      do: ref(nil, %{binding_key: key, via_label: label, binding_digest: nil})
+
     # The member's edge into its brain selects the brain's profile `work`,
-    # which binds the entry; a head of its own binds it directly.
-    test "names a head binding the entry and a head selecting a lender that binds it",
+    # whose own ingress binds the entry; a head of its own binds it on its
+    # edge directly.
+    test "answers an edge that binds the entry and one that selects a lender whose ingress binds it",
          %{athanor: athanor} do
       entry = entry!(athanor)
       other = entry!(athanor)
-      lend = fn source, edge -> "#{source}|#{edge}|default" end
 
-      using!(athanor, "prof_src_brain", "catalyst:local.brain", "work", [ref(entry.id)])
-      using!(athanor, "prof_src_other", "catalyst:local.other", "work", [ref(other.id)])
-      using!(athanor, "prof_src_direct", "agent:local.direct", "default", [ref(entry.id)])
+      using!(athanor, "prof_e_brain", "catalyst:local.brain", "work", [
+        bound("catalyst:local.brain|@ingress|default", entry.id)
+      ])
 
-      for {id, source, edge} <- [
-            {"prof_src_member", "agent:local.member", "catalyst:local.brain|claude"},
-            # The same label of another target, which lends another entry.
-            {"prof_src_elsewhere", "agent:local.elsewhere", "catalyst:local.other"},
-            # Another label of the lender's target.
-            {"prof_src_unlent", "agent:local.unlent", "catalyst:local.brain"}
-          ] do
-        label = if id == "prof_src_unlent", do: "home", else: "work"
+      using!(athanor, "prof_e_other", "catalyst:local.other", "work", [
+        bound("catalyst:local.other|@ingress|default", other.id)
+      ])
 
-        using!(athanor, id, source, "default", [
-          ref(nil, %{binding_key: lend.(source, edge), via_label: label, binding_digest: nil})
-        ])
-      end
+      using!(athanor, "prof_e_direct", "agent:local.direct", "default", [
+        bound("agent:local.direct|catalyst:local.brain|claude|default", entry.id)
+      ])
+
+      using!(athanor, "prof_e_member", "agent:local.member", "default", [
+        lent("agent:local.member|catalyst:local.brain|claude|default", "work")
+      ])
+
+      # The same label of another target, which lends another entry, and
+      # another label of the lender's target.
+      using!(athanor, "prof_e_elsewhere", "agent:local.elsewhere", "default", [
+        lent("agent:local.elsewhere|catalyst:local.other|default", "work")
+      ])
+
+      using!(athanor, "prof_e_unlent", "agent:local.unlent", "default", [
+        lent("agent:local.unlent|catalyst:local.brain|default", "home")
+      ])
 
       # A head that no longer binds what an earlier revision did.
-      earlier = using!(athanor, "prof_src_moved", "agent:local.moved", "default", [ref(entry.id)])
+      earlier =
+        using!(athanor, "prof_e_moved", "agent:local.moved", "default", [
+          bound("agent:local.moved|catalyst:local.brain|default", entry.id)
+        ])
 
       {:ok, _} =
         ConsentStorage.insert_revision(
-          consent_attrs(athanor, "prof_src_moved", 2),
-          [ref(other.id)],
+          consent_attrs(athanor, "prof_e_moved", 2),
+          [bound("agent:local.moved|catalyst:local.brain|default", other.id)],
           earlier.id
         )
 
-      assert {:ok, sources} = ConsentStorage.head_sources_binding(actor(athanor), entry.id)
+      assert {:ok, edges} = ConsentStorage.head_edges_binding(actor(athanor), entry.id)
 
-      assert Enum.sort(sources) ==
-               ["agent:local.direct", "agent:local.member", "catalyst:local.brain"]
+      assert Enum.sort(edges) == [
+               {"agent:local.direct", "agent:local.direct", "catalyst:local.brain"},
+               {"agent:local.member", "agent:local.member", "catalyst:local.brain"}
+             ]
+    end
+
+    # A selection borrows the lender's ingress alone: what an edge of the
+    # lender's own binds is not lent.
+    test "a selection does not reach what the lender binds on an edge of its own",
+         %{athanor: athanor} do
+      home = entry!(athanor)
+      brain_home = entry!(athanor)
+
+      using!(athanor, "prof_r_brain", "catalyst:local.brain", "work", [
+        bound("catalyst:local.brain|@ingress|default", brain_home.id),
+        bound("catalyst:local.brain|catalyst:local.hand|default", home.id)
+      ])
+
+      using!(athanor, "prof_r_member", "agent:local.member", "default", [
+        lent("agent:local.member|catalyst:local.brain|default", "work")
+      ])
+
+      assert {:ok, [{"catalyst:local.brain", "catalyst:local.brain", "catalyst:local.hand"}]} =
+               ConsentStorage.head_edges_binding(actor(athanor), home.id)
+
+      assert {:ok, [{"agent:local.member", "agent:local.member", "catalyst:local.brain"}]} =
+               ConsentStorage.head_edges_binding(actor(athanor), brain_home.id)
     end
   end
 end
