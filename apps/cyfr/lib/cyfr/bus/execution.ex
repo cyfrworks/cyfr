@@ -8,7 +8,8 @@ defmodule Cyfr.Bus.Execution do
   execution's lifecycle telemetry, taking only the fields below; `error`
   is a refusal's class and the cause it reads as (`causes/0`), never its
   sentence, which may carry a component's own words, nor an arbitrary
-  term.
+  term. `started_at` is when the row was admitted and `ended_at` when it
+  ended, nil while it runs.
   """
 
   alias Cyfr.Bus.Payload
@@ -21,6 +22,8 @@ defmodule Cyfr.Bus.Execution do
     :reference,
     :component_type,
     :duration_ms,
+    :started_at,
+    :ended_at,
     :error
   ]
 
@@ -38,6 +41,8 @@ defmodule Cyfr.Bus.Execution do
           reference: String.t() | nil,
           component_type: atom() | String.t() | nil,
           duration_ms: non_neg_integer() | nil,
+          started_at: DateTime.t() | nil,
+          ended_at: DateTime.t() | nil,
           error: %{class: Prima.Refusal.class(), cause: atom()} | nil
         }
 
@@ -66,6 +71,17 @@ defmodule Cyfr.Bus.Execution do
   """
   @spec causes() :: [{atom(), String.t()}]
   def causes, do: @causes
+
+  @doc """
+  An error as a run's record keeps it: its sentence and the refusal class
+  it is kept under, for `new/3`'s `error`, or nil for none. A sentence kept
+  with no class is a producer's own, `internal`.
+  """
+  @spec error(String.t() | nil, Prima.Refusal.class() | nil) :: Prima.Refusal.t() | nil
+  def error(nil, _class), do: nil
+
+  def error(message, class) when is_binary(message),
+    do: %Prima.Refusal{class: class || :internal, reason: message, message: message}
 
   @doc """
   The payload for `actor`'s athanor. A kind outside `kinds/0` or a field

@@ -153,7 +153,7 @@ defmodule Opus.Close do
     case Record.write_completed_ledger(completed_record, close.admission) do
       {:error, :not_standing} ->
         message = "Execution refused: its athanor is no longer active"
-        Telemetry.execute_exception(Record.fail(close.record, message), message)
+        Telemetry.execute_exception(Record.fail(close.record, message, :uncertain), message)
         {:error, message}
 
       {:ok, ledger} ->
@@ -168,8 +168,10 @@ defmodule Opus.Close do
   Close a run failed with `reason`, masked with `secrets`.
 
   `reason` is a crafted sentence, a typed `{:setup_required, payload}` or
-  `{:consent_required, payload}` refusal, or an internal term. A sentence
-  is recorded as it is. A typed refusal records its readable message,
+  `{:consent_required, payload}` refusal, or an internal term. Each is
+  recorded with its refusal class (`Opus.Record.fail/3`): a sentence is
+  `internal`, any other reason its own class (`Sanctum.Refusals.classify/1`).
+  A sentence is recorded as it is. A typed refusal records its readable message,
   announces a `setup_required` event on the run's root or parent stream,
   and answers `{:error, typed}` whole. Any other term is recorded as the
   sentence `Sanctum.Refusals.render/1` gives it — an internal one as the
@@ -184,12 +186,13 @@ defmodule Opus.Close do
   def fail(%__MODULE__{} = close, secrets, {tag, payload} = typed)
       when tag in [:setup_required, :consent_required] and is_map(payload) do
     announce_setup(close, typed)
-    _ = close_failed(close, secrets, failure_message(typed))
+    _ = close_failed(close, secrets, failure_message(typed), tag)
     {:error, typed}
   end
 
   def fail(%__MODULE__{} = close, secrets, reason) do
-    close_failed(close, secrets, "Execution failed: #{client_reason(reason)}")
+    %Prima.Refusal{class: class, message: message} = Sanctum.Refusals.classify(reason)
+    close_failed(close, secrets, "Execution failed: #{message}", class)
   end
 
   @doc """
@@ -224,7 +227,7 @@ defmodule Opus.Close do
     message = "Execution attempt ended before it closed"
 
     if Arca.ControlPlane.held?() do
-      failed_record = Record.fail(record, message)
+      failed_record = Record.fail(record, message, :uncertain)
 
       case Record.write_uncertain(failed_record, close.admission) do
         {:error, :not_running} ->
@@ -336,7 +339,8 @@ defmodule Opus.Close do
         close_failed(
           close,
           secrets,
-          "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)"
+          "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)",
+          :rate_limited
         )
 
       {:ok, _output_json} ->
@@ -455,11 +459,16 @@ defmodule Opus.Close do
   # The terminal failure write. A row not yet admitted is admitted first,
   # so a refusal is on record like any other run, unless a barrier refuses
   # it.
-  defp close_failed(%__MODULE__{started: false, record: record} = close, secrets, message) do
+  #
+  # `class` is the refusal class the failure is kept under
+  # (`Opus.Record.fail/3`): a producer's own sentence is `:internal`.
+  defp close_failed(close, secrets, message, class \\ :internal)
+
+  defp close_failed(%__MODULE__{started: false, record: record} = close, secrets, message, class) do
     case Record.write_started(close.ctx, record, close.admission) do
       :ok ->
         Telemetry.execute_start(record)
-        close_failed(%{close | started: true}, secrets, message)
+        close_failed(%{close | started: true}, secrets, message, class)
 
       {:error, reason} ->
         if Arca.Execution.barrier_refusal?(reason) do
@@ -472,17 +481,17 @@ defmodule Opus.Close do
           )
 
           emit_audit_error(record, :started, reason)
-          write_failed(%{close | started: true}, secrets, message, :unadmitted)
+          write_failed(%{close | started: true}, secrets, message, :unadmitted, class)
         end
     end
   end
 
-  defp close_failed(close, secrets, message),
-    do: write_failed(close, secrets, message, :admitted)
+  defp close_failed(close, secrets, message, class),
+    do: write_failed(close, secrets, message, :admitted, class)
 
-  defp write_failed(close, secrets, message, admitted) do
+  defp write_failed(close, secrets, message, admitted, class) do
     message = SecretMasker.mask(message, secrets)
-    failed_record = Record.fail(close.record, message)
+    failed_record = Record.fail(close.record, message, class)
 
     ended_failed(
       failed_record,

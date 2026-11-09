@@ -112,7 +112,9 @@ your next one. Ask independent members in the same turn; they work in
 parallel. Sequence only when one reply feeds the next job. Put everything
 you have learned into the task: a member reads its own thread, not this
 one. Every member holds every tool you hold; `tools` narrows a job to the
-ones you name, and `options` sets its brain's options for that job.
+ones you name, and `options` sets its brain's options for that job. A
+short `title`, one line of up to 64 characters, is what a desktop shows
+for the job.
 
 ## Your own hands
 

@@ -42,6 +42,8 @@ defmodule Arca.SchemaVocabularyTest do
   defp vocabularies do
     [
       {"executions", "executions_status_known", "status", Prima.ExecutionState.statuses()},
+      {"executions", "executions_error_class_known", "error_class",
+       Arca.Schemas.Execution.error_classes()},
       {"execution_attempts", "execution_attempts_state_known", "state",
        Prima.ExecutionState.attempt_states()},
       {"execution_attempts", "execution_attempts_outcome_known", "outcome",

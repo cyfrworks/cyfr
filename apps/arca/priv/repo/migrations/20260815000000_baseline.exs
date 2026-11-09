@@ -1269,6 +1269,17 @@ defmodule Arca.Repo.Migrations.Baseline do
     execution_status =
       known("executions_status_known", "status", ~w(running paused completed failed cancelled))
 
+    # The refusal classes (`Prima.Refusal.classes/0`) a failed run's error
+    # is kept under.
+    execution_error_class =
+      known(
+        "executions_error_class_known",
+        "error_class",
+        ~w(unauthenticated forbidden consent_required confirmation_required setup_required
+           invalid_argument not_found conflict rate_limited not_owner unavailable corrupt
+           timeout cancelled uncertain internal)
+      )
+
     create table(:executions, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :reference, :string, null: false
@@ -1286,6 +1297,9 @@ defmodule Arca.Repo.Migrations.Baseline do
         check: if(sqlite?, do: execution_status)
 
       add :error_message, :text
+      # The class of the refusal the error is (`Prima.Refusal`), kept with
+      # its sentence so a reader learns its cause without the sentence.
+      add :error_class, :string, check: if(sqlite?, do: execution_error_class)
       add :request_id, :string
       add :input, :text
       add :output, :text
@@ -1303,6 +1317,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :root_execution_id, :string, null: false
       # The profile pinned for a root execution, so approvals reuse its authority.
       add :profile_id, :string
+      # The consent revision the root's authority was loaded at.
+      add :consent_id, :string
       # The turn an execution belongs to, and the schedule that fired it.
       add :turn_id, :string
       add :schedule_id, :string
@@ -1324,7 +1340,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :sources, :text, null: false, default: "[]"
     end
 
-    checked(sqlite?, :executions, [execution_status])
+    checked(sqlite?, :executions, [execution_status, execution_error_class])
     create unique_index(:executions, [:id, :athanor_id])
     # One child per key under a parent: two identical admissions race here,
     # and the loser is answered with the winner's row.

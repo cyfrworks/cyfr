@@ -72,7 +72,14 @@ defmodule Aqua.StreamsTest do
 
       assert {activity.topic, activity.subject, activity.bind} == {:crew_activity, nil, nil}
       assert activity.refresh == {Activity, :open}
-      assert activity.projection == ~w(kind id member asked_by since status)
+      assert activity.projection == ~w(kind id member asked_by title since status)
+
+      assert activity.shape["fields"]["title"] == %{
+               "type" => "string",
+               "max" => 64,
+               "nullable" => true
+             }
+
       assert activity.shape["fields"]["kind"]["values"] == ["started", "ended"]
       assert activity.shape["fields"]["status"]["values"] == Prima.TurnState.statuses()
     end
@@ -354,6 +361,33 @@ defmodule Aqua.StreamsTest do
       refute_receive %CrewActivity{}, 200
     end
 
+    test "a job a request opened carries the request's title as it moves, and a job no request opened carries none",
+         %{ada: ada, room: room, planner: planner, scout: scout} do
+      {:ok, %{turn: turn}} = requested_job!(ada, room, planner, "planner", "Risks")
+      assert_receive %CrewActivity{kind: :started} = accepted
+      assert %{"title" => "Risks", "status" => "accepted"} = read_as(accepted)
+      assert {:ok, [listed]} = Activity.open(ada.ctx, nil)
+      assert %{"title" => "Risks"} = read_as(listed)
+
+      running = rooted!(ada.ctx, turn)
+      assert_receive %CrewActivity{kind: :started} = started
+      assert %{"title" => "Risks", "status" => "running"} = read_as(started)
+
+      {:ok, _} = Tape.finish(ada.ctx, running, "failed", %{error: "it broke"})
+      assert_receive %CrewActivity{kind: :ended} = ended
+      assert %{"title" => "Risks", "status" => "failed"} = read_as(ended)
+
+      {:ok, _} = requested_job!(ada, room, scout, "scout", "Scout it")
+      assert_receive %CrewActivity{kind: :started, member: "scout"}
+      {:ok, %{archived: true}} = call(ada.ctx, %{"action" => "archive", "thread" => scout.id})
+      assert_receive %CrewActivity{kind: :ended, member: "scout"} = archived
+      assert %{"title" => "Scout it", "status" => "cancelled"} = read_as(archived)
+
+      {:ok, _} = job!(ada, planner, "planner")
+      assert_receive %CrewActivity{kind: :started, member: "planner"} = untitled
+      assert %{"title" => nil} = read_as(untitled)
+    end
+
     test "the documented activity key preserves simultaneous jobs", %{ada: ada, planner: planner} do
       {:ok, other_room} = Threads.create(ada.actor)
       {:ok, other_planner} = Threads.crew_thread(ada.actor, other_room.id, "planner")
@@ -438,6 +472,28 @@ defmodule Aqua.StreamsTest do
     Tape.accept(person.ctx, thread.id, %{
       message: %{author: author, sent_by: sent_by, content: @task},
       turn: %{agent: member, requested_by: person.user.id}
+    })
+  end
+
+  # A job for `member` in its child thread opened by the soul's request in
+  # `room`, its title kept on the request as `crew.ask` keeps it.
+  defp requested_job!(person, room, thread, member, title) do
+    {:ok, %{message: request}} =
+      Tape.accept(person.ctx, room.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: member,
+          status: "pending",
+          content: @task,
+          payload: %{"title" => title}
+        }
+      })
+
+    Tape.accept(person.ctx, thread.id, %{
+      message: %{author: Prima.Author.agent(), sent_by: "aqua", content: @task},
+      turn: %{agent: member, requested_by: person.user.id},
+      reply_address: %{asking_thread_id: room.id, request_id: request.id}
     })
   end
 

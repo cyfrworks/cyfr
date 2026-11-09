@@ -74,7 +74,12 @@ defmodule Opus.TurnRoot do
     with {:ok, %{authority: authority, stamp: stamp}} <-
            Admission.authority_and_stamp_for(ctx, :default, agent_ref),
          record = build_record(ctx, agent_ref, authority, stamp, opts),
-         :ok <- Record.write_started(ctx, record, retention_class: "chat_step"),
+         :ok <-
+           Record.write_started(ctx, record,
+             retention_class: "chat_step",
+             reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap},
+             consent_id: authority.consent_id
+           ),
          {:ok, token} <- claim_slot(ctx, record) do
       {:ok, keeper} =
         LeaseWatch.start(record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
@@ -255,8 +260,7 @@ defmodule Opus.TurnRoot do
         component_type: :agent,
         kind: "turn",
         turn_id: Keyword.get(opts, :turn_id),
-        profile_id: authority.profile_id,
-        reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap}
+        profile_id: authority.profile_id
       )
 
     case stamp do

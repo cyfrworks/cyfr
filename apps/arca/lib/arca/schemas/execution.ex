@@ -19,6 +19,7 @@ defmodule Arca.Schemas.Execution do
   - `duration_ms` - Execution duration in milliseconds
   - `status` - running, completed, failed, or cancelled
   - `error_message` - Error message if failed
+  - `error_class` - The refusal class of that error (`Prima.Refusal`)
   - `input` - JSON-encoded execution input
   - `output` - JSON-encoded execution output
   - `host_policy` - JSON-encoded host policy snapshot
@@ -51,6 +52,9 @@ defmodule Arca.Schemas.Execution do
   @doc "Every kind an execution row can carry."
   def kinds, do: @kinds
 
+  @doc "The classes a failed row's error is kept under (`Prima.Refusal.classes/0`)."
+  def error_classes, do: Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
 
@@ -67,6 +71,7 @@ defmodule Arca.Schemas.Execution do
     field :duration_ms, :integer
     field :status, :string, default: "running"
     field :error_message, :string
+    field :error_class, :string
     field :input, :string
     field :output, :string
     field :host_policy, :string
@@ -87,6 +92,9 @@ defmodule Arca.Schemas.Execution do
     # authority again — an approval, an audit — reads it here instead of
     # re-deriving a selection that may since have become ambiguous.
     field :profile_id, :string
+    # The consent revision the root's authority was loaded at, beside its
+    # profile; nil for a child.
+    field :consent_id, :string
     # What the row is: a `component` run, the logical `turn` root a host
     # loop holds without a guest, or an outbound `tool_call`. A turn root's
     # `component_type` is `agent`.
@@ -137,6 +145,7 @@ defmodule Arca.Schemas.Execution do
     :activation_digest,
     :activation_graph,
     :profile_id,
+    :consent_id,
     :kind,
     :turn_id,
     :schedule_id,
@@ -222,8 +231,9 @@ defmodule Arca.Schemas.Execution do
   """
   def complete_changeset(execution, attrs) do
     execution
-    |> cast(attrs, [:completed_at, :duration_ms, :status, :error_message, :output])
+    |> cast(attrs, [:completed_at, :duration_ms, :status, :error_message, :error_class, :output])
     |> validate_required([:completed_at, :duration_ms, :status])
     |> validate_inclusion(:status, @terminal_statuses)
+    |> validate_inclusion(:error_class, error_classes())
   end
 end

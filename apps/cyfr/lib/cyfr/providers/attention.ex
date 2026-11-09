@@ -26,7 +26,11 @@ defmodule Cyfr.Providers.Attention do
   A failed run is one item per reference, its `id` the exact reference the
   run's record keeps, so the next end of a run of that reference names
   the item it settles without a read. `removed` names the item that
-  stopped waiting by its `id`, every other field nil. An approval that a
+  stopped waiting by its `id` and how it left by its `outcome`, every
+  other field nil: `expired` for an end whose time ran out, `withdrawn`
+  for a voided confirmation, a withdrawn offer, a deleted schedule or a
+  deleted thread's approval, and `resolved` for every other end. A
+  waiting item's `outcome` is nil. An approval that a
   cancel, a pause or an archive of its turn invalidates is announced to
   no one (`Arca.TurnStorage`), so it leaves at the next refresh.
 
@@ -63,7 +67,8 @@ defmodule Cyfr.Providers.Attention do
           id: String.t(),
           label: String.t() | nil,
           since: DateTime.t() | nil,
-          destination: map() | nil
+          destination: map() | nil,
+          outcome: nil
         }
 
   @impl true
@@ -82,7 +87,7 @@ defmodule Cyfr.Providers.Attention do
       %Prima.Provider.Stream{
         name: "attention.changes",
         topic: :attention,
-        projection: ["kind", "id", "label", "since", "destination"],
+        projection: ["kind", "id", "label", "since", "destination", "outcome"],
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
         deadline_bound: @deadline_bound,
@@ -187,7 +192,8 @@ defmodule Cyfr.Providers.Attention do
       id: ref,
       label: operation,
       since: opened_at,
-      destination: %{kind: "ref", page: nil, ref: ref}
+      destination: %{kind: "ref", page: nil, ref: ref},
+      outcome: nil
     }
   end
 
@@ -242,7 +248,14 @@ defmodule Cyfr.Providers.Attention do
   end
 
   defp item(kind, id, label, since, destination),
-    do: %{kind: kind, id: id, label: label, since: since, destination: destination}
+    do: %{
+      kind: kind,
+      id: id,
+      label: label,
+      since: since,
+      destination: destination,
+      outcome: nil
+    }
 
   defp page(page, ref) when page in @pages, do: %{kind: "page", page: page, ref: ref}
 
@@ -266,9 +279,14 @@ defmodule Cyfr.Providers.Attention do
             "ref" => %{"type" => "string", "nullable" => true}
           },
           "required" => ["kind", "page", "ref"]
+        },
+        "outcome" => %{
+          "type" => "enum",
+          "values" => Enum.map(Cyfr.Bus.Attention.outcomes(), &Atom.to_string/1),
+          "nullable" => true
         }
       },
-      "required" => ["kind", "id", "label", "since", "destination"]
+      "required" => ["kind", "id", "label", "since", "destination", "outcome"]
     })
   end
 

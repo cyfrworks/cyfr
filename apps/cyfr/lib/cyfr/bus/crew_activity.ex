@@ -8,7 +8,8 @@ defmodule Cyfr.Bus.CrewActivity do
   (`activity.changes`): the job's `id` (its turn, the key a reader
   holds it by, since one member may hold several jobs at once), the
   `member` (the crew agent's name), who
-  `asked_by` (a display name, or the agent that asked), `since` when the
+  `asked_by` (a display name, or the agent that asked), its `title` (a
+  short line the asker gave it, or nil), `since` when the
   member took it, and its `status` (named so because the sanitizer
   reads a bare `state` as an OAuth secret). `ended` is a job that left the
   member's open work. Never the task's text or a person's id.
@@ -17,7 +18,7 @@ defmodule Cyfr.Bus.CrewActivity do
   alias Cyfr.Bus.Payload
 
   @kinds [:started, :ended]
-  @fields [:id, :member, :asked_by, :since, :status]
+  @fields [:id, :member, :asked_by, :title, :since, :status]
 
   @enforce_keys [:athanor_id, :kind]
   defstruct [:athanor_id, :kind | @fields]
@@ -30,6 +31,7 @@ defmodule Cyfr.Bus.CrewActivity do
           id: String.t() | nil,
           member: String.t() | nil,
           asked_by: String.t() | nil,
+          title: String.t() | nil,
           since: DateTime.t() | nil,
           status: String.t() | nil
         }

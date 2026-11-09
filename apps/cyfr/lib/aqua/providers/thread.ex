@@ -116,7 +116,7 @@ defmodule Aqua.Providers.Thread do
       %Prima.Provider.Stream{
         name: "activity.changes",
         topic: :crew_activity,
-        projection: ["kind", "id", "member", "asked_by", "since", "status"],
+        projection: ["kind", "id", "member", "asked_by", "title", "since", "status"],
         deadline_bound: @deadline_bound,
         shape: activity_shape(),
         refresh: {Aqua.Crew.Activity, :open}
@@ -154,10 +154,11 @@ defmodule Aqua.Providers.Thread do
         "id" => %{"type" => "string"},
         "member" => %{"type" => "string"},
         "asked_by" => %{"type" => "string", "max" => 4096, "nullable" => true},
+        "title" => %{"type" => "string", "max" => Aqua.Crew.title_max(), "nullable" => true},
         "since" => %{"type" => "time", "nullable" => true},
         "status" => %{"type" => "enum", "values" => Prima.TurnState.statuses()}
       },
-      "required" => ["kind", "id", "member", "asked_by", "since", "status"]
+      "required" => ["kind", "id", "member", "asked_by", "title", "since", "status"]
     })
   end
 
@@ -590,6 +591,11 @@ defmodule Aqua.Providers.Thread do
               description:
                 "ask: the job, with everything the member needs to do it (at most 32 KiB)",
               max: 32768
+            ),
+            Arg.new("title", :string,
+              description:
+                "ask: a short title for the job, plain text on one line of at most #{Aqua.Crew.title_max()} characters, that a desktop shows for it; omit for none",
+              max: Aqua.Crew.title_max()
             ),
             Arg.new("tools", {:array, Arg.new(nil, :string)},
               description:

@@ -144,6 +144,14 @@ defmodule Compendium.Tincture.Rules do
   @feed_press "feed.press"
   @persons_actions Enum.uniq(Caps.agent_only_tools() ++ [@feed_press])
 
+  # The one `execute` a desktop's control runs besides a feed's press,
+  # admitted by its exact name: a retry runs again a run the person
+  # already ran, with its component, input and the grant revision it ran
+  # under (`Opus.Provider`), so it composes nothing the person has not
+  # approved. Every other `execute` stays refused until a control can be
+  # previewed.
+  @execution_retry "execution.retry"
+
   # The operations a desktop's control never runs while no frame can ask
   # the person for them: each tool only an agent asks for, which binds or
   # ends a feed, schedules or rearranges the screen. Every operation that
@@ -728,8 +736,8 @@ defmodule Compendium.Tincture.Rules do
   Whether a desktop's controls are ones it may offer today, read against
   the operation table (`Sanctum.Catalog.operations/0`) and `streams`, as
   `check_streams/2` takes them. Each control's operation is looked up by
-  name: `#{@feed_press}`, or a `write` the person makes directly, is
-  admitted; an operation the catalog does not hold, a person-only act (a
+  name: `#{@feed_press}`, `#{@execution_retry}`, or a `write` the person
+  makes directly, is admitted; an operation the catalog does not hold, a person-only act (a
   tool only an agent asks for, `#{Enum.join(@persons_controls, "`, `")}`,
   or any operation that asks for the person's confirmation, a grant among
   them), an administrator's (`scope: :platform` or the `admin`
@@ -768,7 +776,7 @@ defmodule Compendium.Tincture.Rules do
 
   defp control_operation(%Prima.Operation{} = declared, operation, where) do
     cond do
-      operation == @feed_press ->
+      operation in [@feed_press, @execution_retry] ->
         {:ok, declared}
 
       operation in @persons_controls or not is_nil(declared.consent) ->
@@ -789,7 +797,7 @@ defmodule Compendium.Tincture.Rules do
       true ->
         refuse(
           "#{where} runs #{operation}, which is #{kind_sentence(declared.kind)}: " <>
-            "a control runs a write or #{@feed_press}"
+            "a control runs a write, #{@feed_press} or #{@execution_retry}"
         )
     end
   end
