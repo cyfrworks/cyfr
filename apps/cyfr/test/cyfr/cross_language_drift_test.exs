@@ -422,7 +422,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(protocol common_fields purpose_fields keys proofs verify exchange)}
     ],
     "feed.json" => [
-      {"apps/cyfr/test/opus/feeds_test.exs", ~w(bindings outputs)},
+      {"apps/cyfr/test/opus/feeds_test.exs", ~w(bindings inputs outputs)},
       {"apps/prima/test/prima/canvas/shape_test.exs", ~w(reasons bindings results)},
       {"apps/prima/test/prima/feed_test.exs",
        ~w(intervals args_max_bytes result_max_bytes reasons bindings binding_ids inputs crons results envelopes bounds)}

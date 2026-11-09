@@ -1643,7 +1643,7 @@ type FeedBindArgs struct {
 	Args any `json:"args"`
 	// bind: how often the feed runs, in minutes: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60
 	IntervalMinutes int `json:"interval_minutes"`
-	// bind: up to 8 labelled actions a canvas may show as controls, [{name, label, kind}]: a refresh reruns the feed; a run runs its own operation and args and publishes nothing
+	// bind: up to 8 labelled actions a canvas may show as controls, [{name, label, kind}]: a refresh reruns the feed; a run runs its own operation and args and publishes nothing, and may name in pick the one argument of its operation, absent from its args, that a press's picked value fills
 	Actions any `json:"actions"`
 }
 
@@ -1675,6 +1675,8 @@ type FeedPressArgs struct {
 	Binding string `json:"binding"`
 	// press: the name of one of the feed's actions
 	ActionName string `json:"action_name"`
+	// press: the value a desktop's control picked, which fills the argument the action's pick names; given exactly when the action names a pick
+	Pick Field[string] `json:"pick,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

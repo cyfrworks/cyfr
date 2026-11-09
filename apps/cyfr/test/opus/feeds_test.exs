@@ -12,7 +12,8 @@ defmodule Opus.FeedsTest do
   and a feed announces no schedule completion and no schedule update. A
   fire publishes an accepted result on the athanor's feeds topic once its
   accept committed, and a refused, stale or fenced-off result publishes
-  nothing.
+  nothing. A press of a picked action runs with the value it was pressed
+  with, and is refused without one.
 
   The fires run through the real scheduler path with the scripted worker
   service the scheduler's own suite uses: everything but the component is
@@ -916,6 +917,37 @@ defmodule Opus.FeedsTest do
                      Map.take(before, [:feed_result, :feed_result_seq, :feed_result_at]),
                    why
         end
+      end
+    end
+  end
+
+  describe "the picked inputs of tests/fixtures/feed.json" do
+    test "a press with the row's picked value runs its input; without it, it runs nothing", %{
+      ctx: ctx,
+      actor: actor
+    } do
+      %{"bindings" => %{"valid" => bindings}, "inputs" => inputs} =
+        @vectors_path |> File.read!() |> Jason.decode!()
+
+      picked = for %{"pick" => _} = row <- inputs, do: row
+      assert picked != []
+      prism = Sanctum.TestContext.via(ctx, :prism)
+      script!(for _ <- picked, do: %{})
+
+      for {%{"why" => why, "binding" => index, "action" => at, "pick" => value} = row, n} <-
+            Enum.with_index(picked) do
+        {:ok, binding} = Prima.Feed.Binding.validate(Enum.at(bindings, index)["binding"])
+        {:ok, feed} = bind(actor, %{binding | name: "picked-#{n}"})
+        %Prima.Feed.Action{name: name, pick: arg} = Enum.at(binding.actions, at)
+        before = length(ScriptedWorker.calls())
+
+        assert Feeds.press(prism, feed.id, name, nil) ==
+                 {:error, {:invalid_argument, "action #{name} takes a pick, which fills #{arg}"}},
+               why
+
+        assert length(ScriptedWorker.calls()) == before, why
+        assert {:ok, %{status: "completed"}} = Feeds.press(prism, feed.id, name, value), why
+        assert List.last(ScriptedWorker.calls()).input == row["input"], why
       end
     end
   end

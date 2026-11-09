@@ -16,8 +16,9 @@ defmodule Opus.Providers.Feed do
       revision and time of the last accepted result. Never the arguments
       or a result's value.
     * `remove` removes a feed by its binding id (`Opus.Feeds.remove/2`).
-    * `press` presses one of a feed's actions by its binding id
-      (`Opus.Feeds.press/3`). It is external only: Prism calls it for the
+    * `press` presses one of a feed's actions by its binding id, with
+      the value a desktop's control picked when the action names a pick
+      (`Opus.Feeds.press/4`). It is external only: Prism calls it for the
       visible canvas's press, only within moments of the person's own
       input, never from a script on its own, and a canvas's code has no
       verb that binds, changes or refreshes a feed.
@@ -109,7 +110,9 @@ defmodule Opus.Providers.Feed do
               description:
                 "bind: up to #{Prima.Feed.Binding.max_actions()} labelled actions a canvas may " <>
                   "show as controls, [{name, label, kind}]: a refresh reruns the feed; a run " <>
-                  "runs its own operation and args and publishes nothing"
+                  "runs its own operation and args and publishes nothing, and may name in pick " <>
+                  "the one argument of its operation, absent from its args, that a press's " <>
+                  "picked value fills"
             )
           ],
           kind: :external,
@@ -145,6 +148,11 @@ defmodule Opus.Providers.Feed do
             Arg.new("action_name", :string,
               required: true,
               description: "press: the name of one of the feed's actions"
+            ),
+            Arg.new("pick", :string,
+              description:
+                "press: the value a desktop's control picked, which fills the argument the " <>
+                  "action's pick names; given exactly when the action names a pick"
             )
           ],
           kind: :execute,
@@ -175,12 +183,12 @@ defmodule Opus.Providers.Feed do
   def handle("feed", %Context{} = ctx, %{"action" => "remove", "binding" => binding}),
     do: Feeds.remove(ctx, binding)
 
-  def handle("feed", %Context{} = ctx, %{
-        "action" => "press",
-        "binding" => binding,
-        "action_name" => action
-      }),
-      do: Feeds.press(ctx, binding, action)
+  def handle(
+        "feed",
+        %Context{} = ctx,
+        %{"action" => "press", "binding" => binding, "action_name" => action} = args
+      ),
+      do: Feeds.press(ctx, binding, action, Map.get(args, "pick"))
 
   @doc """
   The streams a canvas reads: `feed.results` and `runs.changes`, each with
