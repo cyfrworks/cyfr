@@ -329,7 +329,7 @@ defmodule Cyfr.Cluster.Cell do
 
     members =
       for {{id, worker}, port} <-
-            Enum.zip([{:a, "wrk_cell_a"}, {:b, "wrk_cell_b"}], host_api_ports(2)) do
+            Enum.zip([{:a, "wrk_cell_a"}, {:b, "wrk_cell_b"}], host_api_ports(2, candidates())) do
         %{
           id: id,
           node: node_name(id),
@@ -676,11 +676,12 @@ defmodule Cyfr.Cluster.Cell do
 
   # Stop every member this process started, newest first, then wait for
   # each node's name to be released, so the next cell of the run can
-  # take it.
+  # take it, and only then give up the members' port claims.
   defp release_all do
     ids = Enum.map(Process.get(@started, []), &elem(&1, 0))
     Enum.each(ids, &stop_started/1)
     Enum.each(ids, &await_released/1)
+    Enum.each(Process.delete(@claims) || [], &:gen_tcp.close/1)
   end
 
   # Stop `id`'s node if this process started one, and wait for its name.
@@ -779,18 +780,28 @@ defmodule Cyfr.Cluster.Cell do
   # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp node_name(id), do: :"#{Map.fetch!(node_names(), id)}@127.0.0.1"
 
-  # A loopback port for each member to bind and to advertise, distinct
-  # and free now. A member keeps its port across every reboot of the run,
-  # and while it is down nothing holds the port for it, so the port is
-  # taken from below the kernel's ephemeral range: every bind to port 0
-  # on this host (a member's distribution listener, its endpoint, a
-  # scripted worker, a wire) and every outgoing connection draw from that
-  # range, and one of them could otherwise take a down member's port
-  # before it boots again. What remains is a listener of another program
-  # on a fixed port, which a boot is refused naming (`Cyfr.Cluster.Boot`).
+  # A loopback port for each member to bind and to advertise, distinct,
+  # free now and this cell's for its whole life. A member keeps its port
+  # across every reboot of the run, and while it is down its listener
+  # holds nothing, so two things keep the port its own:
+  #
+  #   * it is taken from below the kernel's ephemeral range: every bind
+  #     to port 0 on this host (a member's distribution listener, its
+  #     endpoint, a scripted worker, a wire) and every outgoing connection
+  #     draw from that range;
+  #   * it is claimed: this process binds a Linux abstract socket named
+  #     for the port (`claim_name/1`), which another run's picker on this
+  #     host cannot bind and skips. The kernel releases the name with the
+  #     socket, so the claim ends with this process however it ends, and
+  #     `release_all/0` closes it once the members are stopped.
+  #
+  # What remains is a listener of another program on a fixed port, which
+  # a boot is refused naming (`Cyfr.Cluster.Boot`).
   @port_floor 20_000
+  @claims {__MODULE__, :claims}
 
-  defp host_api_ports(count) do
+  # The ports to try, at random below the ephemeral range.
+  defp candidates do
     ceiling = ephemeral_low() - 1
 
     if ceiling - @port_floor < 1_000 do
@@ -798,16 +809,39 @@ defmodule Cyfr.Cluster.Cell do
               "from #{@port_floor} for the members' host API ports"
     end
 
-    ports =
-      Stream.repeatedly(fn -> Enum.random(@port_floor..ceiling) end)
-      |> Stream.take(100)
-      |> Stream.uniq()
-      |> Stream.filter(&Cyfr.Cluster.Boot.port_free?/1)
-      |> Enum.take(count)
+    Stream.repeatedly(fn -> Enum.random(@port_floor..ceiling) end) |> Stream.take(100)
+  end
 
-    if length(ports) < count, do: raise("no free host API ports below #{ceiling + 1}")
+  @doc false
+  # The first `count` of `candidates` this process can claim and bind,
+  # each claimed for as long as this process lives. Public for
+  # cell_test.exs, which picks as another run on this host would.
+  @spec host_api_ports(pos_integer(), Enumerable.t()) :: [:inet.port_number()]
+  def host_api_ports(count, candidates) do
+    ports = candidates |> Stream.uniq() |> Stream.filter(&claim/1) |> Enum.take(count)
+    if length(ports) < count, do: raise("no #{count} free, unclaimed host API ports")
     ports
   end
+
+  defp claim(port) do
+    case :gen_tcp.listen(0, ifaddr: {:local, claim_name(port)}) do
+      {:ok, socket} ->
+        if Cyfr.Cluster.Boot.port_free?(port) do
+          Process.put(@claims, [socket | Process.get(@claims, [])])
+          true
+        else
+          :gen_tcp.close(socket)
+          false
+        end
+
+      {:error, :eaddrinuse} ->
+        false
+    end
+  end
+
+  # An abstract name (the leading zero byte): no file, one per network
+  # namespace, gone with the last socket bound to it.
+  defp claim_name(port), do: <<0, "cyfr-cluster-host-api-port-#{port}">>
 
   # The low end of the kernel's ephemeral port range: Linux's own setting,
   # else IANA's dynamic range, which BSD and macOS hand out from.

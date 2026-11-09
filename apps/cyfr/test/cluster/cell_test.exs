@@ -280,6 +280,21 @@ defmodule Cyfr.Cluster.CellTest do
       assert Enum.all?(ports, &(&1 < low)), "#{inspect(ports)} not all below #{low}"
     end
 
+    test "a down member's port stays this run's, so another run's picker passes it by" do
+      %{host_api_port: down} = Cell.member(:b)
+      %{host_api_port: up} = Cell.member(:a)
+      Cell.stop(:b)
+
+      # Picked from another process, as another run's cell on this host
+      # picks, offered the two members' ports first.
+      picked =
+        Task.async(fn -> Cell.host_api_ports(1, [down, up | Enum.to_list(20_000..20_100)]) end)
+        |> Task.await()
+
+      assert [port] = picked
+      refute port in [down, up]
+    end
+
     test "a boot finding its port held waits for the release, and is refused naming the port " <>
            "when it does not come" do
       %{host_api_port: port, worker: worker} = Cell.member(:b)
