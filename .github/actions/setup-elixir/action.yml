@@ -12,8 +12,22 @@
 # into the caches their compiles read there, because their own downloads
 # fail (the script's header says why). The fetch needs the fetched deps, so it
 # cannot run here, before them.
+#
+# What that fetch lays down, and the pinned wasm-tools scripts/wasm-tools.sh
+# installs at _tools/wasm-tools, are restored here from the Actions cache,
+# for every caller that caches: each script keeps a file in place that
+# passes its check, so a warm cache makes no download from GitHub's
+# releases, and a cold one downloads what it lacks and is saved when the
+# job ends. The NIFs are keyed by the platform, the OTP release they load
+# into and mix.lock, which changes with every bump of a dep that ships one,
+# so a set that gained a file is saved under a key of its own; under a new
+# lock the newest earlier set is restored, the fetch keeps each file it
+# still names (checked against its dep's checksum file) and downloads only
+# a bumped dep's, and a new OTP release starts the set afresh. wasm-tools
+# is keyed by the platform and its pinned version, so a bump of the pin
+# downloads it once.
 name: Set up Elixir
-description: Set up Erlang and Elixir at the pinned versions and cache deps, and _build when build-cache is true
+description: Set up Erlang and Elixir at the pinned versions and cache deps, the prebuilt binaries, and _build when build-cache is true
 inputs:
   cache-key-prefix:
     description: The caller's own cache key segment, distinct from every other job's; none when build-cache is none
@@ -71,3 +85,23 @@ runs:
         path: deps
         key: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
         restore-keys: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+    - name: Cache the prebuilt NIFs
+      if: inputs.build-cache != 'none'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cache/rustler_precompiled
+          ~/.cache/elixir_make
+        key: ${{ runner.os }}-${{ runner.arch }}-prebuilt-nifs-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-prebuilt-nifs-${{ steps.beam.outputs.otp-version }}-
+    - name: The pinned wasm-tools version
+      id: wasm-tools
+      if: inputs.build-cache != 'none'
+      shell: bash
+      run: echo "version=$(scripts/wasm-tools.sh version)" >> "$GITHUB_OUTPUT"
+    - name: Cache the pinned wasm-tools
+      if: inputs.build-cache != 'none'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: _tools/wasm-tools
+        key: ${{ runner.os }}-${{ runner.arch }}-wasm-tools-${{ steps.wasm-tools.outputs.version }}
