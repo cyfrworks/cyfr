@@ -1124,7 +1124,7 @@ window.RoadScene = function () {
     const list = attention();
     if (on('attention')) add('queue', 'house', list.length + ' waiting at your house. Open the list.');
     else add('queue', 'house', 'Your house');
-    if (on('threads')) add('threads', 'post', 'Post boxes: ' + S.threads.size + ' threads, ' + threads().filter((t) => t.waits).length + ' waiting on you');
+    if (on('threads')) add('threads', 'post', 'Post boxes: ' + S.threads.size + (S.threads.size === 1 ? ' thread, ' : ' threads, ') + threads().filter((t) => t.waits).length + ' waiting on you');
     if (on('activity')) add('crew', 'crew', 'Crew house: ' + S.activity.size + ' at work');
     if (on('components')) add('market', 'market', 'Market: ' + S.installed.length + ' apps');
     if (on('schedules')) { add('tower', 'tower', 'Bell tower: ' + S.schedules.size + ' schedules'); add('press', 'press', 'Press: runs that failed'); add('barn', 'barn', 'Barn: paused schedules'); }
