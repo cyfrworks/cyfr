@@ -6,8 +6,10 @@ defmodule Prism.CanvasValidationTest do
   A candidate canvas version trialled on the glass, through the shell
   (`Prism.CanvasValidation`, `PrismWeb.ShellLive`): one case per outcome.
   The page's `ready` activates the version; the deadline records
-  `not_ready`; a failure at either stage or the frame's death records
-  `died`; a member that lost its slot activates and records nothing.
+  `not_ready` once the page loaded, and records nothing for a page that
+  never loaded, which the next decision trials again; a failure at either
+  stage or the frame's death records `died`; a member that lost its slot
+  activates and records nothing.
   After every outcome, a refused activation included, the frame is no
   longer held and its validation credential's row is revoked. A version
   restored is not trialled again until a newer one is installed; a
@@ -182,6 +184,12 @@ defmodule Prism.CanvasValidationTest do
         "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
       })
 
+  # The trial's page loaded: its bridge asks for the frame's handshake.
+  defp handshake!(view, frame_id) do
+    render_hook(view, "frame_handshake", %{"frame" => frame_id})
+    assert_reply(view, %{"credential" => _, "canvas" => _})
+  end
+
   # The trial ended: its frame is not held, nor rendered, and its
   # credential's row is revoked.
   defp torn_down!(view, trial) do
@@ -271,13 +279,14 @@ defmodule Prism.CanvasValidationTest do
       assert assigns(view).fallbacks == %{}
     end
 
-    test "not ready by the deadline records not_ready, and the working version opens",
+    test "not ready by the deadline once its page loaded records not_ready, and the working version opens",
          %{conn: conn, ctx: ctx} do
       canvas!(ctx, "markets", "1.0.1")
       versions!(ctx, %{working: "1.0.0"})
       view = shell!(conn)
       assert %{reference: %{version: "1.0.1"}} = trial = trial(view)
 
+      handshake!(view, trial.id)
       send(view.pid, {:validation_deadline, trial.id})
       _ = render(view)
 
@@ -296,6 +305,35 @@ defmodule Prism.CanvasValidationTest do
       send(view.pid, {:validation_deadline, trial.id})
       _ = render(view)
       assert stored(ctx).revision == revision
+    end
+
+    test "a deadline before the page loaded, as a reload of the shell leaves a trial, records nothing, and the next decision trials the version again",
+         %{conn: conn, ctx: ctx} do
+      canvas!(ctx, "markets", "1.0.1")
+      versions!(ctx, %{working: "1.0.0"})
+      before = stored(ctx)
+      view = shell!(conn)
+      assert %{reference: %{version: "1.0.1"}} = trial = trial(view)
+
+      # The browser abandoned the trial's page as the shell reloaded, so
+      # its bridge saw no load and asked for no handshake.
+      send(view.pid, {:validation_deadline, trial.id})
+      _ = render(view)
+
+      torn_down!(view, trial)
+      assert stored(ctx) == before
+      assert %{state: :live, reference: %{version: "1.0.0"}} = live_canvas(view)
+
+      # The next decision, the shell loaded again, trials 1.0.1 anew.
+      again = shell!(conn)
+      assert %{reference: %{version: "1.0.1"}} = retrial = trial(again)
+      refute retrial.id == trial.id
+
+      handshake!(again, retrial.id)
+      verb!(again, retrial.id, :ready)
+
+      torn_down!(again, retrial)
+      assert %{working: "1.0.1", kept: "1.0.0", failed: nil} = stored(ctx).document
     end
 
     test "a failure at load records died, and with no working version falls back not_validated",
