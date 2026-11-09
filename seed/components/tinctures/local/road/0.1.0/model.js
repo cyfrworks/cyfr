@@ -5,12 +5,11 @@
 (function () {
   const sdk = window.cyfr || null;
 
-  // Each stream stays open while the part that reads it is on. Every open holds a connection to
-  // CYFR for as long as it runs, and a browser keeps six to one host over HTTP/1.1 (the shell and
-  // its apps need the rest), so there the village reads five at once; over HTTP/2 it reads the
-  // eight a desktop may open.
-  const protocol = (() => { try { return performance.getEntriesByType('navigation')[0].nextHopProtocol || ''; } catch (e) { return ''; } })();
-  const BUDGET = /^(h2|h3)/.test(protocol) ? 8 : 5;
+  // Each stream stays open while the part that reads it is on, and the village reads at most five
+  // at once, whatever the connection: every open holds a connection to CYFR for as long as it
+  // runs, and a browser keeps six to one host over HTTP/1.1, the shell and its apps needing the
+  // rest. Five holds until one connection carries a frame's streams.
+  const BUDGET = 5;
   // The controls the manifest declares, each picking a schedule's id.
   const PAUSE = 'pause-schedule', RESUME = 'resume-schedule';
   // Pauses before opening an ended stream again, growing while opens fail.

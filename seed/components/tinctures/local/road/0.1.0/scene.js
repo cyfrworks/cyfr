@@ -229,7 +229,8 @@ window.RoadScene = function () {
   let millAngle = 0, tramPos = 0, tramDir = 1, tramWait = 0, towerRing = 0;
 
   // ---- interaction state ---------------------------------------------------------------------
-  let card = null, planSel = null;
+  // The open card, the part picked in the Plan, and the page of the card's rows shown.
+  let card = null, planSel = null, cardPage = 0;
   const pending = { weather: null, vpn: null, sched: new Set() };
 
   R.subscribe((ch) => {
@@ -396,8 +397,8 @@ window.RoadScene = function () {
     const q = list[j];
     write({ [p]: R.entry(p, { order: j + 1 }), [q]: R.entry(q, { order: i + 1 }) });
   }
-  function openCard(key) { const m = key && cardModel(key); if (!m) return; card = key; announce(m.title + '. ' + (m.lines || []).join(' ')); wake(); }
-  function closeCard() { card = null; planSel = null; }
+  function openCard(key) { const m = key && cardModel(key); if (!m) return; if (key !== card) cardPage = 0; card = key; announce(m.title + '. ' + (m.lines || []).join(' ')); wake(); }
+  function closeCard() { card = null; planSel = null; cardPage = 0; }
   function partCentre(part) {
     const b = L.blds;
     const at = { weather: L.mill && { x: L.mill.x, y: L.mill.y - 20 }, vpn: { x: L.stopX + 20, y: L.track.y - 20 }, activity: b.crew && { x: b.crew.x + 20, y: b.crew.ground - 30 },
@@ -1042,11 +1043,15 @@ window.RoadScene = function () {
     const all = m.rows || [];
     const cols = all.length > 6 && tw > 420 ? 3 : all.length > 3 && tw > 300 ? 2 : 1;
     const rowH = 22;
-    // rows past what fits above the choices are left for the page their choice opens
+    // the rows that fit above the choices, a page at a time: the next page is one tap away, so
+    // every row, every part of the Plan among them, stays reachable at any size
     const maxRows = Math.max(1, Math.floor((H * 0.62 - 60 - lines.length * 11) / (rowH + 2))) * cols;
-    const rows = all.slice(0, maxRows);
+    const pages = Math.max(1, Math.ceil(all.length / maxRows));
+    const page = Math.min(cardPage, pages - 1);
+    const rows = all.slice(page * maxRows, (page + 1) * maxRows);
     const rowsH = Math.ceil(rows.length / cols) * (rowH + 2);
-    const ch = m.noClose ? m.choices : [...m.choices, { label: 'Close', close: true }];
+    const more = pages > 1 ? [{ label: 'More ' + (page + 1) + '/' + pages, more: true, run: () => { cardPage = (page + 1) % pages; } }] : [];
+    const ch = [...more, ...(m.noClose ? m.choices : [...m.choices, { label: 'Close', close: true }])];
     const cw = ch.map((x) => F.measure(x.label) + 18);
     let cx = tx, cy = 0, chRows = 1; const chPos = [];
     for (let i = 0; i < ch.length; i++) { if (cx + cw[i] > c.x + c.w - pad && cx > tx) { cx = tx; cy += 26; chRows++; } chPos.push({ x: cx, y: cy, w: cw[i] }); cx += cw[i] + 6; }
@@ -1149,7 +1154,8 @@ window.RoadScene = function () {
       const cb = cardBox;
       hit('cardbg', cb.x, cb.y, cb.w, cb.h, '', () => {}, { exact: true, z: 5, tab: -1 });
       cb.rows.forEach((r) => { hit('row' + r.i, r.x, r.y, r.w, r.h, r.r.text + ', ' + r.r.sub, r.r.run, { exact: true, z: 6, pressed: r.r.toggle != null ? !!r.r.sel : null }); if (r.tg) hit('tg' + r.i, r.tg.x, r.tg.y, r.tg.w, r.tg.h, (r.r.toggle ? 'Turn off ' : 'Turn on ') + r.r.text, r.r.flip, { exact: true, z: 6, pressed: r.r.toggle }); });
-      cb.choices.forEach((c, i) => hit('ch' + i + c.c.label, c.x, c.y, c.w, c.h, c.c.label, c.c.close ? closeCard : c.c.run, { exact: true, z: 6, disabled: c.c.disabled }));
+      const more = card === 'plan' ? 'More parts, page ' : 'More rows, page ';
+      cb.choices.forEach((c, i) => hit('ch' + i + c.c.label, c.x, c.y, c.w, c.h, c.c.more ? more + c.c.label.slice(5).replace('/', ' of ') : c.c.label, c.c.close ? closeCard : c.c.run, { exact: true, z: 6, disabled: c.c.disabled }));
     }
     hitsDone();
   }

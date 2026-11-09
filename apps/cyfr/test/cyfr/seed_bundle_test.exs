@@ -213,6 +213,79 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert "dist/third-party-notices.json" in built
   end
 
+  test "the road desktop is 0.1.0 on the vanilla template, and the publish check accepts it" do
+    road = SeedBundle.local_unit!("tinctures", "road")
+    assert road.ref == "tincture:local.road"
+    assert road.version == "0.1.0"
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), road.rel)
+
+    assert Prima.Manifest.validate(road.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(road.manifest)
+    assert Prima.Manifest.Tincture.canvas?(declaration)
+    assert Compendium.tincture_entry(road.manifest) == {:ok, "index.html"}
+    refute Compendium.tincture_lockfile_required?(road.manifest)
+
+    # What its parts read, the two feeds among them; the page opens at most
+    # five of these at once, a part's only while it is on.
+    assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
+             {"attention.changes", nil},
+             {"schedules.changes", nil},
+             {"schedule_runs.changes", nil},
+             {"threads.changes", nil},
+             {"activity.changes", nil},
+             {"vault.changes", nil},
+             {"feed.results", "weather"},
+             {"feed.results", "vpn"}
+           ]
+
+    assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
+    assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+
+    # It pauses and resumes a schedule, picked from the schedules it reads.
+    pick = %Prima.Manifest.Tincture.Pick{
+      stream: "schedules.changes",
+      field: "/schedule_id",
+      arg: "schedule_id"
+    }
+
+    assert [
+             %{id: "pause-schedule", operation: "schedule.pause", args: %{}, pick: ^pick},
+             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick}
+           ] = declaration.desktop.controls
+
+    # Every part keeps whether it is on; the street's parts keep their
+    # order, and the windmill its unit.
+    assert Map.keys(declaration.desktop.prefs.widgets) |> Enum.sort() ==
+             ~w(activity attention components schedules threads vault vpn weather)
+
+    # Its chrome: both modes' colours, the village's pixel face shipped as
+    # WOFF2, its paving and tiles as textures.
+    assert {:ok, tokens} =
+             Compendium.tincture_check_chrome(declaration, &File.read(Path.join(dir, &1)))
+
+    assert %{
+             "radius" => 0,
+             "glyphs" => "pixel",
+             "font" => "Road Pixel",
+             "texture-title" => "azulejo.svg",
+             "texture-shelf" => "calcada.svg",
+             "light" => %{},
+             "dark" => %{}
+           } = tokens
+
+    assert [%{"src" => "road-pixel.woff2"}] = tokens["fonts"]
+    assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: Path.relative_to(path, dir)
+
+    assert Enum.sort(files) ==
+             ~w(art.js azulejo.svg boot.js calcada.svg chrome.css cyfr-manifest.json font.js
+                index.html list.js model.js road-pixel.woff2 scene.js)
+  end
+
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"
