@@ -10,7 +10,8 @@ defmodule Cyfr.ReleaseChannelTest do
   malformed tags; and the process, on a read and a clock of the test's
   own, which serves its answer without waiting, reads a stale one once in
   the background, keeps the last answer through a failure and tries again
-  no sooner than an hour later. Nothing here reaches GitHub.
+  no sooner than an hour later, and ends its read when it stops or dies.
+  Nothing here reaches GitHub.
   """
 
   use ExUnit.Case, async: true
@@ -193,6 +194,36 @@ defmodule Cyfr.ReleaseChannelTest do
       read_ended(channel)
       assert ReleaseChannel.update_available(channel) == nil
       refute_received {:fetched, _}
+    end
+  end
+
+  # A read the channel started is the channel's: whether the channel stops
+  # or is killed, its blocked read ends with it.
+  for ending <- [:stop, :kill] do
+    @ending ending
+    test "the release read ends when its channel ends by #{ending}" do
+      caller = self()
+
+      fetch = fn ->
+        send(caller, {:read_started, self()})
+
+        receive do
+          :answer -> {:error, :unavailable}
+        end
+      end
+
+      {:ok, channel} = ReleaseChannel.start_link(name: nil, fetch: fetch)
+      Process.unlink(channel)
+      assert ReleaseChannel.update_available(channel) == nil
+      assert_receive {:read_started, reader}
+      on_exit(fn -> if Process.alive?(reader), do: Process.exit(reader, :kill) end)
+
+      channel_monitor = Process.monitor(channel)
+      reader_monitor = Process.monitor(reader)
+      if @ending == :stop, do: GenServer.stop(channel), else: Process.exit(channel, :kill)
+
+      assert_receive {:DOWN, ^channel_monitor, :process, ^channel, _}
+      assert_receive {:DOWN, ^reader_monitor, :process, ^reader, _}, 1_000
     end
   end
 

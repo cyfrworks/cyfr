@@ -104,6 +104,10 @@ defmodule Cyfr.ReleaseChannel do
 
   @impl true
   def init(opts) do
+    # The read is the channel's own: linked to it, so the channel's death
+    # takes the read with it, and ended in `terminate/2` when it stops.
+    Process.flag(:trap_exit, true)
+
     {:ok,
      %{
        fetch: Keyword.get(opts, :fetch, &fetch/0),
@@ -120,8 +124,7 @@ defmodule Cyfr.ReleaseChannel do
     do: {:reply, state.answer, maybe_read(state)}
 
   @impl true
-  def handle_info({tag, answer}, %{reading: {tag, monitor}} = state) do
-    Process.demonitor(monitor, [:flush])
+  def handle_info({tag, answer}, %{reading: {tag, _reader}} = state) do
     now = state.clock.()
 
     case answer do
@@ -134,10 +137,14 @@ defmodule Cyfr.ReleaseChannel do
     end
   end
 
-  def handle_info({:DOWN, monitor, :process, _pid, _reason}, %{reading: {_tag, monitor}} = state) do
+  # A read's own exit: after its answer, nothing more; before one, a
+  # failure.
+  def handle_info({:EXIT, reader, _reason}, %{reading: {_tag, reader}} = state) do
     Logger.info("[Cyfr.ReleaseChannel] the release channel's read ended without an answer")
     {:noreply, %{state | reading: nil, failed_at: state.clock.()}}
   end
+
+  def handle_info({:EXIT, _reader, _reason}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
     Prima.LoggerContext.unexpected(__MODULE__, msg)
@@ -145,7 +152,7 @@ defmodule Cyfr.ReleaseChannel do
   end
 
   defp maybe_read(%{fetch: false} = state), do: state
-  defp maybe_read(%{reading: {_tag, _monitor}} = state), do: state
+  defp maybe_read(%{reading: {_tag, _reader}} = state), do: state
 
   defp maybe_read(state) do
     now = state.clock.()
@@ -156,12 +163,20 @@ defmodule Cyfr.ReleaseChannel do
       fetch = state.fetch
       channel = self()
       tag = make_ref()
-      # The read's answer comes as a message, and its monitor tells of a
-      # read that ended without one.
-      {_pid, monitor} = spawn_monitor(fn -> send(channel, {tag, answer(fetch.())}) end)
-      %{state | reading: {tag, monitor}}
+      # The read's answer comes as a message, and its exit tells of a read
+      # that ended without one.
+      reader = spawn_link(fn -> send(channel, {tag, answer(fetch.())}) end)
+      %{state | reading: {tag, reader}}
     end
   end
+
+  @impl true
+  def terminate(_reason, %{reading: {_tag, reader}}) do
+    Process.exit(reader, :kill)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
 
   defp within?(nil, _now, _ms), do: false
   defp within?(at, now, ms), do: now - at < ms
