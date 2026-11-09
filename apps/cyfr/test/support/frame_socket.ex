@@ -11,7 +11,7 @@ defmodule Cyfr.Test.FrameSocket do
   pushes reaches the test, decoded, as `{:socket, pid, message}`, and its
   close as `{:socket_closed, pid, code, reason}`.
 
-  Beside it, `ws_open/2`, `ws_send/2` and `ws_recv/2`: a WebSocket client
+  Beside it, `ws_open/3`, `ws_send/2` and `ws_recv/2`: a WebSocket client
   over a raw TCP socket, as far as a case over a real listener needs one.
   """
 
@@ -148,9 +148,14 @@ defmodule Cyfr.Test.FrameSocket do
 
   # ---- a WebSocket client over a raw TCP socket ---------------------------------
 
-  @doc "Open a WebSocket to `path` on the listener at `port`, answered 101."
-  @spec ws_open(:inet.port_number(), String.t()) :: :gen_tcp.socket()
-  def ws_open(port, path) do
+  @doc """
+  Open a WebSocket to `path` on the listener at `port`, answered 101,
+  sending `headers` beside the upgrade's own: by default a sandboxed
+  frame's `Origin: null`.
+  """
+  @spec ws_open(:inet.port_number(), String.t(), [{String.t(), String.t()}]) ::
+          :gen_tcp.socket()
+  def ws_open(port, path, headers \\ [{"Origin", "null"}]) do
     {:ok, socket} =
       :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw], 5_000)
 
@@ -160,7 +165,7 @@ defmodule Cyfr.Test.FrameSocket do
       :gen_tcp.send(socket, [
         "GET #{path} HTTP/1.1\r\n",
         "Host: localhost\r\n",
-        "Origin: null\r\n",
+        Enum.map(headers, fn {name, value} -> [name, ": ", value, "\r\n"] end),
         "Upgrade: websocket\r\n",
         "Connection: Upgrade\r\n",
         "Sec-WebSocket-Key: #{key}\r\n",

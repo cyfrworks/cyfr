@@ -137,37 +137,19 @@
           pipe_through: ["tincture_data"]
         },
         %{
-          verb: "OPTIONS",
-          path: "/_f/v1/o/:frame_id/stream",
+          verb: "GET",
+          path: "/_f/v1/o/:frame_id/socket",
           plug: "Emissary.Web.TinctureDataController",
-          plug_opts: ":canvas_stream",
+          plug_opts: ":canvas_socket",
           auth: "frame_credential",
           live_view: nil,
           pipe_through: ["tincture_data"]
         },
         %{
-          verb: "POST",
-          path: "/_f/v1/o/:frame_id/stream",
+          verb: "GET",
+          path: "/_f/v1/socket",
           plug: "Emissary.Web.TinctureDataController",
-          plug_opts: ":canvas_stream",
-          auth: "frame_credential",
-          live_view: nil,
-          pipe_through: ["tincture_data"]
-        },
-        %{
-          verb: "OPTIONS",
-          path: "/_f/v1/stream",
-          plug: "Emissary.Web.TinctureDataController",
-          plug_opts: ":stream",
-          auth: "frame_credential",
-          live_view: nil,
-          pipe_through: ["tincture_data"]
-        },
-        %{
-          verb: "POST",
-          path: "/_f/v1/stream",
-          plug: "Emissary.Web.TinctureDataController",
-          plug_opts: ":stream",
+          plug_opts: ":socket",
           auth: "frame_credential",
           live_view: nil,
           pipe_through: ["tincture_data"]

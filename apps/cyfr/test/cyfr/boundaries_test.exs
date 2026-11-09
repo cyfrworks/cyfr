@@ -1220,19 +1220,20 @@ defmodule Cyfr.BoundariesTest do
       assert Enum.sort(postures) == [
                {:get, "/_c/v1/:credential/:frame_id", :tincture_handler_auth},
                {:get, "/_c/v1/sdk/:file", :tincture_handler_auth},
-               {:options, "/_f/v1/o/:frame_id/stream", :frame_credential},
-               {:post, "/_f/v1/o/:frame_id/stream", :frame_credential}
+               {:get, "/_f/v1/o/:frame_id/socket", :frame_credential}
              ]
 
       # Each posture's sentence names the canvas path it covers.
       assert Boundaries.route_postures().tincture_handler_auth.why =~ "`/_c/v1/`"
       assert Boundaries.route_postures().tincture_handler_auth.why =~ "`/_c/v1/sdk/`"
-      assert Boundaries.route_postures().frame_credential.why =~ "`/_f/v1/o/<frame>/stream`"
+      assert Boundaries.route_postures().frame_credential.why =~ "`/_f/v1/o/<frame>/socket`"
 
-      assert %{plane: :external, origin: :interactive} =
+      # The upgrade admits nothing, so it builds no context: the connection
+      # admits each subscription.
+      assert %{plane: :external, origin: :none} =
                Enum.find(
                  Boundaries.admission_entries(),
-                 &(&1.module == Emissary.Web.TinctureDataController and &1.site == :canvas_stream)
+                 &(&1.module == Emissary.Web.TinctureDataController and &1.site == :canvas_socket)
                )
 
       # The page's pipeline mints no call identity, as the served files'
