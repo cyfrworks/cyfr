@@ -40,9 +40,10 @@ defmodule Cyfr.Providers.Attention do
   names. Nothing an operator decides for the server is an item.
 
   The destination is where the person acts on the item, in one trusted
-  spelling: `{kind: "page", page, ref}` for a page of the console
-  (`chat`, `executions`, `schedules`, `files`) and the record on it (a
-  thread, a run, a schedule or an offer), or `{kind: "ref", page: nil,
+  spelling: `{kind: "page", page, ref}` for where Prism shows it (`chat`,
+  the chat on the desktop, which a canvas opens with `settings`; the
+  Dashboard's `executions`, `schedules` and `files`) and the record there
+  (a thread, a run, a schedule or an offer), or `{kind: "ref", page: nil,
   ref}` for a confirmation, which the system layer presents wherever the
   person is. No field carries a message, a credential, a diagnostic
   sentence or a person's identifier.

@@ -367,8 +367,11 @@ defmodule PrismWeb.AquaPanelLive do
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
 
   # The athanor moved: its seeding ended or it was renamed; read it again.
-  def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, %{assigns: %{phase: :ready}} = socket),
-    do: {:noreply, reload_athanor(socket)}
+  def handle_info(
+        %Cyfr.Bus.Notify{kind: :athanor_changed},
+        %{assigns: %{phase: :ready}} = socket
+      ),
+      do: {:noreply, reload_athanor(socket)}
 
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 

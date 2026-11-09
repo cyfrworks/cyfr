@@ -666,6 +666,25 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{id: ^home, state: :live} = canvas(view)
     end
 
+    test "settings of chat, an attention item's destination, opens the chat overlay in place",
+         %{conn: conn} do
+      view = shell!(conn)
+      home = canvas(view).id
+      chat = find_live_child(view, "chat-overlay")
+      # The overlay has reported in once it rendered connected.
+      render(chat)
+      _ = render(view)
+      refute has_element?(chat, "#chat-sheet")
+
+      verb!(view, home, :settings, %{"page" => "chat"})
+      _ = render(view)
+
+      assert has_element?(chat, "#chat-sheet")
+      assert has_element?(chat, ~s(#chat-button[aria-expanded="true"]))
+      refute_push_event(view, "navigate", _)
+      assert %{id: ^home, state: :live} = canvas(view)
+    end
+
     test "open carries a subject of a kind the app declares to its handshake, and refuses any other",
          %{conn: conn} do
       view = shell!(conn)

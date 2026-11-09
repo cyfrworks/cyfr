@@ -8,6 +8,9 @@ defmodule PrismWeb.ChatOverlayLive do
   assistant. A nested LiveView of the desktop (`PrismWeb.ShellLive`), so it
   stays while the person moves between the pages drawn over the desktop.
 
+  The desktop opens it too, for a canvas's `settings` of `chat` (the
+  attention stream's approvals and the shipped desktops name it so).
+
   Its control stands at the shelf's right end (`#chat-button`, in the
   shelf's chrome) with the number of the person's shared threads that hold
   a message someone else posted after the person last had that thread
@@ -61,6 +64,8 @@ defmodule PrismWeb.ChatOverlayLive do
 
     if connected?(socket) do
       Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(socket.assigns.context.user_id))
+      # The desktop opens the chat for a canvas's `settings` of `chat`.
+      if pid = socket.parent_pid, do: send(pid, {:chat_overlay, self()})
       {:ok, load(socket), layout: false}
     else
       {:ok, socket, layout: false}
@@ -279,6 +284,11 @@ defmodule PrismWeb.ChatOverlayLive do
   # lists and the counts again, and the thread in view again under their
   # seat — renamed, archived, or no longer theirs.
   @impl true
+  def handle_info(:open, %{assigns: %{open: true}} = socket), do: {:noreply, socket}
+
+  def handle_info(:open, socket),
+    do: {:noreply, socket |> assign(:open, true) |> load() |> mark_read() |> announce()}
+
   def handle_info(%Cyfr.Bus.SharedThreadChanged{kind: kind, thread_id: id}, socket) do
     socket =
       case socket.assigns.shared do
