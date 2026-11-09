@@ -415,6 +415,101 @@ defmodule Sanctum.MountTest do
       assert {:ok, ids} = Mount.login_entries(ctx.athanor_id)
       assert Enum.sort(ids) == Enum.sort([a.id, b.id])
     end
+
+    # An agent whose brain edge binds the entry, or selects a profile of
+    # its brain whose own ingress binds it, runs its brain in the home; one
+    # whose edge to a hand binds it, or whose brain's profile binds it only
+    # on an edge of the brain's own, does not.
+    test "agents_mounting/2 names the agents whose brain edge reaches the entry", %{ctx: ctx} do
+      entry = login!(ctx)
+      elsewhere = login!(ctx)
+
+      bound = fn key, id ->
+        %{binding_key: key, vault_entry_id: id, binding_digest: "sha256:b"}
+      end
+
+      lent = fn key -> %{binding_key: key, via_label: "work", binding_digest: nil} end
+
+      for {name, brain, ref} <- [
+            {"member", "catalyst:local.brain:0.1.0",
+             bound.("agent:local.member|catalyst:local.brain|claude|default", entry.id)},
+            {"bare", "catalyst:local.brain",
+             bound.("agent:local.bare|catalyst:local.brain|default", entry.id)},
+            {"borrower", "catalyst:local.brain",
+             lent.("agent:local.borrower|catalyst:local.brain|default")},
+            {"handed", "catalyst:local.other",
+             bound.("agent:local.handed|catalyst:local.brain|claude|default", entry.id)},
+            {"lent", "catalyst:local.lender",
+             lent.("agent:local.lent|catalyst:local.lender|default")}
+          ] do
+        agent!(ctx, name, brain)
+        head!(ctx, "prof_mounting_#{name}", Prima.AgentRef.ref(name), "default", [ref])
+      end
+
+      head!(ctx, "prof_mounting_brain", "catalyst:local.brain", "work", [
+        bound.("catalyst:local.brain|@ingress|default", entry.id)
+      ])
+
+      head!(ctx, "prof_mounting_lender", "catalyst:local.lender", "work", [
+        bound.("catalyst:local.lender|@ingress|default", elsewhere.id),
+        bound.("catalyst:local.lender|catalyst:local.hand|default", entry.id)
+      ])
+
+      agent!(ctx, "unbound", "catalyst:local.brain")
+
+      assert {:ok, names} = Mount.agents_mounting(ctx.athanor_id, entry.id)
+      assert Enum.sort(names) == ["bare", "borrower", "member"]
+      assert {:ok, ["lent"]} = Mount.agents_mounting(ctx.athanor_id, elsewhere.id)
+    end
+  end
+
+  # The agent `name`'s index row, its brain `catalyst_ref`.
+  defp agent!(ctx, name, catalyst_ref) do
+    Arca.Repo.insert!(%Arca.Schemas.Agent{
+      id: "agt_#{System.unique_integer([:positive])}",
+      athanor_id: ctx.athanor_id,
+      name: name,
+      kind: "role",
+      revision_digest: "sha256:rev",
+      capability_digest: "sha256:cap",
+      catalyst_ref: catalyst_ref,
+      synced_at: DateTime.utc_now()
+    })
+  end
+
+  # A profile of `source` under `label` whose head holds `refs`.
+  defp head!(ctx, profile_id, source, label, refs) do
+    {:ok, _} =
+      Arca.Test.Writers.put_profile(%{
+        id: profile_id,
+        athanor_id: ctx.athanor_id,
+        source_ref: source,
+        kind: "owner",
+        label: label,
+        status: "active"
+      })
+
+    {:ok, _} =
+      Arca.ConsentStorage.insert_revision(
+        %{
+          athanor_id: ctx.athanor_id,
+          profile_id: profile_id,
+          revision: 1,
+          scope: "versionless",
+          pinned_version: "",
+          invoke_mode: "open_inert",
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          blob_digest: Prima.Digest.sha256("{}"),
+          resolved_policy: "{}",
+          activation: "{}",
+          admitted_origins: [:interactive],
+          granted_by: "test",
+          granted_via: "bootstrap"
+        },
+        refs,
+        nil
+      )
   end
 
   describe "an attach" do

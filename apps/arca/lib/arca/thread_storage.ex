@@ -341,6 +341,30 @@ defmodule Arca.ThreadStorage do
   def archive(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
   @doc """
+  Forget the brain session (`brain_session`) of every thread of the
+  actor's athanor whose agent is one of `agents`, so each one's next
+  request opens a new session, and raise its `brain_generation` in the
+  same statement, so a turn begun before it keeps no session it answers
+  with afterwards (`Arca.TurnStorage.record_response/4`). Answers how
+  many threads it moved on.
+  """
+  @spec forget_sessions(Prima.Actor.t(), [String.t()]) ::
+          {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
+  def forget_sessions(%Prima.Actor{athanor_id: athanor_id} = actor, agents)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(agents) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.forget_sessions", fn ->
+      {count, _} =
+        from(c in Thread, where: c.agent in ^agents)
+        |> QueryHelpers.where_tenant(actor)
+        |> Repo.update_all(set: [brain_session: nil], inc: [brain_generation: 1])
+
+      {:ok, count}
+    end)
+  end
+
+  def forget_sessions(%Prima.Actor{}, _agents), do: {:error, :no_athanor}
+
+  @doc """
   The requests still waiting on a crew member's reply, oldest first: of
   the thread `opts[:thread_id]` names, else of the whole athanor.
   """

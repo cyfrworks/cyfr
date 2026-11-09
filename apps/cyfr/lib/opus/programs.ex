@@ -34,7 +34,8 @@ defmodule Opus.Programs do
   it is made again empty under the same uid) or retires it (its sessions
   end, the home is removed and its uid freed). The box that holds a home
   drew its uid; CYFR never learns it. A retire is retried until the box
-  acknowledges it.
+  acknowledges it. Either way the brain sessions threads kept for the home
+  are forgotten, so a member whose brain ran there starts a new one.
 
   ## Pipes
 
@@ -210,10 +211,31 @@ defmodule Opus.Programs do
   athanor. Answers `:ok` once the box acknowledged it; a retire that could
   not be sent is answered with the reason and stays pending, sent again on
   every tick until it lands.
+
+  Whatever the box answered, the brain session kept on each thread of an
+  agent whose head binds the home's login entry
+  (`Sanctum.Mount.agents_mounting/2`) is forgotten, so its next
+  message starts a new session rather than resuming one the home no
+  longer holds. A store that cannot forget them turns an `:ok` into
+  `{:error, {:unavailable, "Threads"}}`.
   """
   @spec home(String.t(), String.t(), :reset | :retire) :: :ok | {:error, term()}
   def home(athanor_id, home_id, op) when op in [:reset, :retire] do
-    call(box_of(athanor_id), {:home, athanor_id, home_id, op}, Box.control_timeout_ms())
+    answer = call(box_of(athanor_id), {:home, athanor_id, home_id, op}, Box.control_timeout_ms())
+
+    case {answer, forget_sessions(athanor_id, home_id)} do
+      {:ok, {:error, _unanswered}} -> {:error, {:unavailable, "Threads"}}
+      _forgotten_or_refused -> answer
+    end
+  end
+
+  # A home's id is its login entry's.
+  defp forget_sessions(athanor_id, entry_id) do
+    with {:ok, agents} <- Sanctum.Mount.agents_mounting(athanor_id, entry_id),
+         {:ok, _forgotten} <-
+           Arca.ThreadStorage.forget_sessions(Prima.Actor.in_athanor(athanor_id), agents) do
+      :ok
+    end
   end
 
   @doc "The ids of every kept home the box holds, as its `homes` answer names them."
