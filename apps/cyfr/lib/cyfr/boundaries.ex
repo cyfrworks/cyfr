@@ -1149,7 +1149,7 @@ defmodule Cyfr.Boundaries do
         CyfrWeb.Plugs.ParserErrors CyfrWeb.Plugs.RawBodyReader
         CyfrWeb.Plugs.ScrubTinctureCredentials CyfrWeb.Plugs.TinctureRateLimit
         CyfrWeb.Plugs.VerifyWebhookSignature CyfrWeb.Plugs.WebhookIdempotency
-        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE
+        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE CyfrWeb.SSE.Registry
       ),
       reason:
         "Emissary's adapters read the host's shared web tier and never its root router, " <>
@@ -1660,12 +1660,12 @@ defmodule Cyfr.Boundaries do
           "the version and its served type."
     },
     %{
-      from: "Emissary.Web.TinctureDataController",
+      from: "Emissary.Web.FrameAdmission",
       into: "Arca.PlatformSettings",
       functions: [:effective],
       reason:
         "the frame invocation rate's bounds are platform settings, read as they stand " <>
-          "on each request; no athanor's row."
+          "on each request and each stream connection's bind; no athanor's row."
     }
   ]
 
@@ -1829,12 +1829,12 @@ defmodule Cyfr.Boundaries do
           "the version and its served type."
     },
     %{
-      from: "Emissary.Web.TinctureDataController",
+      from: "Emissary.Web.FrameAdmission",
       into: "Arca.PlatformSettings",
       functions: [:effective],
       reason:
         "the frame invocation rate's bounds are platform settings, read as they stand " <>
-          "on each request; no athanor's row."
+          "on each request and each stream connection's bind; no athanor's row."
     }
   ]
 
@@ -2955,7 +2955,7 @@ defmodule Cyfr.Boundaries do
     # The tincture data routes: a request with no frame credential and no
     # public tincture, a credential that no longer stands, an undeclared
     # operation or stream, a canvas off its own path or a frame on another's,
-    # and the per-frame limits. A frame's call is an interactive admission.
+    # a stream connection's upgrade that is none, and the per-frame limits. A frame's call is an interactive admission.
     # A canvas's page is no entry: its pipeline mints no call identity,
     # as the served files' does not.
     %{
@@ -2972,16 +2972,19 @@ defmodule Cyfr.Boundaries do
     },
     %{
       module: Emissary.Web.TinctureDataController,
-      site: :stream,
+      site: :socket,
       plane: :external,
       origin: :interactive
     },
     %{
       module: Emissary.Web.TinctureDataController,
-      site: :canvas_stream,
+      site: :canvas_socket,
       plane: :external,
       origin: :interactive
     },
+    # A frame's stream connection: each subscription it refuses before the
+    # gate, and a message that does not read.
+    %{module: Emissary.Web.FrameSocket, site: :handle_in, plane: :external, origin: :interactive},
     # The webhook route: the caller the row establishes, its signature,
     # its idempotency key and its rate limit.
     %{module: Emissary.Web.WebhookController, site: :invoke, plane: :external, origin: :webhook},
