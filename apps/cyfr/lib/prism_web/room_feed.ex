@@ -6,11 +6,12 @@ defmodule PrismWeb.RoomFeed do
   The shared thread a page has open, told to the person's own AQUA
   beside it.
 
-  The chat page hosts the shared thread; the panel (`PrismWeb.AquaPanelLive`) and
-  the pane inside it are nested LiveViews with mailboxes of their own. So
-  the page announces what it shows on a topic of its own — one per page
-  instance, named by the page's socket id — and whoever sits beside it
-  listens. It travels as a plain map with string keys, `shared_thread_id`
+  The chat overlay (`PrismWeb.ChatOverlayLive`) shows the shared thread;
+  the panel (`PrismWeb.AquaPanelLive`) and the pane inside it are nested
+  LiveViews of the same desktop with mailboxes of their own. So the chat
+  announces what it shows on a topic of the desktop's — one per desktop
+  instance, named by the desktop's socket id (`PrismWeb.ShellLive`) — and
+  whoever sits beside it listens. It travels as a plain map with string keys, `shared_thread_id`
   and `title`, the shape the `thread` tool's `send` takes as its `room`,
   because it also rides the session a nested view mounts with: that is
   how the panel knows the thread the moment it opens, before any

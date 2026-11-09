@@ -1472,13 +1472,12 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # Navigate intents are page paths (`/activities`); the athanor this pane
   # is on is added here, so the assistant never addresses another athanor's
-  # pages. A global page (the chat) is its own address.
+  # pages.
   #
   # The push names this pane: the client hands a pushed event to every
   # pane on the page, and each acts only on `%{pane: <its section id>}`.
-  # In the panel a navigate never moves the page the person is reading —
-  # a chat path onto a thread of You turns the panel to that thread, and
-  # any other page is offered as a link line, theirs to take or leave.
+  # In the panel a navigate never moves the page the person is reading: it
+  # is offered as a link line, theirs to take or leave.
   defp push_intents(socket, []), do: socket
 
   defp push_intents(socket, intents) do
@@ -1489,7 +1488,6 @@ defmodule PrismWeb.ThreadPaneLive do
       intents
       |> Enum.filter(&mode_permits?(&1, mode))
       |> Enum.map(fn
-        # One decision for "global page or under the athanor": `Nav.href/2`.
         %{kind: "navigate", to: to} = intent -> %{intent | to: PrismWeb.Nav.href(to, route)}
         intent -> intent
       end)
@@ -1508,36 +1506,10 @@ defmodule PrismWeb.ThreadPaneLive do
 
     socket =
       Enum.reduce(navigates, socket, fn %{to: to}, socket ->
-        case own_thread(to, socket.assigns.athanor_route) do
-          {:ok, thread_id} ->
-            tell_host(socket, {:open_thread, thread_id})
-            socket
-
-          :elsewhere ->
-            assign(socket, :links, Enum.take(Enum.uniq([to | socket.assigns.links]), @max_links))
-        end
+        assign(socket, :links, Enum.take(Enum.uniq([to | socket.assigns.links]), @max_links))
       end)
 
     {socket, rest}
-  end
-
-  # A chat path onto one thread of the athanor this pane is on —
-  # `/chat?a=<route>&c=<id>`, as `PrismWeb.ChatLive.chat_path/2` spells it.
-  # The athanor alone, with no `c`, names no thread the panel could turn
-  # to: that is a page, and offered as a link like any other.
-  defp own_thread(to, route) do
-    uri = URI.parse(to)
-    params = URI.decode_query(uri.query || "")
-
-    case params["c"] do
-      id when is_binary(id) and id != "" ->
-        if uri.path == PrismWeb.ChatLive.chat_path(nil) and params["a"] == route,
-          do: {:ok, id},
-          else: :elsewhere
-
-      _ ->
-        :elsewhere
-    end
   end
 
   defp pane_id(socket), do: socket.assigns.dom <> "-pane"

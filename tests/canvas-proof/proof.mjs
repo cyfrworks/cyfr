@@ -2341,7 +2341,7 @@ async function main() {
   const homes = lib.readHomes();
   HOME = lib.homeOf(homes.homes);
   BASE = HOME.origin;
-  SHELL_URL = `${BASE}/a/${encodeURIComponent(segment)}/canvas`;
+  SHELL_URL = `${BASE}/a/${encodeURIComponent(segment)}`;
   const proxy = await lib.startProxy({ ...homes, receiver, bodies: false });
 
   let failure = null;

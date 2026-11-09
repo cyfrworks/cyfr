@@ -5,10 +5,24 @@ defmodule PrismWeb.Layouts do
   @moduledoc """
   Layout components for Prism.
 
-  The root HTML skeleton and the app layout: the topbar (the chrome — brand,
-  the athanor switcher, the drawer button, the person), a sidebar in `dev`,
-  a drawer off the page in both modes (the whole navigation on a phone, the
-  lite navigation everywhere), and the content area.
+  Two root skeletons and the app layout. `root` is the bare document the
+  sign-in pages and the console's other pages render in. `desktop` is the
+  `:athanor` session's: the person's desktop (`PrismWeb.ShellLive`) as a
+  LiveView of its own, filling the screen under the top bar, beside the
+  page's LiveView, which a move between the session's pages replaces while
+  the desktop and its frames stay as they are.
+
+  The app layout is the page's layer over the desktop: the top bar (the
+  chrome — brand, the drawer button, the person), the command palette,
+  the flash, and the page. A Dashboard page stands as an overlay over the
+  desktop's apps' area, from the top bar to the shelf, which stays in
+  reach: a panel inset on the desk, the whole area in the hand, with the
+  page list (a sidebar in `dev` on wide screens, the drawer in both UI
+  modes) and a close that returns to the desktop (`PrismWeb.DesktopLive`).
+  A page that draws nothing over the desktop (`overlay: false`, the
+  desktop's own address and the forwards to it) has no overlay. The layer
+  takes no pointer where it draws nothing, so the desktop under it stays
+  live.
   """
 
   use PrismWeb, :html
@@ -17,6 +31,43 @@ defmodule PrismWeb.Layouts do
   alias PrismWeb.Nav
 
   embed_templates "layouts/*"
+
+  @doc """
+  The request as the desktop is rendered from it: without the page's route,
+  its parameters and its live session, whose mount hooks are the page's.
+  The desktop is no route's (`PrismWeb.ShellLive` mounts its own hooks),
+  so its first render runs what its connected mount runs, and nothing the
+  page's address names.
+  """
+  @spec desktop_conn(Plug.Conn.t()) :: Plug.Conn.t()
+  def desktop_conn(%Plug.Conn{} = conn) do
+    %{conn | params: %{}, path_params: %{}}
+    |> Plug.Conn.put_private(:phoenix_live_view, nil)
+  end
+
+  @doc "The document's head, one for both root skeletons."
+  attr :page_title, :string, default: nil
+
+  def document_head(assigns) do
+    ~H"""
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <meta name="csrf-token" content={get_csrf_token()} />
+      <.live_title default="CYFR">
+        {@page_title}
+      </.live_title>
+      <link rel="icon" type="image/jpeg" href={~p"/images/logo.jpg"} />
+      <link rel="apple-touch-icon" href={~p"/images/logo.jpg"} />
+      <link rel="manifest" href="/manifest.webmanifest" />
+      <meta name="theme-color" content="#030712" />
+      <meta property="og:image" content={~p"/images/logo.jpg"} />
+      <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+      <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
+      </script>
+    </head>
+    """
+  end
 
   @doc "The dev sidebar: every page of the mode, sectioned. Hidden below `lg`."
   attr :mode, :string, required: true
@@ -66,7 +117,7 @@ defmodule PrismWeb.Layouts do
     assigns = assign(assigns, :sections, Nav.sections(assigns.mode))
 
     ~H"""
-    <div id="drawer" class="hidden fixed inset-0 z-40" role="dialog" aria-modal="true">
+    <div id="drawer" class="hidden fixed inset-0 z-[66] pointer-events-auto" role="dialog" aria-modal="true">
       <div class="absolute inset-0 bg-black/60" phx-click={hide_drawer()}></div>
       <div class="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-gray-800 bg-gray-900 shadow-xl">
         <div class="flex h-12 items-center justify-between border-b border-gray-800 px-4">

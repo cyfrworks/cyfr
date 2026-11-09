@@ -152,7 +152,7 @@ defmodule Prism.CanvasValidationTest do
   end
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
 
     wait_until(
       fn ->

@@ -272,7 +272,7 @@ defmodule PrismWeb.ShellCanvasTest do
   # ---- the shell ------------------------------------------------------------
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     Process.put(:view, view)
     # The canvas's read and the shell's placing are messages to the view;
     # they end in a canvas decided on, or in its fallback.
@@ -848,9 +848,6 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
 
-      # The Canvas mode draws no sidebar and no drawer.
-      refute has_element?(view, "#chrome-side")
-
       refute has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
@@ -858,14 +855,15 @@ defmodule PrismWeb.ShellCanvasTest do
       # Every canvas layer under the full frame.
       assert has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
-      # The full frame and its capsule, the top bar with its mode switch,
-      # the shell's own Devices control, the switcher, the system layer and
-      # the assistant's panel stay reachable.
+      # The full frame and its capsule, the shell's own Devices control, the
+      # switcher, the system layer and the shelf's right end, the gear, the
+      # chat and the assistant's panel, stay reachable. The top bar is the
+      # page's, outside the desktop.
       refute has_element?(view, ~s([data-canvas-place="full"][inert]))
       refute has_element?(view, ~s([inert] button[phx-click="close_active_tincture"]))
 
       for reachable <-
-            ~w(#chrome-top #topbar #shell-devices #canvas-switcher #system-layer #aqua-panel) do
+            ~w(#shell-devices #canvas-switcher #system-layer #shelf-end #shelf-gear #chat-overlay #aqua-panel) do
         assert has_element?(view, reachable), reachable
         refute has_element?(view, "[inert] #{reachable}"), reachable
         refute has_element?(view, "#{reachable}[inert]"), reachable
@@ -1401,9 +1399,10 @@ defmodule PrismWeb.ShellCanvasTest do
       ancestors = ancestors(view, "#canvas-frames")
       labels = Enum.map(ancestors, &label/1)
 
-      # The walk reaches the canvas layer, the shell and the layout's main.
+      # The walk reaches the canvas layer and the shell, the desktop's own
+      # root: the desktop is no page's, so no page's element stands around it.
       assert Enum.take(labels, 2) == ["canvas", "shell"]
-      assert "page-content" in labels and "main" in labels
+      refute "page-content" in labels or "main" in labels
 
       assert Enum.flat_map(ancestors, &bindings/1) == []
     end
@@ -4134,9 +4133,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert stored(user, athanor).revision == revision + 1
       assert assigns(view).layout_base.revision == revision
 
-      assert {:error, {:live_redirect, %{to: _dashboard}}} =
-               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
-
+      # The document ends.
       GenServer.stop(view.pid, {:shutdown, :closed})
 
       # Written once more on the newer layout, the other screen's apps kept.
@@ -4146,27 +4143,18 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{placement: :tile} = stored_app(user, athanor, "side-dash")
     end
 
-    test "a window survives a switch to the Dashboard and back, even inside the write window",
+    test "a window survives a reload of the document, even inside the write window",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
       assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
       assert %{placement: {:window, geometry}, id: first_id} = app_frame(view, "loose-dash")
       assert assigns(view).pending != []
 
-      # The switch is the top bar's link; following it ends the shell's page.
-      assert {:error, {:live_redirect, %{to: dashboard}}} =
-               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
-
+      # The document ends, and the desktop with it.
       GenServer.stop(view.pid, {:shutdown, :closed})
       assert row(first_id).state == "revoked"
       assert %{placement: :window, geometry: ^geometry} = stored_app(user, athanor, "loose-dash")
 
-      {:ok, dash, _html} = live(conn, dashboard)
-
-      assert {:error, {:live_redirect, %{to: back}}} =
-               dash |> find_live_child("topbar") |> element("#mode-canvas") |> render_click()
-
-      assert back =~ "/canvas"
       again = shell!(conn)
 
       assert %{placement: {:window, ^geometry}, state: :live, id: id} =

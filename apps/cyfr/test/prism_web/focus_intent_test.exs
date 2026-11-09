@@ -146,15 +146,18 @@ defmodule PrismWeb.FocusIntentTest do
     end
   end
 
-  test "a global page is pushed as it is, with no athanor in its address",
-       %{athanor: athanor, thread: thread} = context do
-    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(athanor), thread.id)
-    assert PrismWeb.Nav.global?(path)
+  test "the desktop's address is pushed under the athanor in focus, a tincture's focus kept",
+       %{athanor: athanor} = context do
+    assert {:ok, %{kind: "navigate", to: path} = intent} =
+             Aqua.Intents.validate(%{
+               "kind" => "ui.tincture.focus",
+               "publisher" => "local",
+               "name" => "widget"
+             })
 
-    assert {:ok, %{kind: "navigate", to: ^path} = intent} =
-             Aqua.Intents.validate(%{"kind" => "ui.navigate", "path" => path})
-
-    assert pushed(context, intent) == path
-    assert served_by(URI.parse(path).path) == PrismWeb.ChatLive
+    assert path == "/?publisher=local&tincture_name=widget"
+    pushed = pushed(context, intent)
+    assert pushed == PrismWeb.Focus.path(Athanors.route_slug(athanor), path)
+    assert served_by(URI.parse(pushed).path) == PrismWeb.DesktopLive
   end
 end

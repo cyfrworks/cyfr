@@ -3,31 +3,23 @@
 
 defmodule PrismWeb.ChatRedirectLive do
   @moduledoc """
-  Redirects `/a/<athanor>` to `/chat` with the athanor selected and the
-  remaining query parameters preserved.
+  `/chat`, the retired chat page's address, forwards to the person's
+  desktop (`PrismWeb.DesktopLive`), where the chat is CYFR's own overlay
+  beside AQUA's (`PrismWeb.ChatOverlayLive`, its control on the shelf).
+  Its query is dropped: the overlay opens from the shelf, never from an
+  address.
   """
 
   use PrismWeb, :live_view
 
-  def mount(params, _session, socket) do
-    case socket.assigns[:athanor] do
-      nil ->
-        {:ok, redirect(socket, to: "/login?error=no_athanor")}
-
-      athanor ->
-        {:ok, push_navigate(socket, to: chat_path(athanor, params))}
+  @impl true
+  def mount(_params, _session, socket) do
+    case socket.assigns[:athanor_route] do
+      nil -> {:ok, redirect(socket, to: "/login?error=no_athanor")}
+      route -> {:ok, socket |> assign(:overlay, false) |> push_navigate(to: PrismWeb.DesktopLive.path(route))}
     end
   end
 
-  # The athanor is the path's, so a stray `a` in the query is dropped with
-  # the route param; the rest rides along in a stable order, nested keys
-  # included.
-  defp chat_path(athanor, params) do
-    route = Sanctum.Tenancy.Athanors.route_slug(athanor)
-    rest = params |> Map.drop(["athanor", "a"]) |> Enum.sort()
-
-    "/chat?" <> Plug.Conn.Query.encode([{"a", route} | rest])
-  end
-
+  @impl true
   def render(assigns), do: ~H""
 end

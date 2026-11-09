@@ -1484,7 +1484,7 @@ cyfr key create --name "my-app" --type service
 #    Authorization: Bearer cyfr_sk_...
 ```
 
-The Prism console is served at `http://localhost:4000`, the same endpoint as the API: the chat at `/chat`, and each athanor's pages under `/a/<athanor>/…`, among them its executions, activities, builds and components, each updating as a run progresses.
+The Prism console is served at `http://localhost:4000`, the same endpoint as the API: the desktop at `/`, and each athanor's pages under `/a/<athanor>/…`, each opening over the desktop, among them its executions, activities, builds and components, each updating as a run progresses.
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
 

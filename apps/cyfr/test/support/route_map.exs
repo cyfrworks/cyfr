@@ -373,7 +373,7 @@
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
           auth: "browser_authenticated",
-          live_view: "PrismWeb.RootRedirectLive",
+          live_view: "PrismWeb.DesktopLive",
           pipe_through: ["browser"]
         },
         %{
@@ -382,7 +382,7 @@
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
           auth: "browser_authenticated",
-          live_view: "PrismWeb.RootRedirectLive",
+          live_view: "PrismWeb.DesktopLive",
           pipe_through: ["browser"]
         },
         %{
@@ -391,7 +391,7 @@
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
           auth: "browser_authenticated",
-          live_view: "PrismWeb.ChatRedirectLive",
+          live_view: "PrismWeb.DesktopLive",
           pipe_through: ["browser"]
         },
         %{
@@ -437,15 +437,6 @@
           plug_opts: ":index",
           auth: "browser_authenticated",
           live_view: "PrismWeb.BuildsLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/a/:athanor/canvas",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.ShellLive",
           pipe_through: ["browser"]
         },
         %{
@@ -634,7 +625,7 @@
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
           auth: "browser_authenticated",
-          live_view: "PrismWeb.ChatLive",
+          live_view: "PrismWeb.ChatRedirectLive",
           pipe_through: ["browser"]
         },
         %{

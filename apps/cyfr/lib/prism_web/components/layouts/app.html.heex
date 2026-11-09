@@ -1,68 +1,70 @@
-<div class="flex h-screen flex-col overflow-hidden bg-gray-950">
+<%!-- The page's layer over the desktop (`PrismWeb.ShellLive`, the root
+      layout's): it takes no pointer where it draws nothing, so the desktop
+      under it stays live. --%>
+<div id="page-layer" class="pointer-events-none absolute inset-0 flex flex-col">
   <% mode = Prism.Labels.mode(assigns[:ui_mode]) %>
-  <%!-- The person's mode: Canvas on the shell's page, the Dashboard on every
-        other. The Canvas mode fills everything under the top bar. --%>
-  <% canvas? = assigns[:active_nav] == "canvas" %>
-  <!-- The chrome: brand, the athanor switcher, the drawer, the person — and in dev the live indicators. -->
-  <div id="chrome-top" class="contents">
+  <% overlay? = assigns[:overlay] != false %>
+  <!-- The chrome: brand, the drawer, the person — and in dev the live indicators. -->
+  <div id="chrome-top" class="pointer-events-auto relative z-[66] shrink-0">
     {live_render(@socket, PrismWeb.TopbarLive,
       id: "topbar",
       session: %{
         "athanor_id" => assigns[:athanor] && @athanor.id,
-        "ui_mode" => mode,
-        "surface" => if(canvas?, do: "canvas", else: "dashboard"),
-        "page" => assigns[:active_nav]
+        "ui_mode" => mode
       }
     )}
   </div>
 
-  <!-- Body row: in the Dashboard, sidebar (dev, wide screens) + drawer (both UI modes);
-       then the main content -->
-  <div class="flex flex-1 overflow-hidden">
-    <div :if={not canvas?} id="chrome-side" class="contents">
-      <.sidebar
-        :if={Prism.Labels.dev?(mode)}
-        mode={mode}
-        athanor_route={@athanor_route}
-        active_nav={assigns[:active_nav]}
-      />
-      <.drawer mode={mode} athanor_route={@athanor_route} active_nav={assigns[:active_nav]} />
-    </div>
+  <div class="pointer-events-auto">
+    <.flash_group flash={@flash} />
+  </div>
+  <!-- The command palette (⌘⇧K, the topbar's search icon, the drawer's
+       Search… row). The companion JS hook listens for the shortcut and
+       pushes toggle/close into this component. -->
+  <div class="pointer-events-auto">
+    <.live_component
+      :if={assigns[:context]}
+      module={PrismWeb.CommandPaletteLiveComponent}
+      id="command-palette"
+      context={@context}
+      athanor_route={assigns[:athanor_route]}
+      active_context={assigns[:active_context]}
+      ui_mode={mode}
+    />
+  </div>
 
-    <!-- Main content -->
-    <div class="flex flex-1 flex-col overflow-hidden">
-      <.flash_group flash={@flash} />
-      <!-- The command palette (⌘⇧K, the topbar's search icon, the drawer's
-           Search… row). The companion JS hook listens for the shortcut and
-           pushes toggle/close into this component. -->
-      <.live_component
-        :if={assigns[:context]}
-        module={PrismWeb.CommandPaletteLiveComponent}
-        id="command-palette"
-        context={@context}
-        athanor_route={assigns[:athanor_route]}
-        active_context={assigns[:active_context]}
-        ui_mode={mode}
-      />
-      <%!-- The person's own AQUA, on every page: a floating button, and a
-            panel over the page onto their own athanor. --%>
-      <%= if assigns[:context] do %>
-        {live_render(@socket, PrismWeb.AquaPanelLive,
-          id: "aqua-panel",
-          session: %{
-            "ui_mode" => mode,
-            "room_feed" => assigns[:room_feed],
-            "room" => assigns[:room],
-            "aqua_ask" => assigns[:aqua_ask]
-          }
-        )}
-      <% end %>
+  <div class="pointer-events-auto">
+    <.drawer mode={mode} athanor_route={@athanor_route} active_nav={assigns[:active_nav]} />
+  </div>
 
-      <!-- Page content -->
-      <main class={[
-        "relative flex-1 flex flex-col min-h-0 overflow-y-auto",
-        if(canvas? or assigns[:active_nav] == "chat", do: "p-0", else: "p-4 lg:p-8")
-      ]}>
+  <%!-- A Dashboard page: an overlay over the desktop's apps' area, from the
+        top bar to the shelf, which stays in reach. A panel inset on the
+        desk, the whole area in the hand. Opening one is a move within the
+        session, never a page load, so the desktop's frames keep running
+        under it; its close goes back to the desktop. --%>
+  <section
+    :if={overlay?}
+    id="settings-overlay"
+    aria-label={assigns[:page_title] || "Settings"}
+    class="settings-overlay pointer-events-auto z-[65] flex overflow-hidden bg-gray-950 text-gray-200"
+  >
+    <.sidebar
+      :if={Prism.Labels.dev?(mode)}
+      mode={mode}
+      athanor_route={@athanor_route}
+      active_nav={assigns[:active_nav]}
+    />
+    <div class="relative flex min-w-0 flex-1 flex-col">
+      <.link
+        id="settings-close"
+        navigate={PrismWeb.DesktopLive.path(@athanor_route)}
+        class="absolute right-2 top-2 z-10 rounded-md px-2 py-1 text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+        aria-label="Back to the desktop"
+        title="Back to the desktop"
+      >
+        ×
+      </.link>
+      <main class="relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 lg:p-8">
         <div
           id="page-loading"
           phx-hook="PageLoadingIndicator"
@@ -94,5 +96,6 @@
         </div>
       </main>
     </div>
-  </div>
+  </section>
+  <div :if={not overlay?} id="page-content" hidden>{@inner_content}</div>
 </div>

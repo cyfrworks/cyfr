@@ -4,6 +4,13 @@
 defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
+  # The desktop is no route's: the `:athanor` session's root layout
+  # renders it beside the page, so it establishes the session and its
+  # athanor itself, the person's own (`PrismWeb.Focus` with no athanor
+  # named), as the session's pages do.
+  on_mount {CyfrWeb.ContextGuard, :protected}
+  on_mount {PrismWeb.Focus, :assign}
+
   @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
 
@@ -21,19 +28,36 @@ defmodule PrismWeb.ShellLive do
   @flush_writes 2
 
   @moduledoc """
-  The Prism shell: the person's canvases, the tinctures opened over them,
-  the system layer and, when no canvas runs, the tincture picker. It is the
-  Canvas mode, at `/a/<athanor>/canvas`, filling the screen under the top
-  bar with no sidebar or drawer; every other page is the Dashboard, and the
-  top bar switches between them (`PrismWeb.TopbarLive`).
+  The Prism shell, the person's desktop: their canvases, the tinctures
+  opened over them, the system layer, the shelf's own controls (the gear,
+  the chat and AQUA) and, when no canvas runs, the tincture picker. It
+  fills the screen under the top bar.
 
-  Switching modes is a page navigation, so the shell's frames end with the
-  page: `terminate/2` writes any gesture still waiting to be written (once
-  more on the newer layout when another screen published one meanwhile),
-  then revokes every credential it minted, and an app open over a canvas
-  starts over when the person comes back. Nothing of the arrangement is lost: the
-  layout holds every app's placement, and the shell opens the apps from it
-  again on return.
+  It is no route's page. The `:athanor` session's root layout renders it
+  as a LiveView of its own (`PrismWeb.Layouts`, `desktop`) beside the
+  page's, so it mounts once per document load and stays while the person
+  moves between the session's pages, each of which draws over it
+  (`PrismWeb.DesktopLive` draws nothing): those moves replace the page's
+  LiveView alone, and no frame the shell holds is moved or reloaded. It
+  establishes the session itself (`CyfrWeb.ContextGuard`) and focuses on
+  the person's own athanor (`PrismWeb.Focus` with no athanor named).
+
+  The shelf's right end is the shell's (`#shelf-end`): the gear, a link to
+  the Dashboard's Settings page, which opens as an overlay over the desktop
+  (`PrismWeb.Layouts`); the chat (`PrismWeb.ChatOverlayLive`), CYFR's own
+  overlay of the person's shared threads and pairs, with its unread count;
+  and AQUA (`PrismWeb.AquaPanelLive`). The two overlays are this view's
+  nested LiveViews, so they too stay while the pages change. The chat
+  tells AQUA's panel the shared thread it has open on this view's own
+  topic (`PrismWeb.RoomFeed`), and a desktop's `ask` reaches the panel on
+  another (`Cyfr.Bus.aqua_ask/1`); neither gets a frame's port, and no
+  message body enters a frame.
+
+  The document's end ends the shell: `terminate/2` writes any gesture
+  still waiting to be written (once more on the newer layout when another
+  screen published one meanwhile), then revokes every credential it
+  minted. Nothing of the arrangement is lost: the layout holds every app's
+  placement, and the shell opens the apps from it again at the next load.
 
   ## The canvases
 
@@ -93,7 +117,10 @@ defmodule PrismWeb.ShellLive do
   (`Compendium.put_desktop_prefs/5`); `ask` opens AQUA's panel beside the
   page with Prism's own sentence naming a widget the version declares
   (`Cyfr.Bus.AquaAsk`); and `settings` opens one of the Dashboard's pages
-  for the person's mode (`PrismWeb.Nav`). A control's press and a write
+  for the person's UI mode (`PrismWeb.Nav`) as the overlay over the
+  desktop: the view pushes `navigate` to its own hook (`ShellPage`, on
+  `#shell-page`), which moves the page's LiveView there, so the canvas
+  that asked keeps running under it. A control's press and a write
   are answered over the frame's port (`canvas_answer`) with their typed
   outcome, `cancelled` when this view did not act on them. Its bridge
   (`iframe_bridge.js`) forwards those verbs only while the page holds
@@ -235,7 +262,11 @@ defmodule PrismWeb.ShellLive do
   around the frames pushes an event, since the page locks the element an
   event is pushed from until its reply, and a patch made meanwhile would
   bring back a frame the layer discarded: the shell's keys (`keynav`) are
-  heard on `#shell-keys`, an empty element of their own. The system layer
+  heard by the shell's own hook (`ShellPage`, on `#shell-page`, an empty
+  element of its own), which hands this view a key typed on the desktop as
+  `keynav` and keeps every key typed into a field or inside what stands
+  over the desktop (a Dashboard page, the top bar, the chat, AQUA) for
+  that, so no key typed there launches or closes an app. The system layer
   (`PrismWeb.SystemLayer`) is mounted above them.
 
   The `IframeBridge` hook hands a frame a `MessagePort` on its first load,
@@ -342,6 +373,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:inputs, %{})
       |> assign(:chrome, nil)
       |> assign(:aqua_ask, Cyfr.Bus.aqua_ask(socket.id))
+      |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
 
     socket =
       if connected?(socket) do
@@ -366,22 +398,15 @@ defmodule PrismWeb.ShellLive do
         socket
       end
 
-    {:ok, socket}
+    {:ok, socket, layout: false}
   end
 
-  @impl true
-  def handle_params(params, _uri, socket) do
-    # Re-read the registry CACHE on navigation (cheap — the registry
-    # follows the tinctures topic for real changes), so a change that
-    # broadcast while another page was open shows without a manual refresh.
-    socket = if connected?(socket), do: load_tinctures(socket), else: socket
-    {:noreply, focus_named(socket, params["publisher"], params["tincture_name"])}
-  end
-
-  # `ui.tincture.focus` navigates here with `?publisher=&tincture_name=`.
-  # The picker is index-addressed, so the pair is resolved against the list
-  # that was just loaded; a pair matching nothing leaves the current
-  # selection alone rather than snapping the person to the first card.
+  # `ui.tincture.focus` and the palette move the page to the desktop with
+  # `?publisher=&tincture_name=` (`PrismWeb.DesktopLive`), which this view's
+  # hook reads from the page's address and hands here as `focus_named`. The picker is index-addressed, so the pair is resolved
+  # against the list the shell holds; a pair matching nothing leaves the
+  # current selection alone rather than snapping the person to the first
+  # card.
   defp focus_named(socket, publisher, name) when is_binary(publisher) and is_binary(name) do
     case Enum.find_index(
            socket.assigns.tinctures,
@@ -399,6 +424,9 @@ defmodule PrismWeb.ShellLive do
   # ============================================================================
 
   @impl true
+  def handle_event("focus_named", %{"publisher" => publisher, "name" => name}, socket),
+    do: {:noreply, focus_named(socket, publisher, name)}
+
   def handle_event("focus_tincture", %{"index" => idx_str}, socket) do
     case Integer.parse(to_string(idx_str)) do
       {idx, _} -> {:noreply, focus_tincture(socket, idx)}
@@ -1161,13 +1189,16 @@ defmodule PrismWeb.ShellLive do
   defp ask(socket, _frame, _widget), do: drop_message(socket)
 
   # One of Prism's own pages, by its key in the Dashboard's list for the
-  # person's mode: opening it leaves the canvas for the page.
+  # person's UI mode: it opens as the overlay over the desktop, the page's
+  # LiveView moved there by this view's hook, so the canvas keeps running.
   defp settings(socket, page) do
     mode = Prism.Labels.mode(socket.assigns[:ui_mode])
 
     case Enum.find(PrismWeb.Nav.items(mode), &(&1.key == page)) do
       %{} = item ->
-        push_navigate(socket, to: PrismWeb.Nav.href(item, socket.assigns.athanor_route))
+        push_event(socket, "navigate", %{
+          to: PrismWeb.Nav.href(item, socket.assigns.athanor_route)
+        })
 
       nil ->
         drop_message(socket)
@@ -3022,11 +3053,6 @@ defmodule PrismWeb.ShellLive do
         arrangement={@arrangement}
       />
 
-      <%!-- The page's keys, pushed from an element of their own: the page
-           locks the element an event is pushed from until its reply, and a
-           locked element around the frames keeps a frame the layer discards
-           while it waits. --%>
-      <div id="shell-keys" phx-window-keydown="keynav" hidden></div>
 
       <%!-- The shell's own chrome: no frame draws it or reaches it. --%>
       <button
@@ -3039,6 +3065,51 @@ defmodule PrismWeb.ShellLive do
       >
         Devices
       </button>
+
+      <%!-- The shelf's right end: the gear, the chat and AQUA, the shell's
+           own, drawn above the shelf and outside it (whose backdrop filter
+           would make it the containing block of the overlays' fixed
+           panels). The gear opens the Dashboard's Settings page as the
+           overlay over the desktop, a move of the page alone. The two
+           overlays are nested views of the desktop, so a move between pages
+           leaves them as they are; their containers add no box, so their
+           buttons stand in this row. --%>
+      <div id="shelf-end" class="shelf-end">
+        <.link
+          id="shelf-gear"
+          navigate={PrismWeb.Nav.href("/settings", @athanor_route)}
+          class="shelf-end-button"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <.icon name="cog" class="h-4 w-4" />
+        </.link>
+        {live_render(@socket, PrismWeb.ChatOverlayLive,
+          id: "chat-overlay",
+          container: {:div, class: "contents"},
+          session: %{"room_feed" => @room_feed}
+        )}
+        {live_render(@socket, PrismWeb.AquaPanelLive,
+          id: "aqua-panel",
+          container: {:div, class: "contents"},
+          session: %{
+            "ui_mode" => Prism.Labels.mode(assigns[:ui_mode]),
+            "room_feed" => @room_feed,
+            "aqua_ask" => @aqua_ask
+          }
+        )}
+      </div>
+
+      <%!-- The shell's own hook, on an empty element of its own (the page
+           locks the element an event is pushed from until its reply, and a
+           locked element around the frames would keep a frame the layer
+           discards while it waits): it moves the page's LiveView where the
+           `settings` verb names, hands this view the tincture a desktop
+           address names (`focus_named`) and the keys typed on the desktop
+           (`keynav`). --%>
+      <div id="shell-page" phx-hook="ShellPage" hidden></div>
+
+      <.flash_group flash={@flash} />
 
       <.live_component
         module={PrismWeb.SystemLayer}

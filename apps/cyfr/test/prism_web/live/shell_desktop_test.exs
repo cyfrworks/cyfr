@@ -178,7 +178,7 @@ defmodule PrismWeb.ShellDesktopTest do
   # ---- the shell ------------------------------------------------------------
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
 
     wait_until(
       fn ->
@@ -647,16 +647,23 @@ defmodule PrismWeb.ShellDesktopTest do
       assert dropped(view) == 1
     end
 
-    test "settings opens a page from Prism's own list, and nothing else", %{conn: conn} do
+    test "settings opens a page from Prism's own list over the desktop, the canvas still held, and nothing else",
+         %{conn: conn, athanor: athanor} do
       view = shell!(conn)
       home = canvas(view).id
 
       verb!(view, home, :settings, %{"page" => "no_such_page"})
       assert dropped(view) == 1
+      refute_push_event(view, "navigate", _)
 
       verb!(view, home, :settings, %{"page" => "schedules"})
-      {path, _flash} = assert_redirect(view)
-      assert path =~ "/schedules"
+      to = "/a/#{Sanctum.Tenancy.Athanors.route_slug(athanor)}/schedules"
+      assert_push_event(view, "navigate", %{to: ^to})
+
+      # The page moves under the desktop's own hook; the desktop stays, its
+      # canvas held and live.
+      assert Process.alive?(view.pid)
+      assert %{id: ^home, state: :live} = canvas(view)
     end
 
     test "open carries a subject of a kind the app declares to its handshake, and refuses any other",

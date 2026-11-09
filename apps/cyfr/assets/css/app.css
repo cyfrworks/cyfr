@@ -6,6 +6,7 @@
 @import "./aqua_panel.css";
 /* The canvas's window chrome and shelf. */
 @import "./canvas_chrome.css";
+@import "./chat_overlay.css";
 
 /* =============================================================================
  * Design tokens.

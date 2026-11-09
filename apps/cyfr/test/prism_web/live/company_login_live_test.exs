@@ -138,7 +138,7 @@ defmodule PrismWeb.CompanyLoginLiveTest do
       user = test_user()
       conn = log_in_user(conn, user)
 
-      for path <- [~p"/chat", athanor_path("/settings")] do
+      for path <- [~p"/", athanor_path("/settings")] do
         assert {:error, {:redirect, %{to: "/company-login"}}} = live(conn, path),
                "#{path} sends the lapsed person to the company page"
       end

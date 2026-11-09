@@ -809,7 +809,7 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # The view's own assigns: its context, which may have moved to another
-  # athanor (the chat page opening another), so a grant planned in the one
+  # athanor (a page focused on another), so a grant planned in the one
   # it left ends here.
   def update(assigns, socket) do
     socket = assign(socket, assigns)

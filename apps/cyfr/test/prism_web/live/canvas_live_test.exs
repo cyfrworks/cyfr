@@ -311,7 +311,7 @@ defmodule PrismWeb.CanvasLiveTest do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     html = render(view)
 
     # The canvas fills the layer under everything placed over it.
@@ -365,7 +365,7 @@ defmodule PrismWeb.CanvasLiveTest do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     [first, middle, last] = held = Prism.Frames.list(frames(view))
     assert middle.key == {:app, "home", "tincture:local.tile-dash"}
 
@@ -442,7 +442,7 @@ defmodule PrismWeb.CanvasLiveTest do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
 
     assert by_key(view, {:app, "home", "tincture:local.hidden-dash"}) == nil
     refute Enum.any?(Prism.Frames.list(frames(view)), &(&1.tincture_id == "iframe_hidden-dash"))
@@ -453,7 +453,7 @@ defmodule PrismWeb.CanvasLiveTest do
        %{conn: conn, ctx: ctx, user: user} do
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     html = render(view)
 
     refute html =~ "<iframe"
@@ -466,7 +466,7 @@ defmodule PrismWeb.CanvasLiveTest do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     desk_column = by_key(view, {:app, "home", "tincture:local.slot-dash"})
     desk_tile = by_key(view, {:app, "home", "tincture:local.tile-dash"})
     canvas = by_key(view, {:canvas, "home"})
@@ -498,7 +498,7 @@ defmodule PrismWeb.CanvasLiveTest do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     column = by_key(view, {:app, "home", "tincture:local.slot-dash"})
     canvas = by_key(view, {:canvas, "home"})
     bearer = bearer!(view, column.id)
@@ -532,7 +532,7 @@ defmodule PrismWeb.CanvasLiveTest do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
 
     assert has_element?(
              view,
@@ -573,7 +573,7 @@ defmodule PrismWeb.CanvasLiveTest do
       }
     ])
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
 
     assert %{state: :refused, refusal: :undeclared, credential_id: nil} =
              app = by_key(view, {:app, "home", "tincture:local.notes-canvas"})
@@ -586,7 +586,7 @@ defmodule PrismWeb.CanvasLiveTest do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
-    {view, _html} = mount_athanor(conn, "/canvas")
+    {view, _html} = mount_desktop(conn)
     ids = Enum.map(Prism.Frames.list(frames(view)), & &1.id)
     assert length(ids) == 3
 
@@ -595,7 +595,7 @@ defmodule PrismWeb.CanvasLiveTest do
   end
 
   test "the shell mounts the canvas and the system layer", %{conn: conn} do
-    {_view, html} = mount_athanor(conn, "/canvas")
+    {_view, html} = mount_desktop(conn)
 
     assert html =~ ~s(id="canvas")
     assert html =~ ~s(phx-hook="Canvas")

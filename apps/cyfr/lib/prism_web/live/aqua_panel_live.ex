@@ -3,13 +3,13 @@
 
 defmodule PrismWeb.AquaPanelLive do
   @moduledoc """
-  The person's own AQUA, on every page: a floating button and, opened, a
-  panel over the page onto their own athanor — the threads of You, one of
-  them open as `PrismWeb.ThreadPaneLive` focused on You, whatever
-  athanor the page is on.
+  The person's own AQUA, over the desktop and every page drawn over it: a
+  button at the shelf's right end and, opened, a panel onto their own
+  athanor — the threads of You, one of them open as
+  `PrismWeb.ThreadPaneLive` focused on You.
 
-  Opened beside a shared thread (the chat page tells it what is in view
-  through `PrismWeb.RoomFeed`), a send from here carries a bounded excerpt
+  Opened beside a shared thread (the chat overlay, `PrismWeb.ChatOverlayLive`,
+  tells it what it has open through `PrismWeb.RoomFeed`), a send from here carries a bounded excerpt
   of what was said there as context for the turn — read under the
   person's own seat, into the private thread only, never kept — and an
   answer can be pasted onto the shared thread, attributed to the person.
@@ -17,20 +17,22 @@ defmodule PrismWeb.AquaPanelLive do
   list: the athanor's own threads, and the requests still waiting on a
   crew member, each with its member, who asked, how long ago and the
   task's first line, which turn the panel to the thread it was asked in.
-  A crew member's thread is reached from its room, as in the chat.
+  A crew member's thread is reached from its room. The thread open in the
+  panel is deleted from its header (`thread.delete`), and while the
+  athanor's seeding has not finished the panel says so and offers to try
+  it again (`athanor.provision`).
 
   A page may ask it about something it shows (`Cyfr.Bus.AquaAsk`, on the
   page's own topic the session names, `aqua_ask`): the panel opens on the
   thread it keeps and its pane takes Prism's sentence after the draft the
   person has, attaching and sending nothing.
 
-  The panel is an overlay: it takes no room from the page. From the
-  bottom, the page draws: the canvas's frames (the canvas z-0, column
-  apps z-20, floating apps z-30, a full app z-50), the canvas's own chrome
-  (the edge strip z-51, the chips and switcher z-55, its notice z-60),
-  this panel and its button (z-70, the thread's menu inside the panel),
-  the command palette (z-80), and the system layer's prompts, which the
-  browser draws in its top layer above every z-index. The thread's menu
+  The panel is an overlay: it takes no room from the page. Its order among
+  the desktop's layers is `PrismWeb.CanvasLive`'s: above the frames, the
+  shelf and a Dashboard page's overlay, its button at the shelf's right end
+  (66) and the panel at 70 with the thread's menu inside it, under the
+  command palette (80) and the system layer's prompts, which the browser
+  draws in its top layer above every z-index. The thread's menu
   closes when the palette opens and goes with the panel when it closes.
   On the desk it moves and resizes
   (`AquaPanel`, `assets/js/aqua_panel/`, which reports each settled
@@ -39,15 +41,15 @@ defmodule PrismWeb.AquaPanelLive do
   (`toggle`, from the `AquaPanelKeys` hook) opens and closes it, Escape
   from inside closes it, and a click elsewhere leaves it open.
 
-  Nested in the app layout, so it rides every authenticated page — and
-  remounts on every navigation. Whether it is open, which thread it
-  shows, where it stands, its size and whether it is docked are kept per
-  browser session (`Arca.Cache`, under a hash of the
-  session token), so the panel a
-  person opened on one page is the panel they find on the next. Nothing
-  here reads the page's focus: the panel establishes the session itself
-  and narrows to the person's own athanor. A person with no athanor of
-  their own has no panel.
+  Nested in the desktop (`PrismWeb.ShellLive`), which stays while the
+  person moves between the pages drawn over it, so the panel stays open
+  across them; it remounts with the document. Whether it is open, which
+  thread it shows, where it stands, its size and whether it is docked are
+  kept per browser session (`Arca.Cache`, under a hash of the session
+  token), so the panel a person left open is the panel they find after a
+  reload. Nothing here reads the page's focus: the panel establishes the
+  session itself and narrows to the person's own athanor. A person with no
+  athanor of their own has no panel.
 
   The dead render is the button alone; the athanor and the kept state are
   read on the connected mount, once. `CyfrWeb.ContextGuard` establishes
@@ -97,6 +99,7 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:room_feed, room_feed)
       |> assign(:ui_mode, session["ui_mode"])
       |> assign(:asked, nil)
+      |> assign(:notice, nil)
 
     if connected?(socket) do
       if is_binary(room_feed), do: PrismWeb.RoomFeed.subscribe(room_feed)
@@ -251,6 +254,53 @@ defmodule PrismWeb.AquaPanelLive do
     {:noreply, socket |> open_on(blank_to_nil(id)) |> remember()}
   end
 
+  # The open thread, one of the athanor's own: deleted through the tool
+  # the assistant's own delete goes through, and the panel turns to a
+  # blank thread. A crew member's thread is its room's and has no delete.
+  def handle_event("delete_thread", _params, %{assigns: %{thread: %{id: id, kind: "own"}}} = socket) do
+    case call_tool(socket, "thread/delete", %{"thread" => id}) do
+      {:ok, _} ->
+        {:noreply, socket |> assign(:notice, nil) |> open_on(nil) |> remember()}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :notice, "Delete failed: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("delete_thread", _params, socket), do: {:noreply, socket}
+
+  # A seeding that failed is tried again by the person; the line says how
+  # it went.
+  def handle_event("provision", _params, socket) do
+    notice =
+      case call_tool(socket, "athanor/provision", %{}) do
+        {:ok, _} -> nil
+        {:error, reason} -> "Still not set up: #{error_message(reason)}"
+      end
+
+    {:noreply, socket |> reload_athanor() |> assign(:notice, notice)}
+  end
+
+  defp reload_athanor(socket) do
+    case Athanors.get(socket.assigns.athanor.id) do
+      {:ok, athanor} -> assign(socket, :athanor, athanor)
+      _unread -> socket
+    end
+  end
+
+  defp provisioning_note(athanor) do
+    case Athanors.provisioning_failure(athanor) do
+      nil ->
+        nil
+
+      %{step: step, detail: detail} ->
+        detail =
+          if String.length(detail) > 120, do: String.slice(detail, 0, 120) <> "…", else: detail
+
+        "— last attempt failed at #{step}: #{detail}"
+    end
+  end
+
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(id), do: id
 
@@ -336,9 +386,9 @@ defmodule PrismWeb.AquaPanelLive do
   def render(assigns) do
     ~H"""
     <div id="aqua-panel-root" phx-hook="AquaPanelKeys">
-      <%!-- Above the composer's Send on the chat page, which sits in the
-            corner the button would otherwise cover. The button and the
-            panel stand where the moduledoc's order puts them. --%>
+      <%!-- At the shelf's right end, after the chat's, in the shelf's
+            chrome (`.shelf-end-button`). The panel stands where the
+            moduledoc's order puts it. --%>
       <button
         id="aqua-panel-button"
         type="button"
@@ -347,9 +397,9 @@ defmodule PrismWeb.AquaPanelLive do
         aria-controls={@open && "aqua-panel-sheet"}
         aria-keyshortcuts="Control+J"
         title="Your own AQUA, on your own athanor wherever you are (Ctrl+J)"
-        class="fixed bottom-20 right-4 z-[70] rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-indigo-500"
+        class="shelf-end-button"
       >
-        AQUA
+        <span class="aqua-panel-orb" aria-hidden="true"></span> AQUA
       </button>
 
       <%!-- Escape from inside the sheet (the hook's: the thread's own view
@@ -430,6 +480,20 @@ defmodule PrismWeb.AquaPanelLive do
             </span>
           </span>
           <span class="flex-1"></span>
+          <button
+            :if={match?(%{kind: "own"}, @thread)}
+            id="aqua-panel-delete"
+            type="button"
+            phx-click="delete_thread"
+            data-confirm="Delete this thread?"
+            aria-label="Delete this thread"
+            title="Delete this thread"
+            class="aqua-panel-ghost text-sm hover:text-red-400"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5" />
+            </svg>
+          </button>
           <%!-- The thread's model, soul or role and usage: the pane's menu,
                 which the panel's hook opens and closes. --%>
           <button
@@ -481,6 +545,33 @@ defmodule PrismWeb.AquaPanelLive do
             ×
           </button>
         </header>
+
+        <div
+          :if={is_nil(@athanor.provisioned_at)}
+          id="aqua-panel-provisioning"
+          class="flex shrink-0 items-center justify-between gap-2 border-b border-amber-900/60 bg-amber-950/40 px-3 py-1.5 text-xs text-amber-200"
+        >
+          <span class="min-w-0 truncate">
+            AQUA is still being set up
+            <span :if={note = provisioning_note(@athanor)} class="text-amber-300/80">{note}</span>
+          </span>
+          <button
+            type="button"
+            phx-click="provision"
+            class="min-h-6 shrink-0 rounded bg-amber-800/60 px-2 py-0.5 text-xs text-amber-100 hover:bg-amber-700/80"
+          >
+            Retry
+          </button>
+        </div>
+
+        <p
+          :if={@notice}
+          id="aqua-panel-notice"
+          role="alert"
+          class="shrink-0 border-b border-border-default px-3 py-1 text-[11px] text-red-300"
+        >
+          {@notice}
+        </p>
 
         <p
           :if={@room}
