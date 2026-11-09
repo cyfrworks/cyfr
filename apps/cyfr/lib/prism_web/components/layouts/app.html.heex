@@ -97,5 +97,10 @@
       </main>
     </div>
   </section>
-  <div :if={not overlay?} id="page-content" hidden>{@inner_content}</div>
+  <%!-- The desktop's own address draws no overlay: only what its page
+        holds, its system layer, whose prompts the browser draws in its top
+        layer and which takes the pointer it is drawn under. --%>
+  <div :if={not overlay?} id="page-content" class="contents pointer-events-auto">
+    {@inner_content}
+  </div>
 </div>

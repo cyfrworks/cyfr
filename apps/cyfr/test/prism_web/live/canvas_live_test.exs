@@ -599,7 +599,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
     assert html =~ ~s(id="canvas")
     assert html =~ ~s(phx-hook="Canvas")
-    assert html =~ ~s(id="system-layer")
+    assert html =~ ~s(id="system-layer-desktop")
     assert html =~ ~s(data-posture="desk")
   end
 end

@@ -9,7 +9,6 @@
           (`app.html.heex`) draws the top bar and, for a Dashboard page, the
           page as an overlay over the desktop. --%>
     {live_render(desktop_conn(@conn), PrismWeb.ShellLive,
-      id: "desktop",
       container: {:div, class: "absolute inset-x-0 bottom-0 top-12"}
     )}
     {@inner_content}

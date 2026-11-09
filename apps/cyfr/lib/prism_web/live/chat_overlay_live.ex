@@ -75,7 +75,8 @@ defmodule PrismWeb.ChatOverlayLive do
   # person's name, then the rest by title; how many of each hold a message
   # posted after the person's read mark; and the people they share a
   # thread with. A list that cannot be read is said once and the rows stay
-  # as they were.
+  # as they were; a reading that succeeds leaves what was said standing
+  # until the person dismisses it.
   defp load(socket) do
     ctx = socket.assigns.context
 
@@ -88,7 +89,7 @@ defmodule PrismWeb.ChatOverlayLive do
             end
             |> Enum.sort_by(&{&1.kind != "pair", String.downcase(&1.label)})
 
-          socket |> assign(:threads, rows) |> assign(:error, nil)
+          assign(socket, :threads, rows)
 
         {:error, message} ->
           assign(socket, :error, "Your shared threads could not be read: #{message}")

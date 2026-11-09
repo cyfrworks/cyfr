@@ -197,7 +197,7 @@ defmodule PrismWeb.ShellPromptsTest do
     }
 
     view
-    |> form("#system-layer-credential", typed)
+    |> form("#system-layer-desktop-credential", typed)
     |> render_submit()
 
     assert {:ok, [%{ref: ref, operation: "vault.create"}]} =
@@ -207,10 +207,10 @@ defmodule PrismWeb.ShellPromptsTest do
     waiting.()
 
     Sanctum.TestContext.prove!(ctx, ref)
-    assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+    assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-desktop-credential"}, 2_000)
 
     view
-    |> form("#system-layer-credential", typed)
+    |> form("#system-layer-desktop-credential", typed)
     |> render_submit()
   end
 
@@ -338,7 +338,7 @@ defmodule PrismWeb.ShellPromptsTest do
       verb!(view, keeper, :credential, %{"name" => "another"})
       assert dropped(view) == 1
 
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
       _ = render(view)
 
       assert_push_event(view, "frame_credential", payload)
@@ -370,7 +370,7 @@ defmodule PrismWeb.ShellPromptsTest do
       refute html =~ "s3c0nd-v4lue"
       refute_push_event(view, "frame_credential", _payload, 50)
 
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
       _ = render(view)
       assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: false} = payload)
       assert Map.keys(payload) |> Enum.sort() == [:frame, :saved]
@@ -426,7 +426,7 @@ defmodule PrismWeb.ShellPromptsTest do
       refute render(view) =~ "waiting."
       assert assigns(view).pairing_prompt == prompt_id
 
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
       _ = render(view)
       assert assigns(view).pairing_prompt == nil
       refute render(view) =~ ~s(data-kind="pairing")
@@ -478,7 +478,7 @@ defmodule PrismWeb.ShellPromptsTest do
       assert html =~ ~s(data-kind="grant")
       assert html =~ "Grant tincture:local.blocked-dash"
 
-      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
 
       # The layer asks its sheet for the walk, commits, and reports.
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
@@ -493,7 +493,7 @@ defmodule PrismWeb.ShellPromptsTest do
 
       view = shell!(conn)
       open!(view, "blocked-dash")
-      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      view |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"])) |> render_click()
 
       assert %{state: :refused, refusal: :ungranted} = full(view, "blocked-dash")
 

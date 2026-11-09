@@ -14,12 +14,22 @@ defmodule PrismWeb.SystemLayer do
   Each view that asks for a grant or a sensitive change mounts it once,
   with the view's `context`, beside its `PrismWeb.SystemLayer.Hook`,
   and acts under that context alone: the
-  shell, the chat and each console page that asks, as `id:
-  "system-layer"` (`layer_id/0`); the person's own panel, which sits on
-  every page beside the page's own layer, as `id: "system-layer-panel"`.
-  The component's id is its DOM id and the id every update names. A layer
-  mounted with `listen: false` opens no stream, so the records the page's
-  own layer shows are never drawn twice. `athanor_route` and
+  page that asks, as `id: "system-layer"` (`layer_id/0`); the desktop
+  (`PrismWeb.ShellLive`), which stands in the same document beside every
+  page, as `id: "system-layer-desktop"` (`desktop_layer_id/0`); and the
+  person's own panel, nested in the desktop, as `id: "system-layer-panel"`.
+  The component's id is its DOM id and the id every update names.
+
+  One layer in a document draws the person's confirmations: the page's,
+  which listens (`listen: true`, the default). The panel's layer mounts
+  with `listen: false` and opens no stream. The desktop's mounts with
+  `listen: :own`: it draws its own prompts and hears the facts of the
+  records its own changes asked for, but opens no prompt for any other
+  record and draws no restore checklist, and it tells the browser each
+  record it holds (`system_layer:held`, by its public ref), which hands it
+  to every other layer in the document (`held_elsewhere`): a listening
+  layer leaves such a record to the desktop's, withdrawing the prompt it
+  opened for it, so no record is ever drawn twice. `athanor_route` and
   `athanor_name` name the athanor a grant lands in. A prompt
   (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
   `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`; `prompt:
@@ -240,6 +250,10 @@ defmodule PrismWeb.SystemLayer do
   @doc "The id the layer is mounted under on a page that holds one."
   @spec layer_id() :: String.t()
   def layer_id, do: @layer_id
+
+  @doc "The DOM id of the desktop's own layer, beside the page's in the same document."
+  @spec desktop_layer_id() :: String.t()
+  def desktop_layer_id, do: "system-layer-desktop"
 
   @doc "The stream the layer listens on."
   @spec stream() :: String.t()
@@ -715,6 +729,7 @@ defmodule PrismWeb.SystemLayer do
        listen: true,
        listening: nil,
        panels: %{},
+       elsewhere: MapSet.new(),
        held: %{},
        pairing: nil,
        restoring: %{},
@@ -871,12 +886,15 @@ defmodule PrismWeb.SystemLayer do
   defp listen(socket), do: socket
 
   # The person's records already open, each shown as an opened fact would
-  # show it: those the layer holds no panel for yet.
+  # show it: those the layer holds no panel for yet, and none in a layer
+  # that hears only its own.
+  defp refresh(%{assigns: %{listen: :own}} = socket), do: socket
+
   defp refresh(socket) do
     case pending_entries(socket) do
       {:ok, entries} ->
         Enum.reduce(entries, socket, fn entry, socket ->
-          if Map.has_key?(socket.assigns.panels, entry.ref),
+          if Map.has_key?(socket.assigns.panels, entry.ref) or not shows_others?(socket, entry.ref),
             do: socket,
             else: open_entry(socket, entry)
         end)
@@ -886,6 +904,13 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  # Whether the layer draws a record no change of its own asked for: a
+  # listening layer does, unless another layer of the document holds it.
+  defp shows_others?(%{assigns: %{listen: true, elsewhere: elsewhere}}, ref),
+    do: not MapSet.member?(elsewhere, ref)
+
+  defp shows_others?(_socket, _ref), do: false
+
   defp listenable?(%Context{plane: :external, authenticated: true} = ctx),
     do: present?(ctx.user_id) and present?(ctx.athanor_id)
 
@@ -893,12 +918,20 @@ defmodule PrismWeb.SystemLayer do
 
   defp present?(value), do: is_binary(value) and value != ""
 
-  # A fact of the stream: what happened to one record of the person's.
+  # A fact of the stream: what happened to one record of the person's. A
+  # layer that hears only its own records (`listen: :own`) opens no prompt
+  # for another, and a record another layer of the document holds is that
+  # layer's to draw.
   defp on_fact(socket, %{"ref" => ref, "kind" => kind}) when is_binary(ref) do
     case Map.get(socket.assigns.panels, ref) do
-      nil when kind == :opened -> open_from_stream(socket, ref)
-      nil -> socket
-      panel -> fact(socket, ref, panel, kind)
+      nil when kind == :opened ->
+        if shows_others?(socket, ref), do: open_from_stream(socket, ref), else: socket
+
+      nil ->
+        socket
+
+      panel ->
+        fact(socket, ref, panel, kind)
     end
   end
 
@@ -1130,8 +1163,20 @@ defmodule PrismWeb.SystemLayer do
       )
 
     unless Map.has_key?(socket.assigns.panels, ref), do: expire_at(socket.assigns.id, ref, panel)
-    assign(socket, :panels, Map.put(socket.assigns.panels, ref, panel))
+    held_here? = match?(%{own: true}, Map.get(socket.assigns.panels, ref))
+
+    socket
+    |> assign(:panels, Map.put(socket.assigns.panels, ref, panel))
+    |> tell_held(ref, panel, held_here?)
   end
+
+  # The desktop's layer tells the browser each record it holds, once, by
+  # its public ref, which the browser hands to every other layer of the
+  # document (`held_elsewhere`).
+  defp tell_held(%{assigns: %{listen: :own}} = socket, ref, %{own: true}, false),
+    do: push_layer(socket, "system_layer:held", %{ref: ref})
+
+  defp tell_held(socket, _ref, _panel, _told), do: socket
 
   # A record's expiry is announced only when its asker repeats after it, so
   # a request nobody repeats would wait forever on this page. Each panel
@@ -1334,7 +1379,14 @@ defmodule PrismWeb.SystemLayer do
   # Events
   # ---------------------------------------------------------------------------
 
+  # A record another layer of the document holds, by its public ref: this
+  # layer leaves it to that one, withdrawing the prompt it opened for it
+  # from the stream, which cancels nothing, and opens none for it again.
   @impl true
+  def handle_event("held_elsewhere", %{"ref" => ref}, socket) when is_binary(ref) do
+    CyfrWeb.ContextGuard.guard(socket, &{:noreply, leave_elsewhere(&1, ref)})
+  end
+
   def handle_event("dismiss", %{"id" => id}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case socket.assigns.current do
@@ -1855,6 +1907,15 @@ defmodule PrismWeb.SystemLayer do
   # A prompt the view withdrew, open or waiting, ends unconfirmed, as does
   # a credential entry it raised, and none of them is reported; the others
   # keep their places.
+  defp leave_elsewhere(socket, ref) do
+    socket = update(socket, :elsewhere, &MapSet.put(&1, ref))
+
+    case Map.get(socket.assigns.panels, ref) do
+      %{own: false, prompt_id: prompt_id} -> withdraw(socket, prompt_id)
+      _none_or_own -> socket
+    end
+  end
+
   defp withdraw(socket, prompt_id) do
     socket
     |> end_prompts(&match?(%{id: ^prompt_id}, &1), false)
@@ -2158,7 +2219,7 @@ defmodule PrismWeb.SystemLayer do
   # hears no record's confirmation, so it could not repeat a re-enable,
   # and the page's own layer draws the checklist once. A read the store
   # does not answer leaves the checklist unread, for the next update.
-  defp read_checklist(%{assigns: %{listen: false}} = socket), do: socket
+  defp read_checklist(%{assigns: %{listen: listen}} = socket) when listen != true, do: socket
 
   defp read_checklist(
          %{assigns: %{restore_checklist: :unread, context: %Context{} = context}} = socket

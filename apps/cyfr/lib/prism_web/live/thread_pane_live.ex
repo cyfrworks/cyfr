@@ -3,22 +3,26 @@
 
 defmodule PrismWeb.ThreadPaneLive do
   @moduledoc """
-  One thread on screen: the tape, the composer, the approval cards
-  and the uploads — a window onto `Aqua.Runner` for one thread, under
-  one focused context.
+  One thread of the person's own AQUA on screen: the tape, the composer,
+  the approval cards and the uploads — a window onto `Aqua.Runner` for
+  one thread, under one focused context. Its host is AQUA's panel
+  (`PrismWeb.AquaPanelLive`), which mounts one pane (`id:
+  "aqua-panel-pane"`) focused on the person's own athanor.
 
-  Each nested LiveView has its own mailbox, authenticated session context,
-  and owner-checked athanor focus. Runner calls, row reads, and
-  attachment writes use that context, independently of the host’s focus.
+  The pane is a nested LiveView with its own mailbox, authenticated
+  session context and owner-checked athanor focus. Runner calls, row
+  reads and attachment writes use that context, independently of the
+  host's.
 
-  One pane per athanor (`id: "pane-<athanor id>"`): the host names the
-  thread at mount and turns the pane to another with `{:switch_thread,
-  id | nil}` — the athanor's reads (the row, the roster, the members, the
-  models) are made once, the thread's (its rows, the runner's live state,
-  the subscription) on every turn. What the host must know travels back
-  as `{:pane, id, message}` to `socket.parent_pid`, first of all
-  `{:ready, pid, thread_id}` once the pane is live, which is how
-  the host learns where to send the switch.
+  The host names the thread at mount and turns the pane to another with
+  `{:switch_thread, id | nil}` — the athanor's reads (the row, the
+  roster, the members, the models) are made once, the thread's (its
+  rows, the runner's live state, the subscription) on every turn. What
+  the host must know travels back as `{:pane, id, message}` to
+  `socket.parent_pid`, first of all `{:ready, pid, thread_id}` once the
+  pane is live, which is how the host learns where to send the switch,
+  and `{:opened, thread}` once a first message has made the thread's
+  row.
 
   A turn that needs a grant asks for it as a `:grant` prompt read under
   the pane's own context and sent to the view that renders the pane,
@@ -42,21 +46,24 @@ defmodule PrismWeb.ThreadPaneLive do
   its crew members' threads; a member's thread names its member, leads
   back to its room and, while it stands, can be archived
   (`thread.archive`). The pane opens neither: it asks its host to open
-  the thread, `{:open_thread, id}`, as it does for an assistant's
-  navigate in the panel.
+  the thread, `{:open_thread, id}`.
 
-  In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
-  the pane sits beside the shared thread the host page shows, when it
-  shows one (`PrismWeb.RoomFeed`): it reads that thread into each send as
-  the turn's context (`Aqua.RoomExcerpt` — under the person's own seat,
-  never kept), and offers to paste a line onto it (`thread.aloud`). The panel's
-  own header names AQUA and the thread, so there the pane draws no name
-  or thread label of its own, and its model override, soul or crew member and
-  token counts sit in a menu (`<dom>-menu`, which the panel's header
-  opens). Its status line appears only while it has something to say
-  (still being prepared, no assistant, messages queued, standing answers,
-  a turn being asked), and its message box and Send take the panel's
-  look.
+  The pane sits beside the shared thread the chat overlay shows, when it
+  shows one (`PrismWeb.RoomFeed`, the session's `room_feed` and `room`):
+  it reads that thread into each send as the turn's context
+  (`Aqua.RoomExcerpt` — under the person's own seat, never kept), and
+  offers to paste a line onto it (`thread.aloud`). What a turn asks of
+  the browser is its sender's alone: a page the assistant points at is
+  offered as a link under the thread (`<dom>-links`), never followed, so
+  the page the person is reading stays; every other intent is pushed as
+  `aqua:intents` naming this pane.
+
+  The panel's own header names AQUA and the thread, so the pane draws no
+  name or thread label of its own, and its model override, soul or crew
+  member and token counts sit in a menu (`<dom>-menu`, which the panel's
+  header opens). Its status line appears only while it has something to
+  say (still being prepared, no assistant, messages queued, standing
+  answers, a turn being asked).
   """
 
   use PrismWeb, :live_view
@@ -83,7 +90,7 @@ defmodule PrismWeb.ThreadPaneLive do
   @impl true
   def mount(_params, session, socket) do
     ctx = socket.assigns.context
-    # Every DOM id here carries the pane's own: a page may hold two panes.
+    # Every DOM id here carries the pane's own.
     socket = socket |> assign(:dom, socket.id) |> beside(session) |> open(ctx, session)
 
     if connected?(socket) do
@@ -94,15 +101,14 @@ defmodule PrismWeb.ThreadPaneLive do
     {:ok, socket, layout: false}
   end
 
-  # A pane in the person's own panel sits beside a shared thread: it hears what the
-  # host page shows and reads it into each send.
+  # The pane sits beside the shared thread the chat overlay shows: it hears
+  # which on the desktop's feed and reads it into each send.
   defp beside(socket, session) do
     room_feed = session["room_feed"]
 
     if connected?(socket) and is_binary(room_feed), do: PrismWeb.RoomFeed.subscribe(room_feed)
 
     socket
-    |> assign(:panel?, session["panel"] == true)
     |> assign(:room, session["room"])
     |> assign(:read_room?, true)
   end
@@ -484,12 +490,6 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, socket}
   end
 
-  # Saying a line aloud is the host's picker; the pane names the line.
-  def handle_event("aloud_open", %{"id" => msg_id}, socket) do
-    tell_host(socket, {:aloud_open, msg_id})
-    {:noreply, socket}
-  end
-
   # A crew thread, or its room: the host opens it, as it opens any thread.
   def handle_event("open_thread", %{"id" => id}, socket) do
     tell_host(socket, {:open_thread, id})
@@ -505,20 +505,14 @@ defmodule PrismWeb.ThreadPaneLive do
 
   def handle_event("archive", _params, socket), do: {:noreply, socket}
 
-  # The list beside the thread is the host's drawer on a phone.
-  def handle_event("toggle_rail", _params, socket) do
-    tell_host(socket, :toggle_rail)
-    {:noreply, socket}
-  end
-
   # Beside a shared thread: whether each send reads it.
   def handle_event("toggle_read_room", _params, socket) do
     {:noreply, assign(socket, :read_room?, not socket.assigns.read_room?)}
   end
 
-  # A line from this thread onto the shared thread beside it — the same
-  # `thread.aloud` verb as the picker, its target already known.
-  # `Aqua.Aloud` decides what may be said and attributes the copy.
+  # A line from this thread onto the shared thread beside it, through
+  # `thread.aloud`. `Aqua.Aloud` decides what may be said and attributes
+  # the copy.
   def handle_event("paste", %{"id" => msg_id}, socket) do
     case {socket.assigns.room, socket.assigns.thread} do
       {%{} = room, %{} = thread} ->
@@ -547,7 +541,7 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # A page the assistant pointed at from the panel, taken or left.
+  # A page the assistant pointed at, taken or left.
   def handle_event("dismiss_link", %{"to" => to}, socket) do
     {:noreply, assign(socket, :links, List.delete(socket.assigns.links, to))}
   end
@@ -622,16 +616,16 @@ defmodule PrismWeb.ThreadPaneLive do
       else: {:noreply, open_thread(socket, thread_of(socket.assigns.context, id))}
   end
 
-  # The host page opened another thread: the shared thread this pane reads changed.
-  # The page beside the panel asked about something it shows: Prism's
-  # sentence goes after the person's draft, which it never replaces, and
-  # nothing is sent.
+  # A desktop asked about something it shows: Prism's sentence goes after
+  # the person's draft, which it never replaces, and nothing is sent.
   def handle_info({:aqua_ask, sentence}, socket) when is_binary(sentence) do
     draft = String.trim_trailing(socket.assigns.input)
     input = if draft == "", do: sentence, else: draft <> "\n\n" <> sentence
     {:noreply, assign(socket, :input, input)}
   end
 
+  # The chat overlay opened another shared thread, or none: the thread this
+  # pane reads changed.
   def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
     do: {:noreply, assign(socket, :room, room)}
 
@@ -1221,19 +1215,15 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # The shared thread beside this pane, named for this send — the panel
-  # alone. Its lines are read server-side, under the person's seat, for
-  # this one turn.
-  defp room_context(
-         %{assigns: %{panel?: true, read_room?: true, room: %{} = room}} = socket,
-         _thread
-       ) do
+  # The shared thread beside this pane, named for this send. Its lines are
+  # read server-side, under the person's seat, for this one turn.
+  defp room_context(%{assigns: %{read_room?: true, room: %{} = room}} = socket, _thread) do
     if reads_room?(room), do: {[room: room], socket}, else: {[], socket}
   end
 
   defp room_context(socket, _thread), do: {[], socket}
 
-  # Beside a shared thread: what the page shows is one, so there is
+  # Beside a shared thread: what the chat overlay shows is one, so there is
   # something to read and to paste onto.
   defp reads_room?(%{"shared_thread_id" => id}) when is_binary(id), do: true
   defp reads_room?(_room), do: false
@@ -1287,9 +1277,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # system layer of the view that renders the pane: opened on `account`,
   # the account a launch named, on the app's own calls, when the turn
   # names one, remembering the message of the turn that asked
-  # (`message_id`). A pane with no host has no layer to ask in, and says
-  # so.
-  defp ask_grant(%{parent_pid: host} = socket, ref, account, message_id) when is_pid(host) do
+  # (`message_id`).
+  defp ask_grant(socket, ref, account, message_id) do
     id = "grant-#{socket.id}-#{System.unique_integer([:positive])}"
 
     case PrismWeb.SystemLayer.grant_prompt(socket, id, ref, account_opts(account)) do
@@ -1304,14 +1293,6 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(socket, :error, "Cannot ask for this grant: #{error_message(reason)}")
     end
   end
-
-  defp ask_grant(socket, _ref, _account, _message_id),
-    do:
-      put_flash(
-        socket,
-        :error,
-        "This turn needs a grant. Open the thread in the chat to give it."
-      )
 
   defp account_opts(%{name: name} = account) when is_binary(name),
     do: [account: %{name: name, dep: nil, need: Map.get(account, :need)}]
@@ -1383,8 +1364,8 @@ defmodule PrismWeb.ThreadPaneLive do
   defp tell_host(_socket, _message), do: :ok
 
   # Whether this athanor's AQUA can answer at all: a soul, and a model
-  # with a key behind it. A fresh furnace has neither, and the chat is
-  # where someone finds that out — not the drawer. A model whose consent
+  # with a key behind it. A fresh furnace has neither, and the pane's empty
+  # state is where someone finds that out. A model whose consent
   # exists but is damaged, or could not be read, is said as such: no model
   # is offered to connect over a consent that exists.
   # An agents list that could not be read is not a room with no model.
@@ -1428,8 +1409,8 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # What to call the athanor in its own chat: the person's own is "your
-  # AQUA" — the one their row names as theirs.
+  # What to call the athanor: the person's own is "your AQUA" — the one
+  # their row names as theirs.
   defp athanor_label(%{} = athanor, ctx) do
     if PrismWeb.Athanors.own?(athanor, ctx),
       do: "your AQUA",
@@ -1472,19 +1453,17 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # Navigate intents are page paths (`/activities`); the athanor this pane
   # is on is added here, so the assistant never addresses another athanor's
-  # pages.
-  #
-  # The push names this pane: the client hands a pushed event to every
-  # pane on the page, and each acts only on `%{pane: <its section id>}`.
-  # In the panel a navigate never moves the page the person is reading: it
-  # is offered as a link line, theirs to take or leave.
+  # pages. A navigate never moves the page the person is reading: it is
+  # offered as a link line, theirs to take or leave. Every other intent is
+  # pushed, naming this pane: the client acts only on `%{pane: <its
+  # section id>}`.
   defp push_intents(socket, []), do: socket
 
   defp push_intents(socket, intents) do
     mode = socket.assigns[:ui_mode]
     route = socket.assigns.athanor_route
 
-    intents =
+    {navigates, rest} =
       intents
       |> Enum.filter(&mode_permits?(&1, mode))
       |> Enum.map(fn
@@ -1492,24 +1471,16 @@ defmodule PrismWeb.ThreadPaneLive do
         intent -> intent
       end)
       |> Enum.filter(&served?/1)
-
-    {socket, intents} =
-      if socket.assigns.panel?, do: keep_navigates(socket, intents), else: {socket, intents}
-
-    if intents == [],
-      do: socket,
-      else: push_event(socket, "aqua:intents", %{pane: pane_id(socket), intents: intents})
-  end
-
-  defp keep_navigates(socket, intents) do
-    {navigates, rest} = Enum.split_with(intents, &(&1.kind == "navigate"))
+      |> Enum.split_with(&(&1.kind == "navigate"))
 
     socket =
       Enum.reduce(navigates, socket, fn %{to: to}, socket ->
         assign(socket, :links, Enum.take(Enum.uniq([to | socket.assigns.links]), @max_links))
       end)
 
-    {socket, rest}
+    if rest == [],
+      do: socket,
+      else: push_event(socket, "aqua:intents", %{pane: pane_id(socket), intents: rest})
   end
 
   defp pane_id(socket), do: socket.assigns.dom <> "-pane"
@@ -1551,39 +1522,10 @@ defmodule PrismWeb.ThreadPaneLive do
       class="flex flex-1 min-w-0 flex-col focus:outline-none"
     >
       <header
-        :if={not @panel? or panel_status?(assigns)}
-        class={[
-          "flex items-center justify-between gap-2",
-          if(@panel?,
-            do: "border-b border-border-default px-3 py-1",
-            else: "border-b border-gray-800 px-4 py-2"
-          )
-        ]}
+        :if={status?(assigns)}
+        class="flex items-center justify-between gap-2 border-b border-border-default px-3 py-1"
       >
         <div class="flex items-center gap-2 min-w-0">
-          <%!-- The phone drawer is the host's: this only asks for it. --%>
-          <button
-            :if={not @panel?}
-            type="button"
-            phx-click="toggle_rail"
-            class="md:hidden min-h-6 rounded px-1.5 py-1 text-xs uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
-            title="Chats"
-          >
-            Chats
-          </button>
-          <span :if={not @panel?} class="text-sm font-medium text-gray-200 shrink-0">AQUA</span>
-          <%!-- Which furnace this chat is: a key bound here is bound here.
-                The panel's header already says You. --%>
-          <span :if={not @panel?} class="text-xs text-gray-500 shrink-0 truncate max-w-[10rem]">
-            in {athanor_label(@athanor, @context)}
-          </span>
-          <span
-            :if={@roster != [] and not @panel?}
-            class="text-xs text-gray-400 max-w-[14rem] truncate"
-            title="The soul or crew member this thread is on"
-          >
-            {assistant_label(current_assistant(@assistant, @roster))}
-          </span>
           <span :if={@preparing?} class="text-xs text-amber-400">
             Still being prepared
           </span>
@@ -1604,13 +1546,6 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             +{MapSet.size(@grants)} this chat
           </span>
-          <.model_override
-            :if={not @panel? and @models_loaded and @models_by_provider != %{}}
-            assistant={@assistant}
-            models_by_provider={@models_by_provider}
-            model_override={@model_override}
-            class="min-h-6 bg-transparent text-xs text-gray-600 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate font-mono"
-          />
         </div>
         <div class="flex items-center gap-1">
           <span
@@ -1619,23 +1554,13 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             {label_for(@members, @turn_user, @context)} is asking…
           </span>
-          <%!-- The workbench is the page's; from the panel it would leave the room. --%>
-          <.link
-            :if={not @panel?}
-            navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-            class="inline-flex min-h-6 items-center rounded px-2 py-1 text-xs uppercase tracking-wider text-gray-500 hover:bg-gray-800 hover:text-gray-300"
-          >
-            AQUA
-          </.link>
         </div>
       </header>
 
-      <%!-- In the panel, what the chat page's header shows lives here: the
-            model override, the soul or crew member and the thread's usage. The
-            panel's hook shows and hides it from the panel's header, so its
-            `hidden` is the browser's to keep. --%>
+      <%!-- The thread's menu: the model override, the soul or crew member and
+            the thread's usage. The panel's hook shows and hides it from the
+            panel's header, so its `hidden` is the browser's to keep. --%>
       <div
-        :if={@panel?}
         id={@dom <> "-menu"}
         hidden
         phx-mounted={JS.ignore_attributes(["hidden"])}
@@ -1764,15 +1689,7 @@ defmodule PrismWeb.ThreadPaneLive do
                 <span data-test="model-pending">Reading the model…</span>
               <% @model_ready in [:no_model, :no_key] -> %>
                 <span>{athanor_label(@athanor, @context)} has no model yet.</span>
-                <%!-- From the panel a navigate would leave the room being read. --%>
-                <.link
-                  :if={not @panel?}
-                  navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-                  class="inline-flex min-h-6 items-center text-blue-400 hover:text-blue-300"
-                >
-                  Connect a model
-                </.link>
-                <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
+                <span class="text-gray-500">Connect one on your AQUA page.</span>
               <% @model_ready == :consent_damaged -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,
                      is no model to connect: it is said as such. --%>
@@ -1924,21 +1841,14 @@ defmodule PrismWeb.ThreadPaneLive do
                       attachments={Threads.payload(msg)["attachments"] || []}
                       attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                     />
-                    <%!-- A line you may say aloud: yours, or your assistant's
-                        in your own athanor. The host owns the picker — in
-                        the panel the target is the room beside it. --%>
-                    <div :if={sayable?(msg, @context, @own?)} class="flex justify-end">
+                    <%!-- A line you may paste onto the shared thread beside
+                        the pane: yours, or your assistant's in your own
+                        athanor. --%>
+                    <div
+                      :if={reads_room?(@room) and sayable?(msg, @context, @own?)}
+                      class="flex justify-end"
+                    >
                       <button
-                        :if={not @panel?}
-                        type="button"
-                        phx-click="aloud_open"
-                        phx-value-id={msg.id}
-                        class={aloud_button_class()}
-                      >
-                        Say aloud…
-                      </button>
-                      <button
-                        :if={@panel? and reads_room?(@room)}
                         type="button"
                         phx-click="paste"
                         phx-value-id={msg.id}
@@ -2064,7 +1974,7 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
 
       <label
-        :if={@panel? and reads_room?(@room)}
+        :if={reads_room?(@room)}
         id={@dom <> "-read-room"}
         title="Each message you send here carries what the thread beside it shows — read for you, never kept"
         class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-xs text-gray-500"
@@ -2082,10 +1992,7 @@ defmodule PrismWeb.ThreadPaneLive do
         id={@dom <> "-composer"}
         phx-submit="submit"
         phx-change="validate_upload"
-        class={[
-          "space-y-2 border-t",
-          if(@panel?, do: "border-border-default px-3 pt-2.5 pb-3", else: "border-gray-800 p-3")
-        ]}
+        class="space-y-2 border-t border-border-default px-3 pt-2.5 pb-3"
       >
         <div :if={@uploads.attachments.entries != []} class="flex flex-wrap gap-1">
           <div
@@ -2110,15 +2017,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
         <div class="flex gap-2 items-end">
           <label
-            class={[
-              "self-end cursor-pointer",
-              if(@panel?,
-                do:
-                  "grid h-9 w-8 place-items-center rounded-[10px] text-sm text-text-muted hover:text-text-secondary",
-                else:
-                  "rounded-md border border-gray-700 bg-gray-800 px-2 py-2 text-sm text-gray-400 hover:bg-gray-700"
-              )
-            ]}
+            class="grid h-9 w-8 cursor-pointer place-items-center self-end rounded-[10px] text-sm text-text-muted hover:text-text-secondary"
             title="Attach files"
           >
             📎 <.live_file_input upload={@uploads.attachments} class="hidden" />
@@ -2132,27 +2031,13 @@ defmodule PrismWeb.ThreadPaneLive do
             placeholder={
               composer_placeholder(assistant_handle(current_assistant(@assistant, @roster), @athanor))
             }
-            class={[
-              "flex-1 resize-none text-sm focus:outline-none max-h-40 overflow-y-auto",
-              if(@panel?,
-                do:
-                  "min-h-9 rounded-[10px] border border-border-default bg-surface-base px-2.5 py-2 text-text-primary placeholder-text-muted focus:border-border-focus focus:ring-0",
-                else:
-                  "rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-white placeholder-gray-500 focus:border-blue-500"
-              )
-            ]}
+            class="min-h-9 max-h-40 flex-1 resize-none overflow-y-auto rounded-[10px] border border-border-default bg-surface-base px-2.5 py-2 text-sm text-text-primary placeholder-text-muted focus:border-border-focus focus:outline-none focus:ring-0"
             disabled={@roster == []}
           >{@input}</textarea>
           <button
             type="submit"
             disabled={@roster == [] or (@input == "" and @uploads.attachments.entries == [])}
-            class={[
-              "self-end text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed",
-              if(@panel?,
-                do: "h-9 rounded-[10px] bg-accent-primary px-3.5 font-semibold hover:bg-accent-hover",
-                else: "rounded-md bg-blue-600 px-4 py-2 font-medium hover:bg-blue-500"
-              )
-            ]}
+            class="h-9 self-end rounded-[10px] bg-accent-primary px-3.5 text-sm font-semibold text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
             Send
           </button>
@@ -2167,18 +2052,6 @@ defmodule PrismWeb.ThreadPaneLive do
           </button>
         </div>
       </form>
-
-      <div
-        :if={not @panel?}
-        class="border-t border-gray-800 px-3 py-1.5 text-xs text-gray-500 flex items-center justify-between gap-3"
-      >
-        <span class="truncate">
-          {if @thread, do: @thread.title, else: "New thread"}
-        </span>
-        <span :if={@token_usage.input > 0 or @token_usage.output > 0} class="font-mono shrink-0">
-          {@token_usage.input} in / {@token_usage.output} out
-        </span>
-      </div>
     </section>
     """
   end
@@ -2211,8 +2084,8 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
-  # In the panel the status line is drawn only while it says something.
-  defp panel_status?(assigns) do
+  # The status line is drawn only while it says something.
+  defp status?(assigns) do
     assigns.preparing? or assigns.roster == [] or assigns.queued > 0 or
       MapSet.size(assigns.grants) > 0 or (assigns.running and assigns.turn_user != nil)
   end

@@ -2303,7 +2303,7 @@ defmodule PrismWeb.ShellLive do
     if notice == socket.assigns.noticed do
       socket
     else
-      send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.layer_id(), notice: notice)
+      send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.desktop_layer_id(), notice: notice)
       assign(socket, :noticed, notice)
     end
   end
@@ -2313,10 +2313,10 @@ defmodule PrismWeb.ShellLive do
   # ============================================================================
 
   defp show_prompt(prompt),
-    do: send_update(PrismWeb.SystemLayer, id: "system-layer", prompt: prompt)
+    do: send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.desktop_layer_id(), prompt: prompt)
 
   defp withdraw_prompt(prompt_id),
-    do: send_update(PrismWeb.SystemLayer, id: "system-layer", withdraw: prompt_id)
+    do: send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.desktop_layer_id(), withdraw: prompt_id)
 
   defp next_prompt_id(socket, kind) do
     seq = socket.assigns.prompt_seq + 1
@@ -3111,10 +3111,16 @@ defmodule PrismWeb.ShellLive do
 
       <.flash_group flash={@flash} />
 
+      <%!-- The desktop's own layer: its prompts above every frame, and the
+           outcomes of the confirmations its own changes asked for. The
+           person's confirmations are the page's layer's to draw, the
+           desktop page's included (`PrismWeb.DesktopLive`), and a record
+           this layer holds is handed to that one through the browser. --%>
       <.live_component
         module={PrismWeb.SystemLayer}
-        id={PrismWeb.SystemLayer.layer_id()}
+        id={PrismWeb.SystemLayer.desktop_layer_id()}
         context={@context}
+        listen={:own}
         athanor_route={@athanor_route}
         athanor_name={@athanor && @athanor.name}
       />

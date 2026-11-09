@@ -612,7 +612,6 @@ defmodule PrismWeb.AquaPanelLive do
             "athanor_id" => @athanor.id,
             "thread_id" => @thread && @thread.id,
             "ui_mode" => @ui_mode,
-            "panel" => true,
             "room_feed" => @room_feed,
             "room" => @room
           }

@@ -22,11 +22,12 @@ defmodule PrismWeb.OneModeTest do
   defp route(athanor), do: Athanors.route_slug(athanor)
 
   # The desktop's LiveView, as the session's root layout renders it beside
-  # the page's: one container, carrying its own signed session.
+  # the page's: a root view of its own, its signed session on its container,
+  # the shell inside it.
   defp desktop?(html) do
     html
     |> LazyHTML.from_document()
-    |> LazyHTML.query("body > #desktop[data-phx-session]")
+    |> LazyHTML.query("body > [data-phx-session]:not([data-phx-main]) > #shell")
     |> Enum.count() == 1
   end
 

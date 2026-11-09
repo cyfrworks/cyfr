@@ -19,7 +19,7 @@ defmodule PrismWeb.ChatOverlayLiveTest do
     {:ok, conn: log_in_user(conn, alice), alice: alice}
   end
 
-  defp mount_chat(conn, feed \\ "room-feed-#{System.unique_integer([:positive])}") do
+  defp mount_chat(conn, feed \\ PrismWeb.RoomFeed.topic("desk-#{System.unique_integer([:positive])}")) do
     {:ok, view, _html} =
       live_isolated(conn, PrismWeb.ChatOverlayLive, session: %{"room_feed" => feed})
 

@@ -442,7 +442,7 @@ const PROMPTS = [
 // What the shell's document and the frame's own hold now.
 async function screenState(page, frame) {
   const top = await page.evaluate(() => {
-    const dialog = document.getElementById("system-layer-dialog");
+    const dialog = document.getElementById("system-layer-desktop-dialog");
     const held = dialog && dialog.querySelector("[data-kind]");
     const frames = Array.from(document.querySelectorAll("iframe"));
     return {
@@ -500,7 +500,7 @@ async function promptOverFullscreen(page, frame, browserName, expected, outDir) 
   const shown = (await page.evaluate(() => (window.__shows || []).length));
   const answered = await ask(outDir, expected.request);
   await page.waitForFunction((kind) => {
-    const dialog = document.getElementById("system-layer-dialog");
+    const dialog = document.getElementById("system-layer-desktop-dialog");
     const held = dialog && dialog.querySelector("[data-kind]");
     return !!(dialog && dialog.open && held && held.dataset.kind === kind);
   }, expected.kind, { timeout: 30_000 });
@@ -512,7 +512,7 @@ async function promptOverFullscreen(page, frame, browserName, expected, outDir) 
   await sleep(1_500);
 
   const after = await screenState(page, frame);
-  const shows = after.shows.slice(shown).filter((s) => s.dialog === "system-layer-dialog");
+  const shows = after.shows.slice(shown).filter((s) => s.dialog === "system-layer-desktop-dialog");
   // The page's fullscreen element is what covers a prompt: a hidden frame
   // runs no rendering steps, so the fullscreen element its own document
   // reports is stale until it is shown again, and is recorded, not held.
@@ -528,12 +528,12 @@ async function promptOverFullscreen(page, frame, browserName, expected, outDir) 
   // click, so it is let go first, as a person's Escape lets it go.
   await frame.evaluate(() => document.exitPointerLock()).catch(() => null);
   if (expected.kind === "confirmation") {
-    await page.locator('#system-layer-dialog [data-test="confirm-cancel"]').click();
+    await page.locator('#system-layer-desktop-dialog [data-test="confirm-cancel"]').click();
   } else {
-    await page.locator('#system-layer-dialog button[phx-click="dismiss"]').click();
+    await page.locator('#system-layer-desktop-dialog button[phx-click="dismiss"]').click();
   }
   await page.waitForFunction(() => {
-    const dialog = document.getElementById("system-layer-dialog");
+    const dialog = document.getElementById("system-layer-desktop-dialog");
     return !(dialog && dialog.open);
   }, null, { timeout: 30_000 });
 
@@ -588,7 +588,7 @@ async function pointerRetaken(page, frame, browserName) {
     const shown = (await page.evaluate(() => (window.__shows || []).length));
     await frame.click("#ask");
     await page.waitForFunction(() => {
-      const dialog = document.getElementById("system-layer-dialog");
+      const dialog = document.getElementById("system-layer-desktop-dialog");
       const held = dialog && dialog.querySelector("[data-kind]");
       return !!(dialog && dialog.open && held && held.dataset.kind === "credential_entry");
     }, null, { timeout: 30_000 });
@@ -596,7 +596,7 @@ async function pointerRetaken(page, frame, browserName) {
 
     // 1. Hidden and inert while the prompt shows, and the frame's hold.
     const over = await screenState(page, frame);
-    const shows = over.shows.slice(shown).filter((s) => s.dialog === "system-layer-dialog");
+    const shows = over.shows.slice(shown).filter((s) => s.dialog === "system-layer-desktop-dialog");
     const hiddenHeld = shows.length > 0 && shows.every((s) => s.frames > 0 && s.frames_hidden) && over.frames_hidden &&
       over.open && over.modal && over.kind === "credential_entry";
 
@@ -624,7 +624,7 @@ async function pointerRetaken(page, frame, browserName) {
     // unsaved, and nothing else.
     if (escaped.open) await browserEscape(cdp);
     await page.waitForFunction(() => {
-      const dialog = document.getElementById("system-layer-dialog");
+      const dialog = document.getElementById("system-layer-desktop-dialog");
       return !(dialog && dialog.open);
     }, null, { timeout: 30_000 });
     const ended = await waitFor(async () => {

@@ -2,16 +2,21 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.AquaPanelLiveTest do
-  # The person's own AQUA over the page: beside a shared thread, the
-  # panel's send lands in You with that thread read into the turn, and an
-  # answer pastes back onto it, attributed.
+  # The person's own AQUA on the desktop: beside the shared thread the
+  # chat overlay shows, the panel's send lands in You with that thread read
+  # into the turn, and an answer pastes back onto it, attributed.
   # The panel itself: what the assistant points at stays in the panel, a
-  # halt reaches its own turn, Escape and Ctrl+J close it, and it
-  # keeps its thread, its place, its size and its docking from one page to
-  # the next (the pointer and the hand's sheet are the hook's, tested in
-  # assets/test/aqua_panel/). Driven against the real loop and a
-  # scripted model.
+  # halt reaches its own turn, a grant is asked in its own layer, Escape
+  # and Ctrl+J close it, it keeps its thread, its place, its size and its
+  # docking across a reload (the pointer and the hand's sheet are the
+  # hook's, tested in assets/test/aqua_panel/), and it deletes the open
+  # thread and tries a failed fill again. Its pane is a window onto the
+  # runner: two desktops of the person see one thread, a send is held while
+  # the athanor is being prepared, and a file is stored for any device.
+  # Driven against the real loop and a scripted model.
   use PrismWeb.ConnCase, async: false
+
+  require Ecto.Query
 
   import Prima.Test.Wait
 
@@ -97,10 +102,31 @@ defmodule PrismWeb.AquaPanelLiveTest do
     end
   end
 
+  # The person's desktop, under the session `conn` carries: a reload is a
+  # second mount of it.
+  defp desktop!(conn) do
+    {view, _html} = mount_desktop(conn)
+    view
+  end
+
   defp open_panel(view) do
     panel = child!(view, "aqua-panel")
     html = panel |> element("#aqua-panel-button") |> render_click()
     {panel, html}
+  end
+
+  # The chat overlay on the desktop, opened on the shared thread `thread`.
+  defp beside!(view, thread) do
+    overlay = child!(view, "chat-overlay")
+    overlay |> element("#chat-button") |> render_click()
+    overlay |> element("#shared-thread-#{thread.id} button") |> render_click()
+    overlay
+  end
+
+  # The panel's pane, turned to thread `id`.
+  defp select!(panel, id) do
+    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => id})
+    on_thread!(child!(panel, "aqua-panel-pane"), id)
   end
 
   # The panel's thread of You, once its turn has ended.
@@ -120,10 +146,10 @@ defmodule PrismWeb.AquaPanelLiveTest do
     you_thread
   end
 
-  test "the panel opens onto You beside a shared thread, and a send lands in You with that thread read into the turn",
+  test "the panel opens onto You beside the shared thread the chat shows, and a send lands in You with that thread read into the turn",
        %{conn: conn, me: me, team: team, user: user} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
+    view = desktop!(conn)
+    beside!(view, team)
 
     {panel, html} = open_panel(view)
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
@@ -165,19 +191,19 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel reads what the page shows: another shared thread, and none beside the athanor's chat",
-       %{conn: conn, mine: mine, team: team, user: user} do
+  test "the panel reads what the chat shows: another shared thread, and none once the chat closes",
+       %{conn: conn, team: team, user: user} do
     {:ok, second} = Sanctum.SharedThreads.create(user.user_id, "Second thread")
 
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
+    view = desktop!(conn)
+    overlay = beside!(view, team)
     {panel, html} = open_panel(view)
     assert html =~ "Reading #{team.title}"
 
-    render_click(view, "open_shared", %{"id" => second.id})
+    overlay |> element("#shared-thread-#{second.id} button") |> render_click()
     assert render(panel) =~ "Reading Second thread"
 
-    render_patch(view, PrismWeb.ChatLive.chat_path(route(mine)))
+    overlay |> element("#chat-close") |> render_click()
     refute has_element?(panel, "#aqua-panel-room")
 
     Cyfr.Test.Sandbox.end_views()
@@ -185,8 +211,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   test "an answer in the panel pastes onto the shared thread, attributed, and that thread's pane shows it",
        %{conn: conn, user: user, me: me, team: team} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
+    view = desktop!(conn)
+    overlay = beside!(view, team)
     {panel, _html} = open_panel(view)
     pane = child!(panel, "aqua-panel-pane")
     Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
@@ -219,18 +245,21 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, stored} = Arca.SharedMessages.get(Prima.Actor.system(), team.id, copy.id)
     assert stored.payload["shared_agent"] == true
 
-    # The shared thread's own pane on the page heard of it.
-    shared_pane = child!(view, "shared-pane-" <> team.id)
-    assert render(shared_pane) =~ "They mean Friday."
+    # The shared thread's own pane in the chat heard of it.
+    shared_pane = child!(overlay, "chat-thread-" <> team.id)
+
+    wait_until(
+      fn -> render(shared_pane) =~ "They mean Friday." end,
+      5_000,
+      "the pasted answer in the chat's pane"
+    )
 
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "on a page beside no shared thread the panel reads nothing and sends plainly",
+  test "with no shared thread open beside it the panel reads nothing and sends plainly",
        %{conn: conn, mine: mine, me: me} do
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
-    {panel, _html} = open_panel(view)
+    {panel, _html} = open_panel(desktop!(conn))
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
     refute has_element?(panel, "#aqua-panel-room")
 
@@ -252,9 +281,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     :ok = PrismWeb.ModelCatalog.remember(mine.id, %{"models" => %{"kept" => ["kept-model-1"]}})
     on_exit(fn -> PrismWeb.ModelCatalog.forget(mine.id) end)
 
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
-    {panel, _html} = open_panel(view)
+    {panel, _html} = open_panel(desktop!(conn))
     # The header's toggle opens the pane's menu, an element of the panel
     # that the hook shows; it is drawn hidden.
     assert has_element?(
@@ -310,65 +337,38 @@ defmodule PrismWeb.AquaPanelLiveTest do
     render(pane)
   end
 
-  test "a navigate from the panel never moves the page: a thread of You opens in the panel, another page is a link",
+  test "a navigate from the panel never moves the page: it is a link, nothing is pushed, and the panel keeps its thread",
        %{conn: conn, user: user, mine: mine, me: me, team: team} do
     # The page it points to is dev's, which a person chooses.
     {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
 
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
+    view = desktop!(conn)
+    overlay = beside!(view, team)
     {panel, _html} = open_panel(view)
     Cyfr.Test.ScriptedWorker.script([model_reply("ok")])
     {pane, you_thread} = panel_thread(panel, me, "where are my activities?")
 
-    # Another page: offered as a link, on You, and nothing pushed.
     html = intents(pane, you_thread, user, [%{kind: "navigate", to: "/activities?id=req_abc"}])
     refute_push_event(pane, "aqua:intents", %{intents: _})
     assert html =~ "AQUA points to"
     assert html =~ PrismWeb.Focus.path(route(mine), "/activities?id=req_abc")
 
+    # The panel is on the thread it was on, and the chat beside it is where
+    # it was.
+    on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
+    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{you_thread.id}"][selected]))
+    assert find_live_child(overlay, "chat-thread-" <> team.id)
+
     # Dismissed, it is gone.
     pane |> element(~s(button[phx-click="dismiss_link"])) |> render_click()
     refute render(pane) =~ "AQUA points to"
-
-    # A thread of You: the panel turns to it.
-    {:ok, second} = Threads.create(Sanctum.Context.actor(me))
-    to = PrismWeb.ChatLive.chat_path(route(mine), second.id)
-    intents(pane, you_thread, user, [%{kind: "navigate", to: to}])
-    refute_push_event(pane, "aqua:intents", %{intents: _})
-    on_thread!(child!(panel, "aqua-panel-pane"), second.id)
-
-    # The page is still on the shared thread, its pane where it was.
-    assert child!(view, "shared-pane-" <> team.id)
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "a navigate to the chat of You that names no thread is a link, and the panel keeps its thread",
-       %{conn: conn, user: user, mine: mine, me: me, team: team} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
-    {panel, _html} = open_panel(view)
-    Cyfr.Test.ScriptedWorker.script([model_reply("ok")])
-    {pane, you_thread} = panel_thread(panel, me, "where were we?")
-
-    # The athanor alone, no `c`: not a thread the panel could turn to.
-    to = PrismWeb.ChatLive.chat_path(route(mine))
-    html = intents(pane, you_thread, user, [%{kind: "navigate", to: to}])
-    refute_push_event(pane, "aqua:intents", %{intents: _})
-    assert html =~ "AQUA points to"
-    assert html =~ to
-
-    # The open thread was not blanked.
-    on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
-    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{you_thread.id}"][selected]))
 
     Cyfr.Test.Sandbox.end_views()
   end
 
   test "the panel lists the requests waiting on the crew, and one turns the panel to the thread it was asked in",
-       %{conn: conn, me: me, team: team} do
+       %{conn: conn, me: me} do
     actor = Sanctum.Context.actor(me)
     {:ok, room} = Threads.create(actor)
     {:ok, child} = Threads.crew_thread(actor, room.id, "builder")
@@ -384,9 +384,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
         }
       })
 
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
-    {panel, _html} = open_panel(view)
+    {panel, _html} = open_panel(desktop!(conn))
 
     waiting = "#aqua-panel-pending-#{request.id}"
     assert has_element?(panel, waiting, "builder")
@@ -406,9 +404,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "⌘. in the panel halts the panel's turn",
-       %{conn: conn, mine: mine, me: me, team: team} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
+       %{conn: conn, mine: mine, me: me} do
+    view = desktop!(conn)
     mine_id = mine.id
 
     # The model is held mid-answer until the turn is stopped, so the turn
@@ -443,7 +440,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a grant the panel's turn needs is asked in the panel's own layer, in the person's own athanor, never the page's",
+  test "a grant the panel's turn needs is asked in the panel's own layer, in the person's own athanor, never the desktop's",
        %{conn: conn, user: user, mine: mine, me: me, team: team} do
     name = "panel-grant-#{System.unique_integer([:positive])}"
 
@@ -458,12 +455,12 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     {:ok, you_thread} = Threads.create(Sanctum.Context.actor(me))
 
-    # The page is the shared thread's, with its own layer; the panel is You.
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
+    # The desktop has its own layer, beside the shared thread the chat
+    # shows; the panel is You.
+    view = desktop!(conn)
+    beside!(view, team)
     {panel, _html} = open_panel(view)
-    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => you_thread.id})
-    pane = on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
+    pane = select!(panel, you_thread.id)
 
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
       athanor_id: mine.id,
@@ -476,7 +473,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     render(panel)
     assert has_element?(panel, ~s(#system-layer-panel-dialog [data-kind="grant"]))
     assert has_element?(panel, "#system-layer-panel-dialog .consent-sheet", "in #{mine.name}")
-    refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    desktop_dialog = "#" <> PrismWeb.SystemLayer.desktop_layer_id() <> "-dialog"
+    refute has_element?(view, ~s(#{desktop_dialog} [data-kind="grant"]))
 
     panel |> element(~s(#system-layer-panel-dialog button[phx-click="confirm"])) |> render_click()
 
@@ -496,9 +494,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "the sheet is a dialog over a page that stays live, its close button closes it, and its button names it only while open",
-       %{conn: conn, mine: mine} do
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
+       %{conn: conn} do
+    view = desktop!(conn)
     panel = child!(view, "aqua-panel")
     refute has_element?(panel, "#aqua-panel-button[aria-controls]")
 
@@ -530,29 +527,22 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel keeps its thread from one page to the next, and closed stays closed",
-       %{conn: conn, mine: mine, me: me, team: team} do
+  test "the panel keeps its thread across a reload, and closed stays closed",
+       %{conn: conn, me: me} do
     {:ok, kept} = Threads.create(Sanctum.Context.actor(me))
     {:ok, _} = Threads.update(Sanctum.Context.actor(me), kept.id, %{title: "Kept"})
 
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
-    {panel, _html} = open_panel(view)
-    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => kept.id})
-    on_thread!(child!(panel, "aqua-panel-pane"), kept.id)
+    {panel, _html} = open_panel(desktop!(conn))
+    select!(panel, kept.id)
 
-    # The next page mounts the layout's panel afresh, as a live navigation
-    # does; the same session finds the same panel.
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
-    panel = child!(view, "aqua-panel")
+    # A reload mounts the desktop and its panel afresh; the same session
+    # finds the same panel.
+    panel = child!(desktop!(conn), "aqua-panel")
     assert has_element?(panel, "#aqua-panel-sheet")
     on_thread!(child!(panel, "aqua-panel-pane"), kept.id)
 
     render_click(panel, "close", %{})
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
-    panel = child!(view, "aqua-panel")
+    panel = child!(desktop!(conn), "aqua-panel")
     refute has_element?(panel, "#aqua-panel-sheet")
 
     Cyfr.Test.Sandbox.end_views()
@@ -569,10 +559,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "the panel is an overlay its hook places, and Ctrl+J's toggle opens and closes it",
-       %{conn: conn, mine: mine} do
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
-    panel = child!(view, "aqua-panel")
+       %{conn: conn} do
+    panel = child!(desktop!(conn), "aqua-panel")
     # The keys are heard on the root, which is drawn open or closed.
     assert has_element?(panel, ~s(#aqua-panel-root[phx-hook="AquaPanelKeys"]))
     assert has_element?(panel, ~s(#aqua-panel-button[aria-keyshortcuts="Control+J"]))
@@ -607,11 +595,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "where the panel stands, its size and whether it is docked follow the session from page to page",
-       %{conn: conn, mine: mine, team: team} do
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
-    {panel, _html} = open_panel(view)
+  test "where the panel stands, its size and whether it is docked follow the session across a reload",
+       %{conn: conn} do
+    {panel, _html} = open_panel(desktop!(conn))
 
     render_hook(panel, "place", %{
       "x" => 120,
@@ -630,9 +616,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
              ~s(#aqua-panel-dock[aria-pressed="true"][aria-label="Float over the page"])
            )
 
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
-    settled_render(view)
-    panel = child!(view, "aqua-panel")
+    panel = child!(desktop!(conn), "aqua-panel")
     assert has_element?(panel, "#aqua-panel-sheet")
 
     assert {sheet_attr(panel, "data-x"), sheet_attr(panel, "data-y"), sheet_attr(panel, "data-w"),
@@ -643,8 +627,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     panel |> element("#aqua-panel-dock") |> render_click()
     panel |> element("#aqua-panel-close") |> render_click()
 
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
+    view = desktop!(conn)
     panel = child!(view, "aqua-panel")
     refute has_element?(panel, "#aqua-panel-sheet")
     {panel, _html} = open_panel(view)
@@ -655,10 +638,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "a placement outside the viewport it was made in, under the minimum or not in whole pixels is refused, and the kept one stands",
-       %{conn: conn, mine: mine} do
-    {:ok, view, _} = live(conn, athanor_path("/settings", mine))
-    settled_render(view)
-    {panel, _html} = open_panel(view)
+       %{conn: conn} do
+    {panel, _html} = open_panel(desktop!(conn))
     screen = %{"vw" => 1440, "vh" => 900}
 
     render_hook(
@@ -728,9 +709,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the page's first paint carries the button alone; a session that no longer establishes is sent to sign in",
-       %{conn: conn, team: team} do
-    html = conn |> get(PrismWeb.ChatLive.shared_path(team.id)) |> html_response(200)
+  test "the desktop's first paint carries the button alone; a session that no longer establishes is sent to sign in",
+       %{conn: conn, mine: mine} do
+    html = conn |> get(athanor_path("", mine)) |> html_response(200)
     assert html =~ ~s(id="aqua-panel-button")
     refute html =~ "aqua-panel-sheet"
 
@@ -743,6 +724,401 @@ defmodule PrismWeb.AquaPanelLiveTest do
              live_isolated(stale, PrismWeb.AquaPanelLive, session: %{"ui_mode" => "dev"})
   end
 
+  # The pane's empty state as a person reads it, its whitespace folded.
+  defp empty_state(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([id$="-thread"] > div.justify-center))
+    |> LazyHTML.text()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp member_ctx(person, athanor) do
+    Sanctum.Context.build(
+      user_id: person.user_id,
+      athanor_id: athanor.id,
+      permissions: [:*],
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
+  # A person of their own whose athanor was minted and never filled, signed
+  # in on it. Answers the person, the athanor, the conn and their context.
+  defp unfilled! do
+    person = test_user()
+    own = Sanctum.Test.People.athanor!(person.user_id)
+    conn = log_in_user(build_conn(), person, athanor_id: own.id)
+    ctx = %{Sanctum.TestContext.local() | user_id: person.user_id, athanor_id: own.id}
+    {person, own, conn, ctx}
+  end
+
+  # The fill's claim held elsewhere, so the athanor stays unfilled and a
+  # mount's attempt returns at once instead of running a fill this test
+  # never awaits.
+  defp hold_fill!(own) do
+    {:ok, _held} =
+      Arca.ProvisioningClaims.claim(
+        %Prima.Actor{athanor_id: own.id},
+        "boot_elsewhere/own_held",
+        "first_need",
+        60_000,
+        :none
+      )
+  end
+
+  test "a reply reaches every desktop of the person on that thread: the runner writes it, not the sender's socket",
+       %{conn: conn, user: user, me: me} do
+    {panel, _html} = open_panel(desktop!(conn))
+    pane = child!(panel, "aqua-panel-pane")
+
+    # The athanor's fill bound a key behind its soul's model, so the empty
+    # thread asks for a message and offers no model to connect.
+    assert empty_state(render(pane)) == "Ask AQUA anything."
+    refute render(pane) =~ "A.Q.U.A."
+
+    Cyfr.Test.ScriptedWorker.script([model_reply("Hi there")])
+    pane |> form("form", %{"message" => "@aqua hello from me"}) |> render_submit()
+    you_thread = settled_you!(me)
+
+    # The person's other desktop, under a session of its own, opens the same
+    # thread and reads the reply the runner wrote.
+    {other, _html} = open_panel(desktop!(log_in_user(build_conn(), user)))
+    other_pane = select!(other, you_thread.id)
+    assert render(other_pane) =~ "hello from me"
+    assert render(other_pane) =~ "Hi there"
+    refute render(other_pane) =~ "is asking"
+
+    sender = on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
+    wait_until(fn -> render(sender) =~ "Hi there" end, 5_000, "the reply in the sender's pane")
+
+    agent = Arca.Schemas.Message.agent_author()
+
+    assert [%{author: author}, %{kind: "text", author: ^agent}] =
+             Threads.messages(Sanctum.Context.actor(me), you_thread.id)
+             |> Enum.filter(&(&1.kind == "text"))
+
+    assert author == user.user_id
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "an attachment is stored as a blob the person can fetch on any device, and never from outside",
+       %{conn: conn, user: user, mine: mine, me: me} do
+    Cyfr.Test.ScriptedWorker.script([model_reply("Read them.")])
+    again_conn = log_in_user(build_conn(), user)
+    carol_conn = log_in_user(build_conn(), test_user())
+
+    {panel, _html} = open_panel(desktop!(conn))
+    pane = child!(panel, "aqua-panel-pane")
+
+    for {name, content, type} <- [
+          {"note.txt", "hi there", "text/plain"},
+          {"plan.md", "second", "text/markdown"}
+        ] do
+      pane
+      |> file_input("form[phx-submit=submit]", :attachments, [
+        %{name: name, content: content, type: type}
+      ])
+      |> render_upload(name)
+    end
+
+    pane |> form("form[phx-submit=submit]", %{"message" => "@aqua read these"}) |> render_submit()
+    thread = settled_you!(me)
+
+    # The files rode the model request on the task: text files the brain
+    # does not take inline (it takes PNG and PDF) as text blocks under
+    # their names.
+    [request] = model_requests()
+    blocks = Enum.flat_map(request["messages"], & &1["content"])
+
+    assert %{"type" => "text", "text" => "The attached file note.txt:\n\nhi there"} in blocks
+    assert %{"type" => "text", "text" => "The attached file plan.md:\n\nsecond"} in blocks
+    refute Enum.any?(blocks, &(&1["type"] == "document"))
+
+    [msg | _] = Threads.messages(Sanctum.Context.actor(me), thread.id)
+    refs = msg |> Aqua.attachment_refs() |> Enum.sort_by(& &1["filename"])
+    assert Enum.map(refs, & &1["filename"]) == ["note.txt", "plan.md"]
+    assert Enum.map(refs, & &1["size"]) == [8, 6]
+
+    # The bytes are the record: one blob per ref, under the message, the
+    # location rebuilt from row identity and never kept in the ref.
+    for ref <- refs do
+      refute Map.has_key?(ref, "path")
+
+      assert {:ok, ["threads", thread_id, msg_id, _name] = blob} =
+               Aqua.attachment_blob_path(thread.id, msg.id, ref)
+
+      assert thread_id == thread.id and msg_id == msg.id
+      assert Arca.exists?(Sanctum.Context.actor(me), blob)
+    end
+
+    note = Enum.find(refs, &(&1["filename"] == "note.txt"))
+    plan = Enum.find(refs, &(&1["filename"] == "plan.md"))
+
+    # The person reads the bytes back on any device, addressed by the
+    # stored name so same-named uploads stay distinct; the download still
+    # carries the display filename, and the type is served safe.
+    path = athanor_path("/attachments/#{msg.id}/#{note["stored_name"]}", mine)
+    resp = get(again_conn, path)
+    assert resp.status == 200
+    assert resp.resp_body == "hi there"
+    assert get_resp_header(resp, "content-disposition") == [~s(attachment; filename="note.txt")]
+    assert get_resp_header(resp, "x-content-type-options") == ["nosniff"]
+
+    # An undeclared type is served as opaque bytes, never as what the uploader said.
+    md = get(again_conn, athanor_path("/attachments/#{msg.id}/#{plan["stored_name"]}", mine))
+    assert md.status == 200
+    assert get_resp_header(md, "content-type") == ["application/octet-stream"]
+
+    # A person outside the athanor gets nothing; so does an anonymous request.
+    assert get(carol_conn, path).status == 404
+    assert redirected_to(get(build_conn(), path)) == "/login"
+    assert get(again_conn, athanor_path("/attachments/#{msg.id}/nope.txt", mine)).status == 404
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a draft offered back after a reload deletes no attachment its pane did not store, a sent one of another desktop's included",
+       %{conn: conn, user: user, me: me} do
+    Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
+    again_conn = log_in_user(build_conn(), user)
+
+    {panel, _html} = open_panel(desktop!(conn))
+    pane = child!(panel, "aqua-panel-pane")
+
+    pane
+    |> file_input("form[phx-submit=submit]", :attachments, [
+      %{name: "note.txt", content: "alice's bytes", type: "text/plain"}
+    ])
+    |> render_upload("note.txt")
+
+    pane |> form("form[phx-submit=submit]", %{"message" => "@aqua keep this"}) |> render_submit()
+
+    thread = settled_you!(me)
+    [msg | _] = Threads.messages(Sanctum.Context.actor(me), thread.id)
+    [ref] = Aqua.attachment_refs(msg)
+    {:ok, blob} = Aqua.attachment_blob_path(thread.id, msg.id, ref)
+    assert {:ok, "alice's bytes"} = Arca.get(Sanctum.Context.actor(me), blob)
+
+    # The pane stored the file through the gate: one admitted decision of
+    # the person's for `thread/attach`.
+    user_id = user.user_id
+
+    assert [%{admission: "admitted"}] =
+             Arca.Repo.all(
+               Ecto.Query.from(d in Arca.Schemas.DecisionLog,
+                 where: d.tool == "thread" and d.action == "attach" and d.user_id == ^user_id
+               )
+             )
+
+    # The person's other desktop offers back a "held send" naming the
+    # message the first sent and its file, with a text the send refuses: the
+    # refusal discards nothing this pane did not store itself.
+    {other, _html} = open_panel(desktop!(again_conn))
+    other_pane = select!(other, thread.id)
+
+    render_hook(other_pane, "restore_draft", %{
+      "thread_id" => thread.id,
+      "client_id" => Prima.UUID7.generate_id("snd"),
+      "message_id" => msg.id,
+      "text" => String.duplicate("x", 40_000),
+      "attachments" => [ref]
+    })
+
+    _ = render(other_pane)
+    assert {:ok, "alice's bytes"} = Arca.get(Sanctum.Context.actor(me), blob)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "an athanor still being set up says so in the panel, which tries the fill again, and its pane holds the composer until the fill completes" do
+    # No bundle to fill it from: the fill fails, and says so.
+    Prima.Test.Env.put_app_env(
+      :arca,
+      :seed_path,
+      Path.join(System.tmp_dir!(), "no_seed_#{System.unique_integer([:positive])}")
+    )
+
+    {_person, own, conn, _ctx} = unfilled!()
+
+    {panel, html} = open_panel(desktop!(conn))
+    assert html =~ "still being set up"
+
+    panel |> element("#aqua-panel-provisioning button[phx-click=provision]") |> render_click()
+
+    rendered = render(panel)
+    assert rendered =~ "Still not set up"
+    assert rendered =~ "last attempt failed at"
+    {:ok, row} = Athanors.get(own.id)
+    assert %{step: _} = Athanors.provisioning_failure(row)
+
+    # The pane holds its composer while the athanor is being prepared, and
+    # says why instead of blaming a missing model.
+    pane = child!(panel, "aqua-panel-pane")
+    pane_html = render(pane)
+    assert pane_html =~ "still being prepared"
+    assert pane_html =~ "Still being prepared"
+    refute pane_html =~ "has no model yet"
+
+    # The fill completing reaches the pane without a reload: provisioning
+    # broadcasts on the athanor's own topic.
+    {:ok, filled} = Sanctum.TestContext.mark_provisioned(row)
+    Sanctum.Notify.broadcast(own.id, :athanor_changed, %{name: filled.name})
+    refute render(pane) =~ "Still being prepared"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a message sent while the athanor is prepared is held, offered back after a reload, and accepted once" do
+    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
+    {person, own, conn, ctx} = unfilled!()
+    hold_fill!(own)
+
+    {panel, _html} = open_panel(desktop!(conn))
+    pane = child!(panel, "aqua-panel-pane")
+    pane |> form("form", %{"message" => "@aqua hold this"}) |> render_submit()
+
+    # Held, not refused: the pane says so, the browser is given the whole
+    # send to keep, and nothing was written.
+    assert_push_event(pane, "aqua:held_send", %{
+      envelope:
+        %{"client_id" => client_id, "message_id" => message_id, "thread_id" => thread_id} =
+          envelope
+    })
+
+    assert render(pane) =~ "Retry"
+    assert [] == Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 10)
+
+    # A reload: the panel the send turned to its new thread opens on it
+    # again, the hook offers the held send back, and it is held again under
+    # the same identity.
+    render(panel)
+
+    reloaded =
+      on_thread!(child!(child!(desktop!(conn), "aqua-panel"), "aqua-panel-pane"), thread_id)
+
+    render_hook(reloaded, "restore_draft", envelope)
+    assert render(reloaded) =~ "Retry"
+    assert_push_event(reloaded, "aqua:held_send", %{envelope: %{"message_id" => ^message_id}})
+    assert [] == Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 10)
+
+    # The fill completes: every pane holding the send retries on its own,
+    # the athanor accepts the message once, and the turn runs.
+    Cyfr.Test.ScriptedWorker.script([model_reply("Held, then heard")])
+    ready_athanor!(own.id, person.user_id)
+    {:ok, row} = Athanors.get(own.id)
+    {:ok, filled} = Sanctum.TestContext.mark_provisioned(row)
+    Sanctum.Notify.broadcast(own.id, :athanor_changed, %{name: filled.name})
+
+    wait_until(
+      fn ->
+        Enum.any?(
+          Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 10),
+          &(&1.id == message_id)
+        ) and match?({:ok, []}, Aqua.Tape.open_turns(ctx, thread_id))
+      end,
+      60_000
+    )
+
+    assert_push_event(reloaded, "aqua:held_send", %{envelope: nil}, 5_000)
+    assert_push_event(pane, "aqua:held_send", %{envelope: nil}, 5_000)
+    refute render(reloaded) =~ "Retry"
+
+    rows = Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 50)
+    assert [%{id: ^message_id}] = Enum.filter(rows, &(&1.author == person.user_id))
+    assert Enum.any?(rows, &(&1.content == "Held, then heard"))
+    wait_until(fn -> render(reloaded) =~ "Held, then heard" end)
+
+    # The harness offering the same send names the same identity: the
+    # console and the wire agree on what was accepted.
+    assert {:ok, %{replayed: true, message_id: ^message_id}} =
+             Aqua.Providers.Thread.handle("thread", member_ctx(person, own), %{
+               "action" => "send",
+               "thread" => thread_id,
+               "message" => "@aqua hold this",
+               "client_id" => client_id
+             })
+
+    assert [%{id: ^message_id}] =
+             Enum.filter(
+               Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 50),
+               &(&1.author == person.user_id)
+             )
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a desktop on an athanor still being filled does not wait for the fill" do
+    # The real path: the fill is a task nothing awaits, so a mount cannot be
+    # held open by it. The suite otherwise fills inline so its assertions can
+    # read rows straight after the call.
+    Prima.Test.Env.put_app_env(:sanctum, :provisioning_inline, false)
+    {_person, own, conn, _ctx} = unfilled!()
+    hold_fill!(own)
+
+    started = System.monotonic_time(:millisecond)
+    {panel, html} = open_panel(desktop!(conn))
+    _ = render(child!(panel, "aqua-panel-pane"))
+    assert System.monotonic_time(:millisecond) - started < 5_000
+    assert html =~ "still being set up"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the open thread of You is deleted from the panel's header, which turns to a blank thread; a crew member's thread has no delete",
+       %{conn: conn, me: me} do
+    actor = Sanctum.Context.actor(me)
+    {:ok, doomed} = Threads.create(actor)
+    {:ok, room} = Threads.create(actor)
+    {:ok, child} = Threads.crew_thread(actor, room.id, "builder")
+
+    {panel, _html} = open_panel(desktop!(conn))
+    # The blank thread has nothing to delete.
+    refute has_element?(panel, "#aqua-panel-delete")
+
+    pane = select!(panel, doomed.id)
+    panel |> element("#aqua-panel-delete") |> render_click()
+
+    assert {:error, :not_found} = Threads.get(actor, doomed.id)
+    refute has_element?(panel, ~s(#aqua-panel-threads option[value="#{doomed.id}"]))
+    assert has_element?(panel, ~s(#aqua-panel-threads option[value=""][selected]))
+    wait_until(fn -> thread_of(pane) == nil end, 5_000, "the pane on a blank thread")
+
+    # A crew member's thread is its room's, reached from it.
+    select!(panel, room.id)
+    pane |> element(~s([id$="-crew-#{child.id}"])) |> render_click()
+    on_thread!(pane, child.id)
+    refute has_element?(panel, "#aqua-panel-delete")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a thread chosen in the panel turns its one pane, New thread to a blank one, and a reload finds it blank",
+       %{conn: conn, me: me} do
+    actor = Sanctum.Context.actor(me)
+    {:ok, first} = Threads.create(actor)
+    {:ok, second} = Threads.create(actor)
+
+    {panel, _html} = open_panel(desktop!(conn))
+    pane = select!(panel, first.id)
+    select!(panel, second.id)
+    assert child!(panel, "aqua-panel-pane").pid == pane.pid
+
+    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => ""})
+    wait_until(fn -> thread_of(pane) == nil end, 5_000, "the pane on a blank thread")
+    assert child!(panel, "aqua-panel-pane").pid == pane.pid
+
+    # The blank thread is a place: a reload finds it, not the newest thread.
+    panel = child!(desktop!(conn), "aqua-panel")
+    assert has_element?(panel, ~s(#aqua-panel-threads option[value=""][selected]))
+    assert thread_of(child!(panel, "aqua-panel-pane")) == nil
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   describe "an ask from the desktop" do
     test "opens the panel with Prism's sentence after the person's draft, attaching and sending nothing",
          %{conn: conn, me: me, mine: mine} do
@@ -751,7 +1127,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
       :ok = PrismWeb.ModelCatalog.remember(mine.id, %{"models" => %{"kept" => ["kept-model-1"]}})
       on_exit(fn -> PrismWeb.ModelCatalog.forget(mine.id) end)
 
-      {:ok, shell, _} = live(conn, "/a/#{route(mine)}/canvas")
+      shell = desktop!(conn)
       topic = :sys.get_state(shell.pid).socket.assigns.aqua_ask
       panel = child!(shell, "aqua-panel")
       refute has_element?(panel, "#aqua-panel-sheet")

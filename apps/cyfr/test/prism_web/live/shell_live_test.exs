@@ -282,11 +282,11 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
 
     assert has_element?(
              view,
-             ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"]),
+             ~s(#system-layer-desktop-dialog [data-test="grant-pick"][aria-pressed="true"]),
              entry.name
            )
 
-    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+    view |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"])) |> render_click()
     wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
     {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, "tincture:local.#{name}")

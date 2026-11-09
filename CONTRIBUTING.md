@@ -95,7 +95,7 @@ With an API key from Prism's API Keys page, `CYFR_TOKEN=<key>
 scripts/dev-stack.sh check` runs a component through the worktree's running
 loop and asserts its answer.
 
-AQUA answers in the chat once a model provider's key is in the vault, as on
+AQUA answers in its panel once a model provider's key is in the vault, as on
 any install. While a worktree's loop runs, a second start or `down` in the
 same worktree refuses, naming the run that holds it.
 

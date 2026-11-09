@@ -391,6 +391,8 @@ defmodule PrismWeb.ShellFrameTest do
       old = view.pid
       ref = Process.monitor(old)
       # The document ends, and the desktop's channel with it.
+      # The test hears the view's end as a message, not as its own.
+      Process.flag(:trap_exit, true)
       GenServer.stop(view.pid, {:shutdown, :closed})
       assert_receive {:DOWN, ^ref, :process, ^old, _reason}, 5_000
 

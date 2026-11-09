@@ -16,9 +16,17 @@ defmodule PrismWeb.DesktopLive do
   the shell (`PrismWeb.ShellLive`, `focus_named`), so the page does
   nothing with it. A person with no athanor of their own is sent to sign
   in again.
+
+  It holds the page's system layer (`PrismWeb.SystemLayer`), as every
+  page that asks does: on the desktop it is the one that draws the
+  person's confirmations and their restore checklist, since the desktop's
+  own layer draws only its own prompts.
   """
 
   use PrismWeb, :live_view
+
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
 
   @impl true
   def mount(_params, _session, socket) do
@@ -32,7 +40,17 @@ defmodule PrismWeb.DesktopLive do
   end
 
   @impl true
-  def render(assigns), do: ~H""
+  def render(assigns) do
+    ~H"""
+    <.live_component
+      module={PrismWeb.SystemLayer}
+      id={PrismWeb.SystemLayer.layer_id()}
+      context={@context}
+      athanor_route={@athanor_route}
+      athanor_name={@athanor && @athanor.name}
+    />
+    """
+  end
 
   @doc "The desktop's address for the athanor route `route`: `/a/<route>`, or `/` for none."
   @spec path(String.t() | nil) :: String.t()
