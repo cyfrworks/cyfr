@@ -30,7 +30,7 @@ defmodule Prima.CanvasPrefsTest do
         "fields" => %{
           "seconds" => %{"type" => "boolean"},
           "offset" => %{"type" => "integer"},
-          "scale" => %{"type" => "number"}
+          "scale" => %{"type" => "integer"}
         }
       },
       "notes" => %{}
@@ -121,8 +121,6 @@ defmodule Prima.CanvasPrefsTest do
         {widget("clock", %{"offset" => -@max - 1}),
          "widgets.clock.offset must be a whole number"},
         {widget("clock", %{"offset" => "3"}), "widgets.clock.offset must be a whole number"},
-        {widget("clock", %{"scale" => 0.5}), "widgets.clock.scale must be a whole number"},
-        {widget("clock", %{"scale" => @max + 1}), "widgets.clock.scale must be a whole number"},
         {widget("weather", %{"city" => "Amsterdam"}),
          "widgets.weather.city must be text of at most 8 code points"},
         # Five graphemes, ten code points.
