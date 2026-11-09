@@ -118,21 +118,23 @@ defmodule Cyfr.ReleaseChannel do
     do: {:reply, state.answer, maybe_read(state)}
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{reading: ref} = state) do
+  def handle_info({tag, answer}, %{reading: {tag, monitor}} = state) do
+    Process.demonitor(monitor, [:flush])
     now = state.clock.()
 
-    case reason do
-      {:read, {:ok, newer?}} ->
+    case answer do
+      {:ok, newer?} ->
         {:noreply, %{state | reading: nil, answer: newer?, read_at: now, failed_at: nil}}
 
-      {:read, {:error, why}} ->
+      {:error, why} ->
         Logger.info("[Cyfr.ReleaseChannel] the release channel was not read: #{inspect(why)}")
         {:noreply, %{state | reading: nil, failed_at: now}}
-
-      _crashed ->
-        Logger.info("[Cyfr.ReleaseChannel] the release channel's read ended without an answer")
-        {:noreply, %{state | reading: nil, failed_at: now}}
     end
+  end
+
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, %{reading: {_tag, monitor}} = state) do
+    Logger.info("[Cyfr.ReleaseChannel] the release channel's read ended without an answer")
+    {:noreply, %{state | reading: nil, failed_at: state.clock.()}}
   end
 
   def handle_info(msg, state) do
@@ -141,7 +143,7 @@ defmodule Cyfr.ReleaseChannel do
   end
 
   defp maybe_read(%{fetch: false} = state), do: state
-  defp maybe_read(%{reading: ref} = state) when is_reference(ref), do: state
+  defp maybe_read(%{reading: {_tag, _monitor}} = state), do: state
 
   defp maybe_read(state) do
     now = state.clock.()
@@ -150,10 +152,12 @@ defmodule Cyfr.ReleaseChannel do
       state
     else
       fetch = state.fetch
-      # The read's answer is its exit reason, which the monitor delivers
-      # however it ends.
-      {_pid, ref} = spawn_monitor(fn -> exit({:read, answer(fetch.())}) end)
-      %{state | reading: ref}
+      channel = self()
+      tag = make_ref()
+      # The read's answer comes as a message, and its monitor tells of a
+      # read that ended without one.
+      {_pid, monitor} = spawn_monitor(fn -> send(channel, {tag, answer(fetch.())}) end)
+      %{state | reading: {tag, monitor}}
     end
   end
 
