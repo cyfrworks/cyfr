@@ -1,0 +1,22 @@
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/geist-latin.woff2") format("woff2");
+}
+:root {
+  --chrome-ground: #dde2e2;
+  --chrome-surface: #eef3f3;
+  --chrome-ink: #161a1a;
+  --chrome-accent: #0a7783;
+  --chrome-ground-dark: #0a0a0a;
+  --chrome-surface-dark: #121212;
+  --chrome-ink-dark: #e8e8e8;
+  --chrome-accent-dark: #46c1cc;
+  --chrome-radius: 10px;
+  --chrome-border: 1px;
+  --chrome-edge: 8px;
+  --chrome-title-height: 40px;
+  --chrome-controls: right;
+  --chrome-title-align: left;
+  --chrome-glyphs: plain;
+  --chrome-font: "Geist";
+}
