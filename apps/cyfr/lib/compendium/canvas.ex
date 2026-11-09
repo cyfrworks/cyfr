@@ -301,12 +301,20 @@ defmodule Compendium.Canvas do
       item whole; one whose key is null names no item, a notice to show
       and never to hold.
     * **Revision and freshness.** Every payload carries `revision`, a
-      whole number, and `at`, a time. A later change of one item has a
-      higher revision, so a page keeps, per item, the change of the
-      highest revision it heard; an equal revision is one change heard
-      twice. `at` is when the owner announced the change, and no item of
-      a snapshot is stamped later than its read began, so a change the
-      read did not see always outranks it.
+      whole number, and `at`, a time. On one subscription, a change of an
+      item delivered after another carries a higher revision, whatever
+      the clock of the member that told it, so a page keeps, per item,
+      the change of the highest revision it heard; an equal revision is
+      one change heard twice. A revision promises that order of delivery
+      on its subscription and nothing more: it is no count of changes,
+      it does not say which of two members' changes committed first, and
+      it is not compared across subscriptions, so a page opening a
+      stream again keeps the picture it is handed. Owners stamp a change
+      after its commit (a feed's result by its sequence, every other
+      change by the time it is told, in microseconds), and no item of a
+      snapshot is stamped later than its read began, `at` in whatever
+      form it takes, so on one clock a change the read did not see
+      outranks its item. `at` is when the owner told the change.
     * **Removal.** An item that leaves is a change whose `kind` is the
       stream's `removal`, naming the item by its key; a stream whose
       `removal` is nil keeps its items.
@@ -315,16 +323,17 @@ defmodule Compendium.Canvas do
       picture in its place.
     * **Resync.** When a page cannot be told every change, it is handed
       a fresh picture rather than a hole: `resync`, the items, then
-      `snapshot`. The picture is read again `stale_after` seconds after
-      the last one, on a reread, and when the connection fell too far
-      behind; the SDK opens a stream again after its connection broke.
-      The page replaces its picture: an item the new one does not name
-      is gone.
+      `snapshot`. The picture is read again at half its `stale_after`, on
+      a reread, and when the connection fell too far behind; the SDK
+      opens a stream again after its connection broke. The page replaces
+      its picture: an item the new one does not name is gone. A picture
+      is read beside the connection, never by it, within a deadline, and
+      the changes that come meanwhile follow the picture.
     * **States.** Besides live, a stream is in one of three states the
       page is told as events, never as a hang: `unavailable`, its picture
       cannot be read now, with when it is tried again; `stale`, the
-      picture is older than `stale_after` and reading it again failed,
-      and it stays so until a fresh picture comes; `denied`, the frame's
+      picture is `stale_after` old and no fresh one came, whatever its
+      read does, and it stays so until a fresh picture comes; `denied`, the frame's
       grant no longer covers the stream, which ends and opens again only
       under a new grant.
 

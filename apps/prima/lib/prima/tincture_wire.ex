@@ -73,8 +73,8 @@ defmodule Prima.TinctureWire do
       picture follows, its items and then `snapshot`, and replaces the
       one the frame holds;
     * `stale` (`stale/2`) — exactly `v`, `type`, `sub` and `at`, the time
-      of the picture the frame holds: it is older than the stream's
-      bound and reading it again failed, until the next `resync`;
+      of the picture the frame holds: it is the stream's bound old and no
+      fresh picture came, until the next `resync`;
     * `ended` (`ended/2`) — exactly `v`, `type` and `sub`, and `error`, a
       refusal's projection, when the endpoint ended it for a reason the
       frame should know. One that comes before `subscribed` is the
@@ -783,8 +783,8 @@ defmodule Prima.TinctureWire do
   def resync(sub), do: %{"v" => @version, "type" => "resync", "sub" => sub}
 
   @doc """
-  `stale`: subscription `sub`'s picture, taken at `at`, is older than its
-  stream's bound, and reading it again failed.
+  `stale`: subscription `sub`'s picture, taken at `at`, is its stream's
+  bound old, and no fresh picture came.
   """
   @spec stale(pos_integer(), DateTime.t()) :: map()
   def stale(sub, %DateTime{} = at),

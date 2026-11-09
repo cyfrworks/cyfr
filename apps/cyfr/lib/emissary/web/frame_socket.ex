@@ -53,8 +53,15 @@ defmodule Emissary.Web.FrameSocket do
   and the stream's declared refresh is read after that, each item
   projected and marked `"refresh": true`, so a fact published between the
   subscription and the read arrives after it: the frame may see an item
-  twice and never misses one. A refresh that cannot be read ends the
-  subscription `unavailable`. Each fact of the topic follows as an
+  twice and never misses one. A refresh is read by a task of its own
+  (`Emissary.Web.TaskSupervisor`), never by the connection, within a
+  deadline (30 seconds, a canvas-readable stream's bound when shorter),
+  so the connection keeps answering whatever the provider does; the
+  facts of a stream whose read runs are held and follow its picture. A
+  read past its deadline is stopped, so nothing it would have answered
+  later is applied, and one whose subscription or connection ends is
+  stopped with it. A refresh that cannot be read, or not within its
+  deadline, ends the subscription `unavailable`. Each fact of the topic follows as an
   `event`, projected to the grant's fields (`Prima.StreamGrant.project/2`)
   and tagged with the stream and the subject the frame asked for. A
   filtering stream's subject selects payloads on its row's one topic, so
@@ -63,14 +70,19 @@ defmodule Emissary.Web.FrameSocket do
 
   A canvas-readable stream is delivered by the delivery contract
   (`Compendium.Canvas.catalog/1`): its refresh ends with `snapshot`, the
-  time the read began, and no item of it is stamped later than that. Its
-  picture is read again and handed as a `resync` at the stream's
-  `stale_after`, and once a change of a `reread` kind settles, in the
-  change's place. A read again at the bound that fails leaves the
-  picture, told `stale` once, and is tried again after the bound or 30
-  seconds, whichever is sooner; one the frame holds a hole without,
-  after a reread or an overflow, ends the subscription with the refusal,
-  which the frame opens again.
+  time the read began, and no item of it is stamped later than that,
+  `at` in whatever form it takes. On the subscription, a change of an
+  item delivered after another carries a higher revision: one lower than
+  the item's last is raised past it, and an equal one is the same change
+  again. Its picture is read again and handed as a `resync` at half the
+  stream's `stale_after`, and once a change of a `reread` kind settles,
+  in the change's place. A picture `stale_after` old with no fresh one
+  is told `stale` once, whatever its read does; a read again at the bound
+  that fails leaves the picture, with the facts held meanwhile, and is
+  tried again at half the bound or after 30 seconds, whichever is
+  sooner. One the frame holds a hole without, after a reread or an
+  overflow, that fails ends the subscription with the refusal, which the
+  frame opens again.
 
   `unsubscribe` ends a subscription at once, its forwarder with it, and
   its place on the connection is free for the next `subscribe`.
@@ -152,8 +164,11 @@ defmodule Emissary.Web.FrameSocket do
   # of them is answered with one fresh picture.
   @reread_settle_ms 250
 
-  # The longest a stale picture waits before it is read again once more; a
-  # stream whose bound is shorter waits its bound.
+  # The longest a picture's read may take, and the longest a picture whose
+  # read failed waits before it is read again; a canvas-readable stream
+  # whose bound is shorter takes its bound for the first and half of it
+  # for the second.
+  @read_ms 30_000
   @stale_retry_ms 30_000
 
   # The stream a canvas reads a feed's results on, by the feed's name as
@@ -261,8 +276,10 @@ defmodule Emissary.Web.FrameSocket do
         data = StreamGrant.project(entry.grant, Map.from_struct(message))
 
         cond do
+          overflowing?() -> fell_behind(state)
           not selected?(entry, data) -> {:ok, state}
           rereads?(entry, data) -> {:ok, settle_reread(state, sub)}
+          entry.read != nil -> {:ok, hold(state, sub, message, data)}
           true -> deliver(sub, message, data, state)
         end
     end
@@ -277,8 +294,37 @@ defmodule Emissary.Web.FrameSocket do
 
   def handle_info({__MODULE__, :reread, sub, token}, state) do
     case Map.get(state.subs, sub) do
-      %{reread: {^token, _timer, why}} -> reread(sub, why, state)
+      %{reread: {^token, _timer, why}} = entry ->
+        reread(sub, why, %{state | subs: Map.put(state.subs, sub, %{entry | reread: nil})})
+
+      _another ->
+        {:ok, state}
+    end
+  end
+
+  def handle_info({__MODULE__, :stale, sub, token}, state) do
+    case Map.get(state.subs, sub) do
+      %{stale_timer: {^token, _timer}} = entry -> stale(sub, entry, state)
       _another -> {:ok, state}
+    end
+  end
+
+  # A picture's read answered, or its reader ended without an answer.
+  def handle_info({ref, answer}, state) when is_reference(ref) do
+    case reading(state, ref) do
+      {:ok, sub} ->
+        Process.demonitor(ref, [:flush])
+        read_done(sub, answer, state)
+
+      :error ->
+        {:ok, state}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    case reading(state, ref) do
+      {:ok, sub} -> read_done(sub, :ended, state)
+      :error -> {:ok, state}
     end
   end
 
@@ -512,21 +558,17 @@ defmodule Emissary.Web.FrameSocket do
           forwarder: forwarder,
           timer: nil,
           reread: nil,
+          stale_timer: nil,
           picture: nil,
-          stale: false
+          stale: false,
+          read: nil,
+          held: [],
+          again: false,
+          told: %{}
         }
 
-        state = put_sub(state, sub, entry)
-
-        case refreshed(entry, stream, state) do
-          {:ok, items, began} ->
-            {:push, [text(TinctureWire.subscribed(sub)) | picture(sub, entry, items, began)],
-             pictured(state, sub, began)}
-
-          {:error, refusal} ->
-            {:push, [text(TinctureWire.subscribed(sub)), text(TinctureWire.ended(sub, refusal))],
-             state |> drop(sub) |> idle_if_empty()}
-        end
+        {frames, state} = state |> put_sub(sub, entry) |> start_read(sub, :first)
+        {:push, [text(TinctureWire.subscribed(sub)) | frames], idle_if_empty(state)}
 
       {:error, _unstarted} ->
         {:push, [text(TinctureWire.ended(sub, undeliverable()))], idle_if_empty(state)}
@@ -560,59 +602,237 @@ defmodule Emissary.Web.FrameSocket do
   # the kinds answered with a fresh picture and how long a picture stands.
   # Any other stream has no picture.
   defp delivery(%Prima.Provider.Stream{shape: %{}, stale_after: stale_after} = stream),
-    do: %{reread: stream.reread, stale_after: stale_after}
+    do: %{key: stream.key, reread: stream.reread, stale_after: stale_after}
 
   defp delivery(_stream), do: nil
 
-  # The stream's current state, each item projected, selected and marked
-  # `refresh`, read under the context the subscription was just admitted
-  # under, with the time the read began. A canvas-readable item is stamped
-  # no later than that time, so it never outranks a change the read did
-  # not see.
-  defp refreshed(_entry, nil, _state), do: {:ok, [], DateTime.utc_now()}
+  # ---------------------------------------------------------------------------
+  # A picture's read
+  # ---------------------------------------------------------------------------
 
-  defp refreshed(_entry, %Prima.Provider.Stream{refresh: nil}, _state),
-    do: {:ok, [], DateTime.utc_now()}
+  # The stream's current state is read by a task of its own, never by the
+  # connection, under the context the subscription holds and within a
+  # deadline, so the connection keeps answering whatever the provider does.
+  # A fact of the stream that comes while its read runs is held and handed
+  # after the picture, so the picture always comes first. `why` is the
+  # read's cause: `:first` after `subscribed`, `:periodic` and `:retry` at
+  # the stream's bound, `:needed` when the frame holds a hole.
+  defp start_read(state, sub, why) do
+    entry = Map.fetch!(state.subs, sub)
 
-  defp refreshed(entry, %Prima.Provider.Stream{refresh: {module, function}}, state) do
-    began = DateTime.utc_now()
+    case declared(entry.stream) do
+      %Prima.Provider.Stream{refresh: {_module, _function} = refresh} ->
+        began = DateTime.utc_now()
+        task = reader(state.caller.ctx, refresh, entry.grant.subject, read_ms(entry))
+        read = %{ref: task.ref, pid: task.pid, why: why, began: began}
+        entry = %{entry | read: read, held: [], again: false}
+        {[], %{state | subs: Map.put(state.subs, sub, entry)}}
 
-    case apply(module, function, [state.caller.ctx, entry.grant.subject]) do
+      _no_refresh ->
+        {frames, entry} = picture(sub, entry, [], DateTime.utc_now(), why)
+        {frames, %{state | subs: Map.put(state.subs, sub, entry)}}
+    end
+  end
+
+  # The read under a task that answers the connection by its reference:
+  # the provider's answer, `:timeout` once the deadline passed (the read
+  # stopped, so an answer it would have given later is never applied), or
+  # nothing when the connection is gone, which stops the read with it.
+  defp reader(ctx, {module, function}, subject, deadline) do
+    owner = self()
+
+    Task.Supervisor.async_nolink(Emissary.Web.TaskSupervisor, fn ->
+      watch = Process.monitor(owner)
+      tag = make_ref()
+      task = self()
+      # The read's process carries the callers a task's would, so it reads
+      # as the connection may.
+      callers = [task | Process.get(:"$callers", [])]
+
+      read =
+        spawn_link(fn ->
+          Process.put(:"$callers", callers)
+          send(task, {tag, current(module, function, ctx, subject)})
+        end)
+
+      receive do
+        {^tag, answer} ->
+          answer
+
+        {:DOWN, ^watch, :process, _pid, _reason} ->
+          exit(:shutdown)
+      after
+        deadline ->
+          Process.unlink(read)
+          Process.exit(read, :kill)
+          :timeout
+      end
+    end)
+  end
+
+  defp current(module, function, ctx, subject) do
+    apply(module, function, [ctx, subject])
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  # How long a read may take: a canvas-readable stream's bound, at most
+  # the connection's own limit.
+  defp read_ms(%{delivery: %{stale_after: seconds}}), do: min(seconds * 1_000, @read_ms)
+  defp read_ms(_entry), do: @read_ms
+
+  defp reading(state, ref) do
+    Enum.find_value(state.subs, :error, fn
+      {sub, %{read: %{ref: ^ref}}} -> {:ok, sub}
+      _other -> nil
+    end)
+  end
+
+  # A read's answer. Read, the picture is handed (a `resync` first unless
+  # it is the first), each item projected, selected and marked `refresh`,
+  # then the facts held while it ran. A first read, or one the frame holds
+  # a hole without, that is not answered ends the subscription
+  # `unavailable`, which the frame opens again; one at the bound leaves the
+  # picture as it is, with the facts held meanwhile, and is tried again.
+  defp read_done(sub, answer, state) do
+    %{read: %{why: why, began: began}} = entry = Map.fetch!(state.subs, sub)
+    state = %{state | subs: Map.put(state.subs, sub, %{entry | read: nil})}
+
+    case answer do
       {:ok, items} when is_list(items) ->
-        projected =
-          for item <- items,
-              data = StreamGrant.project(entry.grant, item),
-              selected?(entry, data),
-              do: data |> stamped(entry, began) |> Map.put("refresh", true)
+        {frames, state} = fresh(state)
 
-        {:ok, projected, began}
+        case Map.get(state.subs, sub) do
+          nil ->
+            push(frames, idle_if_empty(state))
+
+          entry ->
+            {handed, entry} = handed(sub, entry, items, began, why)
+            state = pictured(%{state | subs: Map.put(state.subs, sub, entry)}, sub, began)
+            state = if entry.again, do: settle_reread(state, sub), else: state
+            push(frames ++ handed, state)
+        end
+
+      _unread when why in [:first, :needed] ->
+        ended = text(TinctureWire.ended(sub, unread()))
+        push([ended], state |> drop(sub) |> idle_if_empty())
 
       _unread ->
-        {:error, Prima.Refusal.classify({:unavailable, "The stream's current state"})}
+        {frames, entry} = release(sub, Map.fetch!(state.subs, sub))
+        state = %{state | subs: Map.put(state.subs, sub, entry)}
+        push(frames, settle_reread(state, sub, :retry, retry_ms(entry)))
     end
   end
 
-  defp stamped(data, %{delivery: nil}, _began), do: data
+  # The picture's frames and the held facts after them, the entry they
+  # leave, and its picture's timers armed again.
+  defp handed(sub, entry, items, began, why) do
+    projected =
+      for item <- items,
+          data = StreamGrant.project(entry.grant, item),
+          selected?(entry, data),
+          do: data |> clamped(entry, began) |> Map.put("refresh", true)
 
-  defp stamped(data, _entry, began) do
+    {pictured, entry} = picture(sub, entry, projected, began, why)
+    {held, entry} = release(sub, entry)
+    {pictured ++ held, entry}
+  end
+
+  defp unread, do: Prima.Refusal.classify({:unavailable, "The stream's current state"})
+
+  # A canvas-readable item of a snapshot is stamped no later than its read
+  # began, whichever form its time takes, so it never outranks a change
+  # the read did not see.
+  defp clamped(data, %{delivery: nil}, _began), do: data
+
+  defp clamped(data, _entry, began) do
     latest = DateTime.to_unix(began, :microsecond)
 
-    case data do
-      %{"revision" => revision, "at" => %DateTime{} = at} when is_integer(revision) ->
-        %{data | "revision" => min(revision, latest), "at" => Enum.min([at, began], DateTime)}
+    data
+    |> Map.update!("revision", fn
+      revision when is_integer(revision) -> min(revision, latest)
+      other -> other
+    end)
+    |> Map.update!("at", &no_later(&1, began))
+  end
 
-      _unstamped ->
-        data
+  defp no_later(%DateTime{} = at, began), do: Enum.min([at, began], DateTime)
+
+  defp no_later(at, began) when is_binary(at) do
+    case DateTime.from_iso8601(at) do
+      {:ok, parsed, _offset} ->
+        if DateTime.compare(parsed, began) == :gt, do: DateTime.to_iso8601(began), else: at
+
+      {:error, _unparsed} ->
+        at
     end
   end
 
-  # A picture as the frame is handed it: its items, and for a
-  # canvas-readable stream the `snapshot` that says it is whole.
-  defp picture(sub, %{delivery: nil} = entry, items, _began),
-    do: Enum.map(items, &event(sub, entry, &1))
+  defp no_later(at, _began), do: at
 
-  defp picture(sub, entry, items, began),
-    do: Enum.map(items, &event(sub, entry, &1)) ++ [text(TinctureWire.snapshot(sub, began))]
+  # A picture as the frame is handed it: a `resync` before any but the
+  # first, its items, and for a canvas-readable stream the `snapshot` that
+  # says it is whole.
+  defp picture(sub, entry, items, began, why) do
+    {events, entry} =
+      Enum.map_reduce(items, entry, fn data, entry ->
+        {data, entry} = revisioned(entry, data)
+        {event(sub, entry, data), entry}
+      end)
+
+    resync = if why == :first, do: [], else: [text(TinctureWire.resync(sub))]
+    snapshot = if entry.delivery, do: [text(TinctureWire.snapshot(sub, began))], else: []
+    {resync ++ events ++ snapshot, entry}
+  end
+
+  # The facts held while a read ran, as events after its picture.
+  defp release(sub, %{held: held} = entry) do
+    {events, entry} =
+      held
+      |> Enum.reverse()
+      |> Enum.map_reduce(entry, fn {message, data}, entry ->
+        {data, entry} = revisioned(entry, data)
+        {event(sub, entry, data, sequence(message)), entry}
+      end)
+
+    {events, %{entry | held: []}}
+  end
+
+  # A fact of a stream whose read runs, held for after its picture. Past
+  # the backlog bound the held facts go, and the picture is read again
+  # once the running read has answered.
+  defp hold(state, sub, message, data) do
+    entry = Map.fetch!(state.subs, sub)
+
+    entry =
+      if length(entry.held) >= @max_backlog,
+        do: %{entry | held: [], again: true},
+        else: %{entry | held: [{message, data} | entry.held]}
+
+    %{state | subs: Map.put(state.subs, sub, entry)}
+  end
+
+  # On one subscription, a later change of an item always carries a
+  # higher revision than the one before it, whatever the clock of the
+  # member that told it: a revision lower than the item's last is raised
+  # past it. An equal one is the same change heard again, and keeps it.
+  # An item is named by the stream's key, the stream itself when it has
+  # none.
+  defp revisioned(%{delivery: %{key: key}, told: told} = entry, %{"revision" => revision} = data)
+       when is_integer(revision) do
+    item = if key, do: Map.get(data, key), else: :stream
+
+    revision =
+      case Map.fetch(told, item) do
+        {:ok, last} when revision < last -> last + 1
+        _first_or_later -> revision
+      end
+
+    {%{data | "revision" => revision},
+     %{entry | told: Map.update(told, item, revision, &max(&1, revision))}}
+  end
+
+  defp revisioned(entry, data), do: {data, entry}
 
   # An admitted open no forwarder could hear: nothing waits on it.
   defp undeliverable,
@@ -631,11 +851,11 @@ defmodule Emissary.Web.FrameSocket do
   defp validation(%{sub: sub, stream: name, subject: subject}, caller, state) do
     case fixtures(caller.ctx, name, subject) do
       {:ok, items} ->
-        entry = %{stream: name, subject: subject, delivery: delivery(declared(name))}
+        entry = %{stream: name, subject: subject, delivery: delivery(declared(name)), told: %{}}
+        {pictured, _entry} = picture(sub, entry, items, @fixture_at, :first)
 
         {:push,
-         [text(TinctureWire.subscribed(sub))] ++
-           picture(sub, entry, items, @fixture_at) ++ [text(TinctureWire.ended(sub, nil))],
+         [text(TinctureWire.subscribed(sub))] ++ pictured ++ [text(TinctureWire.ended(sub, nil))],
          idle_if_empty(state)}
 
       {:error, refusal} ->
@@ -679,15 +899,16 @@ defmodule Emissary.Web.FrameSocket do
   # A payload is delivered only under a context that still stands and to
   # a frame that keeps up.
   defp deliver(sub, message, data, state) do
-    if overflowing?() do
-      fell_behind(state)
-    else
-      {frames, state} = fresh(state)
+    {frames, state} = fresh(state)
 
-      case Map.get(state.subs, sub) do
-        nil -> push(frames, idle_if_empty(state))
-        entry -> push(frames ++ [event(sub, entry, data, sequence(message))], state)
-      end
+    case Map.get(state.subs, sub) do
+      nil ->
+        push(frames, idle_if_empty(state))
+
+      entry ->
+        {data, entry} = revisioned(entry, data)
+        state = %{state | subs: Map.put(state.subs, sub, entry)}
+        push(frames ++ [event(sub, entry, data, sequence(message))], state)
     end
   end
 
@@ -779,6 +1000,10 @@ defmodule Emissary.Web.FrameSocket do
         {sub, %{delivery: nil}}, {frames, state} ->
           {frames ++ [text(TinctureWire.ended(sub, overflow()))], drop(state, sub)}
 
+        {sub, %{read: %{}} = entry}, {frames, state} ->
+          entry = %{entry | held: [], again: true}
+          {frames, %{state | subs: Map.put(state.subs, sub, entry)}}
+
         {sub, _entry}, {frames, state} ->
           {frames, settle_reread(state, sub, :needed, 0)}
       end)
@@ -837,6 +1062,8 @@ defmodule Emissary.Web.FrameSocket do
       {entry, subs} ->
         cancel(entry.timer)
         cancel_reread(entry)
+        cancel(Map.get(entry, :stale_timer))
+        stop_read(entry)
         StreamForwarder.stop(entry.forwarder)
         %{state | subs: subs}
     end
@@ -846,18 +1073,41 @@ defmodule Emissary.Web.FrameSocket do
   # A canvas-readable stream's picture
   # ---------------------------------------------------------------------------
 
-  # A picture was handed: it stands for the stream's bound, and is read
-  # again at it.
+  # A picture was handed: it is read again at half the stream's bound, so
+  # a read that answers lands before the bound, and is told stale at the
+  # bound unless a fresh picture came first, whatever its read does.
   defp pictured(state, sub, began) do
     case Map.get(state.subs, sub) do
       %{delivery: %{stale_after: seconds}} = entry ->
-        state = %{state | subs: Map.put(state.subs, sub, %{entry | picture: began, stale: false})}
-        settle_reread(state, sub, :periodic, seconds * 1_000)
+        cancel(entry.stale_timer)
+        token = make_ref()
+        timer = Process.send_after(self(), {__MODULE__, :stale, sub, token}, seconds * 1_000)
+        entry = %{entry | picture: began, stale: false, stale_timer: {token, timer}}
+        state = %{state | subs: Map.put(state.subs, sub, entry)}
+        settle_reread(state, sub, :periodic, div(seconds * 1_000, 2))
 
       _no_picture ->
         state
     end
   end
+
+  # The picture is older than its bound and no fresh one came: told once.
+  defp stale(sub, %{stale: true}, state), do: {:ok, clear_stale_timer(state, sub)}
+
+  defp stale(sub, entry, state) do
+    entry = %{entry | stale: true, stale_timer: nil}
+
+    push([text(TinctureWire.stale(sub, entry.picture))], %{
+      state
+      | subs: Map.put(state.subs, sub, entry)
+    })
+  end
+
+  defp clear_stale_timer(state, sub),
+    do: %{state | subs: Map.update!(state.subs, sub, &%{&1 | stale_timer: nil})}
+
+  defp retry_ms(%{delivery: %{stale_after: seconds}}),
+    do: min(div(seconds * 1_000, 2), @stale_retry_ms)
 
   defp rereads?(%{delivery: %{reread: kinds}}, %{"kind" => kind}) when not is_nil(kind),
     do: to_string(kind) in kinds
@@ -865,9 +1115,11 @@ defmodule Emissary.Web.FrameSocket do
   defp rereads?(_entry, _data), do: false
 
   # A change that says only that the picture moved: the picture is read
-  # again once the burst it came in settles, ahead of any later read.
+  # again once the burst it came in settles, ahead of any later read; one
+  # that comes while a read runs is read again after it.
   defp settle_reread(state, sub) do
     case Map.get(state.subs, sub) do
+      %{read: %{}} = entry -> %{state | subs: Map.put(state.subs, sub, %{entry | again: true})}
       %{reread: {_token, _timer, :needed}} -> state
       %{} -> settle_reread(state, sub, :needed, @reread_settle_ms)
       nil -> state
@@ -875,8 +1127,8 @@ defmodule Emissary.Web.FrameSocket do
   end
 
   # The next read of the picture, `why` it is read: `:needed` when the
-  # frame holds a hole, `:periodic` at the stream's bound, `:retry` after
-  # that read failed. One replaces whichever was due.
+  # frame holds a hole, `:periodic` before the stream's bound, `:retry`
+  # after that read failed. One replaces whichever was due.
   defp settle_reread(state, sub, why, ms) do
     case Map.get(state.subs, sub) do
       nil ->
@@ -893,37 +1145,40 @@ defmodule Emissary.Web.FrameSocket do
   defp cancel_reread(%{reread: {_token, timer, _why}}), do: Process.cancel_timer(timer)
   defp cancel_reread(_entry), do: false
 
+  # A read that runs when its subscription ends goes with it.
+  defp stop_read(%{read: %{ref: ref, pid: pid}}) do
+    Process.demonitor(ref, [:flush])
+    Process.exit(pid, :kill)
+  end
+
+  defp stop_read(_entry), do: false
+
   # The picture read again under the frame's context established again
-  # first, as an open is, and handed as a resync. A read the frame holds a
-  # hole without that fails ends the stream, which the frame opens again;
-  # one at the bound leaves the picture it has, told stale once, and is
-  # tried again.
+  # first, as an open is, handed as a resync once the read answers. One
+  # that comes while a read runs waits for it, and a hole the frame holds
+  # is read again after it.
   defp reread(sub, why, state) do
-    {frames, state} = revalidate(state)
-
     case Map.get(state.subs, sub) do
-      nil ->
-        push(frames, idle_if_empty(state))
+      %{read: %{}} = entry when why == :needed ->
+        {:ok, %{state | subs: Map.put(state.subs, sub, %{entry | again: true})}}
 
-      entry ->
-        entry = %{entry | reread: nil}
-        state = %{state | subs: Map.put(state.subs, sub, entry)}
+      %{read: %{}} ->
+        {:ok, state}
 
-        case refreshed(entry, declared(entry.stream), state) do
-          {:ok, items, began} ->
-            resync = [text(TinctureWire.resync(sub)) | picture(sub, entry, items, began)]
-            push(frames ++ resync, pictured(state, sub, began))
+      %{} ->
+        {frames, state} = revalidate(state)
 
-          {:error, refusal} when why == :needed ->
-            ended = text(TinctureWire.ended(sub, refusal))
-            push(frames ++ [ended], state |> drop(sub) |> idle_if_empty())
+        case Map.get(state.subs, sub) do
+          nil ->
+            push(frames, idle_if_empty(state))
 
-          {:error, _unread} ->
-            told = if entry.stale, do: [], else: [text(TinctureWire.stale(sub, entry.picture))]
-            state = %{state | subs: Map.put(state.subs, sub, %{entry | stale: true})}
-            retry = min(entry.delivery.stale_after * 1_000, @stale_retry_ms)
-            push(frames ++ told, settle_reread(state, sub, :retry, retry))
+          _held ->
+            {more, state} = start_read(state, sub, why)
+            push(frames ++ more, state)
         end
+
+      nil ->
+        {:ok, state}
     end
   end
 

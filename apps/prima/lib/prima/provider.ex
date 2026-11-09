@@ -77,8 +77,8 @@ defmodule Prima.Provider do
       * `reread` — the values of the payload's `kind` enum whose change
         says only that the picture moved, which the deliverer answers
         with a fresh picture rather than the change, `[]` for none;
-      * `stale_after` — the seconds a delivered picture stands before its
-        deliverer reads it again.
+      * `stale_after` — the seconds past which a delivered picture with no
+        fresh one is stale; its deliverer reads it again before then.
     """
 
     @type bind :: :holder | nil
