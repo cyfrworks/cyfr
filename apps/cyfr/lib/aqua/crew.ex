@@ -26,13 +26,15 @@ defmodule Aqua.Crew do
 
   ## The hand-off
 
-  `ask/2` is `crew.ask {member, task, tools?, options?}`, called by a
-  turn of the soul in a room (the gate's lineage names the thread and the
-  turn's root): admitted by `Aqua.Runner.Admission.request/4`, it writes
-  the request row (`sent_by` the soul, `addressee` the member, `pending`)
-  and its `crew_request` outbox record in one transaction and answers the
-  request's id. The soul's turn goes on. A person's `@name` in a room is
-  the same request, written by the room's runner.
+  `ask/2` is `crew.ask {member, task, title?, tools?, options?}`, called
+  by a turn of the soul in a room (the gate's lineage names the thread and
+  the turn's root): admitted by `Aqua.Runner.Admission.request/4`, it
+  writes the request row (`sent_by` the soul, `addressee` the member,
+  `pending`) and its `crew_request` outbox record in one transaction and
+  answers the request's id. The job's `title`, when one is given, is kept
+  in the request row's payload, where the job's activity reads it
+  (`Aqua.Crew.Activity`). The soul's turn goes on. A person's `@name` in
+  a room is the same request, written by the room's runner.
 
   ## Delivery
 
@@ -95,6 +97,11 @@ defmodule Aqua.Crew do
   @lease_ms 30_000
   @tick_ms 30_000
   @max_task_bytes 32 * 1024
+  @title_max 64
+
+  # C0 and C1 controls and the Unicode line and paragraph separators: a
+  # title is one line of plain text.
+  @title_control ~r/[\x{0}-\x{1F}\x{7F}-\x{9F}\x{2028}\x{2029}]/u
 
   @undeliverable [
     :archived,
@@ -124,8 +131,10 @@ defmodule Aqua.Crew do
   @doc """
   `crew.ask`: ask `args["member"]` to do `args["task"]` from the turn the
   lineage names (`args["thread_id"]`, `args["root_execution_id"]`), with
-  `args["tools"]` (tool names the job is narrowed to) and
-  `args["options"]` (the brain's options for the job). Answers the
+  `args["title"]` (what a desktop shows for the job: trimmed, 1 to
+  `title_max/0` code points of plain text on one line, and none when
+  absent or blank), `args["tools"]` (tool names the job is narrowed to)
+  and `args["options"]` (the brain's options for the job). Answers the
   request's id; `{:error, :not_addressable}` when the calling turn is not
   the soul's in a room or the member is not of the crew.
   """
@@ -135,6 +144,7 @@ defmodule Aqua.Crew do
     task = String.trim(task)
 
     with :ok <- task(task),
+         {:ok, title} <- title(args["title"]),
          {:ok, tools} <- tools(args["tools"]),
          {:ok, options} <- options(args["options"]),
          {:ok, turn} <- calling_turn(ctx, args),
@@ -151,7 +161,7 @@ defmodule Aqua.Crew do
                addressee: member,
                status: "pending",
                content: task,
-               payload: %{"from_turn" => turn.id}
+               payload: titled(%{"from_turn" => turn.id}, title)
              },
              request: %{
                member: member,
@@ -174,6 +184,10 @@ defmodule Aqua.Crew do
 
   def ask(_ctx, _args),
     do: {:error, {:invalid_argument, "crew.ask takes a 'member' and a 'task'"}}
+
+  @doc "The most code points a job's title holds, as the stream's shape counts them."
+  @spec title_max() :: pos_integer()
+  def title_max, do: @title_max
 
   @doc """
   `crew.list`: the crew index (`index/2`), the members the calling turn
@@ -302,6 +316,32 @@ defmodule Aqua.Crew do
     do: {:error, {:invalid_argument, "crew.ask takes a task of at most 32 KiB"}}
 
   defp task(_task), do: :ok
+
+  defp title(nil), do: {:ok, nil}
+
+  defp title(title) when is_binary(title) do
+    trimmed = if String.valid?(title), do: String.trim(title)
+
+    cond do
+      trimmed == "" ->
+        {:ok, nil}
+
+      is_nil(trimmed) or Regex.match?(@title_control, trimmed) ->
+        {:error, {:invalid_argument, "crew.ask takes a 'title' of plain text on one line"}}
+
+      length(String.codepoints(trimmed)) > @title_max ->
+        {:error,
+         {:invalid_argument, "crew.ask takes a 'title' of at most #{@title_max} characters"}}
+
+      true ->
+        {:ok, trimmed}
+    end
+  end
+
+  defp title(_title), do: {:error, {:invalid_argument, "crew.ask takes 'title' as text"}}
+
+  defp titled(payload, nil), do: payload
+  defp titled(payload, title), do: Map.put(payload, "title", title)
 
   defp tools(nil), do: {:ok, nil}
 

@@ -10,13 +10,15 @@ defmodule Cyfr.Bus.Attention do
   keeps, by its `id`, with the record's own `label`, the time it began
   waiting (`since`) and the trusted `destination` where the person acts
   on it; it is never a second record of its own, and never an operator's
-  item.
+  item. A `removed` names how the item left (`outcome`, one of
+  `outcomes/0`); a waiting item's is nil.
   """
 
   alias Cyfr.Bus.Payload
 
   @kinds [:approval, :confirmation, :failed_run, :failed_schedule, :file_offer, :removed]
-  @fields [:id, :label, :since, :destination]
+  @outcomes [:resolved, :expired, :withdrawn]
+  @fields [:id, :label, :since, :destination, :outcome]
 
   @enforce_keys [:athanor_id, :kind]
   defstruct [:athanor_id, :kind | @fields]
@@ -24,18 +26,29 @@ defmodule Cyfr.Bus.Attention do
   @type kind ::
           :approval | :confirmation | :failed_run | :failed_schedule | :file_offer | :removed
 
+  @type outcome :: :resolved | :expired | :withdrawn
+
   @type t :: %__MODULE__{
           athanor_id: String.t(),
           kind: kind(),
           id: String.t() | nil,
           label: String.t() | nil,
           since: DateTime.t() | nil,
-          destination: map() | nil
+          destination: map() | nil,
+          outcome: outcome() | nil
         }
 
   @doc "The closed union of what is waiting, and `removed` for what stopped."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
+
+  @doc """
+  How a `removed` item left: settled by its person or its record
+  (`resolved`), its time ran out (`expired`), or its record was taken
+  away (`withdrawn`).
+  """
+  @spec outcomes() :: [outcome()]
+  def outcomes, do: @outcomes
 
   @doc """
   The payload for `actor`'s athanor. A kind outside `kinds/0` or a field

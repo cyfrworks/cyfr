@@ -89,11 +89,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     input = Keyword.get(opts, :input, %{"fixture" => true})
     {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
-    record =
-      Record.new(ctx, component_ref, input,
-        component_type: component_type,
-        reservation: reservation(authority, opts)
-      )
+    record = Record.new(ctx, component_ref, input, component_type: component_type)
 
     service_id = Keyword.get(opts, :service_id, "wrk_fixture")
     boot_id = Keyword.get_lazy(opts, :boot_id, &Record.boot_id/0)
@@ -104,6 +100,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     :ok =
       Record.write_started(ctx, record,
         grant: grant,
+        reservation: reservation(authority, opts),
         service_id: service_id,
         boot_id: boot_id
       )

@@ -122,6 +122,7 @@ const (
 	ExecutionList           = "list"
 	ExecutionLogs           = "logs"
 	ExecutionReadResource   = "read_resource"
+	ExecutionRetry          = "retry"
 	ExecutionRun            = "run"
 	ExecutionRunStream      = "run_stream"
 	ExecutionStatus         = "status"
@@ -310,7 +311,7 @@ var Actions = map[string][]string{
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"directory":           {"tombstone"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
-	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
+	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "retry", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
 	"invitation":          {"create", "list", "revoke"},
@@ -1511,6 +1512,21 @@ func (args ExecutionReadResourceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ExecutionReadResource, fields: fields(args)})
+}
+
+// ExecutionRetryArgs carries arguments for execution.retry.
+type ExecutionRetryArgs struct {
+	// retry: the failed run to run again, one a schedule or a feed started; it runs as a new run with the same component, input and grant
+	ExecutionId string `json:"execution_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ExecutionRetryArgs) MarshalJSON() ([]byte, error) {
+	type fields ExecutionRetryArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ExecutionRetry, fields: fields(args)})
 }
 
 // ExecutionRunArgs carries arguments for execution.run.

@@ -217,6 +217,8 @@ defmodule Opus.Providers.Feed do
           "reference",
           "component_type",
           "duration_ms",
+          "started_at",
+          "ended_at",
           "error"
         ],
         deadline_bound: @deadline_bound,
@@ -231,9 +233,11 @@ defmodule Opus.Providers.Feed do
   newest runs, read as the runs page reads them (`Opus.Record.list/2`,
   scoped to the athanor), oldest first, each as the change it last made,
   built as the live payload is (`Cyfr.Bus.Execution`): its error is the
-  stored sentence classified and read as its cause as a live failure's is,
-  and the sentence itself is never handed on. A running or
-  paused run reads as `started`. The subject is none.
+  stored sentence under the class its record keeps it with
+  (`Opus.Record.fail/3`), read as its cause as a live failure's is, a
+  cancel's as `cancelled`, and the sentence itself is never handed on; its
+  `started_at` and `ended_at` are the record's. A running or paused run
+  reads as `started`. The subject is none.
   """
   @spec recent_runs(Context.t(), nil) :: {:ok, [Cyfr.Bus.Execution.t()]} | {:error, term()}
   def recent_runs(%Context{athanor_id: athanor_id} = ctx, _subject)
@@ -270,8 +274,8 @@ defmodule Opus.Providers.Feed do
   end
 
   # The executions topic's payload of a record: the live failure's error
-  # is the sentence the record stores, so the same constructor classifies
-  # both and reads each as its cause.
+  # is the sentence and class the record stores, so the same constructor
+  # reads both as their cause.
   defp run_change(actor, %Opus.Record{status: status} = record) do
     Cyfr.Bus.Execution.new(actor, change_kind(status),
       execution_id: record.id,
@@ -279,9 +283,19 @@ defmodule Opus.Providers.Feed do
       reference: record.reference,
       component_type: record.component_type,
       duration_ms: record.duration_ms,
-      error: record.error
+      started_at: record.started_at,
+      ended_at: record.completed_at,
+      error: run_error(record)
     )
   end
+
+  # A cancel's live payload carries the cancel as its error
+  # (`Opus.Telemetry.execute_cancelled/2`), and its row keeps no sentence.
+  defp run_error(%Opus.Record{status: :cancelled}),
+    do: Cyfr.Bus.Execution.error("cancelled", :cancelled)
+
+  defp run_error(%Opus.Record{error: error, error_class: class}),
+    do: Cyfr.Bus.Execution.error(error, class)
 
   defp change_kind(status) when status in [:running, :paused], do: :started
   defp change_kind(status) when status in [:completed, :failed, :cancelled], do: status
@@ -323,6 +337,8 @@ defmodule Opus.Providers.Feed do
         "reference" => %{"type" => "string"},
         "component_type" => %{"type" => "string", "nullable" => true},
         "duration_ms" => %{"type" => "integer", "nullable" => true},
+        "started_at" => %{"type" => "time"},
+        "ended_at" => %{"type" => "time", "nullable" => true},
         "error" => %{
           "type" => "object",
           "nullable" => true,
@@ -343,6 +359,8 @@ defmodule Opus.Providers.Feed do
         "reference",
         "component_type",
         "duration_ms",
+        "started_at",
+        "ended_at",
         "error"
       ]
     })

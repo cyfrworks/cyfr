@@ -663,8 +663,11 @@ defmodule Opus.Schedules.Provider do
     missing = Enum.filter(keys, fn k -> !args[k] || args[k] == "" end)
 
     case missing do
-      [] -> :ok
-      keys -> {:error, "Missing required arguments: #{Enum.join(keys, ", ")}"}
+      [] ->
+        :ok
+
+      keys ->
+        {:error, {:invalid_argument, "Missing required arguments: #{Enum.join(keys, ", ")}"}}
     end
   end
 
@@ -674,17 +677,18 @@ defmodule Opus.Schedules.Provider do
         case Opus.Schedules.Cron.min_interval_seconds(expr) do
           {:ok, interval} when interval < 60 ->
             {:error,
-             "Minimum interval is 1 minute. Expression '#{expr}' runs every #{interval}s."}
+             {:invalid_argument,
+              "Minimum interval is 1 minute. Expression '#{expr}' runs every #{interval}s."}}
 
           {:ok, _} ->
             :ok
 
           {:error, reason} ->
-            {:error, "Invalid cron expression: #{reason}"}
+            {:error, {:invalid_argument, "Invalid cron expression: #{reason}"}}
         end
 
       {:error, reason} ->
-        {:error, "Invalid cron expression: #{reason}"}
+        {:error, {:invalid_argument, "Invalid cron expression: #{reason}"}}
     end
   end
 
@@ -796,19 +800,21 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  # The storage layer answers typed reasons; this seam renders them.
-  # A write's refusal: a member that lost its slot is answered in the
-  # refusal vocabulary, as a feed's write is; the rest as sentences.
+  # The storage layer answers typed reasons; this seam names them in the
+  # refusal vocabulary (`Prima.Refusal`). A write's refusal: a member that
+  # lost its slot is answered as itself, as a feed's write is. A create's
+  # `:not_found` is its athanor's missing row, which names no schedule.
   defp store_refusal(reason, _id) when reason in [:not_owner, :no_athanor], do: {:error, reason}
   defp store_refusal(reason, id), do: {:error, format_store_error(reason, id)}
 
   defp format_store_error(reason, id \\ nil)
-  defp format_store_error(:not_found, nil), do: "Schedule not found"
-  defp format_store_error(:not_found, id), do: "Schedule not found: #{id}"
-  defp format_store_error(:database_error, _), do: "Storage unavailable — try again shortly"
+  defp format_store_error(:not_found, nil), do: :not_found
+  defp format_store_error(:not_found, id), do: {:not_found, "Schedule", id}
+  defp format_store_error(:database_error, _), do: {:unavailable, "Storage"}
 
   defp format_store_error({:validation, errors}, _) when is_map(errors) do
-    Enum.map_join(errors, "; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+    {:invalid_argument,
+     Enum.map_join(errors, "; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)}
   end
 
   defp resolve_for_schedule(ctx, reference, label) do
