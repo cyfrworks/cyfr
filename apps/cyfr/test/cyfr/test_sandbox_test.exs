@@ -180,6 +180,18 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
+  # A process that ends while the sweep's suspend is on its way answers
+  # `exited` rather than a bad argument; it is as stopped as a suspended
+  # one. The case needs the process running on another scheduler and
+  # ending within its slice as the suspend arrives: about one in 60,000 of
+  # these short-lived processes, so a million make it all but certain.
+  test "a process that ends as it is suspended counts as stopped" do
+    for i <- 1..1_000_000 do
+      pid = spawn(fn -> count_down(rem(i, 50) * 200) end)
+      if Sandbox.suspend(pid), do: :erlang.resume_process(pid)
+    end
+  end
+
   describe "a sync test's runners" do
     setup tags do
       # Unlinked, so it outlives the test process for the check below.
@@ -382,6 +394,9 @@ defmodule Cyfr.Test.SandboxTest do
          ]}
     }
   end
+
+  defp count_down(0), do: :ok
+  defp count_down(n), do: count_down(n - 1)
 
   # A task of the test's, as the attempt and its keeper are: it watches the
   # sibling it is told of and, once that one has ended, reports and makes
