@@ -5,9 +5,12 @@
 (function () {
   const sdk = window.cyfr || null;
 
-  // The streams the manifest declares, all of them read: a desktop opens at most eight at once.
-  const DATA = ['attention.changes', 'schedules.changes', 'schedule_runs.changes', 'threads.changes', 'activity.changes', 'vault.changes'];
-  const FEEDS = ['weather', 'vpn'];
+  // Each stream stays open while the part that reads it is on. Every open holds a connection to
+  // CYFR for as long as it runs, and a browser keeps six to one host over HTTP/1.1 (the shell and
+  // its apps need the rest), so there the village reads five at once; over HTTP/2 it reads the
+  // eight a desktop may open.
+  const protocol = (() => { try { return performance.getEntriesByType('navigation')[0].nextHopProtocol || ''; } catch (e) { return ''; } })();
+  const BUDGET = /^(h2|h3)/.test(protocol) ? 8 : 5;
   // The controls the manifest declares, each picking a schedule's id.
   const PAUSE = 'pause-schedule', RESUME = 'resume-schedule';
   // Pauses before opening an ended stream again, growing while opens fail.
@@ -18,16 +21,18 @@
   const MAX_SCHEDULE_RUNS = 60;
 
   // The parts of the village, each a widget of the preferences document. `bld` are the buildings
-  // a part stands on the street; `hill` parts keep their hill; `order` parts move along the street.
+  // a part stands on the street; `hill` parts keep their hill; `order` parts move along the street;
+  // `streams` are what the part reads (a feed as `feed:<name>`); `on` is whether it stands before
+  // the person says, the defaults reading five streams together.
   const PARTS = {
-    attention: { name: 'Visitors', what: 'what waits on you', bld: [] },
-    threads: { name: 'Post boxes', what: 'threads', bld: ['post'], order: 1 },
-    activity: { name: 'Crew house', what: 'crew at work', bld: ['crew'], order: 2 },
-    components: { name: 'Market', what: 'your apps', bld: ['market'], order: 3 },
-    schedules: { name: 'Tower and road', what: 'schedules and their runs', bld: ['tower', 'press', 'barn'], order: 4 },
-    vault: { name: 'Strongroom', what: 'vault', bld: ['vault'], order: 5 },
-    weather: { name: 'Windmill', what: 'the weather feed', hill: true },
-    vpn: { name: 'Tram line', what: 'the vpn feed', hill: true },
+    attention: { name: 'Visitors', what: 'what waits on you', bld: [], streams: ['attention.changes'], on: true },
+    threads: { name: 'Post boxes', what: 'threads', bld: ['post'], order: 1, streams: ['threads.changes'], on: true },
+    activity: { name: 'Crew house', what: 'crew at work', bld: ['crew'], order: 2, streams: ['activity.changes'], on: true },
+    components: { name: 'Market', what: 'your apps', bld: ['market'], order: 3, streams: [], on: true },
+    schedules: { name: 'Tower and road', what: 'schedules and their runs', bld: ['tower', 'press', 'barn'], order: 4, streams: ['schedules.changes', 'schedule_runs.changes'], on: true },
+    vault: { name: 'Strongroom', what: 'vault', bld: ['vault'], order: 5, streams: ['vault.changes'], on: false },
+    weather: { name: 'Windmill', what: 'the weather feed', hill: true, streams: ['feed:weather'], on: false },
+    vpn: { name: 'Tram line', what: 'the vpn feed', hill: true, streams: ['feed:vpn'], on: false },
   };
 
   const state = {
@@ -158,23 +163,31 @@
     if (changed) emit({ stream: stream.split('.')[0] });
   }
 
+  // What each stream fills, emptied when its part turns off.
+  function empty(key) {
+    if (key.startsWith('feed:')) state.feeds[key.slice(5)] = null;
+    else ({ 'attention.changes': state.attention, 'schedules.changes': state.schedules, 'schedule_runs.changes': state.scheduleRuns, 'threads.changes': state.threads, 'activity.changes': state.activity, 'vault.changes': state.vault })[key].clear();
+    delete state.refusals[key.startsWith('feed:') ? key.slice(5) : key];
+  }
+
   // ---- keeping a stream open ----------------------------------------------------------------
   // Every stream ends in time (its grant has a deadline, a connection breaks, a hidden desktop's
   // credential is suspended), so an ended stream is opened again after a pause and starts again
   // with its current state. Before it first opens, a refusal is final; an open the endpoint gave
   // no answer on (`unavailable`) is tried again. `kick` opens a waiting stream at once, for a
   // desktop shown again.
-  const followers = [];
+  const followers = new Map();
   function follow(name, subject, onItem, onOpen) {
-    let stopped = false, opens = 0, ever = false, timer = null, waiting = false;
+    let stopped = false, opens = 0, ever = false, timer = null, waiting = false, current = null;
     async function open() {
       waiting = false;
       const n = ++opens;
       const handle = await sdk.stream(name, subject, ({ data }) => { if (!stopped && isItem(data)) onItem(data, n); });
-      ever = true;
+      if (stopped) { handle.close(); return; }
+      ever = true; current = handle;
       delete state.refusals[subject || name];
       onOpen(n);
-      handle.closed.catch(() => {}).then(() => retry(0));
+      handle.closed.catch(() => {}).then(() => { current = null; retry(0); });
     }
     function failed(error, attempt) {
       if (stopped) return;
@@ -189,18 +202,41 @@
       clearTimeout(timer);
       timer = setTimeout(() => open().catch((e) => failed(e, Math.min(attempt + 1, RETRY_MS.length - 1))), RETRY_MS[attempt]);
     }
-    const f = {
+    return {
       first: open().catch((e) => failed(e, 0)),
       kick() { if (waiting && !stopped) { clearTimeout(timer); open().catch((e) => failed(e, 1)); } },
+      stop() { stopped = true; clearTimeout(timer); if (current) current.close(); },
     };
-    followers.push(f);
-    return f;
+  }
+  function openKey(key) {
+    if (key.startsWith('feed:')) { const feed = key.slice(5); return follow('feed.results', feed, (d) => foldFeed(feed, d), () => {}); }
+    return follow(key, null, (d, n) => fold(key, d, n), (n) => setTimeout(() => prune(key, n), SETTLE_MS));
+  }
+  // The streams the parts that are on read, at most BUDGET of them, in the parts' order.
+  function wanted() {
+    const keys = [];
+    for (const p of Object.keys(PARTS)) if (partOn(p)) for (const k of PARTS[p].streams) if (keys.length < BUDGET && !keys.includes(k)) keys.push(k);
+    return keys;
+  }
+  // Opens what the parts on read and closes what no part on reads. Answers the new opens' firsts.
+  function sync() {
+    if (!sdk) return [];
+    const keys = wanted(), firsts = [];
+    for (const [key, f] of followers) if (!keys.includes(key)) { f.stop(); followers.delete(key); empty(key); emit({ stream: 'parts' }); }
+    for (const key of keys) if (!followers.has(key)) { const f = openKey(key); followers.set(key, f); firsts.push(f.first); }
+    return firsts;
+  }
+  // Whether turning `part` on keeps the streams read within the budget.
+  function room(part) {
+    const keys = new Set(wanted());
+    for (const k of PARTS[part].streams) keys.add(k);
+    return keys.size <= BUDGET;
   }
 
   // ---- preferences ----------------------------------------------------------------------------
   const widgetOf = (id) => { const w = isItem(state.prefs.document.widgets) ? state.prefs.document.widgets[id] : null; return isItem(w) ? w : {}; };
-  // Every part is on until its entry says `on: false`.
-  const partOn = (id) => widgetOf(id).on !== false;
+  // A part stands as its entry says, or as it stands by default while the person has said nothing.
+  const partOn = (id) => (typeof widgetOf(id).on === 'boolean' ? widgetOf(id).on : PARTS[id].on);
   const units = () => (widgetOf('weather').units === 'f' ? 'f' : 'c');
   // The street's order: each part's stored place, else its own, ties by the default order.
   function order() {
@@ -210,7 +246,7 @@
   }
   // A part's whole entry as it stands, changed by `change`: a write replaces the entry.
   function entry(id, change) {
-    const w = widgetOf(id), e = { on: w.on !== false };
+    const e = { on: partOn(id) }, w = widgetOf(id);
     if (isItem(w.rect)) e.rect = w.rect;
     if (PARTS[id].order) e.order = Number.isInteger(w.order) ? w.order : PARTS[id].order;
     if (id === 'weather') e.units = units();
@@ -219,6 +255,7 @@
   function adopt(answer) {
     if (answer && isItem(answer.document)) {
       state.prefs = { document: answer.document, revision: Number(answer.revision) || state.prefs.revision };
+      sync();
       emit({ stream: 'prefs' });
     }
   }
@@ -240,9 +277,13 @@
     if (isItem(value.prefs) && isItem(value.prefs.document)) state.prefs = { document: value.prefs.document, revision: Number(value.prefs.revision) || 0 };
     if (isItem(value.appearance)) { state.appearance = value.appearance; setZone(str(value.appearance.time_zone) || 'UTC'); }
     state.person = isItem(value.person) && str(value.person.name) ? str(value.person.name) : null;
+    if (started) sync();
     emit({ stream: 'prefs' });
   }
 
+  let started = false;
+  // Starts reading. Answers a promise that settles once every first open has its answer, or after
+  // three seconds: an open the browser holds back for a connection may wait far longer.
   function start() {
     if (!sdk) { emit({ stream: 'none' }); return Promise.resolve(); }
     desktop(sdk.desktop);
@@ -261,16 +302,13 @@
       if (!state.frozen) followers.forEach((f) => f.kick());
       emit({ stream: 'state' });
     });
-    const all = [
-      ...DATA.map((name) => follow(name, null, (d, n) => fold(name, d, n), (n) => setTimeout(() => prune(name, n), SETTLE_MS))),
-      ...FEEDS.map((feed) => follow('feed.results', feed, (d) => foldFeed(feed, d), () => {})),
-    ];
-    return Promise.allSettled(all.map((f) => f.first));
+    started = true;
+    return Promise.race([Promise.allSettled(sync()), new Promise((r) => setTimeout(r, 3000))]);
   }
 
   window.Road = {
     state, PARTS, PAUSE, RESUME, subscribe: (f) => listeners.add(f), start,
-    nowLocal, utcOf, localOf, partOn, units, order, entry, write,
+    nowLocal, utcOf, localOf, partOn, units, order, entry, write, room, BUDGET,
     values: (map) => [...map.values()].map((held) => held.value),
     // What a press of a control answers, as a sentence when it did not run.
     async press(control, value) {

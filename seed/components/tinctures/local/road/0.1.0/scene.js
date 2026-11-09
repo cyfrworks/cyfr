@@ -360,7 +360,7 @@ window.RoadScene = function () {
       const movable = planSel && PARTS[planSel].order;
       const done = { label: 'Done', primary: true, run: () => { planSel = null; closeCard(); } };
       return { title: 'Plan the village', portrait: 'plan', noClose: true, lines: ['Turn parts on or off. Pick one, then move it along the street.'],
-        rows: ids.map((p) => ({ text: PARTS[p].name, sub: PARTS[p].what, toggle: on(p), sel: planSel === p, run: () => { planSel = planSel === p ? null : p; }, flip: () => write({ [p]: R.entry(p, { on: !on(p) }) }) })),
+        rows: ids.map((p) => ({ text: PARTS[p].name, sub: PARTS[p].what, toggle: on(p), sel: planSel === p, run: () => { planSel = planSel === p ? null : p; }, flip: () => flipPart(p) })),
         choices: movable ? [{ label: '< Earlier', run: () => movePart(planSel, -1) }, { label: 'Later >', run: () => movePart(planSel, 1) }, done] : [done] };
     }
     return null;
@@ -384,6 +384,11 @@ window.RoadScene = function () {
       if (/^[0-7]$/.test(dw) && same) return WEEKDAYS[Number(dw) % 7] + 's at ' + at;
     }
     return 'cron ' + c + ' (UTC)';
+  }
+  // A part turned on opens what it reads, within what the connection carries at once.
+  function flipPart(p) {
+    if (!on(p) && !R.room(p)) { say('The village reads ' + R.BUDGET + ' live things at once here. Turn another part off first.'); return; }
+    write({ [p]: R.entry(p, { on: !on(p) }) });
   }
   function movePart(p, d) {
     const list = R.order(), i = list.indexOf(p), j = i + d;
