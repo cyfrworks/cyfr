@@ -118,6 +118,52 @@ defmodule Aqua.Loop.FlushTest do
     assert last["text"] =~ "notes.keep"
   end
 
+  # The flush continues the brain's session, so its answer's session is
+  # the one the next request continues and the thread keeps; a brain that
+  # counts usage against the session it is handed (OpenAI Codex) would
+  # otherwise count the flush's calls again in its next run.
+  for {answer, shape} <- [answered: "an answered", refused: "a refused"] do
+    test "#{shape} flush's session is the one the next request continues", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      allow_keep!(ctx, thread)
+      turn = accept_large!(ctx, thread)
+
+      flush =
+        case unquote(answer) do
+          :answered ->
+            Map.put(flush_reply([keep("n1", "plan", "a note")]), "session", "brain-flush")
+
+          :refused ->
+            {:refuse,
+             %{"type" => "provider_error", "message" => "no notes", "session" => "brain-flush"}}
+        end
+
+      script!([
+        Map.put(round_one(), "session", "brain-chat"),
+        %{"entries" => []},
+        flush,
+        reply("the story so far"),
+        reply("done")
+      ])
+
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert ["chat", "flush", "compaction", "chat"] =
+               for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
+
+      [first, flushed, _summary, last] = chat_requests()
+      refute Map.has_key?(first, "session")
+      assert flushed["session"] == "brain-chat"
+      assert last["session"] == "brain-flush"
+
+      assert {:ok, %{brain_session: "brain-flush"}} =
+               Threads.get(Sanctum.Context.actor(ctx), thread.id)
+    end
+  end
+
   test "a flush in the round that reads the room neither sends nor keeps the room's lines", %{
     ctx: ctx
   } do

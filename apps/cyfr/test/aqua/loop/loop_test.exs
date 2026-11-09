@@ -2023,9 +2023,9 @@ defmodule Aqua.LoopTest do
     {:ok, steps} = Tape.steps(ctx, turn)
     get = Enum.find(steps, &(&1.action == "get"))
 
-    # A handler the gate runs under the step's handle, registered: it
-    # outlives the process that claimed the handle, as a catalog call's
-    # handler outlives the worker that dispatched it.
+    # A handler the gate runs under the step's handle, registered under a
+    # claimer that stays alive: only the loop's own settlement of the dead
+    # worker's step stops it.
     handle = {turn.id, get.id, get.generation}
     test = self()
 
@@ -2035,11 +2035,11 @@ defmodule Aqua.LoopTest do
         Process.sleep(:infinity)
       end)
 
+    on_exit(fn -> Process.exit(claimer, :kill) end)
     assert_receive {:claimed, :ok}, 5_000
     handler = spawn(fn -> Process.sleep(:infinity) end)
     handler_ref = Process.monitor(handler)
     assert :ok = Sanctum.RunningTasks.register_handle(handle, handler)
-    Process.exit(claimer, :kill)
 
     # The loop's worker waits on the call's child: it dies.
     %{waiter: worker} = :sys.get_state(Opus.Attempt.whereis(child))

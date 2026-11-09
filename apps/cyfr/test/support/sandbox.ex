@@ -402,12 +402,22 @@ defmodule Cyfr.Test.Sandbox do
     end
   end
 
-  # A process that ended since it was listed cannot be suspended; its
-  # monitor answers at once.
-  defp suspend(pid) do
+  @doc """
+  Suspend `pid` for the sweep: true, or false for a process that ended
+  since it was listed, which is as stopped as a suspended one (its monitor
+  answers at once). One gone before the call is refused as a bad
+  argument; one that ends while the suspend is on its way answers
+  `exited`.
+  """
+  @spec suspend(pid()) :: boolean()
+  def suspend(pid) do
     :erlang.suspend_process(pid)
   rescue
-    ArgumentError -> false
+    ArgumentError ->
+      false
+
+    error in ErlangError ->
+      if error.original == :exited, do: false, else: reraise(error, __STACKTRACE__)
   end
 
   # ---------------------------------------------------------------------------

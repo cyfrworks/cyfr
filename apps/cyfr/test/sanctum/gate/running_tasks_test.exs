@@ -211,7 +211,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
       assert {:error, :not_found} = RunningTasks.cancel(request_id)
     end
 
-    test "a registered task outlives its dead claimer until it exits itself" do
+    test "a registered task stops with its dead claimer, and leaves no row" do
       request_id = "req_#{System.unique_integer([:positive])}"
       test = self()
 
@@ -232,23 +232,16 @@ defmodule Sanctum.Gate.RunningTasksTest do
 
       assert_receive {:registered, pid}, 1_000
       assert_receive {:task, %Task{pid: ^pid}}, 1_000
-      ref = Process.monitor(pid)
-      claimer_ref = Process.monitor(claimer)
+      ref = monitor!(pid)
+
+      # No one is left to read the task's answer: it stops as a cancel
+      # stops it, and nothing is left for a cancel to reach.
       Process.exit(claimer, :kill)
-      assert_receive {:DOWN, ^claimer_ref, :process, _, :killed}, 1_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, :cancelled}, 1_000
       :sys.get_state(RunningTasks)
 
-      # The cancel still reaches the task, and its exit leaves nothing.
-      assert Sanctum.TestContext.running_pids(request_id) == [pid]
-      assert :ok = RunningTasks.cancel(request_id)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :cancelled}, 1_000
-
-      Prima.Test.Wait.wait_until(
-        fn -> no_claim?(request_id) end,
-        1_000,
-        "the killed task's claim to go"
-      )
-
+      assert no_claim?(request_id)
+      assert Sanctum.TestContext.running_pids(request_id) == []
       assert {:error, :not_found} = RunningTasks.cancel(request_id)
     end
 
@@ -401,10 +394,9 @@ defmodule Sanctum.Gate.RunningTasksTest do
       assert [] = row(handle)
     end
 
-    # An aborted turn kills its worker (the claimer) and then cancels the
-    # call by its handle: the row must still reach the handler, and the
-    # handler's death must then delete it.
-    test "a claimer killed after its task registers: the cancel still stops it, and no row survives" do
+    # A turn's worker is the claimer: however it dies (an abort, its
+    # loop's death, a lost lease), the handler it waited on stops with it.
+    test "a claimer killed after its task registers stops the task, and no row survives" do
       handle = handle()
       test = self()
 
@@ -422,21 +414,17 @@ defmodule Sanctum.Gate.RunningTasksTest do
         end)
 
       assert_receive {:registered, pid}, 1_000
-      ref = Process.monitor(pid)
-      claimer_ref = Process.monitor(claimer)
-      Process.exit(claimer, :kill)
-      assert_receive {:DOWN, ^claimer_ref, :process, _, :killed}, 1_000
-      :sys.get_state(RunningTasks)
+      ref = monitor!(pid)
       assert [{^handle, ^pid}] = row(handle)
 
-      assert :ok = RunningTasks.cancel_handle(handle)
+      Process.exit(claimer, :kill)
       assert_receive {:DOWN, ^ref, :process, ^pid, :cancelled}, 1_000
+      :sys.get_state(RunningTasks)
+      assert row(handle) == []
 
-      Prima.Test.Wait.wait_until(
-        fn -> row(handle) == [] end,
-        1_000,
-        "the killed task's row to go"
-      )
+      # The handle is free again, so a later claim of it starts afresh.
+      assert :ok = RunningTasks.claim(handle)
+      RunningTasks.release_handle(handle)
     end
 
     test "a task that exits on its own takes its row, and the late release is a no-op" do
@@ -577,4 +565,16 @@ defmodule Sanctum.Gate.RunningTasksTest do
 
   defp handle, do: {:turn, System.unique_integer([:positive])}
   defp row(handle), do: :ets.lookup(Sanctum.RunningTasks.Handles, handle)
+
+  # A monitor request is a signal: `Process.monitor/1` returns before the
+  # process has taken it, and an exit sent on another path (the registry
+  # stopping a task whose claimer died) can reach it first, leaving the
+  # monitor to answer `:noproc`. The process's answer to `Process.info/2`
+  # comes after the monitor has landed.
+  defp monitor!(pid) do
+    ref = Process.monitor(pid)
+    assert {:monitored_by, by} = Process.info(pid, :monitored_by)
+    assert self() in by
+    ref
+  end
 end

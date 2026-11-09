@@ -609,10 +609,10 @@ defmodule Emissary.Web.MCPController do
 
   # "Closing the SSE response stream MUST be treated by the server as
   # cancellation of that request." The tool task is killed through the
-  # gate, which tracks it under the same request id; the wrapper task is
-  # killed after it, since killing the wrapper alone would leave the tool
-  # task running with nobody waiting on it. An answer the wrapper sent
-  # before it died is dropped with its monitor.
+  # gate, which tracks it under the same request id, and the wrapper task
+  # waiting on it after it, dependent first (the wrapper's death alone
+  # would stop the task too, `Sanctum.RunningTasks`). An answer the
+  # wrapper sent before it died is dropped with its monitor.
   defp cancel_work({pid, monitor, reply}, request_id) do
     Sanctum.RunningTasks.cancel(request_id)
     Process.exit(pid, :kill)
