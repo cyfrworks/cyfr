@@ -789,11 +789,39 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
+  test("a bridge mounted under activation the page already holds counts it spent: the frame focusing itself passes nothing, a fresh input does", async () => {
+    // The chrome's input that opened the frame holds the page's activation
+    // as its bridge mounts.
+    activation("active")
+    const bridge = connect()
+    const port = bridge.load()
+    bridge.hook.lifespan = 200
+    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
+
+    try {
+      focus(bridge.el)
+      port.postMessage(press)
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      assert.deepEqual(forwarded(bridge.events), [])
+      activation("inactive")
+      await eventually(() => bridge.hook.dropped === 1)
+
+      // A fresh input of the person's carries the next.
+      input(bridge.el)
+      port.postMessage(press)
+      await eventually(() => forwarded(bridge.events).length === 1)
+      assert.deepEqual(forwarded(bridge.events), [press])
+    } finally {
+      bridge.close()
+      port.close()
+    }
+  })
+
   test("a press of a control or a write dropped for want of input is told it did not run; the shell's answers are posted once", async () => {
     const bridge = connect()
     const {el} = bridge
     const tell = (verb, args) => el.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
-    const pressed = {control: "pause-digest", outcome: "accepted"}
+    const pressed = {control: "pause-digest", call: 4, outcome: "accepted"}
 
     // An answer before the handshake is held for nothing.
     tell("pressed", pressed)
@@ -802,25 +830,27 @@ describe("a canvas frame's bridge", () => {
     try {
       await eventually(() => bridge.heard.length === 3)
       activation("inactive")
-      await send(bridge, port, {v: 1, verb: "press", frame: CANVAS, args: {control: "pause-digest", value: "sch_1"}})
-      await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {widgets: {}}}})
+      const press = {control: "pause-digest", value: "sch_1", call: 1}
+      await send(bridge, port, {v: 1, verb: "press", frame: CANVAS, args: press})
+      await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {widgets: {}}, call: 2}})
       await eventually(() => bridge.heard.length === 5)
+      // Each told it did not run under the call it was sent with.
       assert.deepEqual(bridge.heard.slice(3), [
-        {v: 1, verb: "pressed", frame: CANVAS, args: {control: "pause-digest", outcome: "cancelled"}},
-        {v: 1, verb: "prefs", frame: CANVAS, args: {outcome: "cancelled", ...LIVE.canvas.prefs}}
+        {v: 1, verb: "pressed", frame: CANVAS, args: {control: "pause-digest", call: 1, outcome: "cancelled"}},
+        {v: 1, verb: "prefs", frame: CANVAS, args: {call: 2, outcome: "cancelled", ...LIVE.canvas.prefs}}
       ])
 
       // The shell's answer, once; a write's answer moves what the bridge
       // holds for the next one it answers itself.
       tell("pressed", pressed)
-      const saved = {outcome: "saved", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 9}
+      const saved = {call: 5, outcome: "saved", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 9}
       tell("prefs", saved)
-      await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {}}})
+      await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {}, call: 6}})
       await eventually(() => bridge.heard.length === 8)
       assert.deepEqual(bridge.heard.slice(5), [
         {v: 1, verb: "pressed", frame: CANVAS, args: pressed},
         {v: 1, verb: "prefs", frame: CANVAS, args: saved},
-        {v: 1, verb: "prefs", frame: CANVAS, args: {...saved, outcome: "cancelled"}}
+        {v: 1, verb: "prefs", frame: CANVAS, args: {...saved, call: 6, outcome: "cancelled"}}
       ])
       assert.ok(bridge.heard.every((message) => message.type === CREDENTIAL || decodeToFrame(message).ok))
     } finally {
@@ -1035,6 +1065,36 @@ describe("a canvas frame's bridge", () => {
     assert.equal(bridge.posted.length, 1)
     bridge.close()
     port.close()
+  })
+})
+
+describe("an app opened again on another subject", () => {
+  test("its bridge posts the new subject over its port once it runs, and the SDK hears it", async () => {
+    const el = frameElement(FRAME)
+    const win = frameWindow()
+    const {api, onWindowMessage} = createClient({win, fetchFn: fetch, base: "http://127.0.0.1/"})
+    el.contentWindow = {
+      postMessage: (data, _origin, transfer) => onWindowMessage({source: win.parent, data, ports: transfer})
+    }
+    const first = {kind: "run", id: "exec_first"}
+    const second = {kind: "run", id: "exec_second"}
+    const {hook} = mountBridge(el, {credential: "frm.v1.app", subject: first})
+    const {handlers} = mountCanvas(canvasElement({frames: [el]}))
+    const heard = []
+    api.on("subject", (subject) => heard.push({...subject}))
+
+    try {
+      el.dispatchEvent(new Event("load"))
+      await eventually(() => api.subject !== null && api.frame === FRAME)
+      assert.deepEqual({...api.subject}, first)
+
+      handlers.frame_subject({frame: FRAME, subject: second})
+      await eventually(() => heard.length > 0 && heard.at(-1).id === "exec_second")
+      assert.deepEqual({...api.subject}, second)
+    } finally {
+      hook.destroyed()
+      hook._port?.close()
+    }
   })
 })
 

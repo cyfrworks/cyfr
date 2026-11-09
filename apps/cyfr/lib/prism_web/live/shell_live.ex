@@ -79,7 +79,8 @@ defmodule PrismWeb.ShellLive do
   visible canvas, `ready` keeps it standing, `failed` before `ready`
   falls it back (below), `open` is the person's open of a listed
   tincture (`app_open` below), on a subject of a kind the app declares
-  when it names one, which the app is handed at its handshake; `press`
+  when it names one, which the app is handed at its handshake or, open
+  already, as it is opened again; `press`
   of a binding presses a feed's action through `feed.press` once the
   served version's declaration reads that feed, and `press` of a control
   runs the call the component domain reads it as
@@ -869,7 +870,7 @@ defmodule PrismWeb.ShellLive do
     with %{id: id} = card <- listed(socket, ref),
          :ok <- accepts(card, subject) do
       socket = launch_tincture(socket, id)
-      if subject, do: frames(socket, &Frames.put_subject(&1, {:full, id}, subject)), else: socket
+      if subject, do: give_subject(socket, {:full, id}, subject), else: socket
     else
       _refused -> drop_message(socket)
     end
@@ -980,8 +981,8 @@ defmodule PrismWeb.ShellLive do
        }),
        do: open_from_canvas(socket, canvas_id, ref, Map.get(args, "subject"))
 
-  defp live_canvas_verb(socket, frame, %{verb: :press, args: %{"control" => control} = args}),
-    do: press_control(socket, frame, control, Map.get(args, "value"))
+  defp live_canvas_verb(socket, frame, %{verb: :press, args: %{"control" => _} = args}),
+    do: press_control(socket, frame, args)
 
   defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
     do: press(socket, frame, args)
@@ -989,8 +990,8 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, _frame, %{verb: :grant, args: %{"ref" => ref}}),
     do: grant_from_canvas(socket, ref)
 
-  defp live_canvas_verb(socket, frame, %{verb: :prefs, args: %{"document" => document}}),
-    do: write_prefs(socket, frame, document)
+  defp live_canvas_verb(socket, frame, %{verb: :prefs, args: %{"document" => document} = args}),
+    do: write_prefs(socket, frame, document, args["call"])
 
   defp live_canvas_verb(socket, frame, %{verb: :ask, args: %{"widget" => widget}}),
     do: ask(socket, frame, widget)
@@ -1002,10 +1003,12 @@ defmodule PrismWeb.ShellLive do
 
   # A press of a control or a write of the preferences the shell did not
   # act on is answered so, never left waiting: it did not run.
-  defp not_run(socket, frame, %{verb: :press, args: %{"control" => control}}),
-    do: answer(socket, frame, "pressed", Prima.TinctureWire.pressed(control, "cancelled"))
+  defp not_run(socket, frame, %{verb: :press, args: %{"control" => control, "call" => call}}),
+    do: answer(socket, frame, "pressed", Prima.TinctureWire.pressed(control, call, "cancelled"))
 
-  defp not_run(socket, frame, %{verb: :prefs}), do: answer_prefs(socket, frame, "cancelled")
+  defp not_run(socket, frame, %{verb: :prefs, args: %{"call" => call}}),
+    do: answer_prefs(socket, frame, call, "cancelled")
+
   defp not_run(socket, _frame, _decoded), do: socket
 
   # The answer a canvas is told over its port, through the canvas hook and
@@ -1021,15 +1024,20 @@ defmodule PrismWeb.ShellLive do
   # runs through the gate as the person, which decides whether they own
   # what it reaches. Its outcome is told to the canvas as it came; nothing
   # is tried again.
-  defp press_control(socket, frame, control, value) do
+  defp press_control(socket, frame, %{"control" => control, "call" => call} = args) do
     outcome =
-      with {:ok, {tool, args}} <-
-             Compendium.desktop_control(socket.assigns.context, frame.desktop, control, value),
-           {:ok, _ran} <- call_tool(socket, tool, args) do
-        Prima.TinctureWire.pressed(control, "accepted")
+      with {:ok, {tool, call_args}} <-
+             Compendium.desktop_control(
+               socket.assigns.context,
+               frame.desktop,
+               control,
+               Map.get(args, "value")
+             ),
+           {:ok, _ran} <- call_tool(socket, tool, call_args) do
+        Prima.TinctureWire.pressed(control, call, "accepted")
       else
         {:error, reason} ->
-          Prima.TinctureWire.pressed(control, "refused", refusal_class(reason))
+          Prima.TinctureWire.pressed(control, call, "refused", refusal_class(reason))
       end
 
     answer(socket, frame, "pressed", outcome)
@@ -1075,7 +1083,12 @@ defmodule PrismWeb.ShellLive do
   # handed the frame or last answered it: written, or stale with the
   # current document, which the frame is handed so it may write again
   # over it; nothing is merged across a stale revision.
-  defp write_prefs(socket, %{key: {:canvas, canvas_id}, desktop: %{} = desktop} = frame, document) do
+  defp write_prefs(
+         socket,
+         %{key: {:canvas, canvas_id}, desktop: %{} = desktop} = frame,
+         document,
+         call
+       ) do
     %{revision: revision} = held_prefs(socket, frame)
 
     case Compendium.put_desktop_prefs(
@@ -1086,18 +1099,18 @@ defmodule PrismWeb.ShellLive do
            revision
          ) do
       {:ok, stored} ->
-        socket |> put_held_prefs(frame, stored) |> answer_prefs(frame, "saved")
+        socket |> put_held_prefs(frame, stored) |> answer_prefs(frame, call, "saved")
 
       {:error, {:stale, stored}} ->
-        socket |> put_held_prefs(frame, stored) |> answer_prefs(frame, "stale")
+        socket |> put_held_prefs(frame, stored) |> answer_prefs(frame, call, "stale")
 
       {:error, reason} ->
-        answer_prefs(socket, frame, "refused", refusal_class(reason))
+        answer_prefs(socket, frame, call, "refused", refusal_class(reason))
     end
   end
 
-  defp write_prefs(socket, frame, _document),
-    do: answer_prefs(socket, frame, "refused", "invalid_argument")
+  defp write_prefs(socket, frame, _document, call),
+    do: answer_prefs(socket, frame, call, "refused", "invalid_argument")
 
   defp held_prefs(socket, %{id: id}),
     do:
@@ -1106,14 +1119,14 @@ defmodule PrismWeb.ShellLive do
   defp put_held_prefs(socket, %{id: id}, %{document: document, revision: revision}),
     do: update(socket, :prefs_held, &Map.put(&1, id, %{document: document, revision: revision}))
 
-  defp answer_prefs(socket, frame, outcome, reason \\ nil) do
+  defp answer_prefs(socket, frame, call, outcome, reason \\ nil) do
     %{document: document, revision: revision} = held_prefs(socket, frame)
 
     answer(
       socket,
       frame,
       "prefs",
-      Prima.TinctureWire.prefs_answer(outcome, document, revision, reason)
+      Prima.TinctureWire.prefs_answer(call, outcome, document, revision, reason)
     )
   end
 
@@ -1233,18 +1246,30 @@ defmodule PrismWeb.ShellLive do
          :ok <- accepts(card, subject),
          {:ok, opened} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
       if subject,
-        do:
-          frames(opened, &Frames.put_subject(&1, {:app, canvas_id, Frames.ref_of(card)}, subject)),
+        do: give_subject(opened, {:app, canvas_id, Frames.ref_of(card)}, subject),
         else: opened
     else
       _refused -> drop_message(socket)
     end
   end
 
+  # The app under `key` is opened on `subject`: handed it at its handshake
+  # when it has not had one, and told it through its bridge when it runs
+  # already (`frame_subject`), so an app opened again on another subject
+  # hears the new one.
+  defp give_subject(socket, key, subject) do
+    socket = frames(socket, &Frames.put_subject(&1, key, subject))
+    frame = Frames.get(socket.assigns.frames, key)
+
+    if Frames.subject_due?(frame),
+      do: push_event(socket, "frame_subject", %{frame: frame.id, subject: subject}),
+      else: socket
+  end
+
   # An app is opened on a subject only of a kind its declaration accepts
-  # (`tincture.subjects`); the subject is handed to it at its handshake and
-  # opening it does nothing more: what the subject names is the app's to
-  # read under its own grant.
+  # (`tincture.subjects`); the subject is handed to it, and opening it does
+  # nothing more: what the subject names is the app's to read under its
+  # own grant.
   defp accepts(_card, nil), do: :ok
 
   defp accepts(card, %{"kind" => kind}) do

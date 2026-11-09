@@ -1044,11 +1044,14 @@ describe("a desktop's verbs and data", () => {
     await eventually(() => sent(heard, "press").length === 2)
     assert.deepEqual(
       sent(heard, "press").map(({args}) => args),
-      [{control: "pause-digest"}, {control: "vpn-connect", value: "lisbon-1"}]
+      [
+        {control: "pause-digest", call: 1},
+        {control: "vpn-connect", value: "lisbon-1", call: 2}
+      ]
     )
 
-    answerOn(port, "pressed", {control: "vpn-connect", outcome: "refused", reason: "invalid_argument"})
-    answerOn(port, "pressed", {control: "pause-digest", outcome: "accepted"})
+    answerOn(port, "pressed", {control: "vpn-connect", call: 2, outcome: "refused", reason: "invalid_argument"})
+    answerOn(port, "pressed", {control: "pause-digest", call: 1, outcome: "accepted"})
     assert.deepEqual({...(await accepted)}, {outcome: "accepted"})
     assert.deepEqual({...(await picked)}, {outcome: "refused", reason: "invalid_argument"})
 
@@ -1070,15 +1073,56 @@ describe("a desktop's verbs and data", () => {
 
     const writing = api.prefs({widgets: {runs: {on: false}}})
     await eventually(() => sent(heard, "prefs").length === 1)
-    assert.deepEqual(sent(heard, "prefs")[0].args, {document: {widgets: {runs: {on: false}}}})
+    assert.deepEqual(sent(heard, "prefs")[0].args, {document: {widgets: {runs: {on: false}}}, call: 1})
 
     const current = {widgets: {runs: {on: true}, apps: {on: false}}, desktop: {}}
-    answerOn(port, "prefs", {outcome: "stale", document: current, revision: 8})
+    answerOn(port, "prefs", {call: 1, outcome: "stale", document: current, revision: 8})
     assert.deepEqual({...(await writing)}, {outcome: "stale", document: current, revision: 8})
     await eventually(() => seen.length === 2)
     assert.deepEqual(api.desktop.prefs, {document: current, revision: 8})
 
     await assert.rejects(api.prefs([]), {code: "invalid_argument"})
+  })
+
+  test("a cancelled later press cannot answer an earlier press of the same control still running", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+
+    const first = api.press("pause-digest", "sch_first")
+    const second = api.press("pause-digest", "sch_second")
+    await eventually(() => sent(heard, "press").length === 2)
+    const [one, two] = sent(heard, "press").map(({args}) => args.call)
+
+    // The second is told it did not run before the first's run ends.
+    answerOn(port, "pressed", {control: "pause-digest", call: two, outcome: "cancelled"})
+    answerOn(port, "pressed", {control: "pause-digest", call: one, outcome: "accepted"})
+
+    assert.deepEqual(
+      (await Promise.all([first, second])).map((answer) => ({...answer})),
+      [{outcome: "accepted"}, {outcome: "cancelled"}]
+    )
+  })
+
+  test("a cancelled later write cannot answer an earlier write still pending, and an answer to no call settles nothing", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+    const document = {widgets: {runs: {on: false}}, desktop: {}}
+
+    const first = api.prefs({widgets: document.widgets})
+    const second = api.prefs({widgets: {apps: {on: false}}})
+    await eventually(() => sent(heard, "prefs").length === 2)
+    const [one, two] = sent(heard, "prefs").map(({args}) => args.call)
+
+    answerOn(port, "prefs", {call: 999, outcome: "saved", document, revision: 5})
+    answerOn(port, "prefs", {call: two, outcome: "cancelled", ...OPEN.canvas.prefs})
+    answerOn(port, "prefs", {call: one, outcome: "saved", document, revision: 1})
+
+    assert.deepEqual(
+      (await Promise.all([first, second])).map(({outcome}) => outcome),
+      ["saved", "cancelled"]
+    )
   })
 
   test("ask, settings and an open on a subject post the wire's messages; an open on a subject outside it posts nothing", async () => {

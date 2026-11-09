@@ -62,7 +62,8 @@ const TOLD = TOLD_VERBS
  * its write of its preferences (`pressed`, `prefs`) are posted once as
  * they come, never held for a later handshake. A value the wire refuses
  * is never posted. An app's frame opened on a subject is posted it
- * (`subject`) before its credential.
+ * (`subject`) before its credential, and a new one as the app is opened
+ * again on it (`cyfr:to-canvas` with `subject`).
  *
  * From a canvas only `ready`, `failed` and the person's verbs (`open`,
  * `press`, `grant`, `prefs`, `ask`, `settings`) reach the view, and from
@@ -158,7 +159,10 @@ const IframeBridge = {
     // the one verb held until it proves an input of its own.
     this.lifespan = ACTIVATION_LIFESPAN_MS
     this._input = 0
-    this._spentAt = -Infinity
+    // A frame opens on an input of the chrome's (a switch, an open) or with
+    // the page: activation the page holds as the bridge mounts was given by
+    // no input in this frame, so it starts spent.
+    this._spentAt = activated() ? now() : -Infinity
     this._held = null
     // The preferences the frame holds as the shell last told it, for a
     // write the bridge answers itself.
@@ -200,6 +204,7 @@ const IframeBridge = {
   // it once the canvas has its open; post an answer once, holding nothing
   // but the preferences it carries. One the wire refuses is neither.
   _tell(verb, args) {
+    if (!this._canvas && verb === "subject") return this._retell(args)
     if (!this._canvas || !(TOLD.includes(verb) || ANSWER_VERBS.includes(verb))) return
     let message
     try {
@@ -212,15 +217,26 @@ const IframeBridge = {
     if (this._port && this._mode !== null) this._port.postMessage(message)
   },
 
+  // An app opened again on another subject is posted it, once its port is
+  // open; one the wire refuses is not.
+  _retell(subject) {
+    if (!this._port) return
+    try {
+      this._port.postMessage(toFrameMessage("subject", this._frameId, subject))
+    } catch (_error) {
+      // Not a subject the wire carries.
+    }
+  },
+
   // A person's verb the bridge dropped: a press of a control and a write
   // of the preferences are told they did not run.
   _cancelled(message) {
     if (!this._canvas || !this._port || this._mode === null) return
     const {verb, args} = message
     if (verb === "press" && "control" in args) {
-      this._tell("pressed", {control: args.control, outcome: "cancelled"})
+      this._tell("pressed", {control: args.control, call: args.call, outcome: "cancelled"})
     } else if (verb === "prefs" && this._prefs) {
-      this._tell("prefs", {outcome: "cancelled", ...this._prefs})
+      this._tell("prefs", {call: args.call, outcome: "cancelled", ...this._prefs})
     }
   },
 

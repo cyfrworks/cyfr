@@ -97,6 +97,7 @@ const PAGE = /^[a-z][a-z0-9_]{0,31}$/
 // What an app is opened on (`Prima.TinctureWire.subject_id?/1`).
 const SUBJECT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/
 const MAX_PRESS_VALUE = 256
+const MAX_CALL = 2147483647
 const ACCENT = /^#[0-9a-f]{6}$/
 const LOCALE = /^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,7}$/
 const TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]{0,31}(\/[A-Za-z0-9][A-Za-z0-9_+-]{0,31}){0,2}$/
@@ -146,6 +147,10 @@ const isBoundedText = (value, max) =>
 export const isDesktopId = (id) => typeof id === "string" && DESKTOP_ID.test(id)
 
 export const isPressValue = (value) => isBoundedText(value, MAX_PRESS_VALUE)
+
+// The number a frame gives a press or a write, which its answer carries
+// back (`Prima.TinctureWire.call?/1`).
+export const isCall = (call) => Number.isInteger(call) && call >= 1 && call <= MAX_CALL
 
 // What an app is opened on: exactly a kind the apps accept and an id.
 export const isSubject = (subject) =>
@@ -386,15 +391,19 @@ function argsError(verb, args) {
           ? null
           : "press names a binding id and an action"
       }
-      if (sameKeys(args, ["control"])) return isDesktopId(args.control) ? null : "press names a control by its id"
-      if (sameKeys(args, ["control", "value"])) {
-        return isDesktopId(args.control) && isPressValue(args.value)
-          ? null
-          : `a press names a control and a value of 1 to ${MAX_PRESS_VALUE} code points`
+      if (sameKeys(args, ["control", "call"])) {
+        return isDesktopId(args.control) && isCall(args.call) ? null : "press names a control and its call"
       }
-      return "press names a binding id and an action, or a control"
+      if (sameKeys(args, ["control", "value", "call"])) {
+        return isDesktopId(args.control) && isCall(args.call) && isPressValue(args.value)
+          ? null
+          : `a press names a control, its call and a value of 1 to ${MAX_PRESS_VALUE} code points`
+      }
+      return "press names a binding id and an action, or a control and its call"
     case "prefs":
-      return sameKeys(args, ["document"]) && isObject(args.document) ? null : "prefs carries exactly a document"
+      return sameKeys(args, ["document", "call"]) && isObject(args.document) && isCall(args.call)
+        ? null
+        : "prefs carries exactly a document and its call"
     case "ask":
       return sameKeys(args, ["widget"]) && isDesktopId(args.widget) ? null : "ask names a widget by its id"
     case "settings":
@@ -455,9 +464,10 @@ export const TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "sta
 // The shell's answers to a canvas's press and write, each posted once.
 export const ANSWER_VERBS = Object.freeze(["pressed", "prefs"])
 
-// What a canvas's page hears through `cyfr.on`: what the shell tells it,
-// and `desktop`, its preferences, appearance and person.
-export const CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop"])
+// What a page hears through `cyfr.on`: on a canvas what the shell tells
+// it and `desktop`, its preferences, appearance and person; on an app,
+// `subject`, what it was opened on again.
+export const CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"])
 
 const POSTURES = ["desk", "hand"]
 const SHELL_STATES = ["live", "frozen"]
@@ -568,18 +578,21 @@ const isOutcome = (args, outcomes) =>
     : !("reason" in args))
 
 function pressedError(args) {
-  const keys = args.outcome === "refused" ? ["control", "outcome", "reason"] : ["control", "outcome"]
-  return sameKeys(args, keys) && isDesktopId(args.control) && isOutcome(args, PRESS_OUTCOMES)
+  const keys = ["control", "call", "outcome", ...(args.outcome === "refused" ? ["reason"] : [])]
+  return sameKeys(args, keys) && isDesktopId(args.control) && isCall(args.call) && isOutcome(args, PRESS_OUTCOMES)
     ? null
-    : "pressed is exactly a control and its outcome, with a reason when refused"
+    : "pressed is exactly a control, its call and its outcome, with a reason when refused"
 }
 
 function prefsAnswerError(args) {
-  const keys =
-    args.outcome === "refused" ? ["outcome", "document", "revision", "reason"] : ["outcome", "document", "revision"]
-  return sameKeys(args, keys) && isObject(args.document) && isRevision(args.revision) && isOutcome(args, PREFS_OUTCOMES)
+  const keys = ["call", "outcome", "document", "revision", ...(args.outcome === "refused" ? ["reason"] : [])]
+  return sameKeys(args, keys) &&
+    isCall(args.call) &&
+    isObject(args.document) &&
+    isRevision(args.revision) &&
+    isOutcome(args, PREFS_OUTCOMES)
     ? null
-    : "prefs is exactly an outcome, a document and its revision, with a reason when refused"
+    : "prefs is exactly a call, an outcome, a document and its revision, with a reason when refused"
 }
 
 function toFrameArgsError(verb, args, frame) {
