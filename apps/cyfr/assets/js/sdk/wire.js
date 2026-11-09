@@ -2,10 +2,11 @@
 // Copyright 2026 CYFR Works Inc.
 
 // The wire between a tincture's frame, the endpoint and the shell, as
-// `Prima.TinctureWire` defines it: the frame posts `invoke`, `action` and
-// `stream_open` requests to the endpoint under its credential, and shell
-// verbs to the shell over its MessagePort. `tests/fixtures/tincture_wire.json`
-// pins both sides; the SDK's tests read it.
+// `Prima.TinctureWire` defines it: the frame posts `invoke` and `action`
+// requests to the endpoint under its credential, reads its streams over one
+// WebSocket, its stream connection, and sends shell verbs to the shell over
+// its MessagePort. `tests/fixtures/tincture_wire.json` pins both sides; the
+// SDK's tests read it.
 //
 // Beside it, the messages the shell sends the frame over the port: its port
 // and its credential, an app's subject, and to a canvas its open
@@ -21,8 +22,7 @@ export const BEARER_HEADER = "authorization"
 
 export const ROUTES = Object.freeze({
   invoke: "/_f/v1/invoke",
-  action: "/_f/v1/action",
-  stream_open: "/_f/v1/stream"
+  action: "/_f/v1/action"
 })
 
 export const VERBS = Object.freeze([
@@ -185,9 +185,6 @@ export function request(kind, fields, publicIdentity = null) {
     case "action":
       body = {v: VERSION, operation: fields.operation, args: fields.args}
       break
-    case "stream_open":
-      body = {v: VERSION, stream: fields.stream, subject: fields.subject}
-      break
     default:
       throw new TypeError("unknown request kind: " + kind)
   }
@@ -222,123 +219,92 @@ export function publicIdentity(pathname) {
     : null
 }
 
-// The stream a `stream_open` request opens is answered as `text/event-stream`
-// under the grant: one event per group of lines ended by a blank line, `id`
-// the topic's sequence number where it carries one, `event` the projection
-// name and `data` the projected payload as JSON (several `data` lines join
-// with a newline). A line starting with `:` is a comment; any other field is
-// ignored. `sseParser(onEvent)` answers `{push(text), end()}` and calls
-// `onEvent({id, event, data})` for each complete event, `id` a number or
-// null; an event whose data is not JSON, or that has no data, is dropped.
-export const STREAM_CONTENT_TYPE = "text/event-stream"
+// A refusal's projection, as a frame may read one: exactly a class, a
+// sentence and a stage. Which refusal classes exist is the server's
+// (`Prima.Refusal`); the frame reads the class as a name.
+const isRefusal = (error) =>
+  isObject(error) &&
+  sameKeys(error, ["class", "message", "stage"]) &&
+  typeof error.class === "string" &&
+  error.class !== "" &&
+  typeof error.message === "string" &&
+  (error.stage === "admission" || error.stage === "execution")
 
-export function sseParser(onEvent) {
-  let buffer = ""
-  let pendingCR = false
-  let frame = {id: null, event: "message", data: []}
-
-  const dispatch = () => {
-    const {id, event, data} = frame
-    frame = {id: null, event: "message", data: []}
-    if (data.length === 0) return
-    let payload
-    try {
-      payload = JSON.parse(data.join("\n"))
-    } catch (_error) {
-      return
-    }
-    onEvent({id, event, data: payload})
-  }
-
-  const line = (text) => {
-    if (text === "") return dispatch()
-    if (text.startsWith(":")) return
-    const colon = text.indexOf(":")
-    const field = colon === -1 ? text : text.slice(0, colon)
-    let value = colon === -1 ? "" : text.slice(colon + 1)
-    if (value.startsWith(" ")) value = value.slice(1)
-
-    if (field === "data") frame.data.push(value)
-    else if (field === "event") frame.event = value
-    else if (field === "id") frame.id = /^\d+$/.test(value) ? Number(value) : null
-  }
-
-  return {
-    // Lines end with LF, CRLF or CR, and a chunk may end anywhere, a CRLF
-    // pair split between two chunks included.
-    push(text) {
-      if (pendingCR && text.startsWith("\n")) text = text.slice(1)
-      pendingCR = false
-      buffer += text
-
-      let match
-      while ((match = /\r\n|\r|\n/.exec(buffer)) !== null) {
-        if (match[0] === "\r" && match.index === buffer.length - 1) {
-          pendingCR = true
-        }
-        line(buffer.slice(0, match.index))
-        buffer = buffer.slice(match.index + match[0].length)
-      }
-    },
-
-    // A stream that ends mid-event dispatches nothing more: an event is
-    // complete only at its blank line.
-    end() {
-      buffer = ""
-      frame = {id: null, event: "message", data: []}
-    }
-  }
-}
-
-// An answer read back: {ok: true, value} for a result or a stream grant,
-// {ok: false, refusal} for a refusal the frame may read, and
-// {ok: false, invalid: true} for anything else. Which refusal classes exist
-// is the server's (`Prima.Refusal`); the frame reads the class as a name.
+// An answer read back: {ok: true, value} for a result, {ok: false, refusal}
+// for a refusal the frame may read, and {ok: false, invalid: true} for
+// anything else.
 export function decodeAnswer(kind, body) {
   const invalid = {ok: false, invalid: true}
   if (!isObject(body) || body.v !== VERSION || !(kind in ROUTES)) return invalid
-  const keys = Object.keys(body)
-
-  if (body.ok === true && keys.length === 3) {
-    if ((kind === "invoke" || kind === "action") && "result" in body) {
-      return {ok: true, value: body.result}
-    }
-    if (kind === "stream_open" && isObject(body.stream)) return decodeGrant(body.stream)
-    return invalid
-  }
-
-  if (body.ok === false && keys.length === 3 && isObject(body.error)) {
+  if (sameKeys(body, ["v", "ok", "result"]) && body.ok === true) return {ok: true, value: body.result}
+  if (sameKeys(body, ["v", "ok", "error"]) && body.ok === false && isRefusal(body.error)) {
     const {class: cls, message, stage} = body.error
-    if (
-      Object.keys(body.error).length === 3 &&
-      typeof cls === "string" &&
-      cls !== "" &&
-      typeof message === "string" &&
-      (stage === "admission" || stage === "execution")
-    ) {
-      return {ok: false, refusal: {class: cls, message, stage}}
-    }
+    return {ok: false, refusal: {class: cls, message, stage}}
   }
-
   return invalid
 }
 
-function decodeGrant(stream) {
-  const {grant_id, stream: name, subject, projection, deadline} = stream
-  const at = typeof deadline === "string" ? new Date(deadline) : null
-  if (
-    Object.keys(stream).length === 5 &&
-    typeof grant_id === "string" &&
-    typeof name === "string" &&
-    (subject === null || typeof subject === "string") &&
-    Array.isArray(projection) &&
-    projection.every((field) => typeof field === "string") &&
-    at !== null &&
-    !Number.isNaN(at.getTime())
-  ) {
-    return {ok: true, value: {grant_id, stream: name, subject, projection, deadline: at}}
+// ---- the stream connection ---------------------------------------------------
+
+// An app's stream connection; a canvas's is `socketPath/1`.
+export const SOCKET_PATH = "/_f/v1/socket"
+
+// The name of the last event an open stream's handler hears when the
+// endpoint ended it with a refusal, its data the refusal's projection.
+export const REFUSAL_EVENT = "refusal"
+
+// The refusal classes that leave a subscription unanswered: those a request
+// is answered with a server error for. A subscription refused with one
+// rejects as `unavailable`, as one that got no answer does, and may open if
+// asked for again later.
+export const NO_ANSWER_CLASSES = Object.freeze([
+  "cancelled",
+  "corrupt",
+  "internal",
+  "setup_required",
+  "timeout",
+  "uncertain",
+  "unavailable"
+])
+
+// The messages a frame sends over its stream connection: a subscription,
+// numbered by the frame, under the newest frame credential; and its end.
+export function subscribeMessage(sub, credential, stream, subject) {
+  return {v: VERSION, type: "subscribe", sub, credential, stream, subject}
+}
+
+export function unsubscribeMessage(sub) {
+  return {v: VERSION, type: "unsubscribe", sub}
+}
+
+const isEvent = ({stream, subject, id}) =>
+  typeof stream === "string" &&
+  (subject === null || typeof subject === "string") &&
+  (id === null || (Number.isInteger(id) && id >= 0))
+
+// What the endpoint sends over the stream connection read back: `{ok: true,
+// message}` for exactly a `subscribed`, an `event` or an `ended`, the last
+// with `error`, a refusal's projection, when the endpoint said why;
+// `{ok: false}` for anything else. A subscription's number has a call's
+// grammar (`Prima.TinctureWire.subscription?/1`).
+export function decodeConnectionMessage(message) {
+  if (!isObject(message) || message.v !== VERSION || !isCall(message.sub)) return {ok: false}
+  const head = ["v", "type", "sub"]
+  let read
+  switch (message.type) {
+    case "subscribed":
+      read = sameKeys(message, head)
+      break
+    case "event":
+      read = sameKeys(message, [...head, "stream", "subject", "id", "data"]) && isEvent(message)
+      break
+    case "ended":
+      read = sameKeys(message, head) || (sameKeys(message, [...head, "error"]) && isRefusal(message.error))
+      break
+    default:
+      read = false
   }
-  return {ok: false, invalid: true}
+  return read ? {ok: true, message} : {ok: false}
 }
 
 // The message the frame `frame` posts for `verb`.
@@ -427,9 +393,9 @@ function argsError(verb, args) {
 // ---- a canvas ----------------------------------------------------------------
 
 // The one data route under a canvas open's data path, and the path's
-// prefix: a canvas's credential reaches only `<data path>stream`.
+// prefix: a canvas's credential reaches only `<data path>socket`.
 const DATA_PREFIX = "/_f/v1/o/"
-const STREAM_ROUTE = "stream"
+const SOCKET_ROUTE = "socket"
 
 // A canvas open's data path, the one its page's policy names in
 // `connect-src`: `/_f/v1/o/<frame>/`.
@@ -438,9 +404,9 @@ export function dataPath(frame) {
   return DATA_PREFIX + frame + "/"
 }
 
-// The route a canvas's streams are opened on, under its data path.
-export function streamPath(frame) {
-  return dataPath(frame) + STREAM_ROUTE
+// A canvas open's stream connection, under its data path.
+export function socketPath(frame) {
+  return dataPath(frame) + SOCKET_ROUTE
 }
 
 // A canvas open is `live` (the person's canvas) or `validation` (a new

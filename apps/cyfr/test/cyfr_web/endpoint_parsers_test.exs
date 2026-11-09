@@ -794,8 +794,6 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
   @named [
     {:post, "/_f/v1/invoke"},
     {:post, "/_f/v1/action"},
-    {:post, "/_f/v1/stream"},
-    {:post, "/_f/v1/o/x/stream"},
     {:delete, "/auth/logout"},
     {:post, "/no-route-matches-this"},
     {:post, "/mcp"}
@@ -884,6 +882,23 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       assert bytes_read() == Prima.HostAPI.max_body_bytes()
     end
 
+    test "reads no body on a frame's stream connection, whose upgrade is a GET, and ends " <>
+           "the connection a body was framed on",
+         %{flood: flood} do
+      for url <- ["/_f/v1/socket", "/_f/v1/o/x/socket"],
+          framing <- [
+            &declared(&1, byte_size(flood)),
+            &put_req_header(&1, "transfer-encoding", "chunked")
+          ] do
+        {status, headers} =
+          :get |> request(url, flood, "application/json") |> framing.() |> answer()
+
+        assert status == 400, "GET #{url} answered #{status}"
+        assert bytes_read() == 0, "GET #{url} read the body"
+        assert {"connection", "close"} in headers
+      end
+    end
+
     test "is answered within a host call's body, read whole, on a connection kept open" do
       body = ~s({"pad":") <> :binary.copy(<<?x>>, 64) <> ~s("})
 
@@ -909,8 +924,6 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       for path <- [
             "/_f/v1/invoke",
             "/_f/v1/action",
-            "/_f/v1/stream",
-            "/_f/v1/o/:frame_id/stream",
             "/auth/logout",
             "/mcp",
             "/hooks/:slug",
@@ -940,7 +953,7 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       assert Prima.HostAPI.max_body_bytes() == 1_048_576
 
       assert guide =~
-               "| Request body | a host call's body (1 MiB) per invoke, action or stream open | " <>
+               "| Request body | a host call's body (1 MiB) per invoke or action | " <>
                  "a declared length over it is refused 413 before any of the body is read; " <>
                  "a body of undeclared length is read up to it, then refused 413; " <>
                  "either way the call rejects |"

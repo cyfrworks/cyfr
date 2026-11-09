@@ -1149,7 +1149,7 @@ defmodule Cyfr.Boundaries do
         CyfrWeb.Plugs.ParserErrors CyfrWeb.Plugs.RawBodyReader
         CyfrWeb.Plugs.ScrubTinctureCredentials CyfrWeb.Plugs.TinctureRateLimit
         CyfrWeb.Plugs.VerifyWebhookSignature CyfrWeb.Plugs.WebhookIdempotency
-        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE
+        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE CyfrWeb.SSE.Registry
       ),
       reason:
         "Emissary's adapters read the host's shared web tier and never its root router, " <>
@@ -1660,12 +1660,12 @@ defmodule Cyfr.Boundaries do
           "the version and its served type."
     },
     %{
-      from: "Emissary.Web.TinctureDataController",
+      from: "Emissary.Web.FrameAdmission",
       into: "Arca.PlatformSettings",
       functions: [:effective],
       reason:
         "the frame invocation rate's bounds are platform settings, read as they stand " <>
-          "on each request; no athanor's row."
+          "on each request and each stream connection's bind; no athanor's row."
     }
   ]
 
@@ -1829,12 +1829,12 @@ defmodule Cyfr.Boundaries do
           "the version and its served type."
     },
     %{
-      from: "Emissary.Web.TinctureDataController",
+      from: "Emissary.Web.FrameAdmission",
       into: "Arca.PlatformSettings",
       functions: [:effective],
       reason:
         "the frame invocation rate's bounds are platform settings, read as they stand " <>
-          "on each request; no athanor's row."
+          "on each request and each stream connection's bind; no athanor's row."
     }
   ]
 
@@ -2392,7 +2392,7 @@ defmodule Cyfr.Boundaries do
           "at every request (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`) " <>
           "and held to the tincture version and grant it names, or a public tincture's " <>
           "page naming a tincture whose public profile admits it. A canvas reads on its " <>
-          "own open's path alone (`/_f/v1/o/<frame>/stream`), whose frame id the bearer " <>
+          "own open's path alone (`/_f/v1/o/<frame>/socket`), whose frame id the bearer " <>
           "must name before anything else of it is read, and takes no public page there. " <>
           "No session cookie and " <>
           "no CSRF token: the bearer is the only credential, and the `null` origin of a " <>
@@ -2954,10 +2954,12 @@ defmodule Cyfr.Boundaries do
     %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external, origin: :none},
     # The tincture data routes: a request with no frame credential and no
     # public tincture, a credential that no longer stands, an undeclared
-    # operation or stream, a canvas off its own path or a frame on another's,
-    # and the per-frame limits. A frame's call is an interactive admission.
-    # A canvas's page is no entry: its pipeline mints no call identity,
-    # as the served files' does not.
+    # operation, a canvas off its own path, and the per-frame limits. A
+    # frame's call is an interactive admission. A stream connection's
+    # upgrade admits nothing and builds no context: it refuses a request
+    # that is no upgrade, and the connection admits each subscription
+    # (`Emissary.Web.FrameSocket`). A canvas's page is no entry: its
+    # pipeline mints no call identity, as the served files' does not.
     %{
       module: Emissary.Web.TinctureDataController,
       site: :invoke,
@@ -2972,16 +2974,19 @@ defmodule Cyfr.Boundaries do
     },
     %{
       module: Emissary.Web.TinctureDataController,
-      site: :stream,
+      site: :socket,
       plane: :external,
-      origin: :interactive
+      origin: :none
     },
     %{
       module: Emissary.Web.TinctureDataController,
-      site: :canvas_stream,
+      site: :canvas_socket,
       plane: :external,
-      origin: :interactive
+      origin: :none
     },
+    # A frame's stream connection: each subscription it refuses before the
+    # gate, and a message that does not read.
+    %{module: Emissary.Web.FrameSocket, site: :handle_in, plane: :external, origin: :interactive},
     # The webhook route: the caller the row establishes, its signature,
     # its idempotency key and its rate limit.
     %{module: Emissary.Web.WebhookController, site: :invoke, plane: :external, origin: :webhook},

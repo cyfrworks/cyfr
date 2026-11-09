@@ -114,7 +114,7 @@ defmodule Emissary.Router do
       # routes read none.
       pipeline :tincture_data do
         plug CyfrWeb.Plugs.CallIdentity, tool: "tincture"
-        plug :accepts, ["json", "event-stream"]
+        plug :accepts, ["json"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
         plug CyfrWeb.Plugs.CORS, methods: ~w(POST), null_origin: true
         # Before the rate limiter so a 429 is scrubbed too — it is logged like any
@@ -212,7 +212,9 @@ defmodule Emissary.Router do
           metadata: %{auth: :public_oauth_state}
       end
 
-      # The data routes' paths are `Prima.TinctureWire.routes/0`'s.
+      # The data routes' paths are `Prima.TinctureWire.routes/0`'s, and a
+      # frame's stream connection is `Prima.TinctureWire.socket_path/0`'s
+      # for an app and `socket_path/1`'s for a canvas.
       scope "/_f/v1", Emissary.Web do
         pipe_through :tincture_data
 
@@ -220,8 +222,6 @@ defmodule Emissary.Router do
 
         post "/action", TinctureDataController, :system_action,
           metadata: %{auth: :frame_credential}
-
-        post "/stream", TinctureDataController, :stream, metadata: %{auth: :frame_credential}
 
         # OPTIONS preflight — the CORS plug answers 204 before the controller.
         # A sandboxed frame's POST with a JSON body and a bearer is always
@@ -232,16 +232,14 @@ defmodule Emissary.Router do
         match :options, "/action", TinctureDataController, :system_action,
           metadata: %{auth: :frame_credential}
 
-        match :options, "/stream", TinctureDataController, :stream,
-          metadata: %{auth: :frame_credential}
+        # A WebSocket upgrade, which admits nothing itself: the connection
+        # admits each subscription by the credential it carries.
+        get "/socket", TinctureDataController, :socket, metadata: %{auth: :frame_credential}
 
-        # A canvas's one data route, under its open's own frame id
-        # (`Prima.TinctureWire.stream_path/1`): a canvas reads its streams
-        # here and nowhere else, and nothing else is routed under `/o/`.
-        post "/o/:frame_id/stream", TinctureDataController, :canvas_stream,
-          metadata: %{auth: :frame_credential}
-
-        match :options, "/o/:frame_id/stream", TinctureDataController, :canvas_stream,
+        # A canvas's one data route, under its open's own frame id: a canvas
+        # reads its streams here and nowhere else, and nothing else is
+        # routed under `/o/`.
+        get "/o/:frame_id/socket", TinctureDataController, :canvas_socket,
           metadata: %{auth: :frame_credential}
       end
 

@@ -82,8 +82,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {CyfrWeb.Plugs.TinctureRateLimit, :call} => :tincture_rate_limited,
     {Emissary.Web.TinctureDataController, :invoke} => :tincture_data_invoke_no_frame,
     {Emissary.Web.TinctureDataController, :system_action} => :tincture_data_action_no_frame,
-    {Emissary.Web.TinctureDataController, :stream} => :tincture_data_stream_no_frame,
-    {Emissary.Web.TinctureDataController, :canvas_stream} => :tincture_data_canvas_no_frame,
+    {Emissary.Web.TinctureDataController, :socket} => :tincture_socket_no_upgrade,
+    {Emissary.Web.TinctureDataController, :canvas_socket} => :tincture_canvas_socket_no_upgrade,
     {Emissary.Web.WebhookController, :invoke} => :webhook_archived_athanor,
     {CyfrWeb.Plugs.VerifyWebhookSignature, :call} => :webhook_unsigned,
     {CyfrWeb.Plugs.WebhookIdempotency, :call} => :webhook_missing_idempotency_key,
@@ -104,7 +104,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {PrismWeb.PasskeyController, :complete} => :sign_in_passkey_ticket_unknown,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
     {Opus.Host.Children, :call} => :host_api_lost_attempt,
-    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven
+    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven,
+    {Emissary.Web.FrameSocket, :handle_in} => :frame_socket_no_credential
   }
 
   test "every roster row has one driver and every driver a row" do
@@ -365,12 +366,12 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   # A data request with no frame credential and no public tincture: the
   # wire's own refusal, whose class the row carries.
-  defp tincture_data_no_frame(conn, kind, fields, path \\ nil) do
+  defp tincture_data_no_frame(conn, kind, fields) do
     conn =
       conn
       |> put_req_header("content-type", "application/json")
       |> put_req_header("origin", "null")
-      |> post(path || Prima.TinctureWire.route(kind), Prima.TinctureWire.request(kind, fields))
+      |> post(Prima.TinctureWire.route(kind), Prima.TinctureWire.request(kind, fields))
 
     assert conn.status == 401
 
@@ -386,17 +387,24 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   def tincture_data_action_no_frame(conn, _ctx),
     do: tincture_data_no_frame(conn, :action, %{operation: "system.status", args: %{}})
 
-  def tincture_data_stream_no_frame(conn, _ctx),
-    do: tincture_data_no_frame(conn, :stream_open, %{stream: "mcp_servers.changes", subject: nil})
+  # A stream connection's path asked with no upgrade: the route admits
+  # nothing, and refuses a request that is no upgrade in the wire's shape.
+  defp socket_no_upgrade(conn, path) do
+    conn = get(conn, path)
+    assert conn.status == 400
 
-  # A canvas's own data path, asked with no bearer.
-  def tincture_data_canvas_no_frame(conn, _ctx) do
-    tincture_data_no_frame(
-      conn,
-      :stream_open,
-      %{stream: "mcp_servers.changes", subject: nil},
-      Prima.TinctureWire.stream_path("frm_seam_" <> unique("canvas"))
-    )
+    assert {:refused, %{class: class, stage: "admission"}} =
+             Prima.TinctureWire.decode_answer(:invoke, Jason.decode!(conn.resp_body))
+
+    {request_id_of(conn), refused(class, :none)}
+  end
+
+  def tincture_socket_no_upgrade(conn, _ctx),
+    do: socket_no_upgrade(conn, Prima.TinctureWire.socket_path())
+
+  # A canvas open's own stream connection.
+  def tincture_canvas_socket_no_upgrade(conn, _ctx) do
+    socket_no_upgrade(conn, Prima.TinctureWire.socket_path("frm_seam_" <> unique("canvas")))
   end
 
   def tincture_rate_limited(conn, _ctx) do
@@ -679,6 +687,20 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # transport still delivers what arrives before the peer's close: more
   # frames record nothing, so the connection, counted by its request id,
   # holds that one decision.
+  # A subscription under a credential this CYFR did not sign: refused by
+  # its connection before anything of it is read, under no caller.
+  def frame_socket_no_credential(_conn, _ctx) do
+    request_id = Prima.UUID7.request_id()
+    socket = Cyfr.Test.FrameSocket.connect(:shared, request_id)
+    Cyfr.Test.FrameSocket.subscribe(socket, 1, "frm.v1.unsigned", "mcp_servers.changes")
+
+    assert_receive {:socket, ^socket,
+                    %{"sub" => 1, "type" => "ended", "error" => %{"class" => "unauthenticated"}}},
+                   10_000
+
+    {{:request, request_id}, refused("unauthenticated", :none)}
+  end
+
   def device_channel_unproven(_conn, _ctx) do
     {device_key, _device_private} = :crypto.generate_key(:eddsa, :ed25519)
     {_public, installation} = Sanctum.Cipher.installation_key()

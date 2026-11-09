@@ -150,7 +150,7 @@ received is read once it has handled the verbs the click sent.
 | `tile_narrows` | on the desk, the window's tile control tiles it, and the canvas's frame narrows by the tile's width; in the hand no title bar, window or tile is drawn |
 | `covered_windows` | on the desk, the canvas is told the dragged window's rectangle in its own pixels and nothing else, and nothing once the window is a tile; in the hand it is told nothing covers it |
 | `frame_kept` | on the desk, the window's iframe is the same element under the same frame id, with no new load, after it is raised from the shelf, tiled, made full and made a window again with Ctrl+Alt+ArrowDown; in the hand markets places no window |
-| `hidden_canvas` | switched away, the probe's frame is frozen and the probe hears `state` `frozen`; from then no stream open of it reaches the server, a feed result accepted while it is hidden reaches its closed stream not, and a press it sends is dropped (its frame's `data-dropped` moves, the shell receives nothing), a count that outlives another switch while it stays hidden, which draws its iframe again; switched back, its stream refreshes to the new result. Every feed event the probe read is tagged with the state the shell last told it, and none is tagged `frozen`. Nothing asserts the page's JavaScript stopped |
+| `hidden_canvas` | switched away, the probe's frame is frozen and the probe hears `state` `frozen`; from then no subscription of it leaves its frame over its stream connection, a feed result accepted while it is hidden reaches its closed stream not, and a press it sends is dropped (its frame's `data-dropped` moves, the shell receives nothing), a count that outlives another switch while it stays hidden, which draws its iframe again; switched back, its stream refreshes to the new result. Every feed event the probe read is tagged with the state the shell last told it, and none is tagged `frozen`. Nothing asserts the page's JavaScript stopped |
 | `validation_failures` | `canvas-broken` 1.0.0 is working; a later version that never becomes ready is recorded `not_ready` at its deadline, and one that dies before ready (the shell's receipt of its validation frame's `failed`) is recorded `died`; each later version reads a stream 1.0.0 does not, so once its validation fails the working version, 1.0.0, opens nothing (the canvas shows its `ungranted` refusal) and the shell's grant prompt asks for 1.0.0 itself; the person confirms it and 1.0.0 opens; neither falls the canvas back: no fallback line is drawn |
 | `crash_fallback` | a version that becomes ready is activated, then its live frame loads a second time after `ready()` (the page reloads itself, the frame's death, and posts no `failed`: none reaches the shell): the shipped canvas shows in its place, the window over it on the desk stays open as the same frame, and AQUA's control is as it was; one line in the shelf's area reads "Your canvas stopped. Showing the standard one." and offers Try again and Restore the last working one; the kept version reads no stream, so restoring it raises the grant prompt for the kept version, with nothing restored meanwhile; the person confirms it, the kept version is restored and opens, and the line goes |
 | `activation` | a person's click on the press button dispatches one `press`, inside the click, forwarded with the shell's activation active and the canvas its active element; of several presses inside one click one is forwarded and the other two dropped as they arrive, inside the lifespan of the activation the first spent; a press the page sends with no input, and one held 8 s past the click, are each dropped (the frame's `data-dropped` moves, the shell receives nothing). Nothing is read from a page while a timed verb is on its way: an evaluation is a user gesture in each browser, which would give the shell's page activation, so the proof waits for the shell's own receipt of each timed verb, which the instrument writes to the console. Each person's click in a frame first waits out the activation lifespan of the proof's own last spend, so the verb it carries is not dropped too soon. Recorded per browser, no drop asserted: a press after a click elsewhere in the shell, and after a click in a sibling frame (on the desk; the hand has no sibling beside the canvas, which the record says), each with the canvas focusing itself by `window.focus()` and by an element's `focus()` and with neither |
@@ -175,7 +175,8 @@ server sees it; none tries to leave the sandbox.
 - **The page's policy as served.** The canvas page is fetched from the
   harness (not from inside the frame), and its `Content-Security-Policy`'s
   `script-src` is exactly the version's files prefix and the SDK's one
-  path, its `connect-src` exactly the open's data path and the version's
+  path, its `connect-src` exactly the open's data path over the endpoint's
+  WebSocket origin, where its stream connection is, and the version's
   files prefix; the `connection-allowlist: (response-origin)` header is
   present and no `access-control-allow-origin` header is.
 - **A foreign script element.** A script element the page creates with a
@@ -195,9 +196,9 @@ server sees it; none tries to leave the sandbox.
   measurement against a non-loopback address (12 packets from Firefox,
   with the header and without) stands.
 - **No write route.** A canvas credential on the shared invoke route is
-  refused `canvas_path_required`; a credential of another open on this
-  canvas's data path is refused `frame_path_mismatch` before any authority
-  is derived; and the canvas's own data path has no invoke route (404)
+  refused `canvas_path_required`; a credential of another open subscribing
+  over this canvas's stream connection is refused `frame_path_mismatch`
+  before any authority is derived; and the canvas's own data path has no invoke route (404)
   (§6 rows 9i and 9j).
 - **An open carrying arguments.** An `open` carrying arguments beyond
   `ref`, posted over the port by the page, is dropped by the bridge: none is

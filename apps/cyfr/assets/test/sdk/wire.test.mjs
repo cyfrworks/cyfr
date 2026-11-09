@@ -7,7 +7,9 @@ import {describe, test} from "node:test"
 
 import {
   BEARER_HEADER,
+  NO_ANSWER_CLASSES,
   ROUTES,
+  SOCKET_PATH,
   STAGES,
   TO_FRAME_VERBS,
   VERBS,
@@ -17,14 +19,16 @@ import {
   dataPath,
   decodeAnswer,
   decodeCanvasHandshake,
+  decodeConnectionMessage,
   decodeShellMessage,
   decodeToFrame,
   publicIdentity,
   request,
   shellMessage,
-  sseParser,
-  streamPath,
-  toFrameMessage
+  socketPath,
+  subscribeMessage,
+  toFrameMessage,
+  unsubscribeMessage
 } from "../../js/sdk/wire.js"
 // `fixture` is tests/fixtures/tincture_wire.json, which Prima's test reads
 // too: its shell, shell_invalid and canvas sections are held here.
@@ -48,11 +52,7 @@ describe("the wire agrees with the fixture", () => {
   test("every request body is the one the SDK builds, under the fixture's bearer", () => {
     for (const {kind, headers, body} of fixture.requests) {
       const fields =
-        kind === "invoke"
-          ? {ref: body.ref, operation: body.operation, args: body.args}
-          : kind === "action"
-            ? {operation: body.operation, args: body.args}
-            : {stream: body.stream, subject: body.subject}
+        kind === "invoke" ? {ref: body.ref, operation: body.operation, args: body.args} : {operation: body.operation, args: body.args}
 
       assert.deepEqual(request(kind, fields), body, kind)
       assert.equal(bearer(credentialOf(headers.authorization)), headers.authorization)
@@ -61,16 +61,7 @@ describe("the wire agrees with the fixture", () => {
 
   test("every answer reads back", () => {
     for (const {kind, body} of fixture.answers) {
-      const decoded = decodeAnswer(kind, body)
-      assert.equal(decoded.ok, true, kind)
-
-      if (kind === "stream_open") {
-        assert.equal(decoded.value.grant_id, body.stream.grant_id)
-        assert.deepEqual(decoded.value.projection, body.stream.projection)
-        assert.equal(decoded.value.deadline.toISOString(), "2026-09-26T12:00:00.000Z")
-      } else {
-        assert.deepEqual(decoded.value, body.result)
-      }
+      assert.deepEqual(decodeAnswer(kind, body), {ok: true, value: body.result}, kind)
     }
   })
 
@@ -88,6 +79,62 @@ describe("the wire agrees with the fixture", () => {
     for (const {verb, message} of fixture.shell) {
       assert.deepEqual(decodeShellMessage(message), {ok: true, message}, verb)
       assert.deepEqual(shellMessage(verb, message.frame, message.args), message, verb)
+    }
+  })
+})
+
+describe("the stream connection agrees with the fixture", () => {
+  const connection = fixture.connection
+
+  test("an app's path, and the classes that leave a subscription unanswered", () => {
+    assert.equal(SOCKET_PATH, connection.paths.app)
+    assert.deepEqual([...NO_ANSWER_CLASSES], fixture.stream_rejections.no_answer_classes)
+    assert.ok(Object.isFrozen(NO_ANSWER_CLASSES))
+  })
+
+  test("every message the frame sends is the one its encoder writes", () => {
+    assert.ok(connection.from_frame.some(({type}) => type === "unsubscribe"))
+    for (const message of connection.from_frame) {
+      const built =
+        message.type === "subscribe"
+          ? subscribeMessage(message.sub, message.credential, message.stream, message.subject)
+          : unsubscribeMessage(message.sub)
+      assert.deepEqual(built, message, message.type)
+      assert.deepEqual(Object.keys(built), Object.keys(message), message.type)
+    }
+  })
+
+  test("every answer of the endpoint decodes, and every refusal ending a subscription with it", () => {
+    const answers = [...connection.to_frame, ...fixture.stream_rejections.cases.map(({answer}) => answer).filter(Boolean)]
+    assert.deepEqual([...new Set(answers.map(({type}) => type))].sort(), ["ended", "event", "subscribed"])
+    for (const message of answers) {
+      assert.deepEqual(decodeConnectionMessage(message), {ok: true, message}, JSON.stringify(message))
+    }
+  })
+
+  test("what the frame sends, and an answer the wire does not shape, do not decode", () => {
+    const [subscribed] = connection.to_frame
+    const event = connection.to_frame.find(({type}) => type === "event")
+    const ended = connection.to_frame.find(({error}) => error)
+    const refused = [
+      ...connection.from_frame,
+      ...connection.refused.map(({message}) => message),
+      null,
+      "subscribed",
+      {...subscribed, v: 2},
+      {...subscribed, sub: 0},
+      {...subscribed, sub: "1"},
+      {...subscribed, extra: 1},
+      {...event, id: -1},
+      {...event, id: "1"},
+      {...event, subject: 7},
+      {v: 1, type: "event", sub: 1, stream: "runs.changes", subject: null, id: null},
+      {...ended, error: {...ended.error, stage: "elsewhere"}},
+      {...ended, error: {class: ended.error.class, message: ended.error.message}},
+      {...ended, error: null}
+    ]
+    for (const message of refused) {
+      assert.deepEqual(decodeConnectionMessage(message), {ok: false}, JSON.stringify(message))
     }
   })
 })
@@ -157,10 +204,10 @@ describe("the canvas's part of the wire agrees with the fixture", () => {
     }
   })
 
-  test("a canvas open's data path and stream route are the fixture's", () => {
+  test("a canvas open's data path and stream connection are the fixture's", () => {
     for (const row of canvas.paths.valid) {
       assert.equal(dataPath(row.frame), row.data_path)
-      assert.equal(streamPath(row.frame), row.stream_path)
+      assert.equal(socketPath(row.frame), row.socket_path)
     }
   })
 
@@ -171,7 +218,7 @@ describe("the canvas's part of the wire agrees with the fixture", () => {
     assert.equal(refused.length, 2)
     for (const {why, frame} of refused) {
       assert.throws(() => dataPath(frame), TypeError, why)
-      assert.throws(() => streamPath(frame), TypeError, why)
+      assert.throws(() => socketPath(frame), TypeError, why)
     }
   })
 })
@@ -183,7 +230,7 @@ describe("what does not decode", () => {
     const [invoke] = fixture.answers
     assert.equal(decodeAnswer("invoke", {...invoke.body, v: 2}).invalid, true)
     assert.equal(decodeAnswer("invoke", {...invoke.body, extra: 1}).invalid, true)
-    assert.equal(decodeAnswer("stream_open", invoke.body).invalid, true)
+    assert.equal(decodeAnswer("subscribe", invoke.body).invalid, true)
     assert.equal(decodeAnswer("invoke", "nope").invalid, true)
   })
 
@@ -288,56 +335,5 @@ describe("a public page's identity", () => {
       request("invoke", {ref: invoke.body.ref, operation: invoke.body.operation, args: invoke.body.args}, identity),
       {...invoke.body, public: identity}
     )
-    assert.deepEqual(request("stream_open", {stream: "executions.deltas", subject: null}, identity), {
-      v: 1,
-      stream: "executions.deltas",
-      subject: null,
-      public: identity
-    })
-  })
-})
-
-describe("the event stream's grammar", () => {
-  const parse = (chunks) => {
-    const events = []
-    const parser = sseParser((event) => events.push(event))
-    for (const chunk of chunks) parser.push(chunk)
-    parser.end()
-    return events
-  }
-
-  test("id, event and JSON data per blank-line-ended group", () => {
-    assert.deepEqual(parse(['id: 7\nevent: delta\ndata: {"seq":7}\n\n']), [
-      {id: 7, event: "delta", data: {seq: 7}}
-    ])
-  })
-
-  test("comments, other fields and a missing id are ignored; data lines join", () => {
-    const text = ': keepalive\nretry: 10\nevent: kind\ndata: {"a":\ndata: 1}\n\n'
-    assert.deepEqual(parse([text]), [{id: null, event: "kind", data: {a: 1}}])
-  })
-
-  test("CRLF and CR end lines, even split between chunks", () => {
-    assert.deepEqual(parse(["id: 1\r", "\ndata: 1\r\n\r", "\n", "id:2\rdata:2\r\r"]), [
-      {id: 1, event: "message", data: 1},
-      {id: 2, event: "message", data: 2}
-    ])
-  })
-
-  test("any split of a stream delivers the same events", () => {
-    const text = 'id: 1\nevent: delta\ndata: {"seq":1}\n\nid: 2\nevent: delta\ndata: {"seq":2}\n\n'
-    const whole = parse([text])
-
-    for (let cut = 1; cut < text.length; cut++) {
-      assert.deepEqual(parse([text.slice(0, cut), text.slice(cut)]), whole, `cut at ${cut}`)
-    }
-  })
-
-  test("data that is not JSON, an event with no data, and an unfinished event are dropped", () => {
-    assert.deepEqual(parse(["data: not json\n\n", "event: x\n\n", 'data: {"late":1}']), [])
-  })
-
-  test("an id that is not a sequence number reads as none", () => {
-    assert.deepEqual(parse(["id: abc\ndata: 1\n\n"]), [{id: null, event: "message", data: 1}])
   })
 })

@@ -143,11 +143,19 @@ defmodule Compendium.Tincture.RulesTest do
       assert d["script-src"] == ["'self'", "'nonce-#{@nonce}'", "'wasm-unsafe-eval'"]
       assert d["worker-src"] == ["'self'", "blob:"]
 
+      # The endpoint, its WebSocket origin for the frame's stream
+      # connection, then the declared domains.
       assert d["connect-src"] == [
                @endpoint,
+               "wss://cyfr.test",
                "https://api.example.com",
                "https://*.example.org"
              ]
+
+      # An endpoint served over `http` has its stream connection over `ws`.
+      assert Rules.csp(manifest(%{}), %{endpoint: "http://localhost:4000", nonce: @nonce})
+             |> directives()
+             |> Map.fetch!("connect-src") == ["http://localhost:4000", "ws://localhost:4000"]
 
       assert d["frame-ancestors"] == [@endpoint]
       assert d["form-action"] == ["'none'"]
@@ -198,7 +206,8 @@ defmodule Compendium.Tincture.RulesTest do
                  "worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; " <>
                  "img-src 'self' https://cyfr.test data: blob:; font-src 'self' https://cyfr.test; " <>
                  "media-src 'self' https://cyfr.test blob:; " <>
-                 "connect-src https://cyfr.test https://api.example.com; object-src 'none'; " <>
+                 "connect-src https://cyfr.test wss://cyfr.test https://api.example.com; " <>
+                 "object-src 'none'; " <>
                  "base-uri 'self'; frame-ancestors https://cyfr.test; form-action 'none'"
     end
 
@@ -492,7 +501,7 @@ defmodule Compendium.Tincture.RulesTest do
 
     test "is exactly the plan's policy: the version's files, the SDK's path and the open's data path" do
       files = "https://cyfr.test/_s/#{@credential}/"
-      data = "https://cyfr.test/_f/v1/o/#{@frame}/"
+      data = "wss://cyfr.test/_f/v1/o/#{@frame}/"
 
       policy = Rules.canvas_page_csp(canvas_opts())
 
@@ -505,8 +514,16 @@ defmodule Compendium.Tincture.RulesTest do
                  "sandbox allow-scripts"
 
       assert files == @endpoint <> "/" <> Prima.TinctureUrl.asset_prefix() <> "/#{@credential}/"
-      assert data == @endpoint <> Prima.TinctureWire.data_path(@frame)
+      assert data == "wss://cyfr.test" <> Prima.TinctureWire.data_path(@frame)
       assert Compendium.tincture_canvas_page_csp(canvas_opts()) == policy
+
+      # An endpoint served over `http` has its stream connection over `ws`.
+      assert Rules.canvas_page_csp(canvas_opts(%{endpoint: "http://localhost:4000"}))
+             |> directives()
+             |> Map.fetch!("connect-src") == [
+               "ws://localhost:4000" <> Prima.TinctureWire.data_path(@frame),
+               "http://localhost:4000/_s/#{@credential}/"
+             ]
     end
 
     test "weakens nothing: no 'self', no nonce, no inline script, no host source but its own" do
@@ -533,7 +550,7 @@ defmodule Compendium.Tincture.RulesTest do
       allowed = [
         "https://cyfr.test/_s/#{@credential}/",
         "https://cyfr.test" <> @sdk,
-        "https://cyfr.test/_f/v1/o/#{@frame}/",
+        "wss://cyfr.test/_f/v1/o/#{@frame}/",
         @shell
       ]
 
@@ -549,11 +566,11 @@ defmodule Compendium.Tincture.RulesTest do
       # No source is a whole origin: each names a path under it.
       for host <- hosts -- [@shell], do: assert(URI.parse(host).path not in [nil, "", "/"])
 
-      # The open's data path and its own files are the only connections; a
-      # `<base>` names its own files alone; the shell alone may frame it;
-      # the sandbox is the canvas's tokens.
+      # The open's stream connection and its own files are the only
+      # connections; a `<base>` names its own files alone; the shell alone
+      # may frame it; the sandbox is the canvas's tokens.
       assert d["connect-src"] == [
-               "https://cyfr.test/_f/v1/o/#{@frame}/",
+               "wss://cyfr.test/_f/v1/o/#{@frame}/",
                "https://cyfr.test/_s/#{@credential}/"
              ]
 
@@ -1431,7 +1448,8 @@ defmodule Compendium.Tincture.RulesTest do
              |> Rules.csp(%{endpoint: @endpoint, nonce: @nonce})
              |> directives()
              |> Map.fetch!("connect-src") ==
-               [@endpoint | Enum.map(Rules.connect_origins(declared), &"https://#{&1}")]
+               [@endpoint, "wss://cyfr.test"] ++
+                 Enum.map(Rules.connect_origins(declared), &"https://#{&1}")
 
       for none <- [manifest(%{}), manifest(%{"connect" => []}), %{"tincture" => "x"}, nil] do
         assert Rules.connect_origins(none) == []

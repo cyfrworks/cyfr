@@ -1883,7 +1883,8 @@ defmodule PrismWeb.ShellLive do
   end
 
   # A validation ended for `event`: its frame is torn down, `canvas.activate`
-  # is called once, and the shell goes on as its answer says.
+  # is called once unless the trial is abandoned (`CanvasValidation.conclude/5`),
+  # and the shell goes on as the answer says.
   defp validation_ended(socket, canvas_id, event) do
     %{context: ctx, frames: frames} = socket.assigns
     tried = tried(frames, canvas_id)

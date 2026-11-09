@@ -57,6 +57,9 @@ defmodule Emissary.Web.DeviceChannelTest do
   # The rate limiter's table and the settings' cache are the node's.
   use CyfrWeb.ConnCase, async: false
 
+  # A WebSocket client over a raw TCP socket. The device mount checks the
+  # origin, so each case opens it with no headers of its own: no `Origin`.
+  import Cyfr.Test.FrameSocket, only: [ws_open: 3, ws_send: 2, ws_recv: 1, ws_recv: 2]
   import Ecto.Query, only: [from: 2]
 
   import ExUnit.CaptureLog, only: [with_log: 2]
@@ -1228,7 +1231,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         )
 
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-      socket = ws_open(port)
+      socket = ws_open(port, "/device/websocket", [])
       on_exit(fn -> :gen_tcp.close(socket) end)
 
       :ok = ws_send(socket, Jason.encode!(connect_message(device)))
@@ -1327,7 +1330,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         )
 
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-      socket = ws_open(port)
+      socket = ws_open(port, "/device/websocket", [])
       on_exit(fn -> :gen_tcp.close(socket) end)
 
       :ok = ws_send(socket, Jason.encode!(connect_message(device)))
@@ -2152,7 +2155,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         )
 
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-      socket = ws_open(port)
+      socket = ws_open(port, "/device/websocket", [])
 
       # A frame the protocol refuses: the close frame, 4400 and its class.
       :ok = ws_send(socket, "{}")
@@ -2566,86 +2569,6 @@ defmodule Emissary.Web.DeviceChannelTest do
   end
 
   def hold_certificate_insert(_event, _measurements, _metadata, _me), do: :ok
-
-  # ---- a WebSocket client, as far as one case needs it -------------------------
-
-  defp ws_open(port) do
-    {:ok, socket} =
-      :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw], 5_000)
-
-    key = Base.encode64(:crypto.strong_rand_bytes(16))
-
-    :ok =
-      :gen_tcp.send(socket, [
-        "GET /device/websocket HTTP/1.1\r\n",
-        "Host: localhost\r\n",
-        "Upgrade: websocket\r\n",
-        "Connection: Upgrade\r\n",
-        "Sec-WebSocket-Key: #{key}\r\n",
-        "Sec-WebSocket-Version: 13\r\n\r\n"
-      ])
-
-    assert headers(socket, "") =~ ~r{\AHTTP/1\.1 101}
-    socket
-  end
-
-  defp headers(socket, received) do
-    if String.contains?(received, "\r\n\r\n") do
-      received
-    else
-      {:ok, more} = :gen_tcp.recv(socket, 0, 5_000)
-      headers(socket, received <> more)
-    end
-  end
-
-  # One masked text frame, as a client sends it; a 16-bit length covers the
-  # signed connect and proof frames.
-  defp ws_send(socket, payload) do
-    mask = :crypto.strong_rand_bytes(4)
-    length = byte_size(payload)
-
-    header =
-      if length < 126,
-        do: <<1::1, 0::3, 1::4, 1::1, length::7>>,
-        else: <<1::1, 0::3, 1::4, 1::1, 126::7, length::16>>
-
-    :gen_tcp.send(socket, [header, mask, masked(payload, mask)])
-  end
-
-  defp masked(payload, mask) do
-    keys = :binary.bin_to_list(mask)
-
-    payload
-    |> :binary.bin_to_list()
-    |> Enum.with_index()
-    |> Enum.map(fn {byte, i} -> Bitwise.bxor(byte, Enum.at(keys, rem(i, 4))) end)
-    |> :binary.list_to_bin()
-  end
-
-  # One unmasked frame, as the server sends it: its opcode and payload,
-  # all of it read before `deadline` (monotonic milliseconds).
-  defp ws_recv(socket, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
-    <<_fin::1, _rsv::3, opcode::4, 0::1, short::7>> = bounded_recv(socket, 2, deadline)
-
-    length =
-      case short do
-        126 ->
-          <<extended::16>> = bounded_recv(socket, 2, deadline)
-          extended
-
-        short ->
-          short
-      end
-
-    payload = if length > 0, do: bounded_recv(socket, length, deadline), else: ""
-    {opcode, payload}
-  end
-
-  defp bounded_recv(socket, length, deadline) do
-    left = max(deadline - System.monotonic_time(:millisecond), 0)
-    assert {:ok, bytes} = :gen_tcp.recv(socket, length, left)
-    bytes
-  end
 
   # The standing bound a revocation's close is held to (`Sanctum.Caller.fresh?/1`).
   defp two_second_deadline, do: System.monotonic_time(:millisecond) + 2_000

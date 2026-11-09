@@ -8,7 +8,7 @@ defmodule Prima.TinctureWire do
 
   ## Frame to endpoint
 
-  Three requests, each an HTTP `POST` of a JSON body to its route
+  Two requests, each an HTTP `POST` of a JSON body to its route
   (`route/1`) carrying the frame credential as a bearer
   (`authorization: Bearer <credential>`, `bearer_header/0`), never in the
   URL or the body:
@@ -18,10 +18,7 @@ defmodule Prima.TinctureWire do
       The component runs with the input
       `{"operation": <operation>, "params": <args>}`;
     * `action` — run a system action the tincture declares: `operation`
-      (`tool.action`) and `args`;
-    * `stream_open` — open a stream the tincture declares: `stream` (the
-      provider stream's name) and `subject` (a literal, or null for a
-      stream that takes none).
+      (`tool.action`) and `args`.
 
   A public tincture's page opened at its address has no frame credential:
   its requests carry no bearer and name the tincture instead, as
@@ -31,25 +28,60 @@ defmodule Prima.TinctureWire do
   profile.
 
   A body carries `v`, the wire version; one at no version or another is
-  refused before anything else is read. An answer to `invoke` and
-  `action` is `{"v", "ok": true, "result"}`, and for a refusal
+  refused before anything else is read. An answer is
+  `{"v", "ok": true, "result"}`, and for a refusal
   `{"v", "ok": false, "error": {"class", "message", "stage"}}`: the
   projection of a `Prima.Refusal` a frame may read, never its reason
-  term. A refused `stream_open` is answered the same way. Each refusal
-  is answered at the HTTP status its class answers with; a server error
-  (5xx), like no answer at all, is no answer on a `stream_open`, which the
-  SDK rejects as `unavailable` so the page may open it again later.
+  term, at the HTTP status its class answers with.
 
-  An admitted `stream_open` is answered as `text/event-stream`
-  (`stream_content_type/0`), one event per delivery under the grant
-  (`stream_event/3`): `id` the payload's sequence number where the topic
-  carries one, `event` the stream's name and `data` the payload projected
-  to the grant's fields, as JSON. The stream ends at the grant's deadline
-  or when the endpoint closes it; one it closes for a reason the frame
-  should know ends with a `refusal` event (`stream_refusal/1`) whose data
-  is the refusal's projection. The grant's bus topic never leaves the
-  server, and a reconnect is a new open. `stream/2` is the grant as a
-  frame may read it, the JSON form the SDK's reader still decodes.
+  ## The stream connection
+
+  A frame reads every stream it opens over one WebSocket, its stream
+  connection: at `socket_path/0` (`/_f/v1/socket`) for an app, and at
+  `socket_path/1` (`/_f/v1/o/<frame id>/socket`), on its own data path
+  alone, for a canvas. Each message is one JSON text message carrying `v`,
+  at most `max_message_bytes/0` payload bytes from the frame, counted
+  across every WebSocket frame it arrives in. A public page holds no
+  frame credential and opens no stream.
+
+  The frame sends (`decode_message/1`):
+
+    * `subscribe` — exactly `v`, `type`, `sub` (the frame's own number for
+      the subscription, `subscription?/1`, never one of its live ones),
+      `credential` (the frame credential, the newest the shell handed it),
+      `stream` (a provider stream's name) and `subject` (a literal, or
+      null for a stream that takes none). The credential travels in the
+      message and never in the connection's URL;
+    * `unsubscribe` — exactly `v`, `type` and `sub`: the subscription ends
+      at once, admitted or still waiting for its answer, and nothing more
+      of it is sent.
+
+  The endpoint answers each subscription by its `sub`:
+
+    * `subscribed` (`subscribed/1`) — exactly `v`, `type` and `sub`: the
+      stream is open. Its current state follows first, where the stream
+      declares one, each item's `data` marked `"refresh": true`;
+    * `event` (`event/5`) — exactly `v`, `type`, `sub`, `stream`,
+      `subject`, `id` (the payload's sequence number where the topic
+      carries one, else null) and `data` (the payload projected to the
+      grant's fields);
+    * `ended` (`ended/2`) — exactly `v`, `type` and `sub`, and `error`, a
+      refusal's projection, when the endpoint ended it for a reason the
+      frame should know. One that comes before `subscribed` is the
+      subscription's refusal: it never opened. The page's handler hears
+      an `error` after `subscribed` as its last event, named
+      `refusal_event/0`, as it heard a stream's end before.
+
+  One connection carries at most `max_subscriptions/0` subscriptions at
+  once, each counted from its `subscribe` until it ends. A frame holds
+  one connection: a newer one of the same frame credential closes the
+  older. The connection closes (WebSocket close codes, `close_code/1`)
+  on a message that does not read as the wire's (`unreadable`, 4400), on
+  one over `max_message_bytes/0` (`too_big`, 1009, the protocol's own),
+  when replaced (`replaced`, 4409), and when it has held no subscription
+  for `idle_ms/0` (`idle`, 1000); every subscription it carried ends
+  with it, and a reconnect is a new connection whose subscriptions are
+  new opens under the gate.
 
   The frame's document is sandboxed without `allow-same-origin`, so its
   origin is `null` and every request is cross-origin to the endpoint.
@@ -106,7 +138,7 @@ defmodule Prima.TinctureWire do
   `page_path/2` (`/_c/v1/<asset credential>/<frame id>`, under
   `page_prefix/0`), and reads its streams at its open's data path alone:
   `data_path/1` (`/_f/v1/o/<frame id>/`) and its one route under it,
-  `stream_path/1`. The version's own files stay under
+  `socket_path/1`, its stream connection. The version's own files stay under
   `Prima.TinctureUrl`'s served prefix.
 
   The shell answers a canvas frame's handshake with
@@ -114,7 +146,7 @@ defmodule Prima.TinctureWire do
   `canvas`, exactly `mode` (`live` or `validation`, `canvas_modes/0`),
   `data_path`, the frame's own, `streams`, the version's declared
   streams, at most `max_canvas_streams/0` distinct objects of exactly
-  `name` (a stream name, as `stream_open` holds it) and `subject` (a
+  `name` (a stream name, as `subscribe` holds it) and `subject` (a
   string or null), `prefs`, exactly `document` (an object) and
   `revision` (a whole number from 0), `appearance`, exactly `mode`
   (`appearance_modes/0`), `accent` (`#rrggbb`), `locale` (`locale?/1`),
@@ -149,11 +181,12 @@ defmodule Prima.TinctureWire do
   tincture is open over the canvas.
 
   `tests/fixtures/tincture_wire.json` holds one example of each request,
-  one public request, one refusal, one event stream, how the SDK rejects
-  a `stream_open` for each answer that opens no stream, every shell verb's
-  message and the messages refused, and a canvas's handshake replies, the
-  shell's messages to a canvas and its paths; this module's test and the
-  SDK's and the bridge's JavaScript tests read it.
+  one public request, one refusal, the stream connection's messages each
+  way and the messages refused, how the SDK rejects a subscription that
+  opens no stream, every shell verb's message and the messages refused,
+  and a canvas's handshake replies, the shell's messages to a canvas and
+  its paths; this module's test and the SDK's and the bridge's JavaScript
+  tests read it.
   """
 
   @version 1
@@ -161,20 +194,24 @@ defmodule Prima.TinctureWire do
 
   @routes %{
     invoke: "/_f/v1/invoke",
-    action: "/_f/v1/action",
-    stream_open: "/_f/v1/stream"
+    action: "/_f/v1/action"
   }
+
+  @socket_path "/_f/v1/socket"
+  @socket_route "socket"
+  @max_subscriptions 32
+  @max_message_bytes 4_096
+  @idle_ms 60_000
+  @close_codes %{unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1000}
 
   @verbs ~w(open close title ready credential press failed grant prefs ask settings)a
   @canvas_verbs ~w(press failed grant prefs ask settings)a
   @stages ~w(load runtime)
 
-  @stream_content_type "text/event-stream"
   @refusal_event "refusal"
 
   @page_prefix "/_c/v1/"
   @data_prefix "/_f/v1/o/"
-  @stream_route "stream"
 
   @canvas_modes ~w(live validation)
   @max_canvas_streams 64
@@ -206,7 +243,7 @@ defmodule Prima.TinctureWire do
   @max_title 120
 
   @typedoc "A request the frame makes of the endpoint."
-  @type kind :: :invoke | :action | :stream_open
+  @type kind :: :invoke | :action
 
   @typedoc "A message the frame sends the shell."
   @type verb ::
@@ -233,8 +270,6 @@ defmodule Prima.TinctureWire do
           optional(:ref) => String.t(),
           optional(:operation) => String.t(),
           optional(:args) => map(),
-          optional(:stream) => String.t(),
-          optional(:subject) => String.t() | nil,
           optional(:public) => public_identity()
         }
 
@@ -393,11 +428,10 @@ defmodule Prima.TinctureWire do
 
   def public_identity?(_identity), do: false
 
-  @doc "The content type of an admitted `stream_open`'s answer."
-  @spec stream_content_type() :: String.t()
-  def stream_content_type, do: @stream_content_type
-
-  @doc "The name of the event a stream the endpoint closes with a refusal ends with."
+  @doc """
+  The name of the last event a page's handler hears of a stream the
+  endpoint ended with a refusal (`ended` carrying `error`).
+  """
   @spec refusal_event() :: String.t()
   def refusal_event, do: @refusal_event
 
@@ -441,9 +475,6 @@ defmodule Prima.TinctureWire do
   def request(:action, %{operation: operation, args: args}),
     do: %{"v" => @version, "operation" => operation, "args" => args}
 
-  def request(:stream_open, %{stream: stream, subject: subject}),
-    do: %{"v" => @version, "stream" => stream, "subject" => subject}
-
   @doc """
   A decoded `kind` request body, or `{:error, sentence}`: a body at no
   version or another, a missing or malformed field, a field the kind
@@ -465,7 +496,6 @@ defmodule Prima.TinctureWire do
 
   defp fields(:invoke), do: ~w(v ref operation args)
   defp fields(:action), do: ~w(v operation args)
-  defp fields(:stream_open), do: ~w(v stream subject)
 
   defp fields(:invoke, body) do
     with {:ok, ref} <- component_ref(body["ref"]),
@@ -479,22 +509,6 @@ defmodule Prima.TinctureWire do
     with {:ok, operation} <- system_operation(body["operation"]),
          {:ok, args} <- args(body) do
       {:ok, %{operation: operation, args: args}}
-    end
-  end
-
-  defp fields(:stream_open, body) do
-    stream = body["stream"]
-    subject = body["subject"]
-
-    cond do
-      not Prima.Manifest.Tincture.stream_name?(stream) ->
-        {:error, "stream must be a stream name"}
-
-      not (is_nil(subject) or Prima.Manifest.Tincture.literal_subject?(subject)) ->
-        {:error, "subject must be a literal subject or null"}
-
-      true ->
-        {:ok, %{stream: stream, subject: subject}}
     end
   end
 
@@ -549,26 +563,6 @@ defmodule Prima.TinctureWire do
   @spec result(term()) :: map()
   def result(value), do: %{"v" => @version, "ok" => true, "result" => value}
 
-  @doc """
-  A stream grant as a frame may read it, under the stream name it was
-  opened by: the JSON form the SDK's reader decodes for `stream_open`.
-  The bus topic stays on the server.
-  """
-  @spec stream(Prima.StreamGrant.t(), String.t()) :: map()
-  def stream(%Prima.StreamGrant{} = grant, name) when is_binary(name) do
-    %{
-      "v" => @version,
-      "ok" => true,
-      "stream" => %{
-        "grant_id" => grant.grant_id,
-        "stream" => name,
-        "subject" => grant.subject,
-        "projection" => grant.projection,
-        "deadline" => grant.deadline |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-      }
-    }
-  end
-
   @doc "The answer to a request that was refused: the refusal's class, message and stage."
   @spec refusal(Prima.Refusal.t()) :: map()
   def refusal(%Prima.Refusal{} = refusal),
@@ -582,77 +576,194 @@ defmodule Prima.TinctureWire do
     }
   end
 
-  # ---- the event stream ------------------------------------------------------
-
   @doc """
-  One event of an admitted stream: `id` the payload's sequence number
-  (nil for a topic that carries none), `event` the stream's name and
-  `data` the projected payload, encoded as JSON on one line.
-  """
-  @spec stream_event(non_neg_integer() | nil, String.t(), term()) :: String.t()
-  def stream_event(id, name, data)
-      when (is_nil(id) or (is_integer(id) and id >= 0)) and is_binary(name) do
-    id_line = if is_nil(id), do: "", else: "id: #{id}\n"
-    id_line <> "event: " <> name <> "\ndata: " <> Jason.encode!(data) <> "\n\n"
-  end
-
-  @doc """
-  The last event of a stream the endpoint closed for a reason the frame
-  should know: `event: refusal`, its data the refusal's class, message
-  and stage.
-  """
-  @spec stream_refusal(Prima.Refusal.t()) :: String.t()
-  def stream_refusal(%Prima.Refusal{} = refusal),
-    do: stream_event(nil, @refusal_event, projection(refusal))
-
-  @doc """
-  An answer read back: `{:ok, result}` for `invoke` and `action`,
-  `{:ok, stream}` (string-keyed, the deadline a `DateTime`) for
-  `stream_open`, `{:refused, projection}` for a refusal whose class is one
-  of `Prima.Refusal`'s, and `{:error, :invalid_answer}` for anything else.
+  An answer read back: `{:ok, result}`, `{:refused, projection}` for a
+  refusal whose class is one of `Prima.Refusal`'s, and
+  `{:error, :invalid_answer}` for anything else.
   """
   @spec decode_answer(kind(), term()) ::
           {:ok, term()} | {:refused, refusal_projection()} | {:error, :invalid_answer}
   def decode_answer(kind, %{"v" => @version, "ok" => true, "result" => value} = answer)
-      when kind in [:invoke, :action] and map_size(answer) == 3,
+      when is_map_key(@routes, kind) and map_size(answer) == 3,
       do: {:ok, value}
-
-  def decode_answer(:stream_open, %{"v" => @version, "ok" => true, "stream" => stream} = answer)
-      when map_size(answer) == 3 do
-    with %{
-           "grant_id" => grant_id,
-           "stream" => name,
-           "subject" => subject,
-           "projection" => projection,
-           "deadline" => deadline
-         } <- stream,
-         true <- map_size(stream) == 5 and is_binary(grant_id) and is_binary(name),
-         true <- is_nil(subject) or is_binary(subject),
-         true <- is_list(projection) and Enum.all?(projection, &is_binary/1),
-         {:ok, at, 0} <- DateTime.from_iso8601(deadline || "") do
-      {:ok, %{stream | "deadline" => at}}
-    else
-      _ -> {:error, :invalid_answer}
-    end
-  end
 
   def decode_answer(kind, %{"v" => @version, "ok" => false, "error" => error} = answer)
       when is_map_key(@routes, kind) and map_size(answer) == 3 do
-    classes = Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
-
-    case error do
-      %{"class" => class, "message" => message, "stage" => stage}
-      when map_size(error) == 3 and is_binary(message) and stage in ["admission", "execution"] ->
-        if class in classes,
-          do: {:refused, %{class: class, message: message, stage: stage}},
-          else: {:error, :invalid_answer}
-
-      _ ->
-        {:error, :invalid_answer}
+    case read_projection(error) do
+      {:ok, projection} -> {:refused, projection}
+      :error -> {:error, :invalid_answer}
     end
   end
 
   def decode_answer(kind, _answer) when is_map_key(@routes, kind), do: {:error, :invalid_answer}
+
+  defp read_projection(%{"class" => class, "message" => message, "stage" => stage} = error)
+       when map_size(error) == 3 and is_binary(message) and stage in ["admission", "execution"] do
+    if class in Enum.map(Prima.Refusal.classes(), &Atom.to_string/1),
+      do: {:ok, %{class: class, message: message, stage: stage}},
+      else: :error
+  end
+
+  defp read_projection(_error), do: :error
+
+  # ---- the stream connection -------------------------------------------------
+
+  @doc "An app's stream connection, `/_f/v1/socket`."
+  @spec socket_path() :: String.t()
+  def socket_path, do: @socket_path
+
+  @doc """
+  A canvas open's stream connection: `data_path/1` and `socket`. A frame
+  id outside its grammar raises.
+  """
+  @spec socket_path(String.t()) :: String.t()
+  def socket_path(frame_id), do: data_path(frame_id) <> @socket_route
+
+  @doc "The most subscriptions one stream connection carries at once."
+  @spec max_subscriptions() :: pos_integer()
+  def max_subscriptions, do: @max_subscriptions
+
+  @doc """
+  The most payload bytes of one message a frame sends over its stream
+  connection, whether it arrives in one WebSocket frame or several.
+  """
+  @spec max_message_bytes() :: pos_integer()
+  def max_message_bytes, do: @max_message_bytes
+
+  @doc "How long a stream connection that holds no subscription stays open, in milliseconds."
+  @spec idle_ms() :: pos_integer()
+  def idle_ms, do: @idle_ms
+
+  @doc """
+  The WebSocket close code a stream connection ends with: `unreadable`
+  (a message that does not read as the wire's), `too_big` (a message
+  over `max_message_bytes/0`), `replaced` (a newer connection of the same
+  frame) or `idle`.
+  """
+  @spec close_code(:unreadable | :too_big | :replaced | :idle) :: pos_integer()
+  def close_code(reason) when is_map_key(@close_codes, reason),
+    do: Map.fetch!(@close_codes, reason)
+
+  @doc "Whether `sub` is a subscription's number: a whole number from 1 to 2,147,483,647."
+  @spec subscription?(term()) :: boolean()
+  def subscription?(sub), do: is_integer(sub) and sub >= 1 and sub <= @max_call
+
+  @doc "A `subscribe` message, as the frame sends it."
+  @spec subscribe(pos_integer(), String.t(), String.t(), String.t() | nil) :: map()
+  def subscribe(sub, credential, stream, subject) do
+    %{
+      "v" => @version,
+      "type" => "subscribe",
+      "sub" => sub,
+      "credential" => credential,
+      "stream" => stream,
+      "subject" => subject
+    }
+  end
+
+  @doc "An `unsubscribe` message, as the frame sends it."
+  @spec unsubscribe(pos_integer()) :: map()
+  def unsubscribe(sub), do: %{"v" => @version, "type" => "unsubscribe", "sub" => sub}
+
+  @subscribe_keys ~w(credential stream sub subject type v)
+
+  @doc """
+  A message the frame sent, decoded from its JSON: `{:ok, {:subscribe,
+  fields}}` (atom-keyed `sub`, `credential`, `stream` and `subject`),
+  `{:ok, {:unsubscribe, sub}}`, `{:refused, sub, sentence}` for a
+  `subscribe` whose number reads and whose other fields do not, which
+  refuses that subscription alone, and `{:error, sentence}` for anything
+  else, of which no subscription can be told.
+  """
+  @spec decode_message(term()) ::
+          {:ok, {:subscribe, map()} | {:unsubscribe, pos_integer()}}
+          | {:refused, pos_integer(), String.t()}
+          | {:error, String.t()}
+  def decode_message(%{"v" => @version, "type" => "subscribe", "sub" => sub} = message) do
+    if subscription?(sub) do
+      case subscription_fields(message) do
+        {:ok, fields} -> {:ok, {:subscribe, Map.put(fields, :sub, sub)}}
+        {:error, sentence} -> {:refused, sub, sentence}
+      end
+    else
+      {:error, sub_sentence()}
+    end
+  end
+
+  def decode_message(%{"v" => @version, "type" => "unsubscribe", "sub" => sub} = message)
+      when map_size(message) == 3 do
+    if subscription?(sub), do: {:ok, {:unsubscribe, sub}}, else: {:error, sub_sentence()}
+  end
+
+  def decode_message(%{"v" => @version, "type" => type})
+      when type in ["subscribe", "unsubscribe"],
+      do: {:error, "#{type} carries exactly v, type, sub and its own fields"}
+
+  def decode_message(%{"v" => @version}),
+    do: {:error, "a message is a subscribe or an unsubscribe"}
+
+  def decode_message(%{}), do: {:error, "the message carries no wire version #{@version}"}
+  def decode_message(_message), do: {:error, "a message is a JSON object"}
+
+  defp sub_sentence, do: "sub must be a whole number from 1 to #{@max_call}"
+
+  defp subscription_fields(message) do
+    credential = Map.get(message, "credential")
+    stream = Map.get(message, "stream")
+    subject = Map.get(message, "subject")
+
+    cond do
+      Enum.sort(Map.keys(message)) != @subscribe_keys ->
+        {:error, "subscribe carries exactly v, type, sub, credential, stream and subject"}
+
+      not (is_binary(credential) and credential != "" and
+               not String.match?(credential, ~r/\s/)) ->
+        {:error, "credential must be the frame credential"}
+
+      not Prima.Manifest.Tincture.stream_name?(stream) ->
+        {:error, "stream must be a stream name"}
+
+      not (is_nil(subject) or Prima.Manifest.Tincture.literal_subject?(subject)) ->
+        {:error, "subject must be a literal subject or null"}
+
+      true ->
+        {:ok, %{credential: credential, stream: stream, subject: subject}}
+    end
+  end
+
+  @doc "`subscribed`: subscription `sub` is open."
+  @spec subscribed(pos_integer()) :: map()
+  def subscribed(sub), do: %{"v" => @version, "type" => "subscribed", "sub" => sub}
+
+  @doc """
+  One `event` of subscription `sub` to `stream` with `subject`: `id` the
+  payload's sequence number (nil for a topic that carries none) and
+  `data` the projected payload.
+  """
+  @spec event(pos_integer(), String.t(), String.t() | nil, non_neg_integer() | nil, term()) ::
+          map()
+  def event(sub, stream, subject, id, data)
+      when (is_nil(id) or (is_integer(id) and id >= 0)) and is_binary(stream) do
+    %{
+      "v" => @version,
+      "type" => "event",
+      "sub" => sub,
+      "stream" => stream,
+      "subject" => subject,
+      "id" => id,
+      "data" => data
+    }
+  end
+
+  @doc """
+  `ended`: subscription `sub` ended, with `refusal`'s projection as
+  `error` when the endpoint ended it for a reason the frame should know.
+  """
+  @spec ended(pos_integer(), Prima.Refusal.t() | nil) :: map()
+  def ended(sub, nil), do: %{"v" => @version, "type" => "ended", "sub" => sub}
+
+  def ended(sub, %Prima.Refusal{} = refusal),
+    do: Map.put(ended(sub, nil), "error", projection(refusal))
 
   # ---- a canvas --------------------------------------------------------------
 
@@ -704,10 +815,6 @@ defmodule Prima.TinctureWire do
   @doc "The data prefix of a canvas open: `/_f/v1/o/<frame id>/`. A frame id outside its grammar raises."
   @spec data_path(String.t()) :: String.t()
   def data_path(frame_id), do: @data_prefix <> frame!(frame_id) <> "/"
-
-  @doc "The stream route of a canvas open: `data_path/1` and `stream`."
-  @spec stream_path(String.t()) :: String.t()
-  def stream_path(frame_id), do: data_path(frame_id) <> @stream_route
 
   @doc """
   The shell's answer to canvas frame `frame_id`'s handshake: exactly
@@ -911,7 +1018,7 @@ defmodule Prima.TinctureWire do
   defp proper_length([_head | tail], count), do: proper_length(tail, count + 1)
   defp proper_length(_improper_tail, _count), do: nil
 
-  # A stream `stream_open` could name: the stream-name grammar and a
+  # A stream `subscribe` could name: the stream-name grammar and a
   # subject that is a string or null.
   defp canvas_stream?(%{"name" => name, "subject" => subject} = stream)
        when map_size(stream) == 2 do

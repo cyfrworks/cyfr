@@ -83,12 +83,11 @@ defmodule Cyfr.AdmissionOriginTest do
     {CyfrWeb.Plugs.Authenticate, :call} => :http_api,
     {Emissary.Web.TinctureDataController, :invoke} => :frame_invoke,
     {Emissary.Web.TinctureDataController, :system_action} => :frame_action,
-    {Emissary.Web.TinctureDataController, :stream} => :frame_stream,
-    {Emissary.Web.TinctureDataController, :canvas_stream} => :frame_canvas_stream,
     {Emissary.Web.WebhookController, :invoke} => :webhook_delivery,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire,
     {Opus.Host.Children, :call} => :host_tool_call,
-    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel
+    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel,
+    {Emissary.Web.FrameSocket, :handle_in} => :frame_socket
   }
 
   setup do
@@ -275,34 +274,6 @@ defmodule Cyfr.AdmissionOriginTest do
     frame_calls(:action, %{operation: "execution.list", args: %{}})
   end
 
-  def frame_stream(_conn) do
-    frame_calls(:stream_open, %{stream: "executions.deltas", subject: "exec_1"})
-  end
-
-  # A canvas frame on its own data path, asking for a stream its canvas
-  # does not declare: refused after its caller is established. A canvas
-  # path takes no public page, so there is no page's variant.
-  def frame_canvas_stream(_conn) do
-    source = frame_source!()
-    name = "origin-canvas-#{System.unique_integer([:positive])}"
-    frame = frame!(source, name, canvas!(source, name))
-    path = Prima.TinctureWire.stream_path(frame.frame_id)
-
-    request =
-      TinctureWire.request(:stream_open, %{stream: "executions.deltas", subject: "exec_1"})
-
-    framed = data(:stream_open, request, bearer: frame.bearer, path: path)
-
-    # A body naming an origin is refused unread: no context is built.
-    named = Map.put(request, "origin", "programmatic")
-    unread = data(:stream_open, named, bearer: frame.bearer, path: path)
-    assert unread.status == 400
-    refute Map.has_key?(unread.assigns, :context)
-
-    assert framed.status == 403
-    [framed.assigns.context.origin]
-  end
-
   def webhook_delivery(conn) do
     ctx = Sanctum.TestContext.local()
     runnable!(ctx, [%{"ran" => true}], [:webhook])
@@ -365,6 +336,23 @@ defmodule Cyfr.AdmissionOriginTest do
       {:ok, state} = DeviceChannel.init(state)
       state.ctx.origin
     end
+  end
+
+  # A subscription naming an origin is refused unread, building no
+  # context; the one the connection binds to is the frame's.
+  def frame_socket(_conn) do
+    source = frame_source!()
+    name = "origin-socket-#{System.unique_integer([:positive])}"
+    frame = frame!(source, name, declared!(source, name))
+    socket = Cyfr.Test.FrameSocket.connect(:shared)
+    named = TinctureWire.subscribe(1, frame.bearer, "mcp_servers.changes", nil)
+    Cyfr.Test.FrameSocket.send_text(socket, Map.put(named, "origin", "programmatic"))
+    assert_receive {:socket, ^socket, %{"sub" => 1, "type" => "ended"}}, 10_000
+    assert Cyfr.Test.FrameSocket.state(socket).caller == nil
+
+    Cyfr.Test.FrameSocket.subscribe(socket, 2, frame.bearer, "mcp_servers.changes")
+    assert_receive {:socket, ^socket, %{"sub" => 2, "type" => "subscribed"}}, 10_000
+    [Cyfr.Test.FrameSocket.state(socket).caller.ctx.origin]
   end
 
   # ==========================================================================
@@ -767,8 +755,7 @@ defmodule Cyfr.AdmissionOriginTest do
   defp frame_calls(kind, request) do
     source = frame_source!()
 
-    name =
-      "origin-#{String.replace(to_string(kind), "_", "-")}-#{System.unique_integer([:positive])}"
+    name = "origin-#{kind}-#{System.unique_integer([:positive])}"
 
     frame = frame!(source, name, declared!(source, name))
     public = public_tincture!(source)
@@ -836,23 +823,6 @@ defmodule Cyfr.AdmissionOriginTest do
       "tincture" => Map.merge(%{"entry" => "index.html"}, block),
       "dependencies" => %{"static" => deps}
     })
-  end
-
-  # A canvas version in the source's athanor declaring one stream. Answers
-  # its release digest.
-  defp canvas!(ctx, name) do
-    put_version!(ctx, name, %{
-      "name" => name,
-      "type" => "tincture",
-      "version" => "1.0.0",
-      "publisher" => "local",
-      "tincture" => %{
-        "entry" => "index.html",
-        "desktop" => %{"data" => ["mcp_servers.changes"]}
-      }
-    })
-
-    digest_of(name)
   end
 
   # A version's row, as the registry records it. Answers its reference.
@@ -996,7 +966,7 @@ defmodule Cyfr.AdmissionOriginTest do
     1
   end
 
-  # A data request, at the kind's shared route or at `path:`.
+  # A data request at the kind's route.
   defp data(kind, body, opts \\ []) do
     conn =
       build_conn()
@@ -1009,7 +979,7 @@ defmodule Cyfr.AdmissionOriginTest do
         bearer -> put_req_header(conn, "authorization", TinctureWire.bearer(bearer))
       end
 
-    post(conn, Keyword.get(opts, :path, TinctureWire.route(kind)), Jason.encode!(body))
+    post(conn, TinctureWire.route(kind), Jason.encode!(body))
   end
 
   defp action(bearer, operation) do

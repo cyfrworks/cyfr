@@ -338,16 +338,22 @@ defmodule PrismWeb.ShellCanvasTest do
     reply
   end
 
-  # A canvas's stream opened on its own data route under `bearer`, as its
-  # page's SDK opens one.
-  defp canvas_stream(frame_id, bearer, stream, subject \\ nil) do
-    body = Prima.TinctureWire.request(:stream_open, %{stream: stream, subject: subject})
+  # A canvas's stream connection on its own path, as its page's SDK opens
+  # one (`Cyfr.Test.FrameSocket`).
+  defp canvas_socket(frame_id), do: Cyfr.Test.FrameSocket.connect({:canvas, frame_id})
 
-    build_conn()
-    |> put_req_header("content-type", "application/json")
-    |> put_req_header("origin", "null")
-    |> put_req_header("authorization", Prima.TinctureWire.bearer(bearer))
-    |> post(Prima.TinctureWire.stream_path(frame_id), Jason.encode!(body))
+  # Subscription `sub` to `stream` under `bearer` on `socket`: the first
+  # answer the connection gives it.
+  defp canvas_stream(socket, sub, bearer, stream) do
+    Cyfr.Test.FrameSocket.subscribe(socket, sub, bearer, stream)
+    assert_receive {:socket, ^socket, %{"sub" => ^sub} = answer}, 10_000
+    answer
+  end
+
+  # The end of subscription `sub` on `socket`, past any event before it.
+  defp canvas_stream_ended(socket, sub) do
+    assert_receive {:socket, ^socket, %{"sub" => ^sub, "type" => "ended"} = ended}, 10_000
+    ended
   end
 
   defp canvas_verb!(view, frame_id, verb, args \\ %{}),
@@ -1465,39 +1471,33 @@ defmodule PrismWeb.ShellCanvasTest do
       bearer = handshake!(view, home.id)["credential"]
       topic = Cyfr.Bus.executions(Sanctum.Context.actor(ctx))
 
-      # The subscriptions a stream's process holds on the runs' topic; other
-      # parts of the shell hold their own there.
+      # The subscriptions a stream's forwarder holds on the runs' topic;
+      # other parts of the shell hold their own there.
       held_by = fn pid ->
         for {^pid, _value} <- Registry.lookup(Cyfr.PubSub, topic), do: pid
       end
 
-      open_stream = fn ->
-        Task.async(fn -> canvas_stream(home.id, bearer, "runs.changes") end)
-      end
+      forwarder = fn socket, sub -> Cyfr.Test.FrameSocket.state(socket).subs[sub].forwarder end
 
-      stream = open_stream.()
-      wait_until(fn -> held_by.(stream.pid) != [] end, 5_000)
+      socket = canvas_socket(home.id)
+      assert %{"type" => "subscribed"} = canvas_stream(socket, 1, bearer, "runs.changes")
+      first = forwarder.(socket, 1)
+      assert [_one] = held_by.(first)
 
       # Hidden: the switch returns once the canvas is frozen and its
-      # credential suspended, which ends its open stream with a refusal.
+      # credential suspended, which ends its open subscription with a
+      # refusal.
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
       assert %{state: :frozen, visible: false} = canvas(view)
       assert row(home.id).state == "suspended"
       assert {:error, :suspended} = verify(bearer)
 
-      assert {:ok, ended} = Task.yield(stream, 10_000) || Task.shutdown(stream)
-
-      assert [%{event: "refusal", data: %{"class" => "forbidden"}}] =
-               ended.resp_body |> Prima.Test.EventStream.decode() |> Enum.take(-1)
-
-      assert held_by.(stream.pid) == []
+      assert %{"error" => %{"class" => "forbidden"}} = canvas_stream_ended(socket, 1)
+      wait_until(fn -> held_by.(first) == [] end, 5_000)
 
       # A later read is refused, and its open and press are dropped.
-      later = canvas_stream(home.id, bearer, "runs.changes")
-      assert later.status == 403
-
-      assert {:refused, %{class: "forbidden"}} =
-               Prima.TinctureWire.decode_answer(:stream_open, Jason.decode!(later.resp_body))
+      assert %{"type" => "ended", "error" => %{"class" => "forbidden"}} =
+               canvas_stream(socket, 2, bearer, "runs.changes")
 
       before = dropped(view)
       canvas_verb!(view, home.id, :open, %{"ref" => "tincture:local.app-dash"})
@@ -1516,21 +1516,18 @@ defmodule PrismWeb.ShellCanvasTest do
       assert row(home.id).state == "active"
       assert {:ok, _} = verify(bearer)
 
-      again = open_stream.()
-      wait_until(fn -> held_by.(again.pid) != [] end, 5_000)
-      assert [_one] = held_by.(again.pid)
+      assert %{"type" => "subscribed"} = canvas_stream(socket, 3, bearer, "runs.changes")
+      assert [3] = Map.keys(Cyfr.Test.FrameSocket.state(socket).subs)
+      assert [_one] = held_by.(forwarder.(socket, 3))
 
-      # The stream reads the store after its subscription is in place and at
-      # each revalidation, on the test's one shared connection, and a stream
-      # killed inside a read takes that connection with it. So the view
-      # stops first, while the test still owns the sandbox, and its end
-      # revokes the canvas's credential, which closes the stream with a
-      # refusal; the stream is awaited to that end, never killed.
+      # The connection reads the store at each revalidation, on the test's
+      # one shared connection, and one stopped inside a read takes that
+      # connection with it. So the view stops first, while the test still
+      # owns the sandbox, and its end revokes the canvas's credential, which
+      # ends the subscription with a refusal: the connection then holds
+      # nothing and reads nothing when it is stopped.
       GenServer.stop(view.pid, :normal)
-      assert {:ok, closed} = Task.yield(again, 10_000) || Task.shutdown(again)
-
-      assert [%{event: "refusal"}] =
-               closed.resp_body |> Prima.Test.EventStream.decode() |> Enum.take(-1)
+      assert %{"error" => %{}} = canvas_stream_ended(socket, 3)
     end
 
     test "a canvas shown again keeps its row's deadline and its handshake's bearer",
