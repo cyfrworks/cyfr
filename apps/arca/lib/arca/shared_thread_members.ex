@@ -39,6 +39,9 @@ defmodule Arca.SharedThreadMembers do
   pair gains and loses no one: its two seats are written at its birth,
   and it ends by a leave.
 
+  A seat carries its person's read mark (`read_seq`), which `mark_read/4`
+  only raises, and `unread/2` counts what is past it.
+
   A row crosses as a plain map (`Arca.Data`). A refusal is `:not_found`,
   `:archived` (the thread is archived), `:conflict` (the person is seated
   already, or the identifier invited already), `:not_member` (the one
@@ -54,7 +57,7 @@ defmodule Arca.SharedThreadMembers do
   import Ecto.Query
 
   alias Arca.QueryHelpers
-  alias Arca.Schemas.{SharedThread, SharedThreadMember, User}
+  alias Arca.Schemas.{SharedMessage, SharedThread, SharedThreadMember, User}
   alias Arca.SharedThreads
 
   @typedoc "A seat or an invitation, as a plain map."
@@ -537,6 +540,62 @@ defmodule Arca.SharedThreadMembers do
       )
     )
   end
+
+  @doc """
+  Raise the person `user_id`'s read mark in the thread to `seq`: one
+  update of their active seat under `read_seq < seq`, so the mark only
+  rises and of two marks the higher stands. `{:ok, :moved}` when it rose,
+  `{:ok, :unchanged}` when it stood at `seq` or past it, and `:not_found`
+  with no active seat. It moves no one's place in the thread, so it takes
+  no lock of it.
+  """
+  @spec mark_read(Prima.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
+          {:ok, :moved | :unchanged} | {:error, :not_found | {:invalid, map()}} | refusal()
+  # arca:unscoped-ok a shared thread is no athanor's; a seat's mark is written by its thread and person.
+  def mark_read(%Prima.Actor{scope: :platform}, thread_id, user_id, seq)
+      when is_binary(thread_id) and is_binary(user_id) do
+    with :ok <- valid(seq: is_integer(seq) and seq >= 0) do
+      Arca.Repo.owned("Arca.SharedThreadMembers.mark_read", fn ->
+        seat = seat_of(thread_id, user_id)
+
+        case Arca.Repo.update_all(where(seat, [m], m.read_seq < ^seq), set: [read_seq: seq]) do
+          {1, _} -> {:ok, :moved}
+          {0, _} -> if Arca.Repo.exists?(seat), do: {:ok, :unchanged}, else: {:error, :not_found}
+        end
+      end)
+    end
+  end
+
+  def mark_read(%Prima.Actor{}, _thread_id, _user_id, _seq), do: {:error, :cross_tenant}
+
+  @doc """
+  What is unread at each active seat `seats` names, in one query: every
+  thread the person sits in (`user_id:`), or every person seated in the
+  thread (`thread_id:`), as `%{thread_id, user_id, unread}`. `unread` is
+  the number of the thread's messages past the seat's read mark that
+  someone else wrote: a person's own message is never unread to them.
+  """
+  @spec unread(Prima.Actor.t(), [user_id: String.t()] | [thread_id: String.t()]) ::
+          {:ok, [%{thread_id: String.t(), user_id: String.t(), unread: non_neg_integer()}]}
+          | {:error, :cross_tenant | :database_error}
+  # arca:unscoped-ok a shared thread is no athanor's; seats are read by their person or their thread.
+  def unread(%Prima.Actor{scope: :platform}, [{by, id}])
+      when by in [:user_id, :thread_id] and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SharedThreadMembers.unread", fn ->
+      {:ok,
+       Arca.Repo.all(
+         from(m in SharedThreadMember,
+           left_join: s in SharedMessage,
+           on: s.thread_id == m.thread_id and s.seq > m.read_seq and s.author != m.user_id,
+           where: field(m, ^by) == ^id and m.status == "active",
+           group_by: [m.thread_id, m.user_id],
+           select: %{thread_id: m.thread_id, user_id: m.user_id, unread: count(s.id)}
+         )
+       )}
+    end)
+  end
+
+  def unread(%Prima.Actor{}, _seats), do: {:error, :cross_tenant}
 
   @doc "The thread's seats and invitations, oldest first."
   @spec list(Prima.Actor.t(), String.t()) ::

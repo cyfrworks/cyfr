@@ -25,7 +25,7 @@ defmodule Arca.SchemaVocabularyTest do
   generation, which is positive. So are a shared thread's kind, which has
   a title or a pair and never both, and its positive generation, and a
   shared thread's row of people, a seat naming its person or an
-  invitation naming its identifier.
+  invitation naming its identifier, and its read mark, never below 0.
   """
 
   use ExUnit.Case, async: false
@@ -444,6 +444,22 @@ defmodule Arca.SchemaVocabularyTest do
           "shared_thread_members_seat_whole"
         )
       end
+    end
+
+    test "starts a seat's read mark at 0 and refuses one below it" do
+      thread = shared_thread("shared", "Plans", nil)
+      assert {1, _} = insert!("shared_threads", thread)
+
+      row = seat(thread.id, "active", id("usr"), nil)
+
+      assert {1, [%{read_seq: 0}]} =
+               Arca.Repo.insert_all("shared_thread_members", [row], returning: [:read_seq])
+
+      refused!(
+        "shared_thread_members",
+        Map.put(seat(thread.id, "active", id("usr"), nil), :read_seq, -1),
+        "shared_thread_members_read_seq_counted"
+      )
     end
   end
 

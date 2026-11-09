@@ -317,7 +317,8 @@ defmodule Cyfr.TelemetryBridge do
        do: [{:global, Bus.frame_credentials(user_id), FrameCredential.new(change, user_id, id)}]
 
   # A shared thread's change, on the own topic of each person it names:
-  # its people, and anyone the change took from it. And on each one's list
+  # its people, and anyone the change took from it, or the one person whose
+  # read mark moved. And on each one's list
   # of threads in their own athanor, the thread as it reads now or its
   # removal (`Sanctum.SharedThreads.listings/2`): the one announcement here
   # that reads, since a shared thread is no athanor's and its event names

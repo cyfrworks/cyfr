@@ -145,7 +145,8 @@ defmodule Cyfr.BusPayloadTest do
         title: "Plans",
         people: ["Ada"],
         last_activity: ~U[2026-11-09 09:00:00Z],
-        waits_on_you: false
+        waits_on_you: false,
+        unread: nil
       ),
       SystemStatus.new(@actor, :changed,
         health: "ok",

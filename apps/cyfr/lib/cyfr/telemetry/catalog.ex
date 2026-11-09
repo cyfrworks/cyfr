@@ -132,6 +132,12 @@ defmodule Cyfr.Telemetry.Catalog do
         "a shared thread took a message: told to each of its people, and its last activity " <>
           "to the list of threads in each one's athanor"
     },
+    [:cyfr, :sanctum, :shared_thread, :read] => %{
+      consumers: [:bridge],
+      note:
+        "a person's own read mark in a shared thread moved: told to that person alone, and " <>
+          "what is unread to them to the list of threads in their athanor"
+    },
     [:cyfr, :sanctum, :consent, :changed] => %{
       consumers: [:bridge],
       note:

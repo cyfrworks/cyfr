@@ -45,6 +45,11 @@ defmodule Sanctum.SharedThreads do
   that seat is the whole policy for a shared blob. A file is bounded by
   `max_file_bytes` alone, and a message carries any number of them.
 
+  Each seat keeps its person's read mark: the newest message of the
+  thread they have had open (`mark_read/2`), which only rises. What
+  someone else wrote past it is unread to them (`listed/1`); their own
+  messages never are.
+
   ## Answers
 
   To anyone not seated in it a thread answers as a missing one does,
@@ -56,7 +61,8 @@ defmodule Sanctum.SharedThreads do
   `{:unavailable, "Storage"}`.
 
   Every change is told to each person it names, its people and anyone it
-  took from the thread (`Sanctum.Telemetry.shared_thread/3`).
+  took from the thread, and a read mark that moved to its person alone
+  (`Sanctum.Telemetry.shared_thread/3`).
   """
 
   require Logger
@@ -82,7 +88,8 @@ defmodule Sanctum.SharedThreads do
           title: String.t() | nil,
           people: [String.t()],
           last_activity: DateTime.t(),
-          waits_on_you: false
+          waits_on_you: false,
+          unread: non_neg_integer()
         }
 
   @typedoc "Who a person adds, removes or withdraws."
@@ -133,14 +140,19 @@ defmodule Sanctum.SharedThreads do
   them to a reader CYFR does not run, such as a canvas, the latest
   first: each one's id, its title (a pair has none), what its people
   are called (`Sanctum.Tenancy.Users.public_name/1`, never an address or
-  an id), oldest seat first, when it last moved, and that it waits on no
-  one, since nothing in a shared thread asks one person to decide.
+  an id), oldest seat first, when it last moved, that it waits on no
+  one, since nothing in a shared thread asks one person to decide, and
+  how many of its messages are unread to the person (`unread`).
   """
   @spec listed(String.t()) :: {:ok, [listing()]} | {:error, term()}
   def listed(user_id) when is_binary(user_id) do
     case Arca.SharedThreads.list_for(server(), user_id) do
-      {:ok, rows} -> listed_rows(for %{status: "active"} = row <- rows, do: row)
-      {:error, reason} -> unavailable(reason)
+      {:ok, rows} ->
+        with {:ok, unread} <- unread([user_id: user_id], :thread_id),
+             do: listed_rows(for(%{status: "active"} = row <- rows, do: row), unread)
+
+      {:error, reason} ->
+        unavailable(reason)
     end
   end
 
@@ -157,13 +169,18 @@ defmodule Sanctum.SharedThreads do
           [{String.t(), String.t(), listing() | :removed}]
   def listings(thread_id, user_ids) when is_binary(thread_id) and is_list(user_ids) do
     with {:ok, thread} <- listed_thread(thread_id),
-         {:ok, rows} <- rows(thread_id) do
+         {:ok, rows} <- rows(thread_id),
+         {:ok, unread} <- unread([thread_id: thread_id], :user_id) do
       seated = seated(rows)
-      listing = if match?(%{status: "active"}, thread), do: listing(thread, seated)
+      listed? = match?(%{status: "active"}, thread)
 
       for user_id <- Enum.uniq(user_ids),
           {:ok, %{id: athanor_id, status: "active"}} <- [Athanors.get_by_owner(user_id)] do
-        {user_id, athanor_id, if(listing && user_id in seated, do: listing, else: :removed)}
+        {user_id, athanor_id,
+         if(listed? and user_id in seated,
+           do: listing(thread, seated, Map.get(unread, user_id, 0)),
+           else: :removed
+         )}
       end
     else
       {:error, _unanswered} -> []
@@ -723,6 +740,33 @@ defmodule Sanctum.SharedThreads do
     end
   end
 
+  @doc """
+  Move `user_id`'s read mark in the thread to its newest message: the
+  thread they have had open, under their own seat. The mark only rises;
+  one that moved is told to that person alone (`:read`), with the thread
+  as their list now reads it, and one that stood is told to no one.
+  """
+  @spec mark_read(String.t(), String.t()) :: :ok | {:error, term()}
+  def mark_read(user_id, thread_id) when is_binary(user_id) and is_binary(thread_id) do
+    with {:ok, _thread} <- seated(user_id, thread_id),
+         {:ok, seq} <- newest(thread_id) do
+      case Arca.SharedThreadMembers.mark_read(server(), thread_id, user_id, seq) do
+        {:ok, :moved} -> Sanctum.Telemetry.shared_thread(:read, thread_id, [user_id])
+        {:ok, :unchanged} -> :ok
+        {:error, reason} -> refused(reason, thread_id)
+      end
+    end
+  end
+
+  # The `seq` of the thread's newest message, 0 before any.
+  defp newest(thread_id) do
+    case Arca.SharedMessages.latest(server(), thread_id, 1) do
+      {:ok, [%{seq: seq}]} -> {:ok, seq}
+      {:ok, []} -> {:ok, 0}
+      {:error, reason} -> unavailable(reason)
+    end
+  end
+
   @doc "Tell a thread's people, once an invitation's seat in it committed."
   @spec joined(String.t()) :: :ok
   def joined(thread_id) when is_binary(thread_id), do: announce(:changed, thread_id)
@@ -780,12 +824,16 @@ defmodule Sanctum.SharedThreads do
   end
 
   # The threads of a list, each read with its people; one that cannot be
-  # read leaves the list unread rather than shorter.
-  defp listed_rows(threads) do
+  # read leaves the list unanswered rather than shorter.
+  defp listed_rows(threads, unread) do
     Enum.reduce_while(threads, {:ok, []}, fn thread, {:ok, acc} ->
       case rows(thread.id) do
-        {:ok, rows} -> {:cont, {:ok, [listing(thread, seated(rows)) | acc]}}
-        {:error, _} = error -> {:halt, error}
+        {:ok, rows} ->
+          listing = listing(thread, seated(rows), Map.get(unread, thread.id, 0))
+          {:cont, {:ok, [listing | acc]}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
     |> case do
@@ -806,13 +854,14 @@ defmodule Sanctum.SharedThreads do
   # The people seated in a thread, oldest seat first; an invitation is no seat.
   defp seated(rows), do: for(%{status: "active", user_id: id} <- rows, do: id)
 
-  defp listing(thread, seated) do
+  defp listing(thread, seated, unread) do
     %{
       id: thread.id,
       title: thread.title,
       people: Enum.map(seated, &Users.public_name/1),
       last_activity: thread.last_message_at || thread.created_at,
-      waits_on_you: false
+      waits_on_you: false,
+      unread: unread
     }
   end
 
@@ -855,6 +904,14 @@ defmodule Sanctum.SharedThreads do
   defp rows(thread_id) do
     case Arca.SharedThreadMembers.list(server(), thread_id) do
       {:ok, rows} -> {:ok, rows}
+      {:error, reason} -> unavailable(reason)
+    end
+  end
+
+  # What is unread at each seat `seats` names, keyed by `key`.
+  defp unread(seats, key) do
+    case Arca.SharedThreadMembers.unread(server(), seats) do
+      {:ok, rows} -> {:ok, Map.new(rows, &{Map.fetch!(&1, key), &1.unread})}
       {:error, reason} -> unavailable(reason)
     end
   end
