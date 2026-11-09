@@ -301,6 +301,33 @@ defmodule Cyfr.Cluster.CellTest do
     end
   end
 
+  describe "the cell's own exit" do
+    test "a heal whose boot fails stops every member the cell started, and the next cell " <>
+           "starts clean" do
+      names =
+        Enum.map(Cell.ensure!(), &(&1.node |> Atom.to_string() |> String.split("@") |> hd()))
+
+      %{host_api_port: port} = Cell.member(:b)
+
+      # Member a is up and member b's next boot fails, as a held port fails it.
+      Cell.kill(:b)
+      {:ok, holder} = :gen_tcp.listen(port, ip: {127, 0, 0, 1}, reuseaddr: true)
+      assert {{%RuntimeError{message: message}, _stack}, _call} = catch_exit(Cell.heal!())
+      assert message =~ "member b did not boot"
+      :ok = :gen_tcp.close(holder)
+
+      assert Process.whereis(Cell) == nil
+      assert registered(names) == []
+      assert length(Cell.ensure!()) == 2
+    end
+  end
+
+  # Which of `names` a node on this host is registered under.
+  defp registered(names) do
+    {:ok, listed} = :erl_epmd.names(~c"127.0.0.1")
+    for {name, _port} <- listed, to_string(name) in names, do: to_string(name)
+  end
+
   # The low end of the kernel's ephemeral port range.
   defp ephemeral_low do
     case File.read("/proc/sys/net/ipv4/ip_local_port_range") do

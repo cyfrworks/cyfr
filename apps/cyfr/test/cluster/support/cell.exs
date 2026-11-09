@@ -145,8 +145,13 @@ defmodule Cyfr.Cluster.Cell do
         {:ok, _pid} = GenServer.start(__MODULE__, [], name: @name)
         # The cell outlives every case, so the run is what ends it. Two
         # operating-system processes left behind would hold this run's
-        # node names against the next one.
-        ExUnit.after_suite(fn _results -> shutdown() end)
+        # node names against the next one. Registered once per run: a cell
+        # started after an earlier one exited is ended by the same call.
+        unless :persistent_term.get({__MODULE__, :shutdown_registered}, false) do
+          ExUnit.after_suite(fn _results -> shutdown() end)
+          :persistent_term.put({__MODULE__, :shutdown_registered}, true)
+        end
+
         GenServer.call(@name, :members, @boot_timeout_ms)
 
       _running ->
@@ -340,6 +345,11 @@ defmodule Cyfr.Cluster.Cell do
     formed!(started)
 
     {:ok, %{members: started}}
+  catch
+    # A failed init calls no terminate/2, so it stops what it started here.
+    kind, reason ->
+      release_all()
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   @impl true
@@ -370,7 +380,7 @@ defmodule Cyfr.Cluster.Cell do
       # gives the slot back and every claim with it — and that is the
       # failure this distinguishes from `kill/1`.
       safe_call(member, Cyfr.Cluster.Boot, :stop!, [], @boot_timeout_ms)
-      :peer.stop(member.peer)
+      release(member.id)
     end
 
     {:reply, :ok, put_member(state, %{member | peer: nil})}
@@ -386,6 +396,7 @@ defmodule Cyfr.Cluster.Cell do
       Process.unlink(member.peer)
       :peer.cast(member.peer, :erlang, :halt, [1])
       await_down!(member)
+      release(member.id)
     end
 
     {:reply, :ok, put_member(state, %{member | peer: nil})}
@@ -425,24 +436,20 @@ defmodule Cyfr.Cluster.Cell do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
   def handle_info(_message, state), do: {:noreply, state}
 
+  # A heal or a start that raises ends this process with the state from
+  # before it, which names none of the members it had booted by then: the
+  # members it stops are the ones it started (`release_all/0`), whatever
+  # the state says.
   @impl true
-  def terminate(_reason, state) do
-    for %{peer: peer} <- state.members, peer != nil do
-      try do
-        :peer.stop(peer)
-      catch
-        _kind, _reason -> :ok
-      end
-    end
-
-    :ok
-  end
+  def terminate(_reason, _state), do: release_all()
 
   # ---------------------------------------------------------------------------
   # Booting one member
   # ---------------------------------------------------------------------------
 
   defp boot(member) do
+    release(member.id)
+
     {:ok, peer, node} =
       :peer.start(%{
         name: Map.fetch!(node_names(), member.id),
@@ -453,6 +460,7 @@ defmodule Cyfr.Cluster.Cell do
         args: peer_args()
       })
 
+    started(member.id, peer)
     ^node = member.node
     started = %{member | peer: peer}
 
@@ -655,6 +663,65 @@ defmodule Cyfr.Cluster.Cell do
     case safe_call(member, Cyfr.Cell, :roster, []) do
       {:ok, roster} -> roster
       :error -> []
+    end
+  end
+
+  # Every member this process started and has not released, newest first,
+  # kept in the process dictionary rather than the state: a boot that
+  # raises loses the state it was building, and the member it started
+  # must still be stopped.
+  @started {__MODULE__, :started}
+
+  defp started(id, peer), do: Process.put(@started, [{id, peer} | Process.get(@started, [])])
+
+  # Stop every member this process started, newest first, then wait for
+  # each node's name to be released, so the next cell of the run can
+  # take it.
+  defp release_all do
+    ids = Enum.map(Process.get(@started, []), &elem(&1, 0))
+    Enum.each(ids, &stop_started/1)
+    Enum.each(ids, &await_released/1)
+  end
+
+  # Stop `id`'s node if this process started one, and wait for its name.
+  defp release(id) do
+    stop_started(id)
+    await_released(id)
+  end
+
+  defp stop_started(id) do
+    {mine, rest} = Enum.split_with(Process.get(@started, []), &match?({^id, _}, &1))
+    Process.put(@started, rest)
+
+    for {_id, peer} <- mine do
+      try do
+        :peer.stop(peer)
+      catch
+        _kind, _reason -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  # A node starting under a name the port mapper still lists is refused it.
+  defp await_released(id) do
+    name = Atom.to_charlist(Map.fetch!(node_names(), id))
+
+    Cyfr.Cluster.Wait.until!(
+      fn -> not registered?(name) end,
+      "member #{id}'s node name is still registered",
+      30_000
+    )
+
+    :ok
+  end
+
+  defp registered?(name) do
+    case :erl_epmd.names(@host) do
+      {:ok, names} -> List.keymember?(names, name, 0)
+      # No port mapper running: no node holds a name.
+      {:error, :address} -> false
     end
   end
 
