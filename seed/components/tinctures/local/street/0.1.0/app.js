@@ -753,8 +753,9 @@ function rebuild() {
   if (on('stops')) { // the next firing; a paused stop stands boarded up at its last firing
     for (const { item: s } of D.schedules.values()) {
       const t = s.status === 'paused' ? mins(s.last_run_at) : mins(s.next_run_at);
-      if (t == null) continue;
-      add({ id: 'stop-' + s.schedule_id, kind: 'stop', part: 'stops', t, x: X(t), sched: s });
+      if (t != null) add({ id: 'stop-' + s.schedule_id, kind: 'stop', part: 'stops', t, x: X(t), sched: s });
+      // A paused schedule that never ran has no hour: it stands boarded up just past the left arch, to be resumed.
+      else if (s.status === 'paused') add({ id: 'stop-' + s.schedule_id, kind: 'stop', part: 'stops', t: null, x: L.vx0 + L.depotW + 16, sched: s, untold: true });
     }
   }
   if (on('waiting')) {
@@ -830,7 +831,7 @@ function drawLitWindows() {
     const x = Math.round(e.x - e.w / 2), top = L.paveY - L.houseH;
     R(x + 3, top + 3, 4, 6, '#ffd76a'); R(x + e.w - 7, top + 15, 4, 6, '#ffd76a');
   }
-  for (const e of ents) if (e.kind === 'stop' && (e.t < L.dayStart || e.t > L.dayEnd)) {
+  for (const e of ents) if (e.kind === 'stop' && e.t != null && (e.t < L.dayStart || e.t > L.dayEnd)) {
     const x = Math.round(e.x), base = L.roadY - 1;
     R(x - 3, base - 23, 7, 5, e.sched.status === 'paused' ? '#6d6d6d' : '#f4c22e'); R(x - 2, base - 21, 5, 1, '#1c1d26');
   }
@@ -936,7 +937,8 @@ function labelFor(e) {
     }
     case 'crew': return phone ? null : { cls: '', band: 'street', html: `<b>${esc(text(e.job.member) || 'crew')} · since ${when(e.t)}</b><small>${esc(text(e.job.status) || 'working')}</small>` };
     case 'stop': {
-      if (phone || e.t < L.dayStart || e.t > L.dayEnd) return null;
+      if (phone || (!e.untold && (e.t < L.dayStart || e.t > L.dayEnd))) return null;
+      if (e.untold) return { cls: 'quiet', band: 'street', html: `${esc((text(e.sched.name) || 'a stop').split(' ')[0].toLowerCase())} paused` };
       const name = text(e.sched.name) || componentName(text(e.sched.reference));
       return { cls: 'quiet', band: 'street', html: `${when(e.t)} ${esc(name.split(' ')[0].toLowerCase())}` };
     }
@@ -952,7 +954,7 @@ function ariaFor(e) {
     case 'thread': return `Thread ${text(e.th.title)}, ${e.th.kind}, last active ${when(e.t)}${e.th.waits_on_you ? ', waits on you' : ''}`;
     case 'ask': { const w = waitingWords(e.a); return `Waiting on you: ${KIND_WORD[e.a.kind] || 'an item'}, ${w.head} ${w.tail}, since ${when(e.t)}`; }
     case 'lamp': return (e.untold ? 'Earlier runs, time not told: ' : 'Runs at ') + e.runs.map((r) => `${r.t == null ? '' : when(r.t) + ' '}${componentName(r.ref)} ${r.state}`).join('; ');
-    case 'stop': return `Schedule ${text(e.sched.name)}, ${e.sched.status}, ${e.sched.status === 'paused' ? 'last ' : 'next '}${when(e.t)}`;
+    case 'stop': return `Schedule ${text(e.sched.name)}, ${e.sched.status}${e.untold ? ', never ran' : `, ${e.sched.status === 'paused' ? 'last ' : 'next '}${when(e.t)}`}`;
     case 'crew': return `Crew ${text(e.job.member)} ${text(e.job.status)} since ${when(e.t)}`;
     case 'tram': return `Now, ${clock(now())}. Arrow keys walk the day; Escape returns to now.`;
     case 'castle': return 'CYFR: open the settings';
@@ -1190,7 +1192,7 @@ function signFor(e) {
       const control = scheduleAct(s);
       return {
         title: text(s.name) || text(s.reference),
-        facts: [['cron', text(s.cron_expression)], [paused ? 'paused, last' : 'next', when(e.t)], ['runs', text(s.run_count) || '0'], ['errors', text(s.error_count) || '0']],
+        facts: [['cron', text(s.cron_expression)], [paused ? (e.untold ? 'paused' : 'paused, last') : 'next', e.untold ? 'never ran' : when(e.t)], ['runs', text(s.run_count) || '0'], ['errors', text(s.error_count) || '0']],
         acts: [...(control ? [control] : []), page('Open schedules', 'schedules'), ask('stops')],
       };
     }
@@ -1260,8 +1262,8 @@ function phoneList() {
   }).join('');
   const crew = ents.filter((e) => e.kind === 'crew');
   const houses = ents.filter((e) => e.kind === 'thread').sort((a, b) => b.t - a.t).slice(0, 4);
-  const stops = ents.filter((e) => e.kind === 'stop').sort((a, b) => a.t - b.t).slice(0, 3);
-  const row = (e, head, sub) => `<li><button data-pick="${esc(e.id)}"><span>${esc(head)}<small>${esc(sub)}</small></span><span class="when">${when(e.t)}</span></button></li>`;
+  const stops = ents.filter((e) => e.kind === 'stop').sort((a, b) => (a.t ?? -Infinity) - (b.t ?? -Infinity)).slice(0, 3);
+  const row = (e, head, sub) => `<li><button data-pick="${esc(e.id)}"><span>${esc(head)}<small>${esc(sub)}</small></span><span class="when">${e.t == null ? '' : when(e.t)}</span></button></li>`;
   return `<ul class="list" aria-label="Waiting on you">${rows || '<li class="empty">Nothing waits on you.</li>'}</ul>
   <ul class="list">${crew.map((e) => row(e, `${text(e.job.member)} at work`, text(e.job.status))).join('')}${stops.map((e) => row(e, text(e.sched.name), e.sched.status)).join('')}${houses.map((e) => row(e, text(e.th.title), threadSub(e.th))).join('')}</ul>`;
 }
