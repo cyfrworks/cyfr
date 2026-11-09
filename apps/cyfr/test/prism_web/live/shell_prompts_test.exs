@@ -733,6 +733,7 @@ defmodule PrismWeb.ShellPromptsTest do
       [{prompt_id, ^keeper}] = Map.to_list(assigns(view).credential_prompts)
 
       render_hook(view, "page_shown", %{"desktop" => true})
+      assert layer(view) =~ ~s(data-open="true")
       assert layer(view) =~ ~s(data-kind="credential_entry")
       assert layer(view) =~ "under-page"
 
@@ -784,6 +785,7 @@ defmodule PrismWeb.ShellPromptsTest do
       )
 
       render_hook(view, "page_shown", %{"desktop" => true})
+      assert layer(view) =~ ~s(data-open="true")
       assert layer(view) =~ ~s(data-ref="#{ref}")
       assert has_element?(view, "#system-layer-desktop-credential")
 

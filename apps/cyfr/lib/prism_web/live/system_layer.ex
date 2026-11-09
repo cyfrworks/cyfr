@@ -2396,19 +2396,23 @@ defmodule PrismWeb.SystemLayer do
 
   @impl true
   def render(assigns) do
-    # Covered, the layer draws no prompt: the open one keeps its place and
-    # state, drawn again as it stands once the layer is uncovered.
-    assigns = if assigns.covered, do: assign(assigns, :current, nil), else: assigns
-    may = assigns.current && may_confirm?(assigns[:context], assigns.current)
+    # The prompt drawn, `shown`: the open one, or none while the layer is
+    # covered, when it keeps its place and state and is drawn again as it
+    # stands. Derived on every render from `covered` and `current`
+    # together, so the browser sees the dialog open again once the layer is
+    # uncovered, though `current` itself never moved.
+    shown = if assigns.covered, do: nil, else: assigns.current
+    may = shown && may_confirm?(assigns[:context], shown)
 
     panel =
-      case panel_of(assigns.panels, assigns.current) do
+      case panel_of(assigns.panels, shown) do
         {ref, panel} -> Map.put(panel, :ref, ref)
         nil -> nil
       end
 
     assigns =
       assign(assigns,
+        shown: shown,
         may: may,
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
@@ -2423,8 +2427,8 @@ defmodule PrismWeb.SystemLayer do
       id={@id}
       phx-hook="SystemLayer"
       class="contents"
-      data-open={to_string(not is_nil(@current))}
-      data-prompt-id={@current && @current.id}
+      data-open={to_string(not is_nil(@shown))}
+      data-prompt-id={@shown && @shown.id}
     >
       <dialog
         id={"#{@id}-dialog"}
@@ -2435,18 +2439,18 @@ defmodule PrismWeb.SystemLayer do
         aria-describedby={"#{@id}-description"}
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
-        <div :if={@current} class="space-y-4" data-kind={@current.kind}>
+        <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
           <h2 id={"#{@id}-title"} class="text-lg font-semibold">
-            {title(@current)}
+            {title(@shown)}
           </h2>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">
-            {description(@current)}
+            {description(@shown)}
           </p>
 
-          <.standing prompt={@current} may={@may} />
+          <.standing prompt={@shown} may={@may} />
 
           <.body
-            prompt={@current}
+            prompt={@shown}
             may={@may}
             myself={@myself}
             id={@id}
@@ -2469,7 +2473,7 @@ defmodule PrismWeb.SystemLayer do
             <span class="font-semibold">Not done:</span> {@error}
           </p>
 
-          <.controls prompt={@current} may={@may} myself={@myself} id={@id} panel={@panel} />
+          <.controls prompt={@shown} may={@may} myself={@myself} id={@id} panel={@panel} />
 
           <p :if={@queue != []} class="text-xs text-gray-400">
             {waiting(@queue)}
