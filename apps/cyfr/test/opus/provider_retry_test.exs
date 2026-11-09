@@ -172,6 +172,62 @@ defmodule Opus.ProviderRetryTest do
       assert rows(ctx) == before
     end
 
+    test "refuses a scheduled run whose outcome is uncertain", %{ctx: ctx} do
+      # The run's attempt lapses while it runs: the row fails, but what the
+      # run did before is not known, so it is never run again.
+      script!([{:probe, self()}, :hang])
+      id = Prima.UUID7.execution_id()
+      task = Task.async(fn -> scheduled(ctx, id) end)
+      assert_receive {:scripted_probe, _runner, ^id}, 10_000
+
+      attempt =
+        Arca.Repo.one!(
+          from(a in Arca.Schemas.ExecutionAttempt,
+            where: a.execution_id == ^id and a.athanor_id == ^ctx.athanor_id
+          )
+        )
+
+      assert {:ok, [_]} = Opus.Lapse.boot(attempt.service_id, attempt.boot_id, [attempt.attempt])
+
+      assert :ok =
+               Opus.Attempt.stop_unclosed(attempt.attempt, %{
+                 service_id: attempt.service_id,
+                 boot_id: attempt.boot_id,
+                 runner: nil
+               })
+
+      assert {{:error, {:uncertain, _}}, _schedule} = Task.await(task, 10_000)
+      assert {:ok, %Record{status: :failed, error_class: :uncertain}} = Record.get(ctx, id)
+      before = rows(ctx)
+      script!([%{"answer" => "sunny"}])
+
+      assert refused(retry(ctx, id)) ==
+               {:conflict,
+                "This run's outcome is uncertain: it is not known to have failed, so it is not " <>
+                  "run again."}
+
+      assert rows(ctx) == before
+    end
+
+    test "refuses a failed run whose attempt did not close in the run's own failure", %{
+      ctx: ctx
+    } do
+      failed = scheduled_failure!(ctx)
+
+      # The one outcome a retry reads as failed is the run's own `error`;
+      # a lost result is not known to have failed.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.ExecutionAttempt, where: a.execution_id == ^failed),
+          set: [outcome: "result_lost"]
+        )
+
+      before = rows(ctx)
+      assert {:conflict, sentence} = refused(retry(ctx, failed))
+      assert sentence =~ "outcome is uncertain"
+      assert rows(ctx) == before
+    end
+
     test "refuses a run whose input is no longer kept", %{ctx: ctx} do
       failed = scheduled_failure!(ctx)
 

@@ -36,6 +36,10 @@ defmodule Opus.Providers.FeedTest do
   alias Prima.Test.AuthorityFixtures
   alias Sanctum.Test.ConsentFixtures
 
+  # The canvas wire's vectors, whose `stream_events` hold this stream's
+  # payloads as a canvas reads them.
+  @wire Path.expand("../../../../../tests/fixtures/tincture_wire.json", __DIR__)
+
   @reference "catalyst:local.markets"
   @pinned "catalyst:local.markets:1.0.0"
   @profile_id "prof_feed_tool"
@@ -949,6 +953,61 @@ defmodule Opus.Providers.FeedTest do
       assert :ok = Prima.Canvas.Shape.check(stream.shape, refreshed)
     end
   end
+
+  describe "the wire's run events" do
+    test "are a running run's and an ended run's payloads, in the stream's shape and projection",
+         %{actor: actor} do
+      vectors = @wire |> File.read!() |> Jason.decode!()
+      events = for %{"event" => event} <- vectors["stream_events"]["runs.changes"], do: event
+      assert Enum.map(events, & &1["kind"]) == ["started", "failed"]
+
+      {:ok, {_feed, stream}} = Sanctum.Catalog.lookup_stream("runs.changes")
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
+
+      for event <- events do
+        assert Enum.sort(Map.keys(event)) == Enum.sort(stream.projection)
+        assert :ok = Shape.check(stream.shape, event)
+
+        # The payload the run's lifecycle telemetry makes of its record,
+        # as the stream delivers it live.
+        :ok = emit(vector_record(actor, event))
+
+        assert_receive %Cyfr.Bus.Execution{} = payload, 5_000
+        assert on_the_wire(stream, Map.from_struct(payload)) == event
+      end
+    end
+  end
+
+  # The record a vector's event is the payload of: the fields the event
+  # names, its error kept as a sentence under the event's class.
+  defp vector_record(actor, event) do
+    {:ok, started_at, 0} = DateTime.from_iso8601(event["started_at"])
+
+    ended_at =
+      with ended when is_binary(ended) <- event["ended_at"],
+           {:ok, at, 0} <- DateTime.from_iso8601(ended),
+           do: at
+
+    %Opus.Record{
+      id: event["execution_id"],
+      athanor_id: actor.athanor_id,
+      user_id: "local|local|vector",
+      reference: event["reference"],
+      component_type: String.to_existing_atom(event["component_type"]),
+      parent_execution_id: event["parent_execution_id"],
+      status: String.to_existing_atom(event["kind"]),
+      started_at: started_at,
+      completed_at: ended_at,
+      duration_ms: event["duration_ms"],
+      error: event["error"] && "Execution failed: a sentence that never travels",
+      error_class: event["error"] && String.to_existing_atom(event["error"]["class"])
+    }
+  end
+
+  defp emit(%Opus.Record{status: :started} = record), do: Opus.Telemetry.execute_start(record)
+
+  defp emit(%Opus.Record{status: :failed} = record),
+    do: Opus.Telemetry.execute_exception(record, record.error)
 
   # A refresh item or a live payload as a canvas reads it: projected by the
   # grant and passed through JSON.

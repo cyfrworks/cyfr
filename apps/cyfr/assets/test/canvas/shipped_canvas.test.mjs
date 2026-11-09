@@ -365,6 +365,15 @@ describe("runs.changes", () => {
     assert.deepEqual(state.runs.map((r) => [r.execution_id, r.kind]), [["d", "started"], ["c", "completed"], ["b", "failed"], ["a", "completed"]])
   })
 
+  test("folds the wire's run events, a running run and an ended one, whole", () => {
+    const events = fixture.stream_events["runs.changes"].map(({event}) => event)
+    assert.equal(events.length, 2)
+    const state = folded(...events)
+    assert.deepEqual(state.runs, [...events].reverse())
+    assert.equal(state.runs.find((r) => r.kind === "started").ended_at, null)
+    assert.ok(state.runs.every((r) => typeof r.started_at === "string"))
+  })
+
   test("a start that arrives after the run finished leaves its outcome", () => {
     const state = folded(run("a", "failed", {refresh: true}), run("a", "started"))
     assert.deepEqual(state.runs.map((r) => r.kind), ["failed"])

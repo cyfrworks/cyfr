@@ -660,10 +660,11 @@ defmodule Opus.Provider do
   end
 
   # Retry action: a failed run of the caller's athanor that a schedule or
-  # a feed started, run again as a root of its own with the pinned
-  # component, the input and the profile it ran with, at the consent
-  # revision it rooted at (`Opus.run_root/5`'s `:consent_id`), so a grant
-  # changed since runs nothing. Only such a run is repeated exactly from
+  # a feed started, known to have failed rather than uncertain, run again
+  # as a root of its own with the pinned component, the input and the
+  # profile it ran with, at the consent revision it rooted at
+  # (`Opus.run_root/5`'s `:consent_id`), so a grant changed since runs
+  # nothing. Only such a run is repeated exactly from
   # its row: its seed was empty and it named no account, while a run
   # started anywhere else may have carried a launch's sources or an
   # account the row does not record. The retry starts as the caller's own
@@ -671,6 +672,7 @@ defmodule Opus.Provider do
   def handle("execution", %Context{} = ctx, %{"action" => "retry", "execution_id" => id})
       when is_binary(id) do
     with {:ok, record} <- retriable(ctx, id),
+         :ok <- known_failed(record),
          {:ok, consent_id} <- rooted_at(ctx, record),
          {:ok, input} <- Record.input(ctx, record) do
       case Opus.run_root(ctx, {:id, record.profile_id}, record.reference, input,
@@ -846,6 +848,32 @@ defmodule Opus.Provider do
 
   defp retriable(%Record{}),
     do: {:error, {:conflict, "Only a run a schedule or a feed started can be retried."}}
+
+  # A run is run again only once it is known to have failed: its attempt
+  # closed `error`, the run's own failure. An `uncertain` or `result_lost`
+  # outcome (a lapse, a lost result, a restore, an attempt that ended
+  # before it closed the run) may have completed what it did, and no
+  # contract proves running it again safe (ARCHITECTURE.md §6.5).
+  defp known_failed(%Record{} = record) do
+    case Record.ended_outcome(record) do
+      {:ok, "error"} ->
+        :ok
+
+      {:ok, _uncertain} ->
+        {:error, uncertain_outcome()}
+
+      {:error, :not_found} ->
+        {:error, uncertain_outcome()}
+
+      {:error, _unread} ->
+        {:error, {:unavailable, "Executions"}}
+    end
+  end
+
+  defp uncertain_outcome,
+    do:
+      {:conflict,
+       "This run's outcome is uncertain: it is not known to have failed, so it is not run again."}
 
   # The consent revision the run rooted at, which its retry must root at
   # too; a run that records no profile or no revision has no grant to be
