@@ -82,6 +82,22 @@ defmodule Sanctum.Tenancy.Users do
     end
   end
 
+  @doc """
+  How a person is named where their address must not travel, to a reader
+  CYFR does not run (a canvas's stream): `display_name/1`'s reading
+  without the email, so their display name, else `@` and their recorded
+  name, else "someone".
+  """
+  @spec public_name(String.t() | nil) :: String.t()
+  def public_name(nil), do: "someone"
+
+  def public_name(user_id) when is_binary(user_id) do
+    case get(user_id) do
+      {:ok, user} -> user |> Map.put(:email, nil) |> named()
+      {:error, _unread} -> "someone"
+    end
+  end
+
   defp named(%{display_name: name}) when is_binary(name) and name != "", do: name
   defp named(%{email: email}) when is_binary(email) and email != "", do: email
   defp named(%{namespace: name}) when is_binary(name) and name != "", do: "@" <> name

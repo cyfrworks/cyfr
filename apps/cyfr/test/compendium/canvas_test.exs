@@ -971,15 +971,31 @@ defmodule Compendium.CanvasTest do
       assert Map.keys(catalog) == [:streams]
       assert streams == Enum.sort_by(shaped, & &1.name)
 
-      # A canvas reads exactly what waits for its person, by their own id,
-      # a feed's results, by the feed's name, the athanor's runs, its
-      # schedules and its schedules' runs; every other stream declares no
+      # A canvas reads exactly its crew's activity, what waits for its
+      # person, by their own id, the athanor's components, a feed's results,
+      # by the feed's name, the athanor's runs, its schedules and its
+      # schedules' runs, its person's own list of threads, by their own id,
+      # and the athanor's vault entries; every other stream declares no
       # shape.
       assert [
+               %{
+                 name: "activity.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => activity_fields},
+                 filter: nil,
+                 refresh: true
+               },
                %{
                  name: "attention.changes",
                  subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
                  shape: %{"type" => "object", "fields" => attention_fields},
+                 filter: nil,
+                 refresh: true
+               },
+               %{
+                 name: "components.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => component_fields},
                  filter: nil,
                  refresh: true
                },
@@ -1010,8 +1026,32 @@ defmodule Compendium.CanvasTest do
                  shape: %{"type" => "object", "fields" => schedule_fields},
                  filter: nil,
                  refresh: true
+               },
+               %{
+                 name: "threads.changes",
+                 subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
+                 shape: %{"type" => "object", "fields" => thread_fields},
+                 filter: nil,
+                 refresh: true
+               },
+               %{
+                 name: "vault.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => vault_fields},
+                 filter: nil,
+                 refresh: true
                }
              ] = streams
+
+      assert Enum.sort(Map.keys(component_fields)) ==
+               ~w(grant_current icon kind name ref type update_available version)
+
+      assert Enum.sort(Map.keys(vault_fields)) == ~w(kind name status type)
+
+      assert Enum.sort(Map.keys(activity_fields)) == ~w(asked_by kind member since status)
+
+      assert Enum.sort(Map.keys(thread_fields)) ==
+               ~w(id kind last_activity people title waits_on_you)
 
       assert Enum.sort(Map.keys(schedule_fields)) ==
                ~w(cron_expression error_count kind last_run_at name next_run_at reference run_count schedule_id status)

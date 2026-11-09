@@ -267,7 +267,7 @@ defmodule Cyfr.Bus do
       struct: CrewActivity,
       match: {:exact, "bus:crew_activity"},
       template: "tenant:<athanor_id>:bus:crew_activity",
-      producers: ["Aqua.Tape"],
+      producers: ["Aqua.Crew.Activity"],
       consumers: ["stream:activity.changes"],
       reason:
         "a crew member's job began or ended in the athanor, for its canvases; never the " <>
@@ -371,7 +371,7 @@ defmodule Cyfr.Bus do
       struct: ThreadListed,
       match: {:prefix, "bus:threads:"},
       template: "tenant:<athanor_id>:bus:threads:<user_id>",
-      producers: ["Aqua.ThreadList"],
+      producers: ["Aqua.ThreadList", "Cyfr.TelemetryBridge"],
       consumers: ["stream:threads.changes"],
       reason:
         "one person's list of threads moved, on that person's own topic: a shared thread is " <>

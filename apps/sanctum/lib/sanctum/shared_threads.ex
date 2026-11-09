@@ -62,7 +62,7 @@ defmodule Sanctum.SharedThreads do
   require Logger
 
   alias Sanctum.Door
-  alias Sanctum.Tenancy.Users
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   @max_file_bytes 20_000_000
   @name_max 120
@@ -74,6 +74,15 @@ defmodule Sanctum.SharedThreads do
           required(:title) => String.t() | nil,
           required(:status) => String.t(),
           optional(atom()) => term()
+        }
+
+  @typedoc "A thread as a person's list of threads names it to a reader CYFR does not run (`listed/1`)."
+  @type listing :: %{
+          id: String.t(),
+          title: String.t() | nil,
+          people: [String.t()],
+          last_activity: DateTime.t(),
+          waits_on_you: false
         }
 
   @typedoc "Who a person adds, removes or withdraws."
@@ -116,6 +125,48 @@ defmodule Sanctum.SharedThreads do
     with {:ok, _thread} <- seated(user_id, thread_id),
          {:ok, rows} <- rows(thread_id) do
       {:ok, Enum.map(rows, &person/1)}
+    end
+  end
+
+  @doc """
+  The active threads `user_id` sits in as their list of threads names
+  them to a reader CYFR does not run, such as a canvas, the latest
+  first: each one's id, its title (a pair has none), what its people
+  are called (`Sanctum.Tenancy.Users.public_name/1`, never an address or
+  an id), oldest seat first, when it last moved, and that it waits on no
+  one, since nothing in a shared thread asks one person to decide.
+  """
+  @spec listed(String.t()) :: {:ok, [listing()]} | {:error, term()}
+  def listed(user_id) when is_binary(user_id) do
+    case Arca.SharedThreads.list_for(server(), user_id) do
+      {:ok, rows} -> listed_rows(for %{status: "active"} = row <- rows, do: row)
+      {:error, reason} -> unavailable(reason)
+    end
+  end
+
+  @doc """
+  What each of `user_ids` now lists of `thread_id`, and the athanor whose
+  person they are, where that list lives: `{user_id, athanor_id,
+  listing}` (`listed/1`'s) for a person seated in the thread while it is
+  active, and `{user_id, athanor_id, :removed}` for anyone else, so a
+  person who left or was removed, and everyone once it is archived or
+  gone, drops it. A person with no active athanor of their own keeps no
+  list and is left out, and a store that does not answer answers `[]`.
+  """
+  @spec listings(String.t(), [String.t()]) ::
+          [{String.t(), String.t(), listing() | :removed}]
+  def listings(thread_id, user_ids) when is_binary(thread_id) and is_list(user_ids) do
+    with {:ok, thread} <- listed_thread(thread_id),
+         {:ok, rows} <- rows(thread_id) do
+      seated = seated(rows)
+      listing = if match?(%{status: "active"}, thread), do: listing(thread, seated)
+
+      for user_id <- Enum.uniq(user_ids),
+          {:ok, %{id: athanor_id, status: "active"}} <- [Athanors.get_by_owner(user_id)] do
+        {user_id, athanor_id, if(listing && user_id in seated, do: listing, else: :removed)}
+      end
+    else
+      {:error, _unanswered} -> []
     end
   end
 
@@ -726,6 +777,43 @@ defmodule Sanctum.SharedThreads do
       {:error, :not_found} -> missing(thread_id)
       {:error, reason} -> unavailable(reason)
     end
+  end
+
+  # The threads of a list, each read with its people; one that cannot be
+  # read leaves the list unread rather than shorter.
+  defp listed_rows(threads) do
+    Enum.reduce_while(threads, {:ok, []}, fn thread, {:ok, acc} ->
+      case rows(thread.id) do
+        {:ok, rows} -> {:cont, {:ok, [listing(thread, seated(rows)) | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, listings} -> {:ok, Enum.reverse(listings)}
+      error -> error
+    end
+  end
+
+  # A thread gone is no one's to list: `nil`, which every person drops.
+  defp listed_thread(thread_id) do
+    case Arca.SharedThreads.get(server(), thread_id) do
+      {:ok, thread} -> {:ok, thread}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, reason} -> unavailable(reason)
+    end
+  end
+
+  # The people seated in a thread, oldest seat first; an invitation is no seat.
+  defp seated(rows), do: for(%{status: "active", user_id: id} <- rows, do: id)
+
+  defp listing(thread, seated) do
+    %{
+      id: thread.id,
+      title: thread.title,
+      people: Enum.map(seated, &Users.public_name/1),
+      last_activity: thread.last_message_at || thread.created_at,
+      waits_on_you: false
+    }
   end
 
   defp together?(user_a, user_b),

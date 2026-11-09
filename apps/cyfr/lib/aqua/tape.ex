@@ -12,7 +12,9 @@ defmodule Aqua.Tape do
   `{:error, :superseded}`. The rows a person sees are broadcast on the
   thread's topic AFTER the transaction commits, as plain maps in
   `Cyfr.Bus.ThreadEvent`s of kind `:message`; approvals are also
-  announced to the athanor (`Sanctum.Notify`). A
+  announced to the athanor (`Sanctum.Notify`), and after the same commits
+  a thread's place in its person's list (`Aqua.ThreadList`) and a crew
+  member's job beginning and ending (`Aqua.Crew.Activity`). A
   guest-planed context writes here unchanged: the tape is a narrow
   interface, not a plane, and the tenant is the context's.
 
@@ -30,6 +32,8 @@ defmodule Aqua.Tape do
   keeps it.
   """
 
+  alias Aqua.Crew.Activity
+  alias Aqua.ThreadList
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
   alias Sanctum.Context
@@ -81,6 +85,7 @@ defmodule Aqua.Tape do
 
     case TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread_id, attrs) do
       {:ok, %{message: message, turn: turn}} ->
+        announce_lists(ctx, thread_id, turn && {:started, turn})
         broadcast(ctx, thread_id, row_kind(message), message)
         if Map.get(attrs, :request), do: wake_crew(ctx)
         {:ok, %{message: message, turn: turn, replayed: false}}
@@ -214,8 +219,12 @@ defmodule Aqua.Tape do
   behind.
   """
   @spec start_turn(Context.t(), turn(), map()) :: {:ok, turn()} | {:error, term()}
-  def start_turn(%Context{} = ctx, turn, attrs) when is_map(attrs),
-    do: start_turn(ctx, turn, attrs, 3)
+  def start_turn(%Context{} = ctx, turn, attrs) when is_map(attrs) do
+    with {:ok, started} <- start_turn(ctx, turn, attrs, 3) do
+      Activity.started(ctx, started)
+      {:ok, started}
+    end
+  end
 
   defp start_turn(_ctx, _turn, _attrs, 0), do: {:error, :stale}
 
@@ -299,6 +308,7 @@ defmodule Aqua.Tape do
              |> Map.put_new(:fence, turn.fence)
              |> standing(if(status == "completed", do: :current, else: :retiring))
            ) do
+      announce_lists(ctx, turn.thread_id, {:ended, finished})
       broadcast(ctx, turn.thread_id, :turn_finished, nil)
       if finished.asking_thread_id, do: wake_crew(ctx)
       {:ok, finished}
@@ -523,6 +533,7 @@ defmodule Aqua.Tape do
              step.id,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
+      announce_lists(ctx, turn.thread_id, nil)
       broadcast(ctx, turn.thread_id, :message, card)
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_pending, %{
@@ -551,6 +562,7 @@ defmodule Aqua.Tape do
              decision,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
+      announce_lists(ctx, turn.thread_id, nil)
       broadcast(ctx, turn.thread_id, :message, card)
 
       if step.result_message_id do
@@ -606,12 +618,15 @@ defmodule Aqua.Tape do
   @spec archive(Context.t(), String.t()) ::
           {:ok, %{thread: map(), cancelled: [map()]}} | {:error, term()}
   def archive(%Context{} = ctx, thread_id) do
+    open = open_jobs(ctx, [thread_id])
+
     with {:ok, %{cancelled: cancelled}} = archived <-
            Threads.archive(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring)) do
       if cancelled != [] do
         broadcast(ctx, thread_id, :turn_finished, nil)
         announce_notices(ctx, Enum.map(cancelled, & &1.turn_id))
         wake_crew(ctx)
+        Activity.cancelled(ctx, open, cancelled)
       end
 
       archived
@@ -626,8 +641,32 @@ defmodule Aqua.Tape do
   """
   @spec delete_thread(Context.t(), String.t()) ::
           {:ok, %{cancelled: [map()]}} | {:error, term()}
-  def delete_thread(%Context{} = ctx, thread_id),
-    do: Threads.delete(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring))
+  def delete_thread(%Context{} = ctx, thread_id) do
+    actor = Sanctum.Context.actor(ctx)
+
+    open =
+      case Threads.children(actor, thread_id) do
+        children when is_list(children) -> open_jobs(ctx, Enum.map(children, & &1.id))
+        {:error, _unread} -> []
+      end
+
+    with {:ok, %{cancelled: cancelled}} = deleted <-
+           Threads.delete(actor, thread_id, standing(%{}, :retiring)) do
+      ThreadList.removed(ctx, thread_id)
+      Activity.cancelled(ctx, open, cancelled)
+      deleted
+    end
+  end
+
+  # The open turns a write that may cancel them leaves no row of after it:
+  # read first, so its announcement names the jobs it ended. A read that
+  # fails announces none of them.
+  defp open_jobs(ctx, thread_ids) do
+    case Activity.open_turns(ctx, thread_ids) do
+      {:ok, turns} -> turns
+      {:error, _unread} -> []
+    end
+  end
 
   @doc "The requests of a thread still waiting on a crew member's reply, oldest first."
   @spec pending_requests(Context.t(), String.t()) :: [row()] | {:error, term()}
@@ -737,6 +776,20 @@ defmodule Aqua.Tape do
     case TurnStorage.notices(Sanctum.Context.actor(ctx), turn_ids) do
       {:ok, notices} -> Enum.each(notices, &broadcast(ctx, &1.thread_id, :notice, &1))
       {:error, _unread} -> :ok
+    end
+  end
+
+  # The thread's place in its person's list and, for a crew member's turn,
+  # its job, announced before the thread's own events: a holder of the
+  # thread acts on those, so nothing of this write is still reading once
+  # they are heard.
+  defp announce_lists(ctx, thread_id, job) do
+    ThreadList.changed(ctx, thread_id)
+
+    case job do
+      {:started, turn} -> Activity.started(ctx, turn)
+      {:ended, turn} -> Activity.ended(ctx, turn)
+      nil -> :ok
     end
   end
 
