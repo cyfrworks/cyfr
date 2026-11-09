@@ -385,15 +385,16 @@ defmodule Emissary.Web.TinctureControllerTest do
       manifest = component["manifest"]
 
       # The policy is the frame's rules' derivation: connect-src names the
-      # endpoint's origin and the declared domains, never `'self'`, and the
-      # document is sandboxed.
-      assert csp ==
-               Compendium.tincture_frame_policy(manifest, %{
-                 endpoint: Emissary.Web.TinctureAssets.endpoint_origin(),
-                 nonce: nonce
-               })
+      # endpoint's origin, its WebSocket origin (`ws` for `http`, `wss` for
+      # `https`) and the declared domains, never `'self'`, and the document
+      # is sandboxed.
+      endpoint = Emissary.Web.TinctureAssets.endpoint_origin()
 
-      assert csp =~ ~r/connect-src https?:\/\/\S+ https:\/\/\*\.supabase\.co;/
+      assert csp ==
+               Compendium.tincture_frame_policy(manifest, %{endpoint: endpoint, nonce: nonce})
+
+      "http" <> rest = endpoint
+      assert csp =~ "connect-src #{endpoint} ws#{rest} https://*.supabase.co;"
       refute csp =~ "connect-src 'self'"
       assert String.ends_with?(csp, "; sandbox allow-scripts")
 

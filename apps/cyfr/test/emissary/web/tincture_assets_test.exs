@@ -288,7 +288,10 @@ defmodule Emissary.Web.TinctureAssetsTest do
                ~w(default-src script-src worker-src style-src img-src font-src media-src
                   connect-src object-src base-uri frame-ancestors form-action sandbox)
 
-      assert csp(conn) =~ "connect-src #{endpoint_origin()} https://api.example.com;"
+      # The endpoint, its WebSocket origin (`ws` for `http`, `wss` for
+      # `https`), then the declared domain.
+      "http" <> rest = endpoint_origin()
+      assert csp(conn) =~ "connect-src #{endpoint_origin()} ws#{rest} https://api.example.com;"
       refute csp(conn) =~ "evil.com"
       refute csp(conn) =~ "x.com;"
       assert csp(conn) =~ "; sandbox allow-scripts allow-pointer-lock"

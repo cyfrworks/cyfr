@@ -82,8 +82,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {CyfrWeb.Plugs.TinctureRateLimit, :call} => :tincture_rate_limited,
     {Emissary.Web.TinctureDataController, :invoke} => :tincture_data_invoke_no_frame,
     {Emissary.Web.TinctureDataController, :system_action} => :tincture_data_action_no_frame,
-    {Emissary.Web.TinctureDataController, :stream} => :tincture_data_stream_no_frame,
-    {Emissary.Web.TinctureDataController, :canvas_stream} => :tincture_data_canvas_no_frame,
+    {Emissary.Web.TinctureDataController, :socket} => :tincture_socket_no_upgrade,
+    {Emissary.Web.TinctureDataController, :canvas_socket} => :tincture_canvas_socket_no_upgrade,
     {Emissary.Web.WebhookController, :invoke} => :webhook_archived_athanor,
     {CyfrWeb.Plugs.VerifyWebhookSignature, :call} => :webhook_unsigned,
     {CyfrWeb.Plugs.WebhookIdempotency, :call} => :webhook_missing_idempotency_key,
@@ -365,12 +365,12 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   # A data request with no frame credential and no public tincture: the
   # wire's own refusal, whose class the row carries.
-  defp tincture_data_no_frame(conn, kind, fields, path \\ nil) do
+  defp tincture_data_no_frame(conn, kind, fields) do
     conn =
       conn
       |> put_req_header("content-type", "application/json")
       |> put_req_header("origin", "null")
-      |> post(path || Prima.TinctureWire.route(kind), Prima.TinctureWire.request(kind, fields))
+      |> post(Prima.TinctureWire.route(kind), Prima.TinctureWire.request(kind, fields))
 
     assert conn.status == 401
 
@@ -386,17 +386,24 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   def tincture_data_action_no_frame(conn, _ctx),
     do: tincture_data_no_frame(conn, :action, %{operation: "system.status", args: %{}})
 
-  def tincture_data_stream_no_frame(conn, _ctx),
-    do: tincture_data_no_frame(conn, :stream_open, %{stream: "mcp_servers.changes", subject: nil})
+  # A stream connection's path asked with no upgrade: the route admits
+  # nothing, and refuses a request that is no upgrade in the wire's shape.
+  defp socket_no_upgrade(conn, path) do
+    conn = get(conn, path)
+    assert conn.status == 400
 
-  # A canvas's own data path, asked with no bearer.
-  def tincture_data_canvas_no_frame(conn, _ctx) do
-    tincture_data_no_frame(
-      conn,
-      :stream_open,
-      %{stream: "mcp_servers.changes", subject: nil},
-      Prima.TinctureWire.stream_path("frm_seam_" <> unique("canvas"))
-    )
+    assert {:refused, %{class: class, stage: "admission"}} =
+             Prima.TinctureWire.decode_answer(:invoke, Jason.decode!(conn.resp_body))
+
+    {request_id_of(conn), refused(class, :none)}
+  end
+
+  def tincture_socket_no_upgrade(conn, _ctx),
+    do: socket_no_upgrade(conn, Prima.TinctureWire.socket_path())
+
+  # A canvas open's own stream connection.
+  def tincture_canvas_socket_no_upgrade(conn, _ctx) do
+    socket_no_upgrade(conn, Prima.TinctureWire.socket_path("frm_seam_" <> unique("canvas")))
   end
 
   def tincture_rate_limited(conn, _ctx) do

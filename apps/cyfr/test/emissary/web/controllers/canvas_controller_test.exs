@@ -288,8 +288,12 @@ defmodule Emissary.Web.CanvasControllerTest do
       assert policy =~
                "script-src #{endpoint}/_s/#{credential}/ #{endpoint}#{TinctureAssets.canvas_sdk_path()};"
 
+      # The open's data path over the endpoint's WebSocket origin (`ws` for
+      # `http`, `wss` for `https`), where its stream connection is.
+      "http" <> rest = endpoint
+
       assert policy =~
-               "connect-src #{endpoint}#{Prima.TinctureWire.data_path(open.frame_id)} "
+               "connect-src ws#{rest}#{Prima.TinctureWire.data_path(open.frame_id)} "
 
       assert policy =~ "sandbox allow-scripts"
 
@@ -837,14 +841,14 @@ defmodule Emissary.Web.CanvasControllerTest do
       open: open
     } do
       page_path = Prima.TinctureWire.page_path(credential, open.frame_id)
-      stream_path = Prima.TinctureWire.stream_path(open.frame_id)
+      socket_path = Prima.TinctureWire.socket_path(open.frame_id)
       served = Prima.TinctureUrl.asset_path(credential, ["local", "page-canvas", @version])
       sdk = TinctureAssets.canvas_sdk_path()
 
       # Each answers its own status, and none a 3xx or a location: a
-      # trailing slash, a malformed credential or frame id, a data request
-      # with no body (refused before its bearer is read), and paths no
-      # route takes, which the router answers 404.
+      # trailing slash, a malformed credential or frame id, a stream
+      # connection asked with no upgrade (refused before anything is
+      # admitted), and paths no route takes, which the router answers 404.
       cases = [
         {:get, page_path <> "/", 200},
         {:get, "/_c/v1/short/#{open.frame_id}", 404},
@@ -860,12 +864,12 @@ defmodule Emissary.Web.CanvasControllerTest do
         {:get, "/_c/v1/sdk", 404},
         {:get, "/_c/v1/sdk/", 404},
         {:post, sdk, 404},
-        {:post, stream_path, 400},
-        {:post, stream_path <> "/", 400},
-        {:post, "/_f/v1/o/x/stream", 400},
-        {:post, stream_path <> "/extra", 404},
+        {:get, socket_path, 400},
+        {:get, socket_path <> "/", 400},
+        {:get, "/_f/v1/o/x/socket", 400},
+        {:get, socket_path <> "/extra", 404},
         {:post, Prima.TinctureWire.data_path(open.frame_id) <> "invoke", 404},
-        {:get, stream_path, 404},
+        {:post, socket_path, 404},
         {:get, served <> "/", 404},
         {:get, served <> "/app.js", 200},
         {:get, served <> "/app.js/", 200},

@@ -291,18 +291,17 @@ defmodule CyfrWeb.RouterTest do
       refute Prima.TinctureUrl.credential?("sdk")
       refute Prima.TinctureWire.frame_id?(sdk.path_params["file"])
 
-      for verb <- ["POST", "OPTIONS"] do
-        data =
-          Phoenix.Router.route_info(
-            router,
-            verb,
-            Prima.TinctureWire.stream_path(frame),
-            "example.com"
-          )
+      # Its one data route is its stream connection's upgrade.
+      data =
+        Phoenix.Router.route_info(
+          router,
+          "GET",
+          Prima.TinctureWire.socket_path(frame),
+          "example.com"
+        )
 
-        assert %{route: "/_f/v1/o/:frame_id/stream", pipe_through: [:tincture_data]} = data
-        assert data.path_params == %{"frame_id" => frame}
-      end
+      assert %{route: "/_f/v1/o/:frame_id/socket", pipe_through: [:tincture_data]} = data
+      assert data.path_params == %{"frame_id" => frame}
 
       # The page's dispatch, like a served file's, logs no parameters: they
       # carry the credential.
@@ -312,13 +311,14 @@ defmodule CyfrWeb.RouterTest do
                path
       end
 
-      # A canvas path has no invoke or action route, and a page path no
-      # other shape.
+      # A canvas path has no invoke or action route and its stream
+      # connection no other verb or shape, and a page path no other shape.
       for {verb, path} <- [
             {"POST", Prima.TinctureWire.data_path(frame) <> "invoke"},
             {"POST", Prima.TinctureWire.data_path(frame) <> "action"},
-            {"GET", Prima.TinctureWire.stream_path(frame)},
-            {"POST", Prima.TinctureWire.stream_path(frame) <> "/more"},
+            {"POST", Prima.TinctureWire.socket_path(frame)},
+            {"OPTIONS", Prima.TinctureWire.socket_path(frame)},
+            {"GET", Prima.TinctureWire.socket_path(frame) <> "/more"},
             {"GET", Prima.TinctureWire.page_prefix() <> credential},
             {"GET", Prima.TinctureWire.page_path(credential, frame) <> "/more"},
             {"POST", Prima.TinctureWire.page_path(credential, frame)}
