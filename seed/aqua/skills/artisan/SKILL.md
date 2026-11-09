@@ -137,7 +137,7 @@ outside it is refused.
 | `desktop.data[]`, `desktop.feeds[]` | at most 32 each: a stream's name, a feed's name |
 | `desktop.controls[]` | `args`, `id`, `label`, `operation`, `pick`: at most 32; `label` 1 to 32 code points |
 | `desktop.controls[].pick` | `arg`, `field`, `stream`, `subject` |
-| `desktop.prefs` | `desktop`, `widgets`: at most 32 widgets, each section at most 16 `fields` of `boolean`, `integer`, `number`, `string`, `enum`; `string` `max` 1 to 256; `enum` 1 to 64 `values`; never a widget field `on`, `rect` |
+| `desktop.prefs` | `desktop`, `widgets`: at most 32 widgets, each section at most 16 `fields` of `boolean`, `integer`, `string`, `enum`; `string` `max` 1 to 256; `enum` 1 to 64 `values`; never a widget field `on`, `rect` |
 | `desktop.chrome` | a relative path to a `.css` file in the version |
 <!-- /tincture:declaration -->
 

@@ -739,11 +739,13 @@ defmodule Compendium.Tincture.Rules do
   name in `data`, or `#{"feed.results"}` with a feed in `feeds`), a
   `field` that resolves in that stream's shape to a string, a list of
   strings or an enum the shape declares (never a `json` value, beneath
-  which it declares nothing): the choices are the strings the stream
-  publishes there across its current state, which the shell reads again
-  at each press (`Compendium.Desktop.control/4`). And an `arg` the
-  operation takes. A declaration without the desktop block holds nothing
-  here. Publish runs it beside `check_streams/2`.
+  which it declares nothing), or for `#{"feed.results"}` any pointer
+  beneath `/result/`, the feed's own value, admitted by its form: the
+  choices are the strings the stream publishes there across its current
+  state, which the shell reads again at each press
+  (`Compendium.Desktop.control/4`). And an `arg` the operation takes. A
+  declaration without the desktop block holds nothing here. Publish runs
+  it beside `check_streams/2`.
   """
   @spec check_desktop(Tincture.t(), [Prima.Provider.Stream.t()]) :: :ok | {:error, refusal()}
   def check_desktop(%Tincture{desktop: %Tincture.Desktop{} = desktop}, streams)
@@ -806,7 +808,7 @@ defmodule Compendium.Tincture.Rules do
          {:ok, %Prima.Provider.Stream{shape: shape}} <-
            Prima.Provider.fetch_stream(streams, pick.stream),
          {:ok, segments} <- Tincture.pointer_segments(pick.field) |> pointer(where),
-         :ok <- resolves(shape, segments, pick.field, where) do
+         :ok <- picked_field(pick.stream, shape, segments, pick.field, where) do
       if Enum.any?(declared.args, &(&1.name == pick.arg)),
         do: :ok,
         else:
@@ -846,6 +848,26 @@ defmodule Compendium.Tincture.Rules do
 
   defp pointer(:error, where),
     do: refuse("#{where}'s field is no RFC 6901 pointer")
+
+  # A feed's result is the feed's own, a json value whose shape the rules
+  # never see, so a pick from `feed.results` is admitted by its pointer's
+  # form under /result/ and the press checks the value against the feed's
+  # current result. Every other stream's pointer resolves in its shape.
+  defp picked_field(stream, shape, segments, field, where) do
+    cond do
+      stream != Tincture.feed_results() ->
+        resolves(shape, segments, field, where)
+
+      match?(["result", _ | _], segments) ->
+        :ok
+
+      true ->
+        refuse(
+          "#{where}'s field #{field} is outside /result/: a pick from " <>
+            "#{Tincture.feed_results()} reads beneath the feed's result"
+        )
+    end
+  end
 
   # A pointer walks an object's fields, and resolves only where it ends on
   # a string, a list of strings or an enum the shape declares. A `json` node declares
