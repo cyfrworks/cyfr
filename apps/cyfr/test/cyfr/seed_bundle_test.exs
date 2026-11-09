@@ -213,6 +213,59 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert "dist/third-party-notices.json" in built
   end
 
+  test "the line desktop is 0.1.0 on the vanilla template, and the publish check accepts it" do
+    line = SeedBundle.local_unit!("tinctures", "line")
+    assert line.ref == "tincture:local.line"
+    assert line.version == "0.1.0"
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), line.rel)
+
+    assert Prima.Manifest.validate(line.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(line.manifest)
+    assert Prima.Manifest.Tincture.canvas?(declaration)
+    assert Compendium.tincture_entry(line.manifest) == {:ok, "index.html"}
+    refute Compendium.tincture_lockfile_required?(line.manifest)
+
+    # What its widgets read, the feeds it names among them; the page opens
+    # at most five of these at once.
+    assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
+             {"attention.changes", nil},
+             {"runs.changes", nil},
+             {"schedules.changes", nil},
+             {"activity.changes", nil},
+             {"threads.changes", nil},
+             {"vault.changes", nil},
+             {"feed.results", "weather"},
+             {"feed.results", "vpn"}
+           ]
+
+    assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
+    assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+    assert Enum.map(declaration.desktop.controls, & &1.operation) == ~w(schedule.pause schedule.resume)
+
+    # Every widget but the queue keeps where it stands and, per screen
+    # size, whether it is on.
+    assert Map.keys(declaration.desktop.prefs.widgets) |> Enum.sort() ==
+             ~w(apps day queue schedules threads today vault vpn weather)
+
+    # Its chrome: both modes' colours, its own font shipped as WOFF2.
+    assert {:ok, tokens} =
+             Compendium.tincture_check_chrome(declaration, &File.read(Path.join(dir, &1)))
+
+    assert %{"radius" => 10, "title-height" => 40, "controls" => "right", "glyphs" => "plain"} =
+             tokens
+
+    assert [_font] = tokens["fonts"]
+    assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: Path.relative_to(path, dir)
+
+    assert Enum.sort(files) ==
+             ~w(app.js chrome.css cyfr-manifest.json fonts/geist-latin.woff2 index.html style.css)
+  end
+
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"

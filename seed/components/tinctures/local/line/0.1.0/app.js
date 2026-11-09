@@ -366,6 +366,7 @@
       if (outcome === "saved") S.saved = new Date();
       else if (outcome === "stale") S.note = "Another of your screens saved first. Tap again to change this one.";
       else if (outcome === "refused") S.note = `Not saved: ${text(answer.reason) || "refused"}.`;
+      else if (answer && answer.reason === "too_soon") S.note = "Not saved: too soon after your last tap. Tap again in a moment.";
       else S.note = "Not saved. Your desktop saves only on your tap.";
       changed();
     });
@@ -497,7 +498,7 @@
           : `<ul class="rows">${list.slice(0, cap).map((s) => {
             const id = text(s.schedule_id), busy = S.busy[`sch:${id}`], note = S.notes[`sch:${id}`];
             const errors = Number(s.error_count) || 0;
-            const sub = note ? `<span class="note">Refused · ${esc(note)}</span>`
+            const sub = note ? `<span class="note">${esc(note)}</span>`
               : s.status === "paused" ? `Paused · last ${esc(when(s.last_run_at) || "never")} · ${n.format(Number(s.run_count) || 0)} runs`
               : `Next ${esc(when(s.next_run_at) || "not planned")}${errors ? ` · <span class="neg-t">${errors} ${plural(errors, "error", "errors")}</span>` : ""} · ${n.format(Number(s.run_count) || 0)} runs`;
             const control = s.status === "active" ? PAUSE : s.status === "paused" ? RESUME : null;
@@ -763,8 +764,8 @@
     changed();
     sdk.press(control, id).then((answer) => {
       delete S.busy[key];
-      if (answer.outcome === "refused") note(key, text(answer.reason) || "refused");
-      else if (answer.outcome === "cancelled") note(key, "tap again");
+      if (answer.outcome === "refused") note(key, `Refused · ${text(answer.reason) || "refused"}`);
+      else if (answer.outcome === "cancelled") note(key, answer.reason === "too_soon" ? "Not sent · too soon after your last tap" : "Not sent · tap again");
       changed();
     });
   }
