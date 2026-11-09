@@ -354,6 +354,7 @@ defmodule PrismWeb.ShellCanvasTest do
   defp canvas_verb!(view, frame_id, verb, args \\ %{}),
     do:
       render_hook(view, "frame_verb", %{
+        "input" => System.unique_integer([:positive, :monotonic]),
         "frame" => frame_id,
         "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
       })
@@ -660,7 +661,12 @@ defmodule PrismWeb.ShellCanvasTest do
                  home.id,
                  reply["credential"],
                  "live",
-                 [%{"name" => "runs.changes", "subject" => nil}]
+                 [%{"name" => "runs.changes", "subject" => nil}],
+                 %{
+                   "prefs" => %{"document" => Prima.CanvasPrefs.empty(), "revision" => 0},
+                   "appearance" => Prism.Appearance.block(%{}),
+                   "person" => %{"name" => reply["canvas"]["person"]["name"]}
+                 }
                )
 
       assert reply["canvas"]["data_path"] == Prima.TinctureWire.data_path(home.id)
@@ -2354,6 +2360,7 @@ defmodule PrismWeb.ShellCanvasTest do
       home = canvas(view).id
 
       render_hook(view, "frame_verb", %{
+        "input" => System.unique_integer([:positive, :monotonic]),
         "frame" => home,
         "message" => %{
           "v" => 1,
@@ -2394,6 +2401,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # The port's frame and the message's differ.
       render_hook(view, "frame_verb", %{
+        "input" => System.unique_integer([:positive, :monotonic]),
         "frame" => home,
         "message" =>
           Prima.TinctureWire.shell_message(:open, "frm_another_frame", %{
@@ -3921,6 +3929,7 @@ defmodule PrismWeb.ShellCanvasTest do
       side = app_frame(view, "side-dash")
 
       render_hook(view, "frame_verb", %{
+        "input" => System.unique_integer([:positive, :monotonic]),
         "frame" => dash.id,
         "message" => Prima.TinctureWire.shell_message(:close, dash.id)
       })

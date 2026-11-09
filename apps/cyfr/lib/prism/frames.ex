@@ -54,8 +54,10 @@ defmodule Prism.Frames do
       data path and the streams the served version's stored declaration
       names, never anything a frame or a page sends; the version's desktop
       block (`desktop`), whose controls and preferences schema the shell
-      reads; and the asset credential its page is served under (`asset`),
-      which the shell names the chrome's files with.
+      reads; the chrome tokens of the version it serves (`chrome`, as the
+      card holds them, `Prism.TinctureRegistry.chrome/3`); and the asset
+      credential its page is served under (`asset`), which the shell names
+      the chrome's files with.
     * Any other frame takes its `sandbox` and `allow` from the rules for
       the capabilities it declares (`frame_attributes/2`), and a private
       tincture's page is served under an asset credential
@@ -220,6 +222,7 @@ defmodule Prism.Frames do
           actions: [String.t()],
           canvas: canvas() | nil,
           desktop: Prima.Manifest.Tincture.Desktop.t() | nil,
+          chrome: map() | nil,
           asset: String.t() | nil,
           subject: %{String.t() => String.t()} | nil
         }
@@ -1246,6 +1249,7 @@ defmodule Prism.Frames do
       actions: [],
       canvas: nil,
       desktop: nil,
+      chrome: nil,
       asset: nil,
       subject: nil
     }
@@ -1313,6 +1317,7 @@ defmodule Prism.Frames do
               Enum.map(declaration.streams, &%{"name" => &1.name, "subject" => &1.subject})
           },
           desktop: declaration.desktop,
+          chrome: Map.get(card, :chrome),
           asset: asset
       }
     else

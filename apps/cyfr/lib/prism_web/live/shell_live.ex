@@ -760,14 +760,13 @@ defmodule PrismWeb.ShellLive do
       else: socket |> assign(:chrome, chrome) |> push_event("chrome", %{chrome: chrome})
   end
 
-  defp worn_chrome(%{assigns: %{frames: frames, fallbacks: fallbacks}} = socket) do
+  defp worn_chrome(%{assigns: %{frames: frames, fallbacks: fallbacks}}) do
     with canvas_id when is_binary(canvas_id) <- Frames.visible_canvas(frames),
          false <- Map.has_key?(fallbacks, canvas_id),
-         %{state: state, asset: asset, tincture_id: id}
+         %{state: state, asset: asset, chrome: %{} = tokens, reference: version}
          when state != :refused and is_binary(asset) <-
-           Frames.get(frames, {:canvas, canvas_id}),
-         %{chrome: %{} = tokens} = card <- Enum.find(cards(socket), &(&1.id == id)) do
-      Prism.Appearance.chrome(tokens, &Frames.asset_path(asset, card, String.split(&1, "/")))
+           Frames.get(frames, {:canvas, canvas_id}) do
+      Prism.Appearance.chrome(tokens, &Frames.asset_path(asset, version, String.split(&1, "/")))
     else
       _default -> nil
     end
@@ -2020,11 +2019,25 @@ defmodule PrismWeb.ShellLive do
 
     with {:ok, %{"manifest" => stored}} <- Compendium.inspect_component(ctx, ref),
          {:ok, manifest} <- Prima.Manifest.decode_strict(stored) do
-      {:ok, %{card | version: version, manifest: manifest}}
+      {:ok, %{card | version: version, manifest: manifest} |> version_chrome(ctx, version)}
     else
       _unreadable -> :error
     end
   end
+
+  # A card at another version wears that version's chrome, read from its
+  # own files.
+  defp version_chrome(%{segments: [_ | _] = segments} = card, ctx, version) do
+    segments = List.replace_at(segments, -1, version)
+
+    %{
+      card
+      | segments: segments,
+        chrome: Prism.TinctureRegistry.chrome(ctx, card.manifest, segments)
+    }
+  end
+
+  defp version_chrome(card, _ctx, _version), do: Map.put(card, :chrome, nil)
 
   # The fallback's shipped canvas, on this glass alone: the newest version
   # the install media ships, opened live with no validation and no write.
@@ -2534,6 +2547,8 @@ defmodule PrismWeb.ShellLive do
       icon_emoji: emoji_from_hint(t.icon),
       entry: t.entry,
       manifest: t.manifest,
+      chrome: Map.get(t, :chrome),
+      segments: Map.get(t, :segments),
       public: visibility(ctx, ref)
     }
 

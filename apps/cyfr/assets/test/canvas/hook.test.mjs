@@ -54,6 +54,13 @@ function frameElement(id, state = "live", dataset = {}) {
 function canvasFrame(id, box = {x: 0, y: 0, width: 1024, height: 768}, state = "live") {
   const el = frameElement(id, state, {frameKind: "canvas"})
   el.getBoundingClientRect = () => box
+  // Focus leaving the frame, as the browser moves it when the bridge
+  // takes it off the frame.
+  el.blur = () => {
+    const doc = globalThis.window && globalThis.window.document
+    if (doc && doc.activeElement === el) doc.activeElement = null
+    el.dispatchEvent(new Event("blur"))
+  }
   el.wrapper = {dataset: {canvasShown: "true"}, inert: false}
   el.closest = (selector) => {
     if (selector === "[data-canvas-shown]") return el.wrapper
@@ -333,6 +340,24 @@ describe("what a canvas frame is told", () => {
     assert.deepEqual(seen, [{verb: "installed", args: {tinctures}}])
     assert.deepEqual(elsewhere, [])
   })
+
+  test("the shell's answers reach only the canvas frame they name, and only answers", () => {
+    const frame = canvasFrame(FRAME)
+    const app = frameElement(OTHER)
+    const seen = told(frame)
+    const elsewhere = told(app)
+    const {handlers} = mountCanvas(canvasElement({frames: [frame, app]}))
+    const args = {control: "pause-digest", outcome: "accepted"}
+
+    seen.splice(0)
+    handlers.canvas_answer({frame: FRAME, verb: "pressed", args})
+    handlers.canvas_answer({frame: OTHER, verb: "pressed", args})
+    handlers.canvas_answer({frame: FRAME, verb: "installed", args: {tinctures: []}})
+    handlers.canvas_answer(null)
+
+    assert.deepEqual(seen, [{verb: "pressed", args}])
+    assert.deepEqual(elsewhere, [])
+  })
 })
 
 describe("switching canvases", () => {
@@ -526,6 +551,20 @@ describe("a canvas frame's bridge", () => {
   }
   const focus = (element) => (globalThis.window.document.activeElement = element)
 
+  // An input of the person's in the frame, as the shell's page sees one:
+  // the pointer over it, the page holding activation, and focus moving
+  // into it.
+  function input(el) {
+    activation("active")
+    el.dispatchEvent(new Event("pointerenter"))
+    focus(el)
+    el.dispatchEvent(new Event("focus"))
+  }
+
+  // An input the shell's own page hears: a press in its chrome, or a key.
+  const chromePress = () => listeners.pointerdown({type: "pointerdown"})
+  const chromeKey = (key) => listeners.keydown({type: "keydown", key})
+
   const stateEvent = (state) => new CustomEvent(FRAME_STATE_EVENT, {detail: {state}})
 
   // The frame live and shown with the socket up, then put in `standing`:
@@ -622,7 +661,7 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
-  test("an open, a press or a grant reaches the view only under the shell's activation with the frame focused, live and shown", async () => {
+  test("a person's verb reaches the view only for an input of the person's in the frame, live and shown", async () => {
     const bridge = connect()
     const port = bridge.load()
     const other = {id: "another element"}
@@ -634,20 +673,25 @@ describe("a canvas frame's bridge", () => {
 
     try {
       for (const state of ["active", "inactive", "absent"]) {
-        for (const focused of ["frame", "other"]) {
+        for (const given of ["input", "focus only"]) {
           for (const standing of ["live", "hidden", "disconnected"]) {
             for (const message of asks) {
-              activation(state)
-              focus(focused === "frame" ? bridge.el : other)
               stand(bridge.el, standing)
+              if (given === "input") input(bridge.el)
+              else {
+                focus(other)
+                bridge.el.dispatchEvent(new Event("blur"))
+                focus(bridge.el)
+              }
+              activation(state)
               const before = forwarded(bridge.events).length
               await send(bridge, port, message)
 
-              const expected = state === "active" && focused === "frame" && standing === "live" ? 1 : 0
+              const expected = state === "active" && given === "input" && standing === "live" ? 1 : 0
               assert.equal(
                 forwarded(bridge.events).length - before,
                 expected,
-                `${message.verb}: activation ${state}, ${focused} focused, ${standing}`
+                `${message.verb}: activation ${state}, ${given}, ${standing}`
               )
             }
           }
@@ -655,36 +699,142 @@ describe("a canvas frame's bridge", () => {
       }
       // The one combination that forwards, for each verb, and nothing else.
       assert.deepEqual(forwarded(bridge.events), asks)
-      // Those two conditions are the whole check: the bridge tracks no
-      // input of its own, on the shell's document or its window.
+      // Each carries the ordinal of the input it came with, rising.
+      const inputs = bridge.events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.input)
+      assert.ok(inputs.every((n, i) => Number.isInteger(n) && (i === 0 || n > inputs[i - 1])), inputs.join())
+      // The bridge hears the shell page's own input on its window, never a
+      // message there, and nothing on its document.
       assert.deepEqual(documentListeners, [])
-      assert.deepEqual(Object.keys(listeners), [])
+      assert.deepEqual(Object.keys(listeners).sort(), ["blur", "focusin", "keydown", "pointerdown"])
     } finally {
       bridge.close()
       port.close()
     }
   })
 
-  test("inside one activation every open, press and grant is forwarded, and none once it has passed", async () => {
+  test("one input carries one verb: a second inside the same activation is dropped and counted, a new input carries the next", async () => {
     const bridge = connect()
     const port = bridge.load()
-    const asks = [
-      {v: 1, verb: "press", frame: CANVAS, args: PRESS},
-      {v: 1, verb: "grant", frame: CANVAS, args: GRANT},
-      {v: 1, verb: "open", frame: CANVAS, args: OPEN},
-      {v: 1, verb: "grant", frame: CANVAS, args: {ref: "catalyst:local.claude"}},
-      {v: 1, verb: "press", frame: CANVAS, args: {...PRESS, action: "buy"}}
-    ]
+    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
+    const grant = {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
+
+    try {
+      input(bridge.el)
+      await send(bridge, port, press)
+      // Still inside the activation, focus back on the frame: no new input.
+      focus(bridge.el)
+      await send(bridge, port, grant)
+      assert.deepEqual(forwarded(bridge.events), [press])
+      assert.equal(bridge.hook.dropped, 1)
+
+      input(bridge.el)
+      await send(bridge, port, grant)
+      assert.deepEqual(forwarded(bridge.events), [press, grant])
+    } finally {
+      bridge.close()
+      port.close()
+    }
+  })
+
+  test("a press in the chrome followed by the frame focusing itself passes nothing; a chrome input or focus leaving spends an input", async () => {
+    const bridge = connect()
+    const port = bridge.load()
+    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
+
+    try {
+      // The person presses the chrome: the page holds activation, the
+      // pointer is not over the frame, and the frame takes focus itself.
+      activation("active")
+      chromePress()
+      focus(bridge.el)
+      bridge.el.dispatchEvent(new Event("focus"))
+      await send(bridge, port, press)
+
+      // An input in the frame, then one in the chrome before the verb.
+      input(bridge.el)
+      chromePress()
+      focus(bridge.el)
+      await send(bridge, port, press)
+
+      // An input in the frame, then focus leaving it.
+      input(bridge.el)
+      bridge.el.blur()
+      focus(bridge.el)
+      await send(bridge, port, press)
+
+      assert.deepEqual(forwarded(bridge.events), [])
+      assert.equal(bridge.hook.dropped, 3)
+
+      // The positive control.
+      input(bridge.el)
+      await send(bridge, port, press)
+      assert.deepEqual(forwarded(bridge.events), [press])
+    } finally {
+      bridge.close()
+      port.close()
+    }
+  })
+
+  test("the person moving focus into the frame with Tab is an input of theirs; a Tab that lands elsewhere is not", async () => {
+    const bridge = connect()
+    const port = bridge.load()
+    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
 
     try {
       activation("active")
+      bridge.el.dispatchEvent(new Event("pointerleave"))
+      chromeKey("Tab")
+      listeners.focusin({target: {id: "a shelf button"}})
       focus(bridge.el)
-      for (const message of asks) await send(bridge, port, message)
-      assert.deepEqual(forwarded(bridge.events), asks)
+      bridge.el.dispatchEvent(new Event("focus"))
+      await send(bridge, port, press)
+      assert.deepEqual(forwarded(bridge.events), [])
 
+      chromeKey("Tab")
+      focus(bridge.el)
+      listeners.focusin({target: bridge.el})
+      await send(bridge, port, press)
+      assert.deepEqual(forwarded(bridge.events), [press])
+    } finally {
+      bridge.close()
+      port.close()
+    }
+  })
+
+  test("a press of a control or a write dropped for want of input is told it did not run; the shell's answers are posted once", async () => {
+    const bridge = connect()
+    const {el} = bridge
+    const tell = (verb, args) => el.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
+    const pressed = {control: "pause-digest", outcome: "accepted"}
+
+    // An answer before the handshake is held for nothing.
+    tell("pressed", pressed)
+    const port = bridge.load()
+
+    try {
+      await eventually(() => bridge.heard.length === 3)
       activation("inactive")
-      await send(bridge, port, asks[0])
-      assert.equal(forwarded(bridge.events).length, asks.length)
+      await send(bridge, port, {v: 1, verb: "press", frame: CANVAS, args: {control: "pause-digest", value: "sch_1"}})
+      await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {widgets: {}}}})
+      await eventually(() => bridge.heard.length === 5)
+      assert.deepEqual(bridge.heard.slice(3), [
+        {v: 1, verb: "pressed", frame: CANVAS, args: {control: "pause-digest", outcome: "cancelled"}},
+        {v: 1, verb: "prefs", frame: CANVAS, args: {outcome: "cancelled", ...LIVE.canvas.prefs}}
+      ])
+
+      // The shell's answer, once; a write's answer moves what the bridge
+      // holds for the next one it answers itself.
+      tell("pressed", pressed)
+      const saved = {outcome: "saved", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 9}
+      tell("prefs", saved)
+      await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {}}})
+      await eventually(() => bridge.heard.length === 8)
+      assert.deepEqual(bridge.heard.slice(5), [
+        {v: 1, verb: "pressed", frame: CANVAS, args: pressed},
+        {v: 1, verb: "prefs", frame: CANVAS, args: saved},
+        {v: 1, verb: "prefs", frame: CANVAS, args: {...saved, outcome: "cancelled"}}
+      ])
+      assert.ok(bridge.heard.every((message) => message.type === CREDENTIAL || decodeToFrame(message).ok))
     } finally {
       bridge.close()
       port.close()
@@ -698,20 +848,24 @@ describe("a canvas frame's bridge", () => {
     const grant = {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
 
     try {
-      activation("active")
-      focus(bridge.el)
       bridge.el.wrapper.inert = true
+      input(bridge.el)
       await send(bridge, port, press)
+      input(bridge.el)
       await send(bridge, port, grant)
       bridge.el.wrapper.inert = false
       bridge.el.wrapper.dataset.canvasShown = "false"
+      input(bridge.el)
       await send(bridge, port, press)
+      input(bridge.el)
       await send(bridge, port, grant)
       assert.equal(forwarded(bridge.events).length, 0)
 
       // The positive control: shown and not inert, the same press and grant pass.
       bridge.el.wrapper.dataset.canvasShown = "true"
+      input(bridge.el)
       await send(bridge, port, press)
+      input(bridge.el)
       await send(bridge, port, grant)
       assert.deepEqual(forwarded(bridge.events), [press, grant])
     } finally {
@@ -856,8 +1010,7 @@ describe("a canvas frame's bridge", () => {
     const {handlers} = mountCanvas(canvasElement({frames: [bridge.el]}))
     bridge.el.dispatchEvent(new Event("load"))
     const pressed = () => {
-      activation("active")
-      focus(bridge.el)
+      input(bridge.el)
       api.press(PRESS.binding, PRESS.action)
     }
 

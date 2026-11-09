@@ -505,6 +505,7 @@ defmodule PrismWeb.CanvasLiveTest do
     assert {:ok, _} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
 
     render_hook(view, "frame_verb", %{
+      "input" => System.unique_integer([:positive, :monotonic]),
       "frame" => canvas.id,
       "message" =>
         Prima.TinctureWire.shell_message(:open, canvas.id, %{"ref" => "tincture:local.icon-dash"})

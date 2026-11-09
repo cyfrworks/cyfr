@@ -742,4 +742,40 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} =
              live_isolated(stale, PrismWeb.AquaPanelLive, session: %{"ui_mode" => "dev"})
   end
+
+  describe "an ask from the desktop" do
+    test "opens the panel with Prism's sentence after the person's draft, attaching and sending nothing",
+         %{conn: conn, me: me, mine: mine} do
+      {:ok, shell, _} = live(conn, "/a/#{route(mine)}/canvas")
+      topic = :sys.get_state(shell.pid).socket.assigns.aqua_ask
+      panel = child!(shell, "aqua-panel")
+      refute has_element?(panel, "#aqua-panel-sheet")
+
+      :ok = Cyfr.Bus.broadcast_page(topic, Cyfr.Bus.AquaAsk.new("About the runs widget: "))
+      pane = child!(panel, "aqua-panel-pane")
+
+      wait_until(
+        fn -> :sys.get_state(pane.pid).socket.assigns.input == "About the runs widget: " end,
+        2_000
+      )
+
+      assert has_element?(panel, "#aqua-panel-sheet")
+
+      # A draft the person has is kept, the next sentence after it.
+      pane |> element("textarea[name=message]") |> render_change(%{"message" => "my own words"})
+      :ok = Cyfr.Bus.broadcast_page(topic, Cyfr.Bus.AquaAsk.new("About the apps widget: "))
+
+      wait_until(
+        fn ->
+          :sys.get_state(pane.pid).socket.assigns.input ==
+            "my own words\n\nAbout the apps widget: "
+        end,
+        2_000
+      )
+
+      # Nothing was sent: no thread of You was made, and nothing is attached.
+      assert Threads.list(Sanctum.Context.actor(me)) == []
+      assert :sys.get_state(pane.pid).socket.assigns.uploads.attachments.entries == []
+    end
+  end
 end

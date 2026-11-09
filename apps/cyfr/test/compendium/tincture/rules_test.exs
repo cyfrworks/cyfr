@@ -1138,7 +1138,7 @@ defmodule Compendium.Tincture.RulesTest do
                {:error,
                 {:invalid_tincture,
                  "tincture.desktop.controls c1: the pick's field /result/servers reaches a json " <>
-                   "value in the stream's shape, which declares no list of strings or enum: a " <>
+                   "value in the stream's shape, which declares no string, list of strings or enum: a " <>
                    "pick takes one the shape declares"}}
 
       manifest = %{

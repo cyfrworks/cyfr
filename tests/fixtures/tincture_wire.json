@@ -3701,6 +3701,68 @@
         {
           "message": {
             "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "validation",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ],
+              "prefs": {
+                "document": {
+                  "widgets": {
+                    "runs": {
+                      "on": true,
+                      "rect": {
+                        "x": 0,
+                        "y": 0,
+                        "w": 5000,
+                        "h": 4000
+                      }
+                    },
+                    "apps": {
+                      "on": false
+                    }
+                  },
+                  "desktop": {
+                    "compact": false
+                  }
+                },
+                "revision": 3
+              },
+              "appearance": {
+                "mode": "light",
+                "accent": "#0a0b0c",
+                "locale": "pt",
+                "time_zone": "UTC",
+                "safe_areas": {
+                  "top": 47,
+                  "right": 0,
+                  "bottom": 34,
+                  "left": 512
+                }
+              },
+              "person": {
+                "name": null
+              }
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
             "verb": "posture",
             "frame": "frm_8f3c2a1b9d",
             "args": {

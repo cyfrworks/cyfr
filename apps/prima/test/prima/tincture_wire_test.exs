@@ -309,8 +309,8 @@ defmodule Prima.TinctureWireTest do
     end
   end
 
-  test "a press, a failure and a grant are the verbs the shell takes from a canvas alone" do
-    assert TinctureWire.canvas_verbs() == [:press, :failed, :grant]
+  test "a press, a failure, a grant, prefs, ask and settings are the verbs the shell takes from a canvas alone" do
+    assert TinctureWire.canvas_verbs() == [:press, :failed, :grant, :prefs, :ask, :settings]
 
     assert Enum.map(TinctureWire.canvas_verbs(), &Atom.to_string/1) ==
              vectors()["canvas"]["verbs"]
@@ -394,6 +394,98 @@ defmodule Prima.TinctureWireTest do
     assert {:error, _} = TinctureWire.decode_shell_message(%{message | "verb" => "focus"})
   end
 
+  describe "a desktop's verbs and answers" do
+    test "a press names a control, with a value when it picks one, beside its feed form" do
+      frame = "frm_01a09fee2e4f"
+      decode = &TinctureWire.decode_shell_message(TinctureWire.shell_message(:press, frame, &1))
+
+      assert {:ok, %{args: %{"control" => "pause-digest"}}} =
+               decode.(%{"control" => "pause-digest"})
+
+      assert {:ok, %{args: %{"value" => "lisbon-1"}}} =
+               decode.(%{"control" => "vpn-connect", "value" => "lisbon-1"})
+
+      max = TinctureWire.max_press_value()
+      assert {:ok, _} = decode.(%{"control" => "c", "value" => String.duplicate("é", max)})
+
+      assert {:error, _} =
+               decode.(%{"control" => "c", "value" => String.duplicate("é", max + 1)})
+
+      assert {:error, _} = decode.(%{"control" => "c", "value" => "a\u0000b"})
+      assert {:error, _} = decode.(%{"control" => "c", "extra" => "x"})
+    end
+
+    test "prefs, ask and settings are a canvas's alone, and open may carry a typed subject" do
+      assert Enum.all?([:prefs, :ask, :settings], &(&1 in TinctureWire.canvas_verbs()))
+
+      for kind <- Prima.Manifest.Tincture.subject_kinds() do
+        assert TinctureWire.subject?(%{"kind" => kind, "id" => "id_1"})
+      end
+
+      refute TinctureWire.subject?(%{"kind" => "url", "id" => "id_1"})
+      refute TinctureWire.subject?(%{"kind" => "run", "id" => "../x"})
+      refute TinctureWire.subject?(%{"kind" => "run", "id" => "a", "label" => "b"})
+    end
+
+    test "an app's handshake is its credential and the subject it was opened on, each as the fixture spells it" do
+      %{"valid" => valid, "invalid" => invalid} = vectors()["app_handshake"]
+
+      for %{"reply" => reply} <- valid,
+          do: assert(TinctureWire.frame_handshake(reply["credential"], reply["subject"]) == reply)
+
+      for %{"why" => why, "reply" => reply} <- invalid do
+        built =
+          try do
+            TinctureWire.frame_handshake(reply["credential"], reply["subject"])
+          rescue
+            ArgumentError -> :raised
+          end
+
+        refute built == reply, why
+      end
+    end
+
+    test "every answer the fixture posts a canvas is the one the builders write, and refused ones raise" do
+      rows = vectors()["canvas"]["to_frame"]
+
+      for %{"message" => %{"verb" => "pressed", "args" => args}} <- rows["valid"] do
+        assert TinctureWire.pressed(args["control"], args["outcome"], args["reason"]) == args
+      end
+
+      for %{"message" => %{"verb" => "prefs", "args" => args}} <- rows["valid"] do
+        assert TinctureWire.prefs_answer(
+                 args["outcome"],
+                 args["document"],
+                 args["revision"],
+                 args["reason"]
+               ) == args
+      end
+
+      for %{"why" => why, "message" => %{"verb" => verb, "args" => args}} <- rows["invalid"],
+          verb in ["pressed", "prefs"] do
+        built =
+          try do
+            if verb == "pressed",
+              do: TinctureWire.pressed(args["control"], args["outcome"], args["reason"]),
+              else:
+                TinctureWire.prefs_answer(
+                  args["outcome"],
+                  args["document"],
+                  args["revision"],
+                  args["reason"]
+                )
+          rescue
+            ArgumentError -> :raised
+          end
+
+        refute built == args, why
+      end
+
+      assert TinctureWire.press_outcomes() == ~w(accepted refused cancelled)
+      assert TinctureWire.prefs_outcomes() == ~w(saved stale refused cancelled)
+    end
+  end
+
   describe "a canvas" do
     test "every valid handshake reply is the one the builder writes for its frame" do
       valid = vectors()["canvas"]["handshake"]["valid"]
@@ -406,7 +498,8 @@ defmodule Prima.TinctureWireTest do
                  frame,
                  credential,
                  canvas["mode"],
-                 canvas["streams"]
+                 canvas["streams"],
+                 Map.take(canvas, ~w(prefs appearance person))
                ) == reply
 
         assert canvas["mode"] in TinctureWire.canvas_modes()
@@ -430,7 +523,8 @@ defmodule Prima.TinctureWireTest do
               frame,
               reply["credential"],
               canvas["mode"],
-              canvas["streams"]
+              canvas["streams"],
+              Map.take(canvas || %{}, ~w(prefs appearance person))
             )
           rescue
             e in ArgumentError ->

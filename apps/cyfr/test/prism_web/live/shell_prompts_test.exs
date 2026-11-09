@@ -260,6 +260,7 @@ defmodule PrismWeb.ShellPromptsTest do
         ref = "tincture:local.#{name}"
 
         render_hook(view, "frame_verb", %{
+          "input" => System.unique_integer([:positive, :monotonic]),
           "frame" => canvas.id,
           "message" => Prima.TinctureWire.shell_message(:open, canvas.id, %{"ref" => ref})
         })
@@ -272,6 +273,7 @@ defmodule PrismWeb.ShellPromptsTest do
   defp verb!(view, frame_id, verb, args),
     do:
       render_hook(view, "frame_verb", %{
+        "input" => System.unique_integer([:positive, :monotonic]),
         "frame" => frame_id,
         "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
       })

@@ -2050,8 +2050,12 @@ defmodule Cyfr.Boundaries do
       fresh?: 1,
       revalidate_session: 1
     ],
+    # `authorize_stream/2`: a desktop's control with a pick reads the
+    # picked stream's current state at the press, admitted as the
+    # stream's open would be (`Compendium.Desktop`).
     "Sanctum.Catalog" => [
       action_declaration: 1,
+      authorize_stream: 2,
       auto_permitted?: 2,
       chain_reachable?: 2,
       configured_providers: 0,
