@@ -1,0 +1,54 @@
+{
+  "name": "night",
+  "type": "tincture",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "A street at night where only what waits on you burns: an approval lights its thread's plaque, a failed run its row on the board, a file offered to you its locker and an app that needs your grant its awning, and answering one switches its light off. The board shows your schedules, paused or resumed with a tap, and your latest runs; the crew's work, your apps, your vault and your feeds stand along the street; a breaker box turns each part off or on and moves it along the street.",
+  "tags": ["canvas", "desktop"],
+  "category": "utility",
+  "tincture": {
+    "icon": "canvas",
+    "tagline": "Only what waits on you burns",
+    "entry": "index.html",
+    "desktop": {
+      "data": [
+        "attention.changes",
+        "threads.changes",
+        "runs.changes",
+        "schedules.changes",
+        "activity.changes",
+        "components.changes",
+        "vault.changes"
+      ],
+      "feeds": ["weather", "vpn"],
+      "controls": [
+        {
+          "id": "pause-schedule",
+          "label": "Pause",
+          "operation": "schedule.pause",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {
+          "id": "resume-schedule",
+          "label": "Resume",
+          "operation": "schedule.resume",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        }
+      ],
+      "prefs": {
+        "widgets": {
+          "threads": {"fields": {"place": {"type": "integer"}}},
+          "board": {"fields": {"place": {"type": "integer"}}},
+          "weather": {"fields": {"place": {"type": "integer"}}},
+          "crew": {"fields": {"place": {"type": "integer"}}},
+          "vpn": {"fields": {"place": {"type": "integer"}}},
+          "vault": {"fields": {"place": {"type": "integer"}}},
+          "cyfr": {"fields": {"place": {"type": "integer"}}},
+          "apps": {"fields": {"place": {"type": "integer"}}},
+          "files": {"fields": {"place": {"type": "integer"}}}
+        }
+      },
+      "chrome": "chrome.css"
+    }
+  }
+}
