@@ -1849,11 +1849,14 @@ defmodule Cyfr.DocsDriftTest do
     stream_open: {"stream", "name, subject, onEvent"}
   }
   @sdk_verb_args %{
-    open: "ref",
+    open: "ref, subject",
     title: "title",
     credential: "name",
-    press: "binding, action",
-    grant: "ref"
+    press: "control, value",
+    grant: "ref",
+    prefs: "document",
+    ask: "widget",
+    settings: "page"
   }
 
   defp tincture_list("served-types") do

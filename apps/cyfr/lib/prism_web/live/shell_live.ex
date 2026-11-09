@@ -78,12 +78,33 @@ defmodule PrismWeb.ShellLive do
   `posture`, `covered` and `state` come from the glass. From the live,
   visible canvas, `ready` keeps it standing, `failed` before `ready`
   falls it back (below), `open` is the person's open of a listed
-  tincture (`app_open` below), `press` presses a feed's action through
-  `feed.press` once the served version's declaration reads that feed, and
+  tincture (`app_open` below), on a subject of a kind the app declares
+  when it names one, which the app is handed at its handshake; `press`
+  of a binding presses a feed's action through `feed.press` once the
+  served version's declaration reads that feed, and `press` of a control
+  runs the call the component domain reads it as
+  (`Compendium.desktop_control/4`) through the gate as the person;
   `grant` offers the person's grant to an installed component through the
   system layer's generic grant path, unless an offer for it is open or it
-  is granted with nothing its grant needs missing; its outcome opens no
-  frame.
+  is granted with nothing its grant needs missing, and its outcome opens
+  no frame; `prefs` writes the person's preferences for the canvas over
+  the revision this view handed the frame or last answered it
+  (`Compendium.put_desktop_prefs/5`); `ask` opens AQUA's panel beside the
+  page with Prism's own sentence naming a widget the version declares
+  (`Cyfr.Bus.AquaAsk`); and `settings` opens one of the Dashboard's pages
+  for the person's mode (`PrismWeb.Nav`). A control's press and a write
+  are answered over the frame's port (`canvas_answer`) with their typed
+  outcome, `cancelled` when this view did not act on them. Each of those
+  verbs carries the ordinal of the person's input its bridge forwarded it
+  with, and one input is honoured once.
+
+  A canvas frame's handshake carries the person's preferences for that
+  canvas, reduced to the version's schema, with their revision; the
+  screen's appearance (`Prism.Appearance.block/1`, from what the browser
+  reported at connect); and the person's display name. While a canvas
+  with a chrome declaration is the visible canvas and has not fallen
+  back, the view has the canvas hook wear its tokens (`chrome`), and
+  Prism's default otherwise.
   `ready` and `failed` report how a canvas's page loaded and runs, so they
   count from a hidden canvas too, frozen or not the one shown: its `ready`
   makes it ready, and its `failed` before that marks it died, which falls

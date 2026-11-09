@@ -3737,7 +3737,7 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       dash = app_frame(view, "app-dash")
       render_hook(view, "frame_handshake", %{"frame" => dash.id})
-      assert_reply(view, %{credential: bearer})
+      assert_reply(view, %{"credential" => bearer})
 
       for {event, params} <- [
             {"frame_move", %{"geometry" => @moved}},

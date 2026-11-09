@@ -82,7 +82,7 @@ Every library is bundled; nothing is imported from a remote URL.
 | `cyfr.action(name, args)` | `POST /_f/v1/action` |
 | `cyfr.invoke(ref, operation, args)` | `POST /_f/v1/invoke` |
 | `cyfr.stream(name, subject, onEvent)` | `POST /_f/v1/stream` |
-| `cyfr.open(ref)` | the shell's port, `open` |
+| `cyfr.open(ref, subject)` | the shell's port, `open` |
 | `cyfr.close()` | the shell's port, `close` |
 | `cyfr.title(title)` | the shell's port, `title` |
 | `cyfr.ready()` | the shell's port, `ready` |
@@ -94,8 +94,11 @@ A canvas's own calls, and what `installed` tells it of each tincture:
 <!-- tincture:canvas -->
 | Call | Carried by |
 |---|---|
-| `cyfr.press(binding, action)` | the shell's port, `press` |
+| `cyfr.press(control, value)` | the shell's port, `press` |
 | `cyfr.grant(ref)` | the shell's port, `grant` |
+| `cyfr.prefs(document)` | the shell's port, `prefs` |
+| `cyfr.ask(widget)` | the shell's port, `ask` |
+| `cyfr.settings(page)` | the shell's port, `settings` |
 | `cyfr.on("installed", handler)` | the shell's port, `installed`: each tincture's `icon`, `name`, `open`, `ref` |
 <!-- /tincture:canvas -->
 

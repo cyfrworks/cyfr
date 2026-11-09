@@ -188,7 +188,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
   defp bearer!(view, frame_id) do
     render_hook(view, "frame_handshake", %{"frame" => frame_id})
-    assert_reply(view, %{credential: bearer})
+    assert_reply(view, %{"credential" => bearer})
     bearer
   end
 

@@ -87,8 +87,10 @@ defmodule PrismWeb.CanvasLive do
   The hook sits on an empty element of its own, `#<id>-hook`, after the
   frames, which carries `data-posture`; it reads the layer as that
   element's parent, and its pushes go from that element. It relays the
-  shell's `frame_state`, `frame_credential` and `canvas_installed` pushes
-  to each frame's bridge and sends each canvas frame its posture and the
+  shell's `frame_state`, `frame_credential`, `canvas_installed` and
+  `canvas_answer` pushes to each frame's bridge, wears the visible
+  desktop's chrome the shell pushes (`chrome`) on the page's root, and
+  sends each canvas frame its posture and the
   rectangles of the windows over it (a tile narrows the canvas's frame
   instead of covering it, and a full app's cover is the frozen state). A
   canvas or validation frame carries `data-frame-kind="canvas"`, so its
