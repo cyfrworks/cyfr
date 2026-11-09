@@ -518,8 +518,17 @@ defmodule Prima.SanitizerTest do
       end
     end
 
+    # The key is fixed: a drawn one can spell a word the key-name layer
+    # reads (`nJwtBO` holds `jwt`), which redacts the value under it.
     test "a key is never rewritten, so no two keys collapse into one" do
-      [{_kind, credential} | _] = credentials()
+      credential =
+        CredentialShape.signed_token_header() <>
+          "." <>
+          String.duplicate("A", 48) <>
+          "." <> String.duplicate("B", CredentialShape.signed_token_signature_length())
+
+      assert CredentialShape.match?(:signed_token, credential)
+      refute Sanitizer.sensitive_key?(credential)
 
       assert Sanitizer.sanitize(%{credential => "value", "other" => credential}) ==
                %{credential => "value", "other" => "[REDACTED]"}

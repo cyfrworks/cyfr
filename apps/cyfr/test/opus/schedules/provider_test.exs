@@ -191,14 +191,15 @@ defmodule Opus.Schedules.ProviderTest do
         "reference" => "reagent:local.test:1.0.0"
       }
 
-      assert {:error, msg} = Provider.handle("schedule", ctx, args)
-      assert msg =~ "Invalid cron"
+      assert {:error, {:invalid_argument, "Invalid cron" <> _}} =
+               Provider.handle("schedule", ctx, args)
     end
 
     test "rejects missing required fields", %{ctx: ctx} do
       args = %{"action" => "create", "name" => "no-ref"}
-      assert {:error, msg} = Provider.handle("schedule", ctx, args)
-      assert msg =~ "Missing required"
+
+      assert {:error, {:invalid_argument, "Missing required" <> _}} =
+               Provider.handle("schedule", ctx, args)
     end
 
     test "refuses at the configured ceiling, naming it", %{ctx: ctx} do
@@ -239,7 +240,7 @@ defmodule Opus.Schedules.ProviderTest do
       Cyfr.Test.Settings.expire("max_schedules_per_athanor")
       Cyfr.Test.Settings.break_store!()
 
-      assert {:error, "Storage unavailable — try again shortly"} =
+      assert {:error, {:unavailable, "Storage"}} =
                Provider.handle("schedule", ctx, schedule_args("unanswered"))
     end
   end
@@ -819,13 +820,11 @@ defmodule Opus.Schedules.ProviderTest do
 
   describe "re-resolve action" do
     test "re-resolve returns error for nonexistent schedule", %{ctx: ctx} do
-      assert {:error, msg} =
+      assert {:error, {:not_found, "Schedule", "nonexistent"}} =
                Provider.handle("schedule", ctx, %{
                  "action" => "re_resolve",
                  "schedule_id" => "nonexistent"
                })
-
-      assert msg =~ "Schedule not found"
     end
 
     test "re-resolve returns error when reference cannot be resolved", %{ctx: ctx} do
@@ -882,6 +881,22 @@ defmodule Opus.Schedules.ProviderTest do
     end
   end
 
+  describe "a schedule that does not exist" do
+    test "get and pause answer a not_found refusal naming it", %{ctx: ctx} do
+      for action <- ~w(get pause) do
+        assert {:error, reason} =
+                 Provider.handle("schedule", ctx, %{
+                   "action" => action,
+                   "schedule_id" => "sch_gone"
+                 })
+
+        assert %Prima.Refusal{class: :not_found, message: "Schedule not found: sch_gone"} =
+                 Prima.Refusal.classify(reason),
+               action
+      end
+    end
+  end
+
   describe "invalid actions" do
     test "the declaration refuses an unknown or missing action" do
       assert {:error, {:unknown_action, "schedule.nope"}} = cast(%{"action" => "nope"})
@@ -907,11 +922,9 @@ defmodule Opus.Schedules.ProviderTest do
       assert schedules == []
 
       for action <- ~w(get update pause resume delete re_resolve), id <- [feed.id, "btc"] do
-        assert {:error, message} =
+        assert {:error, {:not_found, "Schedule", ^id}} =
                  Provider.handle("schedule", ctx, %{"action" => action, "schedule_id" => id}),
                "#{action} #{id} reached a feed"
-
-        assert message =~ "Schedule not found"
       end
 
       # Nothing the tool was asked touched the feed.

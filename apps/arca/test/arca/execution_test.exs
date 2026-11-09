@@ -309,6 +309,25 @@ defmodule Arca.ExecutionTest do
       assert Ecto.Changeset.get_field(changeset, :error_message) == "Component crashed"
     end
 
+    test "keeps a failed error's refusal class, one of the refusal table's alone" do
+      execution = %Row{id: "exec_test123", status: "running"}
+      attrs = %{completed_at: DateTime.utc_now(), duration_ms: 5, status: "failed"}
+
+      for class <- Prima.Refusal.classes() do
+        changeset =
+          Row.complete_changeset(
+            execution,
+            Map.merge(attrs, %{error_message: "x", error_class: Atom.to_string(class)})
+          )
+
+        assert changeset.valid?, "#{class}"
+      end
+
+      changeset = Row.complete_changeset(execution, Map.put(attrs, :error_class, "bogus"))
+      refute changeset.valid?
+      assert {:error_class, _} = hd(changeset.errors)
+    end
+
     test "validates status for completion" do
       execution = %Row{id: "exec_test123", status: "running"}
 
@@ -792,6 +811,35 @@ defmodule Arca.ExecutionTest do
     test "respects limit parameter" do
       for _ <- 1..3, do: running!(DateTime.add(DateTime.utc_now(), -60, :second))
       assert length(Execution.list_stale_running(DateTime.utc_now(), 1)) == 1
+    end
+  end
+
+  describe "root_consent/2" do
+    test "answers the consent revision a root was admitted at, in the caller's athanor alone" do
+      Arca.Test.Actor.athanor!("ath_other")
+      id = "exec_rooted_#{System.unique_integer([:positive])}"
+
+      {:ok, _row} =
+        Arca.Test.Writers.record_start(%{
+          id: id,
+          root_execution_id: id,
+          reference: "catalyst:local.rooted:1.0.0",
+          user_id: "user_test",
+          athanor_id: @athanor,
+          started_at: DateTime.utc_now(),
+          status: "running",
+          component_type: "catalyst",
+          profile_id: "prof_rooted",
+          consent_id: "consent-rooted-1"
+        })
+
+      assert Execution.root_consent(Arca.Test.Actor.local(), id) == {:ok, "consent-rooted-1"}
+
+      assert Execution.root_consent(Arca.Test.Actor.local(athanor_id: "ath_other"), id) ==
+               {:error, :not_found}
+
+      assert Execution.root_consent(Arca.Test.Actor.local(), "exec_nobody") ==
+               {:error, :not_found}
     end
   end
 

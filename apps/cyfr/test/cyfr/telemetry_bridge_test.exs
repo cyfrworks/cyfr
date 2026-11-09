@@ -80,7 +80,8 @@ defmodule Cyfr.TelemetryBridgeTest do
       # attention topic (`Cyfr.Providers.AttentionTest` holds every kind).
       {[:cyfr, :schedules, :completed],
        Map.merge(tenant, %{schedule_id: "s1", kind: "schedule", user_id: @user}),
-       Bus.attention(@actor, @user), {Attention, %{kind: :removed, id: "s1", label: nil}}},
+       Bus.attention(@actor, @user),
+       {Attention, %{kind: :removed, id: "s1", label: nil, outcome: :resolved}}},
       {[:cyfr, :compendium, :component, :install], Map.put(tenant, :name, "c"),
        Bus.components(@actor), {Components, %{kind: :installed, name: "c"}}},
       {[:cyfr, :compendium, :component, :remove], Map.put(tenant, :name, "c"),
@@ -451,18 +452,51 @@ defmodule Cyfr.TelemetryBridgeTest do
         reference: "reagent:local.x:1.0.0",
         component_type: :reagent,
         status: :cancelled,
+        started_at: ~U[2026-11-09 10:00:00.000001Z],
+        completed_at: ~U[2026-11-09 10:00:00.007001Z],
         duration_ms: 7
       }
 
       :ok = Opus.Telemetry.execute_cancelled(record, "system")
 
+      # A cancel reads as one, in the class and cause a reopen reads too
+      # (`Opus.Providers.Feed.recent_runs/2`).
       assert_receive %Execution{
         kind: :cancelled,
         execution_id: "exec_cancelled",
-        error: %{class: :internal, cause: :failed}
+        started_at: ~U[2026-11-09 10:00:00.000001Z],
+        ended_at: ~U[2026-11-09 10:00:00.007001Z],
+        error: %{class: :cancelled, cause: :cancelled}
       }
 
       refute_receive %Notify{}, 100
+    end
+
+    test "a failure carries the class its record keeps, its sentence never, and its times" do
+      listen(Bus.executions(@actor))
+
+      record =
+        Opus.Record.fail(
+          %Opus.Record{
+            id: "exec_timed_out",
+            athanor_id: @athanor,
+            user_id: @user,
+            reference: "reagent:local.x:1.0.0",
+            component_type: :reagent,
+            status: :running,
+            started_at: ~U[2026-11-09 10:00:00.000001Z]
+          },
+          "Execution failed: the run ran out of time (upstream said: secret-ish)",
+          :timeout
+        )
+
+      :ok = Opus.Telemetry.execute_exception(record, record.error)
+
+      assert_receive %Execution{kind: :failed, execution_id: "exec_timed_out"} = failed
+      assert failed.error == %{class: :timeout, cause: :timed_out}
+      assert failed.started_at == record.started_at
+      assert failed.ended_at == record.completed_at
+      refute inspect(failed) =~ "upstream said"
     end
   end
 

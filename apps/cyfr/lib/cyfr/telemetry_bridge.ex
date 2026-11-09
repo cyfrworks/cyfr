@@ -444,7 +444,9 @@ defmodule Cyfr.TelemetryBridge do
       reference: meta[:reference],
       component_type: meta[:component_type],
       duration_ms: meta[:duration_ms],
-      error: classify(meta[:error])
+      started_at: meta[:started_at],
+      ended_at: meta[:ended_at],
+      error: execution_error(meta)
     }
   end
 
@@ -549,6 +551,14 @@ defmodule Cyfr.TelemetryBridge do
   defp classify(nil), do: nil
   defp classify(reason), do: Sanctum.Refusals.classify(reason)
 
+  # A run's error as its record keeps it: the sentence under the class
+  # `Opus.Record.fail/3` gave it, the same reading the stored row gives a
+  # stream's refresh (`Opus.Providers.Feed.recent_runs/2`).
+  defp execution_error(%{error: message, error_class: class}) when is_binary(message),
+    do: Execution.error(message, class)
+
+  defp execution_error(meta), do: classify(meta[:error])
+
   # The tray counts only root executions: a chain's children are the same
   # piece of work.
   defp root_notify(%{parent_execution_id: parent}, _kind) when not is_nil(parent), do: []
@@ -591,7 +601,10 @@ defmodule Cyfr.TelemetryBridge do
   end
 
   defp ran(:completed, athanor_id, user_id, reference),
-    do: attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: reference}}]} end)
+    do:
+      attention(fn ->
+        {:ok, [{athanor_id, user_id, :removed, %{id: reference, outcome: :resolved}}]}
+      end)
 
   # A schedule's failure is its item as it stands once read; a completed
   # run of it settles the item.
@@ -615,14 +628,15 @@ defmodule Cyfr.TelemetryBridge do
   end
 
   defp scheduled(:completed, athanor_id, user_id, id),
-    do: attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: id}}]} end)
+    do:
+      attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: id, outcome: :resolved}}]} end)
 
   # An approval waits for the athanor's person: opened, it is read as it
-  # stands; resolved, it is removed.
+  # stands; resolved, it is removed with how its decision ended it.
   defp approval_attention(%{
          athanor_id: athanor_id,
          kind: kind,
-         payload: %{approval_id: id}
+         payload: %{approval_id: id} = payload
        })
        when kind in [:approval_pending, :approval_resolved] and is_binary(athanor_id) and
               athanor_id != "" and is_binary(id) do
@@ -635,7 +649,8 @@ defmodule Cyfr.TelemetryBridge do
               |> waiting(athanor_id, person)
 
             :approval_resolved ->
-              {:ok, [{athanor_id, person, :removed, %{id: id}}]}
+              outcome = left_as(Map.get(payload, :decision))
+              {:ok, [{athanor_id, person, :removed, %{id: id, outcome: outcome}}]}
           end
         end
       end)
@@ -664,7 +679,8 @@ defmodule Cyfr.TelemetryBridge do
                   {:ok, files} <- Cyfr.Providers.Files.offer(actor, recipient, offer_id),
                   do: {:ok, actor, waits, files}
            else
-             {:ok, actor, [{athanor_id, recipient, :removed, %{id: offer_id}}],
+             {:ok, actor,
+              [{athanor_id, recipient, :removed, %{id: offer_id, outcome: left_as(kind)}}],
               [Cyfr.Providers.Files.removed(offer_id)]}
            end
          end
@@ -704,9 +720,22 @@ defmodule Cyfr.TelemetryBridge do
   defp confirmation_attention(stage, %{athanor_id: athanor_id, user_id: user_id, ref: ref})
        when stage in @confirmation_ends and is_binary(athanor_id) and athanor_id != "" and
               is_binary(ref),
-       do: [attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: ref}}]} end)]
+       do: [
+         attention(fn ->
+           {:ok, [{athanor_id, user_id, :removed, %{id: ref, outcome: left_as(stage)}}]}
+         end)
+       ]
 
   defp confirmation_attention(_stage, _meta), do: []
+
+  # How an item left its person's attention (`Cyfr.Bus.Attention.outcomes/0`),
+  # by its record's end: a confirmation's stage, an offer's transition or
+  # an approval's decision. An end whose time ran out is `expired`, one
+  # that took the record away (a voided confirmation, a withdrawn offer, a
+  # deleted thread's approval) `withdrawn`, and every other `resolved`.
+  defp left_as(ended) when ended in [:expired, "expired"], do: :expired
+  defp left_as(ended) when ended in [:voided, :withdrawn, "withdrawn"], do: :withdrawn
+  defp left_as(_settled), do: :resolved
 
   # Read when delivered, so a read that fails costs this message alone.
   defp attention(read), do: {:attention, read}

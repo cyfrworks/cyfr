@@ -945,6 +945,10 @@ jobs:
         run: |
           scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
+      # The pinned validator every component passes (scripts/wasm-tools.sh),
+      # at `_tools/wasm-tools`, which the island copies.
+      - name: Install the pinned wasm-tools
+        run: scripts/wasm-tools.sh install _tools
       # The shared contracts depend on no other application: a checkout
       # holding only the lock, Prima, the fetched deps, the WIT tree
       # (`Prima.WIT` embeds it), the protocol vectors, the shipped
@@ -959,10 +963,9 @@ jobs:
           mkdir -p "$island/apps" "$island/tests" "$island/seed"
           cp mix.lock "$island/"
           cp -R apps/prima "$island/apps/"
-          cp -R deps wit "$island/"
+          cp -R deps wit _tools "$island/"
           cp -R tests/fixtures "$island/tests/"
           cp -R seed/components "$island/seed/"
-          scripts/wasm-tools.sh install "$island/_tools"
           cd "$island/apps/prima"
           mix compile --warnings-as-errors
           mix test
@@ -1062,6 +1065,10 @@ jobs:
         run: |
           scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
+      # The pinned validator every component passes (scripts/wasm-tools.sh),
+      # at `_tools/wasm-tools`, which the island copies.
+      - name: Install the pinned wasm-tools
+        run: scripts/wasm-tools.sh install _tools
       # Locus releases without the control plane: a checkout holding only
       # the lock, the contracts, Locus, the fetched deps, the WIT tree
       # (`Prima.WIT` embeds it; `Locus.Runtime.Engine` reads the same
@@ -1078,10 +1085,9 @@ jobs:
           mkdir -p "$island/apps" "$island/config" "$island/tests"
           cp mix.lock "$island/"
           cp -R apps/prima apps/locus "$island/apps/"
-          cp -R deps wit "$island/"
+          cp -R deps wit _tools "$island/"
           cp -R tests/fixtures "$island/tests/"
           cp config/locus_runtime.exs "$island/config/"
-          scripts/wasm-tools.sh install "$island/_tools"
           cd "$island/apps/locus"
           mix compile --warnings-as-errors
           mix test

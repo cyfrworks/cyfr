@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -231,6 +232,46 @@ func TestLoginDriver_AKeyTheLogNoLongerListsIsAddedAgain(t *testing.T) {
 	for _, want := range []string{addURL, "cyfr device approve KEY", "▀", "Your name: @", "Waiting until your account lists"} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("the output lacks %q:\n%s", want, printed)
+		}
+	}
+}
+
+// The command cyfr login shows for its key runs as shown on another
+// terminal whatever the key's first character: a base64url key starts
+// with `-` one time in 64, which a flag parser would read as flags,
+// refusing the command before the approval begins. The help still prints.
+func TestLoginDriver_TheShownApproveCommandRunsForAKeyStartingWithADash(t *testing.T) {
+	const key = "-sNLldjZMiuHb_8IYjTzOUcI2Leg8W-qzT0HHRKJgRc"
+	dev := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, func(call string, d *fakeDevice) {
+		switch call {
+		case "check":
+			if len(d.calls) == 1 {
+				d.set(shell.View{Page: shell.PageEnroll, Code: "0123456789abcdef", AddURL: "https://cyfr.run/account/add#key=" + key, Key: key, Kind: holder.KindChip})
+			}
+		case "enroll":
+			d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip})
+		case "unlock":
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	})
+	c, out := typed("@mira", "123456")
+	if err := (&loginDriver{sh: dev, c: c, mode: "login"}).run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	shown := regexp.MustCompile(`(?m)^  (cyfr device approve .*)$`).FindStringSubmatch(out.String())
+	if shown == nil {
+		t.Fatalf("no approve command was shown:\n%s", out)
+	}
+	// A home of the test's own, which holds no key: the approval itself
+	// refuses there, after the command line has read its argument.
+	withContexts(t, "", map[string]*config.Context{})
+	if _, err := runCommand(t, t.Context(), strings.Fields(shown[1])[1:]...); err == nil || !strings.Contains(err.Error(), "This command line has no key yet") {
+		t.Fatalf("%q answered %v, not the approval's refusal on a command line with no key", shown[1], err)
+	}
+	for _, help := range []string{"--help", "-h"} {
+		out, err := runCommand(t, t.Context(), "device", "approve", help)
+		if err != nil || !strings.Contains(out, "Add a new device to your account") || !strings.Contains(out, "cyfr device approve <key>") {
+			t.Errorf("cyfr device approve %s answered %v, printing:\n%s", help, err, out)
 		}
 	}
 }

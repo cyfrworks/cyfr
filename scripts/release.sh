@@ -40,8 +40,6 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-
 # Pre-flight checks
 if git rev-parse "$VERSION" >/dev/null 2>&1; then
   echo "Error: tag $VERSION already exists"
@@ -61,6 +59,27 @@ if [ -n "$LAST_TAG" ] && ! scripts/ci/seed-guard.sh "$LAST_TAG"; then
   echo "Ship a new version directory instead."
   exit 1
 fi
+
+# A release is cut from main's head, as origin holds it now: the tag names
+# that commit or the bump on it, and --push moves main to the bump. The
+# checkout's branch, or none (a detached HEAD), plays no part, and a HEAD
+# behind main, ahead of it or beside it is refused before anything is made.
+# The push below is a fast-forward of main or nothing, so a main that moves
+# after the second reading, right before the commit, is refused there.
+main_is_head() {
+  local main
+  if ! main="$(git ls-remote --exit-code origin refs/heads/main)"; then
+    echo "Error: origin's main could not be read (above), and a release is cut from main's head."
+    return 1
+  fi
+  main="${main%%[[:space:]]*}"
+  if [ "$main" != "$(git rev-parse HEAD)" ]; then
+    echo "Error: HEAD $(git rev-parse HEAD) is not main's head on origin, $main; a release is cut from main's head."
+    echo "Check out origin's main (git fetch origin main && git checkout --detach FETCH_HEAD) and run this again."
+    return 1
+  fi
+}
+main_is_head || exit 1
 
 # Under --gate the proof is of the working tree's bytes, which the tag
 # would not carry, so a tree with changes is refused there.
@@ -255,6 +274,10 @@ if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
   echo "Error: HEAD moved from the proved $HEAD_SHA to $(git rev-parse HEAD) during the proof; nothing was committed or tagged."
   exit 1
 fi
+if ! main_is_head; then
+  echo "Main moved during the proof; nothing was committed or tagged."
+  exit 1
+fi
 
 if all_declare "$HEAD_SHA"; then
   # The proved commit already bumped every mix.exs: the tag names it and
@@ -262,6 +285,7 @@ if all_declare "$HEAD_SHA"; then
   echo "Every mix.exs declares $VERSION already:"
   grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}"
   git tag -a "$VERSION" "$HEAD_SHA" -m "Release $VERSION"
+  TAGGED="$HEAD_SHA"
   echo ""
   echo "Done! Version $VERSION tagged at $(git rev-parse --short "$HEAD_SHA")."
 else
@@ -316,24 +340,25 @@ else
     exit 1
   fi
   git tag -a "$VERSION" "$BUMP" -m "Release $VERSION"
+  TAGGED="$BUMP"
 
   echo ""
   echo "Done! Version $VERSION committed and tagged at $(git rev-parse --short "$BUMP"): the proved tree $(git rev-parse --short "$HEAD_SHA") plus the version lines; the tag's workflow checks it again before it publishes."
 fi
 
+# Main and the tag by full refs, in one atomic push: both land or neither
+# does, from a branch or a detached HEAD alike, and main only fast-forwards.
+PUBLISH=(git push --atomic origin "$TAGGED:refs/heads/main" "refs/tags/$VERSION:refs/tags/$VERSION")
 if [ "$PUSH" = "--push" ]; then
-  echo "Pushing to origin..."
-  if ! git push -u origin "$BRANCH"; then
-    echo "Error: the push of $BRANCH failed (above); the tag $VERSION was not pushed."
-    exit 1
-  fi
-  if ! git push origin "$VERSION"; then
-    echo "Error: $BRANCH was pushed and the push of the tag $VERSION failed (above); push it with: git push origin $VERSION"
+  echo "Pushing main and the tag $VERSION to origin..."
+  if ! "${PUBLISH[@]}"; then
+    echo "Error: the push failed (above), so neither main nor the tag $VERSION was pushed; once its cause is fixed, push both with:"
+    echo "  ${PUBLISH[*]}"
     exit 1
   fi
   echo "Pushed!"
 else
   echo ""
   echo "To publish:"
-  echo "  git push origin $BRANCH && git push origin $VERSION"
+  echo "  ${PUBLISH[*]}"
 fi

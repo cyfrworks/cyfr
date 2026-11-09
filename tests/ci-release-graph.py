@@ -1374,7 +1374,8 @@ _HELPER_REPOS = []
 def helper_repo(script, declared, scripts=None):
     """A repository of its own holding script as scripts/release.sh, each
     of scripts ({name: text}) as scripts/NAME, and the root's and five
-    applications' mix.exs declaring declared, committed."""
+    applications' mix.exs declaring declared, committed, with an origin of
+    its own (helper_origin) whose main is that commit."""
     repo = os.path.join(scratch(), "helper-%d" % len(_HELPER_REPOS))
     _HELPER_REPOS.append(repo)
     os.makedirs(os.path.join(repo, "scripts"))
@@ -1389,7 +1390,15 @@ def helper_repo(script, declared, scripts=None):
     helper_git(repo, "init", "-q")
     helper_git(repo, "add", ".")
     helper_git(repo, "commit", "-qm", "baseline")
+    helper_git(repo, "init", "-q", "--bare", helper_origin(repo))
+    helper_git(repo, "remote", "add", "origin", helper_origin(repo))
+    helper_git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
     return repo
+
+
+def helper_origin(repo):
+    """The bare repository beside repo that is its origin."""
+    return repo + "-origin.git"
 
 
 def run_helper(repo, version, answer=None, args=(), unproven=True, bin_dir=None, extra_env=None):
@@ -1539,6 +1548,13 @@ echo moved > moved.txt
 git add moved.txt
 git commit -qm 'another agent'
 """
+# A release stage during which another merge lands on origin's main,
+# HEAD left where it was.
+HELPER_MAIN_MOVING_STAGE = """#!/usr/bin/env bash
+rm -rf "$2"
+merged=$(git commit-tree "HEAD^{tree}" -p HEAD -m 'another merge')
+git push -q origin "$merged:refs/heads/main"
+"""
 # A release stage during which another agent commits the version bump
 # itself, every mix.exs then declaring the version asked for.
 HELPER_BUMPING_STAGE = """#!/usr/bin/env bash
@@ -1667,6 +1683,7 @@ exec "{real}" "$@"
     repo = helper_repo(script, HELPER_BASE)
     declare(os.path.join(repo, "mix.exs"), "0.1.0")
     helper_git(repo, "commit", "-qam", "root first")
+    helper_git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
     head = helper_git(repo, "rev-parse", "HEAD")
     status, output = run_helper(repo, "0.1.0")
     changed = sorted(helper_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "0.1.0").splitlines())
@@ -1677,25 +1694,78 @@ exec "{real}" "$@"
 
 
 def helper_push_failure(script):
-    """--push: a branch push that fails pushes no tag, says so and fails;
-    a tag push that fails fails; both pushed, it says Pushed!."""
-    for origin, pushed in (("missing", False), ("refuses tags", False), ("bare", True)):
-        repo = helper_repo(script, "0.6.0-alpha.1")
-        remote = os.path.join(repo + "-origin.git")
-        if origin != "missing":
-            helper_git(repo, "init", "-q", "--bare", remote)
-            if origin == "refuses tags":
-                hook = os.path.join(remote, "hooks", "pre-receive")
-                with open(hook, "w") as f:
-                    f.write("#!/bin/sh\nwhile read old new ref; do case $ref in refs/tags/*) exit 1 ;; esac; done\n")
-                os.chmod(hook, 0o755)
-        helper_git(repo, "remote", "add", "origin", remote)
-        status, output = run_helper(repo, "0.6.0-alpha.1", args=["--push"])
-        said = "Pushed!" in output
-        if pushed and (status != 0 or not said or "0.6.0-alpha.1" not in helper_git(remote, "tag", "-l")):
-            return f"release.sh --push to a {origin} origin exits {status} without both pushes: {output.strip()[-300:]}"
-        if not pushed and (status == 0 or said):
-            return f"release.sh --push to a {origin} origin exits {status}, saying Pushed! {said}: {output.strip()[-300:]}"
+    """--push from a detached HEAD at main's head moves origin's main to
+    the bump and pushes the tag, by full refs; on a HEAD that declares the
+    version already it pushes the tag and leaves main; an origin that
+    refuses the tag takes neither, the push being atomic, and it fails
+    without saying Pushed!. A HEAD that is not main's head on origin
+    (behind it, ahead of it, or with no origin to read) is refused with
+    nothing made, with or without --push, and under --gate before the
+    release stage runs; a main that moves during the --gate proof is
+    refused before the commit."""
+    for declared, version in ((HELPER_BASE, "0.1.0"), ("0.6.0-alpha.1", "0.6.0-alpha.1")):
+        repo = helper_repo(script, declared)
+        head = helper_git(repo, "rev-parse", "HEAD")
+        helper_git(repo, "checkout", "-q", "--detach")
+        status, output = run_helper(repo, version, args=["--push"])
+        tagged = helper_git(repo, "rev-parse", f"{version}^{{commit}}")
+        main = helper_git(helper_origin(repo), "rev-parse", "main")
+        remote_tag = helper_git(helper_origin(repo), "rev-parse", f"{version}^{{commit}}")
+        expected_main = head if declared == version else tagged
+        if status != 0 or "Pushed!" not in output or main != expected_main or remote_tag != tagged:
+            return (
+                f"release.sh --push of {version} from a detached HEAD declaring {declared} exits {status}, origin's main "
+                f"{main!r} (expected {expected_main!r}), its tag {remote_tag!r} (expected {tagged!r}): {output.strip()[-300:]}"
+            )
+    repo = helper_repo(script, HELPER_BASE)
+    head = helper_git(repo, "rev-parse", "HEAD")
+    hook = os.path.join(helper_origin(repo), "hooks", "update")
+    with open(hook, "w") as f:
+        f.write('#!/bin/sh\ncase "$1" in refs/tags/*) exit 1 ;; esac\n')
+    os.chmod(hook, 0o755)
+    status, output = run_helper(repo, "0.1.0", args=["--push"])
+    main = helper_git(helper_origin(repo), "rev-parse", "main")
+    if status == 0 or "Pushed!" in output or main != head or helper_git(helper_origin(repo), "tag", "-l"):
+        return (
+            f"release.sh --push to an origin refusing the tag exits {status}, origin's main {main!r} "
+            f"(expected {head!r}, untouched), its tags {helper_git(helper_origin(repo), 'tag', '-l')!r}: {output.strip()[-300:]}"
+        )
+
+    def behind(repo):
+        helper_git(repo, "commit", "-q", "--allow-empty", "-m", "merged after")
+        helper_git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        helper_git(repo, "checkout", "-q", "--detach", "HEAD~1")
+
+    def ahead(repo):
+        helper_git(repo, "commit", "-q", "--allow-empty", "-m", "not on main")
+
+    def no_origin(repo):
+        helper_git(repo, "remote", "remove", "origin")
+
+    ran = os.path.join(scratch(), "helper-stage-ran")
+    recording_stage = f'#!/usr/bin/env bash\nrm -rf "$2"\ntouch "{ran}"\n'
+    for name, move, args, said in (
+        ("behind main", behind, ["--push"], "is not main's head on origin"),
+        ("ahead of main", ahead, [], "is not main's head on origin"),
+        ("ahead of main under --gate", ahead, ["--gate"], "is not main's head on origin"),
+        ("with no origin", no_origin, ["--push"], "origin's main could not be read"),
+    ):
+        repo = helper_repo(script, HELPER_BASE, {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": recording_stage})
+        move(repo)
+        before = helper_state(repo)
+        if os.path.exists(ran):
+            os.remove(ran)
+        status, output = run_helper(repo, "0.1.0", args=args, unproven="--gate" not in args, bin_dir=helper_bin())
+        if status == 0 or helper_state(repo) != before or said not in output or os.path.exists(ran):
+            return (
+                f"release.sh on a HEAD {name} ({' '.join(args) or 'no flags'}) exits {status}, changed the repository "
+                f"{helper_state(repo) != before} or ran the release stage {os.path.exists(ran)}: {output.strip()[-300:]}"
+            )
+    repo = helper_repo(script, HELPER_BASE, {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": HELPER_MAIN_MOVING_STAGE})
+    before = helper_state(repo)
+    status, output = run_helper(repo, "0.1.0", args=["--gate"], unproven=False, bin_dir=helper_bin())
+    if status == 0 or helper_state(repo) != before or "Main moved during the proof" not in output:
+        return f"release.sh went on after main moved during the --gate proof (exit {status}): {output.strip()[-300:]}"
     return None
 
 
@@ -1735,16 +1805,10 @@ RELEASE_SH_MUTANTS = [
             1,
         ),
     ),
-    (
-        "the pushes chained",
-        lambda t: re.sub(
-            r'  if ! git push -u origin "\$BRANCH"; then.*?\n  fi\n  if ! git push origin "\$VERSION"; then.*?\n  fi\n',
-            '  git push -u origin "$BRANCH" && git push origin "$VERSION"\n',
-            t,
-            count=1,
-            flags=re.S,
-        ),
-    ),
+    ("the push not atomic", lambda t: t.replace("git push --atomic origin", "git push origin", 1)),
+    ("the push naming HEAD", lambda t: t.replace('"$TAGGED:refs/heads/main"', "HEAD", 1)),
+    ("main's head unread before the proof", lambda t: t.replace("main_is_head || exit 1", ":", 1)),
+    ("main's head unread after the proof", lambda t: t.replace("if ! main_is_head; then", "if false; then", 1)),
 ]
 
 

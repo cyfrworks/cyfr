@@ -11,6 +11,7 @@ defmodule Opus.Provider do
   - `list` - List execution instances
   - `logs` - Retrieve execution record and logs
   - `cancel` - Cancel a running execution
+  - `retry` - Run a schedule's or a feed's failed run again, as it ran
   - `status` - Execution slot diagnostics
   - `force_release` - Release every athanor's execution slots (operator only)
   - `read_resource` - Read an `opus://executions/…` resource
@@ -410,6 +411,27 @@ defmodule Opus.Provider do
             planes: [:external, :in_chain],
             permission: :execute
           ),
+          # A run started again is an external act, decided when it is
+          # asked as a run is. A desktop offers it as a direct control
+          # (`Compendium.Tincture.Rules`), since it repeats what the person
+          # already ran, under the grant revision it ran at.
+          Operation.new(
+            "execution",
+            "retry",
+            "Retry execution",
+            [
+              Arg.new("execution_id", :string,
+                required: true,
+                description:
+                  "retry: the failed run to run again, one a schedule or a feed started; it " <>
+                    "runs as a new run with the same component, input and grant"
+              )
+            ],
+            kind: :execute,
+            planes: [:external],
+            permission: :execute,
+            standing: false
+          ),
           # Slot diagnostics are tenant-operational: global counters
           # with no chain grain to scope them to, so the operation is out
           # of the in-chain plane rather than serving a number that means
@@ -637,6 +659,45 @@ defmodule Opus.Provider do
     end
   end
 
+  # Retry action: a failed run of the caller's athanor that a schedule or
+  # a feed started, known to have failed rather than uncertain, run again
+  # as a root of its own with the pinned component, the input and the
+  # profile it ran with, at the consent revision it rooted at
+  # (`Opus.run_root/5`'s `:consent_id`), so a grant changed since runs
+  # nothing. Only such a run is repeated exactly from
+  # its row: its seed was empty and it named no account, while a run
+  # started anywhere else may have carried a launch's sources or an
+  # account the row does not record. The retry starts as the caller's own
+  # run, under the caller's origin, which the grant admits or refuses.
+  def handle("execution", %Context{} = ctx, %{"action" => "retry", "execution_id" => id})
+      when is_binary(id) do
+    with {:ok, record} <- retriable(ctx, id),
+         :ok <- known_failed(record),
+         {:ok, consent_id} <- rooted_at(ctx, record),
+         {:ok, input} <- Record.input(ctx, record) do
+      case Opus.run_root(ctx, {:id, record.profile_id}, record.reference, input,
+             consent_id: consent_id
+           ) do
+        {:ok, result} ->
+          {:ok,
+           ctx
+           |> format_run_result(result, record.reference)
+           |> Map.put(:retry_of, record.id)}
+
+        # The profile it ran under is gone or no longer active: its grant
+        # is not current.
+        {:error, {:not_found, _selector}} ->
+          {:error, :retry_grant_moved}
+
+        {:error, {:profile_unavailable, _status}} ->
+          {:error, :retry_grant_moved}
+
+        refused ->
+          format_root_result(refused)
+      end
+    end
+  end
+
   # Status action - execution slot diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
     {:ok, scoped_slot_status(ctx, slot_status())}
@@ -756,6 +817,78 @@ defmodule Opus.Provider do
   # Private Helpers
   # ============================================================================
 
+  # The run a retry repeats: the caller's athanor's own, failed, and a
+  # component root the scheduler fired for a schedule or a feed (its
+  # `schedule_id`), with the profile it rooted at. Another athanor's run
+  # reads as one that does not exist.
+  defp retriable(ctx, id) do
+    case Record.get(ctx, id) do
+      {:ok, %Record{athanor_id: athanor_id} = record} when athanor_id == ctx.athanor_id ->
+        retriable(record)
+
+      {:ok, _another_athanors} ->
+        {:error, {:not_found, "Execution", id}}
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "Execution", id}}
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
+
+  defp retriable(%Record{status: status}) when status != :failed,
+    do: {:error, {:conflict, "Only a failed run can be retried."}}
+
+  defp retriable(
+         %Record{parent_execution_id: nil, kind: "component", schedule_id: schedule} = run
+       )
+       when is_binary(schedule),
+       do: {:ok, run}
+
+  defp retriable(%Record{}),
+    do: {:error, {:conflict, "Only a run a schedule or a feed started can be retried."}}
+
+  # A run is run again only once it is known to have failed: its attempt
+  # closed `error`, the run's own failure. An `uncertain` or `result_lost`
+  # outcome (a lapse, a lost result, a restore, an attempt that ended
+  # before it closed the run) may have completed what it did, and no
+  # contract proves running it again safe (ARCHITECTURE.md §6.5).
+  defp known_failed(%Record{} = record) do
+    case Record.ended_outcome(record) do
+      {:ok, "error"} ->
+        :ok
+
+      {:ok, _uncertain} ->
+        {:error, uncertain_outcome()}
+
+      {:error, :not_found} ->
+        {:error, uncertain_outcome()}
+
+      {:error, _unread} ->
+        {:error, {:unavailable, "Executions"}}
+    end
+  end
+
+  defp uncertain_outcome,
+    do:
+      {:conflict,
+       "This run's outcome is uncertain: it is not known to have failed, so it is not run again."}
+
+  # The consent revision the run rooted at, which its retry must root at
+  # too; a run that records no profile or no revision has no grant to be
+  # current.
+  defp rooted_at(ctx, %Record{id: id, profile_id: profile_id}) when is_binary(profile_id) do
+    case Arca.Execution.root_consent(Context.actor(ctx), id) do
+      {:ok, consent_id} when is_binary(consent_id) -> {:ok, consent_id}
+      {:ok, nil} -> {:error, :retry_grant_moved}
+      {:error, :database_error} -> {:error, {:unavailable, "Executions"}}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp rooted_at(_ctx, %Record{}), do: {:error, :retry_grant_moved}
+
   # Execution requires a profile; return a typed setup error when none is selected.
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
@@ -822,6 +955,10 @@ defmodule Opus.Provider do
   # launch's card bound stays typed, so the launch answers it as a stale
   # approval with nothing run.
   defp format_root_result({:error, :approved_grant_moved} = refused), do: refused
+
+  # A retry's grant with a new revision since its run stays typed, a
+  # conflict in its own sentence, with nothing run.
+  defp format_root_result({:error, :retry_grant_moved} = refused), do: refused
 
   # A consent the root's load could not read right now, or read damaged,
   # stays typed, so the caller is answered in its own class (unavailable
