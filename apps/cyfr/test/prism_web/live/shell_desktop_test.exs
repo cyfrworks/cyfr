@@ -666,7 +666,24 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{id: ^home, state: :live} = canvas(view)
     end
 
-    test "settings of chat, an attention item's destination, opens the chat overlay in place",
+    test "settings of aqua, an approval's destination, opens AQUA's panel in place",
+         %{conn: conn} do
+      view = shell!(conn)
+      home = canvas(view).id
+      panel = find_live_child(view, "aqua-panel")
+      render(panel)
+      _ = render(view)
+      refute has_element?(panel, "#aqua-panel-sheet")
+
+      verb!(view, home, :settings, %{"page" => "aqua"})
+      _ = render(view)
+
+      assert has_element?(panel, "#aqua-panel-sheet")
+      refute_push_event(view, "navigate", _)
+      assert %{id: ^home, state: :live} = canvas(view)
+    end
+
+    test "settings of chat opens the chat overlay in place",
          %{conn: conn} do
       view = shell!(conn)
       home = canvas(view).id

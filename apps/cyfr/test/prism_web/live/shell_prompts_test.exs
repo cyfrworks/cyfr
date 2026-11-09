@@ -420,6 +420,106 @@ defmodule PrismWeb.ShellPromptsTest do
     end
   end
 
+  # The desktop and the desktop page, the credential prompt of a frame's
+  # `credential` typed and submitted in the desktop's layer: its record
+  # waits, drawn as the desktop's own and, by the page's layer, as another
+  # client's request.
+  defp waiting_in_both!(conn, ctx) do
+    view = shell!(conn)
+    {:ok, page, _html} = live(conn, "/")
+    open!(view, "keeper-dash")
+    keeper = full(view, "keeper-dash").id
+    verb!(view, keeper, :credential, %{"name" => "both-#{System.unique_integer([:positive])}"})
+    [{prompt_id, ^keeper}] = Map.to_list(assigns(view).credential_prompts)
+
+    typed = %{
+      "prompt_id" => prompt_id,
+      "secret" => "b0th-value",
+      "destination_hosts" => "api.example.com"
+    }
+
+    view |> form("#system-layer-desktop-credential", typed) |> render_submit()
+
+    assert {:ok, [%{ref: ref}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+    wait_until(
+      fn -> render(view) =~ ~s(data-ref="#{ref}") end,
+      2_000,
+      "the desktop's own wait"
+    )
+
+    wait_until(
+      fn -> page |> element("#system-layer") |> render() =~ ~s(data-ref="#{ref}") end,
+      2_000,
+      "the page's layer drawing the same record"
+    )
+
+    assert page |> element("#system-layer") |> render() =~ ~s(data-own="false")
+    %{view: view, page: page, typed: typed, keeper: keeper, ref: ref}
+  end
+
+  # A record the desktop's own change waits on is drawn twice in the
+  # document: in the desktop's prompt as its own, and by the page's layer as
+  # another client's request (`PrismWeb.SystemLayer`, `shows_others?/1`).
+  # Both follow the one record, so a decision in either clears both.
+  describe "a record the desktop waits on, beside the page's layer" do
+    setup %{ctx: ctx} do
+      tincture!(ctx, "keeper-dash", %{"actions" => ["vault.create", "vault.list"]})
+      :ok
+    end
+
+    test "a proof given for it ends the wait in both", %{conn: conn, user: user, athanor: athanor} do
+      ctx = person(user, athanor)
+
+      %{view: view, page: page, typed: typed, keeper: keeper, ref: ref} =
+        waiting_in_both!(conn, ctx)
+
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      assert_push_event(
+        view,
+        "system_layer:resubmit",
+        %{form: "system-layer-desktop-credential"},
+        2_000
+      )
+
+      view |> form("#system-layer-desktop-credential", typed) |> render_submit()
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true}, 2_000)
+
+      wait_until(
+        fn -> not (page |> element("#system-layer") |> render() =~ ~s(data-ref="#{ref}")) end,
+        2_000,
+        "the page's prompt gone once the record was consumed"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "cancelled from the desktop's prompt, it ends in the page's too",
+         %{conn: conn, user: user, athanor: athanor} do
+      ctx = person(user, athanor)
+      %{view: view, page: page, keeper: keeper, ref: ref} = waiting_in_both!(conn, ctx)
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="dismiss"]))
+      |> render_click()
+
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: false}, 2_000)
+
+      wait_until(
+        fn -> not (page |> element("#system-layer") |> render() =~ ~s(data-ref="#{ref}")) end,
+        2_000,
+        "the page's prompt gone once the record was cancelled"
+      )
+
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   describe "the devices control" do
     test "opens the pairing prompt, once, listing the person's paired devices", %{conn: conn} do
       view = shell!(conn)

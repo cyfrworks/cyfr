@@ -22,6 +22,9 @@ defmodule PrismWeb.AquaPanelLive do
   athanor's seeding has not finished the panel says so and offers to try
   it again (`athanor.provision`).
 
+  The desktop opens it for a canvas's `settings` of `aqua`, where the
+  attention stream's approvals send the person.
+
   A page may ask it about something it shows (`Cyfr.Bus.AquaAsk`, on the
   page's own topic the session names, `aqua_ask`): the panel opens on the
   thread it keeps and its pane takes Prism's sentence after the draft the
@@ -104,6 +107,8 @@ defmodule PrismWeb.AquaPanelLive do
     if connected?(socket) do
       if is_binary(room_feed), do: PrismWeb.RoomFeed.subscribe(room_feed)
       if is_binary(aqua_ask), do: Cyfr.Bus.subscribe_page(aqua_ask)
+      # The desktop opens the panel for a canvas's `settings` of `aqua`.
+      if pid = socket.parent_pid, do: send(pid, {:aqua_panel, self()})
       {:ok, socket |> own(token) |> restore(), layout: false}
     else
       {:ok, socket, layout: false}
@@ -365,6 +370,15 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
+
+  # The desktop opens the panel (a canvas's `settings` of `aqua`): on the
+  # thread it keeps, as the button does.
+  def handle_info(:open, %{assigns: %{phase: :ready, open: false}} = socket) do
+    id = socket.assigns.thread && socket.assigns.thread.id
+    {:noreply, socket |> open_on(id) |> remember()}
+  end
+
+  def handle_info(:open, socket), do: {:noreply, socket}
 
   # The athanor moved: its seeding ended or it was renamed; read it again.
   def handle_info(

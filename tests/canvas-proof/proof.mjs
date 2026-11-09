@@ -851,12 +851,15 @@ async function stepTwoCanvases(page, name, viewport) {
     });
 }
 
-// A horizontal swipe along the shelf, from its empty right end: a touch
-// swipe in the hand, a pointer drag on the desk.
+// A horizontal swipe along the shelf, from the empty stretch at the left of
+// its right end, which holds the gear, the chat and AQUA (#shelf-end, the
+// shell's own and no part of the shelf): a touch swipe in the hand, a
+// pointer drag on the desk.
 async function swipe(page, viewport, direction) {
   const box = await page.$eval("#canvas-shelf", (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const end = await page.$eval("#shelf-end", (e) => e.getBoundingClientRect().x).catch(() => box.x + box.w);
   const y = box.y + box.h / 2;
-  const right = box.x + box.w - 24;
+  const right = Math.min(box.x + box.w, end) - 24;
   const left = right - 160;
   const [from, to] = direction === "leftward" ? [right, left] : [left, right];
   if (viewport.posture === "hand") {

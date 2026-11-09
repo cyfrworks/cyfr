@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import SystemLayer, {clearAllMarked, clearForms, clearMarked, heldInDocument, hop, markForm, openTab, resubmit, takeFragment, tellHeld} from "../../js/system_layer/index.js"
+import SystemLayer, {clearAllMarked, clearForms, clearMarked, hop, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
 
 // A document with a frame in fullscreen and pointer lock. Every call the
 // hook makes on it, and on the dialog, is recorded in `calls`, in order.
@@ -860,42 +860,5 @@ describe("a page's typed form, marked with its prompt", () => {
     assert.equal(marks.size, 0)
 
     SystemLayer.reconnected.call({marks: undefined})
-  })
-})
-
-describe("a record another layer of the document holds", () => {
-  afterEach(() => heldInDocument.clear())
-
-  test("is handed to every other layer, and not to the layer that holds it", () => {
-    const pushed = []
-    const layer = (id) => ({el: {id}, pushEventTo: (target, event, payload) => pushed.push({id: target.id, event, payload})})
-
-    tellHeld(layer("system-layer"), "system-layer-desktop", "cnf_a")
-    tellHeld(layer("system-layer-desktop"), "system-layer-desktop", "cnf_a")
-
-    assert.deepEqual(pushed, [{id: "system-layer", event: "held_elsewhere", payload: {ref: "cnf_a"}}])
-    assert.equal(heldInDocument.get("cnf_a"), "system-layer-desktop")
-  })
-
-  test("is handed to a layer that mounts after it was told, as the page moves", () => {
-    heldInDocument.set("cnf_b", "system-layer-desktop")
-    const pushed = []
-    const el = {id: "system-layer", dataset: {}, querySelector: () => dialog}
-    const later = Object.assign(Object.create(SystemLayer), {
-      el,
-      framesSee: seenAtOnce,
-      pushEventTo: (target, event, payload) => pushed.push({event, payload})
-    })
-    later.mounted()
-
-    assert.deepEqual(pushed, [{event: "held_elsewhere", payload: {ref: "cnf_b"}}])
-  })
-
-  test("of another shape is handed to nobody", () => {
-    const pushed = []
-    tellHeld({el: {id: "system-layer"}, pushEventTo: () => pushed.push(1)}, "system-layer-desktop", 7)
-    tellHeld({el: {id: "system-layer"}, pushEventTo: () => pushed.push(1)}, null, "cnf_c")
-    assert.deepEqual(pushed, [])
-    assert.equal(heldInDocument.size, 0)
   })
 })

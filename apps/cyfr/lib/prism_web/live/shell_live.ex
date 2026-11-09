@@ -120,8 +120,8 @@ defmodule PrismWeb.ShellLive do
   for the person's UI mode (`PrismWeb.Nav`) as the overlay over the
   desktop: the view pushes `navigate` to its own hook (`ShellPage`, on
   `#shell-page`), which moves the page's LiveView there, so the canvas
-  that asked keeps running under it; `chat` opens the chat overlay in
-  place. A control's press and a write
+  that asked keeps running under it; `chat` opens the chat overlay and
+  `aqua` AQUA's panel in place. A control's press and a write
   are answered over the frame's port (`canvas_answer`) with their typed
   outcome, `cancelled` when this view did not act on them. Its bridge
   (`iframe_bridge.js`) forwards those verbs only while the page holds
@@ -376,6 +376,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:aqua_ask, Cyfr.Bus.aqua_ask(socket.id))
       |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
       |> assign(:chat_overlay, nil)
+      |> assign(:aqua_panel, nil)
 
     socket =
       if connected?(socket) do
@@ -1190,10 +1191,15 @@ defmodule PrismWeb.ShellLive do
 
   defp ask(socket, _frame, _widget), do: drop_message(socket)
 
-  # The chat, CYFR's own overlay on the desktop: `chat` names it, as the
-  # attention stream's destinations and the shipped desktops do, and it
-  # opens in place, the canvas running under it.
+  # CYFR's own overlays on the desktop, which open in place, the canvas
+  # running under them: `chat` the chat, and `aqua` AQUA's panel, where an
+  # approval waits (the attention stream's `aqua` destination).
   defp settings(%{assigns: %{chat_overlay: pid}} = socket, "chat") when is_pid(pid) do
+    send(pid, :open)
+    socket
+  end
+
+  defp settings(%{assigns: %{aqua_panel: pid}} = socket, "aqua") when is_pid(pid) do
     send(pid, :open)
     socket
   end
@@ -2796,11 +2802,14 @@ defmodule PrismWeb.ShellLive do
   def system_layer_report(_id, _outcome, _socket), do: :pass
 
   # The refresh's answer, taken only under the focus it was started for.
-  # The chat overlay reports in once connected: a desktop's `settings` of
-  # `chat` opens it.
+  # The chat overlay and AQUA's panel report in once connected: a
+  # desktop's `settings` of `chat` or `aqua` opens them.
   @impl true
   def handle_info({:chat_overlay, pid}, socket) when is_pid(pid),
     do: {:noreply, assign(socket, :chat_overlay, pid)}
+
+  def handle_info({:aqua_panel, pid}, socket) when is_pid(pid),
+    do: {:noreply, assign(socket, :aqua_panel, pid)}
 
   def handle_info({:deliver, tag, message}, socket),
     do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
@@ -3140,8 +3149,7 @@ defmodule PrismWeb.ShellLive do
       <%!-- The desktop's own layer: its prompts above every frame, and the
            outcomes of the confirmations its own changes asked for. The
            person's confirmations are the page's layer's to draw, the
-           desktop page's included (`PrismWeb.DesktopLive`), and a record
-           this layer holds is handed to that one through the browser. --%>
+           desktop page's included (`PrismWeb.DesktopLive`). --%>
       <.live_component
         module={PrismWeb.SystemLayer}
         id={PrismWeb.SystemLayer.desktop_layer_id()}

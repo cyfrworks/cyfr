@@ -182,33 +182,11 @@ function watchFrames(doc) {
   frameWatch.observe(doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["inert"]})
 }
 
-// The records a layer of this document holds, by public ref, with that
-// layer's id: the desktop's layer tells each one (`system_layer:held`), and
-// every other layer of the document, one mounted later included, is handed
-// it (`held_elsewhere`) and leaves it to that layer, so no record is drawn
-// twice. The document's, so it outlives a move between pages.
-export const heldInDocument = new Map()
-
-export function tellHeld(hook, layer, ref) {
-  if (typeof ref !== "string" || typeof layer !== "string") return
-  heldInDocument.set(ref, layer)
-  if (layer !== hook.el.id) hook.pushEventTo(hook.el, "held_elsewhere", {ref})
-}
-
 export default {
   mounted() {
     if (this.el.dataset.account) return this.mountAccount(this.el.dataset.account)
 
     this.handleLayerEvents()
-    this.onHeld = (event) => {
-      const {layer, ref} = (event && event.detail) || {}
-      tellHeld(this, layer, ref)
-    }
-    if (typeof globalThis.addEventListener === "function")
-      globalThis.addEventListener("phx:system_layer:held", this.onHeld)
-    for (const [ref, layer] of heldInDocument) {
-      if (layer !== this.el.id) this.pushEventTo(this.el, "held_elsewhere", {ref})
-    }
     this.gone = false
     this.layer = initial
     this.returnFocus = null
@@ -257,8 +235,6 @@ export default {
     this.dialog.removeEventListener("keydown", this.onKeydown)
     globalThis.document.removeEventListener("fullscreenchange", this.onEscalated)
     globalThis.document.removeEventListener("pointerlockchange", this.onEscalated)
-    if (this.onHeld && typeof globalThis.removeEventListener === "function")
-      globalThis.removeEventListener("phx:system_layer:held", this.onHeld)
   },
 
   // An element of the account pages' hop and return: the browser sent there
