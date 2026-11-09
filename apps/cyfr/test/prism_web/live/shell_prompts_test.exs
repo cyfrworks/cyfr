@@ -604,6 +604,61 @@ defmodule PrismWeb.ShellPromptsTest do
       assert assigns(view).grant_prompts == %{}
     end
 
+    # A Dashboard page drawn over the desktop (`page_shown`, from the
+    # desktop's hook): the prompt the desktop raised on its own waits
+    # behind the page, so the desktop's layer stands modal over none of the
+    # page's asks, and is drawn again once the desktop is shown.
+    test "while a page is over the desktop, its grant prompt waits behind the page and is drawn again after",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "blocked-dash")
+      blocked!(ctx)
+
+      view = shell!(conn)
+      open!(view, "blocked-dash")
+      assert render(view) =~ ~s(data-kind="grant")
+
+      render_hook(view, "page_shown", %{"desktop" => false})
+      html = view |> element("#system-layer-desktop") |> render()
+      refute html =~ ~s(data-kind="grant")
+      refute html =~ ~s(data-open="true")
+      assert map_size(assigns(view).grant_prompts) == 1
+
+      # The page's own asks stand alone: the page's layer and form, with
+      # nothing of the desktop's open over them.
+      {:ok, page, _html} = live(conn, athanor_path("/settings"))
+      assert has_element?(page, "#settings-overlay")
+      refute page |> element("#system-layer") |> render() =~ ~s(data-open="true")
+
+      render_hook(view, "page_shown", %{"desktop" => true})
+      assert render(view) =~ ~s(data-kind="grant")
+
+      view
+      |> element(~s(#system-layer-desktop-dialog button[phx-click="confirm"]))
+      |> render_click()
+
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+      assert %{state: :live} = full(view, "blocked-dash")
+    end
+
+    test "a desktop that joins under a page draws none of its own prompts until it is shown",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "blocked-dash")
+      blocked!(ctx)
+
+      conn =
+        Phoenix.LiveViewTest.put_connect_params(conn, %{"_path" => athanor_path("/settings")})
+
+      view = shell!(conn)
+      open!(view, "blocked-dash")
+
+      assert %{state: :refused, refusal: :ungranted} = full(view, "blocked-dash")
+      refute render(view) =~ ~s(data-kind="grant")
+      assert map_size(assigns(view).grant_prompts) == 1
+
+      render_hook(view, "page_shown", %{"desktop" => true})
+      assert render(view) =~ ~s(data-kind="grant")
+    end
+
     test "dismissed, the frame keeps showing its refusal", %{conn: conn, ctx: ctx} do
       tincture!(ctx, "blocked-dash")
       blocked!(ctx)

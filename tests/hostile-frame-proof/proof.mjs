@@ -432,17 +432,21 @@ function recordShows() {
   };
 }
 
+// Each prompt in the layer that draws it: the desktop's own, for the grant
+// its frame's open asks for; the page's, for another client's request,
+// which the desktop's layer leaves to the page's (`PrismWeb.SystemLayer`).
 const PROMPTS = [
-  { name: "grant_prompt_fullscreen", kind: "grant", request: { op: "grant" },
+  { name: "grant_prompt_fullscreen", kind: "grant", request: { op: "grant" }, dialog: "system-layer-desktop-dialog",
     what: "a grant prompt opened over a frame holding fullscreen and pointer lock is shown only once every frame is hidden and inert and the page left fullscreen; the frame holds and takes back neither, while it shows or after" },
-  { name: "confirmation_prompt_fullscreen", kind: "confirmation", request: { op: "confirmation" },
+  { name: "confirmation_prompt_fullscreen", kind: "confirmation", request: { op: "confirmation" }, dialog: "system-layer-dialog",
     what: "a confirmation prompt opened over a frame holding fullscreen and pointer lock is shown only once every frame is hidden and inert and the page left fullscreen; the frame holds and takes back neither, while it shows or after" },
 ];
 
-// What the shell's document and the frame's own hold now.
-async function screenState(page, frame) {
-  const top = await page.evaluate(() => {
-    const dialog = document.getElementById("system-layer-desktop-dialog");
+// What the shell's document and the frame's own hold now, the prompt read
+// from the layer `dialogId` names (the desktop's by default).
+async function screenState(page, frame, dialogId = "system-layer-desktop-dialog") {
+  const top = await page.evaluate((dialogId) => {
+    const dialog = document.getElementById(dialogId);
     const held = dialog && dialog.querySelector("[data-kind]");
     const frames = Array.from(document.querySelectorAll("iframe"));
     return {
@@ -457,7 +461,7 @@ async function screenState(page, frame) {
       frames_hidden: frames.length > 0 && frames.every((f) => getComputedStyle(f).visibility === "hidden" && f.inert),
       shows: window.__shows || [],
     };
-  });
+  }, dialogId);
   const own = await frame.evaluate(() => window.__fullscreen.state()).catch(() => null);
   return { ...top, frame: own };
 }
@@ -499,11 +503,11 @@ async function promptOverFullscreen(page, frame, browserName, expected, outDir) 
   await sleep(Math.max(0, clicked + ACTIVATION_MS - Date.now()));
   const shown = (await page.evaluate(() => (window.__shows || []).length));
   const answered = await ask(outDir, expected.request);
-  await page.waitForFunction((kind) => {
-    const dialog = document.getElementById("system-layer-desktop-dialog");
+  await page.waitForFunction(([kind, dialogId]) => {
+    const dialog = document.getElementById(dialogId);
     const held = dialog && dialog.querySelector("[data-kind]");
     return !!(dialog && dialog.open && held && held.dataset.kind === kind);
-  }, expected.kind, { timeout: 30_000 });
+  }, [expected.kind, expected.dialog], { timeout: 30_000 });
 
   // The frame keeps asking for both back, and a click aimed at it lands on
   // the prompt's backdrop: nothing it does takes them over the prompt.
@@ -511,8 +515,8 @@ async function promptOverFullscreen(page, frame, browserName, expected, outDir) 
   if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await sleep(1_500);
 
-  const after = await screenState(page, frame);
-  const shows = after.shows.slice(shown).filter((s) => s.dialog === "system-layer-desktop-dialog");
+  const after = await screenState(page, frame, expected.dialog);
+  const shows = after.shows.slice(shown).filter((s) => s.dialog === expected.dialog);
   // The page's fullscreen element is what covers a prompt: a hidden frame
   // runs no rendering steps, so the fullscreen element its own document
   // reports is stale until it is shown again, and is recorded, not held.
@@ -528,19 +532,19 @@ async function promptOverFullscreen(page, frame, browserName, expected, outDir) 
   // click, so it is let go first, as a person's Escape lets it go.
   await frame.evaluate(() => document.exitPointerLock()).catch(() => null);
   if (expected.kind === "confirmation") {
-    await page.locator('#system-layer-desktop-dialog [data-test="confirm-cancel"]').click();
+    await page.locator(`#${expected.dialog} [data-test="confirm-cancel"]`).click();
   } else {
-    await page.locator('#system-layer-desktop-dialog button[phx-click="dismiss"]').click();
+    await page.locator(`#${expected.dialog} button[phx-click="dismiss"]`).click();
   }
-  await page.waitForFunction(() => {
-    const dialog = document.getElementById("system-layer-desktop-dialog");
+  await page.waitForFunction((dialogId) => {
+    const dialog = document.getElementById(dialogId);
     return !(dialog && dialog.open);
-  }, null, { timeout: 30_000 });
+  }, expected.dialog, { timeout: 30_000 });
 
   // Shown again once the prompt closed, the frame asks for fullscreen with
   // no gesture behind it, and holds neither.
   await sleep(1_500);
-  const closed = await screenState(page, frame);
+  const closed = await screenState(page, frame, expected.dialog);
   const closedHeld = !closed.fullscreen && !!closed.frame && !closed.frame.fullscreen && !closed.frame.pointer_lock;
 
   const held = shownHeld && closedHeld;

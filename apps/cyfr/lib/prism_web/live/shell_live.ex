@@ -377,6 +377,8 @@ defmodule PrismWeb.ShellLive do
       |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
       |> assign(:chat_overlay, nil)
       |> assign(:aqua_panel, nil)
+      |> assign(:covered, false)
+      |> assign(:grant_drawn, %{})
 
     socket =
       if connected?(socket) do
@@ -393,8 +395,11 @@ defmodule PrismWeb.ShellLive do
             do: Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
         end
 
+        params = get_connect_params(socket) || %{}
+
         socket
-        |> assign(:appearance, Prism.Appearance.block(get_connect_params(socket) || %{}))
+        |> assign(:covered, covered_at?(params["_path"]))
+        |> assign(:appearance, Prism.Appearance.block(params))
         |> assign(:person, %{"name" => Prism.Appearance.person_name(ctx.user_id)})
         |> load_tinctures()
       else
@@ -429,6 +434,11 @@ defmodule PrismWeb.ShellLive do
   @impl true
   def handle_event("focus_named", %{"publisher" => publisher, "name" => name}, socket),
     do: {:noreply, focus_named(socket, publisher, name)}
+
+  # Whether a Dashboard page is drawn over the desktop now, as the
+  # desktop's own hook reads the page's address after each move.
+  def handle_event("page_shown", %{"desktop" => desktop?}, socket) when is_boolean(desktop?),
+    do: {:noreply, cover(socket, not desktop?)}
 
   def handle_event("focus_tincture", %{"index" => idx_str}, socket) do
     case Integer.parse(to_string(idx_str)) do
@@ -2423,6 +2433,36 @@ defmodule PrismWeb.ShellLive do
     withdraw_prompts(socket, hidden)
   end
 
+  # A Dashboard page drawn over the desktop covers it, and the grant
+  # prompts the desktop raises on its own, a canvas's or an app's, wait
+  # behind the page: drawn now, they would stand modal over the page's own
+  # asks, which the person is reading. They are taken out of the system
+  # layer as the page comes, which reports nothing for them, and kept here
+  # as they stand, and drawn again once the desktop is shown. One raised
+  # while the desktop is covered is drawn then too. The person's own asks
+  # of the desktop (a canvas's `grant`, the credential entry, the devices)
+  # come from an input on the desktop, so none is raised while it is
+  # covered.
+  defp cover(%{assigns: %{covered: covered}} = socket, covered), do: socket
+
+  defp cover(socket, covered) do
+    waiting = Map.take(socket.assigns.grant_drawn, Map.keys(socket.assigns.grant_prompts))
+
+    if covered,
+      do: Enum.each(Map.keys(waiting), &withdraw_prompt/1),
+      else: Enum.each(Map.values(waiting), &show_prompt/1)
+
+    socket |> assign(:covered, covered) |> assign(:grant_drawn, waiting)
+  end
+
+  # Whether the page's address at the desktop's join is a Dashboard page's:
+  # anything but the desktop's own addresses, `/`, `/a` and `/a/<athanor>`.
+  # A join that names none, as a test's, is the desktop's own.
+  defp covered_at?(path) when is_binary(path),
+    do: not Regex.match?(~r{\A/(a(/[^/]+)?)?/?\z}, path)
+
+  defp covered_at?(_path), do: false
+
   # Grant prompts `prompt_ids`, withdrawn from the system layer, which
   # reports nothing for them, and forgotten here.
   defp withdraw_prompts(socket, prompt_ids) do
@@ -2430,6 +2470,7 @@ defmodule PrismWeb.ShellLive do
 
     socket
     |> update(:grant_prompts, &Map.drop(&1, prompt_ids))
+    |> update(:grant_drawn, &Map.drop(&1, prompt_ids))
     |> update(:grant_decisions, &Map.drop(&1, prompt_ids))
   end
 
@@ -2457,11 +2498,12 @@ defmodule PrismWeb.ShellLive do
 
     case PrismWeb.SystemLayer.grant_prompt(socket, prompt_id, ref) do
       {:ok, prompt} ->
-        show_prompt(prompt)
+        unless socket.assigns.covered, do: show_prompt(prompt)
 
         {:ok,
          next
          |> update(:grant_prompts, &Map.put(&1, prompt_id, {key, tincture_id}))
+         |> update(:grant_drawn, &Map.put(&1, prompt_id, prompt))
          |> answering(prompt_id, key)}
 
       {:error, _unavailable} ->
@@ -2571,6 +2613,7 @@ defmodule PrismWeb.ShellLive do
     socket =
       socket
       |> update(:grant_prompts, &Map.delete(&1, id))
+      |> update(:grant_drawn, &Map.delete(&1, id))
       |> update(:grant_decisions, &Map.delete(&1, id))
 
     cond do

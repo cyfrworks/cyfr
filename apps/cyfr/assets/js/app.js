@@ -112,7 +112,9 @@ function safeAreas() {
 
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: () => ({_csrf_token: csrfToken, ...appearance()}),
+  // `_path`, the page's address at each join, tells the desktop whether a
+  // Dashboard page is drawn over it (PrismWeb.ShellLive).
+  params: () => ({_csrf_token: csrfToken, _path: window.location.pathname, ...appearance()}),
   hooks: Hooks
 })
 

@@ -163,11 +163,12 @@
     // An asset the harness answers with a 302 to asset.json (no tincture
     // route redirects) carrying the CORS header an asset's answer carries,
     // the same 302 without it, and a route the server itself redirects
-    // (/chat, to the sign-in page).
+    // (/a, the desktop's address, to the sign-in page for a request that
+    // carries no session).
     ["redirect_fetch", function () {
       return fetchProbe("moved.json").then(function (asset) {
         return fetchProbe("moved-bare.json").then(function (bare) {
-          return fetchProbe("/chat").then(function (server) {
+          return fetchProbe("/a").then(function (server) {
             return { settled: true, asset: asset, bare: bare, server: server };
           });
         });

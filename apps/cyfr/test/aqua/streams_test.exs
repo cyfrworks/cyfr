@@ -236,6 +236,41 @@ defmodule Aqua.StreamsTest do
     end
   end
 
+  # The canvas wire's vectors (tests/fixtures/tincture_wire.json), whose
+  # `stream_events` hold this stream's events as a canvas reads them.
+  @wire Path.expand("../../../../tests/fixtures/tincture_wire.json", __DIR__)
+
+  describe "the wire's thread events" do
+    test "are a shared thread's and an own thread's payloads, read back whole as a canvas reads them",
+         %{ada: ada} do
+      vectors = @wire |> File.read!() |> Jason.decode!()
+      events = for %{"event" => event} <- vectors["stream_events"]["threads.changes"], do: event
+
+      assert [%{"kind" => "shared", "unread" => unread}, %{"kind" => "own", "unread" => nil}] =
+               events
+
+      assert is_integer(unread) and unread > 0
+
+      actor = Prima.Actor.in_athanor(ada.athanor.id)
+
+      for event <- events do
+        {:ok, last_activity, 0} = DateTime.from_iso8601(event["last_activity"])
+
+        payload =
+          ThreadListed.new(actor, String.to_existing_atom(event["kind"]),
+            id: event["id"],
+            title: event["title"],
+            people: event["people"],
+            last_activity: last_activity,
+            unread: event["unread"],
+            waits_on_you: event["waits_on_you"]
+          )
+
+        assert read_as(payload) == event
+      end
+    end
+  end
+
   describe "one person's list" do
     test "a second person never hears another's list", %{ada: ada, bob: bob} do
       listen(bob)

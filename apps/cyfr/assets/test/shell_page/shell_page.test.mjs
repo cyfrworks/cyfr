@@ -22,7 +22,8 @@ beforeEach(() => at("/a/@alice"))
 afterEach(() => delete globalThis.window)
 
 // The hook as LiveView mounts it: the shell's pushes it handles, the
-// events it pushes, and the page moves it asks for.
+// events it pushes (`page_shown` apart, which `shown` reads), and the page
+// moves it asks for.
 function mount() {
   const handlers = {}
   const pushed = []
@@ -31,11 +32,12 @@ function mount() {
   Object.assign(hook, {
     el: {},
     handleEvent: (event, fn) => (handlers[event] = fn),
-    pushEvent: (event, payload) => pushed.push({event, payload}),
+    pushEvent: (event, payload) => (event === "page_shown" ? shown.push(payload) : pushed.push({event, payload})),
     js: () => ({navigate: (to) => moves.push(to)})
   })
+  const shown = []
   hook.mounted()
-  return {hook, handlers, pushed, moves}
+  return {hook, handlers, pushed, moves, shown}
 }
 
 describe("the shell's navigate", () => {
@@ -116,6 +118,15 @@ describe("the desktop's keys", () => {
     assert.equal(desktopKey({key: "Enter", target: el([], {isContentEditable: true})}), false)
   })
 
+  // Sol's probe (#3433): Enter on a shelf control activates that control
+  // alone; reaching the picker too, it would launch a tincture behind it.
+  test("Enter on a shelf control is not also the picker keynav", () => {
+    assert.equal(desktopKey({key: "Enter", target: el([])}), true)
+    for (const control of ["button", "a[href]"]) {
+      assert.equal(desktopKey({key: "Enter", target: el([control, "#shelf-end"])}), false, control)
+    }
+  })
+
   test("a key with a modifier held is not the picker's", () => {
     for (const mod of ["ctrlKey", "altKey", "metaKey"]) {
       assert.equal(desktopKey({key: "ArrowLeft", [mod]: true, target: el()}), false, mod)
@@ -126,5 +137,26 @@ describe("the desktop's keys", () => {
     const {hook} = mount()
     hook.destroyed()
     assert.equal(windowListeners.keydown, undefined)
+  })
+})
+
+describe("a Dashboard page over the desktop", () => {
+  test("is told to the shell when the hook mounts, and on each move that changes it", () => {
+    at("/a/@alice/settings")
+    const {shown} = mount()
+    assert.deepEqual(shown, [{desktop: false}])
+
+    windowListeners["phx:page-loading-stop"]({detail: {kind: "redirect", to: ORIGIN + "/a/@alice/vault"}})
+    assert.deepEqual(shown, [{desktop: false}], "a move between two pages changes nothing")
+
+    windowListeners["phx:page-loading-stop"]({detail: {kind: "redirect", to: ORIGIN + "/a/@alice"}})
+    assert.deepEqual(shown, [{desktop: false}, {desktop: true}])
+  })
+
+  test("the desktop's own addresses are no page", () => {
+    for (const path of ["/", "/a", "/a/@alice", "/a/@alice/?publisher=p&tincture_name=n"]) {
+      at(path)
+      assert.deepEqual(mount().shown, [{desktop: true}], path)
+    }
   })
 })

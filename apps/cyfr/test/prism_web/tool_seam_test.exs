@@ -267,27 +267,49 @@ defmodule PrismWeb.ToolSeamTest do
            "`@console_owned` names calls that are gone: #{inspect(Enum.sort(stale))}"
   end
 
-  # The chat's verbs go through the tool surface: the same `thread`
-  # actions a headless client calls, from the page. A card is decided
-  # through `approval.resolve`, the one door that carries a standing
-  # answer's bounds, as the wire's `approval` tool does.
+  # The chat's verbs go through the tool surface: the same `thread` and
+  # `shared_thread` actions a headless client calls, from the views that
+  # hold them: AQUA's pane and panel for the person's own threads, the chat
+  # overlay and the shared thread it opens for the threads they share. A
+  # card is decided through `approval.resolve`, the one door that carries
+  # a standing answer's bounds, as the wire's `approval` tool does. None of
+  # them writes a thread through its store or its authority's facade: the
+  # tool is the only way in. The read mark the overlay moves is the
+  # person's own presentation state (`Sanctum.SharedThreads.mark_read/2`)
+  # and no write of the thread's.
   @chat_verbs %{
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
       ~w(thread/create thread/attach thread/send thread/discard thread/stop approval/resolve
          thread/revoke_grant thread/restart_for_consent),
-    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(thread/delete)
+    "apps/cyfr/lib/prism_web/live/aqua_panel_live.ex" => ~w(thread/delete),
+    "apps/cyfr/lib/prism_web/live/chat_overlay_live.ex" =>
+      ~w(shared_thread/create shared_thread/add shared_thread/pair),
+    "apps/cyfr/lib/prism_web/live/shared_thread_live.ex" =>
+      ~w(shared_thread/post shared_thread/attach shared_thread/add shared_thread/remove
+         shared_thread/withdraw shared_thread/rename shared_thread/archive shared_thread/leave
+         invitation/create)
   }
 
+  # A write that goes around the tool: the shared threads' authority's own
+  # writes, or a thread store's.
+  @bypass [
+    ~r/SharedThreads\.(create|pair|add|post|rename|archive|unarchive|leave|remove|withdraw)\(/,
+    ~r/(Threads|ThreadStorage|SharedThreadMembers|SharedMessages)\.(create|append|delete|seat|invite|leave|remove|withdraw)\(/
+  ]
+
   test "the chat's turn writes go through the thread tool" do
-    for {rel, verbs} <- @chat_verbs, verb <- verbs do
+    for {rel, verbs} <- @chat_verbs do
       source = Prima.Test.SourceTree.read(Path.join(root(), rel))
 
-      assert source =~ ~s(call_tool(#{if rel =~ "chat_live", do: "focus", else: ""}) or
-               source =~ verb,
-             "#{rel} does not call #{verb} through PrismWeb.Ops"
+      assert source =~ "call_tool(", "#{rel} calls nothing through PrismWeb.Ops"
 
-      assert source =~ "\"#{verb}\"",
-             "#{rel} does not name #{verb}"
+      for verb <- verbs,
+          do: assert(source =~ "\"#{verb}\"", "#{rel} does not name #{verb}")
+
+      for pattern <- @bypass do
+        refute source =~ pattern,
+               "#{rel} writes a thread around the tool: #{inspect(Regex.run(pattern, source))}"
+      end
     end
 
     pane =

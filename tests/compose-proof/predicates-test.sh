@@ -208,11 +208,12 @@ expect fail "the preview read against another old head" preview_holds "$scratch/
 # ---- cookie_holds ------------------------------------------------------------
 
 unsigned='{"status":302,"headers":{"Location":["/login"]},"body":""}'
-signed='{"status":302,"headers":{"Location":["/chat?a=%40compose-proof"]},"body":""}'
-expect pass "signed out to /login, signed in to the person's chat" cookie_holds "$unsigned" "$signed" "@compose-proof"
+signed='{"status":200,"headers":{},"body":"<a id=\"shelf-gear\" href=\"/a/@compose-proof/settings\" data-phx-link=\"redirect\">"}'
+expect pass "signed out to /login, signed in to the person's desktop" cookie_holds "$unsigned" "$signed" "@compose-proof"
 expect fail "a signed 500" cookie_holds "$unsigned" '{"status":500,"headers":{},"body":"oops"}' "@compose-proof"
 expect fail "a signed redirect elsewhere" cookie_holds "$unsigned" '{"status":302,"headers":{"Location":["/a/other"]},"body":""}' "@compose-proof"
-expect fail "another person's chat" cookie_holds "$unsigned" '{"status":302,"headers":{"Location":["/chat?a=%40someone-else"]},"body":""}' "@compose-proof"
+expect fail "another person's desktop" cookie_holds "$unsigned" '{"status":200,"headers":{},"body":"<a id=\"shelf-gear\" href=\"/a/@someone-else/settings\">"}' "@compose-proof"
+expect fail "a signed-in / that still sends to a page" cookie_holds "$unsigned" '{"status":302,"headers":{"Location":["/chat?a=%40compose-proof"]},"body":""}' "@compose-proof"
 expect fail "an unchanged principal (signed answered as unsigned)" cookie_holds "$unsigned" "$unsigned" "@compose-proof"
 expect fail "a signed-out page served" cookie_holds '{"status":200,"headers":{},"body":"page"}' "$signed" "@compose-proof"
 expect fail "no answer with the cookie" cookie_holds "$unsigned" '{"error":"tls","detail":"x"}' "@compose-proof"

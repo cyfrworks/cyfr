@@ -13,9 +13,16 @@
 // on a tincture, PrismWeb.DesktopLive) is handed to the shell as
 // `focus_named`, read when the hook mounts and after each move of the page.
 //
+// After each move of the page it tells the shell whether a Dashboard page is
+// now drawn over the desktop (`page_shown`, `desktop` true on the desktop's
+// own address), so the prompts the desktop raises on its own wait behind
+// the page rather than stand modal over its asks.
+//
 // The picker's keys are the desktop's: an arrow, Enter or Escape typed on
 // the desktop is handed to the shell as `keynav`, and one typed into a
-// field, with a modifier held, or anywhere inside what stands over the
+// field or on a control (a button, a link: Enter on the shelf's Chat is
+// the button's, never also the picker's launch), with a modifier held, or
+// anywhere inside what stands over the
 // desktop (the page's layer: a Dashboard page, the top bar, the palette;
 // the chat's and AQUA's panels; an open dialog) stays there, so no key
 // typed in a form launches or closes an app.
@@ -30,7 +37,7 @@ export function desktopKey(event) {
   const target = event.target
   if (!target || typeof target.closest !== "function") return true
   if (target.isContentEditable) return false
-  if (target.closest("input, textarea, select, [contenteditable]")) return false
+  if (target.closest("input, textarea, select, [contenteditable], button, a[href]")) return false
   return target.closest(OVER) === null
 }
 
@@ -62,8 +69,27 @@ const ShellPage = {
       if (asked) this.pushEvent("focus_named", asked)
     }
 
-    this._onMoved = (event) => focus((event.detail && event.detail.to) || window.location.href)
+    const shown = (href) => {
+      let url
+      try {
+        url = new URL(href, window.location.origin)
+      } catch {
+        return
+      }
+      const desktop = DESKTOP.test(url.pathname)
+      if (desktop !== this._desktop) {
+        this._desktop = desktop
+        this.pushEvent("page_shown", {desktop})
+      }
+    }
+
+    this._onMoved = (event) => {
+      const href = (event.detail && event.detail.to) || window.location.href
+      shown(href)
+      focus(href)
+    }
     window.addEventListener("phx:page-loading-stop", this._onMoved)
+    shown(window.location.href)
     focus(window.location.href)
 
     this._onKey = (event) => {

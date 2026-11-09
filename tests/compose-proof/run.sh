@@ -55,7 +55,7 @@
 #          the home's, MCP admits that origin and refuses another, the
 #          LiveView socket upgrades for it and not another, and the
 #          session cookie is the fixture person's: / sends to /login
-#          without it and to that person's chat with it. Before the
+#          without it and is that person's desktop with it. Before the
 #          switches: COMPOSE_PROFILES=public,tailnet in the command line's
 #          environment starts neither proxy for a local home with builds
 #          off, and the same key in .env, an incoherent .env and one with
@@ -1380,7 +1380,7 @@ tsnet_checks() {
   unsigned="$(fetched "$(tailnet_fetch "https://$name/")")"
   signed="$(fetched "$(tailnet_fetch --header "cookie: _cyfr_key=$COOKIE" "https://$name/")")"
   why="$(cookie_holds "$unsigned" "$signed" "$SEGMENT")" || fail "at https://$name the session cookie is not the fixture person's: $why"
-  ok "the session cookie is honoured at https://$name: without it / sends to /login, with it to $SEGMENT's chat"
+  ok "the session cookie is honoured at https://$name: without it / sends to /login, with it / is $SEGMENT's desktop"
 }
 
 # `cyfr up` refused before anything starts: the stack is down, the
