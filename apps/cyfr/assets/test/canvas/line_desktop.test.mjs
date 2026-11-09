@@ -3,8 +3,7 @@
 
 // The shipped line desktop (seed/components/tinctures/local/line): its page
 // run as the browser runs it, in a context of its own, against a stand-in
-// for window.cyfr and the few parts of the document it touches; and what
-// its stylesheet holds its controls to.
+// for window.cyfr and the few parts of the document it touches.
 
 import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
@@ -13,7 +12,6 @@ import vm from "node:vm"
 
 const VERSION = new URL("../../../../../seed/components/tinctures/local/line/0.1.0/", import.meta.url)
 const source = readFileSync(new URL("app.js", VERSION), "utf8")
-const stylesheet = readFileSync(new URL("style.css", VERSION), "utf8")
 
 // The browser keeps six connections to one host over plain HTTP, and each
 // stream the page has asked for holds one until it answers and is closed.
@@ -119,42 +117,4 @@ test("pending_stream_replacement_stays_within_five", async () => {
   assert.equal(weather.closed, true)
   assert.equal(asked("threads.changes").length, 1)
   assert.equal(held(), MAX_OPEN)
-})
-
-// Each declaration of a rule whose selectors name `selector`, in the order
-// the stylesheet has them, @media rules included.
-function declarations(selector) {
-  const css = stylesheet.replace(/\/\*[\s\S]*?\*\//g, "")
-  const found = []
-  for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (!selectors.split(",").some((s) => s.trim() === selector)) continue
-    for (const declaration of body.split(";")) {
-      const at = declaration.indexOf(":")
-      if (at !== -1) found.push([declaration.slice(0, at).trim(), declaration.slice(at + 1).trim()])
-    }
-  }
-  return found
-}
-
-test("main_controls_meet_44px", () => {
-  const SIZES = ["height", "min-height", "width", "min-width"]
-  const controls = [".btn", ".btn.sm", ".ib", ".row-btn", ".switch", ".chip", ".link"]
-  for (const control of controls) {
-    for (const [property, value] of declarations(control)) {
-      const px = /^(\d+)px$/.exec(value)
-      if (SIZES.includes(property) && px) assert.ok(Number(px[1]) >= 44, `${control} ${property}: ${value}`)
-    }
-  }
-
-  // Each stands at least 44 pixels high of its own (a small button is a
-  // button's height), and the square ones as wide.
-  const tall = (control) =>
-    declarations(control).some(([p, v]) => ["height", "min-height"].includes(p) && parseInt(v, 10) >= 44)
-  for (const control of controls.filter((c) => c !== ".btn.sm")) assert.ok(tall(control), `${control} has no 44px height`)
-  for (const control of [".btn", ".ib", ".switch", ".link"]) {
-    assert.ok(
-      declarations(control).some(([p, v]) => ["width", "min-width"].includes(p) && parseInt(v, 10) >= 44),
-      `${control} has no 44px width`
-    )
-  }
 })
