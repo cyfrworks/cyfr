@@ -579,6 +579,21 @@ defmodule PrismWeb.ShellDesktopTest do
       assert_push_event(view, "chrome", %{chrome: ^chrome})
     end
 
+    test "a full app over the desktop, the picker's launch among them, takes the chrome off until it closes",
+         %{conn: conn, ctx: ctx} do
+      app!(ctx, "notes")
+      view = shell!(conn)
+      assert_push_event(view, "chrome", %{chrome: %{}})
+
+      render_hook(view, "app_open", %{"ref" => "tincture:local.notes"})
+      app = Frames.get(frames(view), {:app, "home", "tincture:local.notes"})
+      render_hook(view, "frame_full", %{"frame" => app.id})
+      assert_push_event(view, "chrome", %{chrome: nil})
+
+      render_hook(view, "frame_close", %{"frame" => app.id})
+      assert_push_event(view, "chrome", %{chrome: %{"lengths" => %{"radius" => 4}}})
+    end
+
     test "a desktop that falls back wears Prism's default", %{conn: conn} do
       view = shell!(conn)
       home = canvas(view).id
@@ -645,5 +660,28 @@ defmodule PrismWeb.ShellDesktopTest do
       assert app.subject == subject
       assert handshake!(view, app.id)["subject"] == subject
     end
+  end
+
+  # The person's preferences are written by the shell's `prefs` verb
+  # alone: the store's one writer is the component domain's, whose one
+  # caller is the shell.
+  test "the preferences are written only through the shell's prefs verb" do
+    root = Path.expand("../../../../..", __DIR__)
+
+    callers = fn pattern ->
+      for path <- Path.wildcard(Path.join(root, "apps/*/lib/**/*.ex")),
+          File.read!(path) =~ pattern,
+          do: Path.relative_to(path, root)
+    end
+
+    assert callers.(~r/CanvasPrefs\.write\b/) == ["apps/cyfr/lib/compendium/desktop.ex"]
+
+    assert callers.(~r/\bput_desktop_prefs\b/) |> Enum.sort() ==
+             ["apps/cyfr/lib/compendium.ex", "apps/cyfr/lib/prism_web/live/shell_live.ex"]
+
+    # The positive control: the scan reads the tree.
+    assert "apps/cyfr/lib/prism_web/live/shell_live.ex" in callers.(
+             ~r/defmodule PrismWeb\.ShellLive/
+           )
   end
 end

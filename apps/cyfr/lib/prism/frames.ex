@@ -1154,8 +1154,20 @@ defmodule Prism.Frames do
     end
   end
 
-  @doc "The path of `segments` inside the card's version, under an asset credential."
-  @spec asset_path(String.t(), card(), [String.t()]) :: String.t()
+  @doc """
+  The path of `segments` inside a version, a card's or a frame's
+  `reference`, under an asset credential.
+  """
+  @spec asset_path(
+          String.t(),
+          %{
+            required(:publisher) => String.t(),
+            required(:name) => String.t(),
+            required(:version) => String.t(),
+            optional(atom()) => term()
+          },
+          [String.t()]
+        ) :: String.t()
   def asset_path(credential, card, segments) do
     Prima.TinctureUrl.asset_path(credential, [card.publisher, card.name, card.version | segments])
   end

@@ -770,9 +770,9 @@ defmodule PrismWeb.ShellLive do
   end
 
   # The chrome the screen wears: the visible desktop's tokens, applied as
-  # Prism's own variables by the canvas hook, while that desktop's frame
-  # stands and it has not fallen back; Prism's default otherwise. Pushed
-  # only when it changes.
+  # Prism's own variables by the canvas hook, while that desktop's frame is
+  # shown live and it has not fallen back; Prism's default otherwise, a
+  # full app over it among them. Pushed only when it changes.
   defp wear_chrome(socket) do
     chrome = worn_chrome(socket)
 
@@ -784,8 +784,8 @@ defmodule PrismWeb.ShellLive do
   defp worn_chrome(%{assigns: %{frames: frames, fallbacks: fallbacks}}) do
     with canvas_id when is_binary(canvas_id) <- Frames.visible_canvas(frames),
          false <- Map.has_key?(fallbacks, canvas_id),
-         %{state: state, asset: asset, chrome: %{} = tokens, reference: version}
-         when state != :refused and is_binary(asset) <-
+         %{state: :live, visible: true, asset: asset, chrome: %{} = tokens, reference: version}
+         when is_binary(asset) <-
            Frames.get(frames, {:canvas, canvas_id}) do
       Prism.Appearance.chrome(tokens, &Frames.asset_path(asset, version, String.split(&1, "/")))
     else
