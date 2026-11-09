@@ -48,12 +48,13 @@ streams.
    and `feed.results`. `feed(action: "list")` — the feeds the person
    bound, with their result shapes and actions.
 2. Write the page's files, as the page and the SDK below say.
-3. `canvas(action: "write", name: "...", template: "vanilla", files: {...}, data: [...], feeds: [...])` —
+3. `canvas(action: "write", name: "...", template: "vanilla", files: {...}, data: [...], feeds: [...], controls: [...], prefs: {...}, chrome: "...")` —
    `template` is `vanilla` or `react`; `files` maps each file's relative
    path to its text; `data` lists every stream the page opens but a
-   feed's, by name, and `feeds` the name of every feed it reads; add
-   `controls`, `prefs` and `chrome` only when the page uses them, as the
-   Tincture Guide gives them. The person approves the call before it runs. Each write is the next
+   feed's, by name, and `feeds` the name of every feed it reads;
+   `controls`, `prefs` and `chrome` (the path of its `chrome.css` among
+   `files`) are as the Tincture Guide gives them. Leave out every one the
+   page does not use. The person approves the call before it runs. Each write is the next
    version, whole; nothing is ever edited in place.
 4. For a new canvas, `layout(action: "get")` and then `layout.edit` with
    the canvas added, from the revision `get` answered. `write` answers a
