@@ -164,14 +164,12 @@ export async function pressSchedule(sdk: Sdk, row: ScheduleRow): Promise<string 
   return answer.outcome === "refused" ? text(answer.reason) || "refused" : null;
 }
 
-// Shows or hides a section, for the person's tap. A write that came second
-// to another is written once more over the document that answer holds,
-// unless that document already says the same.
+// Shows or hides a section, for the person's tap: one tap, one write. A
+// write that came second to another is not written again, since only the
+// person's input carries a write: its answer holds the current document,
+// which the page shows (through the `desktop` event) for the next tap.
 export async function showWidget(sdk: Sdk, widget: string, on: boolean): Promise<Written> {
-  const write = { widgets: { [widget]: { on } } };
-  const answer = await sdk.prefs(write);
-  if (answer.outcome !== "stale" || isShown(answer.document, widget) === on) return answer;
-  return sdk.prefs(write);
+  return sdk.prefs({ widgets: { [widget]: { on } } });
 }
 
 // Whether the document shows the widget: every widget is shown until its

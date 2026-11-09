@@ -764,20 +764,13 @@ describe("the sections the person hides", () => {
     ])
   })
 
-  test("a stale write is written once more over the answer's document, unless that document says the same", async () => {
+  test("a stale write is not written again: one tap, one write, its answer the document now held", async () => {
     const shell = sdk()
-    shell.answers.prefs.push(
-      {outcome: "stale", document: {widgets: {apps: {on: false}}, desktop: {}}, revision: 7},
-      {outcome: "stale", document: {widgets: {apps: {on: false}, runs: {on: true}}, desktop: {}}, revision: 8}
-    )
+    const current = {widgets: {apps: {on: false}}, desktop: {}}
+    shell.answers.prefs.push({outcome: "stale", document: current, revision: 7})
     const answer = await showWidget(shell.cyfr, "runs", false)
-    assert.equal(answer.outcome, "stale")
-    assert.equal(answer.revision, 8)
-    assert.deepEqual(shell.calls.prefs, [{widgets: {runs: {on: false}}}, {widgets: {runs: {on: false}}}])
-
-    shell.answers.prefs.push({outcome: "stale", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 9})
-    assert.equal((await showWidget(shell.cyfr, "runs", false)).outcome, "stale")
-    assert.equal(shell.calls.prefs.length, 3)
+    assert.deepEqual(answer, {outcome: "stale", document: current, revision: 7})
+    assert.deepEqual(shell.calls.prefs, [{widgets: {runs: {on: false}}}])
   })
 
   test("the manifest declares a widget for each section, with no fields of its own", () => {
@@ -851,7 +844,7 @@ describe("on the SDK itself", () => {
 
   const verbs = (heard, verb) => heard.filter((message) => message.verb === verb).map((message) => message.args)
 
-  test("the open's document hides its sections, and a stale write goes once more and follows the shell's answer", async () => {
+  test("the open's document hides its sections, and a stale write's answer is the document the page then shows", async () => {
     const shell = await opened()
     try {
       const states = []
@@ -861,13 +854,21 @@ describe("on the SDK itself", () => {
 
       const write = showWidget(shell.api, "runs", false)
       await eventually(() => verbs(shell.heard, "prefs").length === 1)
-      shell.tell("prefs", {outcome: "stale", document: {widgets: {apps: {on: false}}, desktop: {}}, revision: 7})
-      await eventually(() => verbs(shell.heard, "prefs").length === 2)
-      shell.tell("prefs", {outcome: "saved", document: {widgets: {apps: {on: false}, runs: {on: false}}, desktop: {}}, revision: 8})
-      assert.deepEqual(await write, {outcome: "saved", document: {widgets: {apps: {on: false}, runs: {on: false}}, desktop: {}}, revision: 8})
-      assert.deepEqual(verbs(shell.heard, "prefs"), [{document: {widgets: {runs: {on: false}}}}, {document: {widgets: {runs: {on: false}}}}])
+      const current = {widgets: {apps: {on: false}, schedules: {on: false}}, desktop: {}}
+      shell.tell("prefs", {outcome: "stale", document: current, revision: 7})
+      assert.deepEqual(await write, {outcome: "stale", document: current, revision: 7})
       await eventually(() => hidden(states.at(-1)).length === 2)
-      assert.deepEqual(hidden(states.at(-1)), ["runs", "apps"])
+      assert.deepEqual(hidden(states.at(-1)), ["apps", "schedules"])
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.deepEqual(verbs(shell.heard, "prefs"), [{document: {widgets: {runs: {on: false}}}}])
+
+      // The person's next tap writes over it.
+      const again = showWidget(shell.api, "runs", false)
+      await eventually(() => verbs(shell.heard, "prefs").length === 2)
+      const saved = {widgets: {apps: {on: false}, schedules: {on: false}, runs: {on: false}}, desktop: {}}
+      shell.tell("prefs", {outcome: "saved", document: saved, revision: 8})
+      assert.deepEqual(await again, {outcome: "saved", document: saved, revision: 8})
+      await eventually(() => hidden(states.at(-1)).length === 3)
       stop()
     } finally {
       shell.close()
