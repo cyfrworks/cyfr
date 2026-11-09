@@ -44,10 +44,8 @@
   const RESUME = "resume-schedule";
   const MAX_RUNS = 20;
   const RETRY_MS = [2000, 5000, 15000, 60000];
-  // How long one open waits for the one before it, and how long the first
-  // draw waits for the opens before the page tells the shell it is ready,
-  // well inside the ten seconds the shell gives it.
-  const OPEN_STEP_MS = 1500;
+  // How long the first draw waits for the opens before the page tells the
+  // shell it is ready, well inside the ten seconds the shell gives it.
   const READY_MS = 6000;
   const NOTE_MS = 4000;
   // The refusal classes a grant can fix, and the cause a run's error reads
@@ -253,19 +251,31 @@
     let stopped = false, opens = 0, everOpened = false, current = null, timer;
     const follower = { refused: false };
     async function open() {
+      await take();
+      if (stopped) return give();
       const n = ++opens;
-      const handle = await sdk.stream(stream.name, stream.subject, ({ data }) => {
-        if (stopped || n !== opens || !isItem(data)) return;
-        stream.item(data, n, data.refresh === true);
-        changed();
-      });
-      if (stopped) return handle.close();
+      let handle;
+      try {
+        handle = await sdk.stream(stream.name, stream.subject, ({ data }) => {
+          if (stopped || n !== opens || !isItem(data)) return;
+          stream.item(data, n, data.refresh === true);
+          changed();
+        });
+      } catch (error) {
+        give();
+        throw error;
+      }
+      if (stopped) {
+        handle.close();
+        return give();
+      }
       everOpened = true;
       current = handle;
       delete S.refusals[label(stream)];
       if (stream.opened) stream.opened(n);
       changed();
       handle.closed.catch(() => {}).then(() => {
+        give();
         if (current === handle) {
           current = null;
           retry(0);
@@ -296,12 +306,31 @@
     return follower;
   }
 
-  // Opens what the shown widgets read and closes what none reads, one open
-  // after another in the order the widgets stand (each waits for the one
-  // before it a moment at most), so when CYFR's bound is reached it is the
-  // last widget that says so. A stream refused before
-  // is opened again, since turning a widget off may have made room.
-  let opening = Promise.resolve();
+  // The stream requests the page holds, pending or open: the browser keeps
+  // a connection for each, so an open waits until fewer than five are
+  // held, in the order it asked. A request the page stopped wanting while
+  // its open was pending cannot be cancelled before it answers; it keeps
+  // its connection until then, is closed at once, and only that frees it.
+  let held = 0;
+  const waiting = [];
+  function take() {
+    if (held < MAX_OPEN) {
+      held += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => waiting.push(resolve));
+  }
+  function give() {
+    const next = waiting.shift();
+    if (next) next();
+    else held -= 1;
+  }
+
+  // Opens what the shown widgets read and closes what none reads, the
+  // opens taking their turns in the order the widgets stand, so when the
+  // five are reached it is the last widget that says so. A stream refused
+  // before is opened again, since turning a widget off may have made room.
+  // Answers once each new stream's first open has its answer.
   function sync() {
     const on = new Set([...shown("near"), ...shown("far")]);
     const order = [...shown("near"), ...shown("far")];
@@ -316,19 +345,15 @@
         followers.delete(label(s));
       }
     }
+    const firsts = [];
     for (const s of wanted) {
       if (followers.has(label(s))) continue;
-      const placeholder = { refused: false, stop() { this.cancelled = true; } };
-      followers.set(label(s), placeholder);
       delete S.refusals[label(s)];
-      opening = opening.then(() => {
-        if (placeholder.cancelled || followers.get(label(s)) !== placeholder) return;
-        const follower = follow(s);
-        followers.set(label(s), follower);
-        return Promise.race([follower.first, pause(OPEN_STEP_MS)]);
-      });
+      const follower = follow(s);
+      followers.set(label(s), follower);
+      firsts.push(follower.first);
     }
-    return opening;
+    return Promise.allSettled(firsts);
   }
   const reading = (name) => followers.has(name);
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
