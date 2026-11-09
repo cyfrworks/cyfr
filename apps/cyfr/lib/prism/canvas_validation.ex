@@ -21,8 +21,9 @@ defmodule Prism.CanvasValidation do
       `{:validation_deadline, frame_id}` to the shell, and covers the
       page's load until it reports `ready`.
     * **The outcome** (`conclude/5`): the page's `ready` is `ready`; the
-      deadline is `not_ready`; a failure at any stage, or the frame's
-      death as its bridge reports it, is `died`. Every outcome first
+      deadline is `not_ready` once the page loaded and took its
+      handshake; a failure at any stage, or the frame's death as its
+      bridge reports it, is `died`. Every outcome first
       forgets the frame, so the shell attributes nothing more to it and
       the next render removes it, then calls `canvas.activate` once,
       through the shell's tool call under the shell's context, whose
@@ -35,7 +36,11 @@ defmodule Prism.CanvasValidation do
       that drops the canvas, or the canvas falling back while it is
       trialled revokes the
       credential, then forgets the frame; nothing is activated or
-      recorded, and the next show validates again.
+      recorded, and the next show validates again. So does a deadline
+      before the page took its handshake, which its bridge asks for once
+      the page has loaded: a browser abandons a trial's load as the shell
+      reloads, and a load abandoned says nothing of the version. The
+      shell then goes on as after an activation that recorded nothing.
 
   What the shell does next is the answer's (`next/1`).
   """
@@ -134,7 +139,9 @@ defmodule Prism.CanvasValidation do
   `canvas.activate` once through `call` with the version, the frame and
   the outcome, then revoke the frame's credential. Answers the frames
   without it and what the shell does next (`next/1`), or `:none` with the
-  frames as they are when no validation of it is held.
+  frames as they are when no validation of it is held. A deadline before
+  the page took its handshake calls nothing: the trial is torn down as
+  `cancel/3` tears one down, and the answer is `{:show_working, :else_fallback}`.
   """
   @spec conclude(Context.t(), Frames.t(), String.t(), event(), call()) ::
           {Frames.t(), next() | :none}
@@ -143,6 +150,11 @@ defmodule Prism.CanvasValidation do
     case Frames.get(frames, {:validation, canvas_id}) do
       nil ->
         {frames, :none}
+
+      # A frame holds its bearer until its handshake hands it over
+      # (`Frames.hand_over/2`), and a validation frame's is never rotated.
+      %{bearer: bearer} when event == :deadline and is_binary(bearer) ->
+        {cancel(ctx, frames, canvas_id), {:show_working, :else_fallback}}
 
       %{id: frame_id, credential_id: credential, reference: %{name: name, version: version}} ->
         # Forgotten first, so nothing more of it is attributed and the next
