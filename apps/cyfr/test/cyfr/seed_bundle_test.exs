@@ -421,6 +421,64 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute Map.has_key?(board.manifest, "dependencies")
   end
 
+  test "the street desktop is 0.1.0 on the vanilla template, and the publish check accepts it" do
+    street = SeedBundle.local_unit!("tinctures", "street")
+    assert street.ref == "tincture:local.street"
+    assert street.version == "0.1.0"
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), street.rel)
+
+    assert Prima.Manifest.validate(street.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(street.manifest)
+    assert Prima.Manifest.Tincture.canvas?(declaration)
+    assert Compendium.tincture_entry(street.manifest) == {:ok, "index.html"}
+    refute Compendium.tincture_lockfile_required?(street.manifest)
+
+    # Five streams, one per part of the street; the page opens a part's
+    # stream only while that part is on.
+    assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
+             {"attention.changes", nil},
+             {"threads.changes", nil},
+             {"runs.changes", nil},
+             {"schedules.changes", nil},
+             {"activity.changes", nil}
+           ]
+
+    assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
+    assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+
+    assert Enum.map(declaration.desktop.controls, & &1.operation) ==
+             ~w(schedule.pause schedule.resume)
+
+    # The parts a person turns off, and the hill's order.
+    assert Map.keys(declaration.desktop.prefs.widgets) |> Enum.sort() ==
+             ~w(apps castle crew houses lamps sky stops vault waiting)
+
+    # Its chrome: both modes' colours, the pixel face it ships as WOFF2.
+    assert {:ok, tokens} =
+             Compendium.tincture_check_chrome(declaration, &File.read(Path.join(dir, &1)))
+
+    assert %{"radius" => 0, "title-height" => 34, "controls" => "right", "glyphs" => "pixel"} =
+             tokens
+
+    assert [_font] = tokens["fonts"]
+
+    # The fonts it ships carry their licence in the manifest, since a
+    # licence file is no served type.
+    assert street.manifest["description"] =~
+             "Pixelify Sans and Silkscreen, ship under the SIL Open Font License 1.1"
+
+    assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: Path.relative_to(path, dir)
+
+    assert Enum.sort(files) ==
+             ~w(app.js assets/pixelify.woff2 assets/silkscreen.woff2 chrome.css chrome/shelf.svg
+                chrome/title.svg cyfr-manifest.json index.html public/media/icon.svg style.css)
+  end
+
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"
