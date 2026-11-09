@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The capybara's road</title>
+<style>
+  :root { --ground: #23324f; --ink: #1d1a17; --paper: #f4ecd6; --red: #9b2b25; }
+  html, body { margin: 0; height: 100%; background: var(--ground); overflow: hidden; }
+  #stage { position: fixed; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #village { position: absolute; left: 0; top: 0; image-rendering: pixelated; image-rendering: crisp-edges; display: none; }
+  #hits { position: absolute; left: 0; top: 0; pointer-events: none; }
+  #hits .hit, #road { position: absolute; pointer-events: auto; background: transparent; border: 0; padding: 0; margin: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  #road { cursor: ew-resize; z-index: 0; }
+  #hits .hit:disabled { cursor: default; }
+  #hits .hit:focus-visible, #road:focus-visible { outline: 3px solid #fff8ec; outline-offset: 0; box-shadow: 0 0 0 6px var(--ink); }
+  #live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  html.scene #village { display: block; }
+  html.scene #fallback { display: none; }
+  /* the plain page, for when the scene cannot run */
+  #fallback { position: fixed; inset: 0; overflow: auto; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; padding: 16px; box-sizing: border-box; }
+  #fallback h1 { font-size: 24px; margin: 0 0 4px; }
+  #fallback h2 { font-size: 17px; margin: 20px 0 4px; }
+  #fallback ul { margin: 0; padding-left: 20px; }
+  #fallback li { margin: 2px 0; }
+  #fallback button { font: inherit; font-size: 14px; padding: 2px 10px; border: 1px solid var(--ink); background: #fff8ec; color: var(--ink); cursor: pointer; }
+  #lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0 32px; max-width: 1100px; }
+  #fallback .bad { color: var(--red); font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="stage" aria-label="The capybara's road: your place as a village">
+  <canvas id="village" aria-hidden="true"></canvas>
+  <div id="hits"><div id="road" role="slider" tabindex="0" aria-label="The day road: drag or use the arrow keys to look back or ahead in time"></div></div>
+  <div id="live" aria-live="polite"></div>
+</div>
+
+<main id="fallback">
+  <h1>The capybara's road</h1>
+  <p>Your schedules as a road the capybara runs, what waits on you queued outside your house, your threads, crew, apps, vault and feeds. The village needs scripts; when it cannot draw, they are listed here.</p>
+  <div id="lists"></div>
+</main>
+
+<script src="font.js"></script>
+<script src="art.js"></script>
+<script src="model.js"></script>
+<script src="list.js"></script>
+<script src="scene.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>
