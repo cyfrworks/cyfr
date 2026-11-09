@@ -71,7 +71,9 @@ config :sanctum,
     # `sanctum`: the gate's own `system` tool.
     Sanctum.Providers.System,
     # `cyfr`: the platform settings, for the server's operators.
-    Cyfr.Providers.Settings
+    Cyfr.Providers.Settings,
+    # `cyfr`: what waits for a person, the stream a canvas reads; no tool.
+    Cyfr.Providers.Attention
   ]
 
 # The proxies whose forwarded headers the proxy listener trusts

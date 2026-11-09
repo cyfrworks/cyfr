@@ -22,6 +22,7 @@ defmodule Cyfr do
       Bus,
       Bus.ApiKeys,
       Bus.AthanorArchived,
+      Bus.Attention,
       Bus.Build,
       Bus.CallerInvalidated,
       Bus.Components,

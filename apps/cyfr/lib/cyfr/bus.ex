@@ -359,7 +359,7 @@ defmodule Cyfr.Bus do
       struct: Attention,
       match: {:prefix, "bus:attention:"},
       template: "tenant:<athanor_id>:bus:attention:<user_id>",
-      producers: ["Cyfr.TelemetryBridge"],
+      producers: ["Cyfr.TelemetryBridge", "Opus.Schedules.Changes"],
       consumers: ["stream:attention.changes"],
       reason:
         "what waits for one person, on that person's own topic, so no other member learns " <>

@@ -23,6 +23,13 @@ defmodule Cyfr.TelemetryBridge do
   event that names no athanor has nowhere to go: it is dropped and counted
   as `[:cyfr, :bus, :bridge_dropped]`.
 
+  What waits for a person (`Cyfr.Bus.Attention`) is told on their own
+  attention topic from the events of the records it references: an item
+  that begins waiting is read again, when its message is delivered,
+  through the stream's own derivation (`Cyfr.Providers.Attention`), so a
+  live item is the one the stream's refresh lists, and one that stops is
+  `removed` by its id.
+
   The handlers run in the emitting process, and `:telemetry` detaches a
   handler that fails in any way for the life of the node. Every failure —
   a refused publish, a raising PubSub, an exit — is caught and logged
@@ -38,6 +45,7 @@ defmodule Cyfr.TelemetryBridge do
   alias Cyfr.Bus.{
     ApiKeys,
     AthanorArchived,
+    Attention,
     Build,
     CallerInvalidated,
     Components,
@@ -68,6 +76,13 @@ defmodule Cyfr.TelemetryBridge do
     [:cyfr, :sanctum, :confirmation, :voided],
     [:cyfr, :sanctum, :confirmation, :expired]
   ]
+
+  # What ends a pending confirmation's wait; a confirmed record still waits
+  # for the change its asker repeats.
+  @confirmation_ends [:consumed, :cancelled, :voided, :expired]
+
+  # What ends an offer's wait for its recipient.
+  @offer_ends [:accepted, :declined, :withdrawn, :expired]
 
   @doc false
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -148,7 +163,7 @@ defmodule Cyfr.TelemetryBridge do
     [
       tenant(meta, &Bus.executions/1, &Execution.new(&1, :completed, execution(meta)))
       | root_notify(meta, :execution_finished)
-    ]
+    ] ++ run_attention(meta, :completed)
   end
 
   # A cancel ends the row as the caller asked; it is not a failure the
@@ -164,7 +179,7 @@ defmodule Cyfr.TelemetryBridge do
     [
       tenant(meta, &Bus.executions/1, &Execution.new(&1, :failed, execution(meta)))
       | root_notify(meta, :execution_failed)
-    ]
+    ] ++ run_attention(meta, :failed)
   end
 
   defp messages([:cyfr, :emissary, :request], measurements, meta) do
@@ -211,8 +226,15 @@ defmodule Cyfr.TelemetryBridge do
           meta |> Map.take([:schedule_id, :execution_id, :reason]) |> classified([:reason])
         )
       end)
-    ]
+    ] ++ schedule_attention(meta, :failed)
   end
+
+  # A schedule's run that completed settles its failing; a feed's has no
+  # item.
+  defp messages([:cyfr, :schedules, :completed], _measurements, %{kind: "schedule"} = meta),
+    do: schedule_attention(meta, :completed)
+
+  defp messages([:cyfr, :schedules, :completed], _measurements, %{kind: "feed"}), do: []
 
   defp messages([:cyfr, :compendium, :component, action], _measurements, meta)
        when action in [:install, :remove, :push] do
@@ -241,6 +263,7 @@ defmodule Cyfr.TelemetryBridge do
       tenant(meta, &Bus.notify/1, fn actor ->
         Notify.new(actor, meta[:kind], notify_payload(meta))
       end)
+      | approval_attention(meta)
     ]
   end
 
@@ -325,7 +348,12 @@ defmodule Cyfr.TelemetryBridge do
               is_binary(recipient) and recipient != "" and is_binary(filename) and
               filename != "" do
     payload = FileOffer.new(kind, offer_id, sender, filename)
-    for user_id <- told(kind, sender, recipient), do: {:global, Bus.file_offers(user_id), payload}
+
+    for(
+      user_id <- told(kind, sender, recipient),
+      do: {:global, Bus.file_offers(user_id), payload}
+    ) ++
+      offer_attention(kind, offer_id, recipient)
   end
 
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})
@@ -344,6 +372,7 @@ defmodule Cyfr.TelemetryBridge do
 
     [
       tenant(meta, &Bus.confirmations(&1, user_id), &Confirmation.new(&1, stage, fields))
+      | confirmation_attention(stage, meta)
     ]
   end
 
@@ -437,6 +466,154 @@ defmodule Cyfr.TelemetryBridge do
     ]
   end
 
+  # ---------------------------------------------------------------------------
+  # What waits for a person
+  # ---------------------------------------------------------------------------
+
+  # A top-level run of a reference its person ran: a failure is that
+  # reference's item as it stands once read, and any end of a run of it
+  # settles the item, which is the reference itself. A child is part of
+  # its root's work.
+  defp run_attention(meta, outcome) do
+    case meta do
+      %{athanor_id: athanor_id, user_id: user_id, reference: reference}
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             user_id != "" and is_binary(reference) ->
+        if is_nil(meta[:parent_execution_id]),
+          do: [ran(outcome, athanor_id, user_id, reference)],
+          else: []
+
+      _unattributed ->
+        []
+    end
+  end
+
+  defp ran(:failed, athanor_id, user_id, reference) do
+    attention(fn ->
+      Cyfr.Providers.Attention.failed_run(Prima.Actor.in_athanor(athanor_id), user_id, reference)
+      |> waiting(athanor_id, user_id)
+    end)
+  end
+
+  defp ran(:completed, athanor_id, user_id, reference),
+    do: attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: reference}}]} end)
+
+  # A schedule's failure is its item as it stands once read; a completed
+  # run of it settles the item.
+  defp schedule_attention(meta, outcome) do
+    case meta do
+      %{kind: "schedule", athanor_id: athanor_id, user_id: user_id, schedule_id: id}
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             user_id != "" and is_binary(id) ->
+        [scheduled(outcome, athanor_id, user_id, id)]
+
+      _feed_or_unattributed ->
+        []
+    end
+  end
+
+  defp scheduled(:failed, athanor_id, user_id, id) do
+    attention(fn ->
+      Cyfr.Providers.Attention.failed_schedule(Prima.Actor.in_athanor(athanor_id), user_id, id)
+      |> waiting(athanor_id, user_id)
+    end)
+  end
+
+  defp scheduled(:completed, athanor_id, user_id, id),
+    do: attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: id}}]} end)
+
+  # An approval waits for the athanor's person: opened, it is read as it
+  # stands; resolved, it is removed.
+  defp approval_attention(%{
+         athanor_id: athanor_id,
+         kind: kind,
+         payload: %{approval_id: id}
+       })
+       when kind in [:approval_pending, :approval_resolved] and is_binary(athanor_id) and
+              athanor_id != "" and is_binary(id) do
+    [
+      attention(fn ->
+        with {:ok, person} <- Cyfr.Providers.Attention.person(athanor_id) do
+          case kind do
+            :approval_pending ->
+              Cyfr.Providers.Attention.approval(Prima.Actor.in_athanor(athanor_id), id)
+              |> waiting(athanor_id, person)
+
+            :approval_resolved ->
+              {:ok, [{athanor_id, person, :removed, %{id: id}}]}
+          end
+        end
+      end)
+    ]
+  end
+
+  defp approval_attention(_meta), do: []
+
+  # An offer waits for its recipient in their own athanor, wherever its
+  # sender is; a receipt's landing or failure is not a wait.
+  defp offer_attention(kind, offer_id, recipient) when kind == :offered or kind in @offer_ends do
+    [
+      attention(fn ->
+        with {:ok, athanor_id} <- Cyfr.Providers.Attention.own_athanor(recipient) do
+          if kind == :offered do
+            %{Prima.Actor.in_athanor(athanor_id) | user_id: recipient}
+            |> Cyfr.Providers.Attention.file_offer(offer_id)
+            |> waiting(athanor_id, recipient)
+          else
+            {:ok, [{athanor_id, recipient, :removed, %{id: offer_id}}]}
+          end
+        end
+      end)
+    ]
+  end
+
+  defp offer_attention(_kind, _offer_id, _recipient), do: []
+
+  # A confirmation is its announcement's item: the record is the identity
+  # domain's, and the announcement carries what the item names.
+  defp confirmation_attention(
+         :opened,
+         %{
+           athanor_id: athanor_id,
+           user_id: user_id,
+           ref: ref,
+           operation: operation,
+           opened_at: %DateTime{} = opened_at
+         }
+       )
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(ref) and
+              is_binary(operation) do
+    item =
+      Cyfr.Providers.Attention.confirmation(%{
+        ref: ref,
+        operation: operation,
+        opened_at: opened_at
+      })
+
+    [attention(fn -> waiting({:ok, [item]}, athanor_id, user_id) end)]
+  end
+
+  defp confirmation_attention(stage, %{athanor_id: athanor_id, user_id: user_id, ref: ref})
+       when stage in @confirmation_ends and is_binary(athanor_id) and athanor_id != "" and
+              is_binary(ref),
+       do: [attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: ref}}]} end)]
+
+  defp confirmation_attention(_stage, _meta), do: []
+
+  # Read when delivered, so a read that fails costs this message alone.
+  defp attention(read), do: {:attention, read}
+
+  # Items as their person's attention messages.
+  defp waiting({:ok, items}, athanor_id, user_id),
+    do:
+      {:ok,
+       for(
+         %{kind: kind} = item <- items,
+         do: {athanor_id, user_id, kind, Map.delete(item, :kind)}
+       )}
+
+  defp waiting({:error, reason}, _athanor_id, _user_id), do: {:error, reason}
+
   defp tenant(meta, topic, build, scope \\ :tenant) do
     case meta[:athanor_id] do
       athanor_id when is_binary(athanor_id) and athanor_id != "" ->
@@ -464,6 +641,29 @@ defmodule Cyfr.TelemetryBridge do
 
   defp deliver(event, {:global, topic, payload}),
     do: publish(event, fn -> Bus.broadcast_global(topic, payload) end)
+
+  defp deliver(event, {:attention, read}) do
+    publish(event, fn ->
+      case read.() do
+        {:ok, items} -> Enum.reduce_while(items, :ok, &tell/2)
+        # No person to tell: an athanor or a recipient this server holds no row for.
+        :none -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  # One person's attention message, on their own topic in the athanor the
+  # item is in.
+  defp tell({athanor_id, user_id, kind, fields}, :ok) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    payload = Attention.new(actor, kind, fields)
+
+    case Bus.broadcast(actor, Bus.attention(actor, user_id), payload) do
+      :ok -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
 
   # A publish that fails — refused, or the PubSub raising — is logged and
   # contained here, one message at a time.
