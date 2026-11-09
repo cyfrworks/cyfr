@@ -1126,7 +1126,7 @@ async function pressSchedule(s) {
   try { answer = await sdk.press(c.control, s.schedule_id); } catch (err) { answer = { outcome: 'refused', reason: (err && err.code) || 'refused' }; }
   pending.delete(s.schedule_id);
   if (answer.outcome === 'refused') said = `CYFR did not ${c.label.toLowerCase()} it: ${text(answer.reason) || 'refused'}.`;
-  else if (answer.outcome === 'cancelled') said = `Not done: tap ${c.label} again.`;
+  else if (answer.outcome === 'cancelled') said = answer.reason === 'too_soon' ? `Too soon after your last tap: wait a few seconds, then tap ${c.label} again.` : `Not done: tap ${c.label} again.`;
   else ding(c.label === 'Pause' ? 'paused' : 'resumed');
   renderBoard();
 }
@@ -1341,7 +1341,7 @@ async function savePlan() {
   if (answer.outcome === 'stale') {
     if (isItem(answer.document)) prefsDoc = answer.document;
     planSaid = 'Another of your screens saved first. Tap Done to keep these.';
-  } else if (answer.outcome === 'cancelled') planSaid = 'Not saved: tap Done again.';
+  } else if (answer.outcome === 'cancelled') planSaid = answer.reason === 'too_soon' ? 'Too soon after your last tap: wait a few seconds, then tap Done again.' : 'Not saved: tap Done again.';
   else planSaid = `Not saved: ${text(answer.reason) || 'refused'}.`;
   renderPlan();
 }
