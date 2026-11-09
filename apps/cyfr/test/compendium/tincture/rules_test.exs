@@ -1102,8 +1102,6 @@ defmodule Compendium.Tincture.RulesTest do
   end
 
   describe "a desktop's chrome" do
-    @licence "SIL Open Font License 1.1"
-
     defp chrome_of(path) do
       {:ok, declaration} =
         Rules.validate_declaration(%{
@@ -1193,32 +1191,19 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "a font is a WOFF2 in the version, at most 512 KiB, with a licence beside it" do
+    test "a font is a WOFF2 in the version, at most 512 KiB, and needs no licence file" do
       css = ~s|@font-face { font-family: "Inter"; src: url("fonts/inter.woff2"); }|
-      assert Rules.licence_names() == ~w(LICENSE LICENSE.txt LICENSE.md OFL.txt)
 
-      for licence <- Rules.licence_names() do
-        assert {:ok, %{"fonts" => [%{"src" => "fonts/inter.woff2"}]}} =
-                 chrome_check(css, %{
-                   "fonts/inter.woff2" => woff2(),
-                   "fonts/#{licence}" => @licence
-                 }),
-               licence
-      end
+      assert {:ok, %{"fonts" => [%{"src" => "fonts/inter.woff2"}]}} =
+               chrome_check(css, %{"fonts/inter.woff2" => woff2()})
 
       where = "tincture.desktop.chrome chrome.css: fonts/inter.woff2"
 
       for {files, sentence} <- [
-            {%{"fonts/inter.woff2" => woff2()},
-             "#{where} has no licence beside it: LICENSE, LICENSE.txt, LICENSE.md, OFL.txt"},
-            # A licence elsewhere in the version is not beside the font.
-            {%{"fonts/inter.woff2" => woff2(), "LICENSE" => @licence},
-             "#{where} has no licence beside it: LICENSE, LICENSE.txt, LICENSE.md, OFL.txt"},
-            {%{"fonts/inter.woff2" => "wOFF" <> "rest", "fonts/OFL.txt" => @licence},
-             "#{where} is not a WOFF2 font"},
-            {%{"fonts/inter.woff2" => woff2(524_285), "fonts/OFL.txt" => @licence},
+            {%{"fonts/inter.woff2" => "wOFF" <> "rest"}, "#{where} is not a WOFF2 font"},
+            {%{"fonts/inter.woff2" => woff2(524_285)},
              "#{where} is 524289 bytes, over the cap of 524288"},
-            {%{"fonts/OFL.txt" => @licence}, "#{where} is not among the version's files"}
+            {%{}, "#{where} is not among the version's files"}
           ] do
         assert chrome_check(css, files) == {:error, {:invalid_tincture, sentence}}, sentence
       end

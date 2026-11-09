@@ -142,9 +142,9 @@ A canvas's chrome declaration says how Prism's chrome looks while the canvas is 
 | `--chrome-glyphs` | `plain`, `round`, `square` or `pixel` |
 | `--chrome-font` | `system`, or the quoted family a `@font-face` of the file declares |
 | `--chrome-texture-title`, `--chrome-texture-shelf` | `url()` of a PNG or an SVG in the version, at most 524,288 bytes and 2048 pixels a side; an SVG's root element says its `width` and `height` |
-| `@font-face` | exactly `font-family`, a quoted family of letters, digits, spaces, `_` and `-`, and `src`, `url()` of a WOFF2 in the version, at most 524,288 bytes, optionally with `format("woff2")`, with a licence beside it named `LICENSE`, `LICENSE.txt`, `LICENSE.md` or `OFL.txt` |
+| `@font-face` | exactly `font-family`, a quoted family of letters, digits, spaces, `_` and `-`, and `src`, `url()` of a WOFF2 in the version, at most 524,288 bytes, optionally with `format("woff2")` |
 
-A length is a whole number of `px`. A `url()`, quoted with `"` or not, names a path relative to the chrome file's directory, of plain segments: never `..`, an absolute path or another origin. Each declaration ends with `;` and is declared once. Anything else, another selector, property or at-rule, a comment, an escape, `!important`, an uppercase name or a value outside its bound, refuses the publish, naming the file and the line, and nothing of the version is installed.
+A length is a whole number of `px`. A `url()`, quoted with `"` or not, names a path relative to the chrome file's directory, of plain segments: never `..`, an absolute path or another origin. Each declaration ends with `;` and is declared once. A font is shipped under its author's licence, and keeping to it is the author's: CYFR asks for no licence file, and a version that ships a font its licence does not let it carry is its author's to withdraw. Anything else, another selector, property or at-rule, a comment, an escape, `!important`, an uppercase name or a value outside its bound, refuses the publish, naming the file and the line, and nothing of the version is installed.
 
 ```css
 :root {

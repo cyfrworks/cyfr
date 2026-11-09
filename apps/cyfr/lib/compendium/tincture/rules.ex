@@ -151,9 +151,6 @@ defmodule Compendium.Tincture.Rules do
   # among them) is refused beside them.
   @persons_controls Caps.agent_only_tools()
 
-  # The licence a font ships beside it, by name.
-  @licence_names ~w(LICENSE LICENSE.txt LICENSE.md OFL.txt)
-
   # The stream namespaces whose events carry a thread's or the
   # notes' material, which may be of any source class.
   @thread_streams ~w(turn thread notes)
@@ -220,13 +217,6 @@ defmodule Compendium.Tincture.Rules do
   """
   @spec frame_capabilities() :: [String.t()]
   def frame_capabilities, do: @frame_capabilities
-
-  @doc """
-  The names a font's licence file takes beside the font a chrome
-  declaration names (`check_chrome/2`).
-  """
-  @spec licence_names() :: [String.t()]
-  def licence_names, do: @licence_names
 
   @doc """
   A canvas frame's `sandbox` tokens: `allow-scripts` alone, never with
@@ -884,10 +874,11 @@ defmodule Compendium.Tincture.Rules do
   it names is in the version, at most its byte cap: a texture a PNG whose
   header says it is at most its pixel cap a side, or an SVG whose root
   element's `width` and `height` say so, and a font a WOFF2 (its
-  signature `wOF2`) with a licence file beside it, named one of
-  `licence_names/0`. Answers the accepted tokens, nil for a desktop that
-  names no chrome or a declaration that is no desktop. A refusal names
-  the chrome file and its line, and nothing is applied.
+  signature `wOF2`). Whether a font may be shipped is its author's to
+  know: no licence file is asked for. Answers the accepted tokens, nil
+  for a desktop that names no chrome or a declaration that is no
+  desktop. A refusal names the chrome file and its line, and nothing is
+  applied.
   """
   @spec check_chrome(Tincture.t(), (String.t() -> {:ok, binary()} | :error)) ::
           {:ok, Prima.Manifest.Chrome.tokens() | nil} | {:error, refusal()}
@@ -938,9 +929,8 @@ defmodule Compendium.Tincture.Rules do
       font = "#{where}: #{path}"
 
       with {:ok, bytes} <- read_file(read, path, font),
-           :ok <- within(bytes, cap, font),
-           :ok <- woff2(bytes, font) do
-        licence(path, read, font)
+           :ok <- within(bytes, cap, font) do
+        woff2(bytes, font)
       end
     end)
   end
@@ -952,17 +942,6 @@ defmodule Compendium.Tincture.Rules do
 
   defp woff2(<<"wOF2", _rest::binary>>, _where), do: :ok
   defp woff2(_bytes, where), do: refuse("#{where} is not a WOFF2 font")
-
-  defp licence(path, read, where) do
-    dir = Path.dirname(path)
-
-    beside =
-      Enum.map(@licence_names, fn name -> if dir == ".", do: name, else: Path.join(dir, name) end)
-
-    if Enum.any?(beside, &match?({:ok, _}, read.(&1))),
-      do: :ok,
-      else: refuse("#{where} has no licence beside it: #{Enum.join(@licence_names, ", ")}")
-  end
 
   defp dimensions(
          ".png",

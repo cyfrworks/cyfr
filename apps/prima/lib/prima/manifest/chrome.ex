@@ -48,7 +48,7 @@ defmodule Prima.Manifest.Chrome do
   tokens or the first refusal, and a refusal applies nothing.
 
   What the paths name, a texture's type, size and dimensions and a font's
-  type, size and licence, is held against the version's files by the
+  type and size, is held against the version's files by the
   component domain (`Compendium.Tincture.Rules.check_chrome/3`); the
   file's caps are `file_caps/0`.
   """
