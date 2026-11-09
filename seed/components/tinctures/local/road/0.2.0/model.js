@@ -1,47 +1,65 @@
-// Everything the road does apart from drawing: the streams it keeps open, how their events fold
-// into one state, the person's preferences and the shell's handshake. The scene and the plain list
+// Everything the road does apart from drawing: the streams it reads, how their events fold into
+// one state, the person's preferences and the shell's handshake. The scene and the plain list
 // both read Road.state and listen through Road.subscribe; neither writes it. Every call that asks
-// CYFR to act (a press, a write, an open, an ask) is made from a tap, by the caller.
+// CYFR to act (a press, a write, an open, an ask, a grant) is made from a tap, by the caller.
 (function () {
   const sdk = window.cyfr || null;
 
-  // Each stream stays open while the part that reads it is on, and the village reads at most five
-  // at once, whatever the connection: every open holds a connection to CYFR for as long as it
-  // runs, and a browser keeps six to one host over HTTP/1.1, the shell and its apps needing the
-  // rest. Five holds until one connection carries a frame's streams.
-  const BUDGET = 5;
-  // The controls the manifest declares, each picking a schedule's id.
-  const PAUSE = 'pause-schedule', RESUME = 'resume-schedule';
-  // Pauses before opening an ended stream again, growing while opens fail.
+  // What the manifest declares: every stream opens once, together, at the start, and stays open
+  // whichever parts are on; they all ride the frame's one stream connection.
+  const DATA = ['attention.changes', 'schedules.changes', 'schedule_runs.changes', 'runs.changes', 'threads.changes', 'activity.changes', 'components.changes', 'vault.changes', 'files.changes', 'system.changes'];
+  const FEEDS = ['weather', 'vpn'];
+  // How each stream names its items and which change takes one away (the delivery contract,
+  // canvas.catalog): system.changes is one item; occurrences, runs and feed results never leave.
+  const KEYS = {
+    'attention.changes': ['id', 'removed'], 'schedules.changes': ['schedule_id', 'removed'], 'schedule_runs.changes': ['occurrence_id', null],
+    'runs.changes': ['execution_id', null], 'threads.changes': ['id', 'removed'], 'activity.changes': ['id', 'ended'],
+    'components.changes': ['ref', 'removed'], 'vault.changes': ['name', 'removed'], 'files.changes': ['id', 'removed'],
+    'system.changes': [null, null], 'feed:weather': ['binding', null], 'feed:vpn': ['binding', null],
+  };
+  // A live change of these kinds says only that the picture moved: a fresh picture follows.
+  const REREAD = { 'components.changes': ['installed', 'pushed', 'changed'] };
+  // The controls the manifest declares: two pick a schedule's id, one a run's.
+  const PAUSE = 'pause-schedule', RESUME = 'resume-schedule', RETRY = 'retry-run';
+  // Pauses before opening again a stream that got no answer or ended, growing while it does.
   const RETRY_MS = [2000, 5000, 15000, 60000];
-  // A reopened stream hands its whole current state first; what an earlier open delivered and
-  // this one has not by then was removed meanwhile.
-  const SETTLE_MS = 2500;
   const MAX_SCHEDULE_RUNS = 60;
+  // runs.changes carries the 20 newest runs, the state the shell checks a retry against: the
+  // village holds as many, so it never offers to run again a run the shell no longer reads.
+  const MAX_RUNS = 20;
   // What a tap within a few seconds of the last one that reached CYFR is told: CYFR takes one
   // act per tap and answers the second `too_soon`, never holding it for later.
   const TOO_SOON = 'Too soon after your last tap: wait a few seconds, then tap again.';
 
   // The parts of the village, each a widget of the preferences document. `bld` are the buildings
   // a part stands on the street; `hill` parts keep their hill; `order` parts move along the street;
-  // `streams` are what the part reads (a feed as `feed:<name>`); `on` is whether it stands before
-  // the person says, the defaults reading five streams together.
+  // `streams` are what the part reads (a feed as `feed:<name>`), whose worst state it shows; `on`
+  // is whether it stands before the person says.
   const PARTS = {
+    // the porters read components.changes too, but the queue shows attention.changes' state alone
     attention: { name: 'Visitors', what: 'what waits on you', bld: [], streams: ['attention.changes'], on: true },
     threads: { name: 'Post boxes', what: 'threads', bld: ['post'], order: 1, streams: ['threads.changes'], on: true },
-    activity: { name: 'Crew house', what: 'crew at work', bld: ['crew'], order: 2, streams: ['activity.changes'], on: true },
-    components: { name: 'Market', what: 'your apps', bld: ['market'], order: 3, streams: [], on: true },
-    schedules: { name: 'Tower and road', what: 'schedules and their runs', bld: ['tower', 'press', 'barn'], order: 4, streams: ['schedules.changes', 'schedule_runs.changes'], on: true },
-    vault: { name: 'Strongroom', what: 'vault', bld: ['vault'], order: 5, streams: ['vault.changes'], on: false },
-    weather: { name: 'Windmill', what: 'the weather feed', hill: true, streams: ['feed:weather'], on: false },
-    vpn: { name: 'Tram line', what: 'the vpn feed', hill: true, streams: ['feed:vpn'], on: false },
+    activity: { name: 'Crew house', what: 'crew at work', bld: ['crew'], order: 2, streams: ['activity.changes', 'system.changes'], on: true },
+    components: { name: 'Market', what: 'your apps', bld: ['market'], order: 3, streams: ['components.changes'], on: true },
+    schedules: { name: 'Tower and road', what: 'schedules and their runs', bld: ['tower', 'press', 'barn'], order: 4, streams: ['schedules.changes', 'schedule_runs.changes', 'runs.changes'], on: true },
+    vault: { name: 'Strongroom', what: 'vault', bld: ['vault'], order: 5, streams: ['vault.changes'], on: true },
+    system: { name: 'Silo', what: 'how CYFR stands', bld: ['silo'], order: 6, streams: ['system.changes'], on: true },
+    files: { name: 'Archive', what: 'your files', bld: ['archive'], order: 7, streams: ['files.changes'], on: false },
+    weather: { name: 'Windmill', what: 'the weather feed', hill: true, streams: ['feed:weather'], on: true },
+    vpn: { name: 'Tram line', what: 'the vpn feed', hill: true, streams: ['feed:vpn'], on: true },
   };
 
   const state = {
-    attention: new Map(), schedules: new Map(), scheduleRuns: new Map(), threads: new Map(),
-    activity: new Map(), vault: new Map(), feeds: { weather: null, vpn: null },
-    refusals: {}, installed: [], posture: null, covered: [], frozen: false,
+    attention: new Map(), schedules: new Map(), scheduleRuns: new Map(), runs: new Map(), threads: new Map(),
+    activity: new Map(), components: new Map(), vault: new Map(), files: new Map(), system: new Map(),
+    feeds: { weather: null, vpn: null }, installed: [], posture: null, covered: [], frozen: false,
     prefs: { document: {}, revision: 0 }, appearance: null, person: null, framed: !!sdk,
+  };
+  const feedItems = { weather: new Map(), vpn: new Map() };
+  const MAPS = {
+    'attention.changes': state.attention, 'schedules.changes': state.schedules, 'schedule_runs.changes': state.scheduleRuns, 'runs.changes': state.runs,
+    'threads.changes': state.threads, 'activity.changes': state.activity, 'components.changes': state.components, 'vault.changes': state.vault,
+    'files.changes': state.files, 'system.changes': state.system, 'feed:weather': feedItems.weather, 'feed:vpn': feedItems.vpn,
   };
 
   const listeners = new Set();
@@ -77,163 +95,193 @@
     const t = typeof iso === 'string' ? Date.parse(iso) : NaN;
     return Number.isNaN(t) ? null : localOf(t);
   }
+  const pad = (n) => String(n).padStart(2, '0');
+  const clock = (m) => { const d = ((Math.floor(m) % 1440) + 1440) % 1440; return pad(Math.floor(d / 60)) + ':' + pad(d % 60); };
 
-  // ---- folding events -------------------------------------------------------------------------
+  // ---- reading an item ------------------------------------------------------------------------
   const isItem = (d) => typeof d === 'object' && d !== null && !Array.isArray(d);
   // "catalyst:local.openai:1.4.1" as a person reads it: "openai".
   const refName = (ref) => { const named = ref.split(':')[1] || ref; return named.includes('.') ? named.slice(named.indexOf('.') + 1) : named; };
+  // "tincture:local.maps:1.0.0" without its version, as components.changes names it.
+  const bare = (ref) => { const p = ref.split(':'); return p.length > 2 ? p[0] + ':' + p[1] : ref; };
   const str = (v) => (typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-  function keep(map, key, value, open) { map.set(key, { value, open }); }
-
-  function fold(stream, d, open) {
-    switch (stream) {
+  // An item's whole state as the scene reads it.
+  function read(key, d) {
+    switch (key) {
       case 'attention.changes': {
-        const id = str(d.id); if (!id) return;
-        if (d.kind === 'removed') { if (state.attention.delete(id)) emit({ stream: 'attention', removed: id }); return; }
         const dest = isItem(d.destination) ? d.destination : {};
         const label = d.kind === 'failed_run' ? refName(str(d.label)) : str(d.label);
-        keep(state.attention, id, { id, kind: str(d.kind), label: label || 'Something', since: timeOf(d.since), page: dest.kind === 'page' ? str(dest.page) : null }, open);
-        break;
+        return { id: str(d.id), kind: str(d.kind), label: label || 'Something', since: timeOf(d.since), page: dest.kind === 'page' ? str(dest.page) || null : null, ref: str(dest.ref) };
       }
-      case 'schedules.changes': {
-        const id = str(d.schedule_id); if (!id) return;
-        if (d.kind === 'removed') { state.schedules.delete(id); break; }
-        keep(state.schedules, id, {
-          id, name: str(d.name) || str(d.reference) || 'A schedule', reference: str(d.reference), cron: str(d.cron_expression),
+      case 'schedules.changes':
+        return {
+          id: str(d.schedule_id), name: str(d.name) || str(d.reference) || 'A schedule', reference: str(d.reference), cron: str(d.cron_expression),
           status: str(d.status), next: timeOf(d.next_run_at), nextUtc: typeof d.next_run_at === 'string' ? Date.parse(d.next_run_at) : NaN,
           last: timeOf(d.last_run_at), runs: Number(d.run_count) || 0, errors: Number(d.error_count) || 0,
-        }, open);
-        break;
-      }
+        };
       case 'schedule_runs.changes': {
-        // once per occurrence and kind; a failure outranks the firing it followed
-        const key = str(d.occurrence_id) || str(d.schedule_id) + '@' + str(d.scheduled_for) + '@' + str(d.execution_id);
-        const before = state.scheduleRuns.get(key);
-        if (before && before.value.kind === 'failed' && d.kind !== 'failed') return;
         const reason = isItem(d.reason) ? d.reason : null;
-        keep(state.scheduleRuns, key, { key, kind: str(d.kind), sid: str(d.schedule_id), at: timeOf(d.scheduled_for), cause: reason ? str(reason.cause) : '' }, open);
-        if (state.scheduleRuns.size > MAX_SCHEDULE_RUNS) {
-          const oldest = [...state.scheduleRuns.values()].sort((a, b) => (a.value.at ?? -Infinity) - (b.value.at ?? -Infinity))[0];
-          state.scheduleRuns.delete(oldest.value.key);
-        }
-        break;
+        return { key: str(d.occurrence_id), kind: str(d.kind), sid: str(d.schedule_id), eid: str(d.execution_id), at: timeOf(d.scheduled_for), cause: reason ? str(reason.cause) : '' };
       }
-      case 'threads.changes': {
-        const id = str(d.id); if (!id) return;
-        if (d.kind === 'removed') { state.threads.delete(id); break; }
-        keep(state.threads, id, { id, own: d.kind === 'own', title: str(d.title) || 'Untitled thread', people: Array.isArray(d.people) ? d.people.length : 0, last: timeOf(d.last_activity), waits: d.waits_on_you === true }, open);
-        break;
+      case 'runs.changes': {
+        const error = isItem(d.error) ? d.error : null;
+        return { id: str(d.execution_id), kind: str(d.kind), parent: str(d.parent_execution_id), name: refName(str(d.reference)) || 'A run', started: timeOf(d.started_at), ended: timeOf(d.ended_at), cause: error ? str(error.cause) : '' };
       }
-      case 'activity.changes': {
-        const id = str(d.id); if (!id) return;
-        if (d.kind === 'ended') { state.activity.delete(id); break; }
-        keep(state.activity, id, { id, member: str(d.member) || 'crew', askedBy: str(d.asked_by), since: timeOf(d.since), status: str(d.status) }, open);
-        break;
-      }
-      case 'vault.changes': {
-        const name = str(d.name); if (!name) return;
-        if (d.kind === 'removed') { state.vault.delete(name); break; }
-        keep(state.vault, name, { name, type: str(d.type), fine: d.status !== 'needs_reauthorisation' }, open);
-        break;
-      }
-      default: return;
+      case 'threads.changes':
+        return { id: str(d.id), own: d.kind === 'own', title: str(d.title) || 'Untitled thread', people: Array.isArray(d.people) ? d.people.length : 0, last: timeOf(d.last_activity), waits: d.waits_on_you === true, unread: num(d.unread) || 0 };
+      case 'activity.changes':
+        return { id: str(d.id), member: str(d.member) || 'crew', askedBy: str(d.asked_by), title: str(d.title), since: timeOf(d.since), status: str(d.status) };
+      case 'components.changes':
+        return { ref: str(d.ref), type: str(d.type), name: str(d.name), version: str(d.version), update: d.update_available === true, grant: typeof d.grant_current === 'boolean' ? d.grant_current : null };
+      case 'vault.changes':
+        return { name: str(d.name), type: str(d.type), fine: d.status !== 'needs_reauthorisation' };
+      case 'files.changes':
+        return { id: str(d.id), kind: str(d.kind), name: str(d.name) || 'A file', type: str(d.type), changed: timeOf(d.changed_at), from: str(d.from) };
+      case 'system.changes':
+        return { health: str(d.health), used: num(d.storage_used), cap: num(d.storage_cap), model: d.model_connected === true, ready: num(d.crew_ready), total: num(d.crew_total), version: str(d.version), update: d.update_available === true };
+      default:
+        return {
+          binding: str(d.binding), revision: Number(d.revision) || 0, at: timeOf(d.at), label: str(d.label), result: d.result,
+          actions: Array.isArray(d.actions) ? d.actions.filter((a) => isItem(a) && str(a.name)).map((a) => ({ name: str(a.name), label: str(a.label) || str(a.name) })) : [],
+        };
     }
-    emit({ stream: stream.split('.')[0] });
   }
 
-  function foldFeed(name, d) {
-    const held = state.feeds[name];
-    const revision = Number(d.revision) || 0;
-    if (held && held.revision >= revision) return;
-    state.feeds[name] = {
-      binding: str(d.binding), revision, at: timeOf(d.at), label: str(d.label), result: d.result,
-      actions: Array.isArray(d.actions) ? d.actions.filter((a) => isItem(a) && str(a.name)).map((a) => ({ name: str(a.name), label: str(a.label) || str(a.name) })) : [],
-    };
-    emit({ stream: 'feeds', feed: name });
+  // ---- holding each stream's picture ------------------------------------------------------------
+  // Per stream: the items it holds by key, each with the highest revision heard; the revisions of
+  // items taken away, so an older change cannot bring one back; and, from an open or a `resync`
+  // until the `snapshot`, the picture gathered apart, which then replaces what the stream held.
+  const streams = {};
+  const fresh = () => ({ items: new Map(), revs: new Map(), gone: new Map() });
+  function holder(key) {
+    return { key, items: MAPS[key], revs: new Map(), gone: new Map(), picture: null, state: 'opening', at: null, retryAt: null, opens: 0, tries: 0, timer: null };
+  }
+  const nameOf = (key) => (key.startsWith('feed:') ? 'feeds' : key === 'schedule_runs.changes' ? 'scheduleRuns' : key.split('.')[0]);
+  function changed(key, removed) {
+    if (key.startsWith('feed:')) {
+      const feed = key.slice(5);
+      let newest = null;
+      for (const { value } of feedItems[feed].values()) if (!newest || value.revision >= newest.revision) newest = value;
+      state.feeds[feed] = newest;
+      emit({ stream: 'feeds', feed });
+    } else emit(removed ? { stream: nameOf(key), removed } : { stream: nameOf(key) });
+  }
+  // Keeps the newest of a stream that never takes an item away.
+  function cap(key, into) {
+    const most = key === 'runs.changes' ? MAX_RUNS : key === 'schedule_runs.changes' ? MAX_SCHEDULE_RUNS : Infinity;
+    if (into.items.size <= most) return;
+    const when = (v) => (key === 'runs.changes' ? v.started : v.at) ?? -Infinity;
+    const [id] = [...into.items].sort((a, b) => when(a[1].value) - when(b[1].value))[0];
+    into.gone.set(id, into.revs.get(id)); into.items.delete(id); into.revs.delete(id);
+  }
+  function change(s, d, revision) {
+    const [field, removal] = KEYS[s.key];
+    const id = field ? str(d[field]) : 'one';
+    // a schedule that failed before it claimed an occurrence: a notice to show, never to hold
+    if (!id) { if (s.key === 'schedule_runs.changes') emit({ stream: 'notice', notice: read(s.key, d) }); return; }
+    if (d.refresh !== true && (REREAD[s.key] || []).includes(d.kind)) return;
+    const into = s.picture || s;
+    const rev = Number.isInteger(revision) ? revision : null;
+    const before = into.revs.has(id) ? into.revs.get(id) : into.gone.get(id);
+    if (rev !== null && before != null && rev <= before) return;
+    if (removal && d.kind === removal) {
+      into.items.delete(id); into.revs.delete(id); into.gone.set(id, rev);
+    } else {
+      into.items.set(id, { value: read(s.key, d) }); into.revs.set(id, rev); into.gone.delete(id);
+      cap(s.key, into);
+    }
+    // only a live removal is told as one: an item a picture drops is simply gone
+    if (!s.picture) changed(s.key, removal && d.kind === removal ? id : null);
+  }
+  function replace(s) {
+    const p = s.picture;
+    s.picture = null;
+    s.items.clear();
+    for (const [id, held] of p.items) s.items.set(id, held);
+    s.revs = p.revs; s.gone = p.gone;
+    changed(s.key);
+  }
+  function setState(s, st, o = {}) {
+    s.state = st; s.at = o.at ?? null; s.retryAt = o.retryAt ?? null;
+    emit({ stream: 'states' });
+  }
+  function heard(s, ev) {
+    const event = ev && ev.event;
+    if (event === 'resync') { s.picture = fresh(); return; }
+    if (event === 'snapshot') { if (s.picture) replace(s); s.tries = 0; return setState(s, 'live'); }
+    if (event === 'stale') return setState(s, 'stale', { at: timeOf(ev.at) });
+    if (event === 'unavailable') return setState(s, 'unavailable', { retryAt: timeOf(isItem(ev.data) ? ev.data.retry_at : null) });
+    if (event === 'denied') { s.picture = null; s.items.clear(); s.revs.clear(); s.gone.clear(); changed(s.key); return setState(s, 'denied'); }
+    if (event === 'refusal' || !isItem(ev.data)) return;
+    change(s, ev.data, ev.revision);
   }
 
-  // After an open settles, drop what no open since `open` delivered.
-  function prune(stream, open) {
-    const map = { 'attention.changes': state.attention, 'schedules.changes': state.schedules, 'threads.changes': state.threads, 'activity.changes': state.activity, 'vault.changes': state.vault }[stream];
-    if (!map) return;
-    let changed = false;
-    for (const [key, held] of map) if (held.open < open) {
-      map.delete(key); changed = true;
-      if (stream === 'attention.changes') emit({ stream: 'attention', removed: key });
-    }
-    if (changed) emit({ stream: stream.split('.')[0] });
+  // ---- opening a stream -----------------------------------------------------------------------
+  // The SDK opens an opened stream again by itself after a lost connection. The page opens one
+  // again only when its first open got no answer (`unavailable`), or when it ended with no
+  // refusal (as at its grant's day-long bound), after a pause that grows while that repeats.
+  // Any other refusal is final: the part says so.
+  function open(s) {
+    clearTimeout(s.timer); s.timer = null;
+    const n = ++s.opens;
+    s.picture = fresh();
+    const feed = s.key.startsWith('feed:') ? s.key.slice(5) : null;
+    let opening;
+    try { opening = sdk.stream(feed ? 'feed.results' : s.key, feed, (ev) => { if (s.opens === n) heard(s, ev); }); }
+    catch (e) { opening = Promise.reject(e); }
+    return Promise.resolve(opening).then((handle) => {
+      if (s.opens !== n) { handle.close(); return; }
+      setState(s, 'live');
+      const ended = () => { if (s.opens === n && handle.state === 'ended') later(s); };
+      handle.closed.then(ended, ended);
+    }, (error) => {
+      if (s.opens !== n) return;
+      s.picture = null;
+      const code = error && error.code;
+      if (code === 'unavailable') later(s);
+      else setState(s, code === 'forbidden' ? 'forbidden' : 'failed');
+    });
+  }
+  function later(s) {
+    const wait = RETRY_MS[Math.min(s.tries++, RETRY_MS.length - 1)];
+    setState(s, 'unavailable', { retryAt: localOf(Date.now() + wait) });
+    s.timer = setTimeout(() => open(s), wait);
   }
 
-  // What each stream fills, emptied when its part turns off.
-  function empty(key) {
-    if (key.startsWith('feed:')) state.feeds[key.slice(5)] = null;
-    else ({ 'attention.changes': state.attention, 'schedules.changes': state.schedules, 'schedule_runs.changes': state.scheduleRuns, 'threads.changes': state.threads, 'activity.changes': state.activity, 'vault.changes': state.vault })[key].clear();
-    delete state.refusals[key.startsWith('feed:') ? key.slice(5) : key];
+  // What a part says of the worst state among its streams, in the village's words, or null
+  // while every one is live.
+  const RANK = { opening: 0, live: 0, stale: 1, unavailable: 2, failed: 3, forbidden: 4, denied: 4 };
+  function note(part) {
+    let worst = null;
+    for (const key of PARTS[part].streams) { const s = streams[key]; if (s && RANK[s.state] > (worst ? RANK[worst.state] : 0)) worst = s; }
+    if (!worst) return null;
+    const text = {
+      stale: 'as of ' + (worst.at != null ? clock(worst.at) : 'earlier'),
+      unavailable: worst.retryAt != null ? 'trying again at ' + clock(worst.retryAt) : 'trying again soon',
+      failed: 'could not be read', forbidden: 'not granted', denied: 'no longer granted',
+    }[worst.state];
+    return { state: worst.state, text };
   }
 
-  // ---- keeping a stream open ----------------------------------------------------------------
-  // Every stream ends in time (its grant has a deadline, a connection breaks, a hidden desktop's
-  // credential is suspended), so an ended stream is opened again after a pause and starts again
-  // with its current state. Before it first opens, a refusal is final; an open the endpoint gave
-  // no answer on (`unavailable`) is tried again. `kick` opens a waiting stream at once, for a
-  // desktop shown again.
-  const followers = new Map();
-  function follow(name, subject, onItem, onOpen) {
-    let stopped = false, opens = 0, ever = false, timer = null, waiting = false, current = null;
-    async function open() {
-      waiting = false;
-      const n = ++opens;
-      const handle = await sdk.stream(name, subject, ({ data }) => { if (!stopped && isItem(data)) onItem(data, n); });
-      if (stopped) { handle.close(); return; }
-      ever = true; current = handle;
-      delete state.refusals[subject || name];
-      onOpen(n);
-      handle.closed.catch(() => {}).then(() => { current = null; retry(0); });
+  // What waits on the person: the attention items, and an installed app whose grant is not
+  // current, a porter at the house. An offer names its sender when the files stream holds it.
+  function waiting() {
+    const out = [];
+    for (const { value: a } of state.attention.values()) {
+      const offer = a.kind === 'file_offer' && state.files.get(a.ref);
+      out.push(offer && offer.value.from ? { ...a, from: offer.value.from } : a);
     }
-    function failed(error, attempt) {
-      if (stopped) return;
-      if (!ever && !(error && error.code === 'unavailable')) {
-        state.refusals[subject || name] = (error && error.message) || 'This could not be opened.';
-        emit({ stream: 'refusal' });
-      } else retry(attempt);
+    for (const app of state.installed) {
+      const c = state.components.get(bare(app.ref));
+      if (c && c.value.grant === false) out.push({ id: 'grant:' + app.ref, kind: 'grant', label: app.name, ref: app.ref, since: null, page: null });
     }
-    function retry(attempt) {
-      if (stopped) return;
-      waiting = true;
-      clearTimeout(timer);
-      timer = setTimeout(() => open().catch((e) => failed(e, Math.min(attempt + 1, RETRY_MS.length - 1))), RETRY_MS[attempt]);
-    }
-    return {
-      first: open().catch((e) => failed(e, 0)),
-      kick() { if (waiting && !stopped) { clearTimeout(timer); open().catch((e) => failed(e, 1)); } },
-      stop() { stopped = true; clearTimeout(timer); if (current) current.close(); },
-    };
+    return out;
   }
-  function openKey(key) {
-    if (key.startsWith('feed:')) { const feed = key.slice(5); return follow('feed.results', feed, (d) => foldFeed(feed, d), () => {}); }
-    return follow(key, null, (d, n) => fold(key, d, n), (n) => setTimeout(() => prune(key, n), SETTLE_MS));
-  }
-  // The streams the parts that are on read, at most BUDGET of them, in the parts' order.
-  function wanted() {
-    const keys = [];
-    for (const p of Object.keys(PARTS)) if (partOn(p)) for (const k of PARTS[p].streams) if (keys.length < BUDGET && !keys.includes(k)) keys.push(k);
-    return keys;
-  }
-  // Opens what the parts on read and closes what no part on reads. Answers the new opens' firsts.
-  function sync() {
-    if (!sdk) return [];
-    const keys = wanted(), firsts = [];
-    for (const [key, f] of followers) if (!keys.includes(key)) { f.stop(); followers.delete(key); empty(key); emit({ stream: 'parts' }); }
-    for (const key of keys) if (!followers.has(key)) { const f = openKey(key); followers.set(key, f); firsts.push(f.first); }
-    return firsts;
-  }
-  // Whether turning `part` on keeps the streams read within the budget.
-  function room(part) {
-    const keys = new Set(wanted());
-    for (const k of PARTS[part].streams) keys.add(k);
-    return keys.size <= BUDGET;
-  }
+  const component = (ref) => { const c = state.components.get(bare(ref)); return c ? c.value : null; };
+  // A run CYFR may run again: held among the latest runs, failed, and a root run.
+  const retryable = (id) => { const h = id && state.runs.get(id); return !!h && h.value.kind === 'failed' && !h.value.parent; };
 
   // ---- preferences ----------------------------------------------------------------------------
   const widgetOf = (id) => { const w = isItem(state.prefs.document.widgets) ? state.prefs.document.widgets[id] : null; return isItem(w) ? w : {}; };
@@ -257,7 +305,6 @@
   function adopt(answer) {
     if (answer && isItem(answer.document)) {
       state.prefs = { document: answer.document, revision: Number(answer.revision) || state.prefs.revision };
-      sync();
       emit({ stream: 'prefs' });
     }
   }
@@ -279,13 +326,11 @@
     if (isItem(value.prefs) && isItem(value.prefs.document)) state.prefs = { document: value.prefs.document, revision: Number(value.prefs.revision) || 0 };
     if (isItem(value.appearance)) { state.appearance = value.appearance; setZone(str(value.appearance.time_zone) || 'UTC'); }
     state.person = isItem(value.person) && str(value.person.name) ? str(value.person.name) : null;
-    if (started) sync();
     emit({ stream: 'prefs' });
   }
 
-  let started = false;
   // Starts reading. Answers a promise that settles once every first open has its answer, or after
-  // three seconds: an open the browser holds back for a connection may wait far longer.
+  // three seconds: a hidden desktop's opens wait until it is shown.
   function start() {
     if (!sdk) { emit({ stream: 'none' }); return Promise.resolve(); }
     desktop(sdk.desktop);
@@ -299,18 +344,34 @@
       state.covered = (Array.isArray(rects) ? rects : []).filter((r) => isItem(r) && ['x', 'y', 'width', 'height'].every((k) => Number.isFinite(r[k])));
       emit({ stream: 'covered' });
     });
-    sdk.on('state', (s) => {
-      state.frozen = s === 'frozen';
-      if (!state.frozen) followers.forEach((f) => f.kick());
-      emit({ stream: 'state' });
-    });
-    started = true;
-    return Promise.race([Promise.allSettled(sync()), new Promise((r) => setTimeout(r, 3000))]);
+    sdk.on('state', (s) => { state.frozen = s === 'frozen'; emit({ stream: 'state' }); });
+    const firsts = [...DATA, ...FEEDS.map((f) => 'feed:' + f)].map((key) => open((streams[key] = holder(key))));
+    return Promise.race([Promise.allSettled(firsts), new Promise((r) => setTimeout(r, 3000))]);
+  }
+
+  // What a press of `retry-run` answers, in the village's words.
+  const REFUSED = {
+    conflict: 'This run cannot be run again: only a run a schedule or a feed started, known to have failed, runs again.',
+    invalid_argument: 'This run is no longer among the latest runs.',
+    not_found: 'This run is gone.',
+    forbidden: 'This run is not yours to run again.',
+    unavailable: 'CYFR cannot run it now. Try again shortly.',
+    rate_limited: 'CYFR cannot run it now. Try again shortly.',
+    timeout: 'CYFR cannot run it now. Try again shortly.',
+    uncertain: 'No answer came. Look at Runs before trying again.',
+  };
+  async function retry(id) {
+    if (!sdk) return 'Runs are run again only inside CYFR.';
+    let answer;
+    try { answer = await sdk.press(RETRY, id); } catch (e) { return 'It could not be run again.'; }
+    if (answer && answer.outcome === 'accepted') return 'Sent: it runs again.';
+    if (answer && answer.outcome === 'cancelled') return answer.reason === 'too_soon' ? TOO_SOON : 'Nothing ran.';
+    return (answer && REFUSED[answer.reason]) || 'It could not be run again.';
   }
 
   window.Road = {
     state, PARTS, PAUSE, RESUME, subscribe: (f) => listeners.add(f), start,
-    nowLocal, utcOf, localOf, partOn, units, order, entry, write, room, BUDGET,
+    nowLocal, utcOf, localOf, partOn, units, order, entry, write, note, waiting, component, retryable, retry,
     values: (map) => [...map.values()].map((held) => held.value),
     // What a press of a control answers, as a sentence when it did not run.
     async press(control, value) {
@@ -325,6 +386,7 @@
     open: (ref) => sdk && sdk.open(ref),
     ask: (widget) => sdk && sdk.ask(widget),
     settings: (page) => sdk && sdk.settings(page),
+    grant: (ref) => sdk && sdk.grant(ref),
     ready: () => sdk && sdk.ready(),
   };
 })();

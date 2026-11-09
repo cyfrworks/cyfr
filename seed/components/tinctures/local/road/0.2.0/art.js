@@ -190,8 +190,9 @@
     door(g, x + 21, y + 22, 10, 20, P.blue, st.out);
     // compass over the door: the crew's mark
     fill(g, x + 24, y + 14, 5, 5, P.white); fill(g, x + 26, y + 14, 1, 5, P.red); fill(g, x + 24, y + 16, 5, 1, P.ink);
-    // one lantern per crew job, lit while it runs; two dark ones while none does
-    for (let i = 0; i < Math.max(2, Math.min(4, st.jobs)); i++) lantern(g, x + 9 + i * 6 - (st.jobs > 2 ? 3 : 0), y + 27, i < st.jobs, L);
+    // one lantern per crew member, lit while ready, at most four; two dark ones while none is known
+    const n = Math.max(2, Math.min(4, st.total));
+    for (let i = 0; i < n; i++) lantern(g, x + 9 + i * 6 - (n > 2 ? 3 : 0), y + 27, i < st.ready, L);
     fill(g, x + 3, y + 40, 34, 2, P.mintS);
   } };
 
@@ -208,6 +209,8 @@
       // the app's initial: an installed app names an emoji or nothing, and neither is pixel art
       if (window.PixelFont) PixelFont.text(g, a.letter, wx + 8, wy + 4, a.open ? P.wood : P.whiteS, { align: 'center' });
       if (a.open) { for (let i2 = 0; i2 < 17; i2 += 2) fill(g, wx - 1 + i2, wy - 3, 2, 2, i2 % 4 ? P.red : P.white); L.push({ x: wx, y: wy, w: 15, h: 15, when: 'always', glow: 3, quiet: true }); }
+      // a crate at the window: an update of the app is ready
+      if (a.update) { fill(g, wx + 10, wy + 12, 7, 6, P.woodL); fill(g, wx + 10, wy + 12, 7, 1, P.wood); fill(g, wx + 13, wy + 13, 1, 4, P.ochre); fill(g, wx + 12, wy + 14, 3, 1, P.ochre); }
     });
   } };
 
@@ -275,6 +278,38 @@
       const c = v.status === 'fine' ? P.green : v.status === 'expiring' ? P.amber : (st.blink ? P.red : P.redD);
       fill(g, sx + 9, sy + 1, 2, 2, c);
     });
+  } };
+
+  B.archive = { w: 42, h: 46, paint(g, x, gy, st, L) {
+    const y = gy - 46;
+    roofTiles(g, x + 2, y + 2, 38, 7);
+    fill(g, x + 3, y + 10, 36, 36, P.white);
+    fill(g, x + 3, y + 10, 36, 2, P.whiteS);
+    // the shelf in the window: one spine per recent file, coloured by its kind; a parcel at the
+    // entrance while something is offered to you
+    fill(g, x + 7, y + 15, 28, 16, P.whiteD); fill(g, x + 8, y + 16, 26, 14, P.woodD);
+    const kind = (t) => (/^image\//.test(t) ? P.aqua : /^text\//.test(t) ? P.ochre : t === 'application/pdf' ? P.red : P.whiteS);
+    (st.recent || []).slice(0, 5).forEach((f, i) => { fill(g, x + 10 + i * 5, y + 18, 4, 11, kind(f.type)); fill(g, x + 10 + i * 5, y + 20, 4, 1, P.ink); });
+    L.push({ x: x + 8, y: y + 16, w: 26, h: 14, when: 'dusk', quiet: true });
+    door(g, x + 16, y + 34, 10, 12, P.blue);
+    if (st.offers) { fill(g, x + 29, y + 39, 7, 6, P.woodL); fill(g, x + 29, y + 41, 7, 1, P.wood); fill(g, x + 32, y + 39, 1, 6, P.wood); }
+  } };
+
+  B.silo = { w: 22, h: 66, paint(g, x, gy, st, L) {
+    const y = gy - 66;
+    fill(g, x + 3, y + 10, 16, 56, P.whiteS);
+    fill(g, x + 3, y + 10, 3, 56, P.white); fill(g, x + 16, y + 10, 3, 56, P.whiteD);
+    for (let i = 0; i < 6; i++) fill(g, x + 4 + i, y + 9 - i, 14 - i * 2, 1, P.roofD);
+    // the gauge window: storage used against its cap
+    fill(g, x + 9, y + 16, 4, 44, P.iron);
+    const f = st.cap > 0 ? Math.round(42 * Math.min(1, st.used / st.cap)) : 0;
+    fill(g, x + 10, y + 17 + 42 - f, 2, f, P.ochre);
+    for (let j = 0; j <= 42; j += 10.5) fill(g, x + 13, y + 17 + Math.round(j), 1, 1, P.ink);
+    // the beacon, lit while a model is connected; an aqua flag while an update of CYFR is ready
+    fill(g, x + 10, y - 1, 2, 4, P.iron);
+    fill(g, x + 9, y - 4, 4, 3, st.model ? P.lamp : P.whiteD);
+    if (st.model && L) L.push({ x: x + 9, y: y - 4, w: 4, h: 3, when: 'always', glow: 5 });
+    if (st.update) { fill(g, x + 19, y + 18, 1, 14, P.iron); fill(g, x + 20, y + 18, 6, 4, P.aqua); }
   } };
 
   B.barn = { w: 44, h: 38, paint(g, x, gy, st) {

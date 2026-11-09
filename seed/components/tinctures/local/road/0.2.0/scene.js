@@ -26,12 +26,21 @@ window.RoadScene = function () {
   const rel = (m) => { const d = m - now(); return Math.abs(d) < 1 ? 'now' : d > 0 ? 'in ' + dur(d) : dur(d) + ' ago'; };
 
   // ---- what the streams say, as the scene reads it ------------------------------------------
-  const attention = () => R.values(S.attention).map((a) => (a.since == null ? { ...a, since: now() } : a)).sort((a, b) => a.since - b.since);
+  const attention = () => R.waiting().map((a) => (a.since == null ? { ...a, since: now(), untimed: true } : a)).sort((a, b) => a.since - b.since);
   const schedules = () => R.values(S.schedules).sort((a, b) => (a.next ?? Infinity) - (b.next ?? Infinity));
   const sched = (id) => { const h = S.schedules.get(id); return h ? h.value : null; };
+  const run = (id) => { const h = id && S.runs.get(id); return h ? h.value : null; };
   const threads = () => R.values(S.threads).sort((a, b) => (b.waits - a.waits) || (b.last ?? 0) - (a.last ?? 0));
   const jobs = () => R.values(S.activity).sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
   const vault = () => R.values(S.vault).sort((a, b) => a.fine - b.fine || a.name.localeCompare(b.name));
+  const sys = () => R.values(S.system)[0] || null;
+  // offers first, then the recent files, newest first
+  const files = () => R.values(S.files).sort((a, b) => (a.kind === 'offer' ? 0 : 1) - (b.kind === 'offer' ? 0 : 1) || (b.changed ?? 0) - (a.changed ?? 0));
+  const noteOf = (part) => { const n = R.note(part); return n ? ', ' + n.text : ''; };
+  // Storage in bytes as a person reads it: "38 GB of 100 GB".
+  const size = (b) => { const [d, u] = b >= 1e12 ? [1e12, 'TB'] : b >= 1e9 ? [1e9, 'GB'] : b >= 1e6 ? [1e6, 'MB'] : [1e3, 'kB']; const v = b / d; return (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + ' ' + u; };
+  const storage = (s) => (s.used == null ? 'not known' : size(s.used) + (s.cap ? ' of ' + size(s.cap) : ' used'));
+  const HEALTH = { ok: 'All is well.', degraded: 'Something is not working as it should.', low_storage: 'Storage is running low.' };
   const obj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
   // A feed's result is the feed's own shape: read the fields a weather or a vpn feed names.
   function pick(r, keys, test) { for (const k of keys) if (test(r[k])) return r[k]; return null; }
@@ -188,7 +197,8 @@ window.RoadScene = function () {
   function buildFirings() {
     firings = [];
     const n = Date.now(), end = n + (AHEAD + 60) * 60000;
-    for (const r of R.values(S.scheduleRuns)) if (r.at != null) firings.push({ at: r.at, sid: r.sid, status: r.kind === 'failed' ? 'failed' : 'ok', cause: r.cause });
+    const linked = new Set();
+    for (const r of R.values(S.scheduleRuns)) if (r.at != null) { linked.add(r.eid); firings.push({ at: r.at, sid: r.sid, eid: r.eid, status: r.kind === 'failed' ? 'failed' : 'ok', cause: r.cause }); }
     for (const s of schedules()) {
       if (s.status !== 'active' && s.status !== 'paused') continue;
       const status = s.status === 'active' ? 'due' : 'paused';
@@ -198,8 +208,9 @@ window.RoadScene = function () {
       if (status === 'due' && Number.isFinite(s.nextUtc) && s.nextUtc >= n - 60000 && !times.includes(s.nextUtc)) times.unshift(s.nextUtc);
       for (const t of times) firings.push({ at: R.localOf(t), sid: s.id, status });
     }
-    // a failed run of no schedule stands where its failure is dated
-    for (const a of attention()) if (a.kind === 'failed_run') firings.push({ at: a.since, sid: null, status: 'failed', ref: a.label });
+    // a run of no schedule stands where it started
+    const RUN = { failed: 'failed', completed: 'ok', started: 'running' };
+    for (const r of R.values(S.runs)) if (!r.parent && r.started != null && !linked.has(r.id)) firings.push({ at: r.started, sid: null, eid: r.id, status: RUN[r.kind] || 'cancelled', ref: r.name, cause: r.cause });
     firings.sort((a, b) => a.at - b.at);
     firingsDirty = false;
   }
@@ -217,6 +228,7 @@ window.RoadScene = function () {
     failed_schedule: { id: 'bell', hair: '#5a3d2a', skin: '#d9a77f', shirt: P.ochreS, pants: '#3b3a2e', bubble: 'bang', bc: P.amberD },
     approval: { id: 'aqua', hair: '#1f3d4a', skin: '#cf9f7c', shirt: P.aqua, pants: '#2f5961', bubble: 'scroll', bc: P.aquaD },
     confirmation: { id: 'porter', hair: '#6a3a22', skin: '#f0c9a4', shirt: P.pinkS, pants: '#4a3b40', bubble: 'key', bc: P.amberD },
+    grant: { id: 'porter', hair: '#6a3a22', skin: '#f0c9a4', shirt: P.pinkS, pants: '#4a3b40', bubble: 'key', bc: P.amberD },
     file_offer: { id: 'sam', hair: '#1a1a1a', skin: '#a8714a', shirt: P.greenD, pants: '#2e3b52', bubble: 'parcel', bc: P.wood },
   };
   const lookOf = (kind) => LOOKS[kind] || LOOKS.confirmation;
@@ -231,11 +243,12 @@ window.RoadScene = function () {
   // ---- interaction state ---------------------------------------------------------------------
   // The open card, the part picked in the Plan, and the page of the card's rows shown.
   let card = null, planSel = null, cardPage = 0;
-  const pending = { weather: null, vpn: null, sched: new Set() };
+  const pending = { weather: null, vpn: null, sched: new Set(), retry: new Set() };
 
   R.subscribe((ch) => {
     firingsDirty = true;
     if (ch.stream === 'feeds' && pending[ch.feed]) pending[ch.feed] = null;
+    if (ch.stream === 'notice') { const s = sched(ch.notice.sid); say((s ? s.name : 'A schedule') + ' could not run' + (ch.notice.cause ? ': ' + ch.notice.cause.replace(/_/g, ' ') : '') + '.'); }
     if (ch.stream === 'attention' && ch.removed) {
       const v = visitors.get(ch.removed);
       if (v) { v.leaving = true; v.wave = 1.6; }
@@ -262,6 +275,26 @@ window.RoadScene = function () {
     pending.sched.delete(s.id);
     if (failed) say(failed);
   }
+  // One press per tap; the choice waits, disabled, until CYFR answers.
+  async function retry(id) {
+    if (pending.retry.has(id)) return;
+    pending.retry.add(id);
+    const words = await R.retry(id);
+    pending.retry.delete(id);
+    say(words); wake();
+  }
+  const retryChoice = (id) => ({ label: pending.retry.has(id) ? 'Retrying...' : 'Retry run', primary: true, disabled: pending.retry.has(id), run: () => retry(id) });
+  const runTimes = (r) => 'Started ' + when(r.started) + (r.ended != null ? ', ended ' + when(r.ended) : r.kind === 'started' ? ', still running' : '') + (r.kind === 'failed' && r.cause ? ': ' + r.cause.replace(/_/g, ' ') : '') + '.';
+  // A firing tapped on the road: a run that failed or a run of no schedule shows its run, held
+  // among the latest runs; any other firing its schedule.
+  function openFiring(f) {
+    if (!f) return;
+    if ((f.status === 'failed' || !f.sid) && run(f.eid)) return openCard('run:' + f.eid);
+    if (f.sid && sched(f.sid)) return openCard('sched:' + f.sid);
+    jumpTo(f.at);
+  }
+  // A destination page's choice: its label, and what the ticker calls it.
+  const PAGES = { aqua: ['Open AQUA', 'AQUA'], chat: ['Open chat', 'the chat'], executions: ['Open runs', 'runs'], schedules: ['Open schedules', 'schedules'], files: ['Open files', 'files'] };
   function pressFeed(feed, action, words) {
     pending[feed] = { action: action.name, until: performance.now() + 20000 };
     R.pressFeed(feed, action.name);
@@ -274,13 +307,20 @@ window.RoadScene = function () {
   // ---- cards ---------------------------------------------------------------------------------
   // A card is a dialogue box in the village's own manner: a portrait, a title, plain lines, rows to
   // pick and choices. Each choice is one tap.
+  // A card of a part that is not live leads with how it stands.
+  const CARD_PART = { queue: 'attention', att: 'attention', threads: 'threads', crew: 'activity', market: 'components', tower: 'schedules', press: 'schedules', barn: 'schedules', sched: 'schedules', run: 'schedules', vault: 'vault', silo: 'system', archive: 'files', weather: 'weather', vpn: 'vpn' };
   function cardModel(key) {
+    const m = cardOf(key), part = CARD_PART[key.split(':')[0]], nt = m && part && R.note(part);
+    if (nt) m.lines = [nt.text[0].toUpperCase() + nt.text.slice(1) + '.', ...m.lines];
+    return m;
+  }
+  function cardOf(key) {
     const i = key.indexOf(':'), kind = i < 0 ? key : key.slice(0, i), id = i < 0 ? '' : key.slice(i + 1);
     const n = now();
     const ask = (widget, part) => ({ label: 'Ask AQUA', aqua: true, run: () => askAqua(widget, partCentre(part || widget)) });
     if (kind === 'weather') {
       const w = weatherNow();
-      if (!w) return { title: 'The windmill', portrait: 'mill', lines: ['No weather feed is bound by the name "weather", so the sails stand still.', 'Ask AQUA to bind one, and its forecast shows on the board.'], choices: [ask('weather')] };
+      if (!w) return { title: 'The windmill', portrait: 'mill', lines: R.note('weather') ? [] : ['No weather feed is bound by the name "weather", so the sails stand still.', 'Ask AQUA to bind one, and its forecast shows on the board.'], choices: [ask('weather')] };
       const base = Math.ceil(n / 60) * 60;
       return { title: 'Weather in ' + w.place, portrait: 'mill', lines: [
         temp(w.temp) + unitMark() + (w.sky ? ', ' + w.sky : '') + (w.wind != null ? ', wind ' + w.wind + ' km/h' : '') + '.',
@@ -294,38 +334,67 @@ window.RoadScene = function () {
     }
     if (kind === 'vpn') {
       const v = vpnNow();
-      if (!v) return { title: 'The tram line', portrait: 'tram', lines: ['No feed is bound by the name "vpn", so the tram waits in its depot.', 'Ask AQUA to bind one, and the tram runs while it is connected.'], choices: [ask('vpn')] };
+      if (!v) return { title: 'The tram line', portrait: 'tram', lines: R.note('vpn') ? [] : ['No feed is bound by the name "vpn", so the tram waits in its depot.', 'Ask AQUA to bind one, and the tram runs while it is connected.'], choices: [ask('vpn')] };
       const line = pending.vpn ? 'Asked; waiting for the feed to say so.' : v.connected ? 'Connected' + (v.server ? ' to ' + v.server : '') + (v.since != null ? ' since ' + when(v.since) : '') + (v.mbps != null ? ', ' + v.mbps + ' Mbps down' : '') + '.' : 'Not connected (' + v.state + ').';
       return { title: v.label || 'VPN', portrait: 'tram', lines: [line, ...(v.servers.length ? ['Lines: ' + v.servers.join(', ') + '.'] : [])],
         choices: [...v.actions.map((a, k) => ({ label: a.label, primary: k === 0, disabled: !!pending.vpn, run: () => pressFeed('vpn', a, 'VPN') })), ask('vpn')] };
     }
     if (kind === 'att') {
-      const h = S.attention.get(id); if (!h) return null;
-      const a = h.value, since = 'Waiting since ' + when(a.since) + (a.since != null ? ', ' + dur(n - a.since) : '') + '.';
+      const a = attention().find((x) => x.id === id); if (!a) return null;
+      const since = 'Waiting since ' + when(a.since) + ', ' + dur(n - a.since) + '.';
       const look = { failed_run: 'news', failed_schedule: 'bell', approval: 'aqua', file_offer: 'sam' }[a.kind] || 'porter';
-      const open = (page, words) => (page ? [{ label: words, primary: true, run: () => settings(page, words.replace(/^Open /, 'the ').toLowerCase()) }] : []);
-      if (a.kind === 'failed_run') return { title: a.label + ' failed', portrait: look, lines: ['Its last run failed, and no run of it has ended since.', since], choices: [...open(a.page, 'Open runs'), { label: 'Show on road', run: () => { jumpTo(a.since); closeCard(); } }, ask('attention', key)] };
-      if (a.kind === 'failed_schedule') return { title: a.label + ' failed', portrait: look, lines: ['The schedule\'s last run failed or its outcome is uncertain.', since], choices: [...open(a.page, 'Open schedules'), { label: 'Show on road', run: () => { jumpTo(a.since); closeCard(); } }, ask('attention', key)] };
-      if (a.kind === 'approval') return { title: 'Approval in ' + a.label, portrait: look, lines: ['AQUA is waiting on your answer in this thread.', since], choices: [...open(a.page, 'Open chat'), ask('attention', key)] };
-      if (a.kind === 'file_offer') return { title: a.label + ' is offered to you', portrait: look, lines: ['A file waits for you to accept or decline it.', since], choices: [...open(a.page, 'Open files'), ask('attention', key)] };
+      const [opens, words] = PAGES[a.page] || ['Open', a.page];
+      const open = a.page ? [{ label: opens, primary: true, run: () => settings(a.page, words) }] : [];
+      if (a.kind === 'failed_run') {
+        const r = run(a.ref), retries = R.retryable(a.ref);
+        return { title: a.label + ' failed', portrait: look, lines: ['Its last run failed, and no run of it has ended since.', ...(r ? [runTimes(r)] : []), since],
+          choices: [...(retries ? [retryChoice(a.ref)] : []), ...open.map((c) => ({ ...c, primary: !retries })), { label: 'Show on road', run: () => { jumpTo(r && r.started != null ? r.started : a.since); closeCard(); } }, ask('attention', key)] };
+      }
+      if (a.kind === 'failed_schedule') return { title: a.label + ' failed', portrait: look, lines: ['The schedule\'s last run failed or its outcome is uncertain.', since], choices: [...open, { label: 'Show on road', run: () => { jumpTo(a.since); closeCard(); } }, ask('attention', key)] };
+      if (a.kind === 'approval') return { title: 'Approval in ' + a.label, portrait: look, lines: ['AQUA is waiting on your answer in this thread.', since], choices: [...open, ask('attention', key)] };
+      if (a.kind === 'file_offer') return { title: attLabel(a), portrait: look, lines: ['A file waits for you to accept or decline it.', since], choices: [...open, ask('attention', key)] };
+      if (a.kind === 'grant') return { title: attLabel(a), portrait: look, lines: ['Its grant is not current. CYFR asks you in its own prompt, and nothing changes until you confirm.'],
+        choices: [{ label: 'Review grant', primary: true, run: () => { R.grant(a.ref); say("CYFR's grant prompt for " + a.label + ' opens.'); } }, ask('attention', key)] };
       return { title: 'Confirm ' + a.label, portrait: look, lines: ['CYFR asks you to confirm this in its own prompt, wherever you are.', since], choices: [ask('attention', key)] };
+    }
+    if (kind === 'run') {
+      const r = run(id); if (!r) return null;
+      const fired = R.values(S.scheduleRuns).find((x) => x.eid === id), s = fired ? sched(fired.sid) : null, name = s ? s.name : r.name;
+      const retries = R.retryable(id);
+      return { title: name + ({ failed: ' failed', completed: ' ran', started: ' is running' }[r.kind] || ' was cancelled'), portrait: r.kind === 'failed' ? 'news' : 'tower', lines: [runTimes(r)],
+        choices: [...(retries ? [retryChoice(id)] : []), { label: 'Open runs', primary: !retries, run: () => settings('executions', 'runs') }, ...(s ? [{ label: 'Schedule', run: () => openCard('sched:' + s.id) }] : []), ask('schedules', 'press')] };
     }
     if (kind === 'queue') {
       const list = attention();
       return { title: list.length ? list.length + ' waiting at your house' : 'Nobody waiting', portrait: 'house', lines: list.length ? [] : ['Everything that waited on you is done.'],
-        rows: list.map((a) => ({ text: attLabel(a), sub: when(a.since), dot: lookOf(a.kind).bc, run: () => openCard('att:' + a.id) })), choices: [] };
+        rows: list.map((a) => ({ text: attLabel(a), sub: a.untimed ? 'now' : when(a.since), dot: lookOf(a.kind).bc, run: () => openCard('att:' + a.id) })), choices: [] };
     }
     if (kind === 'threads') return { title: 'Threads', portrait: 'post', lines: S.threads.size ? [] : ['No threads yet.'],
-      rows: threads().map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.own ? 'with AQUA' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : null,
-        run: () => settings('chat', 'the chat') })), choices: [ask('threads')] };
+      rows: threads().map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.own ? 'with AQUA' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
+        run: () => (t.own ? settings('aqua', 'AQUA') : settings('chat', 'the chat')) })), choices: [ask('threads')] };
     if (kind === 'crew') {
-      const list = jobs();
-      return { title: 'Crew', portrait: 'crew', lines: list.length ? list.map((j) => j.member + ' is at work' + (j.askedBy ? ', asked by ' + j.askedBy : '') + ', since ' + when(j.since) + (j.status ? ' (' + j.status + ')' : '') + '.') : ['Nobody is out on a job.'],
+      const list = jobs(), s = sys();
+      return { title: 'Crew', portrait: 'crew', lines: [...(list.length ? list.map((j) => j.member + ' is at work' + (j.title ? ': ' + j.title : '') + (j.askedBy ? ', asked by ' + j.askedBy : '') + ', since ' + when(j.since) + (j.status ? ' (' + j.status + ')' : '') + '.') : ['Nobody is out on a job.']),
+        ...(s && s.total != null ? [(s.ready ?? 0) + ' of ' + s.total + ' crew members ready.'] : [])],
         choices: [{ label: 'Open activities', primary: true, run: () => settings('activities', 'activities') }, ask('activity')] };
     }
     if (kind === 'market') return { title: 'Apps', portrait: 'market', lines: S.installed.length ? [] : ['No apps are installed yet.'],
-      rows: S.installed.map((a) => ({ text: a.name, sub: a.open ? 'open' : 'tap to open', run: () => { R.open(a.ref); say('Opening ' + a.name + '.'); } })),
+      rows: S.installed.map((a) => { const c = R.component(a.ref); return { text: a.name, sub: (a.open ? 'open' : 'tap to open') + (c && c.update ? ', update ready' : ''), dot: c && c.update ? P.wood : null, run: () => { R.open(a.ref); say('Opening ' + a.name + '.'); } }; }),
       choices: [{ label: 'Components', run: () => settings('components', 'components') }, ask('components')] };
+    if (kind === 'silo') {
+      const s = sys();
+      if (!s) return { title: 'The silo', portrait: 'silo', lines: R.note('system') ? [] : ['How CYFR stands has not been read yet.'], choices: [ask('system')] };
+      return { title: 'CYFR' + (s.version ? ' ' + s.version : ''), portrait: 'silo', lines: [
+        HEALTH[s.health] || 'Its health is not known.', 'Storage: ' + storage(s) + '.', s.model ? 'A model is connected.' : 'No model is connected.',
+        ...(s.total != null ? [(s.ready ?? 0) + ' of ' + s.total + ' crew members ready.'] : []), s.update ? 'An update of CYFR is ready.' : 'CYFR is up to date.'],
+        choices: [{ label: 'Open settings', primary: true, run: () => settings('settings', 'settings') }, ask('system')] };
+    }
+    if (kind === 'archive') {
+      const list = files();
+      return { title: 'Files', portrait: 'archive', lines: list.length ? [] : ['No recent files, and nothing is offered to you.'],
+        rows: list.map((f) => ({ text: f.name, sub: f.kind === 'offer' ? 'offered by ' + (f.from || 'someone') : (f.type ? f.type + ', ' : '') + 'changed ' + when(f.changed), dot: f.kind === 'offer' ? P.amber : null, run: () => settings('files', 'files') })),
+        choices: [{ label: 'Open files', primary: true, run: () => settings('files', 'files') }, ask('files')] };
+    }
     if (kind === 'press') {
       const failed = attention().filter((a) => a.kind === 'failed_run');
       return { title: 'The press', portrait: 'news', lines: failed.length ? ['Its placard is red while a run failed and nothing has run since.'] : ['Every run that failed has run again since.'],
@@ -367,7 +436,8 @@ window.RoadScene = function () {
     return null;
   }
   function attLabel(a) {
-    return a.kind === 'failed_run' || a.kind === 'failed_schedule' ? a.label + ' failed' : a.kind === 'approval' ? 'Approval in ' + a.label : a.kind === 'file_offer' ? a.label + ' offered' : 'Confirm ' + a.label;
+    return a.kind === 'failed_run' || a.kind === 'failed_schedule' ? a.label + ' failed' : a.kind === 'approval' ? 'Approval in ' + a.label : a.kind === 'file_offer' ? (a.from ? a.from + ' offers ' + a.label : a.label + ' offered')
+      : a.kind === 'grant' ? a.label + ' waits for your grant' : 'Confirm ' + a.label;
   }
   function cronWords(c) {
     const p = (CRON_MACROS[c.trim()] || c).trim().split(/\s+/);
@@ -386,11 +456,7 @@ window.RoadScene = function () {
     }
     return 'cron ' + c + ' (UTC)';
   }
-  // A part turned on opens what it reads, within what the connection carries at once.
-  function flipPart(p) {
-    if (!on(p) && !R.room(p)) { say('The village reads ' + R.BUDGET + ' live things at once here. Turn another part off first.'); return; }
-    write({ [p]: R.entry(p, { on: !on(p) }) });
-  }
+  function flipPart(p) { write({ [p]: R.entry(p, { on: !on(p) }) }); }
   function movePart(p, d) {
     const list = R.order(), i = list.indexOf(p), j = i + d;
     if (j < 0 || j >= list.length) return;
@@ -403,7 +469,8 @@ window.RoadScene = function () {
     const b = L.blds;
     const at = { weather: L.mill && { x: L.mill.x, y: L.mill.y - 20 }, vpn: { x: L.stopX + 20, y: L.track.y - 20 }, activity: b.crew && { x: b.crew.x + 20, y: b.crew.ground - 30 },
       threads: b.post && { x: b.post.x + 20, y: b.post.ground - 20 }, components: b.market && { x: b.market.x + 30, y: b.market.ground - 30 }, vault: b.vault && { x: b.vault.x + 20, y: b.vault.ground - 20 },
-      tower: b.tower && { x: b.tower.x + 12, y: b.tower.ground - 60 }, press: b.press && { x: b.press.x + 20, y: b.press.ground - 30 }, schedules: { x: L.nowX, y: L.road.stand - 10 } }[part];
+      tower: b.tower && { x: b.tower.x + 12, y: b.tower.ground - 60 }, press: b.press && { x: b.press.x + 20, y: b.press.ground - 30 }, schedules: { x: L.nowX, y: L.road.stand - 10 },
+      system: b.silo && { x: b.silo.x + 10, y: b.silo.ground - 60 }, files: b.archive && { x: b.archive.x + 20, y: b.archive.ground - 30 } }[part];
     if (at) return at;
     if (part && part.startsWith('att:')) { const v = visitors.get(part.slice(4)); if (v) return { x: v.x, y: L.queueY - 20 }; }
     return { x: W / 2, y: H / 2 };
@@ -471,15 +538,13 @@ window.RoadScene = function () {
     const k = e.key; let d = 0;
     if (k === 'ArrowRight') d = 10; else if (k === 'ArrowLeft') d = -10; else if (k === 'PageUp') d = 60; else if (k === 'PageDown') d = -60;
     else if (k === 'Home') { view.target = 0; wake(); e.preventDefault(); return; }
-    else if (k === 'Enter' || k === ' ') { const f = nearestFiring(viewT(), 8); if (f && f.sid) openCard('sched:' + f.sid); e.preventDefault(); return; }
+    else if (k === 'Enter' || k === ' ') { const f = nearestFiring(viewT(), 8); if (f && (f.sid || f.eid)) openFiring(f); e.preventDefault(); return; }
     if (d) { view.follow = false; view.target = null; setOff(view.off + d); view.idle = 0; wake(); e.preventDefault(); }
   });
   function tapRoad(x) {
     if (Math.abs(x - L.nowX) < 12) return poke();
     const m = viewT() + (x - L.nowX) / L.ppm;
-    const f = nearestFiring(m, 8 / L.ppm + 4);
-    if (f && f.sid && sched(f.sid)) openCard('sched:' + f.sid);
-    else if (f) jumpTo(f.at);
+    openFiring(nearestFiring(m, 8 / L.ppm + 4));
   }
   function nearestFiring(m, tol) {
     let best = null, bd = tol;
@@ -591,9 +656,11 @@ window.RoadScene = function () {
   function buildingState(id, T, ts) {
     const blink = Math.floor(ts * 2) % 2 === 0;
     if (id === 'house') return { name: fit(S.person || 'your place', 54) };
-    if (id === 'post') return { threads: threads().map((t) => ({ kind: t.own ? 'own' : 'shared', unread: 0, people: t.people, waits_on_you: t.waits && (t.last == null || t.last <= T) })) };
-    if (id === 'crew') { const n = jobs().filter((j) => j.since == null || j.since <= T).length; return { out: n > 0, jobs: n }; }
-    if (id === 'market') return { apps: S.installed.map((a) => ({ letter: (Array.from(a.name)[0] || '?').toUpperCase(), open: a.open })) };
+    if (id === 'post') return { threads: threads().map((t) => { const then = t.last == null || t.last <= T; return { kind: t.own ? 'own' : 'shared', unread: then ? t.unread : 0, people: t.people, waits_on_you: t.waits && then }; }) };
+    if (id === 'crew') { const n = jobs().filter((j) => j.since == null || j.since <= T).length, s = sys(); return { out: n > 0, ready: s ? s.ready || 0 : 0, total: s ? s.total || 0 : 0 }; }
+    if (id === 'market') return { apps: S.installed.map((a) => { const c = R.component(a.ref); return { letter: (Array.from(a.name)[0] || '?').toUpperCase(), open: a.open, update: !!(c && c.update) }; }) };
+    if (id === 'silo') { const s = sys() || {}; return { used: s.used || 0, cap: s.cap || 0, model: !!s.model, update: !!s.update }; }
+    if (id === 'archive') { const list = files(); return { recent: list.filter((f) => f.kind === 'file' && (f.changed == null || f.changed <= T)), offers: list.some((f) => f.kind === 'offer') }; }
     if (id === 'press') return { state: attention().some((a) => a.kind === 'failed_run' && a.since <= T) ? 'failed' : 'ok', blink };
     if (id === 'tower') { const ringing = firings.some((f) => f.sid && Math.abs(f.at - T) < 0.6 && f.status !== 'paused'); return { minutes: Math.floor(((T % DAY) + DAY) % DAY), ring: ringing || towerRing > 0, t: ts }; }
     if (id === 'vault') return { vault: vault().map((v) => ({ status: v.fine ? 'fine' : 'needs' })), blink };
@@ -718,6 +785,7 @@ window.RoadScene = function () {
         if (l.when === 'always' && !l.quiet) fill(g, l.x, l.y, l.w, l.h, P.lamp);
       }
     }
+    drawTired();
     drawEffects();
     drawOverlay(T, ts);
     drawCard(ts);
@@ -840,7 +908,7 @@ window.RoadScene = function () {
     const k = f.sid ? hurdleOf(f.sid) : 'mark';
     const st = f.status;
     if (k === 'mark') { // a run of no schedule: a small stone with a coloured top
-      fill(wg, x - 2, y - 4, 5, 4, P.stoneL); fill(wg, x - 2, y - 5, 5, 1, st === 'failed' ? P.red : P.green); return;
+      fill(wg, x - 2, y - 4, 5, 4, P.stoneL); fill(wg, x - 2, y - 5, 5, 1, { failed: P.red, ok: P.green, running: P.amber }[st] || P.whiteD); return;
     }
     if (st === 'paused') { // lying down, grey: a firing that will not happen while paused
       fill(wg, x - 4, y - 4, 9, 4, P.whiteD); fill(wg, x - 4, y - 4, 9, 1, P.stoneD); fill(wg, x - 2, y - 3, 1, 3, P.stoneD); fill(wg, x + 2, y - 3, 1, 3, P.stoneD); return;
@@ -964,7 +1032,7 @@ window.RoadScene = function () {
     }
     // the crew's walker says who is out, now and then
     if (explorerAt && ((ts % 12) < 5 || reduce)) {
-      const words = explorerAt.job.member + ' at work';
+      const words = fit(explorerAt.job.title || explorerAt.job.member + ' at work', W - 16);
       const lw = F.measure(words);
       const r = label(words, Math.max(6 + lw / 2, Math.min(W - 6 - lw / 2, explorerAt.x)), explorerAt.y - 30, { align: 'center', bg: '#fff3dc' });
       fill(g, explorerAt.x - 1, r.y + r.h, 3, 2, P.ink); fill(g, explorerAt.x, r.y + r.h - 1, 1, 2, '#fff3dc');
@@ -1001,12 +1069,12 @@ window.RoadScene = function () {
       if (capText) { ui.caption = label(capText, capRect.x + 3, capY, { bg: onIt && near.status === 'failed' ? '#ffd9d2' : P.paper }); ui.capFiring = onIt ? near : next; fill(g, L.nowX - 1, capY + 9, 3, 2, P.ink); }
       ui.ahead = showAhead ? { f: beyond, r: label(aheadTxt, W - 6, signY, { align: 'right', bg: P.paper2 }) } : null;
       ui.behind = showBehind ? { f: behind, r: label(behindTxt, 6, signY, { bg: '#ffd9d2' }) } : null;
-      // the day's tally of firings, up to the time being looked at
+      // the day's tally of runs on the road, up to the time being looked at
       if (!L.tall) {
         const d0 = Math.floor(T / DAY) * DAY, upto = Math.min(T, n);
-        const rs = R.values(S.scheduleRuns).filter((r) => r.at != null && r.at >= d0 && r.at <= upto);
-        const bad = rs.filter((r) => r.kind === 'failed').length;
-        const words = (dayWord(T) === 'today' ? 'Today' : DAYS[dayIx(T)]) + ': ' + (rs.length ? rs.length + (rs.length === 1 ? ' firing, ' : ' firings, ') + (rs.length - bad) + ' ran' + (bad ? ', ' + bad + ' failed' : '') : (T > n ? 'nothing has fired yet' : 'nothing fired'));
+        const rs = firings.filter((f) => (f.status === 'ok' || f.status === 'failed') && f.at >= d0 && f.at <= upto);
+        const bad = rs.filter((f) => f.status === 'failed').length;
+        const words = (dayWord(T) === 'today' ? 'Today' : DAYS[dayIx(T)]) + ': ' + (rs.length ? rs.length + (rs.length === 1 ? ' run, ' : ' runs, ') + (rs.length - bad) + ' ok' + (bad ? ', ' + bad + ' failed' : '') : (T > n ? 'nothing has run yet' : 'nothing ran'));
         const x = F.text(g, words, 8, L.road.y1 - 11, roadInk(T, false));
         if (bad) fill(g, 8 + x + 4, L.road.y1 - 9, 4, 4, P.red);
       }
@@ -1014,11 +1082,33 @@ window.RoadScene = function () {
     }
     // the planning sign
     ui.plan = label('Plan', L.planX, L.title.y + 1, { align: 'right', bg: P.paper2 });
-    // a stream refused at its open says so, once, under the title
-    const refused = Object.keys(S.refusals);
-    if (refused.length && !card) label(fit('Not reading ' + refused.join(', ') + ': ' + S.refusals[refused[0]], W - 20), tt.x + 3, ty + (away ? 28 : 14), { bg: '#ffd9d2' });
+    // a part not live says so over itself: since when its picture stands, when it is read again,
+    // or that it is not read at all
+    for (const p of Object.keys(PARTS)) {
+      const nt = on(p) && R.note(p), at = nt && noteAt(p);
+      if (!at) continue;
+      const w = F.measure(nt.text) + 6;
+      label(nt.text, Math.max(w / 2 + 2, Math.min(W - w / 2 - 2, at.x)), at.y, { align: 'center', bg: nt.state === 'stale' ? '#e8e0cc' : '#ffd9d2' });
+    }
     // what the last tap asked CYFR to do
     if (ticker && ticker.t > 0) { ticker.t -= 1 / 30; F.wrap(ticker.text, W - 24).slice(0, 3).forEach((ln, i) => label(ln, W / 2, (L.tall ? 44 : 34) + i * 13, { align: 'center', bg: '#fff8ec' })); }
+  }
+  function noteAt(p) {
+    if (p === 'attention') { const h = L.blds.house; return h && { x: h.x + 31, y: h.ground - h.h - 12 }; }
+    if (p === 'weather') return { x: L.board.x + L.board.w / 2, y: L.board.y + L.board.h + 4 };
+    if (p === 'vpn') return { x: L.stopX + 30, y: L.track.y - 52 };
+    const b = L.blds[PARTS[p].bld[0]];
+    return b && { x: b.x + b.w / 2, y: b.ground - b.h - 12 };
+  }
+  // A part whose picture is stale is drawn tired, faded, until a fresh picture comes.
+  function drawTired() {
+    g.fillStyle = 'rgba(236,230,214,0.5)';
+    for (const p of Object.keys(PARTS)) {
+      const nt = on(p) && R.note(p);
+      if (!nt || nt.state !== 'stale') continue;
+      for (const id of PARTS[p].bld) { const b = L.blds[id]; if (b) g.fillRect(b.x, b.ground - b.h, b.w, b.h); }
+      if (p === 'weather') g.fillRect(L.board.x, L.board.y, L.board.w, L.board.h);
+    }
   }
   const roadInk = (T, strong) => (daylight(T).day > 0.5 ? (strong ? P.ink : '#2d3b22') : (strong ? '#fff8ec' : '#d9d5c6'));
   function firingWords(f) {
@@ -1026,6 +1116,7 @@ window.RoadScene = function () {
     if (f.status === 'failed') return when(f.at) + ' ' + name + ': failed' + (f.cause ? ', ' + f.cause.replace(/_/g, ' ') : '');
     if (f.status === 'ok') return when(f.at) + ' ' + name + ': ran';
     if (f.status === 'paused') return when(f.at) + ' ' + name + ': paused, will not run';
+    if (f.status === 'running' || f.status === 'cancelled') return when(f.at) + ' ' + name + ': ' + f.status;
     return when(f.at) + ' ' + name;
   }
 
@@ -1106,7 +1197,7 @@ window.RoadScene = function () {
     const look = { news: LOOKS.failed_run, bell: LOOKS.failed_schedule, aqua: LOOKS.approval, porter: LOOKS.confirmation, sam: LOOKS.file_offer, crew: EXPLORER }[kind];
     if (look) { g.save(); g.translate(cx, gy - 4); g.scale(2, 2); Art.villager(g, 0, 0, look, 'stand'); g.restore(); return; }
     if (kind === 'plan') { Art.capybara(g, cx, gy - 4, { pose: 'stand' }); return; }
-    const sc = { house: 0.5, post: 0.7, market: 0.48, tower: 0.36, vault: 0.75, barn: 0.7 }[kind] || 0.5;
+    const sc = { house: 0.5, post: 0.7, market: 0.48, tower: 0.36, vault: 0.75, barn: 0.7, archive: 0.66, silo: 0.46 }[kind] || 0.5;
     if (Art.B[kind]) { g.save(); g.translate(cx - (Art.B[kind].w * sc) / 2, gy); g.scale(sc, sc); Art.B[kind].paint(g, 0, 0, buildingState(kind, viewT(), ts), []); g.restore(); }
   }
 
@@ -1127,24 +1218,26 @@ window.RoadScene = function () {
     const b = L.blds;
     const add = (key, id, lbl) => { const bb = b[id]; if (bb) hit(key, bb.x, bb.ground - bb.h, bb.w, bb.h, lbl, () => openCard(key), { exact: true, tab: covered.length && overlapsCovered(bb.x, bb.ground - bb.h, bb.w, bb.h) ? -1 : 0 }); };
     const list = attention();
-    if (on('attention')) add('queue', 'house', list.length + ' waiting at your house. Open the list.');
+    if (on('attention')) add('queue', 'house', list.length + ' waiting at your house' + noteOf('attention') + '. Open the list.');
     else add('queue', 'house', 'Your house');
-    if (on('threads')) add('threads', 'post', 'Post boxes: ' + S.threads.size + (S.threads.size === 1 ? ' thread, ' : ' threads, ') + threads().filter((t) => t.waits).length + ' waiting on you');
-    if (on('activity')) add('crew', 'crew', 'Crew house: ' + S.activity.size + ' at work');
-    if (on('components')) add('market', 'market', 'Market: ' + S.installed.length + ' apps');
-    if (on('schedules')) { add('tower', 'tower', 'Bell tower: ' + S.schedules.size + ' schedules'); add('press', 'press', 'Press: runs that failed'); add('barn', 'barn', 'Barn: paused schedules'); }
-    if (on('vault')) add('vault', 'vault', 'Strongroom: vault, ' + vault().filter((v) => !v.fine).length + ' need care');
-    if (on('weather') && ui.weather) { const w = weatherNow(); hit('weather', ui.weather.x, ui.weather.y, ui.weather.w, ui.weather.h, w ? 'Weather in ' + w.place + ', ' + temp(w.temp) : 'Windmill: no weather feed', () => openCard('weather'), { exact: true }); }
-    if (on('vpn')) { const v = vpnNow(); hit('vpn', L.stopX - 4, L.track.y - 40, L.tunnelX + 34 - L.stopX + 4, 40, 'Tram line: VPN ' + (v ? (v.connected ? 'connected' + (v.server ? ' to ' + v.server : '') : 'not connected') : 'feed not bound'), () => openCard('vpn'), { exact: true }); }
-    if (on('attention')) for (const [id, v] of visitors) if (!v.leaving) hit('att:' + id, v.x - 9, L.queueY - 28, 18, 30, attLabel(v.a) + ', since ' + when(v.a.since), () => openCard('att:' + id), { z: 2 });
-    if (explorerAt) hit('explorer', explorerAt.x - 8, explorerAt.y - 16, 16, 18, explorerAt.job.member + ' at work', () => openCard('crew'), { z: 2 });
+    if (on('threads')) add('threads', 'post', 'Post boxes: ' + S.threads.size + (S.threads.size === 1 ? ' thread, ' : ' threads, ') + threads().filter((t) => t.waits).length + ' waiting on you, ' + threads().reduce((n, t) => n + t.unread, 0) + ' unread' + noteOf('threads'));
+    if (on('activity')) { const s = sys(); add('crew', 'crew', 'Crew house: ' + S.activity.size + ' at work' + (s && s.total != null ? ', ' + (s.ready ?? 0) + ' of ' + s.total + ' ready' : '') + noteOf('activity')); }
+    if (on('components')) { const ups = S.installed.filter((a) => { const c = R.component(a.ref); return c && c.update; }).length; add('market', 'market', 'Market: ' + S.installed.length + ' apps' + (ups ? ', ' + ups + ' with an update' : '') + noteOf('components')); }
+    if (on('schedules')) { const nt = noteOf('schedules'); add('tower', 'tower', 'Bell tower: ' + S.schedules.size + ' schedules' + nt); add('press', 'press', 'Press: runs that failed' + nt); add('barn', 'barn', 'Barn: paused schedules' + nt); }
+    if (on('vault')) add('vault', 'vault', 'Strongroom: vault, ' + vault().filter((v) => !v.fine).length + ' need care' + noteOf('vault'));
+    if (on('system')) { const s = sys(); add('silo', 'silo', 'Silo: how CYFR stands' + (s ? ', ' + (HEALTH[s.health] || 'health not known').replace('.', '').toLowerCase() + ', storage ' + storage(s) + (s.update ? ', an update is ready' : '') : '') + noteOf('system')); }
+    if (on('files')) { const list = files(), offers = list.filter((f) => f.kind === 'offer').length; add('archive', 'archive', 'Archive: ' + (list.length - offers) + ' recent files, ' + offers + (offers === 1 ? ' offer' : ' offers') + noteOf('files')); }
+    if (on('weather') && ui.weather) { const w = weatherNow(); hit('weather', ui.weather.x, ui.weather.y, ui.weather.w, ui.weather.h, (w ? 'Weather in ' + w.place + ', ' + temp(w.temp) : 'Windmill: no weather feed') + noteOf('weather'), () => openCard('weather'), { exact: true }); }
+    if (on('vpn')) { const v = vpnNow(); hit('vpn', L.stopX - 4, L.track.y - 40, L.tunnelX + 34 - L.stopX + 4, 40, 'Tram line: VPN ' + (v ? (v.connected ? 'connected' + (v.server ? ' to ' + v.server : '') : 'not connected') : 'feed not bound') + noteOf('vpn'), () => openCard('vpn'), { exact: true }); }
+    if (on('attention')) for (const [id, v] of visitors) if (!v.leaving) hit('att:' + id, v.x - 9, L.queueY - 28, 18, 30, attLabel(v.a) + (v.a.untimed ? '' : ', since ' + when(v.a.since)), () => openCard('att:' + id), { z: 2 });
+    if (explorerAt) hit('explorer', explorerAt.x - 8, explorerAt.y - 16, 16, 18, explorerAt.job.member + ' at work' + (explorerAt.job.title ? ': ' + explorerAt.job.title : ''), () => openCard('crew'), { z: 2 });
     if (ui.count) hit('count', ui.count.x, ui.count.y, ui.count.w, ui.count.h, list.length + ' waiting', () => openCard('queue'), { z: 2, tab: -1 });
     if (ui.plan) hit('plan', ui.plan.x, ui.plan.y, ui.plan.w, ui.plan.h, 'Plan the village: turn parts on or off and move them', () => openCard('plan'), { z: 2 });
     if (on('schedules')) {
       road.style.cssText = `left:0;top:${(L.road.y0 - 26) * SC}px;width:${W * SC}px;height:${(L.road.y1 - L.road.y0 + 26) * SC}px`;
       road.setAttribute('aria-valuetext', dateLabel(T) + ' ' + hm(T) + (Math.abs(T - now()) >= 1 ? ', ' + rel(T) : ', now'));
       road.setAttribute('aria-valuenow', String(Math.round(T - now())));
-      if (ui.caption) hit('cap', ui.caption.x, ui.caption.y, ui.caption.w, ui.caption.h, 'Show this firing', () => { const f = ui.capFiring; if (f && f.sid && sched(f.sid)) openCard('sched:' + f.sid); }, { z: 3, tab: -1 });
+      if (ui.caption) hit('cap', ui.caption.x, ui.caption.y, ui.caption.w, ui.caption.h, 'Show this firing', () => openFiring(ui.capFiring), { z: 3, tab: -1 });
       if (ui.ahead) { const a = ui.ahead; hit('ahead', a.r.x, a.r.y, a.r.w, a.r.h, 'Go to ' + dateLabel(a.f.at) + ' ' + hm(a.f.at) + ', ' + sched(a.f.sid).name, () => jumpTo(a.f.at), { z: 3 }); }
       if (ui.behind) hit('behind', ui.behind.r.x, ui.behind.r.y, ui.behind.r.w, ui.behind.r.h, 'Go back to ' + when(ui.behind.f.at) + ', the failed run', () => jumpTo(ui.behind.f.at), { z: 3 });
       if (ui.now) hit('now', ui.now.x, ui.now.y, ui.now.w, ui.now.h, 'Back to now', () => { view.target = 0; }, { z: 3 });
