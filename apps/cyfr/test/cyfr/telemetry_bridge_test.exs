@@ -18,6 +18,7 @@ defmodule Cyfr.TelemetryBridgeTest do
   alias Cyfr.Bus.{
     ApiKeys,
     AthanorArchived,
+    Attention,
     Build,
     CallerInvalidated,
     Components,
@@ -59,7 +60,7 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.executions(@actor), {Execution, %{kind: :completed, duration_ms: 3}}},
       {[:cyfr, :opus, :execute, :exception], Map.merge(tenant, %{error: "boom"}),
        Bus.executions(@actor),
-       {Execution, %{kind: :failed, error: %{class: :internal, message: "boom"}}}},
+       {Execution, %{kind: :failed, error: %{class: :internal, cause: :failed}}}},
       {[:cyfr, :emissary, :request], Map.put(tenant, :method, "tools/call"), Bus.requests(@actor),
        {Request, %{kind: :logged, method: "tools/call"}}},
       {[:cyfr, :sanctum, :policy, :decision], Map.put(tenant, :decision, "denied"),
@@ -74,12 +75,20 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.schedule_runs(@actor), {ScheduleRun, %{kind: :fired, schedule_id: "s1"}}},
       {[:cyfr, :schedules, :failed], Map.merge(tenant, %{schedule_id: "s1", kind: "schedule"}),
        Bus.schedule_runs(@actor), {ScheduleRun, %{kind: :failed, schedule_id: "s1"}}},
+      # A schedule's completed run settles its failing on its person's own
+      # attention topic (`Cyfr.Providers.AttentionTest` holds every kind).
+      {[:cyfr, :schedules, :completed],
+       Map.merge(tenant, %{schedule_id: "s1", kind: "schedule", user_id: @user}),
+       Bus.attention(@actor, @user), {Attention, %{kind: :removed, id: "s1", label: nil}}},
       {[:cyfr, :compendium, :component, :install], Map.put(tenant, :name, "c"),
        Bus.components(@actor), {Components, %{kind: :installed, name: "c"}}},
       {[:cyfr, :compendium, :component, :remove], Map.put(tenant, :name, "c"),
        Bus.components(@actor), {Components, %{kind: :removed, name: "c"}}},
       {[:cyfr, :compendium, :component, :push], tenant, Bus.components(@actor),
        {Components, %{kind: :pushed}}},
+      {[:cyfr, :sanctum, :consent, :changed],
+       Map.put(tenant, :source_ref, "tincture:local.board"), Bus.components(@actor),
+       {Components, %{kind: :changed, ref: "tincture:local.board", type: "tincture"}}},
       {[:cyfr, :opus, :tincture, :invoke, :start], Map.put(tenant, :request_id, "r1"),
        Bus.tinctures(@actor), {Tinctures, %{kind: :invoke_started, request_id: "r1"}}},
       {[:cyfr, :opus, :tincture, :invoke, :stop], Map.put(tenant, :status, :error),
@@ -155,6 +164,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         ref: @ref,
         id: @secret,
         operation: "vault.create",
+        opened_at: ~U[2026-09-30 12:00:00Z],
         expires_at: expires_at,
         arguments: %{"fields" => %{"API_KEY" => "sk-never-bridged"}}
       })
@@ -242,6 +252,12 @@ defmodule Cyfr.TelemetryBridgeTest do
   end
 
   describe "one struct per event" do
+    # What waits for a person is read again when its message is delivered.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
     test "each event lands on its topic as its payload" do
       for {event, metadata, topic, expected} <- cases() do
         listen(topic)
@@ -438,7 +454,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       assert_receive %Execution{
         kind: :cancelled,
         execution_id: "exec_cancelled",
-        error: %{class: :internal, message: "cancelled"}
+        error: %{class: :internal, cause: :failed}
       }
 
       refute_receive %Notify{}, 100
@@ -546,7 +562,8 @@ defmodule Cyfr.TelemetryBridgeTest do
       })
 
       unconfirmed = %{class: :internal, message: "The outcome could not be confirmed."}
-      assert_receive %ScheduleRun{kind: :failed, reason: ^unconfirmed}
+      # A canvas's run payloads carry the class and its cause, no sentence.
+      assert_receive %ScheduleRun{kind: :failed, reason: %{class: :internal, cause: :failed}}
       assert_receive %Notify{kind: :schedule_failed, payload: %{reason: ^unconfirmed}}
 
       :telemetry.execute([:cyfr, :opus, :execute, :exception], %{}, %{
@@ -556,7 +573,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         error: secret
       })
 
-      assert_receive %Execution{kind: :failed, error: ^unconfirmed}
+      assert_receive %Execution{kind: :failed, error: %{class: :internal, cause: :failed}}
     end
 
     test "an authorization reason is classed by its own vocabulary" do
@@ -569,8 +586,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         reason: {:missing_permission, :execute}
       })
 
-      message = Sanctum.Unauthorized.message({:missing_permission, :execute})
-      assert_receive %ScheduleRun{kind: :failed, reason: %{class: :forbidden, message: ^message}}
+      assert_receive %ScheduleRun{kind: :failed, reason: %{class: :forbidden, cause: :refused}}
     end
 
     test "metadata a payload does not name is not carried" do
@@ -614,7 +630,13 @@ defmodule Cyfr.TelemetryBridgeTest do
     test "Sanctum's announcement of a confirmation is what the bridge carries, kind by kind" do
       listen(Bus.confirmations(@actor, @user))
       expires_at = ~U[2026-09-30 12:05:00Z]
-      fields = %{ref: @ref, operation: "vault.create", expires_at: expires_at}
+
+      fields = %{
+        ref: @ref,
+        operation: "vault.create",
+        opened_at: ~U[2026-09-30 12:00:00Z],
+        expires_at: expires_at
+      }
 
       for kind <- Cyfr.Bus.Confirmation.kinds() do
         :ok = Sanctum.Telemetry.confirmation(kind, @athanor, @user, fields)

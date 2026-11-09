@@ -679,7 +679,7 @@ defmodule Opus.Schedules.SchedulerTest do
     assert_receive %Cyfr.Bus.ScheduleRun{kind: :failed, schedule_id: ^id} = failed, 10_000
     assert failed.occurrence_id == occurrence.id
     assert DateTime.compare(failed.scheduled_for, occurrence.scheduled_for) == :eq
-    assert %{class: _, message: _} = failed.reason
+    assert %{class: _, cause: _} = failed.reason
     assert_receive %Cyfr.Bus.Schedules{schedule_id: ^id, error_count: 1}, 10_000
     assert [] = Arca.Repo.all(Arca.Schemas.Execution)
     assert ScriptedWorker.calls() == []

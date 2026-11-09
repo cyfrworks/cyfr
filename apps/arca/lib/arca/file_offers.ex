@@ -267,6 +267,46 @@ defmodule Arca.FileOffers do
 
   def inbox(%Prima.Actor{}), do: {:error, :no_person}
 
+  @doc """
+  The offers addressed to the actor's person still waiting for them at
+  `now`, from any sender: offered and not past their expiry, one entry per
+  offer, oldest first, as its `offer_id`, its first file's name in name
+  order (`filename`) and when it was made (`inserted_at`), and nothing of
+  its content. `offer_id:` narrows it to that one offer.
+  """
+  @spec awaiting(Prima.Actor.t(), DateTime.t(), keyword()) ::
+          {:ok, [map()]} | {:error, term()}
+  def awaiting(actor, now, opts \\ [])
+
+  # arca:unscoped-ok a person's incoming offers cross senders' athanors and are addressed by person
+  def awaiting(%Prima.Actor{user_id: user_id}, %DateTime{} = now, opts)
+      when is_binary(user_id) and user_id != "" and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.FileOffers.awaiting", fn ->
+      query =
+        from(o in FileOffer,
+          where: o.recipient_user_id == ^user_id and o.status == "offered",
+          where: o.expires_at > ^now,
+          group_by: o.offer_id,
+          order_by: [asc: min(o.inserted_at), asc: o.offer_id],
+          select: %{
+            offer_id: o.offer_id,
+            filename: min(o.filename),
+            inserted_at: type(min(o.inserted_at), :utc_datetime_usec)
+          }
+        )
+
+      query =
+        case Keyword.fetch(opts, :offer_id) do
+          {:ok, id} when is_binary(id) -> where(query, [o], o.offer_id == ^id)
+          :error -> query
+        end
+
+      {:ok, Arca.Repo.all(query)}
+    end)
+  end
+
+  def awaiting(%Prima.Actor{}, _now, _opts), do: {:error, :no_person}
+
   @doc "The offers the actor's person sent from the actor's athanor, newest first."
   @spec outbox(Prima.Actor.t()) :: {:ok, [offer_row()]} | {:error, term()}
   def outbox(%Prima.Actor{athanor_id: athanor_id, user_id: user_id})

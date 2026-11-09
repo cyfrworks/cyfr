@@ -168,6 +168,7 @@ defmodule Arca do
       FencedPublication,
       FencedPublication.Change,
       FrameCredentials,
+      FileOffers,
       Files,
       Health,
       IdentityLog,

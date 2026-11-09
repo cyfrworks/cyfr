@@ -44,9 +44,14 @@ streams.
 ### Steps
 
 1. `canvas(action: "catalog")` — each stream a canvas may read, with its
-   shape: `runs.changes`, `schedules.changes`, `schedule_runs.changes`
-   and `feed.results`. `feed(action: "list")` — the feeds the person
-   bound, with their result shapes and actions.
+   shape: `runs.changes`, `schedules.changes`, `schedule_runs.changes`,
+   `threads.changes` (the person's own list of threads, whose subject is
+   theirs and supplied for them), `attention.changes` (what waits for the
+   person, likewise theirs), `activity.changes` (the crew's jobs beginning
+   and ending), `components.changes` (the installed components),
+   `vault.changes` (the vault's entries by name and standing, never a
+   value) and `feed.results`. `feed(action: "list")` — the feeds the
+   person bound, with their result shapes and actions.
 2. Write the page's files, as the page and the SDK below say.
 3. `canvas(action: "write", name: "...", template: "vanilla", files: {...}, data: [...], feeds: [...], controls: [...], prefs: {...}, chrome: "...")` —
    `template` is `vanilla` or `react`; `files` maps each file's relative

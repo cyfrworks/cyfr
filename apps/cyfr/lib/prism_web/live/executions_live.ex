@@ -259,7 +259,7 @@ defmodule PrismWeb.ExecutionsLive do
           exec
           |> Map.put(:status, status)
           |> put_some(:duration_ms, ended.duration_ms)
-          |> put_some(:error, ended.error && ended.error.message)
+          |> put_some(:error, ended.error && error_sentence(ended.error.cause))
           |> put_some(:request_id, ended.request_id)
           |> put_some(:component_type, ended.component_type && to_string(ended.component_type))
           |> put_some(:parent_execution_id, ended.parent_execution_id)
@@ -269,6 +269,15 @@ defmodule PrismWeb.ExecutionsLive do
       end)
 
     assign(socket, :executions, list)
+  end
+
+  # A live failure carries its cause, never its sentence: the row reads the
+  # cause's own sentence until the list is read again from the records.
+  defp error_sentence(cause) do
+    case List.keyfind(Execution.causes(), cause, 0) do
+      {^cause, sentence} -> sentence
+      nil -> nil
+    end
   end
 
   # ============================================================================

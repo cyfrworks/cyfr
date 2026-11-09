@@ -2787,6 +2787,7 @@ defmodule Sanctum.Consent.Commit do
 
     case result do
       {:ok, consent} ->
+        Sanctum.Telemetry.consent_changed(ctx.athanor_id, prep.source_ref)
         {:ok, consent}
 
       {:error, :head_moved} ->

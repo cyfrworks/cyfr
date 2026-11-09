@@ -53,6 +53,19 @@ defmodule Aqua.Providers.Thread do
       the refusal renders as the typed `consent_class_required` code
       instead of a generic tool error.
 
+  ## Streams
+
+  Two streams a canvas reads ride beside the tools (`streams/0`), each
+  with its shape and refresh:
+
+    * `threads.changes` is one person's list of threads, on their own
+      topic, so its subject is the grant holder's own id, which the gate
+      binds: their athanor's own threads and the active shared threads
+      they sit in (`Aqua.ThreadList`).
+    * `activity.changes` is the athanor's crew at work, a job's start and
+      end, and takes no subject (`Aqua.Crew.Activity`). It is declared
+      here, beside the `crew` tool, as the assistant's one provider.
+
   ## Approvals are never skipped
 
   A client with no way to render a card does not get to decide for the
@@ -79,6 +92,81 @@ defmodule Aqua.Providers.Thread do
   # answers `"emissary"`).
   @impl true
   def tools, do: [definition(), turn_definition(), crew_definition()]
+
+  # A day: the longest a grant on either stream lives.
+  @deadline_bound 86_400
+
+  @doc """
+  The streams a canvas reads: `threads.changes` and `activity.changes`,
+  each with its shape and refresh (the moduledoc's).
+  """
+  @impl true
+  def streams do
+    [
+      %Prima.Provider.Stream{
+        name: "threads.changes",
+        topic: :threads,
+        projection: ["kind", "id", "title", "people", "last_activity", "waits_on_you"],
+        subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
+        bind: :holder,
+        deadline_bound: @deadline_bound,
+        shape: threads_shape(),
+        refresh: {Aqua.ThreadList, :listed}
+      },
+      %Prima.Provider.Stream{
+        name: "activity.changes",
+        topic: :crew_activity,
+        projection: ["kind", "id", "member", "asked_by", "since", "status"],
+        deadline_bound: @deadline_bound,
+        shape: activity_shape(),
+        refresh: {Aqua.Crew.Activity, :open}
+      }
+    ]
+  end
+
+  # A removal carries its kind and id alone, so every other field is
+  # nullable. A title is at most the 200 characters either store keeps.
+  defp threads_shape do
+    normalized(%{
+      "type" => "object",
+      "fields" => %{
+        "kind" => %{"type" => "enum", "values" => ["own", "shared", "removed"]},
+        "id" => %{"type" => "string"},
+        "title" => %{"type" => "string", "max" => 200, "nullable" => true},
+        "people" => %{
+          "type" => "list",
+          "max" => 1000,
+          "nullable" => true,
+          "of" => %{"type" => "string", "max" => 4096}
+        },
+        "last_activity" => %{"type" => "time", "nullable" => true},
+        "waits_on_you" => %{"type" => "boolean", "nullable" => true}
+      },
+      "required" => ["kind", "id", "title", "people", "last_activity", "waits_on_you"]
+    })
+  end
+
+  defp activity_shape do
+    normalized(%{
+      "type" => "object",
+      "fields" => %{
+        "kind" => %{"type" => "enum", "values" => ["started", "ended"]},
+        "id" => %{"type" => "string"},
+        "member" => %{"type" => "string"},
+        "asked_by" => %{"type" => "string", "max" => 4096, "nullable" => true},
+        "since" => %{"type" => "time", "nullable" => true},
+        "status" => %{"type" => "enum", "values" => Prima.TurnState.statuses()}
+      },
+      "required" => ["kind", "id", "member", "asked_by", "since", "status"]
+    })
+  end
+
+  # Declared in the normalized form the stream table keeps
+  # (`Prima.Provider.Stream.valid?/1`).
+  defp normalized(shape) do
+    {:ok, normalized} = Prima.Canvas.Shape.validate(shape)
+    normalized
+  end
 
   @doc false
   def definition do
@@ -607,7 +695,10 @@ defmodule Aqua.Providers.Thread do
         _ -> %{}
       end
 
-    with {:ok, thread} <- Arca.ThreadStorage.create(Sanctum.Context.actor(ctx), attrs) do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, thread} <- Arca.ThreadStorage.create(actor, attrs) do
+      Aqua.ThreadList.changed(actor, thread.id)
       {:ok, render_thread(thread)}
     end
   end

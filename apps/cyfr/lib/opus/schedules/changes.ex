@@ -13,7 +13,10 @@ defmodule Opus.Schedules.Changes do
   before its commit. A row of kind `feed`, a deleted row and a row that
   no longer reads announce nothing. `removed/2` follows the one delete
   whose write removed the live row (`Arca.CronSchedule.soft_delete/2`
-  answers any other `:not_found`), with the row as it was. Both run under
+  answers any other `:not_found`), with the row as it was, and tells the
+  schedule's person it no longer waits for them (`Cyfr.Bus.Attention`'s
+  `removed`, its id the schedule's), so a failing schedule deleted leaves
+  their attention stream. Both run under
   the schedule's lock (`Cyfr.Bus.Schedules.serialized/2`), so once
   `removed` has left, a later `changed` reads the deleted row and
   announces nothing. Under the lock the row is read only while this
@@ -23,7 +26,7 @@ defmodule Opus.Schedules.Changes do
 
   require Logger
 
-  alias Cyfr.Bus.Schedules
+  alias Cyfr.Bus.{Attention, Schedules}
 
   @doc "The row `schedule_id` as it reads now, announced as `changed`."
   @spec changed(Prima.Actor.t(), String.t()) :: :ok
@@ -59,6 +62,7 @@ defmodule Opus.Schedules.Changes do
       case Arca.CronSchedule.get_held(actor, id) do
         {:ok, _held} ->
           broadcast(actor, payload(actor, :removed, row))
+          unwaited(actor, row)
 
         {:error, reason} ->
           Logger.warning(
@@ -74,6 +78,25 @@ defmodule Opus.Schedules.Changes do
   @spec payload(Prima.Actor.t(), Schedules.kind(), map()) :: Schedules.t()
   def payload(%Prima.Actor{} = actor, kind, row),
     do: Schedules.new(actor, kind, Schedules.row_fields(row))
+
+  # A deleted schedule's failing, if it was failing, waits for no one.
+  defp unwaited(actor, %{id: id, user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    case Cyfr.Bus.broadcast(
+           actor,
+           Cyfr.Bus.attention(actor, user_id),
+           Attention.new(actor, :removed, id: id)
+         ) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Opus.Schedules.Changes] removal of #{id} not told its person: #{inspect(reason)}"
+        )
+    end
+  end
+
+  defp unwaited(_actor, _row), do: :ok
 
   defp broadcast(actor, payload) do
     case Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), payload) do

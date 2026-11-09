@@ -148,9 +148,9 @@ defmodule Compendium.TinctureTest do
 
       # A stream no provider offers.
       assert {:error, message} =
-               Tincture.check_version(streams.([%{"name" => "vault.changes"}]), files)
+               Tincture.check_version(streams.([%{"name" => "vault.entries"}]), files)
 
-      assert message =~ "vault.changes, which no provider declares"
+      assert message =~ "vault.entries, which no provider declares"
 
       # A subject the stream does not take: none for a stream bound to its
       # holder, none for a stream that takes no subject.
@@ -354,11 +354,11 @@ defmodule Compendium.TinctureTest do
 
       # Which streams exist is still the providers' to say.
       assert {:error, message} =
-               Tincture.check_version(canvas(%{"desktop" => %{"data" => ["vault.changes"]}}), [
+               Tincture.check_version(canvas(%{"desktop" => %{"data" => ["vault.entries"]}}), [
                  {"index.html", 1}
                ])
 
-      assert message =~ "vault.changes, which no provider declares"
+      assert message =~ "vault.entries, which no provider declares"
 
       assert {:ok, 1} = Tincture.check_version(canvas(), [{"index.html", 1}])
 

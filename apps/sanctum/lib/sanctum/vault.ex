@@ -1070,6 +1070,54 @@ defmodule Sanctum.Vault do
   # global one (the "sanctum:sessions" precedent) so singletons that
   # cannot know every tenant topic — the external-MCP reconciler — still
   # see every mutation. Both are the host bridge's to broadcast.
-  defp broadcast(ctx, entry_id, verb, %{name: _} = meta),
-    do: Sanctum.Telemetry.vault_entry_changed(Context.athanor!(ctx), entry_id, verb, meta)
+  defp broadcast(ctx, entry_id, verb, %{name: _} = meta) do
+    meta = Map.merge(meta, standing(Context.actor(ctx), entry_id))
+    Sanctum.Telemetry.vault_entry_changed(Context.athanor!(ctx), entry_id, verb, meta)
+  end
+
+  @doc """
+  What a canvas reads of an entry's standing (`vault.changes`), read after
+  the write that moved it committed: `%{type, status}`, its credential
+  kind and `"fine"` or `"needs_reauthorisation"`, or both nil for an entry
+  that no longer stands (revoked, tombstoned, deleted or unread), which a
+  reader drops. Never a value, a field, a destination or a last use.
+  """
+  @spec standing(Prima.Actor.t(), String.t()) :: %{
+          type: String.t() | nil,
+          status: String.t() | nil
+        }
+  def standing(%Prima.Actor{} = actor, entry_id) when is_binary(entry_id) do
+    case Arca.VaultStorage.get(actor, entry_id) do
+      {:ok, row} -> stream_view(row)
+      _gone_or_unread -> %{type: nil, status: nil}
+    end
+  end
+
+  @doc """
+  The entries a canvas reads (`vault.changes`' current state): every
+  standing entry of the caller's athanor by `name`, `type` and `status`
+  (`standing/2`), and no other.
+  """
+  @spec standing_entries(Context.t()) ::
+          {:ok, [%{name: String.t(), type: String.t(), status: String.t()}]} | {:error, term()}
+  def standing_entries(%Context{} = ctx) do
+    with {:ok, rows} <- Arca.VaultStorage.list(Context.actor(ctx)) do
+      standing =
+        for row <- rows,
+            %{status: status} = view = stream_view(row),
+            status != nil,
+            do: Map.put(view, :name, row.name)
+
+      {:ok, standing}
+    end
+  end
+
+  # An active entry is fine; one that waits for its owner's sign-in or a
+  # rotation needs reauthorisation; any other stands no more.
+  defp stream_view(%{kind: kind, status: "active"}), do: %{type: kind, status: "fine"}
+
+  defp stream_view(%{kind: kind, status: "needs_reauth"}),
+    do: %{type: kind, status: "needs_reauthorisation"}
+
+  defp stream_view(_row), do: %{type: nil, status: nil}
 end

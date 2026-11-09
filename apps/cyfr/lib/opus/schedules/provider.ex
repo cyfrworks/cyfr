@@ -619,9 +619,9 @@ defmodule Opus.Schedules.Provider do
               "type" => "enum",
               "values" => Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
             },
-            "message" => %{"type" => "string"}
+            "cause" => cause_shape(ScheduleRun.causes())
           },
-          "required" => ["class", "message"]
+          "required" => ["class", "cause"]
         }
       },
       "required" => [
@@ -633,6 +633,16 @@ defmodule Opus.Schedules.Provider do
         "reason"
       ]
     })
+  end
+
+  # A cause's enum lists every cause with its readable sentence, so the
+  # catalog a canvas reads names what each one says.
+  defp cause_shape(causes) do
+    %{
+      "type" => "enum",
+      "values" => Enum.map(causes, fn {cause, _sentence} -> Atom.to_string(cause) end),
+      "labels" => Map.new(causes, fn {cause, sentence} -> {Atom.to_string(cause), sentence} end)
+    }
   end
 
   # Declared in the normalized form the stream table keeps

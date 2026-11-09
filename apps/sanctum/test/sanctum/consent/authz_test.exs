@@ -794,7 +794,11 @@ defmodule Sanctum.Consent.AuthzTest do
 
       for secret <- [id, again] do
         assert_receive {:announced, [:cyfr, :sanctum, :confirmation, :opened], meta}
-        assert Enum.sort(Map.keys(meta)) == [:athanor_id, :expires_at, :operation, :ref, :user_id]
+
+        assert Enum.sort(Map.keys(meta)) ==
+                 [:athanor_id, :expires_at, :opened_at, :operation, :ref, :user_id]
+
+        assert meta.opened_at == record(session_ctx, secret).opened_at
         assert meta.ref == ref(secret)
         refute inspect(meta) =~ secret
       end

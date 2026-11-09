@@ -273,6 +273,69 @@ defmodule Sanctum.SharedThreadsTest do
     end
   end
 
+  describe "listed/1 and listings/2" do
+    test "listed names the active threads by what their people are called, never an address",
+         %{alice: alice, bob: bob} do
+      plans = thread!(alice, "Plans") |> seated!(alice, [bob])
+      old = thread!(alice, "Old")
+      {:ok, _} = SharedThreads.archive(alice, old.id)
+      {:ok, pair} = SharedThreads.pair(alice, bob)
+
+      # A person with no display name is never called by their address.
+      {:ok, nameless} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|st-nameless-#{System.unique_integer([:positive])}",
+          provider: "github",
+          email: "nameless@example.com",
+          verified: true
+        })
+
+      {:ok, :added} = SharedThreads.add(alice, plans.id, user_id: nameless.id)
+      {:ok, _} = SharedThreads.post(bob, plans.id, "SAID-IN-PLANS")
+
+      assert {:ok, listed} = SharedThreads.listed(alice)
+      assert Enum.map(listed, & &1.id) == [plans.id, pair.id]
+
+      assert [
+               %{
+                 title: "Plans",
+                 people: [alice_name, bob_name, "someone"],
+                 waits_on_you: false,
+                 last_activity: %DateTime{}
+               },
+               %{title: nil, people: [_, _]}
+             ] = listed
+
+      assert {alice_name, bob_name} == {Users.public_name(alice), Users.public_name(bob)}
+      assert Users.display_name(nameless.id) == "nameless@example.com"
+      refute inspect(listed) =~ "@example.com"
+      refute inspect(listed) =~ "SAID-IN-PLANS"
+    end
+
+    test "listings tells each person, in their own athanor, what they list of the thread now",
+         %{alice: alice, bob: bob} do
+      thread = thread!(alice, "Plans") |> seated!(alice, [bob])
+      outsider = remote!(identifier())
+      alice_athanor = Sanctum.Test.People.athanor!(alice).id
+      bob_athanor = Sanctum.Test.People.athanor!(bob).id
+
+      # A person with no athanor of their own keeps no list.
+      assert [{^alice, ^alice_athanor, %{id: id, people: [_, _]}}, {^bob, ^bob_athanor, _}] =
+               SharedThreads.listings(thread.id, [alice, bob, outsider.id])
+
+      assert id == thread.id
+
+      {:ok, _} = SharedThreads.leave(bob, thread.id)
+
+      assert [{^alice, _, %{people: [_]}}, {^bob, _, :removed}] =
+               SharedThreads.listings(thread.id, [alice, bob])
+
+      {:ok, _} = SharedThreads.archive(alice, thread.id)
+      assert [{^alice, _, :removed}] = SharedThreads.listings(thread.id, [alice])
+      assert [{^alice, _, :removed}] = SharedThreads.listings("sth_gone", [alice])
+    end
+  end
+
   describe "tail/3 and people_in_threads_with/1" do
     test "tail reads the newest messages, oldest first, for a seated person alone",
          %{alice: alice, bob: bob, carol: carol} do

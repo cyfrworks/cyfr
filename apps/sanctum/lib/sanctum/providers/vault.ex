@@ -291,6 +291,67 @@ defmodule Sanctum.Providers.Vault do
     )
   end
 
+  @doc """
+  The one stream a canvas reads of the vault, `vault.changes`: each
+  standing entry of the athanor by its `name`, its credential kind as
+  `type` and its `status` (`fine` or `needs_reauthorisation`), `changed`
+  as a committed write left it and `removed` by name once a delete, a
+  revoke or a rename takes the name away (`Sanctum.Vault.standing/2`,
+  published by the host's bridge). Never a value, a field, a destination
+  or a last use. Its refresh is every standing entry, each as `changed`.
+  """
+  def streams do
+    [
+      %Prima.Provider.Stream{
+        name: "vault.changes",
+        topic: :vault_entries,
+        projection: ["kind", "name", "type", "status"],
+        deadline_bound: 86_400,
+        shape: vault_changes_shape(),
+        refresh: {__MODULE__, :standing}
+      }
+    ]
+  end
+
+  @doc """
+  The refresh of `vault.changes`: every standing entry of the caller's
+  athanor as `changed` (`Sanctum.Vault.standing_entries/1`). The subject
+  is none.
+  """
+  @spec standing(Context.t(), nil) :: {:ok, [map()]} | {:error, term()}
+  def standing(%Context{athanor_id: athanor_id} = ctx, _subject)
+      when is_binary(athanor_id) and athanor_id != "" do
+    with {:ok, entries} <- Vault.standing_entries(ctx) do
+      {:ok, Enum.map(entries, &Map.put(&1, :kind, :changed))}
+    end
+  end
+
+  def standing(%Context{}, _subject), do: {:error, :no_athanor}
+
+  defp vault_changes_shape do
+    {:ok, shape} =
+      Prima.Canvas.Shape.validate(%{
+        "type" => "object",
+        "fields" => %{
+          "kind" => %{"type" => "enum", "values" => ["changed", "removed"]},
+          "name" => %{"type" => "string"},
+          "type" => %{
+            "type" => "enum",
+            "nullable" => true,
+            "values" => Prima.CredentialKinds.all()
+          },
+          "status" => %{
+            "type" => "enum",
+            "nullable" => true,
+            "values" => ["fine", "needs_reauthorisation"]
+          }
+        },
+        "required" => ["kind", "name"]
+      })
+
+    shape
+  end
+
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     # Enumeration is operator data: the same surfaces that can walk the
     # consent flow may see each living entry's metadata (`entry_view`,

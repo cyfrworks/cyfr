@@ -175,11 +175,22 @@ defmodule Opus.Providers.FeedTest do
 
       assert runs.shape["fields"]["kind"]["values"] == ~w(started completed failed cancelled)
 
-      # An error is absent or a class and its sentence, the class never nil.
+      # An error is absent or a class and its cause, the class never nil and
+      # no sentence beside them; every cause is listed with what it says.
       error = runs.shape["fields"]["error"]
 
       assert {error["type"], error["nullable"], Enum.sort(error["required"])} ==
-               {"object", true, ["class", "message"]}
+               {"object", true, ["cause", "class"]}
+
+      assert Map.keys(error["fields"]) |> Enum.sort() == ["cause", "class"]
+
+      cause = error["fields"]["cause"]
+
+      assert cause["values"] ==
+               Enum.map(Cyfr.Bus.Execution.causes(), &Atom.to_string(elem(&1, 0)))
+
+      assert cause["labels"] ==
+               Map.new(Cyfr.Bus.Execution.causes(), fn {c, s} -> {Atom.to_string(c), s} end)
 
       run = %{
         "kind" => "failed",
@@ -195,11 +206,24 @@ defmodule Opus.Providers.FeedTest do
       assert :ok =
                Shape.check(
                  runs.shape,
-                 Map.put(run, "error", %{"class" => "internal", "message" => "x"})
+                 Map.put(run, "error", %{"class" => "internal", "cause" => "failed"})
                )
 
       assert {:error, _} =
-               Shape.check(runs.shape, Map.put(run, "error", %{"class" => nil, "message" => "x"}))
+               Shape.check(
+                 runs.shape,
+                 Map.put(run, "error", %{"class" => nil, "cause" => "failed"})
+               )
+
+      assert {:error, %{path: "/error/message", reason: "unknown_field"}} =
+               Shape.check(
+                 runs.shape,
+                 Map.put(run, "error", %{
+                   "class" => "internal",
+                   "cause" => "failed",
+                   "message" => "x"
+                 })
+               )
     end
   end
 
@@ -788,7 +812,7 @@ defmodule Opus.Providers.FeedTest do
       assert {:error, :no_athanor} = Feed.recent_runs(%{ctx | athanor_id: nil}, nil)
     end
 
-    test "the runs' carries a failed run's error as the live failure carried it: classified and cut",
+    test "the runs' carries a failed run's error as the live failure carried it: a class and its cause",
          %{ctx: ctx, actor: actor} do
       long = String.duplicate("é", 150)
       script!([{:error, "upstream gone"}, {:error, long}])
@@ -802,20 +826,22 @@ defmodule Opus.Providers.FeedTest do
       assert {:ok, items} = Feed.recent_runs(ctx, nil)
       refreshed = Enum.map(items, &on_the_wire(stream, &1))
 
-      for %{"execution_id" => execution_id, "error" => error} = failed <- refreshed do
-        assert %{"kind" => "failed", "error" => %{"class" => class, "message" => message}} =
+      for %{"execution_id" => execution_id} = failed <- refreshed do
+        assert %{"kind" => "failed", "error" => %{"class" => class, "cause" => cause} = error} =
                  failed
 
+        assert Map.keys(error) |> Enum.sort() == ["cause", "class"]
         assert class in Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
-        assert String.valid?(message) and byte_size(message) <= 200 and message != ""
+        assert cause in Enum.map(Cyfr.Bus.Execution.causes(), &Atom.to_string(elem(&1, 0)))
         assert :ok = Prima.Canvas.Shape.check(stream.shape, failed)
 
         assert %{"error" => ^error} = Enum.find(live, &(&1["execution_id"] == execution_id)),
                "the refreshed error differs from the live one"
       end
 
-      # The long sentence is cut to the bound on a character boundary.
-      assert Enum.any?(refreshed, &(byte_size(&1["error"]["message"]) in 199..200))
+      # Neither the component's words nor the long sentence travel.
+      refute Jason.encode!(refreshed ++ live) =~ "upstream gone"
+      refute Jason.encode!(refreshed ++ live) =~ "é"
     end
   end
 

@@ -16,12 +16,21 @@ defmodule Cyfr.TelemetryBridge do
 
   Each event maps to one payload constructor, which takes only the
   metadata fields it names: telemetry metadata is whatever its emitter
-  attached, and the console is a trust boundary. A reason or an error is
+  attached, and the console is a trust boundary. A shared thread's change
+  alone reads beside its metadata: what each person it names now lists
+  of the thread (`Sanctum.SharedThreads.listings/2`). A reason or an error is
   classified here (`Sanctum.Refusals.classify/1`, which knows the identity
   domain's vocabulary the bus may not name) and carried as its class and
   public sentence, never an arbitrary term. A tenant
   event that names no athanor has nowhere to go: it is dropped and counted
   as `[:cyfr, :bus, :bridge_dropped]`.
+
+  What waits for a person (`Cyfr.Bus.Attention`) is told on their own
+  attention topic from the events of the records it references: an item
+  that begins waiting is read again, when its message is delivered,
+  through the stream's own derivation (`Cyfr.Providers.Attention`), so a
+  live item is the one the stream's refresh lists, and one that stops is
+  `removed` by its id.
 
   The handlers run in the emitting process, and `:telemetry` detaches a
   handler that fails in any way for the life of the node. Every failure —
@@ -38,6 +47,7 @@ defmodule Cyfr.TelemetryBridge do
   alias Cyfr.Bus.{
     ApiKeys,
     AthanorArchived,
+    Attention,
     Build,
     CallerInvalidated,
     Components,
@@ -53,7 +63,9 @@ defmodule Cyfr.TelemetryBridge do
     Session,
     ShareChanged,
     SharedThreadChanged,
+    ThreadListed,
     Tinctures,
+    VaultEntry,
     VaultEntryChanged,
     Webhooks
   }
@@ -68,6 +80,13 @@ defmodule Cyfr.TelemetryBridge do
     [:cyfr, :sanctum, :confirmation, :voided],
     [:cyfr, :sanctum, :confirmation, :expired]
   ]
+
+  # What ends a pending confirmation's wait; a confirmed record still waits
+  # for the change its asker repeats.
+  @confirmation_ends [:consumed, :cancelled, :voided, :expired]
+
+  # What ends an offer's wait for its recipient.
+  @offer_ends [:accepted, :declined, :withdrawn, :expired]
 
   @doc false
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -148,7 +167,7 @@ defmodule Cyfr.TelemetryBridge do
     [
       tenant(meta, &Bus.executions/1, &Execution.new(&1, :completed, execution(meta)))
       | root_notify(meta, :execution_finished)
-    ]
+    ] ++ run_attention(meta, :completed)
   end
 
   # A cancel ends the row as the caller asked; it is not a failure the
@@ -164,7 +183,7 @@ defmodule Cyfr.TelemetryBridge do
     [
       tenant(meta, &Bus.executions/1, &Execution.new(&1, :failed, execution(meta)))
       | root_notify(meta, :execution_failed)
-    ]
+    ] ++ run_attention(meta, :failed)
   end
 
   defp messages([:cyfr, :emissary, :request], measurements, meta) do
@@ -211,14 +230,35 @@ defmodule Cyfr.TelemetryBridge do
           meta |> Map.take([:schedule_id, :execution_id, :reason]) |> classified([:reason])
         )
       end)
-    ]
+    ] ++ schedule_attention(meta, :failed)
+  end
+
+  # A schedule's run that completed settles its failing; a feed's has no
+  # item.
+  defp messages([:cyfr, :schedules, :completed], _measurements, %{kind: "schedule"} = meta),
+    do: schedule_attention(meta, :completed)
+
+  defp messages([:cyfr, :schedules, :completed], _measurements, %{kind: "feed"}), do: []
+
+  # A grant moved: the component it is for is named, so a reader of the
+  # registry reads whether its grant is current again.
+  defp messages([:cyfr, :sanctum, :consent, :changed], _measurements, meta) do
+    fields =
+      case Prima.ComponentRef.parse(meta[:source_ref] || "") do
+        {:ok, %{type: type, namespace: namespace, name: name}} ->
+          %{ref: Prima.ComponentRef.build(type, namespace, name), type: type, name: name}
+
+        _unparsed ->
+          %{}
+      end
+
+    [tenant(meta, &Bus.components/1, &Components.new(&1, :changed, fields))]
   end
 
   defp messages([:cyfr, :compendium, :component, action], _measurements, meta)
        when action in [:install, :remove, :push] do
     kind = %{install: :installed, remove: :removed, push: :pushed}[action]
-    fields = Map.take(meta, [:name, :version, :publisher, :component_type])
-    [tenant(meta, &Bus.components/1, &Components.new(&1, kind, fields))]
+    [tenant(meta, &Bus.components/1, &Components.new(&1, kind, component_fields(meta)))]
   end
 
   defp messages([:cyfr, :opus, :tincture, :invoke, stage], _measurements, meta)
@@ -242,6 +282,7 @@ defmodule Cyfr.TelemetryBridge do
       tenant(meta, &Bus.notify/1, fn actor ->
         Notify.new(actor, meta[:kind], notify_payload(meta))
       end)
+      | approval_attention(meta)
     ]
   end
 
@@ -269,15 +310,29 @@ defmodule Cyfr.TelemetryBridge do
        do: [{:global, Bus.frame_credentials(user_id), FrameCredential.new(change, user_id, id)}]
 
   # A shared thread's change, on the own topic of each person it names:
-  # its people, and anyone the change took from it.
+  # its people, and anyone the change took from it. And on each one's list
+  # of threads in their own athanor, the thread as it reads now or its
+  # removal (`Sanctum.SharedThreads.listings/2`): the one announcement here
+  # that reads, since a shared thread is no athanor's and its event names
+  # only who to tell.
   defp messages([:cyfr, :sanctum, :shared_thread, kind], _measurements, %{
          thread_id: thread_id,
          user_ids: user_ids
        })
        when is_binary(thread_id) and is_list(user_ids) do
-    for user_id <- user_ids, is_binary(user_id) and user_id != "" do
-      {:global, Bus.shared_threads(user_id), SharedThreadChanged.new(kind, user_id, thread_id)}
-    end
+    user_ids = for user_id <- user_ids, is_binary(user_id) and user_id != "", do: user_id
+
+    changed =
+      for user_id <- user_ids,
+          do:
+            {:global, Bus.shared_threads(user_id),
+             SharedThreadChanged.new(kind, user_id, thread_id)}
+
+    changed ++
+      for {user_id, athanor_id, listing} <- listings(thread_id, user_ids) do
+        actor = Prima.Actor.in_athanor(athanor_id)
+        {:tenant, actor, Bus.threads(actor, user_id), &listed(&1, thread_id, listing)}
+      end
   end
 
   # Two topics, one announcement: the athanor's own, and the deliberately
@@ -292,6 +347,7 @@ defmodule Cyfr.TelemetryBridge do
     [
       tenant(meta, &Bus.vault_changed/1, build),
       tenant(meta, fn _actor -> Bus.vault_changed_global() end, build, :global)
+      | vault_entries(meta)
     ]
   end
 
@@ -326,7 +382,12 @@ defmodule Cyfr.TelemetryBridge do
               is_binary(recipient) and recipient != "" and is_binary(filename) and
               filename != "" do
     payload = FileOffer.new(kind, offer_id, sender, filename)
-    for user_id <- told(kind, sender, recipient), do: {:global, Bus.file_offers(user_id), payload}
+
+    for(
+      user_id <- told(kind, sender, recipient),
+      do: {:global, Bus.file_offers(user_id), payload}
+    ) ++
+      offer_attention(kind, offer_id, recipient)
   end
 
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})
@@ -345,6 +406,7 @@ defmodule Cyfr.TelemetryBridge do
 
     [
       tenant(meta, &Bus.confirmations(&1, user_id), &Confirmation.new(&1, stage, fields))
+      | confirmation_attention(stage, meta)
     ]
   end
 
@@ -368,6 +430,63 @@ defmodule Cyfr.TelemetryBridge do
       error: classify(meta[:error])
     }
   end
+
+  # The entry as a canvas reads it, from the standing the committed write
+  # left: a rename takes the old name away first, and an entry that no
+  # longer stands is removed by its name.
+  defp vault_entries(meta) do
+    entry = meta[:meta] || %{}
+
+    renamed =
+      if is_binary(entry[:old_name]) and entry[:old_name] != entry[:name],
+        do: [vault_entry(meta, :removed, %{name: entry[:old_name]})],
+        else: []
+
+    standing =
+      case entry do
+        %{status: status} when is_binary(status) ->
+          vault_entry(meta, :changed, Map.take(entry, [:name, :type, :status]))
+
+        _gone ->
+          vault_entry(meta, :removed, %{name: entry[:name]})
+      end
+
+    renamed ++ [standing]
+  end
+
+  defp vault_entry(meta, kind, fields),
+    do: tenant(meta, &Bus.vault_entries/1, &VaultEntry.new(&1, kind, fields))
+
+  # A version as a registry event names it: its versionless reference, its
+  # type, name and version. What only the listing reads (its icon, a newer
+  # shipped version, its grant) is left to the stream's refresh.
+  defp component_fields(meta) do
+    type = meta[:component_type] && to_string(meta[:component_type])
+
+    ref =
+      if is_binary(type) and is_binary(meta[:publisher]) and is_binary(meta[:name]),
+        do: Prima.ComponentRef.build(type, meta[:publisher], meta[:name])
+
+    %{ref: ref, type: type, name: meta[:name], version: meta[:version]}
+  end
+
+  # What each person lists of a shared thread now. A read that fails costs
+  # the lists their update and never the change's own messages before it.
+  defp listings(thread_id, user_ids) do
+    Sanctum.SharedThreads.listings(thread_id, user_ids)
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[Cyfr.TelemetryBridge] the lists of threads of shared thread #{thread_id} not told: " <>
+          Prima.LogFilter.format_exception(kind, reason)
+      )
+
+      []
+  end
+
+  # A shared thread on one person's list, or its leaving it.
+  defp listed(actor, thread_id, :removed), do: ThreadListed.new(actor, :removed, id: thread_id)
+  defp listed(actor, _thread_id, listing), do: ThreadListed.new(actor, :shared, listing)
 
   # Who a file offer's message is for: a receipt, failed or landed, is its
   # recipient's; every other transition is both people's.
@@ -425,6 +544,154 @@ defmodule Cyfr.TelemetryBridge do
     ]
   end
 
+  # ---------------------------------------------------------------------------
+  # What waits for a person
+  # ---------------------------------------------------------------------------
+
+  # A top-level run of a reference its person ran: a failure is that
+  # reference's item as it stands once read, and any end of a run of it
+  # settles the item, which is the reference itself. A child is part of
+  # its root's work.
+  defp run_attention(meta, outcome) do
+    case meta do
+      %{athanor_id: athanor_id, user_id: user_id, reference: reference}
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             user_id != "" and is_binary(reference) ->
+        if is_nil(meta[:parent_execution_id]),
+          do: [ran(outcome, athanor_id, user_id, reference)],
+          else: []
+
+      _unattributed ->
+        []
+    end
+  end
+
+  defp ran(:failed, athanor_id, user_id, reference) do
+    attention(fn ->
+      Cyfr.Providers.Attention.failed_run(Prima.Actor.in_athanor(athanor_id), user_id, reference)
+      |> waiting(athanor_id, user_id)
+    end)
+  end
+
+  defp ran(:completed, athanor_id, user_id, reference),
+    do: attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: reference}}]} end)
+
+  # A schedule's failure is its item as it stands once read; a completed
+  # run of it settles the item.
+  defp schedule_attention(meta, outcome) do
+    case meta do
+      %{kind: "schedule", athanor_id: athanor_id, user_id: user_id, schedule_id: id}
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             user_id != "" and is_binary(id) ->
+        [scheduled(outcome, athanor_id, user_id, id)]
+
+      _feed_or_unattributed ->
+        []
+    end
+  end
+
+  defp scheduled(:failed, athanor_id, user_id, id) do
+    attention(fn ->
+      Cyfr.Providers.Attention.failed_schedule(Prima.Actor.in_athanor(athanor_id), user_id, id)
+      |> waiting(athanor_id, user_id)
+    end)
+  end
+
+  defp scheduled(:completed, athanor_id, user_id, id),
+    do: attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: id}}]} end)
+
+  # An approval waits for the athanor's person: opened, it is read as it
+  # stands; resolved, it is removed.
+  defp approval_attention(%{
+         athanor_id: athanor_id,
+         kind: kind,
+         payload: %{approval_id: id}
+       })
+       when kind in [:approval_pending, :approval_resolved] and is_binary(athanor_id) and
+              athanor_id != "" and is_binary(id) do
+    [
+      attention(fn ->
+        with {:ok, person} <- Cyfr.Providers.Attention.person(athanor_id) do
+          case kind do
+            :approval_pending ->
+              Cyfr.Providers.Attention.approval(Prima.Actor.in_athanor(athanor_id), id)
+              |> waiting(athanor_id, person)
+
+            :approval_resolved ->
+              {:ok, [{athanor_id, person, :removed, %{id: id}}]}
+          end
+        end
+      end)
+    ]
+  end
+
+  defp approval_attention(_meta), do: []
+
+  # An offer waits for its recipient in their own athanor, wherever its
+  # sender is; a receipt's landing or failure is not a wait.
+  defp offer_attention(kind, offer_id, recipient) when kind == :offered or kind in @offer_ends do
+    [
+      attention(fn ->
+        with {:ok, athanor_id} <- Cyfr.Providers.Attention.own_athanor(recipient) do
+          if kind == :offered do
+            %{Prima.Actor.in_athanor(athanor_id) | user_id: recipient}
+            |> Cyfr.Providers.Attention.file_offer(offer_id)
+            |> waiting(athanor_id, recipient)
+          else
+            {:ok, [{athanor_id, recipient, :removed, %{id: offer_id}}]}
+          end
+        end
+      end)
+    ]
+  end
+
+  defp offer_attention(_kind, _offer_id, _recipient), do: []
+
+  # A confirmation is its announcement's item: the record is the identity
+  # domain's, and the announcement carries what the item names.
+  defp confirmation_attention(
+         :opened,
+         %{
+           athanor_id: athanor_id,
+           user_id: user_id,
+           ref: ref,
+           operation: operation,
+           opened_at: %DateTime{} = opened_at
+         }
+       )
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(ref) and
+              is_binary(operation) do
+    item =
+      Cyfr.Providers.Attention.confirmation(%{
+        ref: ref,
+        operation: operation,
+        opened_at: opened_at
+      })
+
+    [attention(fn -> waiting({:ok, [item]}, athanor_id, user_id) end)]
+  end
+
+  defp confirmation_attention(stage, %{athanor_id: athanor_id, user_id: user_id, ref: ref})
+       when stage in @confirmation_ends and is_binary(athanor_id) and athanor_id != "" and
+              is_binary(ref),
+       do: [attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: ref}}]} end)]
+
+  defp confirmation_attention(_stage, _meta), do: []
+
+  # Read when delivered, so a read that fails costs this message alone.
+  defp attention(read), do: {:attention, read}
+
+  # Items as their person's attention messages.
+  defp waiting({:ok, items}, athanor_id, user_id),
+    do:
+      {:ok,
+       for(
+         %{kind: kind} = item <- items,
+         do: {athanor_id, user_id, kind, Map.delete(item, :kind)}
+       )}
+
+  defp waiting({:error, reason}, _athanor_id, _user_id), do: {:error, reason}
+
   defp tenant(meta, topic, build, scope \\ :tenant) do
     case meta[:athanor_id] do
       athanor_id when is_binary(athanor_id) and athanor_id != "" ->
@@ -452,6 +719,29 @@ defmodule Cyfr.TelemetryBridge do
 
   defp deliver(event, {:global, topic, payload}),
     do: publish(event, fn -> Bus.broadcast_global(topic, payload) end)
+
+  defp deliver(event, {:attention, read}) do
+    publish(event, fn ->
+      case read.() do
+        {:ok, items} -> Enum.reduce_while(items, :ok, &tell/2)
+        # No person to tell: an athanor or a recipient this server holds no row for.
+        :none -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  # One person's attention message, on their own topic in the athanor the
+  # item is in.
+  defp tell({athanor_id, user_id, kind, fields}, :ok) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    payload = Attention.new(actor, kind, fields)
+
+    case Bus.broadcast(actor, Bus.attention(actor, user_id), payload) do
+      :ok -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
 
   # A publish that fails — refused, or the PubSub raising — is logged and
   # contained here, one message at a time.

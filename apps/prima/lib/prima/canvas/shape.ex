@@ -12,7 +12,10 @@ defmodule Prima.Canvas.Shape do
     * `integer` — a JSON integer; a float, `1.0` included, is refused;
     * `boolean`;
     * `time` — a string `DateTime.from_iso8601/1` accepts, offset included;
-    * `enum` — `values`, 1 to 64 distinct strings of 1 to 256 code points;
+    * `enum` — `values`, 1 to 64 distinct strings of 1 to 256 code points,
+      and optionally `labels`, an object naming every value and nothing
+      else, each with its readable sentence of 1 to 256 code points: how a stream's finite values are listed with what
+      they say. A shape without `labels` normalizes without it;
     * `list` — `of` (a shape) and `max` elements, 1 to 1000, default 100;
     * `object` — `fields`, 0 to 64 names (`name?/1`) each mapped to a
       shape, and `required`, distinct names of `fields`, default `[]`. A
@@ -57,7 +60,7 @@ defmodule Prima.Canvas.Shape do
     "integer" => [],
     "boolean" => [],
     "time" => [],
-    "enum" => ~w(values),
+    "enum" => ~w(values labels),
     "list" => ~w(of max),
     "object" => ~w(fields required),
     "json" => []
@@ -196,7 +199,9 @@ defmodule Prima.Canvas.Shape do
 
   defp type_keys("enum", shape, path, _depth) do
     with {:ok, values} <- enum_values(Map.fetch(shape, "values"), path <> "/values"),
-         do: {:ok, %{"values" => values}}
+         {:ok, labels} <- labels(Map.fetch(shape, "labels"), values, path <> "/labels") do
+      {:ok, labels}
+    end
   end
 
   defp type_keys("list", shape, path, depth) do
@@ -263,6 +268,43 @@ defmodule Prima.Canvas.Shape do
       refusal -> refusal
     end
   end
+
+  # Labels are optional and, when given, name every value and no other,
+  # each with a sentence; absent, the normalized enum carries none, so a
+  # shape written before labels existed keeps its digest.
+  defp labels(:error, values, _path), do: {:ok, %{"values" => values}}
+
+  defp labels({:ok, labels}, values, path) when is_map(labels) and not is_struct(labels) do
+    keys = Map.keys(labels)
+
+    if Enum.all?(keys, &is_binary/1) do
+      unknown = keys |> Enum.reject(&member?(values, &1)) |> Enum.sort()
+      missing = Enum.reject(values, &Map.has_key?(labels, &1))
+      labelled(labels, values, unknown, missing, path)
+    else
+      refuse(path, "type")
+    end
+  end
+
+  defp labels({:ok, _labels}, _values, path), do: refuse(path, "type")
+
+  defp labelled(_labels, _values, [key | _], _missing, path), do: refuse(child(path, key), "enum")
+
+  defp labelled(_labels, _values, [], [value | _], path),
+    do: refuse(child(path, value), "required")
+
+  defp labelled(labels, values, [], [], path) do
+    case Enum.find(values, &(not sentence?(Map.fetch!(labels, &1)))) do
+      nil -> {:ok, %{"values" => values, "labels" => labels}}
+      value -> refuse(child(path, value), sentence_reason(Map.fetch!(labels, value)))
+    end
+  end
+
+  defp sentence?(label),
+    do: is_binary(label) and String.valid?(label) and code_points(label) in 1..@enum_value_max
+
+  defp sentence_reason(label) when is_binary(label), do: "range"
+  defp sentence_reason(_label), do: "type"
 
   defp field_names(fields, path) when is_map(fields) and not is_struct(fields) do
     if map_size(fields) > @fields_max do

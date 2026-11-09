@@ -13,6 +13,7 @@
     "Arca.CanvasVersions",
     "Arca.FencedPublication",
     "Arca.FencedPublication.Change",
+    "Arca.FileOffers",
     "Arca.Files",
     "Arca.Layouts",
     "Arca.PlatformSettings",

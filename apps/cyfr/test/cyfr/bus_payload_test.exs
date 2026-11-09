@@ -15,10 +15,12 @@ defmodule Cyfr.BusPayloadTest do
   alias Cyfr.Bus.{
     ApiKeys,
     AthanorArchived,
+    Attention,
     Build,
     CallerInvalidated,
     Components,
     Confirmation,
+    CrewActivity,
     Execution,
     ExecutionEvent,
     FeedPublished,
@@ -42,7 +44,9 @@ defmodule Cyfr.BusPayloadTest do
     ShareChanged,
     SharedThreadChanged,
     ThreadEvent,
+    ThreadListed,
     Tinctures,
+    VaultEntry,
     VaultEntryChanged,
     Webhooks
   }
@@ -54,7 +58,7 @@ defmodule Cyfr.BusPayloadTest do
     [
       Execution.new(@actor, :failed, execution_id: "e", error: "boom", component_type: :reagent),
       Request.new(@actor, :logged, request_id: "r", method: "tools/call", status: :success),
-      Components.new(@actor, :installed, name: "c", version: "1.0.0", publisher: "local"),
+      Components.new(@actor, :installed, ref: "catalyst:local.c", name: "c", version: "1.0.0"),
       Build.new(@actor, :stopped, build_id: "b", status: :error, error: :timeout),
       ScheduleRun.new(@actor, :failed,
         schedule_id: "s",
@@ -112,7 +116,27 @@ defmodule Cyfr.BusPayloadTest do
       Ping.new(1),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
       ScheduleCompleted.new(@actor),
-      CrewPending.new(@actor)
+      CrewPending.new(@actor),
+      VaultEntry.new(@actor, :changed, name: "github", type: "api_key", status: "fine"),
+      CrewActivity.new(@actor, :started,
+        member: "scout",
+        asked_by: "Ada",
+        since: ~U[2026-11-09 09:00:00Z],
+        status: "running"
+      ),
+      Attention.new(@actor, :failed_run,
+        id: "exe_payload",
+        label: "reagent:local.x",
+        since: ~U[2026-11-09 09:00:00Z],
+        destination: %{kind: "page", page: "runs"}
+      ),
+      ThreadListed.new(@actor, :own,
+        id: "thr_payload",
+        title: "Plans",
+        people: ["Ada"],
+        last_activity: ~U[2026-11-09 09:00:00Z],
+        waits_on_you: false
+      )
     ]
   end
 
@@ -282,8 +306,12 @@ defmodule Cyfr.BusPayloadTest do
               do: :reason,
               else: :error
 
-          assert Map.fetch!(payload, field) ==
-                   %{class: :internal, message: "The outcome could not be confirmed."}
+          expected =
+            if is_struct(payload, Execution) or is_struct(payload, ScheduleRun),
+              do: %{class: :internal, cause: :failed},
+              else: %{class: :internal, message: "The outcome could not be confirmed."}
+
+          assert Map.fetch!(payload, field) == expected
         end
 
         assert %Notify{payload: %{reason: %{class: :internal}}} =
@@ -297,11 +325,38 @@ defmodule Cyfr.BusPayloadTest do
       refusal = %Prima.Refusal{class: :forbidden, reason: :x, message: "Not yours"}
 
       assert Execution.new(@actor, :failed, error: refusal).error ==
-               %{class: :forbidden, message: "Not yours"}
+               %{class: :forbidden, cause: :refused}
 
       assert Execution.new(@actor, :completed).error == nil
-      assert %{class: :internal, message: cut} = Execution.new(@actor, :failed, error: long).error
-      assert byte_size(cut) <= 200 and String.valid?(cut)
+
+      assert Execution.new(@actor, :failed, error: long).error == %{
+               class: :internal,
+               cause: :failed
+             }
+    end
+
+    test "a run's and a schedule run's refusal is a class and its cause, every class one cause" do
+      for module <- [Execution, ScheduleRun] do
+        causes = Enum.map(module.causes(), &elem(&1, 0))
+        assert causes == Cyfr.Bus.Payload.causes(), inspect(module)
+
+        for {_code, sentence} <- module.causes(),
+            do: assert(is_binary(sentence) and sentence != "")
+      end
+
+      for class <- Prima.Refusal.classes() do
+        refusal = %Prima.Refusal{class: class, reason: :x, message: "a component's own words"}
+        cause = Cyfr.Bus.Payload.cause(class)
+        assert cause in Cyfr.Bus.Payload.causes()
+
+        assert Execution.new(@actor, :failed, error: refusal).error == %{
+                 class: class,
+                 cause: cause
+               }
+
+        assert ScheduleRun.new(@actor, :failed, reason: refusal).reason ==
+                 %{class: class, cause: cause}
+      end
     end
 
     test "a tenant payload refuses an actor that names no athanor, and a field it does not declare" do
@@ -358,6 +413,8 @@ defmodule Cyfr.BusPayloadTest do
             :thread -> Bus.thread(other, "thr")
             :layouts -> Bus.layouts(other, "usr_1")
             :confirmations -> Bus.confirmations(other, "usr_1")
+            :attention -> Bus.attention(other, "usr_1")
+            :threads -> Bus.threads(other, "usr_1")
             _ -> apply(Bus, key, [other])
           end
 

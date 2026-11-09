@@ -232,7 +232,7 @@ defmodule Sanctum.Mount do
                 Context.athanor!(ctx),
                 row.id,
                 :rotate,
-                %{name: row.name}
+                Map.put(Sanctum.Vault.standing(actor, row.id), :name, row.name)
               )
 
               :ok
