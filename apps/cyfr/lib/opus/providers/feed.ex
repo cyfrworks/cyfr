@@ -28,14 +28,18 @@ defmodule Opus.Providers.Feed do
   no source (`sources: []`). `press` answers what a run of the feed
   produced and declares none, so its answer is outside.
 
-  The streams (`streams/0`) are canvas-readable, each declaring a shape:
+  The streams (`streams/0`) are canvas-readable, each declaring a shape
+  and carrying the delivery contract (`Compendium.Canvas.catalog/1`):
 
     * `feed.results` rides the athanor's one feeds topic, and its subject
       is a feed's name, which filters the payloads delivered (`filter:
       "feed"`) rather than naming a topic. Its refresh is the feed's last
-      accepted envelope (`Opus.Feeds.latest/2`).
+      accepted envelope (`Opus.Feeds.latest/2`). An item is a binding,
+      its revision the binding's result sequence and its `at` when that
+      result was accepted.
     * `runs.changes` rides the athanor's executions topic, and takes no
       subject. Its refresh is the athanor's newest runs (`recent_runs/2`).
+      An item is a run, which never leaves.
   """
 
   @behaviour Prima.Provider
@@ -49,6 +53,11 @@ defmodule Opus.Providers.Feed do
 
   # A day: the longest a grant on either stream lives.
   @deadline_bound 86_400
+
+  # Fifteen minutes: how long a picture of either stream stands before it
+  # is read again. Each change is announced, so a read only mends one the
+  # bus lost.
+  @stale_after 900
 
   @impl true
   def service, do: "opus"
@@ -205,7 +214,9 @@ defmodule Opus.Providers.Feed do
         deadline_bound: @deadline_bound,
         shape: feed_results_shape(),
         refresh: {Feeds, :latest},
-        filter: "feed"
+        filter: "feed",
+        key: "binding",
+        stale_after: @stale_after
       },
       %Prima.Provider.Stream{
         name: "runs.changes",
@@ -219,11 +230,13 @@ defmodule Opus.Providers.Feed do
           "duration_ms",
           "started_at",
           "ended_at",
-          "error"
+          "error" | Prima.Provider.Stream.delivery_fields()
         ],
         deadline_bound: @deadline_bound,
-        shape: runs_changes_shape(),
-        refresh: {__MODULE__, :recent_runs}
+        shape: Prima.Provider.Stream.delivered(runs_changes_shape()),
+        refresh: {__MODULE__, :recent_runs},
+        key: "execution_id",
+        stale_after: @stale_after
       }
     ]
   end

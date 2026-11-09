@@ -88,6 +88,10 @@ function fixtureStreams({type, sub, stream, subject}) {
 // EVENTS as the handler of a subscription to `stream` hears them.
 const eventsOf = (stream) => EVENTS.map((event) => ({...event, event: stream}))
 
+// The same, as a canvas hears them: each with its change's revision and
+// time, null for a payload that carries neither.
+const canvasEventsOf = (stream) => eventsOf(stream).map((event) => ({...event, revision: null, at: null}))
+
 const subscribes = (sent) => sent().filter((message) => message.type === "subscribe")
 
 describe("data goes to the endpoint under the handshake's credential", () => {
@@ -765,7 +769,7 @@ describe("a canvas's streams go over its open's own connection", () => {
     const handle = await api.stream(DECLARED.name, DECLARED.subject, (event) => events.push(event))
     await handle.closed
 
-    assert.deepEqual(events, eventsOf(DECLARED.name))
+    assert.deepEqual(events, canvasEventsOf(DECLARED.name))
     assert.equal(sockets.length, 1)
     assert.equal(sockets[0].url, new URL(SOCKET, server.base.replace(/^http:/, "ws:")).href)
     assert.deepEqual(sockets[0].sent, [
@@ -841,6 +845,122 @@ describe("a canvas's streams go over its open's own connection", () => {
 // answers its subscription as tests/fixtures/tincture_wire.json's
 // suspended-frame stream rejection (`ended` with `forbidden`,
 // `admission`), a refusal a page opening again meets again.
+// The delivery contract's vectors: one canvas connection, each
+// subscription answered with its messages of `delivery.to_frame`.
+const DELIVERY = fixture.delivery
+const PICTURED = {name: "schedules.changes", subject: null}
+const deliveryOf = (sub) => DELIVERY.to_frame.filter((message) => message.sub === sub)
+
+describe("a canvas's stream keeps the delivery contract", () => {
+  test("it hears each vector's picture, changes, resync and states, and reads its state", async () => {
+    const block = {...OPEN.canvas, streams: [PICTURED]}
+    const {api, open, sent} = await canvasClient({
+      block,
+      streams: (message) => (message.type === "subscribe" ? deliveryOf(message.sub) : [])
+    })
+    open(SHOWN)
+
+    const heard = new Map(DELIVERY.heard.map(({sub}) => [sub, []]))
+    const handles = []
+    for (const {sub} of DELIVERY.heard) {
+      handles.push(await api.stream(PICTURED.name, PICTURED.subject, (event) => heard.get(sub).push(event)))
+    }
+    await eventually(() => DELIVERY.heard.every(({sub, events}) => heard.get(sub).length === events.length))
+
+    for (const [index, vector] of DELIVERY.heard.entries()) {
+      const events = heard.get(vector.sub).map((event) => {
+        if (event.event !== "unavailable") return event
+        // When it opens again is the SDK's own: a time within its first wait.
+        const wait = Date.parse(event.data.retry_at) - Date.now()
+        assert.ok(wait > 0 && wait <= 1000, `retry_at ${event.data.retry_at} is within a second`)
+        return {...event, data: {retry_at: "retry_at"}}
+      })
+      assert.deepEqual(events, vector.events, `subscription ${vector.sub}`)
+      assert.equal(handles[index].state, vector.state, `subscription ${vector.sub}'s state`)
+    }
+
+    // Denied, the stream ended and is not asked for again; with no answer,
+    // it is, under a new number, once its wait is over.
+    await handles[1].closed
+    const reopened = () => sent().filter((message) => message.type === "subscribe" && message.sub > 3)
+    await eventually(() => reopened().length === 1, {tries: 40, stepMs: 50})
+    assert.equal(reopened().length, DELIVERY.heard.filter((vector) => vector.reopens).length)
+    assert.equal(reopened()[0].stream, PICTURED.name)
+    for (const handle of handles) handle.close()
+    assert.deepEqual(
+      handles.map((handle) => handle.state),
+      ["ended", "denied", "ended"]
+    )
+  })
+
+  test("a lost connection opens each stream again, its fresh picture announced as a resync", async () => {
+    const block = {...OPEN.canvas, streams: [PICTURED]}
+    const picture = deliveryOf(1).slice(0, 3)
+    const {api, open, sockets} = await canvasClient({
+      block,
+      streams: (message) =>
+        message.type === "subscribe" ? picture.map((reply) => ({...reply, sub: message.sub})) : []
+    })
+    open(SHOWN)
+
+    const events = []
+    const handle = await api.stream(PICTURED.name, PICTURED.subject, (event) => events.push(event.event))
+    await eventually(() => events.length === 2)
+    sockets[0].drop()
+
+    assert.equal(handle.state, "unavailable")
+    await eventually(() => events.length >= 6, {tries: 40, stepMs: 50})
+    assert.deepEqual(events, [
+      "schedules.changes",
+      "snapshot",
+      "unavailable",
+      "resync",
+      "schedules.changes",
+      "snapshot"
+    ])
+    assert.equal(handle.state, "live")
+    assert.equal(sockets.length, 2)
+    handle.close()
+  })
+
+  test("a connection the endpoint closed for a newer one of the same frame opens nothing again", async () => {
+    const block = {...OPEN.canvas, streams: [PICTURED]}
+    const {api, open, sockets} = await canvasClient({
+      block,
+      streams: (message) => (message.type === "subscribe" ? deliveryOf(1).slice(0, 3) : [])
+    })
+    open(SHOWN)
+
+    const handle = await api.stream(PICTURED.name, PICTURED.subject, () => {})
+    sockets[0].drop(fixture.connection.close_codes.replaced)
+    await assert.rejects(handle.closed, {code: "unavailable"})
+    assert.equal(handle.state, "ended")
+    await tick()
+    assert.equal(sockets.length, 1)
+  })
+
+  test("a stream opening again on a connection closed for a newer one ends too, its closed settled", async () => {
+    const block = {...OPEN.canvas, streams: [PICTURED]}
+    // The first connection answers the picture; the second never answers.
+    const {api, open, sockets} = await canvasClient({
+      block,
+      streams: (message, socket) =>
+        message.type === "subscribe" && socket === sockets[0] ? deliveryOf(1).slice(0, 3) : []
+    })
+    open(SHOWN)
+
+    const handle = await api.stream(PICTURED.name, PICTURED.subject, () => {})
+    sockets[0].drop()
+    await eventually(() => sockets.length === 2 && sockets[1].sent.length === 1, {tries: 40, stepMs: 50})
+    sockets[1].drop(fixture.connection.close_codes.replaced)
+
+    // Bounded: a closed that never settles fails here rather than hanging.
+    const never = new Promise((_resolve, reject) => setTimeout(() => reject(new Error("closed never settled")), 2000))
+    await assert.rejects(Promise.race([handle.closed, never]), {code: "unavailable"})
+    assert.equal(handle.state, "ended")
+  })
+})
+
 describe("a hidden canvas's stream opens once it is shown", () => {
   const SUSPENDED = fixture.stream_rejections.cases.find(({rejects}) => /suspended/.test(rejects.message)).answer
 
@@ -902,7 +1022,7 @@ describe("a hidden canvas's stream opens once it is shown", () => {
     const handles = await Promise.all([early, late])
     await Promise.all(handles.map((handle) => handle.closed))
 
-    assert.deepEqual(events, {early: eventsOf(DECLARED.name), late: eventsOf(DECLARED.name)})
+    assert.deepEqual(events, {early: canvasEventsOf(DECLARED.name), late: canvasEventsOf(DECLARED.name)})
     assert.deepEqual(paths(sockets), [SOCKET])
     assert.deepEqual(sent(), [
       {v: 1, type: "subscribe", sub: 1, credential: RENEWED, stream: DECLARED.name, subject: DECLARED.subject},

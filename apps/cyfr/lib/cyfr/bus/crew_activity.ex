@@ -21,13 +21,15 @@ defmodule Cyfr.Bus.CrewActivity do
   @fields [:id, :member, :asked_by, :title, :since, :status]
 
   @enforce_keys [:athanor_id, :kind]
-  defstruct [:athanor_id, :kind | @fields]
+  defstruct [:athanor_id, :kind, :revision, :at | @fields]
 
   @type kind :: :started | :ended
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
           kind: kind(),
+          revision: non_neg_integer(),
+          at: DateTime.t(),
           id: String.t() | nil,
           member: String.t() | nil,
           asked_by: String.t() | nil,
@@ -46,7 +48,7 @@ defmodule Cyfr.Bus.CrewActivity do
   """
   @spec new(Prima.Actor.t(), kind(), map() | keyword()) :: t()
   def new(%Prima.Actor{} = actor, kind, fields \\ %{}) do
-    Payload.build(__MODULE__, @fields, fields, %{
+    Payload.build(__MODULE__, [:revision, :at | @fields], Payload.stamped(fields), %{
       athanor_id: Payload.athanor!(actor),
       kind: Payload.kind!(__MODULE__, kind, @kinds)
     })

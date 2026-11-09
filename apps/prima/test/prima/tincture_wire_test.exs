@@ -10,7 +10,8 @@ defmodule Prima.TinctureWireTest do
   `Prima.Refusal`'s projection and nothing more; the stream connection's
   messages are the ones the encoders write, each refused one is refused
   for the subscription or the connection, and each rejection's refusal
-  reads back as itself; every shell
+  reads back as itself; the delivery contract's messages are the ones
+  their encoders write; every shell
   message decodes and every refused one is refused; a canvas's handshake
   replies are the ones the builder writes, and no refused reply is; and
   a canvas's paths are the fixture's, a value outside its grammar
@@ -187,6 +188,57 @@ defmodule Prima.TinctureWireTest do
         assert heard ++ last == events
       end
     end
+  end
+
+  describe "the delivery contract's messages" do
+    test "each message a canvas-readable stream is sent is the one its encoder writes" do
+      for message <- vectors()["delivery"]["to_frame"] do
+        written =
+          case message do
+            %{"type" => "subscribed", "sub" => sub} ->
+              TinctureWire.subscribed(sub)
+
+            %{"type" => "event"} = event ->
+              TinctureWire.event(
+                event["sub"],
+                event["stream"],
+                event["subject"],
+                event["id"],
+                event["data"]
+              )
+
+            %{"type" => "snapshot", "sub" => sub, "at" => at} ->
+              TinctureWire.snapshot(sub, time(at))
+
+            %{"type" => "resync", "sub" => sub} ->
+              TinctureWire.resync(sub)
+
+            %{"type" => "stale", "sub" => sub, "at" => at} ->
+              TinctureWire.stale(sub, time(at))
+
+            %{"type" => "ended", "sub" => sub, "error" => error} ->
+              TinctureWire.ended(sub, refusal_of(error))
+          end
+
+        assert written == message
+      end
+    end
+
+    test "a change carries its revision and time, and every heard state is one the vectors show" do
+      %{"to_frame" => to_frame, "heard" => heard} = vectors()["delivery"]
+
+      for %{"type" => "event", "data" => data} <- to_frame do
+        assert is_integer(data["revision"])
+        assert data["revision"] == data["at"] |> time() |> DateTime.to_unix(:microsecond)
+      end
+
+      assert heard |> Enum.map(& &1["state"]) |> Enum.sort() == ~w(denied stale unavailable)
+    end
+  end
+
+  defp time(iso) do
+    {:ok, at, 0} = DateTime.from_iso8601(iso)
+    at
   end
 
   # The refusal a vector's error projects: a reason of its own, which the

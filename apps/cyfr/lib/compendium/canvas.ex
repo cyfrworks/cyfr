@@ -81,7 +81,11 @@ defmodule Compendium.Canvas do
           subject: String.t() | nil,
           shape: Prima.Canvas.Shape.t(),
           filter: String.t() | nil,
-          refresh: boolean()
+          refresh: boolean(),
+          key: String.t() | nil,
+          removal: String.t() | nil,
+          reread: [String.t()],
+          stale_after: pos_integer()
         }
 
   @typedoc "The catalog: every canvas-readable stream, by name."
@@ -277,9 +281,64 @@ defmodule Compendium.Canvas do
   @doc """
   What a canvas may read, derived from the operation table and never
   written by hand: every stream whose declaration carries a shape
-  (`Sanctum.Catalog.streams/0`), sorted by name, each with its subject grammar (the source of its anchored
-  expression, or nil for none), its shape, its filter and whether it
-  refreshes. Shapes and names, never a value.
+  (`Sanctum.Catalog.streams/0`), sorted by name, each with its subject
+  grammar (the source of its anchored expression, or nil for none), its
+  shape, its filter, whether it refreshes, and its delivery: `key`,
+  `removal`, `reread` and `stale_after`. Shapes and names, never a value.
+
+  ## The delivery contract
+
+  Every stream the catalog lists is a picture of items, delivered to a
+  canvas over its stream connection (`Emissary.Web.FrameSocket`, whose
+  messages `Prima.TinctureWire` spells) the same way:
+
+    * **Snapshot first, then changes.** An open stream is handed its
+      current items, each an event whose `data` is marked
+      `"refresh": true`, then `snapshot` with `at`, when the read began:
+      the picture is whole as of then. Each event after it is one change.
+    * **Items.** An item is named by the field `key` names, stable for its
+      life; a stream whose `key` is nil is one item. A change carries its
+      item whole; one whose key is null names no item, a notice to show
+      and never to hold.
+    * **Revision and freshness.** Every payload carries `revision`, a
+      whole number, and `at`, a time. On one subscription, a change of an
+      item delivered after another carries a higher revision, whatever
+      the clock of the member that told it, so a page keeps, per item,
+      the change of the highest revision it heard; an equal revision is
+      one change heard twice. A revision promises that order of delivery
+      on its subscription and nothing more: it is no count of changes,
+      it does not say which of two members' changes committed first, and
+      it is not compared across subscriptions, so a page opening a
+      stream again keeps the picture it is handed. Owners stamp a change
+      after its commit (a feed's result by its sequence, every other
+      change by the time it is told, in microseconds), and no item of a
+      snapshot is stamped later than its read began, `at` in whatever
+      form it takes, so on one clock a change the read did not see
+      outranks its item. `at` is when the owner told the change.
+    * **Removal.** An item that leaves is a change whose `kind` is the
+      stream's `removal`, naming the item by its key; a stream whose
+      `removal` is nil keeps its items.
+    * **Reread.** A change whose `kind` is one of the stream's `reread`
+      says only that the picture moved, and is answered with a fresh
+      picture in its place.
+    * **Resync.** When a page cannot be told every change, it is handed
+      a fresh picture rather than a hole: `resync`, the items, then
+      `snapshot`. The picture is read again at half its `stale_after`, on
+      a reread, and when the connection fell too far behind; the SDK
+      opens a stream again after its connection broke. The page replaces
+      its picture: an item the new one does not name is gone. A picture
+      is read beside the connection, never by it, within a deadline, and
+      the changes that come meanwhile follow the picture.
+    * **States.** Besides live, a stream is in one of three states the
+      page is told as events, never as a hang: `unavailable`, its picture
+      cannot be read now, with when it is tried again; `stale`, the
+      picture is `stale_after` old and no fresh one came, whatever its
+      read does, and it stays so until a fresh picture comes; `denied`, the frame's
+      grant no longer covers the stream, which ends and opens again only
+      under a new grant.
+
+  The delivery fields carry no content: `key` names a field the stream
+  projects already, `revision` is a number and `at` a time.
   """
   @spec catalog(Context.t()) :: {:ok, catalog()}
   def catalog(%Context{}) do
@@ -291,7 +350,11 @@ defmodule Compendium.Canvas do
           subject: stream.subject,
           shape: shape,
           filter: stream.filter,
-          refresh: not is_nil(stream.refresh)
+          refresh: not is_nil(stream.refresh),
+          key: stream.key,
+          removal: stream.removal,
+          reread: stream.reread,
+          stale_after: stream.stale_after
         }
       end
 

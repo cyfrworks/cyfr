@@ -82,7 +82,13 @@ defmodule Cyfr.Providers.FilesTest do
       assert Prima.Provider.Stream.valid?(stream)
       assert stream.name == @stream
       assert stream.topic == :files
-      assert stream.projection == ~w(kind id name type changed_at from)
+      assert stream.projection == ~w(kind id name type changed_at from revision at)
+
+      # A removal reaches a canvas as a fresh picture: a folder takes every
+      # file under it, and the next newest file takes a removed one's place.
+      assert {stream.key, stream.removal, stream.reread, stream.stale_after} ==
+               {"id", "removed", ["removed"], 900}
+
       assert stream.subject == nil
       assert stream.bind == nil
       assert stream.filter == nil
@@ -312,7 +318,9 @@ defmodule Cyfr.Providers.FilesTest do
   end
 
   # A refresh item or a live payload as a canvas reads it: projected by the
-  # grant, passed through JSON, and held to the declared shape.
+  # grant, passed through JSON, and held to the declared shape, its
+  # delivery fields (its revision, its time in microseconds) checked and
+  # set aside.
   defp read_as(payload) do
     {:ok, {Provider, stream}} = Sanctum.Catalog.lookup_stream(@stream)
 
@@ -327,7 +335,9 @@ defmodule Cyfr.Providers.FilesTest do
     data = grant |> Prima.StreamGrant.project(payload) |> Jason.encode!() |> Jason.decode!()
     assert :ok = Shape.check(stream.shape, data), inspect(data)
     assert Enum.sort(Map.keys(data)) == Enum.sort(stream.projection)
-    data
+    {:ok, at, 0} = DateTime.from_iso8601(data["at"])
+    assert data["revision"] == DateTime.to_unix(at, :microsecond)
+    Map.drop(data, ~w(revision at))
   end
 
   defp removed?(payload, id) do

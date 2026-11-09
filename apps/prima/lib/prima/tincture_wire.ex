@@ -65,12 +65,27 @@ defmodule Prima.TinctureWire do
       `subject`, `id` (the payload's sequence number where the topic
       carries one, else null) and `data` (the payload projected to the
       grant's fields);
+    * `snapshot` (`snapshot/2`) — exactly `v`, `type`, `sub` and `at`, an
+      ISO 8601 time: the items since `subscribed`, or since the last
+      `resync`, are the stream's whole picture as its read at `at` found
+      it;
+    * `resync` (`resync/1`) — exactly `v`, `type` and `sub`: a fresh
+      picture follows, its items and then `snapshot`, and replaces the
+      one the frame holds;
+    * `stale` (`stale/2`) — exactly `v`, `type`, `sub` and `at`, the time
+      of the picture the frame holds: it is the stream's bound old and no
+      fresh picture came, until the next `resync`;
     * `ended` (`ended/2`) — exactly `v`, `type` and `sub`, and `error`, a
       refusal's projection, when the endpoint ended it for a reason the
       frame should know. One that comes before `subscribed` is the
-      subscription's refusal: it never opened. The page's handler hears
-      an `error` after `subscribed` as its last event, named
+      subscription's refusal: it never opened. An app's handler hears an
+      `error` after `subscribed` as its last event, named
       `refusal_event/0`, as it heard a stream's end before.
+
+  `snapshot`, `resync` and `stale` belong to a canvas-readable stream
+  alone, and what they mean, with how a canvas hears an `ended` (its
+  `unavailable` and `denied`), is the delivery contract
+  (`Compendium.Canvas.catalog/1`).
 
   One connection carries at most `max_subscriptions/0` subscriptions at
   once, each counted from its `subscribe` until it ends. A frame holds
@@ -754,6 +769,26 @@ defmodule Prima.TinctureWire do
       "data" => data
     }
   end
+
+  @doc """
+  `snapshot`: the items subscription `sub` was handed since it opened, or
+  since its last `resync`, are its stream's whole picture as of `at`.
+  """
+  @spec snapshot(pos_integer(), DateTime.t()) :: map()
+  def snapshot(sub, %DateTime{} = at),
+    do: %{"v" => @version, "type" => "snapshot", "sub" => sub, "at" => DateTime.to_iso8601(at)}
+
+  @doc "`resync`: a fresh picture of subscription `sub`'s stream follows and replaces the last."
+  @spec resync(pos_integer()) :: map()
+  def resync(sub), do: %{"v" => @version, "type" => "resync", "sub" => sub}
+
+  @doc """
+  `stale`: subscription `sub`'s picture, taken at `at`, is its stream's
+  bound old, and no fresh picture came.
+  """
+  @spec stale(pos_integer(), DateTime.t()) :: map()
+  def stale(sub, %DateTime{} = at),
+    do: %{"v" => @version, "type" => "stale", "sub" => sub, "at" => DateTime.to_iso8601(at)}
 
   @doc """
   `ended`: subscription `sub` ended, with `refusal`'s projection as

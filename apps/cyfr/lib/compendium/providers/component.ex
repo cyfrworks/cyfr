@@ -1870,7 +1870,11 @@ defmodule Compendium.Providers.Component do
   whether a newer shipped version exists (`update_available`) and whether
   a tincture's grant is current (`grant_current`; nil for a type whose
   grant is a profile's rather than its own). The live events carry what
-  the registry event names, so those three are nil there.
+  the registry event names, so those three are nil there, and the
+  delivery contract (`Compendium.Canvas.catalog/1`) answers every one but
+  a removal with a fresh picture (`reread`): a canvas holds each version
+  whole, by its `ref`, and its picture is read again after fifteen
+  minutes.
   """
   def streams do
     [
@@ -1885,11 +1889,15 @@ defmodule Compendium.Providers.Component do
           "icon",
           "version",
           "update_available",
-          "grant_current"
+          "grant_current" | Prima.Provider.Stream.delivery_fields()
         ],
         deadline_bound: 86_400,
-        shape: components_shape(),
-        refresh: {__MODULE__, :installed}
+        shape: Prima.Provider.Stream.delivered(components_shape()),
+        refresh: {__MODULE__, :installed},
+        key: "ref",
+        removal: "removed",
+        reread: ["installed", "pushed", "changed"],
+        stale_after: 900
       }
     ]
   end
@@ -1903,9 +1911,11 @@ defmodule Compendium.Providers.Component do
   @spec installed(Context.t(), nil) :: {:ok, [map()]} | {:error, term()}
   def installed(%Context{athanor_id: athanor_id} = ctx, _subject)
       when is_binary(athanor_id) and athanor_id != "" do
+    began = DateTime.utc_now()
+
     with {:ok, result} <- Registry.search(ctx, %{type: nil, limit: 1000}),
          {:ok, annotated} <- Compendium.Provenance.annotate(ctx, result.components) do
-      {:ok, Enum.map(annotated, &installed_item(ctx, &1))}
+      {:ok, Enum.map(annotated, &Prima.Provider.Stream.stamped(installed_item(ctx, &1), began))}
     end
   end
 

@@ -30,7 +30,11 @@ defmodule Cyfr.Providers.Files do
   `removed` names what left by its `id`, every other field nil: an
   offer, a file, or a folder deleted whole, which takes every file at or
   under its path with it. A refresh lists the newest 20 files, newest
-  first, then the waiting offers, oldest first.
+  first, then the waiting offers, oldest first. Under the delivery
+  contract (`Compendium.Canvas.catalog/1`) an item is keyed by its `id`,
+  and a removal reaches a canvas as a fresh picture (`reread`), since a
+  folder takes every file under it and the next newest file takes a
+  removed one's place.
 
   Only `data/` is listed: it is the folder the person fills, and every
   other folder holds a component's, AQUA's, a note's or a thread's own
@@ -46,11 +50,17 @@ defmodule Cyfr.Providers.Files do
   # A day: the longest a grant on the stream lives.
   @deadline_bound 86_400
 
+  # Fifteen minutes: how long a picture stands before it is read again.
+  # Each change is announced, so a read only mends one the bus lost.
+  @stale_after 900
+
   # The files a refresh lists, newest first.
   @recent 20
 
   @typedoc "One item: every field of the stream's payload, with its kind."
   @type item :: %{
+          optional(:revision) => non_neg_integer(),
+          optional(:at) => DateTime.t(),
           kind: Cyfr.Bus.FileListed.kind(),
           id: String.t(),
           name: String.t() | nil,
@@ -75,9 +85,15 @@ defmodule Cyfr.Providers.Files do
       %Prima.Provider.Stream{
         name: "files.changes",
         topic: :files,
-        projection: ["kind", "id", "name", "type", "changed_at", "from"],
+        projection:
+          ["kind", "id", "name", "type", "changed_at", "from"] ++
+            Prima.Provider.Stream.delivery_fields(),
         deadline_bound: @deadline_bound,
-        shape: shape(),
+        shape: Prima.Provider.Stream.delivered(shape()),
+        key: "id",
+        removal: "removed",
+        reread: ["removed"],
+        stale_after: @stale_after,
         refresh: {__MODULE__, :listed}
       }
     ]
@@ -93,10 +109,12 @@ defmodule Cyfr.Providers.Files do
   def listed(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, nil)
       when is_binary(athanor_id) and athanor_id != "" do
     actor = Context.actor(ctx)
+    began = DateTime.utc_now()
 
     with {:ok, rows} <- Arca.ObjectRevisions.recent(actor, @recent),
          {:ok, offers} <- waiting(actor, user_id, []) do
-      {:ok, Enum.map(rows, &file_item(&1.path, &1.changed_at)) ++ offers}
+      items = Enum.map(rows, &file_item(&1.path, &1.changed_at)) ++ offers
+      {:ok, Enum.map(items, &Prima.Provider.Stream.stamped(&1, began))}
     end
   end
 

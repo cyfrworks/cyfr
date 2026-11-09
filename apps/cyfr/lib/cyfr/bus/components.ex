@@ -22,13 +22,15 @@ defmodule Cyfr.Bus.Components do
   @fields [:ref, :type, :name, :icon, :version, :update_available, :grant_current]
 
   @enforce_keys [:athanor_id, :kind]
-  defstruct [:athanor_id, :kind | @fields]
+  defstruct [:athanor_id, :kind, :revision, :at | @fields]
 
   @type kind :: :installed | :removed | :pushed | :changed
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
           kind: kind(),
+          revision: non_neg_integer(),
+          at: DateTime.t(),
           ref: String.t() | nil,
           type: String.t() | nil,
           name: String.t() | nil,
@@ -48,7 +50,7 @@ defmodule Cyfr.Bus.Components do
   """
   @spec new(Prima.Actor.t(), kind(), map() | keyword()) :: t()
   def new(%Prima.Actor{} = actor, kind, fields \\ %{}) do
-    Payload.build(__MODULE__, @fields, fields, %{
+    Payload.build(__MODULE__, [:revision, :at | @fields], Payload.stamped(fields), %{
       athanor_id: Payload.athanor!(actor),
       kind: Payload.kind!(__MODULE__, kind, @kinds)
     })
