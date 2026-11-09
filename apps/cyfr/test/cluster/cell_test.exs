@@ -280,6 +280,9 @@ defmodule Cyfr.Cluster.CellTest do
       assert Enum.all?(ports, &(&1 < low)), "#{inspect(ports)} not all below #{low}"
     end
 
+    # The claim is Linux's alone (`Cyfr.Cluster.Cell`'s host API ports).
+    unless match?({:unix, :linux}, :os.type()), do: @tag(skip: "the port claim is Linux-only")
+
     test "a down member's port stays this run's, so another run's picker passes it by" do
       %{host_api_port: down} = Cell.member(:b)
       %{host_api_port: up} = Cell.member(:a)

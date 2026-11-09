@@ -789,11 +789,12 @@ defmodule Cyfr.Cluster.Cell do
   #     to port 0 on this host (a member's distribution listener, its
   #     endpoint, a scripted worker, a wire) and every outgoing connection
   #     draw from that range;
-  #   * it is claimed: this process binds a Linux abstract socket named
-  #     for the port (`claim_name/1`), which another run's picker on this
-  #     host cannot bind and skips. The kernel releases the name with the
-  #     socket, so the claim ends with this process however it ends, and
-  #     `release_all/0` closes it once the members are stopped.
+  #   * on Linux it is claimed: this process binds an abstract socket
+  #     named for the port (`claim_name/1`), which another run's picker
+  #     on this host cannot bind and skips. The kernel releases the name
+  #     with the socket, so the claim ends with this process however it
+  #     ends, and `release_all/0` closes it once the members are stopped
+  #     (elsewhere the port is unclaimed, `claim/1`).
   #
   # What remains is a listener of another program on a fixed port, which
   # a boot is refused naming (`Cyfr.Cluster.Boot`).
@@ -823,7 +824,29 @@ defmodule Cyfr.Cluster.Cell do
     ports
   end
 
+  # The abstract socket namespace is Linux's alone: on another kernel
+  # (macOS, the BSDs) a name with a leading zero byte is a file path or
+  # refused, and has no owner that ends with the process. There a port is
+  # picked free with no claim, as a run picked it before claims existed,
+  # so two runs on one such host can still meet on a down member's port.
   defp claim(port) do
+    if match?({:unix, :linux}, :os.type()), do: claim_abstract(port), else: unclaimed(port)
+  end
+
+  defp unclaimed(port) do
+    unless :persistent_term.get({__MODULE__, :unclaimed_said}, false) do
+      IO.puts(
+        "    the members' host API ports are not claimed on this host: abstract " <>
+          "sockets are Linux-only, so another run here could take a down member's port"
+      )
+
+      :persistent_term.put({__MODULE__, :unclaimed_said}, true)
+    end
+
+    Cyfr.Cluster.Boot.port_free?(port)
+  end
+
+  defp claim_abstract(port) do
     case :gen_tcp.listen(0, ifaddr: {:local, claim_name(port)}) do
       {:ok, socket} ->
         if Cyfr.Cluster.Boot.port_free?(port) do
