@@ -1,19 +1,57 @@
 /* The switchboard's state: what the shell told the desktop at its open and
    since (installed apps, posture, covered, live or frozen, the desktop's
    preferences, appearance and person), and what each declared stream has
-   said, current state first and then changes. Nothing here draws; board.js
-   and plain.js read `SB.state` and are told when it changed. */
+   said, held by the delivery contract `canvas.catalog` documents. Nothing
+   here draws; board.js and plain.js read it through `SB` and are told when
+   it changed. */
 (function () {
   'use strict';
 
-  // The feeds the page reads, each named in the manifest's `feeds`.
-  const FEEDS = ['weather'];
-  // The controls the manifest declares, each picking a schedule's id.
+  // The streams the page reads, each named in the manifest's `data`, and
+  // the feeds it reads by name, each in its `feeds`. Every one rides the
+  // frame's one stream connection, so all are open at once, whatever part
+  // is on.
+  const DATA = [
+    'attention.changes', 'threads.changes', 'components.changes', 'runs.changes', 'schedules.changes',
+    'vault.changes', 'activity.changes', 'files.changes', 'system.changes',
+  ];
+  const FEEDS = ['weather', 'vpn'];
+  const STREAMS = [...DATA, ...FEEDS.map((name) => `feed:${name}`)];
+  // The controls the manifest declares.
   const PAUSE = 'pause-schedule';
   const RESUME = 'resume-schedule';
+  const RETRY = 'retry-run';
   const MAX_RUNS = 20;
-  // Pauses before opening an ended stream again, growing while opens fail.
+  // Pauses before opening again a stream whose open had no answer.
   const RETRY_MS = [2000, 5000, 15000, 60000];
+  // The parts that wait in the spares until the person fits one.
+  const SPARE = ['files'];
+
+  const isItem = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const text = (v) => (typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
+
+  // How each stream names its items and how one leaves: the catalog's `key`
+  // and `removal`, and the `reread` kinds that only say a fresh picture
+  // follows. `kind` is what the page is told changed.
+  const RULES = {
+    'attention.changes': { key: (i) => i.id, removal: 'removed', kind: 'attention' },
+    'threads.changes': { key: (i) => i.id, removal: 'removed', kind: 'threads' },
+    // Every installed version, by its ref and version, since a removal
+    // names the version it removes; a line shows a component's newest.
+    'components.changes': {
+      key: (i) => (typeof i.ref === 'string' ? `${i.ref}@${text(i.version)}` : null),
+      removal: 'removed', reread: ['installed', 'pushed', 'changed'], kind: 'components',
+    },
+    'runs.changes': { key: (i) => i.execution_id, removal: null, kind: 'runs' },
+    'schedules.changes': { key: (i) => i.schedule_id, removal: 'removed', kind: 'schedules' },
+    'vault.changes': { key: (i) => i.name, removal: 'removed', kind: 'vault' },
+    'activity.changes': { key: (i) => i.id, removal: 'ended', kind: 'activity' },
+    'files.changes': { key: (i) => i.id, removal: 'removed', kind: 'files' },
+    // One item: how the person's CYFR stands.
+    'system.changes': { key: () => 'system', removal: null, kind: 'system' },
+  };
+  const FEED_RULE = { key: (i) => i.binding, removal: null, kind: 'feeds' };
+  const rule = (key) => RULES[key] || FEED_RULE;
 
   const state = {
     installed: [],
@@ -23,24 +61,28 @@
     prefs: { document: {}, revision: null },
     appearance: { mode: 'light', accent: null, locale: undefined, time_zone: undefined, safe_areas: null },
     person: null,
-    attention: new Map(),
-    threads: new Map(),
-    // By `ref@version`: a component's newest version is the one a line shows.
-    components: new Map(),
-    // One entry per run, the latest change first.
-    runs: [],
-    schedules: new Map(),
-    vault: new Map(),
-    activity: new Map(),
-    feeds: Object.fromEntries(FEEDS.map((name) => [name, null])),
-    // A stream refused at its first open, and the sentence it was refused with.
-    refusals: {},
   };
+
+  // A picture: each item by its key with the revision it came with, and the
+  // revision each removed item left with, so an older change cannot bring
+  // it back.
+  const hold = () => ({ items: new Map(), gone: new Map() });
+  // Each stream as the page holds it: `held`, the picture it shows;
+  // `picture`, one gathered after an open or a `resync`, which replaces
+  // `held` at its `snapshot`; and how it stands: `opening`, `live`, `stale`
+  // (as of `at`), `unavailable` (opened again at `retryAt`), `denied`, or
+  // `refused` at an open (`code`, the refusal's class).
+  const streams = Object.fromEntries(STREAMS.map((key) => [key, {
+    held: hold(), picture: null, state: 'opening', at: null, retryAt: null, code: null, handle: null, opens: 0, timer: 0,
+  }]));
+  // The calls a live removal cleared since the board last looked: a call a
+  // fresh picture no longer names leaves without being said to clear.
+  const cleared = new Set();
 
   const listeners = new Set();
   const pending = new Set();
   let queued = false;
-  // Many events arrive together (a refresh): the page is told once per frame.
+  // Many events arrive together (a picture): the page is told once per frame.
   function changed(what) {
     pending.add(what);
     if (queued) return;
@@ -52,9 +94,6 @@
       for (const fn of listeners) fn(kinds);
     });
   }
-
-  const isItem = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
-  const text = (v) => (typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
 
   /* ---------- what the shell tells the desktop ---------- */
 
@@ -96,259 +135,141 @@
     changed('desktop');
   }
 
-  /* ---------- what the streams say ---------- */
+  /* ---------- holding each stream by the delivery contract ---------- */
 
-  // Each keyed item remembers the open that last delivered it, so a reopen's
-  // refresh, which holds everything there is, drops what an earlier open
-  // delivered and this one did not.
-  function keep(map, key, item, open, removed) {
-    if (typeof key !== 'string' || key === '') return;
-    if (removed) map.delete(key);
-    else map.set(key, { item, open });
-  }
-  function sweep(map, open) {
-    for (const [key, held] of map) if (held.open < open) map.delete(key);
-  }
-
-  function fold(stream, item, open) {
-    switch (stream) {
-      case 'attention.changes':
-        keep(state.attention, item.id, item, open, item.kind === 'removed');
-        return changed('attention');
-      case 'threads.changes':
-        keep(state.threads, item.id, item, open, item.kind === 'removed');
-        return changed('threads');
-      case 'components.changes':
-        // `changed` asks the reader to open the stream again.
-        if (item.kind === 'changed') { reopen('components.changes'); return; }
-        keep(state.components, `${text(item.ref)}@${text(item.version)}`, item, open, item.kind === 'removed');
-        return changed('components');
-      case 'runs.changes':
-        state.runs = keepRun(state.runs, item);
-        return changed('runs');
-      case 'schedules.changes':
-        keep(state.schedules, item.schedule_id, item, open, item.kind === 'removed');
-        return changed('schedules');
-      case 'vault.changes':
-        keep(state.vault, item.name, item, open, item.kind === 'removed');
-        return changed('vault');
-      case 'activity.changes':
-        keep(state.activity, item.id, item, open, item.kind === 'ended');
-        return changed('activity');
-      default:
-        return undefined;
+  const startOf = (h) => text(h.item.started_at);
+  // The runs stream names the athanor's 20 newest: the page holds no more.
+  function cap(into) {
+    while (into.items.size > MAX_RUNS) {
+      let oldest = null;
+      for (const [id, h] of into.items) if (oldest === null || startOf(h) < startOf(into.items.get(oldest))) oldest = id;
+      into.items.delete(oldest);
     }
   }
-  const SWEPT = {
-    'attention.changes': 'attention', 'threads.changes': 'threads', 'components.changes': 'components',
-    'schedules.changes': 'schedules', 'vault.changes': 'vault', 'activity.changes': 'activity',
-  };
-  function opened(stream, open) {
-    const key = SWEPT[stream];
-    if (key) { sweep(state[key], open); changed(key); }
-  }
 
-  // A feed's result is taken once per revision, the newest kept.
-  function foldFeed(name, item) {
-    const held = state.feeds[name];
-    const rev = Number(item.revision);
-    if (held && Number.isFinite(rev) && Number(held.revision) >= rev) return;
-    state.feeds[name] = item;
-    changed('feeds');
-  }
-
-  // One entry per run, the latest change first. A start published while the
-  // stream opened can arrive after the refresh showed that run finished, so
-  // a finished run keeps its outcome.
-  function keepRun(runs, run) {
-    const id = run.execution_id;
-    if (typeof id !== 'string') return runs;
-    const before = runs.find((r) => r.execution_id === id);
-    if (before && before.kind !== 'started' && run.kind === 'started') return runs;
-    return [run, ...runs.filter((r) => r.execution_id !== id)].slice(0, MAX_RUNS);
-  }
-
-  function refused(stream, error) {
-    const message = error && typeof error.message === 'string' ? error.message : '';
-    state.refusals[stream] = message || 'This could not be read.';
-    changed('refusals');
-  }
-
-  /* ---------- keeping each stream open ---------- */
-
-  const followers = new Map();
-
-  // Keeps one declared stream open. Every stream ends in time (its grant has
-  // a deadline, and a connection can break), so one that ends is opened
-  // again after a pause and starts again with its current state. Until it
-  // has opened once, a refusal is final and nothing is retried; an open the
-  // endpoint gave no answer on (`unavailable`) is tried again on the same
-  // pauses. `first` resolves when the first open has its answer.
-  function follow(sdk, name, subject, onItem, onOpen, onRefused) {
-    let stopped = false;
-    let opens = 0;
-    let everOpened = false;
-    let current = null;
-    let timer;
-    // The open in flight, until it has its answer: a request the page has
-    // sent cannot be called back, so it counts against the five until then.
-    let pending = null;
-
-    function open() {
-      const run = opening();
-      pending = run;
-      const settle = () => { if (pending === run) pending = null; };
-      run.then(settle, settle);
-      return run;
+  // Takes one change into `into`: per item the highest revision heard wins,
+  // and an equal one is the same change heard twice. Answers whether it
+  // changed anything.
+  function take(key, into, item, revision) {
+    const r = rule(key);
+    // A reread kind outside a picture only says a fresh picture follows.
+    if (r.reread && r.reread.includes(item.kind) && item.refresh !== true) return false;
+    const id = r.key(item);
+    if (typeof id !== 'string' || id === '') return false;
+    const held = into.items.get(id);
+    const last = held ? held.revision : into.gone.get(id);
+    if (Number.isInteger(last) && Number.isInteger(revision) && revision <= last) return false;
+    // A finished run keeps its outcome against a start that raced it.
+    if (key === 'runs.changes' && held && held.item.kind !== 'started' && item.kind === 'started') return false;
+    if (r.removal && item.kind === r.removal) {
+      into.items.delete(id);
+      into.gone.set(id, revision);
+    } else {
+      into.items.set(id, { item, revision });
+      if (key === 'runs.changes') cap(into);
     }
-    async function opening() {
-      const n = ++opens;
-      const stream = await sdk.stream(name, subject, ({ data }) => {
-        if (!stopped && n === opens && isItem(data)) onItem(data, n);
-      });
-      if (stopped || n !== opens) { stream.close(); return; }
-      everOpened = true;
-      current = stream;
-      onOpen(n);
-      stream.closed.catch(() => {}).then(() => {
-        if (current !== stream) return;
-        current = null;
-        retry(0);
-      });
-    }
-    function failed(error, attempt) {
-      if (stopped) return;
-      // No answer, or too many open at once, is tried again.
-      const unanswered = error && (error.code === 'unavailable' || error.code === 'rate_limited');
-      if (!everOpened && !unanswered) onRefused(error);
-      else retry(attempt);
-    }
-    function retry(attempt) {
-      if (stopped) return;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        open().catch((e) => failed(e, Math.min(attempt + 1, RETRY_MS.length - 1)));
-      }, RETRY_MS[attempt]);
-    }
-    return {
-      first: open().catch((e) => failed(e, 0)),
-      // Stops the stream; answers the open still in flight, if one is, which
-      // settles once its request has its answer and is closed.
-      stop() {
-        stopped = true;
-        clearTimeout(timer);
-        if (current) current.close();
-        current = null;
-        return pending ? pending.then(() => {}, () => {}) : null;
-      },
-      // Opens the stream again now, its refresh first.
-      again() {
-        // An open in flight already brings the current state first.
-        if (stopped || pending) return;
-        const was = current;
-        current = null;
-        if (was) was.close();
-        clearTimeout(timer);
-        open().catch((e) => failed(e, 0));
-      },
-    };
+    return true;
   }
 
-  function reopen(stream) {
-    const f = followers.get(stream);
-    if (f) f.again();
-  }
-
-  // The streams the page opens, at most five at once, each only while a
-  // part that reads it is on. A browser keeps six connections to one host
-  // over HTTP/1.1 and each open stream holds one; and the server counts a
-  // stream the page closed against the frame's eight for minutes after,
-  // so the page opens a stream when a part needs it and keeps it open,
-  // rather than reading streams in turn. In the order the page gives them
-  // room: the lamps first.
-  const ORDER = ['attention.changes', 'threads.changes', 'components.changes', 'runs.changes', 'schedules.changes', 'vault.changes', 'activity.changes', 'feed:weather'];
-  const MOST = 5;
-  // The parts each stream is read for. The lamps read attention on every part.
-  const NEEDS = {
-    'threads.changes': ['threads'],
-    'components.changes': ['components', 'apps'],
-    'runs.changes': ['runs', 'components'],
-    'schedules.changes': ['schedules'],
-    'vault.changes': ['vault'],
-    'activity.changes': ['crew'],
-    'feed:weather': ['weather'],
-  };
-  // The parts that wait in the spares until the person fits one, so the
-  // board as it comes needs five streams.
-  const SPARE = ['vault', 'crew', 'weather'];
-
-  // Whether a part is on in `doc` (the preferences document): as its entry
-  // says, else on unless it is one of the spares.
-  function partOn(part, doc = state.prefs.document) {
-    const entry = isItem(doc) && isItem(doc.widgets) ? doc.widgets[part] : null;
-    if (isItem(entry) && typeof entry.on === 'boolean') return entry.on;
-    return !SPARE.includes(part);
-  }
-  // The streams the parts that are on need, in order.
-  function wanted(on = partOn) {
-    return ORDER.filter((key) => !NEEDS[key] || NEEDS[key].some((part) => on(part)));
-  }
-
-  // Opens each stream a part that is on needs, up to five, and closes one
-  // no part that is on needs any more.
-  let api = null;
-  // The opens of stopped streams still in flight: each counts against the
-  // five until its request has its answer, and then the page looks again.
-  const draining = new Set();
-  function sync() {
-    if (!api) return;
-    const keep = wanted().slice(0, MOST);
-    for (const [key, held] of followers) {
-      if (keep.includes(key)) continue;
-      followers.delete(key);
-      const settling = held.stop();
-      if (settling) {
-        draining.add(settling);
-        settling.then(() => { draining.delete(settling); sync(); });
+  // One event of the stream `key` (`cyfr.stream`'s handler).
+  function hear(key, ev) {
+    const s = streams[key];
+    switch (ev.event) {
+      case 'resync':
+        s.picture = hold();
+        return;
+      case 'snapshot':
+        // The gathered picture is whole: what it does not name is gone.
+        if (s.picture) { s.held = s.picture; s.picture = null; }
+        Object.assign(s, { state: 'live', at: null, retryAt: null, code: null });
+        break;
+      case 'stale':
+        Object.assign(s, { state: 'stale', at: ev.at });
+        break;
+      case 'unavailable':
+        Object.assign(s, { state: 'unavailable', retryAt: isItem(ev.data) ? ev.data.retry_at : null });
+        break;
+      case 'denied':
+        Object.assign(s, { state: 'denied', held: hold(), picture: null });
+        break;
+      default: {
+        if (ev.event !== (key.startsWith('feed:') ? 'feed.results' : key) || !isItem(ev.data)) return;
+        const live = s.picture === null;
+        const revision = Number.isInteger(ev.revision) ? ev.revision : ev.data.revision;
+        if (!take(key, s.picture || s.held, ev.data, revision)) return;
+        if (live && key === 'attention.changes' && ev.data.kind === 'removed') cleared.add(ev.data.id);
       }
     }
-    changed('refusals');
-    for (const key of keep) {
-      if (followers.has(key)) continue;
-      if (followers.size + draining.size >= MOST) break;
-      const feed = key.startsWith('feed:') ? key.slice(5) : null;
-      followers.set(key, feed
-        ? follow(api, 'feed.results', feed, (item) => foldFeed(feed, item), () => {}, (error) => refused(key, error))
-        : follow(api, key, null,
-          (item, open) => fold(key, item, open),
-          // A reopen's refresh arrives after the open: what an earlier open
-          // delivered and this one did not is dropped once it has.
-          (open) => setTimeout(() => opened(key, open), 2500),
-          (error) => refused(key, error)));
-    }
+    changed(rule(key).kind);
   }
 
-  // Hears the shell, opens the streams its parts need, and calls `ready()`
-  // once each stream's first open has its answer (opened, refused, or
-  // unanswered and to be tried again), or after a few seconds, whichever is
+  /* ---------- opening each stream ---------- */
+
+  let api = null;
+  // Opens the stream `key`; resolves once the open has its answer. The SDK
+  // opens an opened stream again itself after a lost connection; the page
+  // opens it again only when its open had no answer (after a pause), and
+  // when the endpoint ended it with no refusal.
+  function open(key, attempt = 0) {
+    const s = streams[key];
+    const feed = key.startsWith('feed:') ? key.slice(5) : null;
+    const n = ++s.opens;
+    s.picture = hold();
+    return api.stream(feed ? 'feed.results' : key, feed, (ev) => { if (n === s.opens) hear(key, ev); }).then((handle) => {
+      s.handle = handle;
+      handle.closed.then(() => {
+        if (s.handle !== handle || handle.state !== 'ended') return;
+        s.handle = null;
+        s.timer = setTimeout(() => open(key), RETRY_MS[0]);
+      }, () => {
+        // Broken for good: the endpoint closed the connection for what this
+        // frame sent, or for a newer connection of the same frame.
+        if (s.handle !== handle) return;
+        Object.assign(s, { state: 'refused', code: 'ended', held: hold(), picture: null });
+        changed(rule(key).kind);
+      });
+    }, (error) => {
+      const code = error && typeof error.code === 'string' ? error.code : 'unavailable';
+      if (code === 'unavailable') {
+        const wait = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)];
+        Object.assign(s, { state: 'unavailable', retryAt: new Date(Date.now() + wait).toISOString() });
+        s.timer = setTimeout(() => open(key, attempt + 1), wait);
+      } else {
+        Object.assign(s, { state: 'refused', code, held: hold(), picture: null });
+      }
+      changed(rule(key).kind);
+    });
+  }
+
+  // Hears the shell, opens every declared stream, and calls `ready()` once
+  // each first open has its answer, or after a few seconds, whichever is
   // first: the board is drawn by then either way.
   function start(sdk, onReady) {
     sdk.on('installed', onInstalled);
     sdk.on('covered', onCovered);
     sdk.on('posture', onPosture);
     sdk.on('state', onState);
-    sdk.on('desktop', (value) => { onDesktop(value); sync(); });
+    sdk.on('desktop', onDesktop);
     if (sdk.desktop) onDesktop(sdk.desktop);
     api = sdk;
-    sync();
+    const first = STREAMS.map((key) => open(key));
     let told = false;
     const tell = () => { if (!told) { told = true; onReady(); } };
-    Promise.allSettled([...followers.values()].map((f) => f.first)).then(tell);
+    Promise.allSettled(first).then(tell);
     setTimeout(tell, 4000);
   }
 
   /* ---------- reading the state ---------- */
 
+  // Whether a part is on in `doc` (the preferences document): as its entry
+  // says, else on unless it waits in the spares.
+  function partOn(part, doc = state.prefs.document) {
+    const entry = isItem(doc) && isItem(doc.widgets) ? doc.widgets[part] : null;
+    if (isItem(entry) && typeof entry.on === 'boolean') return entry.on;
+    return !SPARE.includes(part);
+  }
+
+  const items = (key) => [...streams[key].held.items.values()].map((h) => h.item);
   // "catalyst:local.openai:1.4.1" without its version.
   function componentRef(reference) {
     const parts = text(reference).split(':');
@@ -370,31 +291,45 @@
   // Each installed component's newest version, by its versionless ref.
   function components() {
     const by = new Map();
-    for (const { item } of state.components.values()) {
+    for (const item of items('components.changes')) {
       const ref = text(item.ref);
       const held = by.get(ref);
       if (!held || newer(item.version, held.version)) by.set(ref, item);
     }
     return by;
   }
-  const values = (map) => [...map.values()].map((h) => h.item);
+  // The held runs, the latest start first.
+  function runs() {
+    return [...streams['runs.changes'].held.items.values()]
+      .sort((a, b) => startOf(b).localeCompare(startOf(a)) || (b.revision || 0) - (a.revision || 0))
+      .map((h) => h.item);
+  }
+  // A feed's latest result: the one heard last on its subscription.
+  function feed(name) {
+    let best = null;
+    for (const h of streams[`feed:${name}`].held.items.values()) if (!best || (h.revision || 0) > (best.revision || 0)) best = h;
+    return best ? best.item : null;
+  }
 
   window.SB = {
-    state, FEEDS, PAUSE, RESUME,
+    state, STREAMS, FEEDS, PAUSE, RESUME, RETRY,
     start,
     subscribe(fn) { listeners.add(fn); },
     partOn,
-    // Whether the page has the stream open (or opening).
-    reading(key) { return followers.has(key); },
-    // Whether the parts that are on, with `part` turned on as well, need
-    // more streams than the page opens at once.
-    tooMany(part) { return wanted((p) => p === part || partOn(p)).length > MOST; },
-    attention: () => values(state.attention),
-    threads: () => values(state.threads),
-    schedules: () => values(state.schedules),
-    vault: () => values(state.vault),
-    activity: () => values(state.activity),
-    components,
+    // How the stream `key` stands: `{state, at, retryAt, code}`.
+    status(key) { const s = streams[key]; return { state: s.state, at: s.at, retryAt: s.retryAt, code: s.code }; },
+    // The item the stream `key` holds under `id`, or null.
+    get(key, id) { const h = streams[key].held.items.get(id); return h ? h.item : null; },
+    // The calls a live removal cleared since the last look, once.
+    takeCleared() { const out = [...cleared]; cleared.clear(); return out; },
+    attention: () => items('attention.changes'),
+    threads: () => items('threads.changes'),
+    schedules: () => items('schedules.changes'),
+    vault: () => items('vault.changes'),
+    activity: () => items('activity.changes'),
+    files: () => items('files.changes'),
+    system: () => items('system.changes')[0] || null,
+    runs, feed, components,
     componentRef, componentName, text, isItem,
   };
 })();

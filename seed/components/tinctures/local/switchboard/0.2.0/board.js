@@ -4,12 +4,13 @@
    jacks (app, chat, AQUA, settings) patches it through, which is the only
    way the board acts on a line. The cord stays in while the call waits and
    is pulled when the attention stream says it cleared. Lamps report; caps
-   act: the levers press the declared controls, a feed's keys press its
-   actions, and the rack writes the person's preferences, each on a tap. */
+   act: the levers and the tickets' Retry press the declared controls, a
+   feed's keys press its actions, and the rack writes the person's
+   preferences, each on a tap. */
 (function () {
   'use strict';
 
-  const { state, PAUSE, RESUME, text, isItem, componentRef, componentName } = window.SB;
+  const { state, PAUSE, RESUME, RETRY, text, isItem, componentRef, componentName } = window.SB;
   const html = document.documentElement;
 
   /* ---------- time, in the person's own zone and words ---------- */
@@ -41,6 +42,14 @@
     if (Math.abs(diff) < 7) return `${weekday(d)} ${hm(d)}`;
     return intl({ day: 'numeric', month: 'short' }).format(d);
   }
+  // A ticket's time, as narrow as its column: the hour today, else the day.
+  function stamp(iso) {
+    const d = parse(iso); if (!d) return '';
+    const diff = dayNumber(d) - dayNumber(new Date());
+    if (diff === 0) return hm(d);
+    if (diff < 0 && diff > -7) return weekday(d);
+    return intl({ day: 'numeric', month: 'short' }).format(d);
+  }
   const secs = (ms) => (Number.isFinite(ms) ? (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`) : '');
 
   /* ---------- words ---------- */
@@ -54,24 +63,37 @@
     waits_for_you: 'Waits for you', rate_limited: 'Rate limited', unavailable: 'Unavailable', bad_input: 'Bad input',
     not_found: 'Not found', uncertain: 'Uncertain',
   };
+  // What a Retry's answer says, by the refusal's class.
+  const SOON = 'CYFR cannot run it now: try again shortly';
+  const REFUSED = {
+    conflict: 'this run cannot be run again', invalid_argument: 'no longer among the latest runs', not_found: 'the run is gone',
+    forbidden: 'not yours to run', unavailable: SOON, rate_limited: SOON, timeout: SOON,
+    uncertain: 'no answer came: look at Runs before trying again',
+  };
   // The shell drops a second call within a few seconds of the last one.
   const tooSoon = (answer) => Boolean(answer) && answer.outcome === 'cancelled' && answer.reason === 'too_soon';
   const cause = (error) => (isItem(error) && CAUSE[error.cause]) || 'Failed';
   const tilt = (t) => { let h = 0; for (const c of String(t)) h = (h * 31 + c.charCodeAt(0)) | 0; return ((h % 13) / 13) * 1.4 - 0.7; };
   const dymo = (t, cls = '') => `<span class="dymo ${cls}" style="--tilt:${tilt(t).toFixed(2)}deg">${esc(t)}</span>`;
   const words = (key) => String(key).replace(/_(c|f|kmh|mbps|pct)$/, '').replace(/_/g, ' ');
+  const HEALTH = { ok: ['Healthy', 'green', 'healthy'], degraded: ['Degraded', 'red', 'degraded'], low_storage: ['Low storage', 'amber', 'low storage'] };
 
   /* ---------- the parts, each a widget of the preferences document ---------- */
+  // `reads`: the streams a part shows, whose worst state it wears.
   const PARTS = {
-    calls: { zone: 'field', title: 'Calls', page: null },
-    threads: { zone: 'field', title: 'Threads', page: 'chat' },
-    apps: { zone: 'field', title: 'Apps', page: 'components' },
-    components: { zone: 'field', title: 'Components', page: 'components' },
-    weather: { zone: 'meters', title: 'Weather', page: 'components' },
-    schedules: { zone: 'shelf', title: 'Schedules', page: 'schedules' },
-    runs: { zone: 'shelf', title: 'Runs', page: 'executions' },
-    vault: { zone: 'shelf', title: 'Vault', page: 'vault' },
-    crew: { zone: 'shelf', title: 'Crew', page: 'activities' },
+    calls: { zone: 'field', title: 'Calls', page: null, reads: ['attention.changes'] },
+    threads: { zone: 'field', title: 'Threads', page: 'chat', reads: ['threads.changes'] },
+    apps: { zone: 'field', title: 'Apps', page: 'components', reads: ['components.changes'] },
+    components: { zone: 'field', title: 'Components', page: 'components', reads: ['components.changes', 'runs.changes'] },
+    weather: { zone: 'meters', title: 'Weather', page: 'components', reads: ['feed:weather'] },
+    vpn: { zone: 'meters', title: 'VPN', page: 'components', reads: ['feed:vpn'] },
+    schedules: { zone: 'shelf', title: 'Schedules', page: 'schedules', reads: ['schedules.changes'] },
+    runs: { zone: 'shelf', title: 'Runs', page: 'executions', reads: ['runs.changes'] },
+    vault: { zone: 'shelf', title: 'Vault', page: 'vault', reads: ['vault.changes'] },
+    // The system plate: how CYFR stands and the crew at work. Its widget
+    // keeps the id `crew` it had, so a person's setting for it stands.
+    crew: { zone: 'shelf', title: 'System', page: 'settings', reads: ['system.changes', 'activity.changes'] },
+    files: { zone: 'shelf', title: 'Files', page: 'files', reads: ['files.changes'] },
   };
   const ORDER = Object.fromEntries(['field', 'meters', 'shelf'].flatMap((z) => Object.keys(PARTS).filter((k) => PARTS[k].zone === z).map((k, i) => [k, i])));
   const DEST = [
@@ -86,9 +108,6 @@
   const isOn = (id) => window.SB.partOn(id);
   const orderOf = (id) => (Number.isInteger(entry(id).order) ? entry(id).order : ORDER[id]);
   const celsius = () => entry('weather').units !== 'f';
-  // A part that is on but whose stream found no room among the five.
-  const NO_LINE = 'No line free · pull a part to read this';
-  const unread = (key) => !window.SB.reading(key);
 
   let sdk = null;
   let root = null;
@@ -96,14 +115,40 @@
   const $$ = (s, el = root) => [...el.querySelectorAll(s)];
   let posEl = {};
 
+  /* ---------- how a part's streams stand ---------- */
+  const WORST = { stale: 1, unavailable: 2, denied: 3, refused: 3 };
+  // The worst state among a part's streams, in the board's words; null
+  // while every one is live. A part that ended has its picture cleared.
+  function standing(part) {
+    let worst = null;
+    for (const key of PARTS[part].reads) {
+      const s = window.SB.status(key);
+      if (WORST[s.state] && (!worst || WORST[s.state] > WORST[worst.state])) worst = s;
+    }
+    if (!worst) return null;
+    if (worst.state === 'stale') return { state: 'stale', say: `as of ${rel(worst.at, 'earlier')}` };
+    if (worst.state === 'unavailable') return { state: 'unavailable', say: parse(worst.retryAt) ? `trying again at ${rel(worst.retryAt)}` : 'trying again shortly' };
+    if (worst.state === 'denied') return { state: 'ended', say: 'no longer granted' };
+    return { state: 'ended', say: worst.code === 'forbidden' ? 'not granted' : 'could not be read' };
+  }
+  // Marks the part with how its streams stand; answers that, or null.
+  function mark(part) {
+    const n = standing(part);
+    $(`[data-part="${part}"]`).dataset.state = n ? n.state : 'live';
+    return n;
+  }
+
   /* ---------- the readout: what the board just did, else the summary ---------- */
   let note = null, noteTimer = 0;
   function tell(t, ms = 3600) { note = t; clearTimeout(noteTimer); noteTimer = setTimeout(() => { note = null; summary(); }, ms); summary(); }
   function summary() {
-    const calling = state.attention.size;
-    const busy = state.activity.size + state.runs.filter((r) => r.kind === 'started').length;
-    const unread = state.refusals['attention.changes'] ? 'calls unreadable' : `${calling} calling`;
-    $('.readout-text').textContent = note || `${unread} · ${busy} busy`;
+    const n = standing('calls');
+    const count = window.SB.attention().length;
+    const calls = !n ? `${count} calling` : n.state === 'stale' ? `${count} calling ${n.say}` : `calls ${n.say}`;
+    const busy = window.SB.activity().length + window.SB.runs().filter((r) => r.kind === 'started').length;
+    const sys = window.SB.system();
+    const health = sys && HEALTH[sys.health] ? HEALTH[sys.health][2] : '';
+    $('.readout-text').textContent = note || [calls, `${busy} busy`, health].filter(Boolean).join(' · ');
   }
   function tick() {
     const d = new Date();
@@ -116,8 +161,9 @@
   /* ---------- the skeleton ---------- */
   const askJack = (part) => `<button class="askjack" data-ask="${part}" aria-label="Lift the ${PARTS[part].title} cord: patch to AQUA or settings"><span class="jack sm"><span class="hole"></span></span></button>`;
   const modHead = (part, extra = '') => `<header class="mod-hd"><h2>${PARTS[part].title}</h2><span class="mod-sub"></span>${extra}${askJack(part)}</header>`;
-  const strip = (part) => `<div class="strip" data-part="${part}"><h2 class="strip-tag">${PARTS[part].title}</h2><div class="cells" data-group="${part}"></div></div>`;
+  const strip = (part) => `<div class="strip" data-part="${part}"><h2 class="strip-tag">${PARTS[part].title}</h2><div class="cells" data-group="${part}"></div><span class="strip-note"></span></div>`;
   const KNOB = '<button class="knob" data-knob aria-label="Units"><span class="knob-c">°C</span><span class="knob-dial"></span><span class="knob-f">°F</span></button>';
+  const LAMP_CODE = '<p class="code" aria-label="Lamp code"><span data-lamp="amber"><span class="lamp"></span>calling</span><span data-lamp="red"><span class="lamp"></span>fault</span><span data-lamp="green"><span class="lamp"></span>in service</span><span data-lamp="white"><span class="lamp"></span>busy</span></p>';
 
   function skeleton() {
     root.innerHTML = `
@@ -133,21 +179,35 @@
           ${DEST.map((d) => `<button class="pos" data-dest="${d.id}" disabled aria-label="Patch to ${d.name}"><span class="pos-name">${d.name}</span><span class="jack lg"><span class="hole"></span></span><span class="pos-hint"></span></button>`).join('')}
         </nav>
         <div class="meters" data-zone="meters">
-          <section class="mod weather" data-part="weather">${modHead('weather', KNOB)}<div class="wx"><div class="vfd wx-now"></div><div class="wx-side"><p class="wx-cap"></p><ol class="wx-hours"></ol><div class="trunk-row"></div><p class="wx-at"></p><div class="wx-keys"></div></div></div></section>
+          <section class="mod weather" data-part="weather">${modHead('weather', KNOB)}<div class="wx"><div class="vfd wx-now"></div><div class="wx-side"><p class="wx-cap"></p><ol class="wx-hours"></ol><div class="trunk-row"></div><p class="wx-at"></p><div class="wx-keys feed-keys"></div></div></div></section>
+          <section class="mod vpn" data-part="vpn">${modHead('vpn')}
+            <div class="trunks"><span class="vpn-local"><span class="tiny">out</span><span class="jack"><span class="hole"></span></span></span><div class="trunk-row"></div></div>
+            <p class="vpn-at"></p>
+            <div class="vpn-foot"><div class="vpn-meter"></div><div class="vpn-keys feed-keys"></div></div></section>
         </div>
       </section>
       <section class="shelf" data-zone="shelf">
         <section class="mod schedules" data-part="schedules">${modHead('schedules')}<div class="seq"></div></section>
         <section class="mod runs" data-part="runs">${modHead('runs')}<div class="printer"><div class="slot"></div><ol class="paper"></ol></div></section>
         <section class="mod vault" data-part="vault">${modHead('vault')}<div class="annun vault-annun"></div></section>
-        <section class="mod crew" data-part="crew">${modHead('crew')}<div class="jobs"></div>
-          <p class="code" aria-label="Lamp code"><span data-lamp="amber"><span class="lamp"></span>calling</span><span data-lamp="red"><span class="lamp"></span>fault</span><span data-lamp="green"><span class="lamp"></span>in service</span><span data-lamp="white"><span class="lamp"></span>busy</span></p></section>
+        <section class="mod crew" data-part="crew">${modHead('crew')}<div class="sys-body"><div class="annun sys-annun"></div><div class="storage"></div><div class="jobs"></div>${LAMP_CODE}</div></section>
+        <section class="mod files" data-part="files">${modHead('files')}<ul class="file-list"></ul></section>
       </section>
       <div class="spares" hidden><span class="spares-tag">Spares</span><div class="spares-list"></div><button class="key" data-rackdone>Done</button></div>`;
     posEl = Object.fromEntries($$('.pos').map((b) => [b.dataset.dest, b]));
   }
 
   /* ---------- lines ---------- */
+  // The position jack a call resolves at, by its destination: AQUA's panel
+  // (an approval), the chat, or one of CYFR's pages; none for a
+  // confirmation, which CYFR's own prompt shows wherever the person is.
+  function jackOf(call) {
+    const d = isItem(call.destination) ? call.destination : {};
+    if (d.kind !== 'page' || typeof d.page !== 'string' || d.page === '') return null;
+    return d.page === 'aqua' || d.page === 'chat' ? d.page : 'settings';
+  }
+  const pageOf = (call) => (jackOf(call) === 'settings' ? call.destination.page : null);
+
   // Each waiting item finds the line it is about: an approval its thread, a
   // failed run its component, a failed schedule the component it runs.
   // What finds no line, or comes second to one, calls on a line of its own.
@@ -163,35 +223,40 @@
       if (a.kind === 'approval' && threadIds.has(dest.ref)) { key = dest.ref; into = onThread; }
       if (a.kind === 'failed_run' && comps.has(componentRef(a.id))) { key = componentRef(a.id); into = onComp; }
       if (a.kind === 'failed_schedule') {
-        const held = state.schedules.get(a.id);
-        const ref = held ? componentRef(held.item.reference) : '';
+        const held = window.SB.get('schedules.changes', a.id);
+        const ref = held ? componentRef(held.reference) : '';
         if (comps.has(ref)) { key = ref; into = onComp; }
       }
       if (into && !into.has(key)) into.set(key, a); else loose.push(a);
     }
     const fault = (a) => a.kind === 'failed_run' || a.kind === 'failed_schedule';
-    const settingsOf = (a, fallback) => (isItem(a.destination) && a.destination.kind === 'page' && a.destination.page) || fallback;
     const out = { calls: [], threads: [], apps: [], components: [] };
 
     for (const a of loose) {
-      const dest = isItem(a.destination) ? a.destination : {};
-      const page = dest.kind === 'page' ? dest.page : null;
-      const target = page === 'chat' ? 'chat' : page ? 'settings' : null;
+      const jack = jackOf(a);
       out.calls.push({
         id: `call:${a.id}`, widget: 'calls', kind: a.kind, name: text(a.label) || KIND[a.kind] || 'Call', call: a,
         lamp: fault(a) ? 'red' : 'amber', meta: [KIND[a.kind] || 'Call', rel(a.since)],
-        targets: target ? [target, 'aqua'] : ['aqua'], primary: target || 'aqua', page,
+        targets: jack && jack !== 'aqua' ? [jack, 'aqua'] : ['aqua'], primary: jack, page: pageOf(a), aqua: jack === 'aqua' ? 'open' : 'ask',
       });
     }
     for (const t of threads.sort((a, b) => text(b.last_activity).localeCompare(text(a.last_activity)))) {
       const call = onThread.get(t.id) || null;
+      const own = t.kind === 'own';
       const people = Array.isArray(t.people) ? t.people.length : 0;
-      const who = t.kind === 'own' ? 'Own' : people > 0 ? `${people} people` : 'Shared';
+      const who = own ? 'Own' : people > 0 ? `${people} people` : 'Shared';
+      const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       const waits = call || t.waits_on_you === true;
+      // A shared thread opens the chat; an own thread AQUA's panel, where
+      // its approvals wait.
+      const targets = own ? ['aqua'] : ['chat', 'aqua'];
+      const jack = call && targets.includes(jackOf(call)) ? jackOf(call) : null;
       out.threads.push({
         id: `thread:${t.id}`, widget: 'threads', kind: 'thread', name: text(t.title) || 'Untitled', call,
-        lamp: waits ? 'amber' : 'off', meta: call ? [KIND[call.kind], rel(call.since)] : waits ? ['Waits on you', rel(t.last_activity)] : [who, rel(t.last_activity)],
-        targets: ['chat', 'aqua'], primary: 'chat', page: 'chat',
+        lamp: waits ? 'amber' : 'off', strong: unread > 0,
+        meta: call ? [KIND[call.kind], rel(call.since)] : waits ? ['Waits on you', rel(t.last_activity)]
+          : unread ? [`${unread} unread`, rel(t.last_activity)] : [who, rel(t.last_activity)],
+        targets, primary: jack || (own ? 'aqua' : 'chat'), aqua: own || jack === 'aqua' ? 'open' : 'ask',
       });
     }
     for (const app of state.installed) {
@@ -200,28 +265,27 @@
       out.apps.push({
         id: `app:${app.ref}`, widget: 'apps', kind: 'app', name: app.name, ref: app.ref, call: null,
         lamp: app.open ? 'green' : 'off', meta: app.open ? ['Open', v] : c && c.update_available === true ? ['Update', v] : ['', v],
-        targets: ['app', 'settings', 'aqua'], primary: 'app', page: 'components',
+        targets: ['app', 'settings', 'aqua'], primary: 'app', page: 'components', aqua: 'ask',
       });
     }
     // The components a line stands for, by name, the ones calling first: a
     // jack keeps its place while runs come and go, and moves only when its
     // call starts or clears.
     const lastRun = new Map();
-    state.runs.forEach((r) => { const ref = componentRef(r.reference); if (!lastRun.has(ref)) lastRun.set(ref, { run: r }); });
+    for (const r of window.SB.runs()) { const ref = componentRef(r.reference); if (!lastRun.has(ref)) lastRun.set(ref, r); }
     const lines = [...comps.values()].filter((c) => c.type !== 'tincture' && c.type !== 'agent')
       .sort((a, b) => (onComp.has(b.ref) ? 1 : 0) - (onComp.has(a.ref) ? 1 : 0) || text(a.name).localeCompare(text(b.name)));
     for (const c of lines) {
       const call = onComp.get(c.ref) || null;
-      const last = lastRun.get(c.ref);
-      const run = last && last.run;
+      const run = lastRun.get(c.ref);
       const v = c.version ? `v${text(c.version)}` : '';
       const meta = call ? [KIND[call.kind], rel(call.since)]
-        : run ? [run.kind === 'started' ? 'Running' : run.kind === 'completed' ? `OK ${secs(run.duration_ms)}` : run.kind === 'failed' ? cause(run.error) : 'Cancelled', v]
+        : run ? [run.kind === 'started' ? 'Running' : run.kind === 'completed' ? `OK ${secs(run.duration_ms)}` : run.kind === 'failed' ? cause(run.error) : 'Cancelled', rel(run.started_at, v)]
           : ['No run yet', v];
       out.components.push({
         id: `component:${c.ref}`, widget: 'components', kind: text(c.type), name: text(c.name) || componentName(c.ref), call,
         lamp: call ? (fault(call) ? 'red' : 'amber') : run && run.kind === 'started' ? 'white' : 'off', meta,
-        targets: ['settings', 'aqua'], primary: 'settings', page: call ? settingsOf(call, 'components') : 'components',
+        targets: ['settings', 'aqua'], primary: 'settings', page: (call && pageOf(call)) || 'components', aqua: 'ask',
       });
     }
     return out;
@@ -230,10 +294,16 @@
   const lineIndex = new Map();
   function renderLines() {
     const model = lineModel();
+    // Calls a live removal cleared: their lamps cool and their cords come
+    // out. One a fresh picture no longer names goes out at once.
+    const clearedLive = new Set(window.SB.takeCleared());
     lineIndex.clear();
     for (const [group, items] of Object.entries(model)) {
       const box = $(`.cells[data-group="${group}"]`);
-      box.closest('.strip').dataset.empty = items.length ? 'no' : 'yes';
+      const stripEl = box.closest('.strip');
+      const n = mark(group);
+      $('.strip-note', stripEl).textContent = n ? n.say : '';
+      stripEl.dataset.empty = items.length ? 'no' : 'yes';
       const keep = new Set(items.map((l) => l.id));
       for (const el of [...box.children]) if (!keep.has(el.dataset.line)) el.remove();
       items.forEach((l, i) => {
@@ -246,8 +316,13 @@
         }
         if (box.children[i] !== el) box.insertBefore(el, box.children[i] || null);
         const was = el.dataset.lamp;
+        const wasCall = el.dataset.call || '';
         el.dataset.lamp = l.lamp;
+        el.dataset.call = l.call ? text(l.call.id) : '';
         if (l.call && !l.call.refresh && was !== l.lamp && (l.lamp === 'amber' || l.lamp === 'red')) { el.classList.add('ringing'); setTimeout(() => el.classList.remove('ringing'), 6000); }
+        // A lamp a fresh picture put out goes out with no afterglow.
+        if (wasCall && wasCall !== el.dataset.call && !clearedLive.has(wasCall)) { el.classList.add('quiet'); setTimeout(() => el.classList.remove('quiet'), 100); }
+        el.classList.toggle('strong', Boolean(l.strong));
         $('.dymo', el).textContent = l.name;
         $('.meta-a', el).textContent = l.meta[0]; $('.meta-b', el).textContent = l.meta[1];
         el.setAttribute('aria-label', `${l.name}, ${l.call ? `${KIND[l.call.kind] || 'call'} waiting since ${rel(l.call.since)}` : l.meta.filter(Boolean).join(', ')}. Lift the cord`);
@@ -255,33 +330,43 @@
       });
       // Short screens give each line more room: four to a row there.
       const most = innerHeight <= 640 && innerWidth < 1200 ? 4 : 6;
-      const n = Math.max(1, Math.min(most, items.length));
-      box.style.setProperty('--n', n);
+      const cols = Math.max(1, Math.min(most, items.length));
+      box.style.setProperty('--n', cols);
       // A strip's share of the field follows how many rows of lines it holds.
-      box.closest('.strip').style.setProperty('--rows', Math.min(2, Math.max(1, Math.ceil(items.length / n))));
+      stripEl.style.setProperty('--rows', Math.min(2, Math.max(1, Math.ceil(items.length / cols))));
     }
-    // A cord whose call cleared comes out, and its lamp cools.
-    for (const [callId, rope] of patches) {
-      if (state.attention.has(callId)) continue;
-      rope.hold = false; rope.retract(); patches.delete(callId);
-      const el = $$('.line.patched').find((x) => !(lineIndex.get(x.dataset.line) || {}).call);
-      const name = el ? (lineIndex.get(el.dataset.line) || {}).name : '';
-      if (el) { el.classList.remove('patched'); el.classList.add('cooling'); setTimeout(() => el.classList.remove('cooling'), 1600); }
-      tell(`Cleared${name ? ` · ${name}` : ''} ${hm(new Date())}`);
+    for (const [callId, { rope, line, name }] of patches) {
+      if (window.SB.get('attention.changes', callId)) continue;
+      patches.delete(callId);
+      // The line stays when it stands for a thread or a component, and goes
+      // with its call when the call had a line of its own.
+      const el = root.querySelector(`[data-line="${CSS.escape(line)}"]`);
+      if (el) el.classList.remove('patched');
+      if (!clearedLive.has(callId)) { rope.kill(); continue; }
+      rope.hold = false; rope.retract();
+      if (el) { el.classList.add('cooling'); setTimeout(() => el.classList.remove('cooling'), 1600); }
+      tell(`Cleared · ${name} ${hm(new Date())}`);
     }
     if (hand && hand.line.id && !lineIndex.has(hand.line.id) && !hand.line.module) drop();
   }
 
   /* ---------- the cord in the hand, and patches ---------- */
   let hand = null;               // { el, rope, line }
-  const patches = new Map();     // attention id -> rope
+  const patches = new Map();     // attention id -> { rope, line, name }
   function onLine(id) {
     const l = lineIndex.get(id);
     if (!l) return;
     const el = root.querySelector(`[data-line="${CSS.escape(id)}"]`);
     const open = l.call && patches.get(l.call.id);
-    if (open) { open.retract(); patches.delete(l.call.id); el.classList.remove('patched'); tell(`Pulled · ${l.name}`); return; }
+    if (open) { open.rope.retract(); patches.delete(l.call.id); el.classList.remove('patched'); tell(`Pulled · ${l.name}`); return; }
     lift(el, el.querySelector('.jack'), l);
+  }
+  // A failed run's call is run again from its run's ticket, offered while
+  // the runs stream holds that run: the ticket's key, if the paper shows it.
+  function retryKeyOf(line) {
+    const d = line.call && line.call.kind === 'failed_run' && isItem(line.call.destination) ? line.call.destination : null;
+    if (!d || typeof d.ref !== 'string' || !window.SB.get('runs.changes', d.ref) || !isOn('runs')) return null;
+    return $(`[data-retry="${CSS.escape(d.ref)}"]`);
   }
   function lift(el, jack, line) {
     if (hand && hand.el === el) { drop(); return; }
@@ -298,10 +383,13 @@
       $('.pos-hint', b).textContent = d.id === line.primary ? (line.call ? 'resolves here' : 'usual') : '';
     }
     if (line.call && line.call.kind === 'confirmation') { tell(`${line.name} · CYFR asks you this itself`, 60000); return; }
-    tell(`${line.name} · patch to ${line.targets.map((t) => DEST.find((d) => d.id === t).name).join(', ')}`, 60000);
+    const key = retryKeyOf(line);
+    if (key) { key.classList.add('beckon'); key.scrollIntoView({ block: 'nearest' }); }
+    tell(`${line.name} · patch to ${line.targets.map((t) => DEST.find((d) => d.id === t).name).join(', ')}${key ? ' · or Retry its ticket' : ''}`, 60000);
   }
   function clearPositions() {
     for (const b of Object.values(posEl)) { b.disabled = true; delete b.dataset.target; }
+    for (const k of $$('.tk-retry.beckon')) k.classList.remove('beckon');
   }
   function drop(quiet) {
     if (!hand) return;
@@ -323,37 +411,22 @@
     // A call patched to where it resolves keeps its cord in until it clears;
     // any other patch is a plain open, and the cord is put back.
     const resolves = line.call && dest === line.primary;
-    if (resolves) { patches.set(line.call.id, rope); el.classList.add('patched'); } else setTimeout(() => rope.retract(), 2200);
+    if (resolves) { patches.set(line.call.id, { rope, line: line.id, name: line.name }); el.classList.add('patched'); } else setTimeout(() => rope.retract(), 2200);
     act(line, dest);
   }
   function act(line, dest) {
     const name = line.name;
+    if (dest === 'aqua' && line.aqua === 'open') { sdk.settings('aqua'); tell(`${name} → AQUA`); return; }
     if (dest === 'aqua') { sdk.ask(line.widget); tell(`${name} → AQUA · nothing sent`); return; }
     if (dest === 'chat') { sdk.settings('chat'); tell(`${name} → chat`); return; }
     if (dest === 'app') { sdk.open(line.ref); tell(`${name} → app`); return; }
     if (dest === 'settings' && line.page) { sdk.settings(line.page); tell(`${name} → settings`); }
   }
 
-  /* ---------- the weather feed: a meter reading whatever the feed says ---------- */
-  let wxWaiting = null;
-  function temp(key, n) {
-    if (!/_c$/.test(key) || celsius()) return n;
-    return Math.round((n * 9) / 5 + 32);
-  }
-  function renderWeather() {
-    const f = state.feeds.weather;
-    const refusal = state.refusals['feed:weather'] || (unread('feed:weather') ? NO_LINE : null);
-    const r = f && f.result;
-    $('.weather h2').textContent = (f && text(f.label)) || PARTS.weather.title;
-    $('.weather .mod-sub').textContent = f && parse(f.at) ? rel(f.at) : '';
-    const now = $('.wx-now'), hours = $('.wx-hours'), trunks = $('.trunk-row'), keys = $('.wx-keys');
-    if (!f) {
-      now.innerHTML = '<b class="wx-t wx-none">- -</b><span class="wx-line">no signal</span>';
-      hours.innerHTML = ''; trunks.innerHTML = ''; keys.innerHTML = ''; $('.wx-cap').textContent = '';
-      $('.wx-at').textContent = refusal || 'No feed named weather is bound yet. Ask AQUA to bind one.';
-      $('[data-knob]').hidden = true;
-      return;
-    }
+  /* ---------- the meters: feeds read whatever their result says ---------- */
+  // A feed's result sorted by what the meters can draw of it: plain values,
+  // lists of numbers, lists of names, and the one value a list names.
+  function reading(r) {
     const scalars = [], numLists = [], strLists = [];
     if (isItem(r)) {
       for (const [k, v] of Object.entries(r)) {
@@ -363,21 +436,46 @@
         else if (Array.isArray(v) && v.length && v.every((x) => typeof x === 'string')) strLists.push([k, v]);
       }
     } else if (r !== undefined && r !== null) scalars.push(['', String(r)]);
+    const names = strLists[0];
+    const current = names ? scalars.find(([, v]) => typeof v === 'string' && names[1].includes(v)) : null;
+    return { scalars, numLists, names, current };
+  }
+  const plainLine = (k, v, t = (x) => x) => (typeof v === 'number' ? `${words(k)} ${t(k, v)}` : /^(place|city|name|sky|summary|state|status)$/.test(k) || !k ? String(v) : `${words(k)} ${v}`);
+  const feedKeys = (f, name) => (Array.isArray(f.actions) ? f.actions.filter((a) => isItem(a) && typeof a.name === 'string') : [])
+    .slice(0, 3).map((a) => `<button class="key" data-feed="${name}" data-feedkey="${esc(a.name)}">${esc(text(a.label) || a.name)}</button>`).join('');
+
+  let wxWaiting = null;
+  function temp(key, n) {
+    if (!/_c$/.test(key) || celsius()) return n;
+    return Math.round((n * 9) / 5 + 32);
+  }
+  function renderWeather() {
+    const n = mark('weather');
+    const f = window.SB.feed('weather');
+    const r = f && f.result;
+    $('.weather h2').textContent = (f && text(f.label)) || PARTS.weather.title;
+    $('.weather .mod-sub').textContent = n ? n.say : f && parse(f.at) ? rel(f.at) : '';
+    const now = $('.wx-now'), hours = $('.wx-hours'), trunks = $('.weather .trunk-row'), keys = $('.wx-keys');
+    if (!f) {
+      now.innerHTML = '<b class="wx-t wx-none">- -</b><span class="wx-line">no signal</span>';
+      hours.innerHTML = ''; trunks.innerHTML = ''; keys.innerHTML = ''; $('.wx-cap').textContent = '';
+      $('.wx-at').textContent = n ? '' : 'No feed named weather is bound yet. Ask AQUA to bind one.';
+      $('[data-knob]').hidden = true;
+      return;
+    }
+    const { scalars, numLists, names, current } = reading(r);
     const big = scalars.find(([, v]) => typeof v === 'number');
     const rest = scalars.filter((s) => s !== big).slice(0, 3);
     const unitOf = (k) => (/_c$/.test(k) ? (celsius() ? '°C' : '°F') : words(k));
     now.innerHTML = (big ? `<b class="wx-t">${esc(temp(big[0], big[1]))}</b><span class="wx-u">${esc(unitOf(big[0]))}</span>` : '')
-      + rest.map(([k, v]) => `<span class="wx-line">${esc(typeof v === 'number' ? `${words(k)} ${temp(k, v)}` : /^(place|city|name|sky|summary|state|status)$/.test(k) || !k ? v : `${words(k)} ${v}`)}</span>`).join('');
+      + rest.map(([k, v]) => `<span class="wx-line">${esc(plainLine(k, v, temp))}</span>`).join('');
     const list = numLists[0];
     $('.wx-cap').textContent = list ? words(list[0]) : '';
     hours.innerHTML = list ? list[1].slice(0, 4).map((v) => `<li><b>${esc(temp(list[0], v))}${/_c$/.test(list[0]) ? '°' : ''}</b></li>`).join('') : '';
     // A list of names, one of them the result's current one: trunk lines,
     // the current one in service.
-    const names = strLists[0];
-    const current = names && scalars.find(([, v]) => typeof v === 'string' && names[1].includes(v));
     trunks.innerHTML = names ? names[1].slice(0, 6).map((s) => `<span class="trunk" data-lamp="${current && current[1] === s ? 'green' : 'off'}">${dymo(s)}<span class="lamp"></span></span>`).join('') : '';
-    const actions = Array.isArray(f.actions) ? f.actions.filter((a) => isItem(a) && typeof a.name === 'string') : [];
-    keys.innerHTML = actions.slice(0, 3).map((a) => `<button class="key sm" data-feedkey="${esc(a.name)}">${esc(text(a.label) || a.name)}</button>`).join('');
+    keys.innerHTML = feedKeys(f, 'weather');
     $('.wx-at').textContent = wxWaiting !== null ? 'Asking the feed…' : '';
     const knob = $('[data-knob]');
     knob.hidden = !scalars.concat(numLists).some(([k]) => /_c$/.test(k));
@@ -385,15 +483,58 @@
     knob.setAttribute('aria-label', `Units: ${celsius() ? '°C' : '°F'}. Switch`);
   }
 
+  // The VPN plate: the feed's list of names as trunk lines, the cord from
+  // the out jack to the one in service, its first figure on an edgewise
+  // meter, and its actions as keys. A trunk is not picked from here.
+  const VPNCORD = { slack: 1.025, extra: 10 };
+  let vpnRope = null, vpnAt = null;
+  function edgewise(v, label) {
+    const max = [100, 200, 500, 1000, 2000, 5000, 10000].find((m) => v <= m) || Math.max(v, 1);
+    const W = 200, x = (n) => 8 + (Math.min(n, max) / max) * (W - 16);
+    let ticks = '';
+    for (let i = 0; i <= 10; i++) { const n = (max / 10) * i, big = i % 2 === 0; ticks += `<line x1="${x(n)}" x2="${x(n)}" y1="6" y2="${big ? 15 : 11}"/>${big ? `<text x="${x(n)}" y="26">${n}</text>` : ''}`; }
+    return `<svg class="edgewise" viewBox="0 0 ${W} 34" role="img" aria-label="${esc(label)}"><rect class="ew-face" x="0" y="0" width="${W}" height="34" rx="2"/><g class="ew-ticks">${ticks}</g><line class="ew-needle" x1="0" x2="0" y1="2" y2="30" style="transform:translateX(${x(v)}px)"/></svg>`;
+  }
+  function renderVpn() {
+    const n = mark('vpn');
+    const f = window.SB.feed('vpn');
+    const row = $('.vpn .trunk-row');
+    const { scalars, names, current } = reading(f && f.result);
+    $('.vpn h2').textContent = (f && text(f.label)) || PARTS.vpn.title;
+    $('.vpn .mod-sub').textContent = n ? n.say : current ? current[1] : f && parse(f.at) ? rel(f.at) : '';
+    const list = names ? names[1].slice(0, 6) : [];
+    if (row.dataset.names !== list.join('\n')) {
+      row.dataset.names = list.join('\n');
+      row.innerHTML = list.map((s) => `<span class="trunk" data-server="${esc(s)}">${dymo(s)}<span class="jack"><span class="hole"></span></span><span class="lamp"></span></span>`).join('');
+      vpnAt = null;
+    }
+    for (const t of $$('.trunk', row)) t.dataset.lamp = current && t.dataset.server === current[1] ? 'green' : 'off';
+    const fig = scalars.find(([, v]) => typeof v === 'number');
+    const label = fig ? `${fig[1]} ${/_mbps$/.test(fig[0]) ? 'Mbps ' : ''}${words(fig[0])}` : '';
+    $('.vpn-meter').innerHTML = fig ? `${edgewise(fig[1], label)}<span class="ew-unit">${esc(label.replace(/^\S+ /, ''))}</span>` : '';
+    const rest = scalars.filter((s) => s !== fig && s !== current && typeof s[1] !== 'number').slice(0, 2);
+    $('.vpn-at').textContent = !f ? (n ? '' : 'No feed named vpn is bound yet. Ask AQUA to bind one.') : rest.map(([k, v]) => plainLine(k, v)).join(' · ');
+    $('.vpn-keys').innerHTML = f ? feedKeys(f, 'vpn') : '';
+    // The cord follows the feed: it plugs the trunk in service while the
+    // plate is fitted, and comes out when none is.
+    const target = current && isOn('vpn') ? $(`.trunk[data-server="${CSS.escape(current[1])}"] .jack`, row) : null;
+    if (target) {
+      if (!vpnRope || vpnRope.dead) vpnRope = window.Cords.wire($('.vpn-local .jack'), target, VPNCORD);
+      else if (vpnAt !== current[1]) vpnRope.patch(target, VPNCORD);
+      vpnAt = current[1];
+    } else if (vpnRope && !vpnRope.dead) { vpnRope.retract(); vpnRope = null; vpnAt = null; }
+  }
+
   /* ---------- schedules: lever keys and peg counters ---------- */
   const counter = (n) => { const s = String(n).padStart(5, '0'); return `<span class="ctr" aria-label="${n} runs">${s.split('').map((d) => `<span class="dg"><span class="dg-s" style="--d:${d}">0 1 2 3 4 5 6 7 8 9</span></span>`).join('')}</span>`; };
   const pending = new Map();     // schedule id -> the action pressed
   function renderSchedules() {
+    const n = mark('schedules');
     const box = $('.seq');
     const list = window.SB.schedules().sort((a, b) => text(a.name).localeCompare(text(b.name)));
     const keep = new Set(list.map((s) => s.schedule_id));
     for (const el of [...box.children]) if (!keep.has(el.dataset.sch)) el.remove();
-    $('.schedules .mod-sub').textContent = state.refusals['schedules.changes'] || (list.length ? `${list.filter((s) => s.status === 'active').length} running` : 'none yet');
+    $('.schedules .mod-sub').textContent = n ? n.say : list.length ? `${list.filter((s) => s.status === 'active').length} running` : 'none yet';
     list.forEach((s, i) => {
       const id = text(s.schedule_id);
       let el = box.querySelector(`[data-sch="${CSS.escape(id)}"]`);
@@ -433,9 +574,8 @@
     });
   }
   async function lever(id, el) {
-    const held = state.schedules.get(id);
-    if (!held) return;
-    const s = held.item;
+    const s = window.SB.get('schedules.changes', id);
+    if (!s) return;
     const action = s.status === 'active' ? 'pause' : 'resume';
     const name = text(s.name) || componentName(s.reference);
     pending.set(id, action); el.dataset.pending = action;
@@ -448,40 +588,106 @@
   }
 
   /* ---------- runs: the ticket printer ---------- */
-  const TYPE = { catalyst: 'CAT', formula: 'FRM', agent: 'AGT', tincture: 'TNC' };
   let seenRuns = null;
+  const retrying = new Set();    // execution ids whose Retry waits for its answer
   function renderRuns() {
-    const runs = state.runs;
+    const n = mark('runs');
+    const runs = window.SB.runs();
     const failed = runs.filter((r) => r.kind === 'failed').length;
-    $('.runs .mod-sub').textContent = state.refusals['runs.changes'] || (failed ? `${failed} failed` : runs.length ? `last ${runs.length}` : 'none yet');
+    $('.runs .mod-sub').textContent = n ? n.say : failed ? `${failed} failed` : runs.length ? `last ${runs.length}` : 'none yet';
+    // The runs a waiting failed-run call names: each offers Retry.
+    const called = new Set(window.SB.attention().filter((a) => a.kind === 'failed_run' && isItem(a.destination)).map((a) => a.destination.ref));
     // A ticket prints as it happens; the current state was already printed.
     const fresh = seenRuns ? runs.filter((r) => !r.refresh && !seenRuns.has(`${r.execution_id}${r.kind}`)) : [];
-    $('.paper').innerHTML = runs.slice(0, 6).map((r) => {
+    $('.paper').innerHTML = runs.map((r) => {
+      const id = text(r.execution_id);
       const name = componentName(r.reference) || text(r.reference);
       const what = r.kind === 'started' ? 'running' : r.kind === 'completed' ? `ok ${secs(r.duration_ms)}` : r.kind === 'failed' ? 'failed' : 'cancelled';
-      return `<li class="tk ${esc(text(r.kind))}${fresh.includes(r) ? ' fresh' : ''}">
-        <span class="tk-t">${TYPE[r.component_type] || ''}</span><span class="tk-n">${esc(name)}</span><span class="tk-d">${esc(what)}</span>
-        ${r.kind === 'failed' ? `<span class="tk-why">${esc(cause(r.error))}</span><button class="key sm tk-open" data-runs>Look</button>` : ''}</li>`;
-    }).join('') || '<li class="tk-none">No runs yet. A run of any component prints here as it happens.</li>';
+      // Only a root run, known to have failed, runs again.
+      const retry = (r.kind === 'failed' && r.parent_execution_id == null) || called.has(id);
+      const waiting = retrying.has(id);
+      return `<li class="tk ${esc(text(r.kind))}${fresh.includes(r) ? ' fresh' : ''}" data-run="${esc(id)}">
+        <span class="tk-t">${esc(stamp(r.started_at))}</span><span class="tk-n">${esc(name)}</span><span class="tk-d">${esc(what)}</span>
+        ${r.kind === 'failed' ? `<span class="tk-why">${esc(cause(r.error))}</span>` : ''}
+        ${retry ? `<button class="key tk-retry" data-retry="${esc(id)}"${waiting ? ' disabled aria-busy="true"' : ''} aria-label="Retry ${esc(name)}, failed ${esc(rel(r.ended_at || r.started_at))}">${waiting ? 'Retrying' : 'Retry'}</button>` : ''}</li>`;
+    }).join('') || `<li class="tk-none">${n ? '' : 'No runs yet. A run of any component prints here as it happens.'}</li>`;
     seenRuns = new Set(runs.map((r) => `${r.execution_id}${r.kind}`));
   }
+  async function retry(id) {
+    if (retrying.has(id)) return;
+    const run = window.SB.get('runs.changes', id);
+    const name = run ? componentName(run.reference) || text(run.reference) : 'Run';
+    retrying.add(id);
+    renderRuns();
+    tell(`${name} · Retry pressed`, 30000);
+    let answer = null;
+    try { answer = await sdk.press(RETRY, id); } catch (_) { answer = null; }
+    retrying.delete(id);
+    renderRuns();
+    const say = answer && answer.outcome === 'accepted' ? 'running again'
+      : answer && answer.outcome === 'refused' ? REFUSED[answer.reason] || 'it could not be run again'
+        : tooSoon(answer) ? 'too soon after the last tap: tap again in a moment' : 'nothing ran';
+    tell(`${name} · ${say}`, 6000);
+  }
 
-  /* ---------- vault and crew: annunciator windows ---------- */
+  /* ---------- vault and system: annunciator windows ---------- */
   function renderVault() {
+    const n = mark('vault');
     const list = window.SB.vault().sort((a, b) => text(a.name).localeCompare(text(b.name)));
-    const refusal = state.refusals['vault.changes'] || (unread('vault.changes') ? NO_LINE : null);
-    $('.vault .mod-sub').textContent = refusal || (list.length ? String(list.length) : '');
+    $('.vault .mod-sub').textContent = n ? n.say : list.length ? String(list.length) : '';
     $('.vault-annun').innerHTML = list.map((v) => {
       const fine = v.status === 'fine';
       const say = fine ? 'Fine' : 'Re-authorise';
       return `<button class="win" data-lamp="${fine ? 'green' : 'red'}" data-vault aria-label="${esc(v.name)}: ${say}. Open the vault"><span class="win-n">${esc(v.name)}</span><span class="win-s">${say}</span></button>`;
-    }).join('') || `<p class="job-none">${esc(refusal || 'Nothing stored yet')}</p>`;
+    }).join('') || (n ? '' : '<p class="job-none">Nothing stored yet</p>');
   }
-  function renderCrew() {
+  // Bytes as the plate reads them: "38 of 100 GB", in the cap's unit.
+  function storage(used, cap) {
+    const top = Number.isFinite(cap) && cap > 0 ? cap : used;
+    const [d, unit] = top >= 1e12 ? [1e12, 'TB'] : top >= 1e9 ? [1e9, 'GB'] : top >= 1e6 ? [1e6, 'MB'] : [1e3, 'kB'];
+    const fig = (v) => { const x = v / d; return x >= 10 || x === 0 ? String(Math.round(x)) : x.toFixed(1); };
+    return { used: fig(used), cap: Number.isFinite(cap) && cap > 0 ? fig(cap) : null, unit };
+  }
+  function renderSystem() {
+    const n = mark('crew');
+    const s = window.SB.system();
     const jobs = window.SB.activity().sort((a, b) => text(a.since).localeCompare(text(b.since)));
-    $('.crew .mod-sub').textContent = state.refusals['activity.changes'] || (unread('activity.changes') ? NO_LINE : jobs.length ? `${jobs.length} at work` : '');
-    $('.jobs').innerHTML = jobs.slice(0, 3).map((j) => `<div class="job" data-lamp="white"><span class="lamp"></span><span class="job-who">${esc(text(j.member))}</span><span class="job-since">for ${esc(text(j.asked_by))} · ${esc(rel(j.since))}</span><span class="job-t">${esc(text(j.status).replace(/_/g, ' '))}</span></div>`).join('')
-      || `<p class="job-none">${unread('activity.changes') ? NO_LINE : 'No crew job running'}</p>`;
+    $('.crew .mod-sub').textContent = n ? n.say : jobs.length ? `${jobs.length} at work` : '';
+    const lit = (v, on, off) => (v === true ? on : v === false ? off : 'off');
+    const crewReady = s && Number.isInteger(s.crew_ready) && Number.isInteger(s.crew_total);
+    const wins = s ? [
+      { n: 'Health', s: HEALTH[s.health] ? HEALTH[s.health][0] : '—', lamp: HEALTH[s.health] ? HEALTH[s.health][1] : 'off', page: 'settings' },
+      { n: 'Model', s: s.model_connected === true ? 'Connected' : s.model_connected === false ? 'Not connected' : '—', lamp: lit(s.model_connected, 'green', 'red'), page: 'settings' },
+      { n: 'Crew', s: crewReady ? `${s.crew_ready} of ${s.crew_total} ready` : '—', lamp: crewReady ? (s.crew_ready >= s.crew_total ? 'green' : 'amber') : 'off', page: 'activities' },
+      { n: `CYFR ${text(s.version)}`.trim(), s: s.update_available === true ? 'Update ready' : s.update_available === false ? 'Current' : '—', lamp: lit(s.update_available, 'amber', 'green'), page: 'settings' },
+    ] : [];
+    $('.sys-annun').innerHTML = wins.map((w) => `<button class="win" data-lamp="${w.lamp}" data-sys="${w.page}" aria-label="${esc(w.n)}: ${esc(w.s)}. Open ${w.page}"><span class="win-n">${esc(w.n)}</span><span class="win-s">${esc(w.s)}</span></button>`).join('');
+    const used = s && Number.isFinite(s.storage_used) ? s.storage_used : null;
+    if (used === null) $('.storage').innerHTML = '';
+    else {
+      const b = storage(used, s.storage_cap);
+      const pct = b.cap ? Math.min(100, (used / s.storage_cap) * 100) : 0;
+      $('.storage').innerHTML = `<span class="st-l">Storage</span><span class="st-bar" role="img" aria-label="${b.used} ${b.unit}${b.cap ? ` of ${b.cap} ${b.unit}` : ' used'}"><span style="width:${pct.toFixed(1)}%"></span></span><span class="st-v"><b>${b.used}</b> ${b.cap ? `of ${b.cap} ${b.unit}` : `${b.unit} used`}</span>`;
+    }
+    $('.jobs').innerHTML = jobs.slice(0, 3).map((j) => `<div class="job" data-lamp="white"><span class="lamp"></span><span class="job-who">${esc(text(j.member))}</span><span class="job-since">for ${esc(text(j.asked_by))} · ${esc(rel(j.since))}</span><span class="job-t">${esc(text(j.title) || text(j.status).replace(/_/g, ' '))}</span></div>`).join('')
+      || (n ? '' : '<p class="job-none">No crew job running</p>');
+  }
+
+  /* ---------- files: offers waiting for the person, then recent files ---------- */
+  // A file's media type as the plate's tag: its kind, or a known format.
+  function kindOf(type) {
+    const [top, sub = ''] = text(type).split('/');
+    return top === 'application' ? (/^(pdf|json|zip)$/.test(sub) ? sub : 'file') : top || 'file';
+  }
+  function renderFiles() {
+    const n = mark('files');
+    const list = window.SB.files();
+    const offers = list.filter((f) => f.kind === 'offer').sort((a, b) => text(a.name).localeCompare(text(b.name)));
+    const recent = list.filter((f) => f.kind === 'file').sort((a, b) => text(b.changed_at).localeCompare(text(a.changed_at)));
+    $('.files .mod-sub').textContent = n ? n.say : offers.length ? `${offers.length} offered` : '';
+    $('.file-list').innerHTML = offers.map((o) => `<li class="offer" data-lamp="amber"><span class="lamp"></span><span>${esc(text(o.name))}</span><span class="f-when">${text(o.from) ? `from ${esc(o.from)}` : ''}</span></li>`).join('')
+      + recent.map((f) => `<li><span class="f-kind">${esc(kindOf(f.type))}</span><span>${esc(text(f.name))}</span><span class="f-when">${esc(rel(f.changed_at, ''))}</span></li>`).join('')
+      || (n ? '' : '<li class="f-none">No recent files</li>');
   }
 
   /* ---------- the rack: parts on and off, and their order ---------- */
@@ -509,7 +715,7 @@
     const off = Object.keys(PARTS).filter((id) => !isOn(id));
     $('.spares-list').innerHTML = off.length ? off.map((id) => `<button class="key spare" data-fit="${id}">Fit ${PARTS[id].title}</button>`).join('') : '<span class="spares-none">Every part is fitted</span>';
     for (const z of ['field', 'meters', 'shelf']) $(`[data-zone="${z}"]`).dataset.count = Object.keys(PARTS).filter((id) => PARTS[id].zone === z && isOn(id)).length;
-    requestAnimationFrame(() => window.Cords.fit());
+    requestAnimationFrame(() => { renderVpn(); window.Cords.fit(); });
   }
   function rackBars() {
     for (const id of Object.keys(PARTS)) {
@@ -551,9 +757,6 @@
     const fit = t.closest('[data-fit]');
     if (fit) {
       const id = fit.dataset.fit;
-      // The page reads at most five streams at once: a part that would need
-      // a sixth waits until another is pulled.
-      if (window.SB.tooMany(id)) { tell(`${PARTS[id].title} needs a line the board has not got · pull a part first`, 6000); return; }
       const last = zoneIds(PARTS[id].zone).reduce((m, k) => Math.max(m, orderOf(k)), -1);
       save({ [id]: entryWith(id, { on: true, order: last + 1 }) }, `${PARTS[id].title} fitted`);
       return;
@@ -561,27 +764,30 @@
     const ask = t.closest('.askjack');
     if (ask) {
       const part = ask.dataset.ask;
-      lift(ask, $('.jack', ask), { id: `part:${part}`, widget: part, module: true, name: (part === 'weather' && $('.weather h2').textContent) || PARTS[part].title, page: PARTS[part].page, targets: ['aqua', 'settings'], primary: 'aqua' });
+      const name = ((part === 'weather' || part === 'vpn') && $(`.${part} h2`).textContent) || PARTS[part].title;
+      lift(ask, $('.jack', ask), { id: `part:${part}`, widget: part, module: true, name, page: PARTS[part].page, targets: ['aqua', 'settings'], primary: 'aqua', aqua: 'ask' });
       return;
     }
     const pos = t.closest('.pos');
     if (pos) { patch(pos.dataset.dest); return; }
+    const again = t.closest('[data-retry]');
+    if (again) { drop(true); retry(again.dataset.retry); return; }
     if (t.closest('[data-knob]')) {
       const units = celsius() ? 'f' : 'c';
       save({ weather: entryWith('weather', { units }) }, `Units ${units === 'f' ? '°F' : '°C'}`);
       return;
     }
     const feedKey = t.closest('[data-feedkey]');
-    if (feedKey && state.feeds.weather) {
-      const f = state.feeds.weather;
-      wxWaiting = f.revision;
+    const f = feedKey && window.SB.feed(feedKey.dataset.feed);
+    if (f) {
+      if (feedKey.dataset.feed === 'weather') { wxWaiting = f.revision; renderWeather(); }
       sdk.press(f.binding, feedKey.dataset.feedkey);
       tell(`${feedKey.textContent} pressed`);
-      renderWeather();
       return;
     }
     if (t.closest('[data-vault]')) { sdk.settings('vault'); tell('Vault → settings'); return; }
-    if (t.closest('[data-runs]')) { sdk.settings('executions'); tell('Runs → settings'); return; }
+    const sys = t.closest('[data-sys]');
+    if (sys) { sdk.settings(sys.dataset.sys); tell('System → settings'); return; }
     if (hand && !t.closest('.line,.pos,.askjack')) drop();
   }
 
@@ -629,18 +835,20 @@
     if (has('posture')) applyPosture();
     if (has('covered', 'posture')) fitCovered();
     if (has('state')) applyLive();
-    if (has('attention', 'threads', 'components', 'runs', 'schedules', 'installed', 'refusals')) renderLines();
-    if (has('feeds', 'refusals', 'desktop')) {
-      const f = state.feeds.weather;
+    if (has('attention', 'threads', 'components', 'runs', 'schedules', 'installed')) renderLines();
+    if (has('feeds', 'desktop')) {
+      const f = window.SB.feed('weather');
       if (wxWaiting !== null && f && f.revision !== wxWaiting) { wxWaiting = null; tell('Weather · new reading'); }
       renderWeather();
+      renderVpn();
     }
-    if (has('schedules', 'refusals')) renderSchedules();
-    if (has('runs', 'refusals')) renderRuns();
-    if (has('vault', 'refusals')) renderVault();
-    if (has('activity', 'refusals')) renderCrew();
+    if (has('schedules')) renderSchedules();
+    if (has('runs', 'attention')) renderRuns();
+    if (has('vault')) renderVault();
+    if (has('system', 'activity')) renderSystem();
+    if (has('files')) renderFiles();
     summary();
-    if (has('desktop', 'covered', 'posture', 'installed', 'threads', 'components', 'attention')) requestAnimationFrame(() => window.Cords.fit());
+    if (has('desktop', 'covered', 'posture', 'installed', 'threads', 'components', 'attention', 'feeds')) requestAnimationFrame(() => window.Cords.fit());
   }
 
   window.Board = {
@@ -651,7 +859,7 @@
       addEventListener('keydown', (e) => { if (e.key === 'Escape') drop(); });
       addEventListener('resize', () => { applyPosture(); fitCovered(); renderLines(); window.Cords.fit(); });
       document.addEventListener('visibilitychange', applyLive);
-      document.fonts && document.fonts.ready.then(() => window.Cords.fit());
+      if (document.fonts) document.fonts.ready.then(() => window.Cords.fit());
       render(new Set(['all']));
     },
     render,
