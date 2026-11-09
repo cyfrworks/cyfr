@@ -44,6 +44,8 @@ body {
   font-size: 16px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
+  /* the subset pixel faces carry no ligature glyphs */
+  font-variant-ligatures: none;
   -webkit-font-smoothing: none;
   overflow: hidden;
   touch-action: manipulation;
@@ -138,6 +140,8 @@ button { font: inherit; color: inherit; }
 #board .facts { margin: 4px 0 0; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #board .facts .k { color: var(--cobalt-2); }
 #board .acts { display: flex; gap: 8px; flex: 0 0 auto; align-items: center; }
+/* CYFR's own AQUA button stands over the page's lower right corner: the board's taps keep clear of it. */
+:root:not(.phone) #board .acts { margin-right: 96px; }
 .btn {
   min-height: 44px; padding: 8px 14px; border: 3px solid var(--board-ink); background: var(--board);
   color: var(--board-ink); font-size: 16px; cursor: pointer; white-space: nowrap;

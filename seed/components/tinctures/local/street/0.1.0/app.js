@@ -88,6 +88,7 @@ function componentName(ref) {
 const SHORT_REASONS = {
   needs_setup: 'needs setup', unavailable: 'unavailable', timed_out: 'timed out', cancelled: 'cancelled',
   rate_limited: 'rate limited', refused: 'refused', bad_input: 'bad input', not_found: 'not found', waits_for_you: 'waits for you',
+  uncertain: 'outcome not known',
 };
 const shortReason = (cause) => SHORT_REASONS[cause] || 'failed';
 
@@ -431,7 +432,9 @@ function placeHill() {
   const phone = L.posture === 'phone';
   const items = hillKeys().map(hillItem).filter((b) => b && on(b.part));
   const totalW = items.reduce((s, b) => s + b.w, 0);
-  const x0 = L.vx0 + (phone ? 3 : L.depotW + 6), x1 = L.vx1 - (phone ? 3 : L.termW + 6);
+  // The name plaque stands over the hill's left end: the hill starts past it.
+  const plaque = phone ? 0 : Math.ceil(260 / L.scale) - L.vx0;
+  const x0 = L.vx0 + (phone ? 3 : Math.max(L.depotW + 6, plaque)), x1 = L.vx1 - (phone ? 3 : L.termW + 6);
   const gap = items.length > 1 ? Math.max(1, (x1 - x0 - totalW) / (items.length - 1)) : 0;
   let x = items.length === 1 ? (x0 + x1 - totalW) / 2 : x0;
   for (const b of items) {
@@ -889,7 +892,8 @@ function waitingWords(a) {
     case 'failed_run': {
       const name = componentName(text(a.id));
       const run = [...D.runs.values()].filter((r) => r.run.reference === a.id && r.run.kind === 'failed').sort((x, y) => y.seq - x.seq)[0];
-      return { head: `${name} failed`, tail: run ? shortReason(text(isItem(run.run.error) ? run.run.error.cause : '')) : 'its run failed', fail: true };
+      const cause = run && isItem(run.run.error) ? text(run.run.error.cause) : '';
+      return { head: `${name} failed`, tail: cause && cause !== 'failed' ? shortReason(cause) : 'its last run', fail: true };
     }
     case 'failed_schedule': return { head: `${label || 'A schedule'} failed`, tail: 'its last run', fail: true };
     case 'approval': return { head: 'Approve in', tail: label || 'a thread' };
@@ -1153,7 +1157,7 @@ function signFor(e) {
         : many ? `${e.runs.length} runs at ${when(e.runs[0].t)}–${when(r.t)}` : `${componentName(r.ref)} ${r.state} at ${when(r.t)}`;
       return {
         title,
-        facts: e.runs.slice(0, 8).map((x) => [x.t == null ? '' : when(x.t), `${componentName(x.ref)} ${x.state}${secs(x.ms) ? ' ' + secs(x.ms) : ''}${x.state === 'failed' ? ' · ' + shortReason(x.cause) : ''}`]),
+        facts: e.runs.slice(0, 8).map((x) => [x.t == null ? '' : when(x.t), `${componentName(x.ref)} ${x.state}${secs(x.ms) ? ' ' + secs(x.ms) : ''}${x.state === 'failed' && x.cause && x.cause !== 'failed' ? ' · ' + shortReason(x.cause) : ''}`]),
         acts: [page('Open runs', 'executions', 'go'), ask('lamps')],
       };
     }
@@ -1331,12 +1335,12 @@ async function savePlan() {
 /* ================= the plain page: every list as text, when the drawing cannot run ================= */
 function renderFallback() {
   const section = (title, items, empty) => `<section><h2>${esc(title)}</h2>${items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : `<p class="empty">${esc(empty)}</p>`}</section>`;
-  const at = (iso) => { const t = mins(iso); return t == null ? '' : ', ' + when(t); };
+  const at = (iso, word = '') => { const t = mins(iso); return t == null ? '' : `, ${word}${when(t)}`; };
   const waiting = [...D.attention.values()].map(({ item }) => { const w = waitingWords(item); return `${w.head} ${w.tail}${at(item.since)}`; });
   const threads = [...D.threads.values()].map(({ item }) => `${text(item.title) || 'A thread'} (${threadSub(item)})${at(item.last_activity)}`);
-  const runs = lampRuns().map((r) => `${componentName(r.ref)} ${r.state}${r.t == null ? '' : ', ' + when(r.t)}${r.state === 'failed' ? ' (' + shortReason(r.cause) + ')' : ''}`);
-  const schedules = [...D.schedules.values()].map(({ item: s }) => `${text(s.name) || text(s.reference)}, ${s.status}${s.status === 'paused' ? '' : ', next' + at(s.next_run_at)}`);
-  const crew = [...D.activity.values()].map(({ item: j }) => `${text(j.member)}, ${text(j.status)}, since${at(j.since)}`);
+  const runs = lampRuns().map((r) => `${componentName(r.ref)} ${r.state}${r.t == null ? '' : ', ' + when(r.t)}${r.state === 'failed' && r.cause && r.cause !== 'failed' ? ' (' + shortReason(r.cause) + ')' : ''}`);
+  const schedules = [...D.schedules.values()].map(({ item: s }) => `${text(s.name) || text(s.reference)}, ${s.status}${s.status === 'paused' ? '' : at(s.next_run_at, 'next ')}`);
+  const crew = [...D.activity.values()].map(({ item: j }) => `${text(j.member)}, ${text(j.status)}${at(j.since, 'since ')}`);
   const apps = D.apps.map((a) => a.name + (a.open ? ' (open)' : ''));
   const refused = Object.entries(D.refused).map(([n, why]) => `<p class="note">${esc(n)}: ${esc(why)}</p>`).join('');
   $('#fallback h1').textContent = person ? `${person}'s street` : 'Your street';
