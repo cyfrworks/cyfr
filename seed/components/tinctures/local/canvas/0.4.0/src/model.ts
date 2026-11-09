@@ -203,6 +203,9 @@ export interface Cause {
   key: string;
   class: string;
   message: string;
+  // What the page shows for the cause: its class and code, never the
+  // run's own text; the class alone when the run carries no code.
+  shown: string;
   short: string;
   grantable: boolean;
   // How many of the held runs failed for it.
@@ -210,8 +213,8 @@ export interface Cause {
   components: Component[];
 }
 
-// The held runs that failed, grouped by their cause (the refusal's class
-// and sentence), each with the components it hit, most often first; the
+// The held runs that failed, grouped by their cause (the refusal's class,
+// code and sentence), each with the components it hit, most often first; the
 // causes most often first. A failure with no error is its own cause.
 export function causes(state: State): Cause[] {
   const groups = new Map<string, Cause>();
@@ -220,11 +223,13 @@ export function causes(state: State): Cause[] {
     const error = isItem(run.error) ? run.error : {};
     const cls = text(error.class) || "internal";
     const message = text(error.message) || "The run failed without saying why.";
-    const key = `${cls}\u0000${message}`;
+    const code = text(error.code);
+    const key = `${cls}\u0000${code}\u0000${message}`;
     const cause = groups.get(key) ?? {
       key,
       class: cls,
       message,
+      shown: code ? `${cls} (${code})` : cls,
       short: shortReason(cls, message),
       grantable: grantable(cls, message),
       count: 0,

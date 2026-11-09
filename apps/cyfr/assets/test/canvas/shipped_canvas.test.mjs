@@ -44,9 +44,9 @@ import {
   text,
   today,
   week
-} from "../../../../../seed/components/tinctures/local/canvas/0.3.0/src/model.ts"
+} from "../../../../../seed/components/tinctures/local/canvas/0.4.0/src/model.ts"
 
-const VERSION = new URL("../../../../../seed/components/tinctures/local/canvas/0.3.0/", import.meta.url)
+const VERSION = new URL("../../../../../seed/components/tinctures/local/canvas/0.4.0/", import.meta.url)
 const SCAFFOLD = new URL("../../../lib/compendium/scaffold.ex", import.meta.url)
 
 // Every pending reaction runs: a promise's handlers, then theirs.
@@ -471,6 +471,8 @@ describe("what needs attention", () => {
     assert.deepEqual(rest, [])
     assert.equal(grant.count, 15)
     assert.equal(grant.message, NOT_GRANTED)
+    // What the page shows is the class and code, never the run's text.
+    assert.equal(grant.shown, "setup_required")
     assert.equal(grant.grantable, true)
     assert.equal(grant.short, "Not granted")
     assert.deepEqual(
@@ -501,6 +503,19 @@ describe("what needs attention", () => {
     assert.equal(byMessage["The grant for this account has expired; grant it again."].grantable, true)
     assert.equal(byMessage["Granted elsewhere, it says nothing to do here."].grantable, false)
     assert.equal(today(state, new Date("2026-10-30T09:00:00Z")).sentence, "All of your last 3 runs failed. One grant fixes 2 of them.")
+  })
+
+  test("a cause shows its class and code, and its class alone without a code", () => {
+    const state = folded(
+      run("a", "failed", {reference: "catalyst:local.x:1.0.0", error: {class: "unavailable", code: "no_runner"}}),
+      run("b", "failed", {reference: "catalyst:local.x:1.0.0", error: {class: "unavailable", code: "no_runner"}}),
+      failed("c", "catalyst:local.y:1.0.0", "timeout", "It took too long.")
+    )
+    const shown = causes(state).map((c) => [c.shown, c.count])
+    assert.deepEqual(shown, [["unavailable (no_runner)", 2], ["timeout", 1]])
+    const page = readFileSync(new URL("src/App.tsx", VERSION), "utf8")
+    assert.match(page, /\{cause\.shown\}/)
+    assert.doesNotMatch(page, /\{cause\.message\}/)
   })
 
   test("only a grant's absence or lapse offers a grant", () => {

@@ -61,9 +61,8 @@ defmodule Prism.CanvasValidationTest do
       "version" => version,
       "publisher" => "local",
       "tincture" => %{
-        "frame" => %{"placement" => "canvas"},
         "entry" => "index.html",
-        "streams" => [%{"name" => "runs.changes"}]
+        "desktop" => %{"data" => ["runs.changes"]}
       }
     }
 

@@ -44,11 +44,13 @@ defmodule Sanctum.RunningTasks do
   and records nothing, and its task does not run.
 
   This process monitors each claimer and each registered task. A task's
-  death deletes its row. A claimer's death deletes its row only while no
-  task is registered under it: a registered task keeps its row, so a
-  cancel that follows the claimer's death (an aborted turn's settlement)
-  still reaches it, and the task's own death then deletes it. No row
-  outlives both its claimer and its task.
+  death deletes its row. A claimer is the process waiting on its task's
+  answer, so its death, however it comes (its turn aborted, its owner
+  dead, its lease lost), stops the task registered under it and deletes
+  the row: no one is left to read what the task would answer, and a
+  task's own nested calls stop with it, since it is their claimer. A
+  cancel that follows finds nothing and writes nothing. No row outlives
+  its claimer.
 
   ## Why there is no authorization check
 
@@ -310,28 +312,22 @@ defmodule Sanctum.RunningTasks do
       {{:task, {:handle, handle}}, monitors} ->
         {:noreply, drop_handle(%{state | monitors: monitors}, handle)}
 
+      # A dead claimer's task stops with it (the moduledoc's "Lifetimes").
       {{:claimer, {:request, claim}}, monitors} ->
         state = %{state | monitors: monitors}
 
-        case state.requests[claim] do
-          # A registered task keeps its entry until its own exit.
-          %{task: task} when is_reference(task) ->
-            {:noreply, put_in(state.requests[claim].claimer, nil)}
+        with %{status: pid} when is_pid(pid) <- state.requests[claim],
+             do: Process.exit(pid, :cancelled)
 
-          _ ->
-            {:noreply, drop_request(state, claim)}
-        end
+        {:noreply, drop_request(state, claim)}
 
       {{:claimer, {:handle, handle}}, monitors} ->
         state = %{state | monitors: monitors}
 
-        case state.handles[handle] do
-          %{task: task} when is_reference(task) ->
-            {:noreply, put_in(state.handles[handle].claimer, nil)}
+        with [{_, pid}] when is_pid(pid) <- :ets.lookup(@handles, handle),
+             do: Process.exit(pid, :cancelled)
 
-          _ ->
-            {:noreply, drop_handle(state, handle)}
-        end
+        {:noreply, drop_handle(state, handle)}
     end
   end
 

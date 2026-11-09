@@ -3,8 +3,9 @@
 
 defmodule Compendium.Providers.Canvas do
   @moduledoc """
-  The `canvas` tool: a person's canvases, each a tincture whose placement
-  is `canvas`, read and written through `Compendium.Canvas`.
+  The `canvas` tool: a person's canvases, each a tincture that declares
+  the `tincture.desktop` block, read and written through
+  `Compendium.Canvas`.
 
     * `catalog` answers what a canvas may read: every canvas-readable
       stream with its subject grammar, shape, filter and whether it
@@ -13,7 +14,9 @@ defmodule Compendium.Providers.Canvas do
       glass opens, which one is kept, which validation last failed) and
       its revision.
     * `write` writes a new canvas version whole, its page's files on the
-      vanilla or the React template and the streams it reads, built first
+      vanilla or the React template and the parts of its desktop block it
+      uses (what it reads, its controls, its preferences and its chrome),
+      built first
       when it is React, after allocating its version number, and
       registers it. It never edits a version, opens no stream and
       activates nothing. It takes no standing answer (`standing: false`),
@@ -94,11 +97,30 @@ defmodule Compendium.Providers.Canvas do
                   "index.html and files under src/ and public/, which may also be " <>
                   Enum.join(Compendium.Canvas.build_source_extensions(), ", ") <> " sources"
             ),
-            Arg.new("streams", :json,
-              required: true,
+            Arg.new("data", :json,
               description:
-                "write: the streams the canvas reads, [{name, subject}], from catalog's " <>
-                  "streams; a feed's results name the feed as the subject"
+                "write: the desktop block's data, the canvas-readable streams the page " <>
+                  "opens, by name from catalog's streams; omit when it opens none"
+            ),
+            Arg.new("feeds", :json,
+              description:
+                "write: the desktop block's feeds, the names of the bound feeds the page " <>
+                  "reads; omit when it reads none"
+            ),
+            Arg.new("controls", :json,
+              description:
+                "write: the desktop block's controls, [{id, label, operation, args, pick}], " <>
+                  "each run by the shell on the person's tap; omit when it offers none"
+            ),
+            Arg.new("prefs", :json,
+              description:
+                "write: the desktop block's prefs, the schema of its preferences " <>
+                  "{widgets, desktop}; omit when it keeps none"
+            ),
+            Arg.new("chrome", :string,
+              description:
+                "write: the desktop block's chrome, the path among files of its chrome.css; " <>
+                  "omit for the default chrome"
             )
           ],
           kind: :write,

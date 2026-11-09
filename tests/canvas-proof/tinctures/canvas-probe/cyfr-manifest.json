@@ -5,8 +5,7 @@
   "publisher": "local",
   "description": "The canvas proof's probe canvas, a vanilla page: it reads the feed candles and draws them as its own SVG, keeps a counter running, opens an app from its own button, and offers checks of its page's own requests under the canvas policy.",
   "tincture": {
-    "frame": {"placement": "canvas"},
     "entry": "index.html",
-    "streams": [{"name": "feed.results", "subject": "candles"}]
+    "desktop": {"feeds": ["candles"]}
   }
 }

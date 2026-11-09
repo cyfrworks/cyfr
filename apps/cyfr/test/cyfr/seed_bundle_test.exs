@@ -100,11 +100,11 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.3.0 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.4.0 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.3.0"
+    assert canvas.version == "0.4.0"
 
     # The seed ships this one version of the canvas.
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)
@@ -117,7 +117,7 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert Prima.Manifest.validate(canvas.manifest, fn _ -> true end) == :ok
     assert {:ok, declaration} = Compendium.tincture_declaration(canvas.manifest)
-    assert declaration.frame.placement == "canvas"
+    assert Prima.Manifest.Tincture.canvas?(declaration)
     assert declaration.frame.background == false
     assert declaration.frame.capabilities == []
 
@@ -140,7 +140,27 @@ defmodule Cyfr.Test.SeedBundleTest do
            ]
 
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
-    assert Compendium.tincture_check_canvas_streams(declaration, Sanctum.Catalog.streams()) == :ok
+    assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+
+    # It declares the current look in its chrome, read as publish reads it,
+    # and offers no control.
+    assert declaration.desktop.controls == []
+    assert declaration.desktop.chrome == "chrome.css"
+
+    assert {:ok, tokens} =
+             Compendium.tincture_check_chrome(declaration, &File.read(Path.join(dir, &1)))
+
+    assert tokens == %{
+             "fonts" => [],
+             "radius" => 12,
+             "border" => 1,
+             "edge" => 8,
+             "title-height" => 34,
+             "controls" => "right",
+             "title-align" => "left",
+             "glyphs" => "plain",
+             "font" => "system"
+           }
 
     for key <- ~w(actions connect),
         do: refute(Map.has_key?(canvas.manifest["tincture"], key), key)
@@ -163,7 +183,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     {built, sources} = Enum.split_with(files, &String.starts_with?(&1, "dist/"))
 
     assert Enum.sort(sources) ==
-             ~w(cyfr-manifest.json index.html package-lock.json package.json src/App.tsx
+             ~w(chrome.css cyfr-manifest.json index.html package-lock.json package.json src/App.tsx
                 src/cyfr.d.ts src/index.css src/main.tsx src/model.ts tsconfig.json vite.config.ts)
 
     assert {[_js], [_css]} =

@@ -145,7 +145,7 @@ function CauseRow({ cause }: { cause: Cause }) {
           {cause.count} {cause.count === 1 ? "run" : "runs"} failed
           {cause.short !== "Failed" && <span className="muted"> · {cause.short.toLowerCase()}</span>}
         </div>
-        <p className="why">{cause.message}</p>
+        <p className="why">{cause.shown}</p>
         <div className="chips">
           {cause.components.map((component) =>
             cause.grantable ? (

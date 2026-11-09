@@ -1410,7 +1410,10 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # A tincture's frame, streams and system actions, from the
   # declaration the shape digest binds (`Prima.Manifest.Tincture`); none
-  # for a manifest that declares none. Never narrowed.
+  # for a manifest that declares none. Never narrowed. A desktop's frame
+  # row says `placement` `canvas`, the preview's word for a frame that is
+  # the person's page, its streams rows are its data and feeds, and its
+  # controls are one row.
   defp tincture_rows(node_key, manifest) do
     if Tincture.declared?(manifest) do
       case Tincture.from_manifest(manifest) do
@@ -1423,7 +1426,10 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp declaration_rows(node_key, canonical) do
-    frame = Map.take(canonical["frame"], ~w(capabilities background placement))
+    frame =
+      if canonical["desktop"],
+        do: Map.put(canonical["frame"], "placement", "canvas"),
+        else: canonical["frame"]
 
     actions =
       case canonical["actions"] do
@@ -1433,8 +1439,27 @@ defmodule Sanctum.Consent.BlobBuilder do
 
     [row("frame", node_key, frame, false)] ++
       Enum.map(canonical["streams"], &row("streams", node_key, &1, false)) ++
-      actions
+      actions ++ controls_rows(node_key, canonical["desktop"])
   end
+
+  # A desktop's controls, in the order of their ids, each as the person
+  # reads it: its label, the operation it runs and the pick's stream and
+  # field; none for a desktop that offers none, or an app.
+  defp controls_rows(node_key, %{"controls" => [_ | _] = controls}) do
+    shown =
+      Enum.map(controls, fn control ->
+        control
+        |> Map.take(~w(label operation))
+        |> put_pick(control["pick"])
+      end)
+
+    [row("controls", node_key, %{"controls" => shown}, false)]
+  end
+
+  defp controls_rows(_node_key, _desktop), do: []
+
+  defp put_pick(shown, nil), do: shown
+  defp put_pick(shown, pick), do: Map.put(shown, "pick", Map.take(pick, ~w(stream subject field)))
 
   defp limits_map_from_caps(node_key, caps) do
     defaults =

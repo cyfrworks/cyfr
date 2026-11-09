@@ -55,9 +55,9 @@ defmodule PrismWeb.AquaApprovalCard do
   every exit of that grant, and binds them.
 
   A canvas write's card names the streams the version it writes reads,
-  from the proposal's own `streams` (`canvas_streams/1`), which the
-  approval binds: what the page will read is on the card, not only in the
-  call's details.
+  from the proposal's own `data` and `feeds` (`canvas_streams/1`), which
+  the approval binds: what the page will read is on the card, not only in
+  the call's details.
 
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
@@ -534,28 +534,26 @@ defmodule PrismWeb.AquaApprovalCard do
   defp account(_proposal), do: nil
 
   # The streams a canvas write's version reads, as its proposal names them:
-  # each stream's name, with the feed it names as its subject; nil for any
-  # other call. An entry of another shape is named as one the write refuses,
-  # never spelled out.
+  # each `data` name, and each of its `feeds` as the feed's results with the
+  # feed it names; nil for any other call. An entry of another shape is
+  # named as one the write refuses, never spelled out.
   @refused_streams "a stream entry the write refuses"
 
   defp canvas_streams(%{"tool" => "canvas", "action" => "write"} = proposal) do
-    case (proposal["args"] || %{})["streams"] do
-      streams when is_list(streams) -> Enum.map(streams, &canvas_stream/1)
-      _other -> [@refused_streams]
-    end
+    args = proposal["args"] || %{}
+
+    canvas_names(args["data"], & &1) ++
+      canvas_names(args["feeds"], &"#{Prima.Manifest.Tincture.feed_results()} (#{&1})")
   end
 
   defp canvas_streams(_proposal), do: nil
 
-  defp canvas_stream(%{"name" => name} = stream) when is_binary(name) do
-    case stream["subject"] do
-      subject when is_binary(subject) -> "#{name} (#{subject})"
-      _none -> name
-    end
-  end
+  defp canvas_names(nil, _spell), do: []
 
-  defp canvas_stream(_other), do: @refused_streams
+  defp canvas_names(names, spell) when is_list(names),
+    do: Enum.map(names, &if(is_binary(&1), do: spell.(&1), else: @refused_streams))
+
+  defp canvas_names(_other, _spell), do: [@refused_streams]
 
   # The classes a launch's card lets flow to every exit of the launched
   # app's grant (`lets_flow`, which the approval binds), in class order;

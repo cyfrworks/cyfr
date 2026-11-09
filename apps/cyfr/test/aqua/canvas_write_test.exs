@@ -37,7 +37,8 @@ defmodule Aqua.CanvasWriteTest do
       ~S|cyfr.stream("runs.changes", null, () => {}).catch(() => {}).finally(() => cyfr.ready()) // CANVAS_FILE_MARKER|,
     "style.css" => "body { margin: 0 }"
   }
-  @streams [%{"name" => "runs.changes"}, %{"name" => "schedules.changes"}]
+  @data ["runs.changes", "schedules.changes"]
+  @feeds ["btc"]
 
   setup do
     Arca.Cache.init()
@@ -88,8 +89,8 @@ defmodule Aqua.CanvasWriteTest do
     # The card binds the call as the model made it, and names its streams.
     assert %{"tool" => "canvas", "action" => "write", "args" => args} = intent["proposal"]
 
-    assert {args["name"], args["template"], args["files"], args["streams"]} ==
-             {@canvas, "vanilla", @files, @streams}
+    assert {args["name"], args["template"], args["files"], args["data"], args["feeds"]} ==
+             {@canvas, "vanilla", @files, @data, @feeds}
 
     html = card_html(intent, approval)
 
@@ -100,6 +101,7 @@ defmodule Aqua.CanvasWriteTest do
 
     assert named =~ "runs.changes"
     assert named =~ "schedules.changes"
+    assert named =~ "feed.results (btc)"
 
     # The card offers this call's approval and no standing answer, and one
     # that would stand is refused while the card waits.
@@ -133,9 +135,8 @@ defmodule Aqua.CanvasWriteTest do
     assert files == @files
 
     assert %{
-             "frame" => %{"placement" => "canvas"},
              "entry" => "index.html",
-             "streams" => @streams
+             "desktop" => %{"data" => @data, "feeds" => @feeds}
            } =
              Jason.decode!(manifest)["tincture"]
 
@@ -253,7 +254,8 @@ defmodule Aqua.CanvasWriteTest do
       "name" => @canvas,
       "template" => "vanilla",
       "files" => @files,
-      "streams" => @streams
+      "data" => @data,
+      "feeds" => @feeds
     }
 
     start_supervised!(

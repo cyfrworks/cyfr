@@ -5162,10 +5162,11 @@ defmodule PrismWeb.SystemLayerTest do
     defp offer(view, offer),
       do: element(view, ~s(#system-layer-notice button[phx-value-offer="#{offer}"]))
 
-    # Markets installed at `versions`, each reading the streams `streams`
-    # names for it (none unless named), granted as the person would grant
-    # its newest, its versions document `fields`.
-    defp markets!(ctx, versions, fields, streams \\ %{}) do
+    # Markets installed at `versions`, each with the desktop block
+    # `desktops` names for it (one that reads nothing unless named),
+    # granted as the person would grant its newest, its versions document
+    # `fields`.
+    defp markets!(ctx, versions, fields, desktops \\ %{}) do
       for version <- versions do
         unit =
           Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "markets", version,
@@ -5174,9 +5175,8 @@ defmodule PrismWeb.SystemLayerTest do
               "name" => "markets",
               "version" => version,
               "tincture" => %{
-                "frame" => %{"placement" => "canvas"},
                 "entry" => "index.html",
-                "streams" => Map.get(streams, version, [])
+                "desktop" => Map.get(desktops, version, %{})
               }
             },
             files: [{"index.html", "<html><head></head><body>markets #{version}</body></html>"}]
@@ -5376,7 +5376,7 @@ defmodule PrismWeb.SystemLayerTest do
     test "a kept version whose streams differ from the newest's asks for its own grant, and once it is confirmed the restore passes",
          %{view: view, ctx: ctx} do
       markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"}, %{
-        "1.0.1" => [%{"name" => "runs.changes"}]
+        "1.0.1" => %{"data" => ["runs.changes"]}
       })
 
       # The grant names the newest, 1.0.1; the kept 1.0.0 reads another

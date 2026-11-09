@@ -51,7 +51,7 @@ defmodule Sanctum.Gate.BulkContentRefusalLogTest do
       "name" => "INVALID",
       "template" => "vanilla",
       "files" => %{"index.html" => page, "app.js" => script},
-      "streams" => []
+      "data" => []
     }
 
     # The declaration accepts this call. The handler refuses its component

@@ -752,7 +752,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.3.0" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.4.0" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -835,7 +835,7 @@ async function swipe(page, viewport, direction) {
 // on ready), then activated, then opened live at its working version.
 async function stepWrittenCanvas(page, name) {
   const canvas = "written";
-  const written = await ask({ op: "write", canvas, kind: "written", streams: [] });
+  const written = await ask({ op: "write", canvas, kind: "written", desktop: {} });
   if (!OK(written)) throw new Error(`canvas.write refused the canvas: ${JSON.stringify(written)}`);
   const before = await versions(canvas);
   await publish(page, layout([{ id: canvas, tincture: `tincture:local.${canvas}` }]));
@@ -1299,7 +1299,7 @@ async function stepValidationFailures(page, name) {
 
   const outcomes = {};
   for (const [id, kind, feed, outcome] of [["brk1", "broken-quiet", "broken-quiet", "not_ready"], ["brk2", "broken-die", "broken-die", "died"]]) {
-    const written = await ask({ op: "write", canvas: "canvas-broken", kind, streams: [{ name: "feed.results", subject: feed }] });
+    const written = await ask({ op: "write", canvas: "canvas-broken", kind, desktop: { feeds: [feed] } });
     if (!OK(written)) throw new Error(`canvas.write refused canvas-broken: ${JSON.stringify(written)}`);
     await publish(page, layout([{ id, tincture: "tincture:local.canvas-broken" }], { without: ["broken"] }));
     const from = (await instrument(page)).receipts.length;
@@ -1345,7 +1345,7 @@ async function stepValidationFailures(page, name) {
 // once it is confirmed the kept version is restored, the line goes, and the
 // kept version opens.
 async function stepCrashFallback(page, name, viewport) {
-  const written = await ask({ op: "write", canvas: "canvas-broken", kind: "broken-crash", streams: [{ name: "feed.results", subject: "broken-crash" }] });
+  const written = await ask({ op: "write", canvas: "canvas-broken", kind: "broken-crash", desktop: { feeds: ["broken-crash"] } });
   if (!OK(written)) throw new Error(`canvas.write refused canvas-broken: ${JSON.stringify(written)}`);
   const before = await versions("canvas-broken");
   const desk = viewport.posture === "desk";
@@ -2006,7 +2006,7 @@ async function measurement(page) {
     await showCanvas(page, "start");
   }
   for (let i = 1; i <= SAMPLES; i++) {
-    const written = await ask({ op: "write", canvas: "measure", kind: "measure", streams: [] });
+    const written = await ask({ op: "write", canvas: "measure", kind: "measure", desktop: {} });
     if (!OK(written)) throw new Error(`canvas.write refused measure: ${JSON.stringify(written)}`);
     await publish(page, measureLayout(`val${i}`));
     const s = await sampleValidation(page, `val${i}`);

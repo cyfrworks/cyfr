@@ -683,6 +683,45 @@ defmodule Sanctum.Gate.CatalogTest do
       end)
     end
 
+    # A loop's worker waits on the call and so claims it. The loop's death
+    # stops the worker (`Aqua.Loop.Worker`), and the handler stops with it:
+    # nothing of the call stays registered.
+    test "a handler stops when its waiter dies with the loop that owns it" do
+      with_blocking_tool(fn ->
+        n = System.unique_integer([:positive])
+        ctx = %{Sanctum.TestContext.local() | request_id: "req_owner_#{n}"}
+        handle = {:catalog_test, n}
+        test = self()
+
+        loop =
+          spawn(fn ->
+            Aqua.Loop.Worker.async(fn ->
+              send(test, {:waiter, self()})
+
+              Sanctum.Gate.call_external(@blocking_tool, ctx, %{"action" => "block"},
+                runner: :supervised,
+                cancel_handle: handle
+              )
+            end)
+
+            Process.sleep(:infinity)
+          end)
+
+        assert_receive {:waiter, waiter}, 5_000
+        assert_receive {:handler_running, handler}, 5_000
+        waiter_ref = monitor!(waiter)
+        handler_ref = monitor!(handler)
+
+        Process.exit(loop, :kill)
+
+        assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, _}, 5_000
+        assert_receive {:DOWN, ^handler_ref, :process, ^handler, :cancelled}, 5_000
+        :sys.get_state(Sanctum.RunningTasks)
+        assert [] = :ets.lookup(Sanctum.RunningTasks.Handles, handle)
+        assert [] = :ets.lookup(Sanctum.RunningTasks, ctx.request_id)
+      end)
+    end
+
     test "the entry is cleaned up when the work finishes on its own" do
       ctx = %{Sanctum.TestContext.local() | request_id: "req_finished"}
 
@@ -1253,5 +1292,17 @@ defmodule Sanctum.Gate.CatalogTest do
       assert_received {^lost, %{stage: :append, kind: :unavailable}}
       assert_received {^lost, %{stage: :finish, kind: :unavailable}}
     end
+  end
+
+  # A monitor request is a signal: `Process.monitor/1` returns before the
+  # process has taken it, and an exit sent on another path (the registry
+  # stopping a task whose claimer died) can reach it first, leaving the
+  # monitor to answer `:noproc`. The process's answer to `Process.info/2`
+  # comes after the monitor has landed.
+  defp monitor!(pid) do
+    ref = Process.monitor(pid)
+    assert {:monitored_by, by} = Process.info(pid, :monitored_by)
+    assert self() in by
+    ref
   end
 end
