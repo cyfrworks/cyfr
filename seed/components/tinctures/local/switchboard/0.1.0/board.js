@@ -33,11 +33,11 @@
     try { return new Intl.RelativeTimeFormat(state.appearance.locale, { numeric: 'auto' }).format(days, 'day'); } catch (_) { return days > 0 ? 'tomorrow' : 'yesterday'; }
   }
   // When something was or will be, as briefly as the board can say it.
-  function rel(iso, absent = '—') {
+  function rel(iso, absent = '—', brief = false) {
     const d = parse(iso); if (!d) return absent;
     const diff = dayNumber(d) - dayNumber(new Date());
     if (diff === 0) return hm(d);
-    if (diff === 1) return `${relWord(diff)} ${hm(d)}`;
+    if (diff === 1 && !brief) return `${relWord(diff)} ${hm(d)}`;
     if (Math.abs(diff) < 7) return `${weekday(d)} ${hm(d)}`;
     return intl({ day: 'numeric', month: 'short' }).format(d);
   }
@@ -45,7 +45,7 @@
 
   /* ---------- words ---------- */
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-  const KIND = { approval: 'Approval', confirmation: 'Confirmation', failed_run: 'Failed run', failed_schedule: 'Schedule failed', file_offer: 'File offer' };
+  const KIND = { approval: 'Approval', confirmation: 'Confirmation', failed_run: 'Failed run', failed_schedule: 'Fire failed', file_offer: 'File offer' };
   // A few words for a failure, by its cause: the board's own, since the
   // readable sentence each cause has in the stream's shape reaches the
   // catalog and not the page.
@@ -198,13 +198,13 @@
         targets: ['app', 'settings', 'aqua'], primary: 'app', page: 'components',
       });
     }
-    // The components a line stands for, the ones calling first, then the
-    // ones that ran most recently.
+    // The components a line stands for, by name, the ones calling first: a
+    // jack keeps its place while runs come and go, and moves only when its
+    // call starts or clears.
     const lastRun = new Map();
-    state.runs.forEach((r, i) => { const ref = componentRef(r.reference); if (!lastRun.has(ref)) lastRun.set(ref, { run: r, i }); });
-    const rank = (c) => (onComp.has(c.ref) ? -1e6 : 0) + (lastRun.has(c.ref) ? lastRun.get(c.ref).i : 1e3);
+    state.runs.forEach((r) => { const ref = componentRef(r.reference); if (!lastRun.has(ref)) lastRun.set(ref, { run: r }); });
     const lines = [...comps.values()].filter((c) => c.type !== 'tincture' && c.type !== 'agent')
-      .sort((a, b) => rank(a) - rank(b) || text(a.name).localeCompare(text(b.name)));
+      .sort((a, b) => (onComp.has(b.ref) ? 1 : 0) - (onComp.has(a.ref) ? 1 : 0) || text(a.name).localeCompare(text(b.name)));
     for (const c of lines) {
       const call = onComp.get(c.ref) || null;
       const last = lastRun.get(c.ref);
@@ -248,7 +248,12 @@
         el.setAttribute('aria-label', `${l.name}, ${l.call ? `${KIND[l.call.kind] || 'call'} waiting since ${rel(l.call.since)}` : l.meta.filter(Boolean).join(', ')}. Lift the cord`);
         lineIndex.set(l.id, l);
       });
-      box.style.setProperty('--n', Math.max(1, Math.min(6, items.length)));
+      // Short screens give each line more room: four to a row there.
+      const most = innerHeight <= 640 && innerWidth < 1200 ? 4 : 6;
+      const n = Math.max(1, Math.min(most, items.length));
+      box.style.setProperty('--n', n);
+      // A strip's share of the field follows how many rows of lines it holds.
+      box.closest('.strip').style.setProperty('--rows', Math.min(2, Math.max(1, Math.ceil(items.length / n))));
     }
     // A cord whose call cleared comes out, and its lamp cools.
     for (const [callId, rope] of patches) {
@@ -335,7 +340,7 @@
     const refusal = state.refusals['feed:weather'];
     const r = f && f.result;
     $('.weather h2').textContent = (f && text(f.label)) || PARTS.weather.title;
-    $('.weather .mod-sub').textContent = f && parse(f.at) ? rel(f.at) : '';
+    $('.weather .mod-sub').textContent = f && parse(f.at) ? rel(f.at) : state.readAt['feed:weather'] ? `as of ${hm(state.readAt['feed:weather'])}` : '';
     const now = $('.wx-now'), hours = $('.wx-hours'), trunks = $('.trunk-row'), keys = $('.wx-keys');
     if (!f) {
       now.innerHTML = '<b class="wx-t wx-none">- -</b><span class="wx-line">no signal</span>';
@@ -418,7 +423,7 @@
       $('.sch-err', el).textContent = `${errors} error${errors === 1 ? '' : 's'}`;
       $('.sch-err', el).classList.toggle('bad', errors > 0);
       const next = parse(s.next_run_at);
-      $('.sch-next', el).textContent = active && next ? rel(s.next_run_at) : 'held';
+      $('.sch-next', el).textContent = active && next ? rel(s.next_run_at, '—', true) : 'held';
       $('.sch-next', el).title = active ? 'Next run' : `Last run ${rel(s.last_run_at, 'never')}`;
     });
   }
@@ -459,7 +464,9 @@
   function renderVault() {
     const list = window.SB.vault().sort((a, b) => text(a.name).localeCompare(text(b.name)));
     const refusal = state.refusals['vault.changes'];
-    $('.vault .mod-sub').textContent = refusal || (list.length ? String(list.length) : '');
+    const at = state.readAt['vault.changes'];
+    $('.vault .mod-sub').textContent = refusal || (at ? hm(at) : '');
+    $('.vault .mod-sub').title = at ? `As of ${hm(at)}` : '';
     $('.vault-annun').innerHTML = list.map((v) => {
       const fine = v.status === 'fine';
       const say = fine ? 'Fine' : 'Re-authorise';
@@ -468,7 +475,9 @@
   }
   function renderCrew() {
     const jobs = window.SB.activity().sort((a, b) => text(a.since).localeCompare(text(b.since)));
-    $('.crew .mod-sub').textContent = state.refusals['activity.changes'] || (jobs.length ? `${jobs.length} at work` : '');
+    const at = state.readAt['activity.changes'];
+    $('.crew .mod-sub').textContent = state.refusals['activity.changes'] || (jobs.length ? `${jobs.length} at work` : at ? hm(at) : '');
+    $('.crew .mod-sub').title = at ? `As of ${hm(at)}` : '';
     $('.jobs').innerHTML = jobs.slice(0, 3).map((j) => `<div class="job" data-lamp="white"><span class="lamp"></span><span class="job-who">${esc(text(j.member))}</span><span class="job-since">for ${esc(text(j.asked_by))} · ${esc(rel(j.since))}</span><span class="job-t">${esc(text(j.status).replace(/_/g, ' '))}</span></div>`).join('')
       || '<p class="job-none">No crew job running</p>';
   }
@@ -562,6 +571,7 @@
       const f = state.feeds.weather;
       wxWaiting = f.revision;
       sdk.press(f.binding, feedKey.dataset.feedkey);
+      window.SB.readSoon('feed:weather');
       tell(`${feedKey.textContent} pressed`);
       renderWeather();
       return;
@@ -635,7 +645,7 @@
       skeleton();
       root.addEventListener('click', onClick);
       addEventListener('keydown', (e) => { if (e.key === 'Escape') drop(); });
-      addEventListener('resize', () => { applyPosture(); fitCovered(); window.Cords.fit(); });
+      addEventListener('resize', () => { applyPosture(); fitCovered(); renderLines(); window.Cords.fit(); });
       document.addEventListener('visibilitychange', applyLive);
       document.fonts && document.fonts.ready.then(() => window.Cords.fit());
       render(new Set(['all']));

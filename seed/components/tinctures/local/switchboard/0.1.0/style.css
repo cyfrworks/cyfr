@@ -517,7 +517,7 @@ html[data-compact='on'] {
 /* A short screen (the carried one, 1024 by 600 less the shell's bars): each
    line puts its tape beside its jack and lamp, one row shorter. */
 @media (max-height: 640px) {
-  :root { --pad: 10px; --gap: 6px; }
+  :root { --pad: 10px; --gap: 6px; --jack: 25px; --lamp: 14px; --shelf-h: clamp(160px, 36vh, 236px); }
   .hdr { height: 34px; }
   .clock-hm { font-size: 21px; } .clock { font-size: 15px; }
   .readout { font-size: 14px; }
@@ -526,6 +526,10 @@ html[data-compact='on'] {
   .line .meta { grid-row: 1; grid-column: 3; flex-direction: column; gap: 2px; align-items: flex-start; }
   .cells { padding: 3px 8px 3px 4px; }
   .strip-tag { font-size: 10px; }
+  .position { gap: 2px; padding: 4px; }
+  .pos { gap: 3px; }
+  .jack.lg { width: 32px; height: 32px; }
+  .pos-name { font-size: 9.5px; }
 }
 .wx-cap { margin: 0; font: 600 11px/1 var(--f-label); color: var(--ink-2); text-transform: lowercase; }
 .wx-hours span:empty { display: none; }
@@ -535,3 +539,10 @@ html[data-compact='on'] {
 @media (min-width: 1280px) and (min-height: 760px) {
   .line { padding: 6px 8px 5px; row-gap: 6px; }
 }
+
+/* Each strip as tall as its lines, sharing what is left; a long one scrolls. */
+.strip { flex: var(--rows, 1) 1 0; }
+/* In the hand, the position bar leaves the shell's own AQUA key its corner. */
+html[data-compact='on'] .position { right: 84px; }
+/* Every strip shows at least one whole row of lines. */
+.strip { min-height: calc(var(--jack) + 34px); }

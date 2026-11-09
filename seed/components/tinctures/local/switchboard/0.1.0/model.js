@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  // The streams the page opens, each named in the manifest's `data`.
+  // The streams the page reads, each named in the manifest's `data`.
   const STREAMS = [
     'attention.changes',
     'threads.changes',
@@ -45,6 +45,8 @@
     feeds: Object.fromEntries(FEEDS.map((name) => [name, null])),
     // A stream refused at its first open, and the sentence it was refused with.
     refusals: {},
+    // When each stream read now and then was last read.
+    readAt: {},
   };
 
   const listeners = new Set();
@@ -248,9 +250,67 @@
     if (f) f.again();
   }
 
-  // Hears the shell, opens every stream, and calls `ready()` once each
-  // stream's first open has its answer: opened, refused, or unanswered and
-  // to be tried again.
+  // Streams the page keeps open, and streams it reads now and then. A
+  // browser keeps six connections to one host over HTTP/1.1 and each open
+  // stream holds one, and the server holds a frame to eight open streams,
+  // counting a closed one until its next keep-alive write finds it gone
+  // (up to about half a minute). So the page keeps five open, the ones the
+  // lamps, the lines and the levers move with, and reads the other three
+  // one at a time, each opened, its current state taken and closed: all
+  // three at the start, then one a minute.
+  const KEPT = ['attention.changes', 'threads.changes', 'components.changes', 'runs.changes', 'schedules.changes'];
+  const TURNS = [['vault.changes', null], ['activity.changes', null], ['feed.results', 'weather']];
+  const QUIET_MS = 800;      // a read's current state has come once it is this quiet,
+  const READ_MS = 4000;      // or once the read has run this long
+  const FIRST_GAP_MS = 2000; // the pause between the first reads
+  const GAP_MS = 60000;      // and between every later one
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let soon = null;
+
+  async function turns(sdk) {
+    const opens = new Map();
+    const refusedOnce = new Set();
+    let round = 0;
+    for (;;) {
+      for (const [name, subject] of TURNS) {
+        const key = subject ? `feed:${subject}` : name;
+        if (refusedOnce.has(key)) continue;
+        const n = (opens.get(key) || 0) + 1;
+        opens.set(key, n);
+        let last = Date.now();
+        try {
+          const stream = await sdk.stream(name, subject, ({ data }) => {
+            if (!isItem(data)) return;
+            last = Date.now();
+            if (subject) foldFeed(subject, data); else fold(name, data, n);
+          });
+          const began = Date.now();
+          last = began;
+          while (Date.now() - began < READ_MS && Date.now() - last < QUIET_MS) await sleep(200);
+          stream.close();
+          if (!subject) opened(name, n);
+          delete state.refusals[key];
+          state.readAt[key] = new Date();
+          changed(subject ? 'feeds' : SWEPT[name]);
+        } catch (error) {
+          // A refusal stands until something changes; no answer, or too
+          // many open at once, is tried again on the next turn.
+          const again = error && (error.code === 'unavailable' || error.code === 'rate_limited');
+          if (!again) { refusedOnce.add(key); refused(key, error); }
+        }
+        // A read the person asked for (a feed's key pressed) comes sooner.
+        const until = Date.now() + (round === 0 ? FIRST_GAP_MS : GAP_MS);
+        while (Date.now() < until && !soon) await sleep(500);
+        if (soon) { const k = soon; soon = null; const i = TURNS.findIndex(([n, sub]) => (sub ? `feed:${sub}` : n) === k); if (i >= 0) TURNS.push(...TURNS.splice(0, i)); break; }
+      }
+      round += 1;
+    }
+  }
+
+  // Hears the shell, opens the kept streams, starts the turns, and calls
+  // `ready()` once each kept stream's first open has its answer (opened,
+  // refused, or unanswered and to be tried again), or after a few seconds,
+  // whichever is first: the board is drawn by then either way.
   function start(sdk, onReady) {
     sdk.on('installed', onInstalled);
     sdk.on('covered', onCovered);
@@ -259,19 +319,19 @@
     sdk.on('desktop', onDesktop);
     if (sdk.desktop) onDesktop(sdk.desktop);
 
-    for (const name of STREAMS) {
+    for (const name of KEPT) {
       followers.set(name, follow(sdk, name, null,
         (item, open) => fold(name, item, open),
-        (open) => opened(name, open),
+        // A reopen's refresh arrives after the open: what an earlier open
+        // delivered and this one did not is dropped once it has.
+        (open) => setTimeout(() => opened(name, open), 2500),
         (error) => refused(name, error)));
     }
-    for (const feed of FEEDS) {
-      followers.set(`feed:${feed}`, follow(sdk, 'feed.results', feed,
-        (item) => foldFeed(feed, item),
-        () => {},
-        (error) => refused(`feed:${feed}`, error)));
-    }
-    Promise.allSettled([...followers.values()].map((f) => f.first)).then(onReady);
+    let told = false;
+    const tell = () => { if (!told) { told = true; onReady(); } };
+    Promise.allSettled([...followers.values()].map((f) => f.first)).then(tell);
+    setTimeout(tell, 4000);
+    turns(sdk);
   }
 
   /* ---------- reading the state ---------- */
@@ -310,6 +370,9 @@
     state, STREAMS, FEEDS, PAUSE, RESUME,
     start,
     subscribe(fn) { listeners.add(fn); },
+    // Reads a stream that is read now and then at its next chance, a few
+    // seconds from now: `feed:<name>` or a stream's name.
+    readSoon(key) { soon = key; },
     attention: () => values(state.attention),
     threads: () => values(state.threads),
     schedules: () => values(state.schedules),
