@@ -69,27 +69,33 @@ const TOLD = TOLD_VERBS
  * a validation frame only `ready` and `failed`. A canvas's `ready` and
  * `failed` are forwarded whatever its shown state, needing no input.
  *
- * A person's verb is forwarded once per input of the person's in the
- * frame, never from a script on its own. The bridge sees no input made
- * inside a frame; it sees the frame take focus, and every input the
- * shell's own page hears. So an input in the frame is the frame taking
- * focus while the shell document holds transient user activation (which
- * only the person's input gives it) and either the pointer is over the
- * frame or the person moved focus into it with the Tab key; that arms
- * the frame for one verb. The verb is forwarded only while the frame is
- * armed, is the document's active element, and is shown, live and not
- * inert, and it carries the input's ordinal (`input`), by which the view
- * honours one verb per input too. Forwarding one disarms the frame and
- * takes focus off it, so the person's next press in it is a new input.
- * Any input the shell's own page hears (a pointer press, a key) disarms
- * every frame, as does focus leaving it: a click in the chrome followed by
- * the frame focusing itself arms nothing, since the pointer is not over
- * it. A person's verb dropped for want of input is counted, and a press
- * of a control or a write of the preferences is answered `cancelled`
- * over the port. What stays open: a frame that focuses itself again while
- * the pointer rests on it, within the activation the person's last input
- * gave, is armed again; and a person working by keyboard moves focus back
- * into the frame with Tab after each verb.
+ * A person's verb is forwarded once per input of the person's, never from
+ * a script on its own. The bridge sees no input made inside a frame, and in
+ * a browser that runs a frame in a process of its own it sees neither the
+ * pointer entering it nor a click in it: only the shell document's
+ * transient user activation, which an input anywhere on the page gives it
+ * for a few seconds (`ACTIVATION_LIFESPAN_MS`), and every input the
+ * shell's own page hears (a press, a touch, a key). So an input of the
+ * person's carries a verb only while the shell document holds activation
+ * that nothing has spent: an input the shell's page heard spends
+ * it, as does each verb the bridge forwards. A verb sent while the
+ * activation is unspent is forwarded at once; one sent within the
+ * activation's lifespan of a spend is held until that spent activation
+ * would have lapsed, and forwarded then only if the document still holds
+ * activation, which only a newer input can have given it, and is
+ * dropped as soon as the activation lapses or the shell's page hears an
+ * input. Either way the frame must be the document's active element and
+ * shown, live and not inert when it goes, and the verb carries the
+ * ordinal of the input it came with (`input`), by which the view honours
+ * one verb per input too. One verb is held at a time; another sent
+ * meanwhile is dropped. A person's verb dropped is counted, and a press of
+ * a control or a write of the preferences is answered `cancelled` over the
+ * port. So a press in the chrome followed by the frame focusing itself
+ * passes nothing, and two verbs from one input pass one; a person's
+ * press in the frame right after a press in the chrome, or right after
+ * the frame's last verb, waits out the rest of that activation before it
+ * goes. What stays open: an input in another frame followed by this frame
+ * taking focus within that input's activation counts as this frame's.
  *
  * A later load (a reload, or the frame navigating itself) gets no second
  * handshake: the port is closed and the frame is spent until the person
@@ -147,13 +153,13 @@ const IframeBridge = {
     this._onBearer = (event) => this._replace(event.detail && event.detail.credential)
     this.el.addEventListener(FRAME_BEARER_EVENT, this._onBearer)
 
-    // The person's input: the ordinal of the last one that armed the
-    // frame, whether it is unspent, where the pointer is, and a Tab whose
-    // focus has not landed yet.
+    // The person's input: the ordinal of the last verb forwarded, when
+    // the activation last was spent and whether it has lapsed since, and
+    // the one verb held until it proves an input of its own.
+    this.lifespan = ACTIVATION_LIFESPAN_MS
     this._input = 0
-    this._armed = false
-    this._inside = false
-    this._tabbed = false
+    this._spentAt = -Infinity
+    this._held = null
     // The preferences the frame holds as the shell last told it, for a
     // write the bridge answers itself.
     this._prefs = null
@@ -162,48 +168,17 @@ const IframeBridge = {
 
   _listen() {
     const win = typeof window === "undefined" ? null : window
-    this._onPointerEnter = () => (this._inside = true)
-    this._onPointerLeave = () => (this._inside = false)
-    this._onFocus = () => this._focused()
-    this._onBlur = () => (this._armed = false)
-    this.el.addEventListener("pointerenter", this._onPointerEnter)
-    this.el.addEventListener("pointerleave", this._onPointerLeave)
-    this.el.addEventListener("focus", this._onFocus)
-    this.el.addEventListener("blur", this._onBlur)
-
     if (!win || typeof win.addEventListener !== "function") return
-    this._onChromePointer = () => this._chromeInput(false)
-    this._onChromeKey = (event) => this._chromeInput(event && event.key === "Tab")
-    this._onFocusIn = (event) => this._focusMoved(event && event.target)
-    this._onWindowBlur = () => this._focusMoved(win.document && win.document.activeElement)
-    win.addEventListener("pointerdown", this._onChromePointer, true)
-    win.addEventListener("keydown", this._onChromeKey, true)
-    win.addEventListener("focusin", this._onFocusIn, true)
-    win.addEventListener("blur", this._onWindowBlur)
+    this._onChromeInput = () => this._spend()
+    for (const type of CHROME_INPUTS) win.addEventListener(type, this._onChromeInput, true)
   },
 
-  // An input the shell's own page heard: it is not the frame's.
-  _chromeInput(tab) {
-    this._armed = false
-    this._tabbed = tab
-  },
-
-  // Focus moved to `target` on the shell's page: into this frame, or
-  // elsewhere, where a Tab landed and is spent.
-  _focusMoved(target) {
-    if (target === this.el) this._focused()
-    else this._tabbed = false
-  },
-
-  // The frame took focus: an input of the person's in it when the
-  // document holds activation and the pointer is over the frame or a Tab
-  // moved focus into it.
-  _focused() {
-    const tabbed = this._tabbed
-    this._tabbed = false
-    if (this._armed || !activated() || !(this._inside || tabbed)) return
-    this._input += 1
-    this._armed = true
+  // The activation the document holds now is spent: by an input the
+  // shell's own page heard, which is not the frame's, or by a verb
+  // forwarded. A verb held is dropped with it.
+  _spend() {
+    this._spentAt = now()
+    this._release(false)
   },
 
   _replace(credential) {
@@ -331,11 +306,51 @@ const IframeBridge = {
       return
     }
 
-    // One input, one verb: the input is spent, and focus leaves the frame
-    // so the person's next press in it is an input of its own.
-    this._armed = false
+    if (now() - this._spentAt >= this.lifespan) {
+      this._forward(message)
+    } else if (this._held === null) {
+      this._hold(message)
+    } else {
+      this._drop()
+      this._cancelled(message)
+    }
+  },
+
+  // One input, one verb: forwarding spends the activation that carried it.
+  _forward(message) {
+    this._input += 1
+    this._spentAt = now()
     this.pushEvent("frame_verb", {frame: this._frameId, message, input: this._input})
-    if (typeof this.el.blur === "function") this.el.blur()
+  },
+
+  // Hold `message` until the activation spent at `_spentAt` would have
+  // lapsed: watched every few milliseconds, it goes the moment the
+  // activation lapses (no newer input) and goes on if the document still
+  // holds activation once the spent one is past its lifespan.
+  _hold(message) {
+    const due = this._spentAt + this.lifespan
+    const watch = () => {
+      if (this._held === null || this._held.message !== message) return
+      if (!activated()) return this._release(false)
+      if (now() >= due) return this._release(true)
+      this._held.timer = setTimeout(watch, HOLD_POLL_MS)
+    }
+    this._held = {message, timer: setTimeout(watch, HOLD_POLL_MS)}
+  },
+
+  // The held verb goes when an input of its own is proven and the frame
+  // may still act for the person, and is dropped otherwise.
+  _release(proven) {
+    const held = this._held
+    if (held === null) return
+    clearTimeout(held.timer)
+    this._held = null
+    if (proven && this._forwards(held.message.verb)) {
+      this._forward(held.message)
+    } else {
+      this._drop()
+      this._cancelled(held.message)
+    }
   },
 
   // Whether a verb this frame posted reaches the view, which it can only
@@ -360,11 +375,12 @@ const IframeBridge = {
     return wrapper !== null && wrapper.dataset.canvasShown === "true" && el.closest("[inert]") === null
   },
 
-  // An input of the person's in the frame is unspent: the frame is armed,
-  // the shell document still holds the activation it gave, and the frame
-  // is its active element. Reading the activation consumes nothing.
+  // The person gave input: the shell document holds transient user
+  // activation, which no script can give it, and the frame is its active
+  // element. Whether that activation is the frame's own is `_receive`'s.
+  // Reading the activation consumes nothing.
   _personActed() {
-    if (!this._armed || !activated()) return false
+    if (!activated()) return false
     const doc = typeof window === "undefined" ? null : window.document
     return Boolean(doc) && doc.activeElement === this.el
   },
@@ -390,15 +406,10 @@ const IframeBridge = {
   destroyed() {
     const win = typeof window === "undefined" ? null : window
     if (this._canvas && win && typeof win.removeEventListener === "function") {
-      win.removeEventListener("pointerdown", this._onChromePointer, true)
-      win.removeEventListener("keydown", this._onChromeKey, true)
-      win.removeEventListener("focusin", this._onFocusIn, true)
-      win.removeEventListener("blur", this._onWindowBlur)
+      for (const type of CHROME_INPUTS) win.removeEventListener(type, this._onChromeInput, true)
     }
-    this.el.removeEventListener("pointerenter", this._onPointerEnter)
-    this.el.removeEventListener("pointerleave", this._onPointerLeave)
-    this.el.removeEventListener("focus", this._onFocus)
-    this.el.removeEventListener("blur", this._onBlur)
+    if (this._held) clearTimeout(this._held.timer)
+    this._held = null
     this.el.removeEventListener("load", this._onLoad)
     this.el.removeEventListener(FRAME_STATE_EVENT, this._onState)
     this.el.removeEventListener(CREDENTIAL_CLOSED_EVENT, this._onCredentialClosed)
@@ -407,6 +418,20 @@ const IframeBridge = {
     this._closePort()
   }
 }
+
+// How long one input's transient user activation lasts: five seconds in
+// Chromium and Firefox. A browser whose activation lapses sooner only
+// makes a held verb's wait end sooner.
+const ACTIVATION_LIFESPAN_MS = 5000 + 150
+
+// The shell page's own inputs that give it activation: a press, a touch's
+// end, a key. Each spends the activation it gives.
+const CHROME_INPUTS = Object.freeze(["pointerdown", "pointerup", "touchend", "keydown"])
+
+// How often a held verb looks at the activation.
+const HOLD_POLL_MS = 50
+
+const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now())
 
 // Whether the shell document holds transient user activation, which only
 // the person's input gives it. Where the browser has no activation API,
