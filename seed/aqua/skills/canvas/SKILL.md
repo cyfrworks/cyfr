@@ -97,11 +97,15 @@ working, which is kept, and which validation last failed.
 
 - `cyfr.stream(name, subject, onEvent)` opens a declared stream
   (`subject` is `null` for one that takes none) and resolves once it is
-  open; `onEvent` gets `{id, event, data}`. A refused open rejects:
-  catch it, since an error the page does not catch fails the canvas. An
-  open that got no answer (the server unreachable or erring) rejects
-  with `code` `unavailable` and may open if tried again later; any other
-  rejection is final, its `message` the sentence to show.
+  open with a handle whose `close()` ends it; `onEvent` gets
+  `{id, event, data}`. Every stream rides the page's one connection, so
+  open every stream the page shows at once, up to 32. The returned
+  promise has the same `close()`, which cancels an open still waiting.
+  A refused open rejects: catch it, since an error the page does not
+  catch fails the canvas. An open that got no answer (the server
+  unreachable or erring) rejects with `code` `unavailable` and may open
+  if tried again later; any other rejection is final, its `message` the
+  sentence to show.
 - `cyfr.on(event, handler)` hears `installed` (`[{ref, name, icon,
   open}]`, the person's installed apps, each with its emoji or null and
   whether it is open over the canvas), `posture` (`hand` or `desk`), `covered` (the

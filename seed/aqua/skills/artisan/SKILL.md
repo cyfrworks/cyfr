@@ -81,7 +81,7 @@ Every library is bundled; nothing is imported from a remote URL.
 |---|---|
 | `cyfr.action(name, args)` | `POST /_f/v1/action` |
 | `cyfr.invoke(ref, operation, args)` | `POST /_f/v1/invoke` |
-| `cyfr.stream(name, subject, onEvent)` | `POST /_f/v1/stream` |
+| `cyfr.stream(name, subject, onEvent)` | the stream connection, `GET /_f/v1/socket` |
 | `cyfr.open(ref, subject)` | the shell's port, `open` |
 | `cyfr.close()` | the shell's port, `close` |
 | `cyfr.title(title)` | the shell's port, `title` |
@@ -104,20 +104,20 @@ A canvas's own calls, and what `installed` tells it of each tincture:
 
 - `cyfr.invoke(ref, operation, args)` runs a component declared in `dependencies.static` with the input `{"operation": operation, "params": args}` and resolves with `{status, output, execution_id, duration_ms}`.
 - `cyfr.action(name, args)` runs a system action the declaration's `actions` lists.
-- `cyfr.stream(name, subject, onEvent)` opens a declared stream and resolves with a handle (`close()`, `closed`); `onEvent` gets `{id, event, data}`.
+- `cyfr.stream(name, subject, onEvent)` opens a declared stream over the frame's one stream connection and resolves with a handle (`close()`, `closed`); the returned promise's own `close()` cancels an open still waiting; `onEvent` gets `{id, event, data}`.
 - A frame never asks for a secret: `cyfr.credential(name)` has the shell prompt the person and store the value in the vault as `name`, for a tincture that declares `vault.create`, and resolves with `{saved}` alone.
 - A frame never raises itself: no verb places, sizes or raises a frame.
 - A refusal rejects with a `CyfrError` whose `code` is its class (`forbidden`, `rate_limited`, `consent_required`, `unauthenticated`, …).
 - A public tincture's page at its address calls the same SDK with no credential, under its public profile.
 
-The SDK talks only to these routes, with the frame's credential as a bearer:
+The SDK talks only to these routes, with the frame's credential as a bearer, and over its stream connection, the credential in each subscription:
 
 <!-- tincture:wire-routes -->
 | Request | Route |
 |---|---|
 | `action` | `POST /_f/v1/action` |
 | `invoke` | `POST /_f/v1/invoke` |
-| `stream_open` | `POST /_f/v1/stream` |
+| the stream connection | `GET /_f/v1/socket`, a WebSocket |
 <!-- /tincture:wire-routes -->
 
 ## The Declaration

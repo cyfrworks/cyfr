@@ -1841,13 +1841,14 @@ defmodule Cyfr.DocsDriftTest do
   @tincture_list_files ["tincture-guide.md", "seed/aqua/skills/artisan/SKILL.md"]
   @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk canvas)
 
-  # The SDK's call for each request kind, and the arguments of each shell
-  # verb: the JavaScript names of what the wire names.
+  # The SDK's call for each request kind and for the stream connection,
+  # and the arguments of each shell verb: the JavaScript names of what the
+  # wire names.
   @sdk_requests %{
     invoke: {"invoke", "ref, operation, args"},
-    action: {"action", "name, args"},
-    stream_open: {"stream", "name, subject, onEvent"}
+    action: {"action", "name, args"}
   }
+  @sdk_stream {"stream", "name, subject, onEvent"}
   @sdk_verb_args %{
     open: "ref, subject",
     title: "title",
@@ -1927,7 +1928,10 @@ defmodule Cyfr.DocsDriftTest do
       for kind <- Prima.TinctureWire.kinds(),
           do: "| `#{kind}` | `POST #{Prima.TinctureWire.route(kind)}` |"
 
-    ["| Request | Route |", "|---|---|" | rows]
+    connection =
+      "| the stream connection | `GET #{Prima.TinctureWire.socket_path()}`, a WebSocket |"
+
+    ["| Request | Route |", "|---|---|" | rows ++ [connection]]
   end
 
   defp tincture_list("sdk") do
@@ -1937,13 +1941,18 @@ defmodule Cyfr.DocsDriftTest do
         "| `cyfr.#{name}(#{args})` | `POST #{Prima.TinctureWire.route(kind)}` |"
       end
 
+    {name, args} = @sdk_stream
+
+    stream =
+      "| `cyfr.#{name}(#{args})` | the stream connection, `GET #{Prima.TinctureWire.socket_path()}` |"
+
     # Every frame's verbs; a canvas's own are the guide's canvas section's.
     verbs =
       for verb <- Prima.TinctureWire.verbs() -- Prima.TinctureWire.canvas_verbs(),
           do:
             "| `cyfr.#{verb}(#{Map.get(@sdk_verb_args, verb, "")})` | the shell's port, `#{verb}` |"
 
-    ["| Call | Carried by |", "|---|---|" | requests ++ verbs]
+    ["| Call | Carried by |", "|---|---|" | requests ++ [stream] ++ verbs]
   end
 
   # A canvas's own calls, and what `installed` carries of each tincture;
@@ -2005,6 +2014,7 @@ defmodule Cyfr.DocsDriftTest do
     # ready, never a call; `on` hears what the shell sends a canvas.
     wire =
       Enum.map(Prima.TinctureWire.kinds(), &elem(Map.fetch!(@sdk_requests, &1), 0)) ++
+        [elem(@sdk_stream, 0)] ++
         Enum.map(Prima.TinctureWire.verbs() -- [:failed], &Atom.to_string/1) ++ ["on"]
 
     assert methods == Enum.sort(wire),
