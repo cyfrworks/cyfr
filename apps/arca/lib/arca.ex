@@ -1072,7 +1072,12 @@ defmodule Arca do
         # discipline, `Prima.Caps.check_storage/2` the policy.
         with :ok <- check_cap(actor, path, kind, opts) do
           result = guarded(actor, path, fun)
-          Arca.Usage.account(actor, path, accounted(path, kind, opts), result)
+          accounted = accounted(path, kind, opts)
+          Arca.Usage.account(actor, path, accounted, result)
+
+          if accounted == :settled and result == :ok,
+            do: Arca.ObjectRevisions.announce(actor, path)
+
           result
         end
     end

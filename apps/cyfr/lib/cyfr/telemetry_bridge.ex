@@ -32,6 +32,12 @@ defmodule Cyfr.TelemetryBridge do
   live item is the one the stream's refresh lists, and one that stops is
   `removed` by its id.
 
+  The athanor's recent files and the offers waiting for its person
+  (`Cyfr.Bus.FileListed`) are told on its files topic the same way: a
+  path under `data/` that changed, or an offer that began or stopped
+  waiting, is read again through the stream's own derivation
+  (`Cyfr.Providers.Files`) when its message is delivered.
+
   The handlers run in the emitting process, and `:telemetry` detaches a
   handler that fails in any way for the life of the node. Every failure —
   a refused publish, a raising PubSub, an exit — is caught and logged
@@ -54,6 +60,7 @@ defmodule Cyfr.TelemetryBridge do
     Confirmation,
     Execution,
     FeedRun,
+    FileListed,
     FileOffer,
     FrameCredential,
     Notify,
@@ -387,7 +394,17 @@ defmodule Cyfr.TelemetryBridge do
       user_id <- told(kind, sender, recipient),
       do: {:global, Bus.file_offers(user_id), payload}
     ) ++
-      offer_attention(kind, offer_id, recipient)
+      offer_attention(kind, offer_id, recipient) ++ offer_files(kind, offer_id, recipient)
+  end
+
+  # A path under an athanor's data/ changed: what it names now, read when
+  # the message is delivered.
+  defp messages([:cyfr, :arca, :file, :changed], _measurements, %{
+         athanor_id: athanor_id,
+         path: "data/" <> _ = path
+       })
+       when is_binary(athanor_id) and athanor_id != "" do
+    [files(fn -> {:ok, athanor_id} end, &Cyfr.Providers.Files.file(&1, path))]
   end
 
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})
@@ -647,6 +664,21 @@ defmodule Cyfr.TelemetryBridge do
 
   defp offer_attention(_kind, _offer_id, _recipient), do: []
 
+  # The same wait among the recipient's files, in their own athanor.
+  defp offer_files(kind, offer_id, recipient) when kind == :offered or kind in @offer_ends do
+    where = fn -> Cyfr.Providers.Attention.own_athanor(recipient) end
+
+    if kind == :offered,
+      do: [files(where, &Cyfr.Providers.Files.offer(&1, recipient, offer_id))],
+      else: [files(where, fn _actor -> {:ok, [Cyfr.Providers.Files.removed(offer_id)]} end)]
+  end
+
+  defp offer_files(_kind, _offer_id, _recipient), do: []
+
+  # Read when delivered, the athanor first, so a read that fails costs
+  # this message alone.
+  defp files(where, read), do: {:files, where, read}
+
   # A confirmation is its announcement's item: the record is the identity
   # domain's, and the announcement carries what the item names.
   defp confirmation_attention(
@@ -729,6 +761,30 @@ defmodule Cyfr.TelemetryBridge do
         {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  defp deliver(event, {:files, where, read}) do
+    publish(event, fn ->
+      with {:ok, athanor_id} <- where.(),
+           actor = Prima.Actor.in_athanor(athanor_id),
+           {:ok, items} <- read.(actor) do
+        Enum.reduce_while(items, :ok, &list_file(actor, &1, &2))
+      else
+        # No athanor to tell: a recipient this server holds none for.
+        :none -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  # One item of an athanor's files, on its files topic.
+  defp list_file(actor, %{kind: kind} = item, :ok) do
+    payload = FileListed.new(actor, kind, Map.delete(item, :kind))
+
+    case Bus.broadcast(actor, Bus.files(actor), payload) do
+      :ok -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
   end
 
   # One person's attention message, on their own topic in the athanor the

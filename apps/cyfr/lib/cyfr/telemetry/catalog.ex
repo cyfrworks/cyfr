@@ -280,6 +280,11 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :arca, :file_offer, :expired] => %{consumers: [:audit, :bridge]},
     [:cyfr, :arca, :file_offer, :failed] => %{consumers: [:audit, :bridge]},
     [:cyfr, :arca, :file_offer, :landed] => %{consumers: [:audit, :bridge]},
+    # ——— a path under an athanor's data/ changed: after each committed
+    # settlement or delete (`Arca.ObjectRevisions.announce/2`), with the
+    # athanor and the path, never content. The bridge reads the file as it
+    # stands and carries it to `Cyfr.Bus.files/1` ———
+    [:cyfr, :arca, :file, :changed] => %{consumers: [:bridge]},
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:

@@ -73,7 +73,10 @@ config :sanctum,
     # `cyfr`: the platform settings, for the server's operators.
     Cyfr.Providers.Settings,
     # `cyfr`: what waits for a person, the stream a canvas reads; no tool.
-    Cyfr.Providers.Attention
+    Cyfr.Providers.Attention,
+    # `cyfr`: a person's recent files and the offers waiting for them, the
+    # stream a canvas reads; no tool (the files are `Arca.Providers.Files`').
+    Cyfr.Providers.Files
   ]
 
 # The proxies whose forwarded headers the proxy listener trusts

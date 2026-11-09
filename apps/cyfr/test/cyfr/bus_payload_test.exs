@@ -26,6 +26,7 @@ defmodule Cyfr.BusPayloadTest do
     ExecutionEvent,
     FeedPublished,
     FeedRun,
+    FileListed,
     FileOffer,
     FrameCredential,
     LayoutPublished,
@@ -131,6 +132,12 @@ defmodule Cyfr.BusPayloadTest do
         label: "reagent:local.x",
         since: ~U[2026-11-09 09:00:00Z],
         destination: %{kind: "page", page: "runs"}
+      ),
+      FileListed.new(@actor, :file,
+        id: "data/reports/q3.csv",
+        name: "q3.csv",
+        type: "text/csv",
+        changed_at: ~U[2026-11-09 09:00:00Z]
       ),
       ThreadListed.new(@actor, :own,
         id: "thr_payload",

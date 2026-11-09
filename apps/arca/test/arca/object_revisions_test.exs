@@ -714,4 +714,75 @@ defmodule Arca.ObjectRevisionsTest do
     assert {:ok, [["f"]]} = Arca.copy_tree(actor, ["data", "src"], ["data", "own"], sources: [])
     assert {:ok, "clean", []} = ObjectRevisions.read(actor, ["data", "own", "f"])
   end
+
+  # ---------------------------------------------------------------------------
+  # What a change announces, and the recent files
+  # ---------------------------------------------------------------------------
+
+  describe "a change's announcement" do
+    setup %{actor: actor} do
+      id = {Arca.Test.Announced, make_ref()}
+      on_exit(fn -> :telemetry.detach(id) end)
+      :ok = Arca.Test.Announced.attach(id, actor)
+    end
+
+    test "a settled write, a delete and a folder's delete each name their path once, after the commit",
+         %{actor: actor} do
+      :ok = Arca.put(actor, ["data", "a.txt"], "one", sources: [])
+      assert_received {:announced, "data/a.txt", false, true}
+
+      :ok = Arca.append(actor, ["data", "a.txt"], " two", sources: [])
+      assert_received {:announced, "data/a.txt", false, true}
+
+      :ok = Arca.delete(actor, ["data", "a.txt"])
+      assert_received {:announced, "data/a.txt", false, false}
+
+      :ok = Arca.put(actor, ["data", "dir", "b.txt"], "b", sources: [])
+      :ok = Arca.put(actor, ["data", "dir", "c.txt"], "c", sources: [])
+      assert_received {:announced, "data/dir/b.txt", false, true}
+      assert_received {:announced, "data/dir/c.txt", false, true}
+
+      :ok = Arca.delete_tree(actor, ["data", "dir"])
+      assert_received {:announced, "data/dir", false, false}
+      refute_received {:announced, _path, _in_transaction, _settled}
+    end
+
+    test "a refused write and a write outside data/ announce nothing", %{actor: actor} do
+      :ok = Arca.put(actor, ["data", "once.txt"], "first", sources: [])
+      assert_received {:announced, "data/once.txt", false, true}
+
+      assert {:error, :exists} = Arca.put_if_none_match(actor, ["data", "once.txt"], "again")
+      assert {:error, :not_found} = Arca.delete(actor, ["data", "never.txt"])
+      :ok = Arca.put(actor, ["threads", "thr_announce", "m.json"], "{}")
+
+      refute_received {:announced, _path, _in_transaction, _settled}
+    end
+  end
+
+  test "the recent files are the newest settled ones, each with its last change", %{actor: actor} do
+    for name <- ~w(old mid new gone) do
+      :ok = Arca.put(actor, ["data", "r", name], name, sources: [])
+    end
+
+    :ok = Arca.delete(actor, ["data", "r", "gone"])
+    t = ~U[2026-11-09 10:00:00.000000Z]
+
+    for {name, seconds} <- [{"old", 0}, {"mid", 60}, {"new", 120}] do
+      from(r in ObjectRevision,
+        where: r.athanor_id == ^actor.athanor_id and r.path == ^"data/r/#{name}"
+      )
+      |> Arca.Repo.update_all(set: [settled_at: DateTime.add(t, seconds)])
+    end
+
+    assert {:ok, [newest, next]} = ObjectRevisions.recent(actor, 2)
+    assert newest == %{path: "data/r/new", changed_at: DateTime.add(t, 120)}
+    assert next == %{path: "data/r/mid", changed_at: DateTime.add(t, 60)}
+
+    assert {:ok, listed} = ObjectRevisions.recent(actor, 10)
+    assert Enum.map(listed, & &1.path) == ~w(data/r/new data/r/mid data/r/old)
+
+    assert {:ok, ^t} = ObjectRevisions.changed_at(actor, ["data", "r", "old"])
+    assert {:error, :not_found} = ObjectRevisions.changed_at(actor, ["data", "r", "gone"])
+    assert {:error, :no_athanor} = ObjectRevisions.recent(%Prima.Actor{}, 1)
+  end
 end
