@@ -1,0 +1,24 @@
+@font-face {
+  font-family: "Road Pixel";
+  src: url("road-pixel.woff2") format("woff2");
+}
+:root {
+  --chrome-ground: #f4ecd6;
+  --chrome-surface: #fff8ec;
+  --chrome-ink: #1d1a17;
+  --chrome-accent: #1f7f79;
+  --chrome-ground-dark: #23324f;
+  --chrome-surface-dark: #2c3e60;
+  --chrome-ink-dark: #f4ecd6;
+  --chrome-accent-dark: #36c9c0;
+  --chrome-radius: 0px;
+  --chrome-border: 2px;
+  --chrome-edge: 8px;
+  --chrome-title-height: 34px;
+  --chrome-controls: right;
+  --chrome-title-align: left;
+  --chrome-glyphs: pixel;
+  --chrome-font: "Road Pixel";
+  --chrome-texture-title: url("azulejo.svg");
+  --chrome-texture-shelf: url("calcada.svg");
+}

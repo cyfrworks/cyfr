@@ -100,16 +100,21 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.5.0 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.6.0 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.5.0"
+    assert canvas.version == "0.6.0"
 
-    # The seed ships it beside the version before it, which stays as it
+    # The seed ships it beside the versions before it, which stay as they
     # shipped.
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)
-    assert dir |> Path.dirname() |> File.ls!() |> Enum.sort() == ["0.4.0", canvas.version]
+
+    assert dir |> Path.dirname() |> File.ls!() |> Enum.sort() == [
+             "0.4.0",
+             "0.5.0",
+             canvas.version
+           ]
 
     # The default layout's one canvas, with nothing placed over it.
     assert [%{id: "home", tincture: ref, postures: postures}] = Prima.Layout.default().canvases
@@ -144,8 +149,9 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
 
     # It pauses and resumes a schedule, picked from the schedules it reads,
-    # keeps each section's on and off in its preferences, and declares the
-    # current look in its chrome, read as publish reads it.
+    # runs a failed run again, picked from the runs, keeps each section's on
+    # and off in its preferences, and declares the current look in its
+    # chrome, read as publish reads it.
     pick = %Prima.Manifest.Tincture.Pick{
       stream: "schedules.changes",
       field: "/schedule_id",
@@ -154,8 +160,11 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert [
              %{id: "pause-schedule", operation: "schedule.pause", args: %{}, pick: ^pick},
-             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick}
+             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick},
+             %{id: "retry-run"}
            ] = declaration.desktop.controls
+
+    assert retries?(declaration)
 
     assert declaration.desktop.prefs == %{
              widgets: Map.new(~w(attention runs apps schedules), &{&1, %{}}),
@@ -213,10 +222,56 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert "dist/third-party-notices.json" in built
   end
 
-  test "the line desktop is 0.1.0 on the vanilla template, and the publish check accepts it" do
+  # A desktop's Retry: `execution.retry`, picked from the runs it reads at
+  # the run's id, as the guide spells it.
+  defp retries?(declaration) do
+    pick = %Prima.Manifest.Tincture.Pick{
+      stream: "runs.changes",
+      field: "/execution_id",
+      arg: "execution_id"
+    }
+
+    match?(
+      [%{id: "retry-run", label: "Retry", operation: "execution.retry", args: %{}, pick: ^pick}],
+      Enum.filter(declaration.desktop.controls, &(&1.operation == "execution.retry"))
+    )
+  end
+
+  # A shipped version is immutable: each desktop's earlier version (the
+  # five's 0.1.0, the canvas's 0.5.0) ships beside its new one as it
+  # shipped, still a desktop the publish check accepts, with no retry
+  # control.
+  test "each shipped desktop's earlier version still ships beside the new one and passes the publish check" do
+    components = Path.expand("../../../../seed/components", __DIR__)
+
+    for {name, before, now} <- [
+          {"canvas", "0.5.0", "0.6.0"},
+          {"line", "0.1.0", "0.2.0"},
+          {"night", "0.1.0", "0.2.0"},
+          {"road", "0.1.0", "0.2.0"},
+          {"street", "0.1.0", "0.2.0"},
+          {"switchboard", "0.1.0", "0.2.0"}
+        ] do
+      unit = SeedBundle.local_unit!("tinctures", name)
+      assert unit.version == now, name
+      dir = Path.join(components, "tinctures/local/#{name}/#{before}")
+      assert before in (dir |> Path.dirname() |> File.ls!()), name
+
+      manifest = dir |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()
+      assert manifest["version"] == before, name
+      assert Prima.Manifest.validate(manifest, fn _ -> true end) == :ok, name
+      assert {:ok, declaration} = Compendium.tincture_declaration(manifest)
+      assert Prima.Manifest.Tincture.canvas?(declaration), name
+      assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
+      refute Enum.any?(declaration.desktop.controls, &(&1.operation == "execution.retry")), name
+      assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
+    end
+  end
+
+  test "the line desktop is 0.2.0 on the vanilla template, and the publish check accepts it" do
     line = SeedBundle.local_unit!("tinctures", "line")
     assert line.ref == "tincture:local.line"
-    assert line.version == "0.1.0"
+    assert line.version == "0.2.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), line.rel)
 
     assert Prima.Manifest.validate(line.manifest, fn _ -> true end) == :ok
@@ -225,15 +280,19 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_entry(line.manifest) == {:ok, "index.html"}
     refute Compendium.tincture_lockfile_required?(line.manifest)
 
-    # What its widgets read, the feeds it names among them; the page opens
-    # at most five of these at once.
+    # What its widgets read, the feeds it names among them, all open at
+    # once on the frame's one stream connection.
     assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
              {"attention.changes", nil},
              {"runs.changes", nil},
              {"schedules.changes", nil},
+             {"schedule_runs.changes", nil},
              {"activity.changes", nil},
              {"threads.changes", nil},
+             {"components.changes", nil},
              {"vault.changes", nil},
+             {"files.changes", nil},
+             {"system.changes", nil},
              {"feed.results", "weather"},
              {"feed.results", "vpn"}
            ]
@@ -242,12 +301,14 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
 
     assert Enum.map(declaration.desktop.controls, & &1.operation) ==
-             ~w(schedule.pause schedule.resume)
+             ~w(schedule.pause schedule.resume execution.retry)
+
+    assert retries?(declaration)
 
     # Every widget but the queue keeps where it stands and, per screen
     # size, whether it is on.
     assert Map.keys(declaration.desktop.prefs.widgets) |> Enum.sort() ==
-             ~w(apps day queue schedules threads today vault vpn weather)
+             ~w(apps day queue schedules system threads today vault vpn weather)
 
     # Its chrome: both modes' colours, its own font shipped as WOFF2.
     assert {:ok, tokens} =
@@ -281,17 +342,25 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_entry(night.manifest) == {:ok, "index.html"}
     refute Compendium.tincture_lockfile_required?(night.manifest)
 
-    # It reads what waits, the threads, runs, schedules, crew, components
-    # and vault, and two feeds by name; it presses only the schedules'
-    # pause and resume, picked from the schedules it reads.
+    # It reads what waits, the threads, runs, schedules, crew, components,
+    # vault, files and how CYFR stands, and two feeds by name; it pauses and
+    # resumes the schedules it reads and runs a failed run again.
+    assert night.version == "0.2.0"
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
     assert declaration.desktop.feeds == ["weather", "vpn"]
 
+    assert declaration.desktop.data ==
+             ~w(attention.changes threads.changes runs.changes schedules.changes activity.changes
+                components.changes vault.changes files.changes system.changes)
+
     assert Enum.map(declaration.desktop.controls, &{&1.id, &1.operation}) == [
              {"pause-schedule", "schedule.pause"},
-             {"resume-schedule", "schedule.resume"}
+             {"resume-schedule", "schedule.resume"},
+             {"retry-run", "execution.retry"}
            ]
+
+    assert retries?(declaration)
 
     # Each part of the street is a widget the person turns off or moves.
     assert declaration.desktop.prefs.widgets |> Map.keys() |> Enum.sort() ==
@@ -330,10 +399,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute Map.has_key?(night.manifest, "dependencies")
   end
 
-  test "the road desktop is 0.1.0 on the vanilla template, and the publish check accepts it" do
+  test "the road desktop is 0.2.0 on the vanilla template, and the publish check accepts it" do
     road = SeedBundle.local_unit!("tinctures", "road")
     assert road.ref == "tincture:local.road"
-    assert road.version == "0.1.0"
+    assert road.version == "0.2.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), road.rel)
 
     assert Prima.Manifest.validate(road.manifest, fn _ -> true end) == :ok
@@ -342,15 +411,19 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_entry(road.manifest) == {:ok, "index.html"}
     refute Compendium.tincture_lockfile_required?(road.manifest)
 
-    # What its parts read, the two feeds among them; the page opens at most
-    # five of these at once, a part's only while it is on.
+    # What its parts read, the two feeds among them, all open at once on the
+    # frame's one stream connection.
     assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
              {"attention.changes", nil},
              {"schedules.changes", nil},
              {"schedule_runs.changes", nil},
+             {"runs.changes", nil},
              {"threads.changes", nil},
              {"activity.changes", nil},
+             {"components.changes", nil},
              {"vault.changes", nil},
+             {"files.changes", nil},
+             {"system.changes", nil},
              {"feed.results", "weather"},
              {"feed.results", "vpn"}
            ]
@@ -358,7 +431,8 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
 
-    # It pauses and resumes a schedule, picked from the schedules it reads.
+    # It pauses and resumes a schedule, picked from the schedules it reads,
+    # and runs a failed firing's run again, picked from the runs.
     pick = %Prima.Manifest.Tincture.Pick{
       stream: "schedules.changes",
       field: "/schedule_id",
@@ -367,13 +441,16 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert [
              %{id: "pause-schedule", operation: "schedule.pause", args: %{}, pick: ^pick},
-             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick}
+             %{id: "resume-schedule", operation: "schedule.resume", args: %{}, pick: ^pick},
+             %{id: "retry-run"}
            ] = declaration.desktop.controls
+
+    assert retries?(declaration)
 
     # Every part keeps whether it is on; the street's parts keep their
     # order, and the windmill its unit.
     assert Map.keys(declaration.desktop.prefs.widgets) |> Enum.sort() ==
-             ~w(activity attention components schedules threads vault vpn weather)
+             ~w(activity attention components files schedules system threads vault vpn weather)
 
     # Its chrome: both modes' colours, the village's pixel face shipped as
     # WOFF2, its paving and tiles as textures.
@@ -403,10 +480,10 @@ defmodule Cyfr.Test.SeedBundleTest do
                 index.html list.js model.js road-pixel.woff2 scene.js)
   end
 
-  test "the switchboard desktop is 0.1.0 on the vanilla template, reads what it declares and passes the publish check" do
+  test "the switchboard desktop is 0.2.0 on the vanilla template, reads what it declares and passes the publish check" do
     board = SeedBundle.local_unit!("tinctures", "switchboard")
     assert board.ref == "tincture:local.switchboard"
-    assert board.version == "0.1.0"
+    assert board.version == "0.2.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), board.rel)
 
     assert Prima.Manifest.validate(board.manifest, fn _ -> true end) == :ok
@@ -417,8 +494,8 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_entry(board.manifest) == {:ok, "index.html"}
     refute Compendium.tincture_lockfile_required?(board.manifest)
 
-    # What its parts read, the weather feed by name among them; the page
-    # opens at most five of these at once.
+    # What its parts read, the weather and VPN feeds by name among them,
+    # all open at once on the frame's one stream connection.
     assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
              {"attention.changes", nil},
              {"threads.changes", nil},
@@ -427,22 +504,28 @@ defmodule Cyfr.Test.SeedBundleTest do
              {"schedules.changes", nil},
              {"vault.changes", nil},
              {"activity.changes", nil},
-             {"feed.results", "weather"}
+             {"files.changes", nil},
+             {"system.changes", nil},
+             {"feed.results", "weather"},
+             {"feed.results", "vpn"}
            ]
 
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
 
     # Its levers pause and resume a schedule, picked from the schedules it
-    # reads; nothing else is pressed through a control.
+    # reads, and its ticket printer runs a failed run again.
     assert Enum.map(declaration.desktop.controls, &{&1.id, &1.operation}) == [
              {"pause-schedule", "schedule.pause"},
-             {"resume-schedule", "schedule.resume"}
+             {"resume-schedule", "schedule.resume"},
+             {"retry-run", "execution.retry"}
            ]
+
+    assert retries?(declaration)
 
     # Each part is a widget the person pulls, fits or moves.
     assert declaration.desktop.prefs.widgets |> Map.keys() |> Enum.sort() ==
-             ~w(apps calls components crew runs schedules threads vault weather)
+             ~w(apps calls components crew files runs schedules threads vault vpn weather)
 
     assert {:ok, tokens} =
              Compendium.tincture_check_chrome(declaration, &File.read(Path.join(dir, &1)))
@@ -476,10 +559,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute Map.has_key?(board.manifest, "dependencies")
   end
 
-  test "the street desktop is 0.1.0 on the vanilla template, and the publish check accepts it" do
+  test "the street desktop is 0.2.0 on the vanilla template, and the publish check accepts it" do
     street = SeedBundle.local_unit!("tinctures", "street")
     assert street.ref == "tincture:local.street"
-    assert street.version == "0.1.0"
+    assert street.version == "0.2.0"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), street.rel)
 
     assert Prima.Manifest.validate(street.manifest, fn _ -> true end) == :ok
@@ -488,25 +571,33 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_entry(street.manifest) == {:ok, "index.html"}
     refute Compendium.tincture_lockfile_required?(street.manifest)
 
-    # Five streams, one per part of the street; the page opens a part's
-    # stream only while that part is on.
+    # What the street's parts read, the two feeds among them, all open at
+    # once on the frame's one stream connection.
     assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
              {"attention.changes", nil},
              {"threads.changes", nil},
              {"runs.changes", nil},
              {"schedules.changes", nil},
-             {"activity.changes", nil}
+             {"activity.changes", nil},
+             {"files.changes", nil},
+             {"components.changes", nil},
+             {"vault.changes", nil},
+             {"system.changes", nil},
+             {"feed.results", "weather"},
+             {"feed.results", "vpn"}
            ]
 
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
 
     assert Enum.map(declaration.desktop.controls, & &1.operation) ==
-             ~w(schedule.pause schedule.resume)
+             ~w(schedule.pause schedule.resume execution.retry)
+
+    assert retries?(declaration)
 
     # The parts a person turns off, and the hill's order.
     assert Map.keys(declaration.desktop.prefs.widgets) |> Enum.sort() ==
-             ~w(apps castle crew houses lamps sky stops vault waiting)
+             ~w(apps castle crew ferry files houses lamps sky stops vault waiting)
 
     # Its chrome: both modes' colours, the pixel face it ships as WOFF2.
     assert {:ok, tokens} =

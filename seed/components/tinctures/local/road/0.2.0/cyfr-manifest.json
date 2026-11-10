@@ -1,0 +1,59 @@
+{
+  "name": "road",
+  "type": "tincture",
+  "version": "0.2.0",
+  "publisher": "local",
+  "description": "Your place as a pixel village by a river. Your schedules are a cobbled road the capybara runs: it hops each firing that ran, trips on one that failed and steps over a paused one, and dragging the road looks back or ahead while the village shows that hour. What waits on you queues outside your house, your threads are post boxes, your crew walks the street, your apps fill the market, your vault is a strongroom, how CYFR stands is a silo, your files are an archive, and a weather feed and a vpn feed turn the windmill and run the tram. Pause or resume a schedule, or run a failed run again, with a tap; turn parts on or off and move them along the street.",
+  "tags": ["canvas", "desktop"],
+  "category": "utility",
+  "tincture": {
+    "icon": "🛤️",
+    "tagline": "Your day as a road the capybara runs",
+    "entry": "index.html",
+    "desktop": {
+      "data": [
+        "attention.changes",
+        "schedules.changes",
+        "schedule_runs.changes",
+        "runs.changes",
+        "threads.changes",
+        "activity.changes",
+        "components.changes",
+        "vault.changes",
+        "files.changes",
+        "system.changes"
+      ],
+      "feeds": ["weather", "vpn"],
+      "controls": [
+        {
+          "id": "pause-schedule",
+          "label": "Pause",
+          "operation": "schedule.pause",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {
+          "id": "resume-schedule",
+          "label": "Resume",
+          "operation": "schedule.resume",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {"id": "retry-run", "label": "Retry", "operation": "execution.retry", "args": {}, "pick": {"stream": "runs.changes", "field": "/execution_id", "arg": "execution_id"}}
+      ],
+      "prefs": {
+        "widgets": {
+          "attention": {},
+          "threads": {"fields": {"order": {"type": "integer"}}},
+          "activity": {"fields": {"order": {"type": "integer"}}},
+          "components": {"fields": {"order": {"type": "integer"}}},
+          "schedules": {"fields": {"order": {"type": "integer"}}},
+          "vault": {"fields": {"order": {"type": "integer"}}},
+          "system": {"fields": {"order": {"type": "integer"}}},
+          "files": {"fields": {"order": {"type": "integer"}}},
+          "weather": {"fields": {"units": {"type": "enum", "values": ["c", "f"]}}},
+          "vpn": {}
+        }
+      },
+      "chrome": "chrome.css"
+    }
+  }
+}

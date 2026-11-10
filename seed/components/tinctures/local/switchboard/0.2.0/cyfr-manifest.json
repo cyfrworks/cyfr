@@ -1,0 +1,65 @@
+{
+  "name": "switchboard",
+  "type": "tincture",
+  "version": "0.2.0",
+  "publisher": "local",
+  "description": "A cord switchboard for your place: each thread, app and component is a line with a jack, and a line that waits on you lights its lamp. Tap a lit line, then the jack it resolves at, to patch it through to the app, the chat, AQUA or its settings. Meters read your weather and VPN feeds, lever keys pause and resume your schedules, a ticket printer lists your runs and runs a failed one again, annunciator windows show your vault and how your CYFR stands, a files plate lists your recent files and offers, and the rack pulls, fits and moves each part.",
+  "tags": ["canvas", "desktop"],
+  "category": "utility",
+  "tincture": {
+    "icon": "canvas",
+    "tagline": "Every waiting thing lights its lamp; a tap patches it through",
+    "entry": "index.html",
+    "desktop": {
+      "data": [
+        "attention.changes",
+        "threads.changes",
+        "components.changes",
+        "runs.changes",
+        "schedules.changes",
+        "vault.changes",
+        "activity.changes",
+        "files.changes",
+        "system.changes"
+      ],
+      "feeds": ["weather", "vpn"],
+      "controls": [
+        {
+          "id": "pause-schedule",
+          "label": "Hold",
+          "operation": "schedule.pause",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {
+          "id": "resume-schedule",
+          "label": "Run",
+          "operation": "schedule.resume",
+          "pick": {"stream": "schedules.changes", "field": "/schedule_id", "arg": "schedule_id"}
+        },
+        {
+          "id": "retry-run",
+          "label": "Retry",
+          "operation": "execution.retry",
+          "args": {},
+          "pick": {"stream": "runs.changes", "field": "/execution_id", "arg": "execution_id"}
+        }
+      ],
+      "prefs": {
+        "widgets": {
+          "calls": {"fields": {"order": {"type": "integer"}}},
+          "threads": {"fields": {"order": {"type": "integer"}}},
+          "apps": {"fields": {"order": {"type": "integer"}}},
+          "components": {"fields": {"order": {"type": "integer"}}},
+          "weather": {"fields": {"order": {"type": "integer"}, "units": {"type": "enum", "values": ["c", "f"]}}},
+          "vpn": {"fields": {"order": {"type": "integer"}}},
+          "schedules": {"fields": {"order": {"type": "integer"}}},
+          "runs": {"fields": {"order": {"type": "integer"}}},
+          "vault": {"fields": {"order": {"type": "integer"}}},
+          "crew": {"fields": {"order": {"type": "integer"}}},
+          "files": {"fields": {"order": {"type": "integer"}}}
+        }
+      },
+      "chrome": "chrome.css"
+    }
+  }
+}

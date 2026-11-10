@@ -132,3 +132,480 @@ describe("the night desktop", () => {
     }
   })
 })
+
+// ---------- 0.2.0: every stream at once, held by the delivery contract ----------
+
+const V2 = new URL("../../../../../seed/components/tinctures/local/night/0.2.0/", import.meta.url)
+const MANIFEST_2 = JSON.parse(readFileSync(new URL("cyfr-manifest.json", V2), "utf8"))
+const DESK_2 = MANIFEST_2.tincture.desktop
+const DECLARED = [...DESK_2.data, ...DESK_2.feeds.map((feed) => `feed:${feed}`)].sort()
+const PARTS_2 = Object.keys(DESK_2.prefs.widgets)
+const AT = "2026-11-10T14:20:00Z"
+
+// An element that keeps what the page writes into it and lays nothing out.
+function stub() {
+  const classes = new Set()
+  return {
+    dataset: {},
+    style: {setProperty() {}},
+    classList: {add: (c) => classes.add(c), remove: (c) => classes.delete(c), toggle() {}, contains: (c) => classes.has(c)},
+    addEventListener() {},
+    setAttribute() {},
+    removeAttribute() {},
+    getBoundingClientRect: () => ({left: 0, top: 0, right: 1024, bottom: 600, width: 1024, height: 600}),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    focus() {},
+    hidden: true,
+    innerHTML: "",
+    offsetWidth: 296,
+    offsetHeight: 200,
+  }
+}
+
+// The page's model.js and street.js at 1024 by 600 under a stand-in
+// window.cyfr whose `stream` records each open as a line the test pushes
+// events into, whose `press` answers `answer` (a value, or a function of
+// the press), and whose first opens of the streams named in `refuse` reject
+// with that code. Its timers wait until the test runs them.
+function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}} = {}) {
+  const els = new Map(["street", "header", "wall", "level", "puddle-index", "plate", "fusebox"].map((id) => [`#${id}`, stub()]))
+  const frames = []
+  const timers = []
+  const listeners = {}
+  const handlers = {}
+  const opened = []
+  const presses = []
+  const pages = []
+  const cyfr = {
+    desktop: {prefs: {document: {widgets, desktop: {}}, revision: 1}, appearance: {mode: "dark", accent: "#d9e4ff", locale: "en", time_zone: "UTC", safe_areas: {}}, person: {name: "Noor"}},
+    on: (event, handler) => (handlers[event] ||= []).push(handler),
+    stream(name, subject, onEvent) {
+      const line = {key: subject ? `feed:${subject}` : name, name, state: "live", push: (event) => onEvent(event)}
+      line.handle = {close() {}, closed: new Promise((resolve) => (line.end = resolve)), get state() { return line.state }}
+      opened.push(line)
+      const code = refuse[line.key]
+      delete refuse[line.key]
+      return code ? Promise.reject(Object.assign(new Error("A sentence the page must not show."), {code})) : Promise.resolve(line.handle)
+    },
+    prefs: async (document) => ({outcome: "saved", document, revision: 2}),
+    press: async (control, value) => (presses.push([control, value]), typeof answer === "function" ? answer(control, value) : answer),
+    settings: (...args) => pages.push(args),
+    ask() {},
+    open() {},
+    grant() {},
+    ready() {},
+  }
+  const page = {
+    console,
+    document: {
+      readyState: "complete",
+      documentElement: stub(),
+      querySelector: (query) => els.get(query) || null,
+      querySelectorAll: () => [],
+      addEventListener: (type, handler) => (listeners[type] = handler),
+    },
+    cyfr,
+    matchMedia: () => ({matches: true}),
+    innerWidth: 1024,
+    innerHeight: 600,
+    requestAnimationFrame: (f) => frames.push(f),
+    setTimeout: (fn, ms) => timers.push({fn, ms}),
+    clearTimeout: (id) => timers[id - 1] && (timers[id - 1].cleared = true),
+    setInterval: () => 0,
+    addEventListener() {},
+  }
+  page.window = page
+  vm.createContext(page)
+  for (const file of ["model.js", "street.js"]) vm.runInContext(readFileSync(new URL(file, V2), "utf8"), page, {filename: file})
+  const html = (id) => els.get(`#${id}`).innerHTML
+  return {
+    opened,
+    presses,
+    pages,
+    plate: els.get("#plate"),
+    html,
+    street: () => html("wall") + html("level"),
+    line: (key) => opened.filter((l) => l.key === key).at(-1),
+    // What the shell tells the page through `cyfr.on`.
+    tell: (event, value) => (handlers[event] || []).forEach((handler) => handler(value)),
+    opens: (key) => opened.filter((l) => l.key === key).length,
+    // Draws what the page has queued.
+    draw() {
+      for (let i = 0; i < 5 && frames.length; i++) for (const f of frames.splice(0)) f(0)
+    },
+    runTimers() {
+      for (const t of timers.splice(0)) if (!t.cleared) t.fn()
+    },
+    // A tap on an element carrying `attrs`, as the page's document hears it.
+    tap(attrs) {
+      const node = {
+        ...stub(),
+        dataset: Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith("data-")).map(([k, v]) => [k.slice(5), v])),
+        classList: {add() {}, remove() {}, contains: (c) => (attrs.class || "").split(" ").includes(c)},
+        closest(query) {
+          const attr = /^\[([\w-]+)\]$/.exec(query)
+          if (attr) return attr[1] in attrs ? node : null
+          return query.startsWith(".") && node.classList.contains(query.slice(1)) ? node : null
+        },
+      }
+      listeners.click({target: node})
+    },
+  }
+}
+
+const settle = async () => {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve))
+}
+
+// A stream's picture: its items, each marked fresh, then its snapshot.
+function picture(line, items) {
+  for (const data of items) line.push({id: null, event: line.name, data: {revision: 1, ...data, refresh: true, at: AT}, revision: data.revision ?? 1, at: AT})
+  line.push({id: null, event: "snapshot", data: null, revision: null, at: AT})
+}
+const change = (line, data) => line.push({id: null, event: line.name, data: {...data, at: AT}, revision: data.revision, at: AT})
+
+// The plate's buttons as the person reads them, and its last answer.
+function plateButtons(p) {
+  return [...p.plate.innerHTML.matchAll(/<button class="([^"]*)" data-plate="(\d+)"([^>]*)>([\s\S]*?)<\/button>/g)].map(([, cls, index, attrs, inner]) => ({
+    index,
+    cls,
+    attrs,
+    label: inner.replace(/<[^>]*>/g, "").trim(),
+  }))
+}
+const plateNote = (p) => (/<p class="plate__note" role="status">([^<]*)<\/p>/.exec(p.plate.innerHTML) || [])[1]
+function press(p, label) {
+  const button = plateButtons(p).find((b) => b.label === label)
+  assert.ok(button, `no "${label}" on the plate among ${plateButtons(p).map((b) => b.label).join(" | ")}`)
+  p.tap({"data-plate": button.index})
+}
+
+const RUN_FAILED = {kind: "failed", execution_id: "exe_fail", parent_execution_id: null, reference: "formula:local.digest:1.0.0", component_type: "formula", started_at: "2026-11-10T09:00:00Z", ended_at: "2026-11-10T09:00:04Z", error: {class: "timeout", cause: "provider_slow"}}
+const RUN_DONE = {kind: "completed", execution_id: "exe_ok", parent_execution_id: null, reference: "catalyst:local.weather:1.0.0", component_type: "catalyst", duration_ms: 1100, started_at: "2026-11-10T14:10:00Z", ended_at: "2026-11-10T14:10:01Z"}
+const RUN_CHILD = {kind: "failed", execution_id: "exe_child", parent_execution_id: "exe_ok", reference: "catalyst:local.lookup:1.0.0", component_type: "catalyst", started_at: "2026-11-10T14:10:00Z", ended_at: "2026-11-10T14:10:01Z", error: {class: "timeout", cause: "provider_slow"}}
+const FAILED_ITEM = {kind: "failed_run", id: "formula:local.digest:1.0.0", label: "formula:local.digest:1.0.0", since: "2026-11-10T09:00:04Z", destination: {kind: "page", page: "executions", ref: "exe_fail"}}
+
+// A page with every opened stream's first picture in: runs as given, the rest empty.
+async function lit({runs = [], attention = [], ...options} = {}) {
+  const p = night2(options)
+  await settle()
+  for (const line of p.opened) picture(line, line.key === "runs.changes" ? runs : line.key === "attention.changes" ? attention : [])
+  p.draw()
+  return p
+}
+
+describe("the night desktop 0.2.0", () => {
+  for (const [name, widgets] of [
+    ["the design's defaults", {}],
+    ["every part on", Object.fromEntries(PARTS_2.map((id) => [id, {on: true}]))],
+    ["every part off", Object.fromEntries(PARTS_2.map((id) => [id, {on: false}]))],
+  ]) {
+    test(`every declared stream opens exactly once at start, and nothing undeclared, with ${name}`, async () => {
+      const p = night2({widgets})
+      await settle()
+      assert.deepEqual(p.opened.map((l) => l.key).sort(), DECLARED)
+    })
+  }
+
+  test("the manifest declares retry-run exactly as the brief spells it, and reads files and system", () => {
+    assert.deepEqual(DESK_2.controls.find((c) => c.id === "retry-run"), {id: "retry-run", label: "Retry", operation: "execution.retry", args: {}, pick: {stream: "runs.changes", field: "/execution_id", arg: "execution_id"}})
+    assert.ok(DESK_2.data.includes("files.changes") && DESK_2.data.includes("system.changes"))
+  })
+
+  test("a failed root run's plate offers Retry, which waits for its answer and presses retry-run with the run's id once", async () => {
+    let answered
+    const p = await lit({runs: [RUN_FAILED, RUN_DONE, RUN_CHILD], answer: () => new Promise((resolve) => (answered = resolve))})
+    assert.match(p.html("wall"), /data-target="run:exe_fail"/)
+    assert.match(p.html("wall"), /<span class="dot when">09:00<\/span>/, "the run's own start time")
+    p.tap({"data-target": "run:exe_fail"})
+    press(p, "Retry")
+    const waiting = plateButtons(p).find((b) => b.label === "Retry")
+    assert.match(waiting.attrs, /disabled aria-busy="true"/)
+    assert.match(waiting.cls, /is-working/)
+    press(p, "Retry")
+    assert.deepEqual(p.presses, [["retry-run", "exe_fail"]])
+    answered({outcome: "accepted"})
+    await settle()
+    assert.equal(plateNote(p), "Running it again.")
+    assert.doesNotMatch(plateButtons(p).find((b) => b.label === "Retry").attrs, /disabled/)
+  })
+
+  test("a completed run and a child run offer no Retry", async () => {
+    const p = await lit({runs: [RUN_FAILED, RUN_DONE, RUN_CHILD]})
+    assert.doesNotMatch(p.html("wall"), /exe_child/, "a child run is not on the board")
+    for (const target of ["run:exe_ok", "run:exe_child"]) {
+      p.tap({"data-target": target})
+      assert.ok(!plateButtons(p).some((b) => b.label === "Retry"), `${target} offers Retry`)
+      p.tap({"data-act": "plate-close"})
+    }
+  })
+
+  test("a failed_run waiting item lights its run's row, and offers Retry only while that run is held", async () => {
+    const p = await lit({runs: [RUN_FAILED, RUN_DONE], attention: [FAILED_ITEM]})
+    assert.match(p.html("wall"), /data-target="failed:formula:local.digest:1.0.0" data-light="sputter"/)
+    p.tap({class: "ripple", "data-ref": "failed:formula:local.digest:1.0.0"})
+    press(p, "Retry")
+    await settle()
+    assert.deepEqual(p.presses, [["retry-run", "exe_fail"]])
+    p.tap({"data-act": "plate-close"})
+
+    // The runs' fresh picture no longer holds it: Retry goes, Open runs stays.
+    const runs = p.line("runs.changes")
+    runs.push({id: null, event: "resync", data: null, revision: null, at: null})
+    picture(runs, [RUN_DONE])
+    p.draw()
+    p.tap({class: "ripple", "data-ref": "failed:formula:local.digest:1.0.0"})
+    assert.deepEqual(plateButtons(p).map((b) => b.label), ["Open runs", "Ask AQUA"])
+  })
+
+  for (const [answer, words] of [
+    [{outcome: "refused", reason: "conflict"}, /only a failed run a schedule or a feed started can/],
+    [{outcome: "refused", reason: "invalid_argument"}, /no longer among the latest runs/],
+    [{outcome: "refused", reason: "not_found"}, /That run is gone/],
+    [{outcome: "refused", reason: "forbidden"}, /not yours to run again/],
+    [{outcome: "refused", reason: "unavailable"}, /cannot run it now\. Try again shortly/],
+    [{outcome: "refused", reason: "rate_limited"}, /cannot run it now\. Try again shortly/],
+    [{outcome: "refused", reason: "timeout"}, /cannot run it now\. Try again shortly/],
+    [{outcome: "refused", reason: "uncertain"}, /No answer came\. Look at your runs before trying again/],
+    [{outcome: "refused", reason: "internal"}, /It could not be run again/],
+    [{outcome: "cancelled", reason: "too_soon"}, /tap again/],
+    [{outcome: "cancelled"}, /nothing ran/],
+  ]) {
+    test(`Retry answered ${answer.outcome} ${answer.reason || "with no reason"} says so in the street's words`, async () => {
+      const p = await lit({runs: [RUN_FAILED], answer})
+      p.tap({"data-target": "run:exe_fail"})
+      press(p, "Retry")
+      await settle()
+      assert.match(plateNote(p), words)
+    })
+  }
+
+  test("a resync followed by a picture without an item removes it, and only a live answer switches a light off", async () => {
+    const p = await lit()
+    const threads = p.line("threads.changes")
+    const attention = p.line("attention.changes")
+    picture(threads, [{kind: "shared", id: "t1", title: "Family", people: ["a", "b", "c"]}, {kind: "own", id: "t2", title: "Tax notes", people: ["me"], unread: null}])
+    picture(attention, [{kind: "approval", id: "ap1", label: "Family", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}}])
+    p.draw()
+    assert.match(p.html("wall"), /Tax notes/)
+
+    threads.push({id: null, event: "resync", data: null, revision: null, at: null})
+    picture(threads, [{kind: "shared", id: "t1", title: "Family", people: ["a", "b", "c"]}])
+    attention.push({id: null, event: "resync", data: null, revision: null, at: null})
+    picture(attention, [])
+    p.draw()
+    assert.doesNotMatch(p.html("wall"), /Tax notes/)
+    assert.doesNotMatch(p.html("puddle-index"), /data-going/, "a picture's drop does not switch a light off")
+
+    change(attention, {kind: "approval", id: "ap2", label: "Family", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}, revision: 2})
+    p.draw()
+    change(attention, {kind: "removed", id: "ap2", outcome: "resolved", revision: 3})
+    p.draw()
+    assert.match(p.html("puddle-index"), /data-going="1"/, "a live answer switches its light off")
+  })
+
+  test("a lower revision after a higher one, or the same one twice, changes nothing", async () => {
+    const p = await lit()
+    const threads = p.line("threads.changes")
+    change(threads, {kind: "shared", id: "t1", title: "Family", people: ["a", "b"], revision: 5})
+    change(threads, {kind: "shared", id: "t1", title: "Old name", people: ["a", "b"], revision: 3})
+    change(threads, {kind: "removed", id: "t1", revision: 5})
+    p.draw()
+    assert.match(p.html("wall"), /Family/)
+    assert.doesNotMatch(p.html("wall"), /Old name/)
+  })
+
+  test("stale shows the tired picture as of its time, and the next snapshot clears it", async () => {
+    const p = await lit()
+    const threads = p.line("threads.changes")
+    change(threads, {kind: "shared", id: "t1", title: "Family", people: ["a", "b"], revision: 2})
+    threads.push({id: null, event: "stale", data: null, revision: null, at: AT})
+    p.draw()
+    assert.match(p.html("wall"), /data-part="threads" data-line="stale"/)
+    assert.match(p.html("wall"), /as of 14:20/)
+    assert.match(p.html("wall"), /Family/)
+    picture(threads, [{kind: "shared", id: "t1", title: "Family", people: ["a", "b"], revision: 3}])
+    p.draw()
+    assert.match(p.html("wall"), /data-part="threads" data-line="live"/)
+    assert.doesNotMatch(p.html("wall"), /as of/)
+  })
+
+  test("unavailable keeps the picture and says when it tries again", async () => {
+    const p = await lit({runs: [RUN_DONE]})
+    p.line("runs.changes").push({id: null, event: "unavailable", data: {retry_at: "2026-11-10T14:21:00Z"}, revision: null, at: null})
+    p.draw()
+    assert.match(p.html("wall"), /trying again at 14:21/)
+    assert.match(p.html("wall"), /data-target="run:exe_ok"/)
+  })
+
+  test("denied ends the part and says it is no longer granted, never the refusal's sentence, and the page does not open it again", async () => {
+    const p = await lit()
+    const vault = p.line("vault.changes")
+    const threads = p.line("threads.changes")
+    change(threads, {kind: "shared", id: "t1", title: "Family", people: ["a", "b"], revision: 2})
+    threads.state = "denied"
+    threads.push({id: null, event: "denied", data: {class: "forbidden", message: "A sentence the page must not show.", stage: "admission"}, revision: null, at: null})
+    threads.end()
+    await settle()
+    p.runTimers()
+    p.draw()
+    assert.doesNotMatch(p.html("wall"), /Family/)
+    assert.match(p.html("wall"), /No longer granted/)
+    assert.doesNotMatch(p.html("wall"), /must not show|No threads yet/)
+    assert.equal(p.opens("threads.changes"), 1)
+    assert.equal(p.opens("vault.changes"), 1, `${vault.key} untouched`)
+  })
+
+  test("a first open refused forbidden says not granted; one with no answer, or one the endpoint ended, opens again", async () => {
+    const p = night2({refuse: {"system.changes": "forbidden", "threads.changes": "unavailable"}})
+    await settle()
+    p.draw()
+    assert.match(p.html("level"), /Not granted/)
+    assert.doesNotMatch(p.html("level"), /must not show/)
+    assert.match(p.html("wall"), /data-part="threads" data-line="unavailable"[\s\S]*trying again at \d\d:\d\d/)
+    const runs = p.line("runs.changes")
+    runs.state = "ended"
+    runs.end()
+    await settle()
+    p.runTimers()
+    await settle()
+    assert.equal(p.opens("threads.changes"), 2)
+    assert.equal(p.opens("runs.changes"), 2)
+    assert.equal(p.opens("system.changes"), 1)
+  })
+
+  test("a hidden-then-shown desktop shows its parts live again, with no denied in between", async () => {
+    const APPROVAL = {kind: "approval", id: "ap1", label: "Family", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}}
+    const p = await lit({runs: [RUN_FAILED, RUN_DONE], attention: [APPROVAL, FAILED_ITEM]})
+    picture(p.line("threads.changes"), [{kind: "shared", id: "t1", title: "Family", people: ["a", "b", "c"]}, {kind: "own", id: "t2", title: "Tax notes", people: ["me"], unread: null}])
+    p.draw()
+    assert.match(p.html("wall"), /data-target="failed:formula:local\.digest:1\.0\.0" data-light="sputter"/)
+    const opens = p.opened.length
+
+    // Hidden: the SDK suspends every handle and the page hears nothing; time passes.
+    p.tell("state", "frozen")
+    for (const line of p.opened) line.state = "suspended"
+    p.runTimers()
+    await settle()
+    p.draw()
+
+    // Shown: the SDK opens each again itself, and each hears resync, a fresh picture (one item changed, one gone), snapshot.
+    p.tell("state", "live")
+    for (const line of p.opened) line.state = "live"
+    const fresh = {
+      "attention.changes": [{...APPROVAL, label: "Family dinner", revision: 2}],
+      "threads.changes": [{kind: "shared", id: "t1", title: "Family dinner", people: ["a", "b", "c"], revision: 2}],
+      "runs.changes": [{...RUN_DONE, duration_ms: 2400, revision: 2}],
+    }
+    for (const [key, items] of Object.entries(fresh)) {
+      const line = p.line(key)
+      line.push({id: null, event: "resync", data: null, revision: null, at: null})
+      picture(line, items)
+    }
+    p.runTimers()
+    await settle()
+    p.draw()
+
+    const street = p.street() + p.html("puddle-index")
+    assert.match(p.html("wall"), /Family dinner/)
+    assert.doesNotMatch(p.html("wall"), /Tax notes/)
+    assert.match(p.html("wall"), /2\.4 s/)
+    assert.doesNotMatch(street, /exe_fail|failed:formula/, "the failure the fresh picture dropped is gone")
+    assert.doesNotMatch(street, /data-going|data-light="out"/, "a light a picture dropped goes out with no flare")
+    assert.doesNotMatch(street, /class="refused/, "no part says it is not live")
+    assert.deepEqual([...new Set([...p.street().matchAll(/data-line="(\w+)"/g)].map((m) => m[1]))], ["live"])
+    assert.match(p.html("header"), /1 waiting on you/)
+    assert.equal(p.opened.length, opens, "the page opened no stream again by itself")
+  })
+
+  test("each waiting item and thread opens the page its destination names", async () => {
+    const p = await lit({
+      runs: [RUN_FAILED],
+      attention: [
+        {kind: "approval", id: "ap1", label: "Trip planning", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}},
+        FAILED_ITEM,
+        {kind: "failed_schedule", id: "sch_1", label: "Morning digest", since: AT, destination: {kind: "page", page: "schedules", ref: "sch_1"}},
+        {kind: "file_offer", id: "off_1", label: "budget.xlsx", since: AT, destination: {kind: "page", page: "files", ref: "off_1"}},
+      ],
+    })
+    picture(p.line("threads.changes"), [
+      {kind: "own", id: "t1", title: "Trip planning", people: ["me"], unread: null},
+      {kind: "shared", id: "t2", title: "Family", people: ["a", "b", "c"], unread: 2},
+      {kind: "own", id: "t3", title: "Tax notes", people: ["me"], unread: null},
+    ])
+    picture(p.line("schedules.changes"), [{kind: "changed", schedule_id: "sch_1", name: "Morning digest", reference: "formula:local.digest:1.0.0", cron_expression: "0 9 * * *", status: "active", next_run_at: "2026-11-11T09:00:00Z", run_count: 41, error_count: 1}])
+    picture(p.line("files.changes"), [{kind: "offer", id: "off_1", name: "budget.xlsx", from: "Sam", changed_at: AT}])
+    p.draw()
+    for (const [target, label, page] of [
+      ["thread:t1", "Open the approval", "aqua"],
+      ["thread:t2", "Open in chat", "chat"],
+      ["thread:t3", "Open in AQUA", "aqua"],
+      ["failed:formula:local.digest:1.0.0", "Open runs", "executions"],
+      ["schedule:sch_1", "Open schedules", "schedules"],
+      ["offer:off_1", "Open files", "files"],
+    ]) {
+      assert.match(p.street(), new RegExp(`data-target="${target}"`))
+      p.tap({"data-target": target})
+      press(p, label)
+      assert.equal(p.pages.at(-1)[0], page, `${target} opened ${p.pages.at(-1)}`)
+    }
+  })
+
+  test("a shared thread of one person reads 1 person, and of three, 3 people", async () => {
+    const p = await lit({runs: [RUN_DONE]})
+    picture(p.line("threads.changes"), [
+      {kind: "shared", id: "t1", title: "Alone", people: ["a"], unread: 0},
+      {kind: "shared", id: "t3", title: "Family", people: ["a", "b", "c"], unread: 0},
+    ])
+    p.draw()
+    const wall = p.html("wall")
+    assert.match(wall, /1 person\b/)
+    assert.doesNotMatch(wall, /1 people/)
+    assert.match(wall, /3 people/)
+  })
+
+  test("a lit sign opens its item's destination at its ref, and a thread plaque opens AQUA or the chat at the thread", async () => {
+    const p = await lit({
+      runs: [RUN_FAILED],
+      attention: [{kind: "approval", id: "ap1", label: "Trip planning", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}}, FAILED_ITEM],
+    })
+    picture(p.line("threads.changes"), [
+      {kind: "own", id: "t1", title: "Trip planning", people: ["me"], unread: null},
+      {kind: "shared", id: "t2", title: "Family", people: ["a", "b", "c"], unread: 2},
+      {kind: "own", id: "t3", title: "Tax notes", people: ["me"], unread: null},
+    ])
+    p.draw()
+    for (const [target, label, opened] of [
+      ["thread:t1", "Open the approval", ["aqua", "t1"]],
+      ["thread:t2", "Open in chat", ["chat", "t2"]],
+      ["thread:t3", "Open in AQUA", ["aqua", "t3"]],
+      ["failed:formula:local.digest:1.0.0", "Open runs", ["executions", "exe_fail"]],
+    ]) {
+      p.tap({"data-target": target})
+      press(p, label)
+      assert.deepEqual(p.pages.at(-1), opened, `${target} opened ${p.pages.at(-1)}`)
+    }
+  })
+
+  test("the files and system items reach the locker and the junction box, and the fields the catalog now carries show", async () => {
+    const p = await lit({runs: [RUN_DONE]})
+    picture(p.line("files.changes"), [
+      {kind: "file", id: "data/trip.md", name: "trip.md", type: "text/markdown", changed_at: AT},
+      {kind: "offer", id: "off_1", name: "budget.xlsx", from: "Sam", changed_at: "2026-11-10T13:10:00Z"},
+    ])
+    picture(p.line("system.changes"), [{kind: "changed", health: "ok", storage_used: 38 * 2 ** 30, storage_cap: 100 * 2 ** 30, model_connected: true, crew_ready: 2, crew_total: 2, version: "0.6.0", update_available: true}])
+    picture(p.line("attention.changes"), [{kind: "file_offer", id: "off_1", label: "budget.xlsx", since: AT, destination: {kind: "page", page: "files", ref: "off_1"}}])
+    picture(p.line("threads.changes"), [{kind: "shared", id: "t2", title: "Family", people: ["a", "b", "c"], unread: 2}])
+    picture(p.line("activity.changes"), [{kind: "started", id: "j1", member: "explorer", asked_by: "Noor", title: "Compare ferry times", since: AT, status: "running"}])
+    p.draw()
+    const level = p.html("level")
+    for (const seen of ["trip.md", "budget.xlsx", "from Sam · 13:10", "0.6.0", "healthy", "model connected", "crew 2 of 2", "38 of 100 GB", "update available"]) assert.ok(level.includes(seen), `the street level lacks "${seen}"`)
+    assert.match(p.html("puddle-index"), /budget\.xlsx from Sam/)
+    assert.match(p.html("wall"), /2 new/)
+    assert.match(p.html("wall"), /Compare ferry times/)
+    p.tap({"data-target": "file:data/trip.md"})
+    press(p, "Open files")
+    assert.deepEqual(p.pages, [["files"]])
+  })
+})
