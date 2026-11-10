@@ -231,8 +231,11 @@ defmodule PrismWeb.ShellDesktopTest do
 
   defp next_call, do: System.unique_integer([:positive, :monotonic])
 
+  # The answer follows work the shell does after the event returns (an
+  # approved call runs first), so a loaded host needs more than ExUnit's
+  # 100 ms to deliver it.
   defp answer!(view, frame_id, verb) do
-    assert_push_event(view, "canvas_answer", %{frame: ^frame_id, verb: ^verb, args: args})
+    assert_push_event(view, "canvas_answer", %{frame: ^frame_id, verb: ^verb, args: args}, 5_000)
     args
   end
 
