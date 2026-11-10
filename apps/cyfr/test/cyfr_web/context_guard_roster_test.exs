@@ -46,22 +46,34 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive
   )
 
-  # The tasks started from the console, by file, and the files that take
-  # their answers through `deliver/3`. Every other deferred path — pane and
-  # host messages, runner broadcasts, a component's message to its page,
-  # `send_update/3` fan-out — lands in a guarded callback of its own.
+  # The tasks started from the console, by file, and each answer they send
+  # back: the file whose callback takes it, and what that callback matches —
+  # a `handle_info/2` message `{answer, ...}`, a `handle_async/3` named
+  # `answer`, or an `update/2` whose assigns carry the key `answer`. Every
+  # other deferred path — pane and host messages, runner broadcasts, a
+  # component's message to its page, `send_update/3` fan-out — lands in a
+  # guarded callback of its own.
   @tasks %{
-    "model_catalog.ex" => {1, ["live/aqua_live.ex", "live/thread_pane_live.ex"]},
-    "live/components_live.ex" => {4, ["live/components_live.ex"]},
-    "live/builds_live.ex" => {1, ["live/builds_live.ex"]},
-    "live/shell_live.ex" => {1, ["live/shell_live.ex"]},
+    "model_catalog.ex" =>
+      {1,
+       [
+         {"live/aqua_live.ex", :list_models_result},
+         {"live/thread_pane_live.ex", :list_models_result}
+       ]},
+    "live/components_live.ex" => {4, [{"live/components_live.ex", :deliver}]},
+    "live/builds_live.ex" => {1, [{"live/builds_live.ex", :deliver}]},
+    "live/shell_live.ex" => {1, [{"live/shell_live.ex", :deliver}]},
     # A model catalyst's install, answered to the page, and each ready
     # brain's options, answered to the agents section itself.
     "live/aqua_live/agents_component.ex" =>
-      {2, ["live/aqua_live.ex", "live/aqua_live/agents_component.ex"]},
+      {2,
+       [
+         {"live/aqua_live.ex", :catalyst_installed},
+         {"live/aqua_live/agents_component.ex", :brain_options}
+       ]},
     # The system layer's listener on `confirmation.changes`, whose facts
     # the layer takes in the focus it was opened for.
-    "live/system_layer.ex" => {1, ["live/system_layer.ex"]}
+    "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}
   }
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
@@ -160,13 +172,182 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     assert counts(sources, @capture) == starts,
            "the focus captures and the task starts differ, file by file"
 
-    for {path, {_n, consumers}} <- @tasks, consumer <- consumers do
+    # Clause by clause: one guarded clause of a callback does not cover
+    # another that takes the same answer.
+    for {path, {_n, answers}} <- @tasks, {consumer, answer} <- answers do
       assert Map.has_key?(sources, consumer),
              "#{path}'s answer is rostered to #{consumer}, which is gone"
 
-      assert sources[consumer] =~ "CyfrWeb.ContextGuard.deliver(",
-             "#{consumer} takes #{path}'s answer without CyfrWeb.ContextGuard.deliver/3"
+      clauses = answer_clauses(sources[consumer], answer)
+      assert clauses != [], "no callback in #{consumer} takes #{path}'s #{inspect(answer)}"
+
+      for {line, _args, _body, _how} = clause <- clauses do
+        assert delivered?(clause),
+               "#{consumer}:#{line} takes #{path}'s #{inspect(answer)} outside " <>
+                 "CyfrWeb.ContextGuard.deliver/3, or its head cannot be read"
+      end
     end
+  end
+
+  test "the delivery check fails a planted clause that takes an answer outside deliver/3" do
+    planted = """
+    defmodule PrismWeb.PlantedAnswer do
+      use PrismWeb, :live_view
+
+      def handle_info({:answer, tag, result}, socket) when is_map(result),
+        do: CyfrWeb.ContextGuard.deliver(socket, tag, &shown(&1, result))
+
+      def handle_info({:answer, _tag, result}, socket), do: {:noreply, shown(socket, result)}
+
+      def handle_info({:answer, tag, result}, socket) do
+        socket = assign(socket, :last, result)
+        CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, &1})
+      end
+
+      def handle_info({:answer, _tag, _exit}, socket), do: {:noreply, socket}
+
+      def handle_info({:answer, _tag, {:done, _} = message} = _answer, socket),
+        do: handle_info(message, socket)
+
+      def handle_info({:answer, _, %{}}, socket), do: {:noreply, assign(socket, :rows, %{})}
+
+      def handle_info(@answer = message, socket), do: handle_info(message, socket)
+
+      def handle_info({_kind = :answer, _tag, {:done, _} = message}, socket),
+        do: handle_info(message, socket)
+
+      def handle_info({kind, _tag, result}, socket) when kind in [:answer],
+        do: {:noreply, shown(socket, result)}
+
+      def handle_info({:other, result}, socket), do: {:noreply, shown(socket, result)}
+    end
+    """
+
+    assert planted |> answer_clauses(:answer) |> Enum.map(&delivered?/1) ==
+             [true, false, false, true, false, false, false, false, false]
+  end
+
+  # The `def` clauses in `source` whose head may take `answer`, as
+  # `{line, args, body, how}`: `how` is `:taken`, `:open` or `:unreadable`.
+  defp answer_clauses(source, answer) do
+    {:ok, ast} = Code.string_to_quoted(source)
+
+    {_, clauses} =
+      Macro.prewalk(ast, [], fn
+        {:def, meta, [head, [{:do, body} | _]]} = node, acc ->
+          {name, args} = call_head(head)
+
+          case takes(name, args, answer) do
+            false -> {node, acc}
+            how -> {node, [{meta[:line], args, body, how} | acc]}
+          end
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.reverse(clauses)
+  end
+
+  defp call_head({:when, _, [head | _]}), do: call_head(head)
+  defp call_head({name, _, args}) when is_list(args), do: {name, args}
+  defp call_head(_head), do: {nil, []}
+
+  # A scan of the source: it reads heads, not guards or clause order, so a
+  # catch-all clause (`msg`, `assigns`) is taken to follow the one that takes the answer.
+  defp takes(:handle_info, [message, _socket], answer), do: message |> strip() |> leading(answer)
+
+  defp takes(:handle_async, [name, _result, _socket], answer),
+    do: name |> strip() |> named(answer)
+
+  defp takes(:update, [assigns, _socket], answer), do: assigns |> strip() |> keyed(answer)
+  defp takes(_name, _args, _answer), do: false
+
+  # Every alias (`a = b`), at any depth, cut to its side that is not a variable.
+  defp strip(pattern), do: Macro.prewalk(pattern, &unalias/1)
+
+  defp unalias({:=, _, [left, right]}), do: unalias(if variable?(left), do: right, else: left)
+  defp unalias(pattern), do: pattern
+
+  defp variable?({name, _, ctx}), do: is_atom(name) and is_atom(ctx)
+  defp variable?(_pattern), do: false
+
+  # `:taken` when the answer position names `answer`; `:open` when what
+  # names it is no literal (a variable, a pin, a call), so any answer fits.
+  defp leading({:{}, _, [first | _]}, answer), do: named(first, answer)
+  defp leading({first, _}, answer), do: named(first, answer)
+  defp leading(message, _answer), do: whole(message)
+
+  defp named(answer, answer), do: :taken
+  defp named(name, _answer) when is_atom(name) or is_binary(name) or is_number(name), do: false
+  defp named({:__aliases__, _, _module}, _answer), do: false
+  defp named(_name, _answer), do: :open
+
+  defp keyed({:%{}, _, pairs}, answer) do
+    keys = Enum.map(pairs, fn {key, _value} -> key end)
+
+    cond do
+      answer in keys -> :taken
+      Enum.all?(keys, &is_atom/1) -> false
+      true -> :open
+    end
+  end
+
+  defp keyed(assigns, _answer), do: whole(assigns)
+
+  # A whole pattern no answer's shape: a variable, a literal, a map or a
+  # struct; anything else (a pin, a call) is unreadable.
+  defp whole({kind, _, _}) when kind in [:%, :%{}], do: false
+  defp whole(pattern) when is_atom(pattern) or is_binary(pattern) or is_number(pattern), do: false
+  defp whole(pattern), do: if(variable?(pattern), do: false, else: :unreadable)
+
+  # The clause hands the answer to `deliver/3` under a tag its head bound
+  # and reads nothing its head bound outside that call, or it drops the
+  # answer: it answers the socket it was handed, unchanged. A clause open
+  # to any answer passes only by dropping it.
+  defp delivered?({_line, _args, _body, :unreadable}), do: false
+  defp delivered?({_line, args, body, :open}), do: dropped?(List.last(args), body)
+
+  defp delivered?({_line, args, body, :taken}) do
+    dropped?(List.last(args), body) or delivered?(args |> Enum.drop(-1) |> vars(), body)
+  end
+
+  defp dropped?(socket, {reply, {name, _, ctx}}) when reply in [:noreply, :ok] and is_atom(ctx),
+    do: name in vars(socket)
+
+  defp dropped?(_socket, _body), do: false
+
+  defp delivered?(bound, body) do
+    {outside, tags} =
+      Macro.prewalk(body, [], fn
+        {{:., _, [{:__aliases__, _, [:CyfrWeb, :ContextGuard]}, :deliver]}, _, [_, tag, _]},
+        acc ->
+          {:delivered, [tag | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.any?(tags, fn
+      {name, _, ctx} when is_atom(name) and is_atom(ctx) -> name in bound
+      _expression -> false
+    end) and MapSet.disjoint?(vars(outside), bound)
+  end
+
+  # The variables `ast` names, an underscored one apart.
+  defp vars(ast) do
+    {_, found} =
+      Macro.prewalk(ast, MapSet.new(), fn
+        {name, _, ctx} = node, acc when is_atom(name) and is_atom(ctx) ->
+          if String.starts_with?(Atom.to_string(name), "_"),
+            do: {node, acc},
+            else: {node, MapSet.put(acc, name)}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found
   end
 
   defp counts(sources, pattern) do

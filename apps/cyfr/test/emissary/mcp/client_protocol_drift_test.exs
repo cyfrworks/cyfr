@@ -54,16 +54,20 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
     @legacy_sources ["apps/cyfr/lib/emissary/external/server.ex"]
 
     # The one definition, read by name: the alias spelling and the full one.
-    @legacy_call ~r/\b(?:Prima\.MCP\.)?Protocol\.legacy_version\(\)/
+    @legacy_call ~r/\A(?:Prima\.MCP\.)?Protocol\.legacy_version\(\)\z/
     @date_literal ~r/"\d{4}-\d{2}-\d{2}"/
+    # Each revision the hop sends: an `initialize`'s `protocolVersion`.
+    @sent_revision ~r/"protocolVersion"\s*=>\s*([^,\n]+)/
 
-    # What is wrong with one outbound hop's source: it must read the legacy
-    # revision from `Prima.MCP.Protocol.legacy_version/0` and spell no
+    # What is wrong with one outbound hop's source: every revision it sends
+    # must read `Prima.MCP.Protocol.legacy_version/0`, and it spells no
     # revision of its own.
     defp legacy_drift(source) do
-      missing = if source =~ @legacy_call, do: [], else: [:no_legacy_version_call]
+      sent = for [value] <- Regex.scan(@sent_revision, source, capture: :all_but_first), do: value
+      missing = if sent == [], do: [:no_initialize], else: []
+      wrong = for value <- sent, not (value =~ @legacy_call), do: {:not_legacy_version, value}
       literals = for [date] <- Regex.scan(@date_literal, source), do: {:date_literal, date}
-      missing ++ literals
+      missing ++ wrong ++ literals
     end
 
     test "every outbound fallback reads the one legacy revision and spells none of its own" do
@@ -100,9 +104,17 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
 
       # Every read spelled back as the date: the client reads it at its
       # initialize and at its legacy fallback.
-      assert [:no_legacy_version_call | literals] = legacy_drift(planted)
-      assert literals != []
-      assert Enum.uniq(literals) == [{:date_literal, ~s("#{Protocol.legacy_version()}")}]
+      date = ~s("#{Protocol.legacy_version()}")
+      drift = legacy_drift(planted)
+      assert length(drift) >= 4
+      assert Enum.uniq(drift) == [{:not_legacy_version, date}, {:date_literal, date}]
+
+      # One initialize of several sending the current revision is refused,
+      # though another still reads the legacy one.
+      legacy = ~s|"protocolVersion" => Protocol.legacy_version()|
+      assert [head, tail] = String.split(source, legacy, parts: 2)
+      one = head <> ~s|"protocolVersion" => Protocol.version()| <> tail
+      assert legacy_drift(one) == [{:not_legacy_version, "Protocol.version()"}]
 
       assert legacy_drift(source <> ~s(\n@legacy "2025-03-26"\n)) == [
                {:date_literal, ~s("2025-03-26")}

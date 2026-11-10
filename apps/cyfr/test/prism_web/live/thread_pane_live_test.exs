@@ -28,8 +28,14 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   alias Sanctum.Tenancy.Athanors
 
   # A text size under the 12 px a 720×720 glass is held to (WCAG 2.2 AA at
-  # that viewport, as the join proof measures it).
+  # that viewport). A test here renders markup and sees no stylesheet: it
+  # holds the pane to the shared size classes (`text-xs` and up, `min-h-6`
+  # targets) with nothing beside them that could size an element
+  # differently — an arbitrary size under 12 px, or an inline style, which
+  # outranks every class. The size the classes come to is a browser's to
+  # measure.
   @under_12px ~r/text-\[(?:\d|1[01])(?:\.\d+)?px\]/
+  @inline_style ~r/\sstyle=/
 
   # The empty state's way to a model: the AQUA page, named.
   @connect "Connect one on your AQUA page."
@@ -574,27 +580,29 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute html =~ "A.Q.U.A."
   end
 
-  test "at 720×720 an open thread draws no text under 12 px and no target under 24 px", %{
-    conn: conn,
-    athanor: athanor,
-    thread: thread
-  } do
+  test "at 720×720 an open thread's text and small targets carry the shared size classes alone",
+       %{
+         conn: conn,
+         athanor: athanor,
+         thread: thread
+       } do
     room = PrismWeb.RoomFeed.room("sthr_beside", "Plans")
     pane = open_pane(conn, athanor, thread, %{"room" => room})
     html = render(pane)
     assert html =~ "hello"
 
-    # Every size the pane draws is `text-xs` or larger (WCAG 2.2 AA at the
-    # 720×720 glass, as the join proof measures it), and its small targets
-    # are held to 24 px (`min-h-6`): the line's author, its paste onto the
-    # shared thread beside it, and the box that reads that thread.
+    # Every text class the pane draws is `text-xs` or larger, and its small
+    # targets carry `min-h-6`: the line's author, its paste onto the shared
+    # thread beside it, and the box that reads that thread. Nothing is
+    # sized inline.
     refute html =~ @under_12px
+    refute html =~ @inline_style
     assert has_element?(pane, "span.text-xs", "You")
     assert has_element?(pane, "button.min-h-6.text-xs", "Paste to Plans")
     assert has_element?(pane, ~s(label[id$="-read-room"].text-xs input.h-6.w-6))
   end
 
-  test "at 720×720 every state the pane draws holds the same sizes", %{
+  test "at 720×720 every state the pane draws holds the same size classes", %{
     conn: conn,
     user: user,
     athanor: athanor,
@@ -603,12 +611,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   } do
     # A state no test here reaches — several approvals pending, a held
     # send, the panel's links and its read-the-thread box —
-    # is held by the template itself: no text class under 12 px anywhere,
-    # and each of those small targets at 24 px.
+    # is held by the template itself: no text class under 12 px and no
+    # inline style anywhere, and each of those small targets on `min-h-6`.
     source =
       PrismWeb.ThreadPaneLive.module_info(:compile)[:source] |> to_string() |> File.read!()
 
     refute source =~ @under_12px
+    refute source =~ @inline_style
 
     for click <- ~w(approve_all_pending decline_all_pending retry_send discard_send dismiss_link) do
       assert source =~ ~r/phx-click="#{click}"[^>]*class="[^"]*min-h-6/,
@@ -670,6 +679,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         do: assert(html =~ drawn, "#{drawn} is not drawn")
 
     refute html =~ @under_12px
+    refute html =~ @inline_style
 
     standing = ~s([data-test="standing-answers"])
     assert has_element?(pane, "#{standing}.text-xs")
