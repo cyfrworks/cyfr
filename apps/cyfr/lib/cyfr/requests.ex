@@ -9,8 +9,8 @@ defmodule Cyfr.Requests do
   by the shell that presents it: the shell's own process registers it
   here, under its person in its athanor, and it leaves with that process
   whatever ends it, so no request outlives the prompt that asks it.
-  Nothing is stored. A member of a cell lists the requests its own shells
-  hold.
+  Nothing is stored: a request lives on the member whose shell holds it
+  and expires with it, so a member of a cell lists only its own shells'.
 
   Each opening and each end is told on the person's attention topic
   (`Cyfr.Bus.attention/2`) as an `attention.changes` item of kind
