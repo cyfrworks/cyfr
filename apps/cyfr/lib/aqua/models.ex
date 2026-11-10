@@ -11,7 +11,8 @@ defmodule Aqua.Models do
       key the reading ran with; `brain_options/2` is the options of an
       agent's brain, read as a person on the AQUA page;
     * `catalogue/1` — the listing the console's pickers show, every
-      installed catalyst that speaks the contract asked for its models;
+      installed catalyst that speaks the contract and has what it needs
+      connected asked for its models;
     * `model_status/2` — whether each agent's brain is ready: installed,
       and bound to a key or a login the agent runs it with
       (`t:status/0`).
@@ -203,8 +204,13 @@ defmodule Aqua.Models do
   @doc """
   The model listing the console shows: every installed catalyst that
   declares the contract, at its newest version, asked for `models`
-  through the catalog (so consent applies: a catalyst with no key answers
-  `setup_required` and is listed under `errors`, not `models`).
+  through the catalog, so consent applies to what runs. A catalyst whose
+  setup plan (`component.setup_plan`, as `model_status/2` reads it)
+  leaves a key or a sign-in to connect is not run: it is listed under
+  `errors` with the sentence its run would be refused with
+  (`:connection_not_granted`'s), and no run, failed or otherwise, is
+  recorded for it. Any other plan, or a plan that cannot be read, runs the
+  listing, whose own refusal is the catalyst's row.
 
   Returns `{:ok, %{"models" => %{provider => [id]}, "refs" => %{provider
   => versionless ref}, "errors" => %{provider => message}}}`. A provider
@@ -270,7 +276,31 @@ defmodule Aqua.Models do
     end
   end
 
+  # A listing opened on every pane mount runs nothing for a catalyst
+  # still waiting on its key or sign-in: such a run could only fail, and a
+  # failed run stands as something waiting on the person
+  # (`Cyfr.Providers.Attention`).
   defp list_models(ctx, ref) do
+    if to_connect?(ctx, ref),
+      do: {:error, refusal_text(:connection_not_granted)},
+      else: ask_models(ctx, ref)
+  end
+
+  # Whether the catalyst's own consent leaves a key or a sign-in to
+  # connect: a damaged consent, one the store could not answer, or a plan
+  # that could not be read is no setup the person can make, and runs as
+  # it always has.
+  defp to_connect?(ctx, ref) do
+    case Aqua.Ops.call_tool("component", ctx, %{"action" => "setup_plan", "reference" => ref}) do
+      {:ok, %{ready: false} = plan} ->
+        match?({status, _} when status in [:needs_key, :needs_sign_in], unready(plan, ref))
+
+      _ready_or_unread ->
+        false
+    end
+  end
+
+  defp ask_models(ctx, ref) do
     run = run_as_caller(ctx, ref, %{"operation" => "models", "params" => %{}})
 
     with {:ok, result} <- run,
