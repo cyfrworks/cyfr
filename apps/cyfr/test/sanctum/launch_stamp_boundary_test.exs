@@ -17,6 +17,9 @@ defmodule Sanctum.LaunchStampBoundaryTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @root Path.expand("../../../..", __DIR__)
   @context "apps/sanctum/lib/sanctum/context.ex"
 

@@ -47,6 +47,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   # module path => string-returning `{:error, "…"}` sites remaining.
   # Ordered by size, which is also the order worth converting them in.
   @worklist %{

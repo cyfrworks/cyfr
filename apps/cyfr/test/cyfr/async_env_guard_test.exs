@@ -51,6 +51,9 @@ defmodule Cyfr.AsyncEnvGuardTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   alias Prima.Test.SourceTree
 
   @app_writes [:put_env, :delete_env, :put_all_env]

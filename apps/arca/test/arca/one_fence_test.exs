@@ -30,6 +30,9 @@ defmodule Arca.OneFenceTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @lib Path.expand("../../lib", __DIR__)
   @owners [[:Arca, :Repo], [:Arca, :ControlPlane]]
 

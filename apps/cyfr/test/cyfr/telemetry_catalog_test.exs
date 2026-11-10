@@ -4,6 +4,9 @@
 defmodule Cyfr.TelemetryCatalogTest do
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @moduledoc """
   Pins the telemetry roster to `Cyfr.Telemetry.Catalog` in both directions.
 

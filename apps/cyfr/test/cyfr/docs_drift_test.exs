@@ -10,6 +10,9 @@ defmodule Cyfr.DocsDriftTest do
   """
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   alias Cyfr.Platform.Settings.Roster
   alias Cyfr.Platform.Settings.Roster.Entry
   alias Mix.Tasks.Cyfr.Gen.ConfigurationGuide

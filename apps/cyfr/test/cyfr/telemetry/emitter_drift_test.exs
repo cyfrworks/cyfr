@@ -33,6 +33,9 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   alias Cyfr.Telemetry.Catalog
 
   # apps/cyfr/test/cyfr/telemetry -> umbrella root

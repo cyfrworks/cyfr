@@ -13,6 +13,11 @@ defmodule Arca.Test.Adapter do
   passed. A test that asserts differently per adapter branches in its body
   on `postgres?/0` or `sqlite?/0`; none defines its own, none compiles its
   body out on an adapter attribute, and none skips itself on the adapter.
+  A test whose every input is the same on both adapters carries `:sqlite`,
+  so it runs once: it reads no database, branches on no adapter, and reads
+  no compiled module the adapter shapes (one built from `:arca,
+  :repo_adapter`) and no file that differs by adapter, as a scan of the
+  source tree does.
 
   The adapter is the build's (`CYFR_DATABASE`, compiled into
   `:arca, :repo_adapter`), so a build path and the runner that chose it

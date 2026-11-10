@@ -31,6 +31,9 @@ defmodule Cyfr.TestSkipRosterTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @root Path.expand("../../../..", __DIR__)
   @test_files "apps/*/test/**/*_test.exs"
   @this "apps/cyfr/test/cyfr/test_skip_roster_test.exs"

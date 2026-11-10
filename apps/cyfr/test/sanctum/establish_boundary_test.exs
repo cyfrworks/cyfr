@@ -12,6 +12,9 @@ defmodule Sanctum.EstablishBoundaryTest do
   """
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   alias Prima.Test.SourceTree
 
   @root Path.expand("../../../..", __DIR__)

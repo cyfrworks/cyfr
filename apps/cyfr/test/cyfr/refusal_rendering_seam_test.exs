@@ -33,6 +33,9 @@ defmodule Cyfr.RefusalRenderingSeamTest do
 
   use ExUnit.Case, async: true
 
+  # Every input is the same on both adapters (`Arca.Test.Adapter`).
+  @moduletag :sqlite
+
   @root Path.expand("../../../..", __DIR__)
 
   # The names a callee's answer goes by where it is inspected.
