@@ -987,7 +987,7 @@ defmodule Compendium.Tincture.RulesTest do
       assert control_check([control("execution.retry")]) == :ok
     end
 
-    test "never run any execute but feed.press and execution.retry" do
+    test "ask the person before any execute but feed.press and execution.retry" do
       executes =
         for {tool, {_provider, %{operations: operations}}} <- Sanctum.Catalog.operations(),
             %Prima.Operation{kind: :execute, action: action} = op <- operations,
@@ -1004,55 +1004,94 @@ defmodule Compendium.Tincture.RulesTest do
       assert "feed.press" in executes
       assert "execution.run" in executes
 
+      for operation <- ["execution.retry", "feed.press"] do
+        assert Rules.control_runs(operation) == {:ok, :direct}, operation
+      end
+
       for operation <- executes -- ["execution.retry", "feed.press"] do
-        assert control_check([control(operation)]) ==
-                 {:error,
-                  {:invalid_tincture,
-                   "tincture.desktop.controls c1 runs #{operation}, which is an execute: a " <>
-                     "control runs a write, feed.press or execution.retry"}},
-               operation
+        assert control_check([control(operation)]) == :ok, operation
+        assert Rules.control_runs(operation) == {:ok, :asks}, operation
       end
     end
 
-    test "never run an unknown, person-only, administrator's or in-run operation, or any other kind" do
+    test "run a write directly, and ask before a person-only, destructive or external act" do
+      for operation <- ["schedule.pause", "schedule.resume", "file.write"] do
+        assert Rules.control_runs(operation) == {:ok, :direct}, operation
+      end
+
+      for operation <- [
+            "schedule.create",
+            "schedule.update",
+            "feed.bind",
+            "feed.remove",
+            "layout.edit",
+            "vault.create",
+            "thread.archive",
+            "execution.run",
+            "schedule.delete",
+            "registry.legal_accept"
+          ] do
+        assert control_check([control(operation)]) == :ok, operation
+        assert Rules.control_runs(operation) == {:ok, :asks}, operation
+      end
+
+      # Every tool only an agent asks for is among the person's, and asks.
+      for tool <- Prima.Manifest.Caps.agent_only_tools() do
+        assert Rules.control_runs(tool) == {:ok, :asks}, tool
+      end
+    end
+
+    test "never run an unknown, administrator's, in-run, consent-walk or read operation" do
+      walk =
+        "a step of a grant's consent walk: a desktop asks for a grant itself, and the " <>
+          "person grants in CYFR's grant prompt"
+
       for {operation, why} <- [
             {"nothing.here", "which no provider declares"},
-            {"schedule.create",
-             "which is the person's own act: a desktop cannot ask the person for it yet"},
-            {"schedule.update",
-             "which is the person's own act: a desktop cannot ask the person for it yet"},
-            {"feed.bind",
-             "which is the person's own act: a desktop cannot ask the person for it yet"},
-            {"feed.remove",
-             "which is the person's own act: a desktop cannot ask the person for it yet"},
-            {"layout.edit",
-             "which is the person's own act: a desktop cannot ask the person for it yet"},
-            {"profile.grant",
-             "which is the person's own act: a desktop cannot ask the person for it yet"},
-            {"vault.create",
-             "which is the person's own act: a desktop cannot ask the person for it yet"},
+            {"profile.commit", walk},
+            {"profile.grant", walk},
+            {"component.register", walk},
             {"settings.set", "which is an administrator's"},
             {"key.create", "which is an administrator's"},
             {"source.write", "which runs only inside a run"},
             {"athanor.get",
-             "which is a read: a control runs a write, feed.press or execution.retry"},
-            {"execution.run",
-             "which is an execute: a control runs a write, feed.press or execution.retry"},
-            {"schedule.delete",
-             "which is destructive: a control runs a write, feed.press or execution.retry"},
-            {"registry.legal_accept",
-             "which is external: a control runs a write, feed.press or execution.retry"}
+             "which is a read: a control runs a write, feed.press or execution.retry " <>
+               "directly, and asks the person before any other execute, destructive or " <>
+               "external operation and any of the person's own acts"}
           ] do
         assert control_check([control("schedule.pause", %{"id" => "ok"}), control(operation)]) ==
                  {:error,
                   {:invalid_tincture, "tincture.desktop.controls c1 runs #{operation}, #{why}"}},
                operation
+
+        assert {:error, {:invalid_tincture, "a control runs " <> _}} =
+                 Rules.control_runs(operation),
+               operation
+      end
+    end
+
+    test "a request names a person-only act: an agent-only tool or one that asks for confirmation" do
+      for operation <-
+            Prima.Manifest.Caps.agent_only_tools() ++ ["vault.create", "thread.archive"] do
+        assert Rules.request_operation(operation) == :ok, operation
       end
 
-      # Every tool only an agent asks for is among the person's.
-      for tool <- Prima.Manifest.Caps.agent_only_tools() do
-        assert {:error, {:invalid_tincture, sentence}} = control_check([control(tool)])
-        assert sentence =~ "the person's own act", tool
+      for {operation, why} <- [
+            {"nothing.here", "names an operation no provider declares"},
+            {"schedule.pause", "names an operation that is not the person's own act"},
+            {"execution.run", "names an operation that is not the person's own act"},
+            {"schedule.delete", "names an operation that is not the person's own act"},
+            {"profile.grant", "a step of a grant's consent walk"},
+            {"profile.commit", "a step of a grant's consent walk"},
+            {"mcp_servers.create", "which is an administrator's"},
+            {"thread.list", "which is a read"},
+            {"source.write", "which runs only inside a run"}
+          ] do
+        assert {:error, {:invalid_tincture, sentence}} = Rules.request_operation(operation),
+               operation
+
+        assert sentence =~ "a request for #{operation}", operation
+        assert sentence =~ why, operation
       end
     end
 

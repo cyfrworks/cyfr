@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given; one refusal, the projection of a Prima.Refusal a frame may read; the stream connection's messages (`connection`): what a frame sends over it and what the endpoint answers, how the page's handler hears each answer, and the messages the endpoint refuses; how the SDK rejects a subscription that opens no stream, for each answer it can get (`stream_rejections`: no connection, or a refusal of a class in `no_answer_classes`, is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press`, `failed` and `grant` among them, which the shell takes from a canvas alone), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' `no_answer_classes`, exactly the classes answered with a server error; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, every connection message the frame sends is the one its encoder writes and every answer is heard as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built. `stream_events` holds stream payloads as a canvas reads them, by stream: `runs.changes` a run still running (no `ended_at`, no `error`) and one that ended (its `ended_at` and its error's `class` and `cause`), each time ISO 8601 UTC; the runs stream's owner's test (apps/cyfr/test/opus/providers/feed_test.exs) builds each from a run's payload and finds it in the stream's shape and projection, and the shipped canvas's test folds them as it folds a run; `threads.changes` a shared thread (its `unread` a count of the messages someone else posted after the person last had it open) and an own thread (its `unread` null: no read mark), each `last_activity` ISO 8601 UTC; the threads stream's owner's test (apps/cyfr/test/aqua/streams_test.exs) builds each from a listing's payload and reads it back as a canvas reads it, in the stream's shape and projection, and the switchboard desktop's test (apps/cyfr/assets/test/canvas/switchboard_desktop.test.mjs) folds them whole as it folds a thread.",
+  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given; one refusal, the projection of a Prima.Refusal a frame may read; the stream connection's messages (`connection`): what a frame sends over it and what the endpoint answers, how the page's handler hears each answer, and the messages the endpoint refuses; how the SDK rejects a subscription that opens no stream, for each answer it can get (`stream_rejections`: no connection, or a refusal of a class in `no_answer_classes`, is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press`, `failed` and `grant` among them, which the shell takes from a canvas alone, and `request`, which it takes from any frame), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' `no_answer_classes`, exactly the classes answered with a server error; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, every connection message the frame sends is the one its encoder writes and every answer is heard as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built. `stream_events` holds stream payloads as a canvas reads them, by stream: `runs.changes` a run still running (no `ended_at`, no `error`) and one that ended (its `ended_at` and its error's `class` and `cause`), each time ISO 8601 UTC; the runs stream's owner's test (apps/cyfr/test/opus/providers/feed_test.exs) builds each from a run's payload and finds it in the stream's shape and projection, and the shipped canvas's test folds them as it folds a run; `threads.changes` a shared thread (its `unread` a count of the messages someone else posted after the person last had it open) and an own thread (its `unread` null: no read mark), each `last_activity` ISO 8601 UTC; the threads stream's owner's test (apps/cyfr/test/aqua/streams_test.exs) builds each from a listing's payload and reads it back as a canvas reads it, in the stream's shape and projection, and the switchboard desktop's test (apps/cyfr/assets/test/canvas/switchboard_desktop.test.mjs) folds them whole as it folds a thread.",
   "version": 1,
   "bearer_header": "authorization",
   "routes": {
@@ -830,6 +830,79 @@
           }
         }
       }
+    },
+    {
+      "verb": "request",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "schedule.create",
+          "args": {
+            "name": "digest",
+            "cron_expression": "0 8 * * *",
+            "reference": "formula:local.digest:0.2.0",
+            "profile_id": "prof-default",
+            "input": {}
+          },
+          "call": 4
+        }
+      }
+    },
+    {
+      "verb": "request",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "grant",
+          "args": {
+            "ref": "c:local.openai"
+          },
+          "call": 5
+        }
+      }
+    },
+    {
+      "verb": "request",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "feed.remove",
+          "args": {
+            "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+          },
+          "call": 6
+        }
+      }
+    },
+    {
+      "verb": "settings",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "page": "aqua",
+          "ref": "thr_0190f3a2"
+        }
+      }
+    },
+    {
+      "verb": "settings",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "page": "chat",
+          "ref": "sth_0190f3a2-7b1c-7d2e-8f3a-1b2c3d4e5f60"
+        }
+      }
     }
   ],
   "shell_invalid": [
@@ -1240,10 +1313,183 @@
           }
         }
       }
+    },
+    {
+      "why": "a request without its call",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "schedule.create",
+          "args": {}
+        }
+      }
+    },
+    {
+      "why": "a request naming an operation outside the grammar",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "Schedule Create",
+          "args": {},
+          "call": 7
+        }
+      }
+    },
+    {
+      "why": "a request naming a tool without its action",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "schedule",
+          "args": {},
+          "call": 7
+        }
+      }
+    },
+    {
+      "why": "a request whose args are not an object",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "schedule.create",
+          "args": [
+            "digest"
+          ],
+          "call": 7
+        }
+      }
+    },
+    {
+      "why": "a request without its args",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "schedule.create",
+          "call": 7
+        }
+      }
+    },
+    {
+      "why": "a request carrying a sentence of its own",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "schedule.create",
+          "args": {},
+          "call": 7,
+          "label": "Make the digest daily"
+        }
+      }
+    },
+    {
+      "why": "a request for a grant naming no component",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "grant",
+          "args": {},
+          "call": 7
+        }
+      }
+    },
+    {
+      "why": "a request for a grant naming an address",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "grant",
+          "args": {
+            "ref": "https://example.com/"
+          },
+          "call": 7
+        }
+      }
+    },
+    {
+      "why": "a request for a grant carrying more than its reference",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "grant",
+          "args": {
+            "ref": "c:local.openai",
+            "label": "default"
+          },
+          "call": 7
+        }
+      }
+    },
+    {
+      "why": "a request whose call is not a whole number from 1",
+      "message": {
+        "v": 1,
+        "verb": "request",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "operation": "schedule.create",
+          "args": {},
+          "call": 0
+        }
+      }
+    },
+    {
+      "why": "settings with a ref outside the id grammar",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "page": "aqua",
+          "ref": "<script>"
+        }
+      }
+    },
+    {
+      "why": "settings with a ref that is not a string",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "page": "aqua",
+          "ref": 7
+        }
+      }
+    },
+    {
+      "why": "settings with another key beside its ref",
+      "message": {
+        "v": 1,
+        "verb": "settings",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "page": "aqua",
+          "ref": "thr_1",
+          "subject": "x"
+        }
+      }
     }
   ],
   "canvas": {
-    "comment": "A canvas frame's part of the tincture wire. `verbs` are the shell verbs the shell takes from a canvas alone. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. A canvas block is exactly mode, data_path, streams, prefs (exactly document, an object, and revision, a whole number from 0), appearance (exactly mode, light or dark; accent, lowercase #rrggbb; locale, a language tag; time_zone, a zone name; and safe_areas, exactly top, right, bottom and left, whole CSS pixels to 512) and person (exactly name, 1 to 128 code points with no control character, or null). `to_frame` are the messages the bridge posts to a frame over its port, each exactly v, verb, frame and args, read by the SDK: a canvas's open, what the shell tells it, its answers `pressed` (exactly control, call and outcome, accepted, refused or cancelled, with reason, a refusal's class, exactly when refused) and `prefs` (exactly call, outcome, saved, stale, refused or cancelled, document and revision, with reason exactly when refused), each carrying back the call number the frame's press or write was sent with, and an app's `subject`. An `installed` tincture is exactly ref, name, icon (an emoji of 1 to 16 code points, or null) and open (a boolean). A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream connection. Every invalid row is refused for the reason `why` gives.",
+    "comment": "A canvas frame's part of the tincture wire. `verbs` are the shell verbs the shell takes from a canvas alone. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. A canvas block is exactly mode, data_path, streams, prefs (exactly document, an object, and revision, a whole number from 0), appearance (exactly mode, light or dark; accent, lowercase #rrggbb; locale, a language tag; time_zone, a zone name; and safe_areas, exactly top, right, bottom and left, whole CSS pixels to 512) and person (exactly name, 1 to 128 code points with no control character, or null). `to_frame` are the messages the bridge posts to a frame over its port, each exactly v, verb, frame and args, read by the SDK: a canvas's open, what the shell tells it, its answers `pressed` (exactly control, call and outcome, accepted, refused or cancelled, with reason, a refusal's class, exactly when refused) and `prefs` (exactly call, outcome, saved, stale, refused or cancelled, document and revision, with reason exactly when refused), each carrying back the call number the frame's press or write was sent with, the answers to a request (and to a press of a control the person approves first) `requested` (exactly call and request, a request id) and `decided` (exactly call and outcome, approved, refused or cancelled, with reason exactly when refused, declined or a refusal's class, and, when cancelled, perhaps too_soon, busy, expired or dismissed), which an app's frame is posted too, and an app's `subject`. An `installed` tincture is exactly ref, name, icon (an emoji of 1 to 16 code points, or null) and open (a boolean). A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream connection. Every invalid row is refused for the reason `why` gives.",
     "stages": [
       "load",
       "runtime"
@@ -4431,6 +4677,133 @@
               "id": "thr_0190f3a2"
             }
           }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "requested",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 20,
+              "request": "req_3q2Rw0x9TzK1pL7mVb4cNg"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 20,
+              "outcome": "approved"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 21,
+              "outcome": "refused",
+              "reason": "declined"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 22,
+              "outcome": "refused",
+              "reason": "forbidden"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 23,
+              "outcome": "cancelled",
+              "reason": "busy"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 24,
+              "outcome": "cancelled",
+              "reason": "expired"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 25,
+              "outcome": "cancelled",
+              "reason": "dismissed"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 26,
+              "outcome": "cancelled",
+              "reason": "too_soon"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 27,
+              "outcome": "cancelled"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "requested",
+            "frame": "frm_01a09fee2e4f",
+            "args": {
+              "call": 3,
+              "request": "req_9fKd02LmQpZx7Yt1Rw5sVa"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_01a09fee2e4f",
+            "args": {
+              "call": 3,
+              "outcome": "approved"
+            }
+          }
         }
       ],
       "invalid": [
@@ -6122,6 +6495,127 @@
                 "desktop": {}
               },
               "revision": 1
+            }
+          }
+        },
+        {
+          "why": "a requested answer without its request",
+          "message": {
+            "v": 1,
+            "verb": "requested",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9
+            }
+          }
+        },
+        {
+          "why": "a requested answer whose request is not a request id",
+          "message": {
+            "v": 1,
+            "verb": "requested",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "request": "sch_1"
+            }
+          }
+        },
+        {
+          "why": "a requested answer without its call",
+          "message": {
+            "v": 1,
+            "verb": "requested",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "request": "req_3q2Rw0x9TzK1pL7mVb4cNg"
+            }
+          }
+        },
+        {
+          "why": "a decided answer with an outcome outside the wire's",
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "accepted"
+            }
+          }
+        },
+        {
+          "why": "a refused request without its reason",
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "refused"
+            }
+          }
+        },
+        {
+          "why": "an approved request with a reason",
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "approved",
+              "reason": "declined"
+            }
+          }
+        },
+        {
+          "why": "a cancelled request naming a reason outside the wire's",
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "cancelled",
+              "reason": "not_found"
+            }
+          }
+        },
+        {
+          "why": "a refused request naming a reason that is no class",
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "refused",
+              "reason": "Declined!"
+            }
+          }
+        },
+        {
+          "why": "a decided answer carrying its request",
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "approved",
+              "request": "req_3q2Rw0x9TzK1pL7mVb4cNg"
+            }
+          }
+        },
+        {
+          "why": "a decided answer without its call",
+          "message": {
+            "v": 1,
+            "verb": "decided",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "approved"
             }
           }
         }

@@ -16,7 +16,15 @@ defmodule Cyfr.Bus.Attention do
 
   alias Cyfr.Bus.Payload
 
-  @kinds [:approval, :confirmation, :failed_run, :failed_schedule, :file_offer, :removed]
+  @kinds [
+    :approval,
+    :grant_request,
+    :confirmation,
+    :failed_run,
+    :failed_schedule,
+    :file_offer,
+    :removed
+  ]
   @outcomes [:resolved, :expired, :withdrawn]
   @fields [:id, :label, :since, :destination, :outcome]
 
@@ -24,7 +32,13 @@ defmodule Cyfr.Bus.Attention do
   defstruct [:athanor_id, :kind, :revision, :at | @fields]
 
   @type kind ::
-          :approval | :confirmation | :failed_run | :failed_schedule | :file_offer | :removed
+          :approval
+          | :grant_request
+          | :confirmation
+          | :failed_run
+          | :failed_schedule
+          | :file_offer
+          | :removed
 
   @type outcome :: :resolved | :expired | :withdrawn
 

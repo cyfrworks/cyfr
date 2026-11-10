@@ -462,6 +462,59 @@ defmodule Prima.TinctureWireTest do
     end
   end
 
+  test "a request names grant or an operation, its args and its call, and nothing else" do
+    frame = "frm_01a09fee2e4f"
+
+    for {operation, args} <- [
+          {"schedule.create", %{"name" => "digest", "cron_expression" => "0 8 * * *"}},
+          {"layout.edit", %{}},
+          {"grant", %{"ref" => "c:local.openai"}},
+          {"grant", %{"ref" => "tincture:local.vault:0.2.0"}}
+        ] do
+      request = %{"operation" => operation, "args" => args, "call" => 1}
+      message = TinctureWire.shell_message(:request, frame, request)
+
+      assert {:ok, %{verb: :request, args: ^request}} =
+               TinctureWire.decode_shell_message(message)
+    end
+
+    for args <- [
+          %{"operation" => "schedule.create", "args" => %{}},
+          %{"operation" => "schedule", "args" => %{}, "call" => 1},
+          %{"operation" => 7, "args" => %{}, "call" => 1},
+          %{"operation" => "schedule.create", "args" => "digest", "call" => 1},
+          %{"operation" => "grant", "args" => %{"ref" => "agent:local.helper"}, "call" => 1},
+          %{"operation" => "grant", "args" => %{"ref" => "c:local.x", "y" => 1}, "call" => 1},
+          %{"operation" => "layout.edit", "args" => %{}, "call" => 1, "why" => "x"}
+        ] do
+      message = TinctureWire.shell_message(:request, frame, args)
+      assert {:error, _} = TinctureWire.decode_shell_message(message), inspect(args)
+    end
+
+    assert TinctureWire.request_operation?(TinctureWire.grant_operation())
+    refute TinctureWire.request_operation?("grant.commit.now")
+  end
+
+  test "settings names a page and, optionally, the record on it to open at" do
+    for args <- [%{"page" => "aqua"}, %{"page" => "chat", "ref" => "sth_1"}] do
+      message = TinctureWire.shell_message(:settings, "frm_01a09fee2e4f", args)
+      assert {:ok, %{verb: :settings, args: ^args}} = TinctureWire.decode_shell_message(message)
+    end
+
+    for args <- [%{"page" => "aqua", "ref" => ""}, %{"ref" => "thr_1"}] do
+      message = TinctureWire.shell_message(:settings, "frm_01a09fee2e4f", args)
+      assert {:error, _} = TinctureWire.decode_shell_message(message), inspect(args)
+    end
+  end
+
+  test "a request id the identifier generator mints is one the wire reads, and no two are the same" do
+    ids = for _ <- 1..32, do: Prima.UUID7.request_id()
+    assert Enum.all?(ids, &TinctureWire.request_id?/1)
+    assert Enum.uniq(ids) == ids
+    refute TinctureWire.request_id?("req_short")
+    refute TinctureWire.request_id?("sch_0190f3a27b1c7d2e8f3a")
+  end
+
   test "every installed tincture the fixture sends a canvas is the wire's entry, and the refused ones break it" do
     rows = vectors()["canvas"]["to_frame"]
     keys = TinctureWire.installed_keys()
@@ -613,8 +666,38 @@ defmodule Prima.TinctureWireTest do
         refute built == args, why
       end
 
+      for %{"message" => %{"verb" => "requested", "args" => args}} <- rows["valid"] do
+        assert TinctureWire.requested(args["call"], args["request"]) == args
+      end
+
+      decided =
+        for %{"message" => %{"verb" => "decided", "args" => args}} <- rows["valid"], do: args
+
+      assert decided |> Enum.map(& &1["outcome"]) |> Enum.uniq() |> Enum.sort() ==
+               Enum.sort(TinctureWire.request_outcomes())
+
+      for args <- decided do
+        assert TinctureWire.decided(args["call"], args["outcome"], args["reason"]) == args
+      end
+
+      for %{"why" => why, "message" => %{"verb" => verb, "args" => args}} <- rows["invalid"],
+          verb in ["requested", "decided"] do
+        built =
+          try do
+            if verb == "requested",
+              do: TinctureWire.requested(args["call"], args["request"]),
+              else: TinctureWire.decided(args["call"], args["outcome"], args["reason"])
+          rescue
+            ArgumentError -> :raised
+          end
+
+        refute built == args, why
+      end
+
       assert TinctureWire.press_outcomes() == ~w(accepted refused cancelled)
       assert TinctureWire.prefs_outcomes() == ~w(saved stale refused cancelled)
+      assert TinctureWire.request_outcomes() == ~w(approved refused cancelled)
+      assert TinctureWire.request_cancel_reasons() == ~w(too_soon busy expired dismissed)
     end
   end
 

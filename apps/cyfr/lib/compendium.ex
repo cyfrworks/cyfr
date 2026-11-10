@@ -251,17 +251,45 @@ defmodule Compendium do
 
   @doc """
   The call a desktop's control `id` makes when the person presses it with
-  `value`, or its refusal (`Compendium.Desktop.control/4`): checked
-  against the served version's declaration, the direct rule and, for a
-  pick, the stream's current state. Nothing is run.
+  `value`, run directly or once the person approves it, or its refusal
+  (`Compendium.Desktop.control/4`): checked against the served version's
+  declaration, the control rule and, for a pick, the stream's current
+  state. Nothing is run.
   """
   @spec desktop_control(
           Context.t(),
           Prima.Manifest.Tincture.Desktop.t() | nil,
           String.t(),
           String.t() | nil
-        ) :: {:ok, Compendium.Desktop.call()} | {:error, term()}
+        ) ::
+          {:ok, {:direct, Compendium.Desktop.call()} | {:asks, Compendium.Desktop.ask()}}
+          | {:error, term()}
   defdelegate desktop_control(ctx, desktop, id, value), to: Compendium.Desktop, as: :control
+
+  @doc """
+  What a frame's request asks the person for, a grant of an installed
+  component or one of their own acts with the preview they approve it
+  on, or its refusal (`Compendium.Desktop.request/3`). Nothing is run.
+  """
+  @spec desktop_request(Context.t(), String.t(), map()) ::
+          {:ok, {:grant, String.t()} | {:asks, Compendium.Desktop.ask()}} | {:error, term()}
+  defdelegate desktop_request(ctx, operation, args), to: Compendium.Desktop, as: :request
+
+  @doc """
+  How a desktop's control of `operation` runs: directly on the person's
+  tap, or once the person approves it, or its refusal
+  (`Compendium.Tincture.Rules.control_runs/1`).
+  """
+  @spec tincture_control_runs(String.t()) ::
+          {:ok, :direct | :asks} | {:error, Rules.refusal()}
+  defdelegate tincture_control_runs(operation), to: Rules, as: :control_runs
+
+  @doc """
+  Whether a frame may ask the person for `operation` through a request
+  (`Compendium.Tincture.Rules.request_operation/1`).
+  """
+  @spec tincture_request_operation(String.t()) :: :ok | {:error, Rules.refusal()}
+  defdelegate tincture_request_operation(operation), to: Rules, as: :request_operation
 
   @doc """
   The caller's preferences for their canvas `canvas_id`, reduced to the

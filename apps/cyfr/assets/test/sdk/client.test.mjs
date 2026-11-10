@@ -5,7 +5,15 @@ import assert from "node:assert/strict"
 import {afterEach, describe, test} from "node:test"
 
 import {CyfrError, createClient} from "../../js/sdk/client.js"
-import {CANVAS_VERBS, CREDENTIAL, HANDSHAKE, SOCKET_PATH, credentialClosed, toFrameMessage} from "../../js/sdk/wire.js"
+import {
+  ANSWER_OF,
+  CANVAS_VERBS,
+  CREDENTIAL,
+  HANDSHAKE,
+  SOCKET_PATH,
+  credentialClosed,
+  toFrameMessage
+} from "../../js/sdk/wire.js"
 import {credentialOf, eventually, fixture, frameWindow, nextMessage, stubServer, stubSockets} from "./support.mjs"
 
 const GRANT = fixture.shell.find((vector) => vector.verb === "grant").message.args.ref
@@ -325,11 +333,20 @@ describe("shell verbs go over the port", () => {
 
     for (const {verb, message} of fixture.shell.filter(({verb}) => !CANVAS_VERBS.includes(verb))) {
       const received = nextMessage(shell)
+      let asking = null
       if (verb === "open") api.open(message.args.ref, message.args.subject ?? null)
       else if (verb === "title") api.title(message.args.title)
       else if (verb === "credential") api.credential(message.args.name)
+      else if (verb === "request") asking = api.request(message.args.operation, message.args.args)
       else api[verb]()
-      assert.deepEqual(await received, message, verb)
+      const got = await received
+      // A request is numbered by the page's own count, its answer under it.
+      const call = verb === "request" ? got.args.call : undefined
+      assert.deepEqual(got, call === undefined ? message : {...message, args: {...message.args, call}}, verb)
+      if (asking) {
+        shell.postMessage(toFrameMessage("decided", FRAME, {call, outcome: "approved"}))
+        assert.deepEqual({...(await asking)}, {outcome: "approved"})
+      }
     }
   })
 
@@ -1676,8 +1693,11 @@ describe("a desktop's verbs and data", () => {
     const {api, heard} = client
     const subject = {kind: "run", id: "exec_0190f3a2"}
 
+    const atRecord = fixture.shell.find(({verb, message}) => verb === "settings" && "ref" in message.args).message.args
+
     api.ask("runs")
     api.settings("schedules")
+    api.settings(atRecord.page, atRecord.ref)
     api.open("t:local.runs", {kind: "url", id: "x"})
     api.open("t:local.runs", subject)
     await settled(client)
@@ -1687,6 +1707,7 @@ describe("a desktop's verbs and data", () => {
       [
         ["ask", {widget: "runs"}],
         ["settings", {page: "schedules"}],
+        ["settings", atRecord],
         ["open", {ref: "t:local.runs", subject}]
       ]
     )
@@ -1711,5 +1732,194 @@ describe("a desktop's verbs and data", () => {
     api.ready()
     await eventually(() => heard.length === 1)
     assert.deepEqual(heard, [{v: 1, verb: "ready", frame: FRAME, args: {}}])
+  })
+})
+
+// ---- a request for the person, from any frame -----------------------------------
+
+describe("a request asks the person, from any frame", () => {
+  const [ASK] = fixture.shell.filter(({verb}) => verb === "request").map(({message}) => message)
+  // The fixture's answers to an app frame's request, both under one call.
+  const APP_ANSWERS = fixture.canvas.to_frame.valid
+    .map(({message}) => message)
+    .filter(({verb, frame}) => frame === FRAME && ANSWER_OF.request.includes(verb))
+  const [{args: {request: REQUEST_ID}}] = APP_ANSWERS
+  const OTHER_ID = "req_0000000000000000"
+  const answerOn = (port, verb, args, frame = CANVAS) => port.postMessage(toFrameMessage(verb, frame, args))
+  const sent = (heard, verbs) => heard.filter(({verb}) => verbs.includes(verb))
+  const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+  // An app frame's SDK with its port open, and every message it posts.
+  async function appClient() {
+    const client = await frameClient()
+    const port = client.handshake()
+    const heard = []
+    port.onmessage = (event) => heard.push(event.data)
+    await eventually(() => client.api.frame === FRAME)
+    return {...client, port, heard}
+  }
+
+  test("an app's press and write go nowhere but take their calls; its request is the wire's, hears requested and settles with decided", async () => {
+    assert.deepEqual(
+      APP_ANSWERS.map(({verb}) => verb),
+      ["requested", "decided"]
+    )
+    const [requested, decided] = APP_ANSWERS
+    const {api, port, heard} = await appClient()
+
+    assert.deepEqual({...(await api.press("pause-digest"))}, {outcome: "cancelled"})
+    assert.deepEqual({...(await api.prefs({widgets: {}}))}, {outcome: "cancelled"})
+    const asking = api.request(ASK.args.operation, ASK.args.args)
+    await eventually(() => heard.length === 1)
+    assert.deepEqual(heard, [{...ASK, args: {...ASK.args, call: requested.args.call}}])
+
+    port.postMessage(requested)
+    assert.equal(await asking.requested, requested.args.request)
+    port.postMessage(decided)
+    assert.deepEqual({...(await asking)}, {outcome: "approved"})
+  })
+
+  test("a request decided before the person is asked settles with it, its requested null; another call's, verb's or frame's answer settles nothing", async () => {
+    const {api, port, heard} = await appClient()
+    const asking = api.request("grant", {ref: GRANT})
+    await eventually(() => heard.length === 1)
+    const {call} = heard[0].args
+    assert.deepEqual(heard[0].args, {operation: "grant", args: {ref: GRANT}, call})
+
+    answerOn(port, "pressed", {control: "pause-digest", call, outcome: "accepted"}, FRAME)
+    answerOn(port, "prefs", {call, outcome: "saved", document: {}, revision: 1}, FRAME)
+    answerOn(port, "decided", {call: call + 1, outcome: "approved"}, FRAME)
+    answerOn(port, "decided", {call, outcome: "approved"}, "frm_02b10aaa3f5e")
+    port.postMessage({v: 1, verb: "decided", frame: FRAME, args: {call, outcome: "approved", reason: "declined"}})
+    port.postMessage({v: 1, verb: "requested", frame: FRAME, args: {call, request: "sch_1"}})
+    answerOn(port, "decided", {call, outcome: "refused", reason: "declined"}, FRAME)
+
+    assert.deepEqual({...(await asking)}, {outcome: "refused", reason: "declined"})
+    assert.equal(await asking.requested, null)
+  })
+
+  test("a canvas numbers its presses, writes and requests from one count, and its request settles as an app's does", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+
+    const pressing = api.press("pause-digest")
+    const writing = api.prefs({widgets: {}})
+    const asking = api.request(ASK.args.operation, ASK.args.args)
+    await eventually(() => sent(heard, ["press", "prefs", "request"]).length === 3)
+    assert.deepEqual(
+      sent(heard, ["press", "prefs", "request"]).map(({verb, args}) => [verb, args.call]),
+      [
+        ["press", 1],
+        ["prefs", 2],
+        ["request", 3]
+      ]
+    )
+
+    answerOn(port, "requested", {call: 3, request: REQUEST_ID})
+    answerOn(port, "decided", {call: 3, outcome: "cancelled", reason: "busy"})
+    answerOn(port, "pressed", {control: "pause-digest", call: 1, outcome: "accepted"})
+    answerOn(port, "prefs", {call: 2, outcome: "saved", document: {widgets: {}}, revision: 1})
+    assert.equal(await asking.requested, REQUEST_ID)
+    assert.deepEqual({...(await asking)}, {outcome: "cancelled", reason: "busy"})
+    assert.deepEqual({...(await pressing)}, {outcome: "accepted"})
+    assert.equal((await writing).outcome, "saved")
+  })
+
+  test("a press of a control the person approves first is answered requested, then decided", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+
+    const declined = api.press("pause-digest")
+    const approved = api.press("vpn-connect", "lisbon-1")
+    await eventually(() => sent(heard, ["press"]).length === 2)
+
+    answerOn(port, "requested", {call: 1, request: REQUEST_ID})
+    answerOn(port, "requested", {call: 2, request: OTHER_ID})
+    answerOn(port, "decided", {call: 2, outcome: "approved"})
+    answerOn(port, "decided", {call: 1, outcome: "refused", reason: "declined"})
+    assert.deepEqual({...(await approved)}, {outcome: "approved"})
+    assert.deepEqual({...(await declined)}, {outcome: "refused", reason: "declined"})
+  })
+
+  test("outside a frame a request is cancelled; arguments outside the wire are refused before anything is sent", async () => {
+    const outside = await frameClient({framed: false})
+    const cancelled = outside.api.request(ASK.args.operation, ASK.args.args)
+    assert.deepEqual({...(await cancelled)}, {outcome: "cancelled"})
+    assert.equal(await cancelled.requested, null)
+
+    const {api, heard} = await appClient()
+    const refused = [
+      ["Schedule Create", {}],
+      ["schedule", {}],
+      ["schedule.create", ["digest"]],
+      ["schedule.create", null],
+      ["grant", {}],
+      ["grant", {ref: "https://example.com/"}],
+      ["grant", {ref: GRANT, label: "default"}],
+      [7, {}]
+    ]
+    for (const [operation, args] of refused) {
+      const handle = api.request(operation, args)
+      await assert.rejects(handle, {code: "invalid_argument"}, JSON.stringify([operation, args]))
+      assert.equal(await handle.requested, null)
+    }
+    // The positive control: a verb after them arrives, alone.
+    api.ready()
+    await eventually(() => heard.length === 1)
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: FRAME, args: {}}])
+  })
+
+  test("an unanswered request settles refused uncertain after 30 s; once the person is asked, a request or a press waits 10 minutes", async (t) => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+    await settled(client)
+    const ANSWER_MS = 30_000
+    const DECISION_MS = 10 * 60_000
+
+    t.mock.timers.enable({apis: ["setTimeout"]})
+    try {
+      const outcomes = new Map()
+      const watch = (name, handle) => handle.then((answer) => outcomes.set(name, {...answer}))
+      const drained = async (check) => {
+        for (let i = 0; i < 100 && !check(); i++) await flush()
+        assert.ok(check(), "the condition never held")
+      }
+
+      const unanswered = api.request(ASK.args.operation, ASK.args.args)
+      const asked = api.request(ASK.args.operation, ASK.args.args)
+      const pressed = api.press("pause-digest")
+      for (const [name, handle] of Object.entries({unanswered, asked, pressed})) watch(name, handle)
+      await drained(() => sent(heard, ["press", "request"]).length === 3)
+      const [, two, three] = sent(heard, ["press", "request"]).map(({args}) => args.call)
+
+      // The port delivers in order: once the request hears its id, the press has heard its own.
+      answerOn(port, "requested", {call: three, request: OTHER_ID})
+      answerOn(port, "requested", {call: two, request: REQUEST_ID})
+      assert.equal(await asked.requested, REQUEST_ID)
+
+      t.mock.timers.tick(ANSWER_MS - 1)
+      await flush()
+      assert.equal(outcomes.size, 0)
+      t.mock.timers.tick(1)
+      await drained(() => outcomes.size === 1)
+      assert.deepEqual(outcomes.get("unanswered"), {outcome: "refused", reason: "uncertain"})
+      assert.equal(await unanswered.requested, null)
+
+      t.mock.timers.tick(DECISION_MS - ANSWER_MS - 1)
+      await flush()
+      assert.equal(outcomes.size, 1)
+      answerOn(port, "decided", {call: three, outcome: "approved"})
+      await drained(() => outcomes.has("pressed"))
+      assert.deepEqual(outcomes.get("pressed"), {outcome: "approved"})
+
+      t.mock.timers.tick(1)
+      await drained(() => outcomes.has("asked"))
+      assert.deepEqual(outcomes.get("asked"), {outcome: "refused", reason: "uncertain"})
+    } finally {
+      t.mock.timers.reset()
+    }
   })
 })

@@ -132,12 +132,21 @@ defmodule Prima.TinctureWire do
     * `ask` — ask AQUA about a widget: `args.widget`, a widget id
       (`widget?/1`). The sentence AQUA's panel opens with is Prism's;
     * `settings` — open one of Prism's pages: `args.page`, a page's key
-      (`page?/1`); which pages exist is Prism's;
+      (`page?/1`), and optionally `args.ref` (`subject_id?/1`), the record
+      on that page to open at; which pages exist, and which take a record,
+      are Prism's;
     * `grant` — ask for the person's grant to a component: `args.ref`, a
       component reference (`Prima.ComponentRef`) of a catalyst, reagent,
       formula or tincture, at a version or none, and nothing else. Which
       component it names, and whether the person is asked, are the
       shell's; the person confirms in CYFR's own prompt;
+    * `request` — ask the person for an act only they may do:
+      `args.operation`, `grant` or an operation's name (`tool.action`,
+      `request_operation?/1`), `args.args`, its arguments (an object; for
+      a grant exactly `ref`, a component reference as `grant` takes one),
+      and `args.call`, the number its answers carry back (`call?/1`).
+      Which operations a frame may ask for, what the person is shown and
+      what runs are the shell's: the frame performs nothing;
     * `failed` — the page failed: `args.stage`, `load` or `runtime`
       (`stages/0`);
     * `ready`, `close` — no arguments.
@@ -145,7 +154,20 @@ defmodule Prima.TinctureWire do
   No verb places, sizes or raises a frame: which frame is shown is the
   shell's and the person's. Which verbs the shell acts on is the shell's,
   by the frame's kind: `press`, `failed`, `grant`, `prefs`, `ask` and
-  `settings` only from a canvas (`canvas_verbs/0`).
+  `settings` only from a canvas (`canvas_verbs/0`), and `request` from
+  any frame.
+
+  The shell answers a frame's `request`, and a canvas's press of a
+  control whose operation the person approves first, over the frame's
+  port under the call's number: `requested` (`requested/2`), exactly
+  `call` and `request`, the request's id (`request_id?/1`), once the
+  person is asked; then `decided` (`decided/3`), exactly `call` and
+  `outcome` (`request_outcomes/0`), with `reason` exactly when the
+  outcome names one: a refused request names `declined` when the person
+  refused it, or a refusal's class (`Prima.Refusal.classes/0`) when CYFR
+  refused it, before asking or after the person approved; a cancelled
+  one may name one of `request_cancel_reasons/0`. A request refused or
+  cancelled before the person was asked is answered `decided` alone.
 
   An app opened with a subject is answered it at its handshake beside its
   credential, `frame_handshake/2`: exactly `credential` and `subject`.
@@ -198,6 +220,9 @@ defmodule Prima.TinctureWire do
   `max_installed_icon/0` code points or null; and `open`, whether the
   tincture is open over the canvas.
 
+  An app's frame is answered `requested` and `decided` over its port as a
+  canvas is, and nothing else of a canvas's messages.
+
   `tests/fixtures/tincture_wire.json` holds one example of each request,
   one public request, one refusal, the stream connection's messages each
   way and the messages refused, how the SDK rejects a subscription that
@@ -222,7 +247,7 @@ defmodule Prima.TinctureWire do
   @idle_ms 60_000
   @close_codes %{unreadable: 4400, too_big: 1009, replaced: 4409, idle: 1000}
 
-  @verbs ~w(open close title ready credential press failed grant prefs ask settings)a
+  @verbs ~w(open close title ready credential press failed grant prefs ask settings request)a
   @canvas_verbs ~w(press failed grant prefs ask settings)a
   @stages ~w(load runtime)
 
@@ -246,6 +271,10 @@ defmodule Prima.TinctureWire do
   @press_outcomes ~w(accepted refused cancelled)
   @prefs_outcomes ~w(saved stale refused cancelled)
   @cancel_reasons ~w(too_soon)
+  @request_outcomes ~w(approved refused cancelled)
+  @request_cancel_reasons ~w(too_soon busy expired dismissed)
+  @declined "declined"
+  @grant_operation "grant"
   @ended_reasons ~w(frame_suspended)
 
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
@@ -255,6 +284,7 @@ defmodule Prima.TinctureWire do
   @desktop_id ~r/\A[a-z][a-z0-9_-]{0,62}\z/
   @page ~r/\A[a-z][a-z0-9_]{0,31}\z/
   @subject_id ~r/\A[A-Za-z0-9][A-Za-z0-9_.:@\/-]{0,255}\z/
+  @request_id ~r/\Areq_[A-Za-z0-9_-]{16,64}\z/
   @accent ~r/\A#[0-9a-f]{6}\z/
   @locale ~r/\A[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,7}\z/
   @time_zone ~r/\A[A-Za-z][A-Za-z0-9_+-]{0,31}(\/[A-Za-z0-9][A-Za-z0-9_+-]{0,31}){0,2}\z/
@@ -277,6 +307,7 @@ defmodule Prima.TinctureWire do
           | :prefs
           | :ask
           | :settings
+          | :request
 
   @typedoc "The public tincture a request names in place of a bearer."
   @type public_identity :: %{athanor: String.t(), publisher: String.t(), name: String.t()}
@@ -429,6 +460,51 @@ defmodule Prima.TinctureWire do
   """
   @spec cancel_reasons() :: [String.t()]
   def cancel_reasons, do: @cancel_reasons
+
+  @doc """
+  What a request comes to, as `decided` tells the frame: the person
+  approved it and it ran (`approved`); it was refused, by the person
+  (`declined`) or by CYFR (a refusal's class), before the person was
+  asked or once they approved it (`refused`); or it ended undecided
+  (`cancelled`), naming why when the shell knows (`request_cancel_reasons/0`).
+  """
+  @spec request_outcomes() :: [String.t()]
+  def request_outcomes, do: @request_outcomes
+
+  @doc """
+  Why a request was cancelled, when `decided` says: sent while the
+  activation its input gave was spent already (`too_soon`), sent while
+  another request of the same frame waited (`busy`), left undecided until
+  it expired (`expired`), or dismissed by the person (`dismissed`).
+  """
+  @spec request_cancel_reasons() :: [String.t()]
+  def request_cancel_reasons, do: @request_cancel_reasons
+
+  @doc "The reason a request the person refused names: `declined`."
+  @spec declined() :: String.t()
+  def declined, do: @declined
+
+  @doc "The operation a request for a grant names: `grant`."
+  @spec grant_operation() :: String.t()
+  def grant_operation, do: @grant_operation
+
+  @doc """
+  Whether `operation` is one a request may name by its form: `grant`, or
+  an operation's name (`tool.action`). Which of them the shell asks the
+  person for is the shell's.
+  """
+  @spec request_operation?(term()) :: boolean()
+  def request_operation?(@grant_operation), do: true
+
+  def request_operation?(operation),
+    do: is_binary(operation) and Prima.Manifest.Tincture.operation_name?(operation)
+
+  @doc """
+  Whether `id` is a request's id: `req_` and 16 to 64 URL-safe characters,
+  as `Prima.UUID7.request_id/0` mints one.
+  """
+  @spec request_id?(term()) :: boolean()
+  def request_id?(id), do: is_binary(id) and Regex.match?(@request_id, id)
 
   @doc """
   Why the endpoint ended a subscription, when its `ended` says beside its
@@ -985,6 +1061,50 @@ defmodule Prima.TinctureWire do
     |> answered(outcome, reason, @prefs_outcomes)
   end
 
+  @doc """
+  The `requested` message's arguments: request `call` waits for the
+  person as the request `request`. A value outside the wire raises.
+  """
+  @spec requested(pos_integer(), String.t()) :: map()
+  def requested(call, request) do
+    unless call?(call), do: raise(ArgumentError, "requested names the request's call")
+    unless request_id?(request), do: raise(ArgumentError, "requested names a request id")
+    %{"call" => call, "request" => request}
+  end
+
+  @doc """
+  The `decided` message's arguments: request `call` came to `outcome`,
+  with `reason`: `declined` or a refusal's class exactly when refused, or
+  one of `request_cancel_reasons/0` when cancelled for it. A value outside
+  the wire raises.
+  """
+  @spec decided(pos_integer(), String.t(), String.t() | nil) :: map()
+  def decided(call, outcome, reason \\ nil) do
+    unless call?(call), do: raise(ArgumentError, "decided names the request's call")
+    classes = [@declined | Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)]
+    args = %{"call" => call, "outcome" => outcome}
+
+    cond do
+      outcome not in @request_outcomes ->
+        raise ArgumentError, "an outcome is one of #{Enum.join(@request_outcomes, ", ")}"
+
+      outcome == "refused" and reason in classes ->
+        Map.put(args, "reason", reason)
+
+      outcome == "refused" ->
+        raise ArgumentError, "a refused request names declined or its refusal's class"
+
+      outcome == "cancelled" and reason in @request_cancel_reasons ->
+        Map.put(args, "reason", reason)
+
+      is_nil(reason) ->
+        args
+
+      true ->
+        raise ArgumentError, "only a refused or a cancelled request names a reason"
+    end
+  end
+
   defp answered(args, outcome, reason, outcomes) do
     classes = Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
 
@@ -1188,25 +1308,46 @@ defmodule Prima.TinctureWire do
 
   defp shell_args(:ask, _args), do: {:error, "ask names a widget by its id"}
 
-  defp shell_args(:settings, %{"page" => page} = args) when map_size(args) == 1 do
-    if page?(page), do: {:ok, args}, else: {:error, "settings names a page by its key"}
+  defp shell_args(:settings, %{"page" => page} = args) when map_size(args) in [1, 2] do
+    cond do
+      not page?(page) -> {:error, "settings names a page by its key"}
+      map_size(args) == 1 -> {:ok, args}
+      subject_id?(Map.get(args, "ref")) -> {:ok, args}
+      true -> {:error, "settings' ref names a record by its id"}
+    end
   end
 
   defp shell_args(:settings, _args), do: {:error, "settings names a page by its key"}
 
-  defp shell_args(:grant, %{"ref" => ref} = args) when map_size(args) == 1 do
-    case Prima.ComponentRef.parse(ref) do
-      {:ok, %{type: type}} ->
-        if type in Prima.ComponentRef.valid_types(),
-          do: {:ok, args},
-          else: {:error, "grant names a component reference"}
+  defp shell_args(
+         :request,
+         %{"operation" => operation, "args" => request_args, "call" => call} = args
+       )
+       when map_size(args) == 3 do
+    cond do
+      not request_operation?(operation) ->
+        {:error, "a request names grant or an operation, tool.action"}
 
-      _ ->
-        {:error, "grant names a component reference"}
+      not (is_map(request_args) and not is_struct(request_args)) ->
+        {:error, "a request's args are an object"}
+
+      operation == @grant_operation and not grant_args?(request_args) ->
+        {:error, "a request for a grant names exactly a component reference"}
+
+      not call?(call) ->
+        {:error, "a request's call is a whole number from 1 to #{@max_call}"}
+
+      true ->
+        {:ok, args}
     end
   end
 
-  defp shell_args(:grant, _args), do: {:error, "grant names a component reference"}
+  defp shell_args(:request, _args),
+    do: {:error, "request carries exactly an operation, its args and its call"}
+
+  defp shell_args(:grant, args) do
+    if grant_args?(args), do: {:ok, args}, else: {:error, "grant names a component reference"}
+  end
 
   defp shell_args(:failed, %{"stage" => stage} = args)
        when map_size(args) == 1 and stage in @stages,
@@ -1217,6 +1358,16 @@ defmodule Prima.TinctureWire do
 
   defp shell_args(_verb, args) when args == %{}, do: {:ok, args}
   defp shell_args(verb, _args), do: {:error, "#{verb} takes no arguments"}
+
+  # Exactly `ref`, a component reference of a type a grant takes.
+  defp grant_args?(%{"ref" => ref} = args) when map_size(args) == 1 do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %{type: type}} -> type in Prima.ComponentRef.valid_types()
+      _ -> false
+    end
+  end
+
+  defp grant_args?(_args), do: false
 
   defp only(map, keys) do
     case map |> Map.keys() |> Enum.reject(&(&1 in keys)) do

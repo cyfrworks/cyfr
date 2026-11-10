@@ -7,7 +7,9 @@ defmodule PrismWeb.ShellDesktopTest do
   it the person's preferences, the screen's appearance and the person's
   name; one input of the person's carries one verb; a declared control
   runs through the gate as the person, its pick checked against the
-  stream's current state, and its outcome is told to the desktop; a write
+  stream's current state, and its outcome is told to the desktop, or asks
+  the person first; a frame's request asks the person above every frame
+  on CYFR's preview and runs only once they approve it; a write
   of its preferences goes over the revision the frame holds, a stale one
   answered with the current document; the visible desktop's chrome is
   worn and taken off; `ask` opens AQUA's panel with Prism's sentence;
@@ -224,6 +226,7 @@ defmodule PrismWeb.ShellDesktopTest do
   # carries back, as the SDK sends them.
   defp with_call(:press, %{"control" => _} = args), do: Map.put_new(args, "call", next_call())
   defp with_call(:prefs, args), do: Map.put_new(args, "call", next_call())
+  defp with_call(:request, args), do: Map.put_new(args, "call", next_call())
   defp with_call(_verb, args), do: args
 
   defp next_call, do: System.unique_integer([:positive, :monotonic])
@@ -455,8 +458,9 @@ defmodule PrismWeb.ShellDesktopTest do
             "operation" => "schedule.pause",
             "args" => %{"schedule_id" => "sch_nowhere"}
           },
-          # Publish refuses a person's own act; this version was laid
-          # without publish, so only the shell's own check stands.
+          # An act the person approves first, whose call the schedule
+          # tool's declaration does not take: refused before anyone is
+          # asked.
           %{
             "id" => "make-schedule",
             "label" => "Make",
@@ -540,6 +544,471 @@ defmodule PrismWeb.ShellDesktopTest do
       verb!(view, home, :press, %{"control" => "pause-schedule", "value" => digest.id}, nil)
       assert %{"outcome" => "cancelled"} = answer!(view, home, "pressed")
       assert status(ctx, digest.id) == "active"
+    end
+  end
+
+  # ---- a frame's request --------------------------------------------------------
+
+  describe "a request" do
+    setup %{ctx: ctx, user: user, athanor: athanor} do
+      pick = %{"stream" => "schedules.changes", "field" => "/schedule_id", "arg" => "schedule_id"}
+
+      desktop!(ctx, "markets", %{
+        "data" => ["schedules.changes"],
+        "controls" => [
+          %{
+            "id" => "rename",
+            "label" => "Rename",
+            "operation" => "schedule.update",
+            "args" => %{"name" => "renamed-by-control"},
+            "pick" => pick
+          }
+        ]
+      })
+
+      app!(ctx, "planner")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      {:ok, digest: schedule!(ctx, user, "digest")}
+    end
+
+    defp rename(schedule, name, call),
+      do: %{
+        "operation" => "schedule.update",
+        "args" => %{"schedule_id" => schedule.id, "name" => name},
+        "call" => call
+      }
+
+    defp name_of(ctx, id) do
+      {:ok, row} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), id)
+      row.name
+    end
+
+    defp prompt, do: ~s(#system-layer-desktop-dialog [data-kind="request"])
+
+    defp click!(view, test),
+      do:
+        view
+        |> element(~s(#system-layer-desktop-dialog button[data-test="#{test}"]))
+        |> render_click()
+
+    defp waiting(ctx, user), do: Cyfr.Requests.waiting(ctx.athanor_id, user.user_id)
+
+    test "asks the person above every frame on CYFR's preview, naming the frame, and runs only once approved",
+         %{conn: conn, ctx: ctx, user: user, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      verb!(view, home, :request, rename(digest, "renamed", 11))
+      assert %{"call" => 11, "request" => id} = answer!(view, home, "requested")
+      assert Prima.TinctureWire.request_id?(id)
+
+      assert has_element?(view, prompt())
+      assert has_element?(view, ~s([data-test="request-preview"]), "schedule.update")
+      assert has_element?(view, ~s([data-test="request-preview"]), "renamed")
+      assert has_element?(view, ~s([data-test="request-asker"]), "markets")
+      assert name_of(ctx, digest.id) == "digest"
+
+      # The person's attention holds it while it waits.
+      assert [%{kind: :grant_request, id: ^id, label: "schedule.update"}] = waiting(ctx, user)
+
+      click!(view, "request-approve")
+      assert answer!(view, home, "decided") == %{"call" => 11, "outcome" => "approved"}
+      assert name_of(ctx, digest.id) == "renamed"
+      refute has_element?(view, prompt())
+      assert waiting(ctx, user) == []
+    end
+
+    test "refused or dismissed by the person, it runs nothing and says how it ended",
+         %{conn: conn, ctx: ctx, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      verb!(view, home, :request, rename(digest, "refused", 12))
+      assert %{"call" => 12} = answer!(view, home, "requested")
+      click!(view, "request-refuse")
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 12, "outcome" => "refused", "reason" => "declined"}
+
+      verb!(view, home, :request, rename(digest, "dismissed", 13))
+      assert %{"call" => 13} = answer!(view, home, "requested")
+      click!(view, "prompt-dismiss")
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 13, "outcome" => "cancelled", "reason" => "dismissed"}
+
+      assert name_of(ctx, digest.id) == "digest"
+    end
+
+    test "a second request of the frame while one waits is cancelled busy and asks nothing",
+         %{conn: conn, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      verb!(view, home, :request, rename(digest, "first", 14))
+      assert %{"call" => 14} = answer!(view, home, "requested")
+
+      verb!(view, home, :request, rename(digest, "second", 15))
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 15, "outcome" => "cancelled", "reason" => "busy"}
+
+      assert map_size(assigns(view).requests) == 1
+    end
+
+    test "left undecided, it expires cancelled and its prompt is withdrawn",
+         %{conn: conn, ctx: ctx, user: user, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      verb!(view, home, :request, rename(digest, "late", 16))
+      assert %{"request" => id} = answer!(view, home, "requested")
+
+      send(view.pid, {:request_expired, id})
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 16, "outcome" => "cancelled", "reason" => "expired"}
+
+      _ = render(view)
+      refute has_element?(view, prompt())
+      assert waiting(ctx, user) == []
+      assert name_of(ctx, digest.id) == "digest"
+    end
+
+    test "one the request rule refuses is refused with its class, the person never asked",
+         %{conn: conn, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      verb!(view, home, :request, %{
+        "operation" => "schedule.pause",
+        "args" => %{"schedule_id" => digest.id},
+        "call" => 17
+      })
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 17, "outcome" => "refused", "reason" => "invalid_argument"}
+
+      refute has_element?(view, prompt())
+      assert assigns(view).requests == %{}
+    end
+
+    test "sent with no input of the person's it asks nothing, and is told so",
+         %{conn: conn, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      verb!(view, home, :request, rename(digest, "scripted", 18), nil)
+      assert answer!(view, home, "decided") == %{"call" => 18, "outcome" => "cancelled"}
+      refute has_element?(view, prompt())
+    end
+
+    test "the gate's refusal of the approved call decides it, and nothing is left to approve again",
+         %{conn: conn, ctx: ctx, user: user, digest: digest} do
+      taken = schedule!(ctx, user, "taken")
+      view = shell!(conn)
+      home = canvas(view).id
+
+      # A name another schedule holds: the schedule tool refuses the call.
+      verb!(view, home, :request, rename(digest, "taken", 19))
+      assert %{"call" => 19} = answer!(view, home, "requested")
+      [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
+
+      click!(view, "request-approve")
+
+      assert %{"call" => 19, "outcome" => "refused", "reason" => reason} =
+               answer!(view, home, "decided")
+
+      assert reason in Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+      assert name_of(ctx, digest.id) == "digest"
+
+      # The prompt says why and offers nothing more to run. The name is
+      # freed, so a run now would succeed: an approval sent all the same
+      # runs nothing.
+      assert has_element?(view, prompt())
+      refute has_element?(view, ~s(button[data-test="request-approve"]))
+      {:ok, _} = Arca.CronSchedule.update(Sanctum.Context.actor(ctx), taken.id, %{name: "free"})
+
+      view
+      |> with_target("#system-layer-desktop")
+      |> render_hook("request_approve", %{"id" => prompt_id})
+
+      assert name_of(ctx, digest.id) == "digest"
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+    end
+
+    # Messages the view takes in this order, queued while it is held so
+    # none is handled before the last is in: the person's events reach the
+    # system layer as its own hook events, as the browser sends them.
+    defp queued!(view, messages) do
+      :ok = :sys.suspend(view.pid)
+
+      try do
+        Enum.each(messages, &send(view.pid, &1))
+      after
+        :ok = :sys.resume(view.pid)
+      end
+    end
+
+    defp layer_event(view, event, prompt_id) do
+      [tag] = Regex.run(~r/<[^>]*\bid="system-layer-desktop"[^>]*>/, render(view))
+      [_, cid] = Regex.run(~r/\bdata-phx-component="(\d+)"/, tag)
+
+      %Phoenix.Socket.Message{
+        topic: :sys.get_state(view.pid).topic,
+        event: "event",
+        ref: nil,
+        payload: %{
+          "type" => "hook",
+          "event" => event,
+          "value" => %{"id" => prompt_id},
+          "cid" => String.to_integer(cid)
+        }
+      }
+    end
+
+    test "an approval queued behind expiry performs nothing", %{
+      conn: conn,
+      ctx: ctx,
+      digest: digest
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :request, rename(digest, "must-not-run-after-expiry", 66))
+      assert %{"request" => id} = answer!(view, home, "requested")
+      [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
+
+      queued!(view, [{:request_expired, id}, layer_event(view, "request_approve", prompt_id)])
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 66, "outcome" => "cancelled", "reason" => "expired"}
+
+      _ = render(view)
+      assert name_of(ctx, digest.id) == "digest"
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      refute has_element?(view, prompt())
+    end
+
+    test "an approval queued behind a refusal performs nothing", %{
+      conn: conn,
+      ctx: ctx,
+      digest: digest
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :request, rename(digest, "must-not-run-after-refusal", 67))
+      assert %{"call" => 67} = answer!(view, home, "requested")
+      [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
+
+      queued!(view, [
+        layer_event(view, "request_refuse", prompt_id),
+        layer_event(view, "request_approve", prompt_id)
+      ])
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 67, "outcome" => "refused", "reason" => "declined"}
+
+      _ = render(view)
+      assert name_of(ctx, digest.id) == "digest"
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+    end
+
+    test "two approvals of one request run it once, and expiry behind them acts on nothing", %{
+      conn: conn,
+      ctx: ctx,
+      digest: digest
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :request, rename(digest, "approved-once", 68))
+      assert %{"request" => id} = answer!(view, home, "requested")
+      [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
+
+      queued!(view, [
+        layer_event(view, "request_approve", prompt_id),
+        layer_event(view, "request_approve", prompt_id),
+        {:request_expired, id}
+      ])
+
+      assert answer!(view, home, "decided") == %{"call" => 68, "outcome" => "approved"}
+      _ = render(view)
+      assert name_of(ctx, digest.id) == "approved-once"
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+    end
+
+    # A request whose approved call needs the person's fresh confirmation:
+    # an entry rebound to disclose its value. Approved, it waits for the
+    # proof, still listed in the person's attention and told nothing yet.
+    defp confirming!(conn, ctx, user, call) do
+      Sanctum.TestContext.passkey!(user.user_id)
+      person = %{ctx | user_id: user.user_id}
+
+      params = %{
+        name: "rebound-#{call}",
+        kind: "api_key",
+        fields: %{"API_KEY" => "not-a-real-secret"},
+        destination: %{hosts: ["api.example.com"]},
+        disclose: false
+      }
+
+      entering =
+        Sanctum.TestContext.confirmed(person, :credential_entry, %{
+          operation: "vault.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.Vault.create(entering, params)
+      view = shell!(conn)
+      home = canvas(view).id
+
+      rebind = %{
+        "operation" => "vault.rebind",
+        "args" => %{"id" => entry.id, "disclose" => true},
+        "call" => call
+      }
+
+      verb!(view, home, :request, rebind)
+      assert %{"call" => ^call, "request" => id} = answer!(view, home, "requested")
+      click!(view, "request-approve")
+
+      assert {:ok, [%{ref: ref}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(person), user.user_id)
+
+      wait_until(fn -> render(view) =~ ~s(data-ref="#{ref}") end, 2_000, "the waiting record")
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert [%{id: ^id}] = waiting(ctx, user)
+      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry}
+    end
+
+    defp attach_only?(person, entry_id) do
+      {:ok, entries} = Sanctum.Vault.list(person)
+      Enum.find(entries, &(&1.id == entry_id)).attach_only
+    end
+
+    defp request_ended!(view) do
+      wait_until(
+        fn ->
+          _ = render(view)
+          assigns(view).requests == %{}
+        end,
+        2_000,
+        "the request to end"
+      )
+    end
+
+    test "a cancelled fresh confirmation also ends the frame request",
+         %{conn: conn, ctx: ctx, user: user} do
+      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry} =
+        confirming!(conn, ctx, user, 69)
+
+      assert {:ok, _cancelled} =
+               PrismWeb.Ops.call_tool(assigns(view).context, "confirmation/cancel", %{
+                 "ref" => ref
+               })
+
+      request_ended!(view)
+      assert answer!(view, home, "decided") == %{"call" => 69, "outcome" => "cancelled"}
+      assert waiting(ctx, user) == []
+
+      send(view.pid, {:request_expired, id})
+      _ = render(view)
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert attach_only?(person, entry.id)
+    end
+
+    test "a fresh confirmation proven after the request's own expiry runs it, approved once",
+         %{conn: conn, ctx: ctx, user: user} do
+      %{view: view, home: home, id: id, ref: ref, person: person, entry: entry} =
+        confirming!(conn, ctx, user, 70)
+
+      send(view.pid, {:request_expired, id})
+      _ = render(view)
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert [%{id: ^id}] = waiting(ctx, user)
+
+      Sanctum.TestContext.prove!(person, ref)
+      request_ended!(view)
+      assert answer!(view, home, "decided") == %{"call" => 70, "outcome" => "approved"}
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      assert waiting(ctx, user) == []
+      refute attach_only?(person, entry.id)
+    end
+
+    test "a fresh confirmation that expires cancels the request expired",
+         %{conn: conn, ctx: ctx, user: user} do
+      %{view: view, home: home, ref: ref, person: person, entry: entry} =
+        confirming!(conn, ctx, user, 71)
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer,
+        id: "system-layer-desktop",
+        expire: ref
+      )
+
+      request_ended!(view)
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 71, "outcome" => "cancelled", "reason" => "expired"}
+
+      assert waiting(ctx, user) == []
+      assert attach_only?(person, entry.id)
+    end
+
+    test "a control that asks is a request under its press's call", %{
+      conn: conn,
+      ctx: ctx,
+      digest: digest
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      verb!(view, home, :press, %{"control" => "rename", "value" => digest.id, "call" => 20})
+      assert %{"call" => 20, "request" => _} = answer!(view, home, "requested")
+      assert has_element?(view, ~s([data-test="request-preview"]), "renamed-by-control")
+      assert name_of(ctx, digest.id) == "digest"
+
+      click!(view, "request-approve")
+      assert answer!(view, home, "decided") == %{"call" => 20, "outcome" => "approved"}
+      assert name_of(ctx, digest.id) == "renamed-by-control"
+    end
+
+    test "an app's request is the person's too, from a frame they see",
+         %{conn: conn, ctx: ctx, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :open, %{"ref" => "tincture:local.planner"})
+      app = Frames.get(frames(view), {:app, "home", "tincture:local.planner"})
+
+      verb!(view, app.id, :request, rename(digest, "from-the-app", 21))
+      assert %{"call" => 21} = answer!(view, app.id, "requested")
+      assert has_element?(view, ~s([data-test="request-asker"]), "planner")
+
+      click!(view, "request-approve")
+      assert answer!(view, app.id, "decided") == %{"call" => 21, "outcome" => "approved"}
+      assert name_of(ctx, digest.id) == "from-the-app"
+
+      # Without an input of the person's, it asks nothing.
+      verb!(view, app.id, :request, rename(digest, "scripted", 22), nil)
+      assert answer!(view, app.id, "decided") == %{"call" => 22, "outcome" => "cancelled"}
+    end
+
+    test "a request whose frame leaves is withdrawn, told nowhere",
+         %{conn: conn, ctx: ctx, user: user, digest: digest} do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :open, %{"ref" => "tincture:local.planner"})
+      app = Frames.get(frames(view), {:app, "home", "tincture:local.planner"})
+
+      verb!(view, app.id, :request, rename(digest, "orphan", 23))
+      assert %{"call" => 23} = answer!(view, app.id, "requested")
+
+      render_hook(view, "frame_close", %{"frame" => app.id})
+      _ = render(view)
+
+      refute has_element?(view, prompt())
+      assert assigns(view).requests == %{}
+      assert waiting(ctx, user) == []
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
     end
   end
 
@@ -700,6 +1169,51 @@ defmodule PrismWeb.ShellDesktopTest do
       assert has_element?(chat, ~s(#chat-button[aria-expanded="true"]))
       refute_push_event(view, "navigate", _)
       assert %{id: ^home, state: :live} = canvas(view)
+    end
+
+    test "settings of aqua with a ref opens AQUA's panel at that thread of the person's own, and at its kept one otherwise",
+         %{conn: conn, ctx: ctx, user: user} do
+      {:ok, plans} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx), %{title: "Plans"})
+      {:ok, theirs} = Sanctum.SharedThreads.create(user.user_id, "Shared, not AQUA's")
+      view = shell!(conn)
+      home = canvas(view).id
+      panel = find_live_child(view, "aqua-panel")
+      render(panel)
+      _ = render(view)
+
+      verb!(view, home, :settings, %{"page" => "aqua", "ref" => plans.id})
+      _ = render(view)
+      assert has_element?(panel, "#aqua-panel-sheet")
+      assert %{id: id} = :sys.get_state(panel.pid).socket.assigns.thread
+      assert id == plans.id
+
+      # A shared thread is not one of the person's own with AQUA: the
+      # panel stays at the thread it holds.
+      verb!(view, home, :settings, %{"page" => "aqua", "ref" => theirs.id})
+      _ = render(view)
+      assert %{id: ^id} = :sys.get_state(panel.pid).socket.assigns.thread
+    end
+
+    test "settings of chat with a ref opens the chat at that shared thread, read under the person's seat",
+         %{conn: conn, user: user} do
+      {:ok, plans} = Sanctum.SharedThreads.create(user.user_id, "Plans together")
+      stranger = test_user()
+      {:ok, theirs} = Sanctum.SharedThreads.create(stranger.user_id, "Not yours")
+      view = shell!(conn)
+      home = canvas(view).id
+      chat = find_live_child(view, "chat-overlay")
+      render(chat)
+      _ = render(view)
+
+      verb!(view, home, :settings, %{"page" => "chat", "ref" => plans.id})
+      _ = render(view)
+      assert has_element?(chat, "#chat-sheet")
+      assert find_live_child(chat, "chat-thread-" <> plans.id)
+
+      verb!(view, home, :settings, %{"page" => "chat", "ref" => theirs.id})
+      assert render(chat) =~ "That thread cannot be opened"
+      refute find_live_child(chat, "chat-thread-" <> theirs.id)
+      refute render(chat) =~ "Not yours"
     end
 
     test "open carries a subject of a kind the app declares to its handshake, and refuses any other",

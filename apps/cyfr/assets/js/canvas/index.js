@@ -16,11 +16,9 @@ import {
 } from "./signals.js"
 import {wear} from "./chrome.js"
 import {WindowGestures} from "./windows.js"
+import {ANSWER_OF, ANSWER_VERBS} from "../sdk/wire.js"
 
 const SHELF = "#canvas-shelf"
-
-// The shell's answers a canvas hears from it.
-const ANSWERS = ["pressed", "prefs"]
 
 // What a canvas is told covers it: the windows over it. A tile narrows its
 // frame instead, and a full app's cover is the frozen state.
@@ -38,10 +36,12 @@ const COVERING = ["window"]
  * frame asked for closed) as `cyfr:credential-closed`, its `frame_bearer`
  * pushes (a frame's rotated credential) as `cyfr:frame-bearer` on the one
  * frame they name, its `canvas_installed` pushes to the canvas frame
- * they name, and its `canvas_answer` pushes (the outcome of a canvas's
- * press of a control or write of its preferences) to that canvas frame's
- * bridge, which posts each once, and its `frame_subject` pushes (an app
- * opened again on another subject) to the app frame they name.
+ * they name, its `canvas_answer` pushes to the bridge of the frame each
+ * names, which posts each once: the outcome of a canvas's press of a
+ * control or write of its preferences to a canvas frame alone, and the
+ * answers to a request (`requested`, `decided`) to any frame; and its
+ * `frame_subject` pushes (an app opened again on another subject) to the
+ * app frame they name.
  *
  * It wears the visible desktop's chrome (`chrome`, `./chrome.js`) on the
  * page's root while the shell says so, and takes it off for Prism's
@@ -268,10 +268,12 @@ const Canvas = {
     }
   },
 
-  // An answer to the canvas frame it names, as its bridge posts it once.
+  // An answer to the frame it names, as its bridge posts it once: one to a
+  // request to any frame, any other to a canvas frame alone.
   _answer(payload) {
-    if (payload === null || typeof payload !== "object" || !ANSWERS.includes(payload.verb)) return
-    const frame = this._canvasFrames().find((el) => el.dataset.frameId === payload.frame)
+    if (payload === null || typeof payload !== "object" || !ANSWER_VERBS.includes(payload.verb)) return
+    const frames = ANSWER_OF.request.includes(payload.verb) ? this._frames() : this._canvasFrames()
+    const frame = frames.find((el) => el.dataset.frameId === payload.frame)
     if (frame) {
       frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: payload.verb, args: payload.args}}))
     }

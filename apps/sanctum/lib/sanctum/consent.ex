@@ -265,6 +265,16 @@ defmodule Sanctum.Consent do
     do: Sanctum.Consent.Loader.row_binding(ctx, consent, ref)
 
   @doc """
+  The preview the person approves a frame's request on: the call
+  `operation` with `args` as it runs, touching `resource` by name or
+  nothing named, in the shape a confirmation's record holds
+  (`Sanctum.Consent.Authz.request_preview/4`).
+  """
+  @spec request_preview(Sanctum.Context.t(), String.t(), map(), String.t() | nil) ::
+          {:ok, Prima.Confirmation.Preview.t()} | {:error, term()}
+  defdelegate request_preview(ctx, operation, args, resource), to: Sanctum.Consent.Authz
+
+  @doc """
   The context's own person's confirmations of sensitive changes still
   open in its athanor, oldest first, each as its public `ref`
   (`Prima.Confirmation.ref/1`), the operation it confirms and when it

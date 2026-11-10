@@ -316,6 +316,15 @@ answer_ask() {
     bearer)
       ANSWER="$(canvas_fixture bearer "$TOKEN" "$(asked "$ask" reference)")"
       ;;
+    schedule)
+      ANSWER="$(canvas_fixture schedule "$TOKEN" "$(asked "$ask" name)")"
+      ;;
+    schedule_name)
+      ANSWER="$(canvas_fixture schedule_name "$TOKEN" "$(asked "$ask" id)")"
+      ;;
+    expire)
+      ANSWER="$(canvas_fixture expire "$TOKEN")"
+      ;;
     rebind)
       arg="$(asked "$ask" feed)"
       old="${FEEDS[$arg]}"
