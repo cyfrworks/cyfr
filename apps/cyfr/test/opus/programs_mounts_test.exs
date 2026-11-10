@@ -124,6 +124,19 @@ defmodule Opus.ProgramsMountsTest do
     start_supervised!(Emissary.External.Reconciler)
   end
 
+  # Suspends the server registry's partitions, which remove a process's
+  # entries when it exits, until the test ends; resumed by the on_exit
+  # registered before the first suspend.
+  defp hold_registry_cleanup do
+    partitions =
+      for {_id, pid, _type, _modules} <-
+            Supervisor.which_children(Emissary.External.ServerRegistry),
+          do: pid
+
+    on_exit(fn -> Enum.each(partitions, &:sys.resume/1) end)
+    Enum.each(partitions, &:sys.suspend/1)
+  end
+
   defp revoked(ctx, entry, name) do
     {:ok, _} = Sanctum.Vault.revoke(ctx, entry)
 
@@ -157,6 +170,37 @@ defmodule Opus.ProgramsMountsTest do
       assert server == row.id
 
       {:ok, row} = Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row.id)
+      assert {:error, sentence} = Servers.ensure_started(row, ctx)
+      assert sentence =~ "login entry"
+    end
+
+    test "a call that finds the stopped row's process still registered is refused with the entry's sentence",
+         %{ctx: ctx} do
+      entry = login_entry(ctx, "gh-login", "gh")
+      start_reconciler()
+      row = kept_stdio_row(ctx, entry)
+      assert {:ok, _tools} = Servers.ensure_started(row, ctx)
+      pid = server_pid(ctx, row)
+      ref = Process.monitor(pid)
+
+      # The race the test above can lose under load, held open: the
+      # registry drops a stopped process's entry only when its partition
+      # handles the exit, after the stopper and a monitor already saw it
+      # go, and the reconciler raises the row's epoch only after the stop.
+      # A call in that window, with the row read before the raise, finds
+      # the dead process under the row's own digest; it must open a new
+      # one, which refuses for the entry, rather than answer the dead
+      # one's exit (`{:server_exited, {:noproc, _}}`) or, once the entry
+      # is dropped between the two lookups, `:not_running`.
+      hold_registry_cleanup()
+      revoked(ctx, entry, "gh-login")
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 3_000
+      assert_receive {:control, "release", %{"owners" => [%{"server" => server}]}, _}, 3_000
+      assert server == row.id
+
+      assert [{^pid, _digest}] =
+               Registry.lookup(Emissary.External.ServerRegistry, {row.name, ctx.athanor_id})
+
       assert {:error, sentence} = Servers.ensure_started(row, ctx)
       assert sentence =~ "login entry"
     end
