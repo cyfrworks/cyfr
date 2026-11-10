@@ -517,13 +517,15 @@ defmodule Locus.BuilderServiceTest do
     test "past its deadline is ended with its process group, and answers timeout as its terminal line",
          %{port: port} do
       {script, file} = lingering()
-      request = Wire.request(script, %{deadline: System.system_time(:millisecond) + 8_000})
+      # Long enough for the request to arrive and the build to say it runs,
+      # and no longer: the case waits the deadline out.
+      request = Wire.request(script, %{deadline: System.system_time(:millisecond) + 3_000})
 
       started = System.monotonic_time(:millisecond)
       assert {200, lines} = Wire.build(port, request)
 
       assert {:refusal, {:timeout, budget_ms}, diagnostics} = List.last(lines)
-      assert budget_ms in 7_000..8_000
+      assert budget_ms in 2_000..3_000
       assert "output: running" in diagnostics
       assert System.monotonic_time(:millisecond) - started < 20_000
 
