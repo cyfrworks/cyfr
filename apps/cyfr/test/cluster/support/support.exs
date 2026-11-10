@@ -35,12 +35,33 @@ defmodule Cyfr.Cluster.Support do
   def modules do
     case :persistent_term.get(@key, nil) do
       nil ->
-        compiled = Enum.flat_map(@files, &Code.compile_file(&1, dir()))
+        compiled = compile!()
         :persistent_term.put(@key, compiled)
         compiled
 
       compiled ->
         compiled
+    end
+  end
+
+  # These files are compiled here, at run time, where the run's
+  # `--warnings-as-errors` does not reach: a warning in them (an attribute
+  # read before it is set compiles as nil) refuses the suite instead.
+  defp compile! do
+    {compiled, diagnostics} =
+      Code.with_diagnostics(fn -> Enum.flat_map(@files, &Code.compile_file(&1, dir())) end)
+
+    case for(%{severity: :warning} = d <- diagnostics, do: d) do
+      [] ->
+        compiled
+
+      warnings ->
+        raise "the cluster suite's support compiled with warnings:\n" <>
+                Enum.map_join(
+                  warnings,
+                  "\n",
+                  &"#{&1.file}:#{inspect(&1.position)}: #{&1.message}"
+                )
     end
   end
 

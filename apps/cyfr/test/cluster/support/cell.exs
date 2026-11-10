@@ -686,6 +686,8 @@ defmodule Cyfr.Cluster.Cell do
   # raises loses the state it was building, and the member it started
   # must still be stopped.
   @started {__MODULE__, :started}
+  # The members' port claims this process holds (`host_api_ports/2`).
+  @claims {__MODULE__, :claims}
 
   defp started(id, peer), do: Process.put(@started, [{id, peer} | Process.get(@started, [])])
 
@@ -814,7 +816,6 @@ defmodule Cyfr.Cluster.Cell do
   # What remains is a listener of another program on a fixed port, which
   # a boot is refused naming (`Cyfr.Cluster.Boot`).
   @port_floor 20_000
-  @claims {__MODULE__, :claims}
 
   # The ports to try, at random below the ephemeral range.
   defp candidates do
