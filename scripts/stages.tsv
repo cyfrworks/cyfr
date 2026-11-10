@@ -28,6 +28,7 @@ handoff	js	scoped	900	apps/cyfr/assets/**,seed/**	(cd apps/cyfr/assets && npm ci
 handoff	run-names-test	scoped	600	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
 handoff	image-test	scoped	600	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
 handoff	janitor-test	scoped	900	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh
+handoff	load-check-test	scoped	900	tests/load-check/**,scripts/lib/contain.sh,scripts/lib/run-names.sh,scripts/heavy-check.sh,scripts/commit-gate.sh,tests/browser/harness.sh,tests/install-screen-proof/lib.sh	bash tests/load-check/run-test.sh
 handoff	release-boot-names-test	scoped	600	tests/release-boot/**	bash tests/release-boot/names-test.sh
 handoff	imagesuite-test	scoped	600	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
 handoff	registry-stand-in-test	scoped	600	tests/registry-stand-in/**	python3 -I tests/registry-stand-in/standin_test.py

@@ -448,6 +448,10 @@ jobs:
           bash tests/stage-test.sh
           bash tests/image-test.sh
           bash tests/janitor-test.sh
+      # The load check (tests/load-check/README.md) against stub subjects,
+      # on four of the runner's processors.
+      - name: The load check
+        run: bash tests/load-check/run-test.sh
 
   # The partition runner against a stand-in Mix and a toy umbrella of its
   # own, and its environment helper's unit tests: Erlang and Elixir, and

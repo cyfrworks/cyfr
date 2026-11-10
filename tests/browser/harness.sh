@@ -352,6 +352,7 @@ browser_node_modules() {
         cp "$BROWSER_HOME/package.json" "$BROWSER_HOME/package-lock.json" "$staging/" || exit 1
         printf '\n=== %s\n' "installing Playwright's library from tests/browser/package-lock.json (${key:0:12}), once for this lockfile" >&2
         docker run --rm ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-install-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+          ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
           -u "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_update_notifier=false \
           -v "$staging:/install" -w /install "$PLAYWRIGHT_IMAGE" \
           npm ci --ignore-scripts --no-audit --no-fund --loglevel=error >&2 || exit 1
@@ -394,8 +395,10 @@ playwright_run() {
     )
   fi
   # Named after the run under PROOF_RUN_PREFIX, so one a killed proof
-  # leaves is found by that name.
+  # leaves is found by that name, and placed on the processors the check
+  # holds (HEAVY_CHECK_CPUS) when it is given them.
   docker run --rm ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
     --network host --shm-size=1g \
     -u "$(id -u):$(id -g)" -e HOME=/tmp \
     -v "$ROOT/tests:/tests:ro" -v "$ROOT/apps/cyfr/assets:/assets:ro" -v "$OUT:/out" \
