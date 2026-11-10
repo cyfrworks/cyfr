@@ -10,9 +10,9 @@
 # frames its stdout with `_START=<pid>` first and `_EXIT=<pid> <status>`
 # last, both carrying the gate's own pid, which scripts/await-task.sh waits
 # for. Under scripts/heavy-check.sh (HEAVY_CHECK_HELD set) heavy-check
-# writes those lines and the gate writes neither; a scoped or proof check
-# (`heavy-check.sh -s` or `-p`) is refused with 64, because the gate sizes
-# itself to the whole host. What the gate itself makes is named
+# writes those lines and the gate writes neither; a check on fewer than
+# all four quarters (`heavy-check.sh -q 1`) is refused with 64, because the
+# gate sizes itself to the whole host. What the gate itself makes is named
 # cyfr-gate-<pid>-gate-, whatever PROOF_RUN_PREFIX it was given. Legs:
 #   static    SQLite test compile and forced dev compile (warnings as
 #             errors, so every Boundary declaration is checked), format,
@@ -1302,8 +1302,9 @@ done
 PG_PATHS=("$@")
 
 case "${HEAVY_CHECK_HELD:-}" in
-  scoped|proof)
-    echo 'the commit gate takes the whole host: run it under scripts/heavy-check.sh without -s or -p' >&2
+  ''|4) ;;
+  *)
+    echo 'the commit gate takes the whole host: run it under scripts/heavy-check.sh on all four quarters, without -q 1' >&2
     exit 64 ;;
 esac
 # The gate's own names, whatever prefix heavy-check gave it: its sweeps

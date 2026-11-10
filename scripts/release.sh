@@ -135,8 +135,8 @@ fi
 # for a release cut offline or a HEAD GitHub has not run: the release
 # stage (scripts/stage.sh release, the gate's close as scripts/stages.tsv
 # holds it), CI's checks and the full suite on both database adapters, the
-# cluster suite and every island, queued on the verification host as any
-# exclusive check is and holding the host for over an hour. Its
+# cluster suite and every island, queued on the verification host on all
+# four quarters and holding the host for over an hour. Its
 # PostgreSQL legs use the database config/test.exs names for each
 # partition on the host's fixture server, localhost:5432, so the release
 # names none, and its logs stay in a fresh directory named before it

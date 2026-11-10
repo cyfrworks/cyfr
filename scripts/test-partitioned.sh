@@ -41,9 +41,9 @@
 # the tests that read a module's beam (Prima.EffectsTest's compiled view,
 # Prima.VersionTest, Prima.Test.BeamsTest, Cyfr.SeedOfferTest) fail under it.
 #
-# Under heavy-check's scoped or proof lane (HEAVY_CHECK_HELD) a run takes one
+# Under a heavy-check on one quarter (HEAVY_CHECK_HELD=1) a run takes one
 # partition, and more is refused with 64. `-- --repeat-until-failure` is
-# refused with 64 in every lane: a second pass in one VM would run after
+# refused with 64 on any quarters: a second pass in one VM would run after
 # the suite's own after_suite cleanups, so the way to repeat a run is to
 # run the invocation again. A passing run removes its run directory, unless
 # CYFR_TEST_KEEP=1, which keeps it and names it as a failing run's is
@@ -210,8 +210,8 @@ done
 if [ "$cluster" = true ] && { [ "$PARTITIONS" -ne 1 ] || [ "$ADAPTER" != postgres ]; }; then
   echo 'the cluster suite requires -n 1 -a postgres' >&2; exit 64
 fi
-# The cores this run may size itself to: the machine's, or the share a
-# caller that runs several at once gives it (scripts/heavy-check.sh -s).
+# The cores this run may size itself to: the machine's, or the count a
+# caller that runs several at once gives it (scripts/heavy-check.sh -q 1).
 if [ -n "${CYFR_TEST_CORES:-}" ]; then
   case "$CYFR_TEST_CORES" in *[!0-9]*|0*) echo 'CYFR_TEST_CORES must be a positive decimal integer' >&2; exit 64 ;; esac
   [ "${#CYFR_TEST_CORES}" -le 4 ] || { echo 'CYFR_TEST_CORES is at most 9999' >&2; exit 64; }
@@ -225,8 +225,8 @@ if [ "${#PARTITIONS}" -gt 2 ] || [ "$PARTITIONS" -gt 32 ]; then
   echo 'at most 32 partitions are supported' >&2; exit 64
 fi
 case "$keep" in ''|0|1) ;; *) echo 'CYFR_TEST_KEEP is 1 (keep a passing run'"'"'s directory) or unset' >&2; exit 64 ;; esac
-if { [ "$held" = scoped ] || [ "$held" = proof ]; } && [ "$PARTITIONS" -gt 1 ]; then
-  echo "a $held check runs one partition: -n 1" >&2; exit 64
+if [ "$held" = 1 ] && [ "$PARTITIONS" -gt 1 ]; then
+  echo 'a check on one quarter runs one partition: -n 1' >&2; exit 64
 fi
 # The partitions this run's shard holds: every one without --shard.
 in_shard() { [ $((($1 - 1) % shard_count + 1)) = "$shard_index" ]; }

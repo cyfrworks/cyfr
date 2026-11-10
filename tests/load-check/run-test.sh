@@ -128,7 +128,7 @@ chmod +x "$S/notaskset/taskset" "$S/bin/docker"
 # was handed before, and a release build that fails.
 repo="$S/repo"
 mkdir -p "$repo/scripts/lib" "$repo/tests/load-check" "$repo/tests/release-boot"
-cp "$ROOT/scripts/lib/contain.sh" "$ROOT/scripts/lib/run-names.sh" "$repo/scripts/lib/"
+cp "$ROOT/scripts/lib/contain.sh" "$ROOT/scripts/lib/run-names.sh" "$ROOT/scripts/lib/quarters.sh" "$repo/scripts/lib/"
 cp "$ROOT/scripts/heavy-check.sh" "$repo/scripts/"
 cp "$ROOT/tests/load-check/run.sh" "$ROOT/tests/load-check/needs.sh" "$ROOT/tests/load-check/fresh-database.sh" "$repo/tests/load-check/"
 cat >"$repo/tests/release-boot/boot.sh" <<'EOF'
@@ -196,7 +196,7 @@ fresh() {
 # env_of NAME: the environment every load check here runs in.
 lc_env=()
 set_env() {
-  lc_env=(HEAVY_CHECK_HELD=exclusive LOAD_CHECK_CPU_ROOT="$S/cpu" LOAD_CHECK_WORKTREES="$S/wt" LOAD_CHECK_SUBJECTS="$table"
+  lc_env=(HEAVY_CHECK_HELD=4 LOAD_CHECK_CPU_ROOT="$S/cpu" LOAD_CHECK_WORKTREES="$S/wt" LOAD_CHECK_SUBJECTS="$table"
     LOAD_CHECK_SAMPLE=1 LOAD_CHECK_GRACE=10 PATH="$S/bin:$PATH" LOAD_TEST_TOKEN="$TOKEN" LOAD_TEST_ALL="$ALL4"
     LOAD_PROBE="$S/probe" DOCKER_STUB="$S/docker" LOAD_CHECK_BOOT_DATABASE_URL=postgres://u:p@localhost:5432/base
     LOAD_TEST_SECRET="$SECRET2")
@@ -298,7 +298,7 @@ own_trees() {
     "$S/wt/"*-load-check-a/"$S/wt/"*-load-check-b) ;; *) echo 'a copy ran outside its worktree'; return 1 ;;
   esac
   [ "$(cat "$o/probe/r1-busy/a/build")" = unset ] || { echo 'a copy saw the caller'"'"'s MIX_BUILD_PATH'; return 1; }
-  [ "$(cat "$o/probe/r1-pair/b/held")" = exclusive ] || { echo 'a copy lost HEAVY_CHECK_HELD'; return 1; }
+  [ "$(cat "$o/probe/r1-pair/b/held")" = 4 ] || { echo 'a copy lost HEAVY_CHECK_HELD'; return 1; }
   python3 -I - "$o/report.tsv" <<'PY' || return 1
 import csv, sys
 rows = [r for r in csv.DictReader(open(sys.argv[1]), delimiter="\t") if r["subject"] == "probe"]
@@ -326,12 +326,12 @@ PY
 
 # --- the cases ---------------------------------------------------------------
 
-begin 'a refused run starts no work: outside the exclusive lane, without taskset, on three cores, with a busy load that cannot run'
+begin 'a refused run starts no work: outside heavy-check, on one quarter, without taskset, on three cores, with a busy load that cannot run'
 fresh
-lc lane HEAVY_CHECK_HELD= -- -s probe
-[ "$rc" = 64 ] && grep -q 'takes the whole host' "$S/lane.err" && no_work lane || fail "unheld: $rc $(cat "$S/lane.err")"
-lc scoped HEAVY_CHECK_HELD=scoped -- -s probe
-[ "$rc" = 64 ] && no_work scoped || fail "scoped: $rc $(cat "$S/scoped.err")"
+lc unheld HEAVY_CHECK_HELD= -- -s probe
+[ "$rc" = 64 ] && grep -q 'takes the whole host' "$S/unheld.err" && no_work unheld || fail "unheld: $rc $(cat "$S/unheld.err")"
+lc quarter HEAVY_CHECK_HELD=1 -- -s probe
+[ "$rc" = 64 ] && no_work quarter || fail "one quarter: $rc $(cat "$S/quarter.err")"
 lc notaskset PATH="$S/notaskset:$S/bin:$PATH" -- -s probe
 [ "$rc" = 69 ] && grep -q 'taskset (util-linux) is required' "$S/notaskset.err" && no_work notaskset || fail "no taskset: $rc $(cat "$S/notaskset.err")"
 lc three LOAD_CHECK_CPU_ROOT="$S/cpu3" -- -s probe
@@ -339,9 +339,9 @@ lc three LOAD_CHECK_CPU_ROOT="$S/cpu3" -- -s probe
 sed 's/^load\tspin\t-\t-\t-\t1\t30\t-\t/load\tspin\t-\t-\t-\t1\t30\techo no load here; exit 1\t/' "$table" >"$S/noload.tsv"
 lc noload LOAD_CHECK_SUBJECTS="$S/noload.tsv" -- -s probe
 [ "$rc" = 69 ] && grep -qF 'the load row spin: no load here' "$S/noload.err" && no_work noload || fail "no load: $rc $(cat "$S/noload.err")"
-mutant lane 'if ! $DRY && [ "${HEAVY_CHECK_HELD:-}" != exclusive ]; then' 'if false; then'
-lc mutant-lane HEAVY_CHECK_HELD= -- -s nap -c alone
-! no_work mutant-lane >/dev/null || fail 'no_work passed a run that did work'
+mutant held 'if ! $DRY && [ "${HEAVY_CHECK_HELD:-}" != 4 ]; then' 'if false; then'
+lc mutant-held HEAVY_CHECK_HELD= -- -s nap -c alone
+! no_work mutant-held >/dev/null || fail 'no_work passed a run that did work'
 
 begin 'each run sees exactly its processors and is told them, the load runs on the other quarters and stops with its run, each worktree is its own'
 fresh
@@ -438,7 +438,7 @@ mutant sample 'if [ "$SECONDS" -ge "$next" ]; then sample; next=$((SECONDS + SAM
 fresh; lc mutant-sample -- -s escape,misplaced -c alone
 said mutant-sample 'escape (1 quarter): holds' >/dev/null && said mutant-sample 'misplaced (1 quarter): holds' >/dev/null ||
   fail 'without sampling an escape was still seen'
-mutant container '      if [ -n "$allowed" ] && [ "$(cpus_of "$allowed" 2>/dev/null)" != "$(cpus_of "${J_CPUS[$i]}")" ]; then' '      if false; then'
+mutant container '      if [ -n "$allowed" ] && [ "$(quarters_cpus_of "$allowed" 2>/dev/null)" != "$(quarters_cpus_of "${J_CPUS[$i]}")" ]; then' '      if false; then'
 fresh; lc mutant-container -- -s misplaced -c alone
 said mutant-container 'misplaced (1 quarter): holds' >/dev/null || fail 'without the container check the misplaced container was still seen'
 
@@ -618,8 +618,14 @@ done
 lc pick HEAVY_CHECK_HELD= LOAD_CHECK_CPU_ROOT="$S/smt16" -- -n -s probe,two -c whole -r 2
 said pick 'subject probe: none of its conditions is chosen' &&
   said pick 'subject two: 2 quarter(s), warm w; whole 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15; about 2s' || fail "$(cat "$S/pick.out")"
-mutant siblings '  key=${sib// /,}' '  sib=$cpu key=$cpu'
-lc mutant-siblings HEAVY_CHECK_HELD= LOAD_CHECK_CPU_ROOT="$S/smt16" -- -n -s probe
-! said mutant-siblings 'quarter 1: 0,1,8,9' >/dev/null || fail 'the siblings control still kept a core in one quarter'
+# The control: with the library's cut keeping no core whole, the plan
+# splits a core's threads.
+mutant siblings '    key=${sib// /,}' '    sib=$cpu key=$cpu' "$repo/scripts/lib/quarters.sh" "$S/mutant-siblings"
+cp "$repo/scripts/lib/quarters.sh" "$S/quarters.kept"
+cp "$S/mutant-siblings" "$repo/scripts/lib/quarters.sh"
+lc siblings HEAVY_CHECK_HELD= LOAD_CHECK_CPU_ROOT="$S/smt16" -- -n -s probe
+cp "$S/quarters.kept" "$repo/scripts/lib/quarters.sh"
+[ "$rc" = 0 ] || fail "the siblings control exited $rc: $(cat "$S/siblings.err")"
+! said siblings 'quarter 1: 0,1,8,9' >/dev/null || fail 'the siblings control still kept a core in one quarter'
 
 echo 'load check self-test: every case passed'

@@ -7,7 +7,7 @@
 # call's environment, directory and arguments are recorded. Everything else
 # the gate runs is real: the JavaScript suite, the Python checks, test.yml's
 # step scripts, the wasm-tools install and the partition runner. So the
-# test takes the whole host (scripts/heavy-check.sh without -s).
+# test takes the whole host (scripts/heavy-check.sh on all four quarters).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 gate="$root/scripts/commit-gate.sh"
@@ -996,16 +996,16 @@ grep -qF 'with no --image-namespace the plan has no name of the gate' "$scratch/
   fail "the planner refused a name with no namespace without its reason: $(cat "$scratch/images-p4.err")"
 echo "ok: the close's jobs give images only the names the table renames"
 
-# --- scoped refusal ----------------------------------------------------------
-run_gate scoped HEAVY_CHECK_HELD=scoped -- "$gate" -l "$scratch/scoped.log"; [ "$gate_rc" = 64 ] || fail 'the gate ran as a scoped check'
-no_line '^_(START|EXIT)=' "$scratch/scoped.out" || fail 'a refused scoped gate wrote a terminal line under heavy-check'
-[ ! -e "$scratch/scoped.log" ] || fail 'a refused scoped gate touched its log directory'
-no_mix_ran scoped || fail 'a refused scoped gate ran Mix'
-run_gate proof HEAVY_CHECK_HELD=proof -- "$gate" -l "$scratch/proof.log"; [ "$gate_rc" = 64 ] || fail 'the gate ran as a proof check'
-no_line '^_(START|EXIT)=' "$scratch/proof.out" || fail 'a refused proof gate wrote a terminal line under heavy-check'
-[ ! -e "$scratch/proof.log" ] || fail 'a refused proof gate touched its log directory'
-no_mix_ran proof || fail 'a refused proof gate ran Mix'
-echo 'ok: scoped and proof refusal'
+# --- refused on fewer than four quarters --------------------------------------
+run_gate quarter HEAVY_CHECK_HELD=1 -- "$gate" -l "$scratch/quarter.log"; [ "$gate_rc" = 64 ] || fail 'the gate ran on one quarter'
+no_line '^_(START|EXIT)=' "$scratch/quarter.out" || fail 'a gate refused on one quarter wrote a terminal line under heavy-check'
+[ ! -e "$scratch/quarter.log" ] || fail 'a gate refused on one quarter touched its log directory'
+no_mix_ran quarter || fail 'a gate refused on one quarter ran Mix'
+run_gate half HEAVY_CHECK_HELD=2 -- "$gate" -l "$scratch/half.log"; [ "$gate_rc" = 64 ] || fail 'the gate ran on two quarters'
+no_line '^_(START|EXIT)=' "$scratch/half.out" || fail 'a gate refused on two quarters wrote a terminal line under heavy-check'
+[ ! -e "$scratch/half.log" ] || fail 'a gate refused on two quarters touched its log directory'
+no_mix_ran half || fail 'a gate refused on two quarters ran Mix'
+echo 'ok: refused on fewer than four quarters'
 
 # --- step deadlines the containment library cannot take ------------------------
 # Zero, and seven digits where contain_wait takes six: refused with 64
@@ -2552,7 +2552,7 @@ echo 'ok: SIGKILL: every session its registry names is empty, the seven legs and
 # Run as heavy-check runs it: no terminal lines, and its sessions recorded
 # in the registry heavy-check owns, which it leaves in place.
 ( umask 077 && : > "$scratch/registry-e" )
-start_gate e HEAVY_CHECK_HELD=exclusive CONTAIN_REGISTRY="$scratch/registry-e" STUB_HOLD=sqlite_test_compile \
+start_gate e HEAVY_CHECK_HELD=4 CONTAIN_REGISTRY="$scratch/registry-e" STUB_HOLD=sqlite_test_compile \
   -- "$gate" -n 2 -l "$scratch/e.log" -- apps/arca/test apps/sanctum/test/sanctum/issuance_test.exs
 e=$gate_pid
 until_true 60 test -s "$scratch/e.trace/held.sqlite_test_compile" || fail "the dead-leg case's step never started: $(cat "$scratch/e.err")"

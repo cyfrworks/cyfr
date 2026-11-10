@@ -1,57 +1,57 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 # What each stage runs, read by scripts/stage.sh, whose header gives the columns
-# and the rules: stage, check, lane, hold, when, command, separated by tabs.
-# The handoff runs no exclusive row: the harness self-tests that need the whole
-# machine, and go test -race, run on the pull request's run on GitHub
-# (CONTRIBUTING.md says how to run one here by name). tests/stage-test.sh holds
-# that, and that every self-test a handoff row runs is one a pull-request
-# workflow runs too.
-save	format	scoped	600	always	mix format --check-formatted
-save	credo	scoped	600	apps/**,config/**	mix credo --strict
-save	compile	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors
-save	tests	scoped	1800	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
-save	go-cmd	scoped	1200	apps/codex/**	cd apps/codex && go test ./cmd/...
+# and the rules: stage, check, quarters, hold, when, command, separated by tabs.
+# No save or handoff row takes more than one quarter: the harness self-tests
+# that need the whole machine, and go test -race, run on the pull request's run
+# on GitHub (CONTRIBUTING.md says how to run one here by name).
+# tests/stage-test.sh holds that, and that every self-test a handoff row runs is
+# one a pull-request workflow runs too.
+save	format	1	600	always	mix format --check-formatted
+save	credo	1	600	apps/**,config/**	mix credo --strict
+save	compile	1	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors
+save	tests	1	1800	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
+save	go-cmd	1	1200	apps/codex/**	cd apps/codex && go test ./cmd/...
 
-handoff	format	scoped	600	always	mix format --check-formatted
-handoff	credo	scoped	600	apps/**,config/**	mix credo --strict
-handoff	compile-sqlite	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors
-handoff	compile-postgres	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev mix compile --force --warnings-as-errors
-handoff	generated	scoped	600	apps/**,config/**	mix ops.gen.cli --check && mix cyfr.gen.configuration_guide --check
-handoff	tests-sqlite	scoped	2700	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
-handoff	tests-postgres	scoped	2700	tests	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors $STAGE_TESTS
-handoff	rosters	scoped	2700	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs
-handoff	arca-sqlite	scoped	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test
-handoff	arca-postgres	scoped	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test
-handoff	dialyzer	scoped	2400	apps/*/lib/**	mix dialyzer
-handoff	js	scoped	900	apps/cyfr/assets/**,seed/**	(cd apps/cyfr/assets && npm ci --ignore-scripts --no-audit --no-fund && npx eslint . && test/run.sh) && scripts/check-seed-canvas.sh
-handoff	run-names-test	scoped	600	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
-handoff	image-test	scoped	600	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
-handoff	janitor-test	scoped	900	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh
-handoff	load-check-test	scoped	900	tests/load-check/**,scripts/lib/contain.sh,scripts/lib/run-names.sh,scripts/heavy-check.sh,scripts/commit-gate.sh,tests/browser/harness.sh,tests/install-screen-proof/lib.sh	bash tests/load-check/run-test.sh
-handoff	release-boot-names-test	scoped	600	tests/release-boot/**	bash tests/release-boot/names-test.sh
-handoff	imagesuite-test	scoped	600	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
-handoff	registry-stand-in-test	scoped	600	tests/registry-stand-in/**	python3 -I tests/registry-stand-in/standin_test.py
-handoff	runtime-image-checks	scoped	600	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check
-handoff	backends-image-check	scoped	600	tests/locus-backends-image/**	python3 -I tests/locus-backends-image/harness.py --self-check
-handoff	compose-proof-tests	scoped	900	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
-handoff	setup-proof-test	scoped	600	tests/setup-proof/**	bash tests/setup-proof/cleanup-test.sh
-handoff	tailnet-guard-tests	scoped	600	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
-handoff	dev-stack-test	scoped	284	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
-handoff	prebuilt-binaries-test	scoped	600	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
-handoff	ci-guards-test	scoped	600	scripts/ci/**,scripts/release.sh,tests/ci-guards-test.sh	bash tests/ci-guards-test.sh
-handoff	containerd-store-test	scoped	600	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh
-handoff	release-graph	scoped	600	.github/workflows/release.yml,scripts/release.sh,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
-handoff	security-scan-test	scoped	600	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh
-handoff	go-checks	scoped	1200	apps/codex/**	cd apps/codex && test -z "$(gofmt -l .)" && go vet ./... && go build ./...
+handoff	format	1	600	always	mix format --check-formatted
+handoff	credo	1	600	apps/**,config/**	mix credo --strict
+handoff	compile-sqlite	1	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors
+handoff	compile-postgres	1	1200	apps/**,config/**,mix.exs,mix.lock	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev mix compile --force --warnings-as-errors
+handoff	generated	1	600	apps/**,config/**	mix ops.gen.cli --check && mix cyfr.gen.configuration_guide --check
+handoff	tests-sqlite	1	2700	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
+handoff	tests-postgres	1	2700	tests	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors $STAGE_TESTS
+handoff	rosters	1	2700	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs
+handoff	arca-sqlite	1	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test
+handoff	arca-postgres	1	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test
+handoff	dialyzer	1	2400	apps/*/lib/**	mix dialyzer
+handoff	js	1	900	apps/cyfr/assets/**,seed/**	(cd apps/cyfr/assets && npm ci --ignore-scripts --no-audit --no-fund && npx eslint . && test/run.sh) && scripts/check-seed-canvas.sh
+handoff	run-names-test	1	600	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
+handoff	image-test	1	600	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
+handoff	janitor-test	1	900	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh
+handoff	load-check-test	1	900	tests/load-check/**,scripts/lib/contain.sh,scripts/lib/run-names.sh,scripts/lib/quarters.sh,scripts/heavy-check.sh,scripts/commit-gate.sh,tests/browser/harness.sh,tests/install-screen-proof/lib.sh	bash tests/load-check/run-test.sh
+handoff	release-boot-names-test	1	600	tests/release-boot/**	bash tests/release-boot/names-test.sh
+handoff	imagesuite-test	1	600	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
+handoff	registry-stand-in-test	1	600	tests/registry-stand-in/**	python3 -I tests/registry-stand-in/standin_test.py
+handoff	runtime-image-checks	1	600	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check
+handoff	backends-image-check	1	600	tests/locus-backends-image/**	python3 -I tests/locus-backends-image/harness.py --self-check
+handoff	compose-proof-tests	1	900	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
+handoff	setup-proof-test	1	600	tests/setup-proof/**	bash tests/setup-proof/cleanup-test.sh
+handoff	tailnet-guard-tests	1	600	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
+handoff	dev-stack-test	1	284	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
+handoff	prebuilt-binaries-test	1	600	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
+handoff	ci-guards-test	1	600	scripts/ci/**,scripts/release.sh,tests/ci-guards-test.sh	bash tests/ci-guards-test.sh
+handoff	containerd-store-test	1	600	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh
+handoff	release-graph	1	600	.github/workflows/release.yml,scripts/release.sh,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
+handoff	security-scan-test	1	600	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh
+handoff	go-checks	1	1200	apps/codex/**	cd apps/codex && test -z "$(gofmt -l .)" && go vet ./... && go build ./...
 # The install proof's VM boots from the base image in the host's cache and
 # runs the proof image, which tests/install-screen-proof/prepare.sh fetches
-# and builds outside any lane; without them it exits 69 and names that
+# and builds outside the queue; without them it exits 69 and names that
 # command.
-handoff	install-screen-proof	proof	3600	tests/install-screen-proof/**,apps/codex/**,scripts/install.sh,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh
+handoff	install-screen-proof	1	3600	tests/install-screen-proof/**,apps/codex/**,scripts/install.sh,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh
 
-pull-request	gate	exclusive	2700	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
+pull-request	gate	4	2700	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
 
-release	close	exclusive	10800	always	scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"
+release	close	4	10800	always	scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"
 
-nightly	janitor	exclusive	1800	always	scripts/janitor.sh
+nightly	janitor	1	1800	always	scripts/janitor.sh

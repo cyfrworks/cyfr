@@ -792,37 +792,30 @@ lines_of "$scratch/lines" -n 2 -a postgres -- --only cluster
   [ "$(tail -n 1 "$scratch/lines")" = "_EXIT=$lines_pid 64" ]; } || fail 'a refusal after the options lacks its terminal lines'
 lines_of "$scratch/lines" -n 0
 { [ "$lines_status" = 64 ] && [ ! -s "$scratch/lines" ]; } || fail 'an invalid -n wrote terminal lines'
-for mode in exclusive scoped; do
-  "${clean[@]}" HEAVY_CHECK_HELD=$mode bash "$runner" -n 1 >"$scratch/held" 2>&1 || fail "a run held $mode failed"
-  if grep -qE '_(START|EXIT)=' "$scratch/held"; then fail "terminal lines written under HEAVY_CHECK_HELD=$mode"; fi
+for held in 4 1; do
+  "${clean[@]}" HEAVY_CHECK_HELD=$held bash "$runner" -n 1 >"$scratch/held" 2>&1 || fail "a run on $held quarters failed"
+  if grep -qE '_(START|EXIT)=' "$scratch/held"; then fail "terminal lines written under HEAVY_CHECK_HELD=$held"; fi
 done
 
-# Scoped admission: a resolved count above one is refused before anything
-# is prepared.
-scoped() { status_of "${clean[@]}" HEAVY_CHECK_HELD=scoped bash "$runner" "$@"; }
+# On one quarter a resolved count above one is refused before anything is
+# prepared; on four it is not.
+quarter() { status_of "${clean[@]}" HEAVY_CHECK_HELD=1 bash "$runner" "$@"; }
 before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
-[ "$(scoped -n 4)" = 64 ] || fail 'a scoped run took four partitions'
-[ "$(scoped -n 1 -n 4)" = 64 ] || fail 'a scoped run took the last -n of four'
-[ "$(scoped -a sqlite -n 4)" = 64 ] || fail 'a scoped run took four partitions after -a'
-[ "$(scoped)" = 64 ] || fail 'a scoped run took the default count'
-[ "$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)" = "$before" ] || fail 'a refused scoped run prepared or reached Mix'
-[ "$(scoped -a sqlite -n 1)" = 0 ] || fail 'a scoped run refused one partition'
-[ "$(scoped -n 4 -n 1)" = 0 ] || fail 'a scoped run refused a last -n of one'
-
-# The proof lane admits one partition, as the scoped lane does.
-proof() { status_of "${clean[@]}" HEAVY_CHECK_HELD=proof bash "$runner" "$@"; }
-before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
-[ "$(proof -n 4)" = 64 ] || fail 'a proof-lane run took four partitions'
-grep -qx 'a proof check runs one partition: -n 1' "$scratch/status" || fail "the proof-lane refusal: $(cat "$scratch/status")"
-[ "$(proof)" = 64 ] || fail 'a proof-lane run took the default count'
-[ "$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)" = "$before" ] || fail 'a refused proof-lane run prepared or reached Mix'
-[ "$(proof -a sqlite -n 1)" = 0 ] || fail 'a proof-lane run refused one partition'
+[ "$(quarter -n 4)" = 64 ] || fail 'a run on one quarter took four partitions'
+grep -qx 'a check on one quarter runs one partition: -n 1' "$scratch/status" || fail "the refusal on one quarter: $(cat "$scratch/status")"
+[ "$(quarter -n 1 -n 4)" = 64 ] || fail 'a run on one quarter took the last -n of four'
+[ "$(quarter -a sqlite -n 4)" = 64 ] || fail 'a run on one quarter took four partitions after -a'
+[ "$(quarter)" = 64 ] || fail 'a run on one quarter took the default count'
+[ "$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)" = "$before" ] || fail 'a refused run on one quarter prepared or reached Mix'
+[ "$(quarter -a sqlite -n 1)" = 0 ] || fail 'a run on one quarter refused one partition'
+[ "$(quarter -n 4 -n 1)" = 0 ] || fail 'a run on one quarter refused a last -n of one'
+[ "$(status_of "${clean[@]}" HEAVY_CHECK_HELD=4 bash "$runner" -n 2)" = 0 ] || fail "a run on four quarters refused two partitions: $(cat "$scratch/status")"
 
 # A second pass in one VM would run after the suite's after_suite cleanups:
-# --repeat-until-failure is refused, in every spelling and lane, before
+# --repeat-until-failure is refused, in every spelling and on any quarters, before
 # anything is prepared, naming the replacement.
 before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
-for held in '' scoped; do
+for held in '' 1; do
   for form in '-- --repeat-until-failure 2 apps/prima/test/prima/boot_test.exs' '--repeat-until-failure 2' '--repeat-until-failure=2'; do
     # shellcheck disable=SC2086
     [ "$(status_of "${clean[@]}" HEAVY_CHECK_HELD="$held" bash "$runner" -n 1 $form)" = 64 ] || fail "accepted $form under '$held'"

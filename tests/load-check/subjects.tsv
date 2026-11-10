@@ -4,11 +4,12 @@
 # the columns: kind, name, quarters, with, warm, expect, deadline, needs,
 # command, separated by tabs. README.md says why each row is here.
 #
-# expect is the median seconds of the passing runs this host recorded in
-# today's lanes (the check runs from 2026-10-30 to 2026-11-10); for the four
-# subjects that also run on the whole machine it is twice that median, the
-# time assumed busy on two quarters, so their whole run is planned at the
-# median itself. A row with no recorded run says so.
+# expect is the median seconds of the passing runs this host recorded under
+# the queue's lanes, before the quarters (the check runs from 2026-10-30 to
+# 2026-11-10); for the four subjects that also run on the whole machine it
+# is twice that median, the time assumed busy on two quarters, so their
+# whole run is planned at the median itself. A row with no recorded run
+# says so.
 #
 # Every scratch worktree is prepared cold by the prep rows, in order: the
 # deps, then the deps compiled into each build path a check compiles in,

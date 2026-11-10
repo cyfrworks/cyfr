@@ -11,11 +11,10 @@
 # `scripts/release.sh --gate` runs for a HEAD with no run on GitHub) and
 # nightly (the janitor, which a timer on the host runs once a day). What
 # each runs is scripts/stages.tsv, one row per check:
-#   stage<TAB>check<TAB>lane<TAB>hold<TAB>when<TAB>command
+#   stage<TAB>check<TAB>quarters<TAB>hold<TAB>when<TAB>command
 #   stage    one of the five above
 #   check    [a-z0-9-]+, unique within its stage
-#   lane     scoped, proof or exclusive, the scripts/heavy-check.sh lane it
-#            queues in (-s, -p or no flag)
+#   quarters 1 or 4, the quarters of the machine it takes, heavy-check's -q
 #   hold     heavy-check's -t in seconds. A row waits for the host as long
 #            as heavy-check's default queue deadline, which is longer than
 #            every hold here (tests/heavy-check-test.sh holds the two
@@ -55,12 +54,12 @@
 # other harness scripts frame theirs (scripts/await-task.sh), with one line
 # per row between: `<check>: ok <seconds>s`, `<check>: failed <status>
 # <seconds>s` or `<check>: skipped (<reason>) <seconds>s`. -n prints `would run
-# <check> (<lane>): <command>` or `would skip <check>: <reason>` per row
+# <check> (<n> quarter[s]): <command>` or `would skip <check>: <reason>` per row
 # and runs nothing.
 #
 # Exits 0 when every row that ran passed and 1 otherwise; 64 on usage, or
-# inside a heavy-check (HEAVY_CHECK_HELD set), since each row queues in
-# its own lane; 65 for a table that is missing or unreadable, or a line of
+# inside a heavy-check (HEAVY_CHECK_HELD set), since each row queues for
+# its own quarters; 65 for a table that is missing or unreadable, or a line of
 # it that is not a row, naming it, or a
 # touched path with whitespace, before any row runs; 69 outside a Git
 # checkout, without the stage's base, or when Git cannot list the changed
@@ -109,7 +108,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 is_stage "$stage" || { usage >&2; exit 64; }
-[ -z "${HEAVY_CHECK_HELD:-}" ] || refuse 64 'each row queues in its own lane: run this outside scripts/heavy-check.sh'
+[ -z "${HEAVY_CHECK_HELD:-}" ] || refuse 64 'each row queues for its own quarters: run this outside scripts/heavy-check.sh'
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 root=$(git -C "$here/.." rev-parse --show-toplevel 2>/dev/null) || root=
@@ -129,14 +128,14 @@ while IFS= read -r line || [ -n "$line" ]; do
   tabs=${line//[^$'\t']/}
   [ "${#tabs}" = 5 ] || refuse 65 "$table:$number: a row has six fields separated by single tabs"
   case $line in $'\t'*|*$'\t\t'*|*$'\t') refuse 65 "$table:$number: a field is empty" ;; esac
-  IFS=$'\t' read -r r_stage r_check r_lane r_hold r_when r_command <<<"$line"
+  IFS=$'\t' read -r r_stage r_check r_quarters r_hold r_when r_command <<<"$line"
   is_stage "$r_stage" || refuse 65 "$table:$number: no stage is called '$r_stage'"
   [[ $r_check =~ ^[a-z0-9-]+$ ]] || refuse 65 "$table:$number: the check '$r_check' is not [a-z0-9-]+"
   [ -z "${seen[$r_stage/$r_check]+set}" ] || refuse 65 "$table:$number: $r_stage has a second check called $r_check"
   seen[$r_stage/$r_check]=1
-  case $r_lane in
-    scoped|proof|exclusive) ;;
-    *) refuse 65 "$table:$number: no lane is called '$r_lane'" ;;
+  case $r_quarters in
+    1|4) ;;
+    *) refuse 65 "$table:$number: a row takes 1 or 4 quarters, not '$r_quarters'" ;;
   esac
   [[ $r_hold =~ ^[1-9][0-9]{0,5}$ ]] || refuse 65 "$table:$number: the hold '$r_hold' is not seconds"
   case $r_when in
@@ -231,19 +230,17 @@ export STAGE="$stage" STAGE_TESTS="${tests[*]+${tests[*]}}" STAGE_LOGDIR="$logdi
 
 failures=0
 for i in ${rows[@]+"${!rows[@]}"}; do
-  IFS=$'\t' read -r _ _ check lane hold _ command <<<"${rows[$i]}"
+  IFS=$'\t' read -r _ _ check quarters hold _ command <<<"${rows[$i]}"
   reason=${reasons[$i]}
   if $dry; then
-    if [ -n "$reason" ]; then echo "would skip $check: $reason"; else echo "would run $check ($lane): $command"; fi
+    if [ -n "$reason" ]; then echo "would skip $check: $reason"
+    elif [ "$quarters" = 1 ]; then echo "would run $check (1 quarter): $command"
+    else echo "would run $check ($quarters quarters): $command"; fi
     continue
   fi
   started=$SECONDS
   if [ -n "$reason" ]; then echo "$check: skipped ($reason) $((SECONDS - started))s"; continue; fi
-  case $lane in
-    scoped) scripts/heavy-check.sh -s -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;
-    proof) scripts/heavy-check.sh -p -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;
-    exclusive) scripts/heavy-check.sh -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;
-  esac
+  scripts/heavy-check.sh -q "$quarters" -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 &
   row_pid=$!
   status=0
   wait "$row_pid" || status=$?

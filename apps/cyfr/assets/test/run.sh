@@ -10,8 +10,8 @@
 # fails only when a test does. c8's reports go to a directory of the run's
 # own, removed when it ends.
 #
-# CYFR_TEST_CORES, which scripts/heavy-check.sh sets to a scoped slot's
-# share of the cores, bounds how many test files Node runs at once
+# CYFR_TEST_CORES, which scripts/heavy-check.sh sets to the processor count
+# of a check on one quarter, bounds how many test files Node runs at once
 # (--test-concurrency); unset, Node's own default stands.
 set -euo pipefail
 

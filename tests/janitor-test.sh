@@ -67,7 +67,7 @@ OLD=2026-01-01T00:00:00Z
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 plant_image() { printf 'tag=%s\nlabel=%s\ncreated=%s\n' "$1" "$2" "$3" >"$(image_file "$1")"; }
 plant_container() { printf 'image=%s\n' "${2:-busybox}" >"$DOCKER_STUB/containers/$1"; }
-record() { printf 'pid=%s mode=scoped since=2026-10-29T00:00:00+0000 hold=2700s %s checkout=/x command=run pid=1 group=1\n' "$1" "$2" >"$3"; }
+record() { printf 'pid=%s quarters=1 cpus=0,1,8,9 since=2026-10-29T00:00:00+0000 hold=2700s %s checkout=/x command=run pid=1 group=1\n' "$1" "$2" >"$3"; }
 # Runs the janitor from the toy repository: janitor RUN-NAME ARGS...
 janitor() {
   local name=$1 status=0
@@ -110,11 +110,11 @@ done
 l2=$(live_pid)
 for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do plant_container "cyfr-$seed-$pid-proof"; done
 record "$d2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.holder"
-record "$d3" "group=$group watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.slot1.holder"
-record "$d4" "group=$(dead_pid) watchdog=$watchdog" "$HEAVY_CHECK_LOCK.slot2.holder"
-record "$d5" '' "$HEAVY_CHECK_LOCK.proof.holder"
+record "$d3" "group=$group watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.quarter1.holder"
+record "$d4" "group=$(dead_pid) watchdog=$watchdog" "$HEAVY_CHECK_LOCK.quarter2.holder"
+record "$d5" '' "$HEAVY_CHECK_LOCK.quarter3.holder"
 # A stale record, its group and watchdog gone, for a pid that still lives.
-record "$l2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.slot3.holder"
+record "$l2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.quarter4.holder"
 plant_container other-project-db
 # Rule 1: what a commit gate made, named by its pid: a gone gate's
 # objects and scratch directories, and a running gate's.

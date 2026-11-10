@@ -83,8 +83,9 @@
 # pin it could not read. It never names or touches anything
 # else: not a tag scripts/image.sh did not make, not another project's
 # objects. The per-image lock and the run-finished test,
-# not a queue lane, protect an image between its choice and its
-# container's start and a run until its end, so it runs in any lane.
+# not the queue, protect an image between its choice and its
+# container's start and a run until its end, so it takes one quarter
+# (scripts/heavy-check.sh -q 1) beside any other check.
 #
 # HEAVY_CHECK_LOCK (default /tmp/cyfr-heavy-check.lock) names heavy-check's
 # lock, beside which the holder records lie; JANITOR_TMP (default /tmp)

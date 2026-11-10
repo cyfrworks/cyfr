@@ -91,7 +91,7 @@ print(json.dumps(value))' "$@"
 }
 
 # The shared proof image this worktree's inputs name, which prepare.sh
-# built outside any lane, its use by this run recorded so the janitor
+# built outside the queue, its use by this run recorded so the janitor
 # keeps it while the run lives. The run never builds or removes it.
 proof_image_use() {
   local status=0
@@ -150,11 +150,11 @@ sys.exit(1)' "$1"
 
 # The base the host's cache holds, verified inside the container with no
 # network, read-only. The run downloads nothing itself: prepare.sh fills
-# the cache outside any lane, so a held lane never waits on the network.
+# the cache outside the queue, so a held quarter never waits on the network.
 proof_base_verify() {
   step "the pinned Ubuntu 26.04 cloud image, from the host's cache $BASE_DIR, verified"
   if [ ! -f "$BASE_DIR/$CLOUD_IMAGE" ]; then
-    echo "install-screen proof: the base image is not in $BASE_DIR; run tests/install-screen-proof/prepare.sh first, outside any lane" >&2
+    echo "install-screen proof: the base image is not in $BASE_DIR; run tests/install-screen-proof/prepare.sh first, outside the queue" >&2
     exit 69
   fi
   proof_own volume "$VOLUME" || fail "the volume $VOLUME cannot be the run's"
@@ -177,7 +177,7 @@ proof_seed() {
   cp "$WORK/key.pub" "$WORK/seed/authorized_key" || fail "no SSH key"
   od -An -N12 -tx1 /dev/urandom | tr -d ' \n' >"$WORK/password" || fail "no password"
   cp "$WORK/password" "$WORK/seed/password" || fail "no password"
-  # Readable by the container's user, whatever the lane's umask; the
+  # Readable by the container's user, whatever the queue's umask; the
   # directory holding them on this host stays private.
   chmod 644 "$WORK/seed/authorized_key" "$WORK/seed/password" || fail "no seed"
 }
@@ -523,7 +523,7 @@ candidate_build() {
 }
 
 # This tree's server image for the guests, which scripts/image.sh --undated
-# app builds outside any lane before the run, its use by this run recorded
+# app builds outside the queue before the run, its use by this run recorded
 # so the janitor keeps it while the run lives; without it the run exits
 # 69, naming that command, and it never builds it. candidate_server_load
 # puts it in each guest in place of the release's cyfr image, a stand-in
@@ -536,7 +536,7 @@ candidate_server_use() {
   step "this tree's server image, built by scripts/image.sh --undated app (stand-in for a signed candidate)"
   tag=$("$ROOT/scripts/image.sh" --undated --tag-only app) || fail "scripts/image.sh named no server image for this tree"
   if [ "$(docker image inspect -f '{{index .Config.Labels "works.cyfr.image-inputs"}}' "$tag" 2>/dev/null)" != "${tag#cyfr:in-}" ]; then
-    echo "install-screen proof: this tree's server image $tag is not built; run scripts/image.sh --undated app first, outside any lane" >&2
+    echo "install-screen proof: this tree's server image $tag is not built; run scripts/image.sh --undated app first, outside the queue" >&2
     exit 69
   fi
   "$ROOT/scripts/image.sh" --undated --for "$$" app >/dev/null 2>>"$OUT/candidate-server.log" ||
