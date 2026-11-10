@@ -552,12 +552,14 @@ write_record() {
 # Run in a child process, so that a check stopped meanwhile either holds
 # its quarters with its record written or holds nothing: it takes the
 # locks on the descriptors the check opened, then reads the queue
-# deadline and writes the record. Exits 10 when it took the four quarters,
-# 10 + i when it took quarter i; 1 when too few are free; 2 when the
-# deadline has passed. A lock it took stays on the check's descriptors,
-# which the check closes unless the take succeeded.
+# deadline and writes the record, and on every path that does not end
+# with the quarters taken it gives back what it took before it exits,
+# since the check, stopped, may not close its descriptors for as long as
+# it stays stopped. Exits 10 when it took the four quarters, 10 + i when
+# it took quarter i; 1 when too few are free or the record was not
+# written; 2 when the deadline has passed.
 take_quarters() {
-  local i held=0
+  local i held=0 taken=9 s=0
   if [ "$QUARTERS" = 4 ]; then
     flock -n -x 9 || exit 1
   else
@@ -565,17 +567,25 @@ take_quarters() {
     for ((i=1; i<=4; i++)); do
       if flock -n -x "${quarter_fd[$i]}"; then held=$i; break; fi
     done
-    [ "$held" != 0 ] || exit 1
+    [ "$held" != 0 ] || { flock -u 9; exit 1; }
+    taken="9 ${quarter_fd[$held]}"
   fi
-  ! expired || exit 2
-  record=$(record_for "$held") cpus=$(cpus_for "$held")
-  write_record || exit 1
+  if expired; then
+    s=2
+  else
+    record=$(record_for "$held") cpus=$(cpus_for "$held")
+    write_record || s=1
+  fi
+  if [ "$s" != 0 ]; then
+    for i in $taken; do flock -u "$i"; done
+    exit "$s"
+  fi
   exit $((10 + held))
 }
 # Opens the descriptors and takes the quarters in a child; returns 0, 1 or
 # 2, and keeps the descriptors only when it took the quarters, the one it
-# holds as 7 on one quarter. Closing the rest gives back every lock the
-# child took, also when it ended any other way, killed included.
+# holds as 7 on one quarter. Closing the rest also gives back what a child
+# that ended any other way, killed included, took and could not give back.
 admit() {
   local i fd s=0
   exec 9>>"$LOCK" || exit 1

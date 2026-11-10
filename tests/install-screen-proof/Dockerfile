@@ -4,7 +4,7 @@
 # The install-and-screen proof's VM host: QEMU/KVM, qemu-img, the cloud
 # image tools and swtpm, the guest's simulated TPM, all from Ubuntu, so
 # the verification host installs none of them.
-# tests/install-screen-proof/prepare.sh builds it, outside any lane, as
+# tests/install-screen-proof/prepare.sh builds it, outside the queue, as
 # cyfr-install-screen:in-<h>, a hash of this file and guest/, which
 # every worktree at those inputs shares. Its guest/ scripts are what the
 # containers run, as the unprivileged PROOF_UID: QEMU needs no root,

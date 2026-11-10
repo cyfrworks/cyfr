@@ -715,10 +715,12 @@ t_quarter_stopped() {
 # in the queue behind four holders, it keeps no share of the machine, so
 # once they end a check on four quarters that arrived after it runs. And
 # a take interrupted after it took a quarter, its child killed before the
-# record, leaves nothing taken: the check takes a quarter afresh, the
-# first again, and the other three stay free.
+# record, leaves nothing taken: stopped as soon as it goes on, the check
+# holds nothing, so a check on four quarters runs; continued, it takes a
+# quarter afresh, the first again, and the other three stay free.
 # The take's child stops itself once, at $STOP_CMD in $STOP_FN, writing its
-# pid to $STOP_MARK.pid first.
+# pid to $STOP_MARK.pid first; once it has, the check stops itself at the
+# start of the next queued line it says, creating $STOP_MARK.check.
 t_all_or_none() {
   local x y child s p
   rm -f "$scratch/order" "$scratch"/stopped-mark*
@@ -743,7 +745,7 @@ t_all_or_none() {
   rm -f "$scratch/order" "$scratch/an.cpus"
   cat > "$scratch/kill-at" <<'KILLAT'
 set -T
-trap 'if [[ ! -e $STOP_MARK && ${FUNCNAME[0]:-} == "$STOP_FN" && $BASH_COMMAND == $STOP_CMD ]]; then echo $BASHPID > "$STOP_MARK.pid"; : > "$STOP_MARK"; kill -STOP $BASHPID; fi' DEBUG
+trap 'if [[ ! -e $STOP_MARK && ${FUNCNAME[0]:-} == "$STOP_FN" && $BASH_COMMAND == $STOP_CMD ]]; then echo $BASHPID > "$STOP_MARK.pid"; : > "$STOP_MARK"; kill -STOP $BASHPID; elif [[ -e $STOP_MARK && ! -e $STOP_MARK.check && ${FUNCNAME[0]:-} == announce ]]; then : > "$STOP_MARK.check"; kill -STOP $$; fi' DEBUG
 KILLAT
   "${clean[@]}" BASH_ENV="$scratch/kill-at" STOP_MARK="$scratch/stopped-mark" STOP_FN=take_quarters STOP_CMD='write_record*' \
     bash "$check" -q 1 -- sh -c "echo \"\$HEAVY_CHECK_CPUS\" > $scratch/an.cpus; $hold $scratch/release-an" >/dev/null 2>"$scratch/anI.err" &
@@ -753,11 +755,70 @@ KILLAT
   until_true 5 is_stopped "$child" || fail 'the take did not stop'
   flock -n "$scratch/lock.quarter1" true && fail 'the stopped take did not hold quarter 1'
   kill -KILL "$child"
+  until_true 10 test -e "$scratch/stopped-mark.check" || fail "the check did not go on after its take was killed: $(cat "$scratch/anI.err")"
+  until_true 5 is_stopped "$y" || fail 'the check did not stop after its take was killed'
+  [ "$(status_of "${hc[@]}" -w 5 -- sh -c "echo Y >> $scratch/order")" = 0 ] ||
+    fail "a check on four quarters behind one stopped after its take was killed exited $(tail -n 1 "$scratch/out"): $(cat "$scratch/err")"
+  kill -CONT "$y"
   until_true 10 test -s "$scratch/an.cpus" || fail "the check did not run after its take was killed: $(cat "$scratch/anI.err")"
   [ "$(cat "$scratch/an.cpus")" = "${Q[1]}" ] || fail "the check ran on $(cat "$scratch/an.cpus"), not quarter 1 afresh"
   for s in 2 3 4; do flock -n "$scratch/lock.quarter$s" true || fail "quarter $s was held after the killed take"; done
   touch "$scratch/release-an"
   wait "$y" || fail 'the check whose take was killed failed'
+}
+
+# A take that does not end with its quarters gives back what it took
+# before its child exits, so its check, stopped meanwhile, holds nothing:
+# the take found no quarter free (four holders, which then end), or its
+# queue deadline passed after it took (the child held until then), or its
+# record could not be written (a directory in its place). Each time a
+# check that needs what the stopped one took runs at once, and the
+# stopped one, continued, goes on as its take said: it runs once the
+# quarters are free, gives up at its deadline with 75, or runs once the
+# record can be written.
+t_stopped_take() {
+  local how size flag x y s want p
+  for how in none:1 expired:1 expired:4 record:1 record:4; do
+    size=${how#*:} how=${how%:*}
+    flag=$(size_flag "$size")
+    rm -f "$scratch/order" "$scratch/stopped-mark" "$scratch/until"
+    set -- STOP_FN=take_quarters
+    case $how in
+      none)
+        hold_quarters sf$size
+        set -- "$@" STOP_CMD='\[ "$held" != 0 \]' ;;
+      expired) set -- "$@" STOP_CMD=expired STOP_UNTIL="$scratch/until" ;;
+      record)
+        if [ "$size" = 4 ]; then mkdir "$scratch/lock.holder"; else mkdir "$scratch/lock.quarter1.holder"; fi
+        set -- "$@" STOP_CMD='write_record*' ;;
+    esac
+    # shellcheck disable=SC2086
+    "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" "$@" \
+      bash "$check" $flag $( [ "$how" != expired ] || echo -w 1 ) -- sh -c "echo X >> $scratch/order" >"$scratch/sf.out" 2>"$scratch/sf.err" &
+    x=$!; started+=("$x")
+    until_true 10 test -e "$scratch/stopped-mark" || fail "$how on $size: the take did not reach its hook: $(cat "$scratch/sf.err")"
+    until_true 5 is_stopped "$x" || fail "$how on $size: the check did not stop"
+    if [ "$how" = expired ]; then sleep 1.5; touch "$scratch/until"; fi
+    until_true 5 sh -c "! ps -o stat= --ppid $x | grep -qv '^Z'" || fail "$how on $size: the stopped check's take did not end"
+    if [ "$how" = none ]; then
+      touch "$scratch/release-sf${size}"{1,2,3,4}
+      for p in "${quarter_holders[@]}"; do wait "$p"; done
+    fi
+    # What the stopped check took, the machine whole or shared and a
+    # quarter, is what this one needs.
+    if [ "$how" = record ] && [ "$size" = 4 ]; then y=(-q 1); else y=(); fi
+    [ "$(status_of "${hc[@]}" ${y[@]+"${y[@]}"} -w 5 -- sh -c "echo Y >> $scratch/order")" = 0 ] ||
+      fail "$how on $size: a check behind a stopped one whose take ended exited $(tail -n 1 "$scratch/out"): $(cat "$scratch/err")"
+    [ "$how" != record ] || rmdir "$scratch/lock.holder" "$scratch/lock.quarter1.holder" 2>/dev/null || :
+    kill -CONT "$x"
+    s=0; wait "$x" || s=$?
+    case $how in expired) want=75 ;; *) want=0 ;; esac
+    [ "$s" = "$want" ] || fail "$how on $size: the continued check exited $s, not $want: $(cat "$scratch/sf.err")"
+    case $how in
+      expired) [ "$(tr '\n' ' ' < "$scratch/order")" = 'Y ' ] || fail "$how on $size: the order was $(tr '\n' ' ' < "$scratch/order")" ;;
+      *) [ "$(tr '\n' ' ' < "$scratch/order")" = 'Y X ' ] || fail "$how on $size: the order was $(tr '\n' ' ' < "$scratch/order")" ;;
+    esac
+  done
 }
 
 # --- the order of arrival across sizes ----------------------------------------
@@ -1639,7 +1700,7 @@ t_await_queue() {
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere cut host unplaced
   whole redaction killed_holder killed_quarter quarters placement quarter_order quarter_stale quarter_stopped
-  all_or_none precedence expired_waiter admission_stopped ticket_order admission_two_stopped stopped_holder
+  all_or_none stopped_take precedence expired_waiter admission_stopped ticket_order admission_two_stopped stopped_holder
   waiters_skipped run_record record_watchdog environment status queued_repeat queue_quarter
   hold hold_frame queue queue_default term int hup usr1 quarter_stop term_queued int_queued hup_queued
   term_queued_quarter int_queued_quarter hup_queued_quarter refusals
