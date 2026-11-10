@@ -98,8 +98,9 @@ defmodule Sanctum.EstablishBoundaryTest do
   # each pipe undone: a map or struct literal or update, a keyword list or
   # a pair naming it, a `Map` or `Keyword` writer whose key it is, and
   # `put_in/2,3` whose path reaches it. A pattern matches the key and
-  # writes nothing: a function head, a clause's head, the left of `=` or
-  # `<-`, `match?/2`'s pattern, and a type.
+  # writes nothing: a function's arguments, a clause's head, the left of
+  # `=` or `<-`, `match?/2`'s pattern, and a type. What runs beside a
+  # pattern is code: a default argument, a guard, and `cond`'s conditions.
   defp authenticated_sets(ast) do
     ast
     |> Macro.prewalk(fn
@@ -110,14 +111,24 @@ defmodule Sanctum.EstablishBoundaryTest do
     |> Enum.reverse()
   end
 
-  defp sets({def, meta, [_head | body]}, _line, acc) when def in @defs,
-    do: sets(body, meta[:line], acc)
+  defp sets({def, meta, [head | body]}, _line, acc) when def in @defs,
+    do: sets(body, meta[:line], head_sets(head, meta[:line], acc))
 
-  defp sets({op, meta, [_pattern, expression]}, _line, acc) when op in [:=, :<-],
-    do: sets(expression, meta[:line], acc)
+  defp sets({op, meta, [pattern, expression]}, _line, acc) when op in [:=, :<-],
+    do: sets(expression, meta[:line], guard_sets(pattern, meta[:line], acc))
 
-  defp sets({:->, meta, [_heads, body]}, _line, acc), do: sets(body, meta[:line], acc)
-  defp sets({:match?, meta, [_pattern, term]}, _line, acc), do: sets(term, meta[:line], acc)
+  defp sets({:cond, _meta, [[do: clauses]]}, _line, acc) do
+    Enum.reduce(clauses, acc, fn {:->, meta, [conditions, body]}, acc ->
+      sets(body, meta[:line], sets(conditions, meta[:line], acc))
+    end)
+  end
+
+  defp sets({:->, meta, [heads, body]}, _line, acc),
+    do: sets(body, meta[:line], Enum.reduce(heads, acc, &guard_sets(&1, meta[:line], &2)))
+
+  defp sets({:match?, meta, [pattern, term]}, _line, acc),
+    do: sets(term, meta[:line], guard_sets(pattern, meta[:line], acc))
+
   defp sets({:@, _meta, [{type, _, _}]}, _line, acc) when type in @types, do: acc
   defp sets({:authenticated, true}, line, acc), do: [line | acc]
 
@@ -139,6 +150,25 @@ defmodule Sanctum.EstablishBoundaryTest do
     do: children(node, meta[:line] || line, acc)
 
   defp sets(node, line, acc), do: children(node, line, acc)
+
+  # A function head's guard and default arguments run; its arguments are
+  # patterns.
+  defp head_sets({:when, _meta, [call, guard]}, line, acc),
+    do: sets(guard, line, head_sets(call, line, acc))
+
+  defp head_sets({_name, _meta, args}, line, acc) when is_list(args),
+    do: Enum.reduce(args, acc, &default_sets(&1, line, &2))
+
+  defp head_sets(_bare, _line, acc), do: acc
+
+  defp default_sets({:\\, meta, [_pattern, default]}, line, acc),
+    do: sets(default, meta[:line] || line, acc)
+
+  defp default_sets(_pattern, _line, acc), do: acc
+
+  # A pattern's guard runs; the pattern does not.
+  defp guard_sets({:when, _meta, parts}, line, acc), do: sets(List.last(parts), line, acc)
+  defp guard_sets(_pattern, _line, acc), do: acc
 
   defp children({call, _meta, args}, line, acc) when is_list(args),
     do: sets(args, line, sets(call, line, acc))
@@ -216,6 +246,23 @@ defmodule Sanctum.EstablishBoundaryTest do
       def o(ctx), do: Map.get(ctx, :authenticated, true)
       @spec p() :: %{authenticated: true}
       def p, do: :ok
+      def q(ctx \\\\ %Sanctum.Context{authenticated: true}), do: ctx # set
+      def r(ctx \\\\ %{authenticated: true}) when is_map(ctx), do: ctx # set
+      def s(ctx) when ctx == %{authenticated: true}, do: ctx # set
+      def t(ctx) do
+        case ctx do
+          c when c == %{authenticated: true} -> c # set
+        end
+      end
+      def u(ctx) do
+        cond do
+          ctx == %{authenticated: true} -> ctx # set
+        end
+      end
+      def v(ctx) do
+        with c when c == %{authenticated: true} <- ctx, do: c # set
+      end
+      def w(ctx), do: match?(c when c == %{authenticated: true}, ctx) # set
     end
     """
 
@@ -224,7 +271,7 @@ defmodule Sanctum.EstablishBoundaryTest do
           line =~ "# set",
           do: number
 
-    assert length(set) == 10
+    assert length(set) == 17
     assert authenticated_sets(Code.string_to_quoted!(planted)) == set
   end
 
