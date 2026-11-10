@@ -135,7 +135,7 @@ DIR="$WORK/dir"
 browser_home "$CELL" home.test
 browser_home "$DIR" dir.test
 openssl rand -hex 32 | tr -d '\n' >"$WORK/setup-token"
-identity_directory dir.test 127.77.0.1
+identity_directory dir.test
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
 identity_reaches_directory "$CELL" dir.test
 identity_env "$CELL" CYFR_REGISTRY_URL dir.test

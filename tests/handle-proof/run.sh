@@ -61,7 +61,6 @@ PG_VOLUME="$RUN-pgdata"
 REGISTRY="$RUN-registry"
 REGISTRY_IMAGE="$RUN-registry:$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 REGISTRY_HOST=registry.test
-REGISTRY_FRONT=127.77.0.3
 SMOKEID="$WORK/bin/smokeid"
 
 cleanup() {
@@ -129,7 +128,8 @@ browser_certificate "$REGISTRY_HOST"
 openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-a"
 openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-b"
 
-identity_directory "$REGISTRY_HOST" "$REGISTRY_FRONT"
+identity_directory "$REGISTRY_HOST"
+REGISTRY_FRONT="${IDENTITY_FRONTS[$REGISTRY_HOST]}"
 identity_reaches_directory "$A" registry.test
 identity_reaches_directory "$B" registry.test
 for cell in "$A" "$B"; do identity_env "$cell" CYFR_REGISTRY_URL "$REGISTRY_HOST"; done

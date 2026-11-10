@@ -75,7 +75,7 @@ browser_home "$DIR" dir.test
 browser_home "$A" a.test
 openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-a"
 
-identity_directory dir.test 127.77.0.1
+identity_directory dir.test
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
 identity_reaches_directory "$A" dir.test "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH"
 identity_env "$A" CYFR_REGISTRY_URL dir.test

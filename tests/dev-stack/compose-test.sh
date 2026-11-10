@@ -134,8 +134,8 @@ checks() {
 }
 
 # stand_ins_apart SOURCES SLOTS JSON...: each slot's stand-in on its own
-# address of 127.79.0.0/16, apart from the identity and join proofs'
-# 127.77.0.0/16, on a port no check reserves in SOURCES and no slot's
+# address of 127.79.0.0/16, apart from the proofs' fronts'
+# 127.128.0.0/9, on a port no check reserves in SOURCES and no slot's
 # other listener or other stand-in takes.
 stand_ins_apart() {
   local sources="$1" slots="$2" k lines=""
@@ -159,7 +159,7 @@ for path in jsons:
     slot = os.path.basename(path).removeprefix("slot-").removesuffix(".json")
     for what, port in compose_shape.declared(json.load(open(path)))[1].items():
         taken[port] = "slot %s'"'"'s %s" % (slot, what)
-proofs = ipaddress.ip_network("127.77.0.0/16")
+proofs = ipaddress.ip_network("127.128.0.0/9")
 seen = {}
 for k, s in sorted(stand_ins.items(), key=lambda kv: int(kv[0])):
     address, port = ipaddress.ip_address(s["ADDRESS"]), s["PORT"]

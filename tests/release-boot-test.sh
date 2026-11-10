@@ -150,7 +150,7 @@ case "$1" in
     ;;
   front)
     BROWSER_AUTHORITY="$DRIVE_SCRATCH/authority"
-    identity_directory dir.test "$2" "$3"
+    identity_directory dir.test "$2"
     identity_front_start "$DRIVE_SCRATCH/dir"
     ;;
   cell)
@@ -703,9 +703,11 @@ pass "BROWSER_HOMES_PORT keeps both homes' explicit consecutive port ranges"
 
 # --- the identity front's readiness -----------------------------------------
 
-# `docker` as the front sees it: `run` starts the front's control listener
-# answering the token it was given (STUB_FRONT=own), or starts nothing, a
-# front that could not listen (STUB_FRONT=dead); `inspect` says which.
+# `docker` as the front sees it: `run` starts a listener on the control
+# address the front was given, answering the token it was given
+# (STUB_FRONT=own) or none, a stranger there beside a front that could not
+# listen (STUB_FRONT=dead), and records that address and the pid of the
+# shell that asked; `inspect` says which.
 mkdir -p "$scratch/bin" "$scratch/authority" "$scratch/dir"
 : >"$scratch/authority/dir.test.pem"
 printf 'CYFR_HOST=dir.test\nCYFR_PORT=%s\nCYFR_PROXY_PORT=%s\n' "$(free_port)" "$(free_port)" >"$scratch/dir/.env"
@@ -713,14 +715,18 @@ cat >"$scratch/bin/docker" <<SH
 #!/usr/bin/env bash
 case "\$1" in
   run)
-    if [ "\$STUB_FRONT" = own ]; then
-      for ((i = 1; i <= \$#; i++)); do
-        case "\${!i}" in *:443) address="\${!i%:443}"; next=\$((i + 1)); control="\${!next}" ;; esac
-      done
-      token="\${!#}"
-      python3 "$scratch/serve.py" json "\$address" "\$control" "{\"name\":\"dir.test\",\"mode\":\"none\",\"token\":\"\$token\"}" &
-      echo \$! >"$scratch/own.pid"
-    fi
+    for ((i = 1; i <= \$#; i++)); do
+      case "\${!i}" in *:443) address="\${!i%:443}"; next=\$((i + 1)); control="\${!next}" ;; esac
+    done
+    token=""
+    [ "\$STUB_FRONT" != own ] || token=",\"token\":\"\${!#}\""
+    python3 "$scratch/serve.py" json "\$address" "\$control" "{\"name\":\"dir.test\",\"mode\":\"none\"\$token}" >/dev/null 2>&1 &
+    echo \$! >"$scratch/front.pid"
+    echo "\$address \$PPID" >"$scratch/front.asked"
+    for _ in \$(seq 1 100); do
+      python3 -c 'import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 1).close()' "\$address" "\$control" 2>/dev/null && break
+      sleep 0.1
+    done
     echo stub-container
     ;;
   inspect) if [ "\$STUB_FRONT" = own ]; then echo true; else echo false; fi ;;
@@ -729,21 +735,30 @@ esac
 exit 0
 SH
 chmod +x "$scratch/bin/docker"
-front() { PATH="$scratch/bin:$PATH" STUB_FRONT="$1" drive front "$2" "$3"; }
+# front MODE CONTROL: the front's start, its output in $scratch/out and
+# its status FRONT_STATUS, on FRONT_ADDRESS, which must be the address
+# made from the pid of the shell that started it.
+front() {
+  local pid
+  FRONT_STATUS=$(PATH="$scratch/bin:$PATH" STUB_FRONT="$1" status_of drive front "$2")
+  kill "$(cat "$scratch/front.pid")" 2>/dev/null || :
+  read -r FRONT_ADDRESS pid <"$scratch/front.asked"
+  [ "$FRONT_ADDRESS" = "127.$((128 + (pid >> 16))).$(((pid >> 8) & 255)).$((pid & 255))" ] ||
+    fail "the front of the run $pid stood on $FRONT_ADDRESS, not on its pid's address"
+}
 
 control=$(free_port)
-python3 "$scratch/serve.py" json 127.77.0.9 "$control" '{"name":"dir.test","mode":"none"}' &
-servers+=("$!")
-until_true 10 accepts 127.77.0.9 "$control" || fail "the stranger never listened"
-[ "$(status_of front dead 127.77.0.9 "$control")" = 1 ] || { cat "$scratch/out" >&2; fail "a stranger's health answer was taken for the front's"; }
-has "the front of dir.test stopped before it answered on http://127.77.0.9:$control, where another front answers" \
+front dead "$control"
+[ "$FRONT_STATUS" = 1 ] || { cat "$scratch/out" >&2; fail "a stranger's health answer was taken for the front's"; }
+has "the front of dir.test stopped before it answered on http://$FRONT_ADDRESS:$control, where another front answers" \
   "the refusal names the front and the stranger"
 pass "a stranger answering on the front's address without the front's token is refused"
+stranger=$FRONT_ADDRESS
 
-control=$(free_port)
-[ "$(status_of front own 127.77.0.10 "$control")" = 0 ] || { cat "$scratch/out" >&2; fail "the front's own health answer was refused"; }
-kill "$(cat "$scratch/own.pid")" 2>/dev/null || :
-pass "the front's own health answer, with its token, is accepted"
+front own "$control"
+[ "$FRONT_STATUS" = 0 ] || { cat "$scratch/out" >&2; fail "the front's own health answer was refused"; }
+[ "$FRONT_ADDRESS" != "$stranger" ] || fail "two runs' fronts stood on one address, $FRONT_ADDRESS"
+pass "the front's own health answer, with its token, is accepted, on an address of its run's own"
 
 # --- the redaction --------------------------------------------------------------
 
