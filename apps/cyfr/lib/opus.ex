@@ -7,8 +7,10 @@ defmodule Opus do
 
   Every way an execution starts is here. `run_root/5` is the external
   ingress: the reference runs under the authority its selected profile's
-  consent grants. `run_root_edge/5` roots at a tincture's profile and runs
-  one of its dependencies under that edge. `run_child/5` and
+  consent grants; `start_root/5` roots the same way and answers once the
+  run is admitted, a task of its own carrying it to its end.
+  `run_root_edge/5` roots at a tincture's profile and runs one of its
+  dependencies under that edge. `run_child/5` and
   `admit_child/5` are the in-chain entries: the target runs under the child
   authority the caller's authority steps to, bound or zero. `run_child/5`
   runs it on a worker service and waits for it; `admit_child/5` admits a
@@ -116,6 +118,67 @@ defmodule Opus do
   @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_root(%Context{} = ctx, profile_selector, reference, input, opts \\ []) do
+    with {:ok, admitted, _execution_id} <-
+           admit_root(ctx, profile_selector, reference, input, opts),
+         do: Dispatch.dispatch(admitted)
+  end
+
+  @doc """
+  Root a run as `run_root/5` does and answer once it is admitted, its row
+  written and its attempt open: `{:ok, execution_id}`, or the refusal
+  `run_root/5` would answer before it, with nothing run. The run is
+  admitted and carried to its end by a task under `Opus.TaskSupervisor`,
+  its waiter, as the scheduler's task carries a fired run, so it outlives
+  the caller; its outcome is the run's own, on its row and its events. A
+  task that cannot be started, or ends before it answers, answers
+  `{:error, :execution_unavailable}`.
+  """
+  @spec start_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def start_root(%Context{} = ctx, profile_selector, reference, input, opts) do
+    caller = self()
+    answer = make_ref()
+    logger_metadata = Prima.LoggerContext.capture()
+
+    run = fn ->
+      Prima.LoggerContext.restore(logger_metadata)
+
+      case admit_root(ctx, profile_selector, reference, input, opts) do
+        {:ok, admitted, execution_id} ->
+          send(caller, {answer, {:ok, execution_id}})
+          Dispatch.dispatch(admitted)
+
+        refused ->
+          send(caller, {answer, refused})
+      end
+    end
+
+    case Task.Supervisor.start_child(Opus.TaskSupervisor, run) do
+      {:ok, pid} -> await_admission(pid, answer)
+      {:error, _max_children} -> {:error, :execution_unavailable}
+    end
+  end
+
+  # The task answers once, before it carries the run on, so its exit after
+  # an answer is dropped with the monitor; one that exits first admitted
+  # nothing it can still answer for, and a run it admitted is killed with
+  # it, as any waiter's is.
+  defp await_admission(pid, answer) do
+    monitor = Process.monitor(pid)
+
+    receive do
+      {^answer, result} ->
+        Process.demonitor(monitor, [:flush])
+        result
+
+      {:DOWN, ^monitor, :process, ^pid, _reason} ->
+        {:error, :execution_unavailable}
+    end
+  end
+
+  # Everything `run_root/5` decides before the run is dispatched: the
+  # admission of the run in the calling process, its waiter.
+  defp admit_root(ctx, profile_selector, reference, input, opts) do
     # An athanor still being filled refuses as a turn does, with the fill
     # asked for, and an unavailable executor refuses: both before any
     # consent is resolved or any row is written. Dispatch checks the worker
@@ -137,7 +200,7 @@ defmodule Opus do
           profile_id: profile.id
         )
 
-      Dispatch.run(ctx, reference, input, exec_opts)
+      Dispatch.admit(ctx, reference, input, exec_opts)
     end
   end
 

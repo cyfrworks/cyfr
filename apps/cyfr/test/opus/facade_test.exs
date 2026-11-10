@@ -42,6 +42,7 @@ defmodule Opus.FacadeTest do
     sources: 2,
     start_lease_watch: 2,
     start_lease_watch: 3,
+    start_root: 5,
     stop_lease_watch: 1,
     subscribe_events: 2,
     suspend_lease_watch: 1,

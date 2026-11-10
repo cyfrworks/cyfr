@@ -267,6 +267,100 @@ defmodule Cyfr.Cluster.CellTest do
 
   defp node_of(id), do: Cell.member(id).node
 
+  describe "the members' host API ports" do
+    # A member keeps its host API port for the run, so the port has to
+    # stay out of every other listener's way while its member is down:
+    # every bind to port 0 and every outgoing connection on this host
+    # draws from the kernel's ephemeral range.
+    test "each member's port is its own, below the range the kernel hands out" do
+      ports = Enum.map(Cell.ensure!(), & &1.host_api_port)
+
+      assert length(Enum.uniq(ports)) == 2
+      low = ephemeral_low()
+      assert Enum.all?(ports, &(&1 < low)), "#{inspect(ports)} not all below #{low}"
+    end
+
+    # The claim is Linux's alone (`Cyfr.Cluster.Cell`'s host API ports):
+    # elsewhere the picker takes a free port unclaimed, so the down
+    # member's free port is the one it picks.
+    test "a down member's port stays this run's where the kernel can claim it, " <>
+           "so another run's picker passes it by" do
+      %{host_api_port: down} = Cell.member(:b)
+      %{host_api_port: up} = Cell.member(:a)
+      Cell.stop(:b)
+
+      # Picked from another process, as another run's cell on this host
+      # picks, offered the two members' ports first.
+      picked =
+        Task.async(fn -> Cell.host_api_ports(1, [down, up | Enum.to_list(20_000..20_100)]) end)
+        |> Task.await()
+
+      assert [port] = picked
+
+      if match?({:unix, :linux}, :os.type()) do
+        refute port in [down, up]
+      else
+        assert port == down
+      end
+    end
+
+    test "a boot finding its port held waits for the release, and is refused naming the port " <>
+           "when it does not come" do
+      %{host_api_port: port, worker: worker} = Cell.member(:b)
+      # Whatever this case leaves of member b, the next one boots afresh.
+      on_exit(fn -> Cell.kill(:b) end)
+
+      :ok = Cell.call(:b, Cyfr.Cluster.Boot, :stop!, [])
+      {:ok, holder} = :gen_tcp.listen(port, ip: {127, 0, 0, 1}, reuseaddr: true)
+
+      {elapsed_us, refused} =
+        :timer.tc(fn -> Cell.call(:b, Cyfr.Cluster.Boot, :start!, [worker], 60_000) end)
+
+      assert refused == {:error, {:host_api_port_held, port}}
+      # Refused after the boot's wait for the release, not at the bind.
+      assert elapsed_us >= 10_000_000
+
+      :ok = :gen_tcp.close(holder)
+      assert Cell.call(:b, Cyfr.Cluster.Boot, :start!, [worker], 60_000) == :ok
+    end
+  end
+
+  describe "the cell's own exit" do
+    test "a heal whose boot fails stops every member the cell started, and the next cell " <>
+           "starts clean" do
+      names =
+        Enum.map(Cell.ensure!(), &(&1.node |> Atom.to_string() |> String.split("@") |> hd()))
+
+      %{host_api_port: port} = Cell.member(:b)
+
+      # Member a is up and member b's next boot fails, as a held port fails it.
+      Cell.kill(:b)
+      {:ok, holder} = :gen_tcp.listen(port, ip: {127, 0, 0, 1}, reuseaddr: true)
+      assert {{%RuntimeError{message: message}, _stack}, _call} = catch_exit(Cell.heal!())
+      assert message =~ "member b did not boot"
+      :ok = :gen_tcp.close(holder)
+
+      assert Process.whereis(Cell) == nil
+      assert registered(names) == []
+      assert length(Cell.ensure!()) == 2
+    end
+  end
+
+  # Which of `names` a node on this host is registered under.
+  defp registered(names) do
+    {:ok, listed} = :erl_epmd.names(~c"127.0.0.1")
+    for {name, _port} <- listed, to_string(name) in names, do: to_string(name)
+  end
+
+  # The low end of the kernel's ephemeral port range.
+  defp ephemeral_low do
+    case File.read("/proc/sys/net/ipv4/ip_local_port_range") do
+      {:ok, range} -> range |> String.split() |> hd() |> String.to_integer()
+      # IANA's dynamic range, which BSD and macOS hand out from.
+      {:error, _} -> 49_152
+    end
+  end
+
   # The member the cell proposes for `subject`, and the one it does not.
   defp proposed(one, other, subject) do
     if Cell.call(one, Cyfr.Cell, :mine?, [subject]), do: {one, other}, else: {other, one}
