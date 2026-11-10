@@ -124,8 +124,8 @@ apart:
 A ratio with no passed run on one side is `n/a`. Each subject's verdict is
 `holds`, `FAILS BUSY` (it passed alone and failed busy or beside its
 pair), `fails alone`, `fails on the whole machine`, `not decided` (a run
-was void) or `skipped`. The check exits 0 only when every selected
-subject held.
+was void) or `skipped`; a subject of four quarters is listed as not
+measured. The check exits 0 only when every other selected subject held.
 
 ## What it does not place
 

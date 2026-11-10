@@ -96,8 +96,8 @@
 # quarters, two quarters against the whole machine (the alone median over
 # the whole median). A ratio with no passed run on either side is n/a.
 #
-# Exits 0 when every selected subject was measured and every one of its
-# runs passed, and its clean-up was clean; 1 when a subject failed busy or
+# Exits 0 when every selected subject of one or two quarters was measured
+# and every one of its runs passed, and the clean-up was clean; 1 when a subject failed busy or
 # beside its second copy while it passed alone (named "fails busy"), when
 # any other run failed or was void, when preparation failed, or when the
 # clean-up left something; 69 when nothing failed but a subject was
