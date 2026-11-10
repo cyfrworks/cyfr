@@ -46,22 +46,34 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive
   )
 
-  # The tasks started from the console, by file, and the files that take
-  # their answers through `deliver/3`. Every other deferred path — pane and
-  # host messages, runner broadcasts, a component's message to its page,
-  # `send_update/3` fan-out — lands in a guarded callback of its own.
+  # The tasks started from the console, by file, and each answer they send
+  # back: the file whose callback takes it, and what that callback matches —
+  # a `handle_info/2` message `{answer, ...}`, a `handle_async/3` named
+  # `answer`, or an `update/2` whose assigns carry the key `answer`. Every
+  # other deferred path — pane and host messages, runner broadcasts, a
+  # component's message to its page, `send_update/3` fan-out — lands in a
+  # guarded callback of its own.
   @tasks %{
-    "model_catalog.ex" => {1, ["live/aqua_live.ex", "live/thread_pane_live.ex"]},
-    "live/components_live.ex" => {4, ["live/components_live.ex"]},
-    "live/builds_live.ex" => {1, ["live/builds_live.ex"]},
-    "live/shell_live.ex" => {1, ["live/shell_live.ex"]},
+    "model_catalog.ex" =>
+      {1,
+       [
+         {"live/aqua_live.ex", :list_models_result},
+         {"live/thread_pane_live.ex", :list_models_result}
+       ]},
+    "live/components_live.ex" => {4, [{"live/components_live.ex", :deliver}]},
+    "live/builds_live.ex" => {1, [{"live/builds_live.ex", :deliver}]},
+    "live/shell_live.ex" => {1, [{"live/shell_live.ex", :deliver}]},
     # A model catalyst's install, answered to the page, and each ready
     # brain's options, answered to the agents section itself.
     "live/aqua_live/agents_component.ex" =>
-      {2, ["live/aqua_live.ex", "live/aqua_live/agents_component.ex"]},
+      {2,
+       [
+         {"live/aqua_live.ex", :catalyst_installed},
+         {"live/aqua_live/agents_component.ex", :brain_options}
+       ]},
     # The system layer's listener on `confirmation.changes`, whose facts
     # the layer takes in the focus it was opened for.
-    "live/system_layer.ex" => {1, ["live/system_layer.ex"]}
+    "live/system_layer.ex" => {1, [{"live/system_layer.ex", :fact}]}
   }
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
@@ -160,13 +172,118 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     assert counts(sources, @capture) == starts,
            "the focus captures and the task starts differ, file by file"
 
-    for {path, {_n, consumers}} <- @tasks, consumer <- consumers do
+    # Clause by clause: one guarded clause of a callback does not cover
+    # another that takes the same answer.
+    for {path, {_n, answers}} <- @tasks, {consumer, answer} <- answers do
       assert Map.has_key?(sources, consumer),
              "#{path}'s answer is rostered to #{consumer}, which is gone"
 
-      assert sources[consumer] =~ "CyfrWeb.ContextGuard.deliver(",
-             "#{consumer} takes #{path}'s answer without CyfrWeb.ContextGuard.deliver/3"
+      clauses = answer_clauses(sources[consumer], answer)
+      assert clauses != [], "no callback in #{consumer} takes #{path}'s #{inspect(answer)}"
+
+      for {line, _args, _body} = clause <- clauses do
+        assert delivered?(clause),
+               "#{consumer}:#{line} takes #{path}'s #{inspect(answer)} outside " <>
+                 "CyfrWeb.ContextGuard.deliver/3"
+      end
     end
+  end
+
+  test "the delivery check fails a planted clause that takes an answer outside deliver/3" do
+    planted = """
+    defmodule PrismWeb.PlantedAnswer do
+      use PrismWeb, :live_view
+
+      def handle_info({:answer, tag, result}, socket) when is_map(result),
+        do: CyfrWeb.ContextGuard.deliver(socket, tag, &shown(&1, result))
+
+      def handle_info({:answer, _tag, result}, socket), do: {:noreply, shown(socket, result)}
+
+      def handle_info({:answer, tag, result}, socket) do
+        socket = assign(socket, :last, result)
+        CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, &1})
+      end
+
+      def handle_info({:answer, _tag, _exit}, socket), do: {:noreply, socket}
+
+      def handle_info({:other, result}, socket), do: {:noreply, shown(socket, result)}
+    end
+    """
+
+    assert planted |> answer_clauses(:answer) |> Enum.map(&delivered?/1) ==
+             [true, false, false, true]
+  end
+
+  # The `def` clauses in `source` whose head takes `answer`, as
+  # `{line, args, body}`.
+  defp answer_clauses(source, answer) do
+    {:ok, ast} = Code.string_to_quoted(source)
+
+    {_, clauses} =
+      Macro.prewalk(ast, [], fn
+        {:def, meta, [head, [{:do, body} | _]]} = node, acc ->
+          {name, args} = call_head(head)
+
+          if takes?(name, args, answer),
+            do: {node, [{meta[:line], args, body} | acc]},
+            else: {node, acc}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.reverse(clauses)
+  end
+
+  defp call_head({:when, _, [head | _]}), do: call_head(head)
+  defp call_head({name, _, args}) when is_list(args), do: {name, args}
+  defp call_head(_head), do: {nil, []}
+
+  defp takes?(:handle_info, [{:{}, _, [answer | _]}, _socket], answer), do: true
+  defp takes?(:handle_info, [{answer, _}, _socket], answer), do: true
+  defp takes?(:handle_async, [answer, _result, _socket], answer), do: true
+  defp takes?(:update, [{:%{}, _, pairs}, _socket], answer), do: List.keymember?(pairs, answer, 0)
+  defp takes?(_name, _args, _answer), do: false
+
+  # The clause hands the answer to `deliver/3` under a tag its head bound,
+  # and reads nothing its head bound outside that call. A clause whose head
+  # binds nothing (a task's exit) has no answer to read.
+  defp delivered?({_line, args, body}) do
+    bound = args |> Enum.drop(-1) |> vars()
+    MapSet.size(bound) == 0 or delivered?(bound, body)
+  end
+
+  defp delivered?(bound, body) do
+    {outside, tags} =
+      Macro.prewalk(body, [], fn
+        {{:., _, [{:__aliases__, _, [:CyfrWeb, :ContextGuard]}, :deliver]}, _, [_, tag, _]},
+        acc ->
+          {:delivered, [tag | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.any?(tags, fn
+      {name, _, ctx} when is_atom(name) and is_atom(ctx) -> name in bound
+      _expression -> false
+    end) and MapSet.disjoint?(vars(outside), bound)
+  end
+
+  # The variables `ast` names, an underscored one apart.
+  defp vars(ast) do
+    {_, found} =
+      Macro.prewalk(ast, MapSet.new(), fn
+        {name, _, ctx} = node, acc when is_atom(name) and is_atom(ctx) ->
+          if String.starts_with?(Atom.to_string(name), "_"),
+            do: {node, acc},
+            else: {node, MapSet.put(acc, name)}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found
   end
 
   defp counts(sources, pattern) do

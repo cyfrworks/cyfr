@@ -1562,24 +1562,14 @@ defmodule Opus.ProviderTest do
     test "non-admin user can still run executions", %{restricted_ctx: restricted_ctx, ref: ref} do
       # The run action is open to all authenticated users: through the
       # dispatcher, where a permission refusal would come from (the handler
-      # alone refuses nothing on permission), the call may be refused for
-      # its athanor's state, never as unauthorized.
-      result =
-        Sanctum.Gate.call_external("execution", restricted_ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 1, "b" => 2}
-        })
-
-      case result do
-        {:error, msg} ->
-          refute Sanctum.Unauthorized.reason?(msg) or
-                   (is_binary(msg) and msg =~ "Unauthorized"),
-                 "run action should not require admin permissions"
-
-        {:ok, _} ->
-          :ok
-      end
+      # alone refuses nothing on permission), the call is admitted and then
+      # refused for its athanor's state alone — this athanor is not filled.
+      assert {:error, :not_provisioned} =
+               Sanctum.Gate.call_external("execution", restricted_ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{"a" => 1, "b" => 2}
+               })
     end
 
     test "non-admin user can list their own executions", %{restricted_ctx: restricted_ctx} do
@@ -1798,29 +1788,20 @@ defmodule Opus.ProviderTest do
       assert db_record.completed_at != nil
     end
 
-    test "marks execution as failed for unregistered component", %{ctx: ctx} do
-      # Unregistered component should fail and write a record
-      _result =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.unregistered-crash:0.1.0",
-          "input" => %{}
-        })
+    test "an unregistered component is refused before any record is written", %{ctx: ctx} do
+      # No profile exists for it, so the consent gate refuses before a record
+      # could be written; a failed record is the trapping run's, above.
+      assert {:error, {:consent_required, %{}}} =
+               Provider.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => "reagent:local.unregistered-crash:0.1.0",
+                 "input" => %{}
+               })
 
-      # Check for a failed execution record
-      records =
-        Arca.Execution.list(Prima.Actor.in_athanor(ctx.athanor_id),
-          user_id: ctx.user_id,
-          limit: 10
-        )
-
-      failed_records = Enum.filter(records, &(&1.status == "failed"))
-
-      if failed_records != [] do
-        failed_record = hd(failed_records)
-        assert failed_record.status == "failed"
-        assert failed_record.error_message != nil
-      end
+      assert Arca.Execution.list(Prima.Actor.in_athanor(ctx.athanor_id),
+               user_id: ctx.user_id,
+               limit: 10
+             ) == []
     end
   end
 
@@ -1998,30 +1979,6 @@ defmodule Opus.ProviderTest do
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
       assert Prima.Refusal.message(reason) =~ "not found"
-    end
-
-    test "includes error in logs for failed execution", %{ctx: ctx} do
-      # Execute unregistered component
-      _result =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.unregistered-logs:0.1.0",
-          "input" => %{}
-        })
-
-      # Get the execution ID by listing
-      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
-
-      if list_result.count > 0 do
-        exec = hd(list_result.executions)
-
-        if exec.status == "failed" do
-          uri = "opus://executions/#{exec.execution_id}/logs"
-          {:ok, %{content: content}} = read(ctx, uri)
-
-          assert content =~ "Error:"
-        end
-      end
     end
   end
 
