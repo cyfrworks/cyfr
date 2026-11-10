@@ -1074,6 +1074,121 @@ describe("the shipped canvas 0.6.0", () => {
     page.stop()
   })
 
+  // window.cyfr whose stream handles the test ends and marks, as the SDK
+  // does (Sol's review of 036cf4ed9, #4991): each open counted by name.
+  function contract() {
+    const handlers = new Map()
+    const counts = new Map()
+    const handles = new Map()
+    const states = []
+    const cyfr = {
+      desktop: null,
+      on: () => () => {},
+      ready() {},
+      stream(name, _subject, onEvent) {
+        handlers.set(name, onEvent)
+        counts.set(name, (counts.get(name) || 0) + 1)
+        let end
+        const handle = {state: "live", close() {}, closed: new Promise((resolve) => (end = resolve))}
+        handles.set(name, {handle, end})
+        return Promise.resolve(handle)
+      }
+    }
+    const stop = V6.start(cyfr, (state) => states.push(state))
+    const tell = (name, event, data = null, revision = null, at = "2026-11-10T14:20:00Z") =>
+      handlers.get(name)({id: null, event, data, revision, at})
+    return {stop, counts, handles, tell, state: () => states.at(-1) ?? V6.EMPTY}
+  }
+
+  test("a resync replaces the schedule picture, an item gone while hidden included", async () => {
+    const p = contract()
+    try {
+      await settle()
+      p.tell("schedules.changes", "schedules.changes", {kind: "changed", schedule_id: "s1", name: "Gone"}, 10)
+      p.tell("schedules.changes", "snapshot")
+      assert.equal(p.state().schedules.size, 1)
+      p.tell("schedules.changes", "resync")
+      p.tell("schedules.changes", "snapshot")
+      assert.equal(p.state().schedules.size, 0)
+    } finally {
+      p.stop()
+    }
+  })
+
+  test("an older change of a schedule after a newer one changes nothing, and a removal stays removed", async () => {
+    const p = contract()
+    try {
+      await settle()
+      p.tell("schedules.changes", "schedules.changes", {kind: "changed", schedule_id: "s1", name: "Newer"}, 20)
+      p.tell("schedules.changes", "schedules.changes", {kind: "changed", schedule_id: "s1", name: "Older"}, 10)
+      assert.equal(p.state().schedules.get("s1").schedule.name, "Newer")
+      p.tell("schedules.changes", "schedules.changes", {kind: "removed", schedule_id: "s1"}, 30)
+      p.tell("schedules.changes", "schedules.changes", {kind: "changed", schedule_id: "s1", name: "Late"}, 25)
+      assert.equal(p.state().schedules.has("s1"), false)
+    } finally {
+      p.stop()
+    }
+  })
+
+  test("a denied subscription is not opened again by the page; one the endpoint ended with no refusal is", async () => {
+    mock.timers.enable({apis: ["setTimeout"]})
+    const p = contract()
+    try {
+      await settle()
+      const denied = p.handles.get("schedules.changes")
+      denied.handle.state = "denied"
+      p.tell("schedules.changes", "denied", {class: "consent_required", message: "Not covered", stage: "admission"})
+      denied.end()
+      await settle()
+      mock.timers.tick(V6.RETRY_MS[0])
+      await settle()
+      assert.equal(p.counts.get("schedules.changes"), 1)
+
+      const ended = p.handles.get("runs.changes")
+      ended.handle.state = "ended"
+      ended.end()
+      await settle()
+      mock.timers.tick(V6.RETRY_MS[0])
+      await settle()
+      assert.equal(p.counts.get("runs.changes"), 2)
+    } finally {
+      p.stop()
+      mock.timers.reset()
+    }
+  })
+
+  test("stale and unavailable are said in the section, the next snapshot clears them, and denied ends it", async () => {
+    const p = contract()
+    try {
+      await settle()
+      const runs = ["runs.changes"]
+      p.tell("runs.changes", "runs.changes", failed("ex-1"), 5)
+      p.tell("runs.changes", "snapshot")
+      assert.equal(V6.deliveryNote(p.state(), runs), null)
+
+      p.tell("runs.changes", "stale", null, null, "2026-11-10T14:20:00Z")
+      assert.equal(V6.deliveryNote(p.state(), runs).state, "stale")
+      assert.match(V6.deliveryNote(p.state(), runs).text, /^As of /)
+      assert.equal(p.state().runs.length, 1)
+
+      p.tell("runs.changes", "unavailable", {retry_at: "2026-11-10T14:21:00Z"}, null, null)
+      assert.match(V6.deliveryNote(p.state(), runs).text, /^Can't be read now · trying again at /)
+      assert.equal(p.state().runs.length, 1)
+
+      p.tell("runs.changes", "resync")
+      p.tell("runs.changes", "runs.changes", failed("ex-2"), 1)
+      p.tell("runs.changes", "snapshot")
+      assert.equal(V6.deliveryNote(p.state(), runs), null)
+      assert.deepEqual(p.state().runs.map((r) => r.execution_id), ["ex-2"])
+
+      p.tell("runs.changes", "denied", {class: "consent_required", message: "x", stage: "admission"})
+      assert.deepEqual(V6.deliveryNote(p.state(), runs), {state: "denied", text: "No longer granted to this canvas."})
+      assert.deepEqual(p.state().runs, [])
+    } finally {
+      p.stop()
+    }
+  })
+
   test("its types declare the SDK as it stands: request, settings at a ref, the handle's suspended state, and revision and at", () => {
     const model = readFileSync(new URL("src/model.ts", VERSION_6), "utf8")
     assert.match(model, /request\(operation: string, args\?: Record<string, unknown>\): Promise<Decided> & \{ requested: Promise<string \| null> \}/)

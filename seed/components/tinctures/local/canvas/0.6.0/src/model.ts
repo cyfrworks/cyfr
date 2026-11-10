@@ -94,12 +94,20 @@ export interface State {
   apps: InstalledApp[];
   // One entry per run, the latest change first.
   runs: Item[];
-  // By schedule id, with the number of the open that last delivered each.
-  schedules: Map<string, { schedule: Item; open: number }>;
+  // By schedule id.
+  schedules: Map<string, { schedule: Item }>;
   // The last schedule runs, newest first.
   scheduleRuns: Item[];
   // A stream refused at open, and the sentence it was refused with.
   refusals: Record<string, string>;
+  // Per stream, the highest revision heard of each item by its key, a
+  // removed item's kept, so an older change cannot bring it back.
+  revisions: Record<string, Record<string, number>>;
+  // Per stream, the keys its picture has named since it began, while one
+  // is being read (from an open or a `resync` until its `snapshot`).
+  pictures: Record<string, string[] | null>;
+  // Per stream, its delivery state when it is not live.
+  delivery: Record<string, Delivery>;
   // What the windows over the canvas cover of it, as the shell tells it.
   covered: Rect[];
   // The posture the shell tells it, or null before it has.
@@ -108,7 +116,21 @@ export interface State {
   prefs: Item;
 }
 
+// A stream's state besides live (the delivery contract, `canvas.catalog`):
+// its picture past its bound (`stale`, as of `at`), unreadable for now
+// (`unavailable`, opened again at `at`), or no longer granted (`denied`).
+export interface Delivery {
+  state: "stale" | "unavailable" | "denied";
+  at: string | null;
+}
+
 export const STREAMS = ["runs.changes", "schedules.changes", "schedule_runs.changes"];
+// The field that names an item of each stream.
+const KEYS: Record<string, string> = {
+  "runs.changes": "execution_id",
+  "schedules.changes": "schedule_id",
+  "schedule_runs.changes": "occurrence_id",
+};
 // The sections, each a widget of the preferences document.
 export const WIDGETS = ["attention", "runs", "apps", "schedules"];
 // The controls the manifest declares, each picking a schedule's id.
@@ -119,7 +141,8 @@ export const RETRY = "retry-run";
 export const MAX_RUNS = 20;
 export const MAX_SCHEDULE_RUNS = 10;
 
-// Pauses before opening an ended stream again, growing while opens fail.
+// Pauses before opening again a stream whose first open got no answer, or
+// one the endpoint ended with no refusal, growing while opens fail.
 export const RETRY_MS = [2_000, 5_000, 15_000, 60_000];
 
 // The class cyfr.stream() rejects an open with when the endpoint gave no
@@ -134,6 +157,9 @@ export const EMPTY: State = {
   schedules: new Map(),
   scheduleRuns: [],
   refusals: {},
+  revisions: {},
+  pictures: {},
+  delivery: {},
   covered: [],
   posture: null,
   prefs: {},
@@ -160,13 +186,13 @@ export function start(sdk: Sdk, onChange: (state: State) => void): () => void {
   ];
 
   const followers = STREAMS.map((name) =>
-    follow(
-      sdk,
-      name,
-      (item, open) => change(fold(state, name, item, open)),
-      (open) => change(opened(state, name, open)),
-      (error) => change(refused(state, name, error))
-    )
+    follow(sdk, name, {
+      change: (item, revision) => change(fold(state, name, item, revision)),
+      resync: () => change(resynced(state, name)),
+      snapshot: () => change(snapshotted(state, name)),
+      delivery: (kind, at) => change(delivered(state, name, kind, at)),
+      refused: (error) => change(refused(state, name, error)),
+    })
   );
 
   Promise.allSettled(followers.map((follower) => follower.first)).then(() => {
@@ -243,25 +269,108 @@ export function desktop(state: State, value: unknown): State {
   return prefs && isItem(prefs.document) ? { ...state, prefs: prefs.document } : state;
 }
 
-export function fold(state: State, stream: string, item: Item, open: number): State {
+// One change of `stream`, whole, at `revision`: kept only above the
+// revision its item last had, an equal one being the same change heard
+// again; a removal takes the item away and keeps its revision. A change
+// that names no item is a notice, shown and never compared.
+export function fold(state: State, stream: string, item: Item, revision: number | null = null): State {
+  const key = keyOf(stream, item);
+  let next = state;
+  if (key !== null) {
+    const held = state.revisions[stream]?.[key];
+    if (revision !== null && held !== undefined && revision <= held) return state;
+    const picture = state.pictures[stream];
+    next = {
+      ...state,
+      revisions:
+        revision === null ? state.revisions : { ...state.revisions, [stream]: { ...state.revisions[stream], [key]: revision } },
+      pictures: picture ? { ...state.pictures, [stream]: [...picture, key] } : state.pictures,
+    };
+  }
   switch (stream) {
     case "runs.changes":
-      return { ...state, runs: keepRun(state.runs, item) };
+      return { ...next, runs: keepRun(next.runs, item) };
     case "schedules.changes":
-      return { ...state, schedules: keepSchedule(state.schedules, item, open) };
+      return { ...next, schedules: keepSchedule(next.schedules, item) };
     case "schedule_runs.changes":
-      return { ...state, scheduleRuns: keepScheduleRun(state.scheduleRuns, item) };
+      return { ...next, scheduleRuns: keepScheduleRun(next.scheduleRuns, item) };
     default:
-      return state;
+      return next;
   }
 }
 
-// A reopened stream's refresh holds every schedule there is, so a schedule
-// an earlier open delivered and this one did not was removed in between.
-export function opened(state: State, stream: string, open: number): State {
-  if (stream !== "schedules.changes") return state;
-  const schedules = new Map([...state.schedules].filter(([, held]) => held.open >= open));
-  return { ...state, schedules };
+// A fresh picture of `stream` begins (an open, or a `resync`): what it names
+// until its `snapshot` is all that stream holds then, and its revisions,
+// another subscription's, are compared with nothing held before.
+export function resynced(state: State, stream: string): State {
+  return {
+    ...state,
+    pictures: { ...state.pictures, [stream]: [] },
+    revisions: { ...state.revisions, [stream]: {} },
+  };
+}
+
+// The picture of `stream` is whole: every item it did not name is gone, and
+// the stream is live again.
+export function snapshotted(state: State, stream: string): State {
+  const named = state.pictures[stream];
+  const delivery = { ...state.delivery };
+  delete delivery[stream];
+  const next = { ...state, delivery, pictures: { ...state.pictures, [stream]: null } };
+  if (!named) return next;
+  const keep = new Set(named);
+  const kept = (item: Item) => keep.has(text(item[KEYS[stream]]));
+  switch (stream) {
+    case "runs.changes":
+      return { ...next, runs: next.runs.filter(kept) };
+    case "schedules.changes":
+      return { ...next, schedules: new Map([...next.schedules].filter(([id]) => keep.has(id))) };
+    case "schedule_runs.changes":
+      return { ...next, scheduleRuns: next.scheduleRuns.filter(kept) };
+    default:
+      return next;
+  }
+}
+
+// `stream` turned stale, unavailable or denied. Denied ends it: what it
+// held goes, and the section says it is no longer granted.
+export function delivered(state: State, stream: string, kind: Delivery["state"], at: string | null): State {
+  const next = { ...state, delivery: { ...state.delivery, [stream]: { state: kind, at } } };
+  if (kind !== "denied") return next;
+  const cleared = { ...next, revisions: { ...next.revisions, [stream]: {} }, pictures: { ...next.pictures, [stream]: null } };
+  if (stream === "runs.changes") return { ...cleared, runs: [] };
+  if (stream === "schedules.changes") return { ...cleared, schedules: new Map() };
+  if (stream === "schedule_runs.changes") return { ...cleared, scheduleRuns: [] };
+  return cleared;
+}
+
+// What a section reading `streams` says of their delivery, the worst of
+// them, or null while every one is live.
+export function deliveryNote(state: State, streams: string[]): { state: Delivery["state"]; text: string } | null {
+  const rank = { stale: 1, unavailable: 2, denied: 3 };
+  let worst: Delivery | null = null;
+  for (const stream of streams) {
+    const held = state.delivery[stream];
+    if (held && (!worst || rank[held.state] > rank[worst.state])) worst = held;
+  }
+  if (!worst) return null;
+  const time = clock(worst.at);
+  if (worst.state === "denied") return { state: "denied", text: "No longer granted to this canvas." };
+  if (worst.state === "unavailable") {
+    return { state: "unavailable", text: time ? `Can't be read now · trying again at ${time}` : "Can't be read now" };
+  }
+  return { state: "stale", text: time ? `As of ${time}` : "Not fresh" };
+}
+
+function clock(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+function keyOf(stream: string, item: Item): string | null {
+  const key = KEYS[stream] ? item[KEYS[stream]] : undefined;
+  return typeof key === "string" && key !== "" ? key : null;
 }
 
 export function refused(state: State, stream: string, error: unknown): State {
@@ -646,12 +755,12 @@ function keepRun(runs: Item[], run: Item): Item[] {
   return [run, ...runs.filter((r) => r.execution_id !== id)].slice(0, MAX_RUNS);
 }
 
-function keepSchedule(schedules: State["schedules"], schedule: Item, open: number): State["schedules"] {
+function keepSchedule(schedules: State["schedules"], schedule: Item): State["schedules"] {
   const id = schedule.schedule_id;
   if (typeof id !== "string") return schedules;
   const next = new Map(schedules);
   if (schedule.kind === "removed") next.delete(id);
-  else next.set(id, { schedule, open });
+  else next.set(id, { schedule });
   return next;
 }
 
@@ -677,57 +786,66 @@ function unanswered(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as Item).code === UNANSWERED;
 }
 
-// Keeps one declared stream open. Every stream ends in time (its grant has
-// a deadline, and a connection can break), so a stream that ends is opened
-// again after a pause, and starts again with its refresh, the current
-// state. Until the stream has opened once, an open the endpoint refused is
-// final: `onRefused` hears the refusal and nothing is retried; an open it
-// gave no answer on is tried again on the same pauses. Once it has opened,
-// every failed reopen is tried again. `first` resolves when the first open
-// has its answer. Each item comes with the number of the open that
-// delivered it, and `onOpen` hears each open's number once that open
-// succeeds.
-function follow(
-  sdk: Sdk,
-  name: string,
-  onItem: (item: Item, open: number) => void,
-  onOpen: (open: number) => void,
-  onRefused: (error: unknown) => void
-): { first: Promise<void>; stop(): void } {
+// What a stream's follower tells: each change with its revision, a fresh
+// picture beginning and being whole, its delivery state, and a refusal.
+interface Follower {
+  change(item: Item, revision: number | null): void;
+  resync(): void;
+  snapshot(): void;
+  delivery(kind: Delivery["state"], at: string | null): void;
+  refused(error: unknown): void;
+}
+
+// Keeps one declared stream open by the delivery contract. The SDK opens
+// an opened stream again by itself, after a lost connection or while the
+// canvas was hidden, announcing its fresh picture with `resync`; the page
+// opens one again only when its first open got no answer, or when the
+// endpoint ended it with no refusal (its handle `ended`, as at its grant's
+// bound). A denied stream ends and is never opened again by the page, and
+// an open the endpoint refused is final: `refused` hears the refusal.
+// Every open begins a fresh picture. `first` resolves when the first open
+// has its answer.
+function follow(sdk: Sdk, name: string, on: Follower): { first: Promise<void>; stop(): void } {
   let stopped = false;
   let opens = 0;
-  let everOpened = false;
-  let current: { close(): void } | null = null;
+  let current: StreamHandle | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function open(): Promise<void> {
     const n = ++opens;
-    // A change of the stream itself: a delivery event (`unavailable`'s
-    // retry time, `denied`'s refusal) is no item of it.
-    const stream = await sdk.stream(name, null, ({ event, data }) => {
-      if (!stopped && event === name && isItem(data)) onItem(data, n);
+    on.resync();
+    const stream = await sdk.stream(name, null, (event) => {
+      if (stopped || n !== opens) return;
+      const { event: kind, data } = event;
+      // A change of the stream itself; a delivery event's data (`unavailable`'s
+      // retry time, `denied`'s refusal) is no item of it.
+      if (kind === name) {
+        if (isItem(data)) on.change(data, revisionOf(event));
+      } else if (kind === "resync") on.resync();
+      else if (kind === "snapshot") on.snapshot();
+      else if (kind === "stale") on.delivery("stale", text(event.at) || null);
+      else if (kind === "unavailable") on.delivery("unavailable", isItem(data) ? text(data.retry_at) || null : null);
+      else if (kind === "denied") on.delivery("denied", null);
     });
     if (stopped) {
       stream.close();
       return;
     }
-    everOpened = true;
     current = stream;
-    onOpen(n);
-    stream.closed
-      .catch(() => {})
-      .then(() => {
-        current = null;
-        retry(0);
-      });
+    const ended = () => {
+      if (current !== stream) return;
+      current = null;
+      if (stream.state === "ended") retry(0);
+    };
+    stream.closed.then(ended, ended);
   }
 
-  // An open that failed at `attempt`: a refusal before the stream ever
-  // opened ends it; anything else is tried again after the pause.
+  // An open that failed at `attempt`: one with no answer is tried again
+  // after the pause; a refusal is final.
   function failed(error: unknown, attempt: number) {
     if (stopped) return;
-    if (!everOpened && !unanswered(error)) onRefused(error);
-    else retry(attempt);
+    if (unanswered(error)) retry(attempt);
+    else on.refused(error);
   }
 
   function retry(attempt: number) {
@@ -745,6 +863,13 @@ function follow(
       current?.close();
     },
   };
+}
+
+// A change's revision, as the SDK hands it or as its data carries it.
+function revisionOf(event: StreamEvent): number | null {
+  if (Number.isInteger(event.revision)) return event.revision as number;
+  const data = event.data;
+  return isItem(data) && Number.isInteger(data.revision) ? (data.revision as number) : null;
 }
 
 function isItem(data: unknown): data is Item {

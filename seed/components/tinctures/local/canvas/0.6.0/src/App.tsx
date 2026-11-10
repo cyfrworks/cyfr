@@ -3,6 +3,7 @@ import {
   EMPTY,
   attentionColumn,
   causes,
+  deliveryNote,
   grantComponent,
   hidden,
   isShown,
@@ -162,7 +163,13 @@ function Attention({ state }: { state: State }) {
   const list = causes(state);
   if (list.length === 0) return null;
   return (
-    <Section widget="attention" state={state} count={String(list.length)} refusal={state.refusals["runs.changes"]}>
+    <Section
+      widget="attention"
+      state={state}
+      count={String(list.length)}
+      refusal={state.refusals["runs.changes"]}
+      streams={["runs.changes"]}
+    >
       {list.map((cause) => (
         <CauseRow key={cause.key} cause={cause} />
       ))}
@@ -214,6 +221,7 @@ function Runs({ state }: { state: State }) {
       state={state}
       count={state.runs.length > 0 ? `last ${state.runs.length}` : undefined}
       refusal={state.refusals["runs.changes"]}
+      streams={["runs.changes"]}
     >
       {rows.length === 0 ? (
         <p className="empty">No runs yet. A run of any component shows here as it happens.</p>
@@ -283,6 +291,7 @@ function Schedules({ state, now }: { state: State; now: Date }) {
       state={state}
       count={rows.length > 0 ? String(rows.length) : "none yet"}
       refusal={state.refusals["schedules.changes"]}
+      streams={["schedules.changes", "schedule_runs.changes"]}
     >
       {rows.length === 0 ? (
         <p className="empty">
@@ -398,15 +407,19 @@ function Section({
   state,
   count,
   refusal,
+  streams = [],
   children,
 }: {
   widget: string;
   state: State;
   count?: string;
   refusal?: string;
+  // The streams the section reads, whose delivery it says.
+  streams?: string[];
   children: ReactNode;
 }) {
   if (!isShown(state.prefs, widget)) return null;
+  const note = deliveryNote(state, streams);
   return (
     <section className="card">
       <h2>
@@ -415,7 +428,18 @@ function Section({
           Hide
         </button>
       </h2>
-      {refusal ? <p className="refusal">{refusal}</p> : children}
+      {refusal ? (
+        <p className="refusal">{refusal}</p>
+      ) : note?.state === "denied" ? (
+        <p className="refusal">{note.text}</p>
+      ) : note ? (
+        <>
+          <p className="note">{note.text}</p>
+          <div className={note.state === "stale" ? "tired" : undefined}>{children}</div>
+        </>
+      ) : (
+        children
+      )}
     </section>
   );
 }

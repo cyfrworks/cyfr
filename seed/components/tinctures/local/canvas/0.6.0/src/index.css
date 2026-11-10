@@ -270,6 +270,18 @@ main.stacked {
   align-self: center;
 }
 
+/* A section's stream not live: what it says, and a tired picture. */
+.note {
+  margin: 0;
+  padding: 2px 16px 6px;
+  font-size: 12px;
+  color: var(--t2);
+}
+
+.tired {
+  opacity: 0.55;
+}
+
 /* Recent runs: the last ones as squares, newest first, then rows. */
 .strip {
   display: flex;
