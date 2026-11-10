@@ -1293,14 +1293,16 @@ defmodule PrismWeb.ShellLive do
 
       true ->
         {prompt_id, socket} = next_prompt_id(socket, "request")
+        id = Prima.UUID7.request_id()
 
         case PrismWeb.SystemLayer.grant_prompt(socket, prompt_id, component) do
           {:ok, prompt} ->
-            show_prompt(put_in(prompt.subject[:asker], asker(socket, frame)))
+            subject = Map.merge(prompt.subject, %{asker: asker(socket, frame), request: id})
+            show_prompt(%{prompt | subject: subject})
 
             socket
             |> update(:grant_prompts, &Map.put(&1, prompt_id, {{:component, component}, nil}))
-            |> open_request(frame, call, prompt_id, :grant, component)
+            |> open_request(frame, call, prompt_id, id, :grant, component)
 
           {:error, reason} ->
             unasked(socket, frame, call, "refused", refusal_class(reason))
@@ -1312,6 +1314,7 @@ defmodule PrismWeb.ShellLive do
   # call that runs once they approve it, which the system layer runs.
   defp ask_person(socket, frame, call, ask) do
     {prompt_id, socket} = next_prompt_id(socket, "request")
+    id = Prima.UUID7.request_id()
 
     show_prompt(%{
       id: prompt_id,
@@ -1322,11 +1325,12 @@ defmodule PrismWeb.ShellLive do
         tool: ask.tool,
         args: ask.args,
         preview: Prima.Confirmation.Preview.encode(ask.preview),
-        asker: asker(socket, frame)
+        asker: asker(socket, frame),
+        request: id
       }
     })
 
-    open_request(socket, frame, call, prompt_id, :asks, ask.operation)
+    open_request(socket, frame, call, prompt_id, id, :asks, ask.operation)
   end
 
   # The frame that asked, as the person's listing names its tincture.
@@ -1341,24 +1345,14 @@ defmodule PrismWeb.ShellLive do
   end
 
   # The request waits: held under the person in the athanor it was asked
-  # in (`Cyfr.Requests`, which tells their attention), answered
-  # `requested`, and ended `expired` at its bound. It ends under the
-  # context it was opened with, wherever the view's focus has moved since.
-  defp open_request(socket, frame, call, prompt_id, kind, label) do
-    id = Prima.UUID7.request_id()
-    ctx = socket.assigns.context
-    :ok = Cyfr.Requests.open(ctx, id, label)
+  # in (`Cyfr.Requests`, which tells their attention and is the one
+  # authority on whether it still waits), answered `requested`, and ended
+  # `expired` at its bound. Its prompt names it, so the system layer
+  # decides it there before it acts.
+  defp open_request(socket, frame, call, prompt_id, id, kind, label) do
+    :ok = Cyfr.Requests.open(socket.assigns.context, id, label)
     timer = Process.send_after(self(), {:request_expired, id}, @request_ttl_ms)
-
-    request = %{
-      id: id,
-      frame: frame.id,
-      call: call,
-      prompt: prompt_id,
-      kind: kind,
-      timer: timer,
-      ctx: ctx
-    }
+    request = %{id: id, frame: frame.id, call: call, prompt: prompt_id, kind: kind, timer: timer}
 
     socket
     |> update(:requests, &Map.put(&1, id, request))
@@ -1368,15 +1362,12 @@ defmodule PrismWeb.ShellLive do
   defp request_of(socket, prompt_id),
     do: Enum.find_value(socket.assigns.requests, fn {_id, r} -> r.prompt == prompt_id && r end)
 
-  # The system layer's report on a request's prompt. A grant's refused
-  # commit leaves its prompt open for the person to try again, so it
-  # decides nothing; a request's refusal decides it, as does every other
-  # outcome.
-  defp request_closed(socket, %{kind: :grant}, {:refused, reason})
-       when reason != :invalid_prompt,
-       do: socket
-
+  # The system layer's report on a request's prompt, which the layer
+  # decided at the registry before it acted (`Cyfr.Requests.decide/2`); a
+  # prompt never drawn is decided here. The frame is told how it ended.
   defp request_closed(socket, request, outcome) do
+    _decided = Cyfr.Requests.decide(request.id, :resolved)
+
     {outcome, reason} =
       case outcome do
         :confirmed -> {"approved", nil}
@@ -1386,28 +1377,31 @@ defmodule PrismWeb.ShellLive do
       end
 
     socket
-    |> end_request(request, :resolved)
+    |> end_request(request)
     |> decided_request(request, outcome, reason)
   end
 
-  # A request that waited past its bound: its prompt withdrawn, unanswered
-  # by the person, and the frame told it expired.
+  # A request that waited past its bound: ended `expired` at the registry
+  # first, and only when nothing decided it before, its prompt withdrawn
+  # after and the frame told it expired. One the person decided already
+  # is that decision's to answer.
   defp request_expired(socket, id) do
-    case Map.fetch(socket.assigns.requests, id) do
-      {:ok, request} ->
-        withdraw_prompt(request.prompt)
+    with {:ok, request} <- Map.fetch(socket.assigns.requests, id),
+         :ok <- Cyfr.Requests.decide(id, :expired) do
+      withdraw_prompt(request.prompt)
 
-        socket
-        |> end_request(request, :expired)
-        |> decided_request(request, "cancelled", "expired")
-
-      :error ->
-        socket
+      socket
+      |> end_request(request)
+      |> decided_request(request, "cancelled", "expired")
+    else
+      _decided -> socket
     end
   end
 
-  # Requests whose frame this view no longer holds: their prompts
-  # withdrawn, nothing told, since no frame is left to tell.
+  # Requests whose frame this view no longer holds: each still waiting is
+  # ended `withdrawn` at the registry and its prompt withdrawn after,
+  # nothing told, since no frame is left to tell. One the person already
+  # decided runs on to its end, its answer going nowhere.
   defp drop_orphan_requests(socket) do
     held = MapSet.new(Frames.list(socket.assigns.frames), & &1.id)
 
@@ -1416,14 +1410,15 @@ defmodule PrismWeb.ShellLive do
     |> Map.values()
     |> Enum.reject(&MapSet.member?(held, &1.frame))
     |> Enum.reduce(socket, fn request, socket ->
-      withdraw_prompt(request.prompt)
-      end_request(socket, request, :withdrawn)
+      if Cyfr.Requests.decide(request.id, :withdrawn) == :ok,
+        do: withdraw_prompt(request.prompt)
+
+      end_request(socket, request)
     end)
   end
 
-  defp end_request(socket, request, outcome) do
+  defp end_request(socket, request) do
     Process.cancel_timer(request.timer)
-    :ok = Cyfr.Requests.close(request.ctx, request.id, outcome)
 
     socket
     |> update(:requests, &Map.delete(&1, request.id))

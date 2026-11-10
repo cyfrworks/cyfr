@@ -36,8 +36,11 @@ defmodule PrismWeb.SystemLayer.Prompt do
       grant opens on: exactly its `name` (an account name,
       `Prima.Authority.Blob.valid_account_name?/1`) and the `dep`, `from`
       and `need` it sits on, each nil or a non-empty string
-      (`PrismWeb.SystemLayer.grant_prompt/4` builds it), and `asker`, the
-      frame whose request asked for the grant (`asker?/1`), when one did;
+      (`PrismWeb.SystemLayer.grant_prompt/4` builds it), and, when a
+      frame's request asked for the grant, `asker`, that frame
+      (`asker?/1`), and `request`, the request's id
+      (`Prima.TinctureWire.request_id?/1`), which the grant decides
+      (`Cyfr.Requests.decide/2`) before it commits;
     * `:credential_entry` — `name`, the vault entry to create, and
       optionally `field`, the name its one field is stored under
       (`API_KEY` when absent), created through `vault.create` as an `api_key`
@@ -67,9 +70,11 @@ defmodule PrismWeb.SystemLayer.Prompt do
       under the action `:approval`: `operation`, its name (`tool.action`),
       `tool` and `args`, the call that runs once the person approves it,
       `preview`, the JSON map of the `Prima.Confirmation.Preview` CYFR
-      built of exactly that call, which is what the prompt shows, and
+      built of exactly that call, which is what the prompt shows,
       `asker`, the frame that asked: exactly its `name`, as the person's
-      listing names the tincture, and its `ref`, a tincture reference;
+      listing names the tincture, and its `ref`, a tincture reference, and
+      `request`, the request's id, which the prompt decides
+      (`Cyfr.Requests.decide/2`) before it runs anything;
     * `:confirmation` — one pending confirmation as `confirmation.pending`
       lists it: its public `ref`, the `operation` and `action` it confirms,
       the `preview` and `asker` the CYFR stored, its `expires_at`, the
@@ -208,27 +213,37 @@ defmodule PrismWeb.SystemLayer.Prompt do
     refused = Map.get(subject, :suggestion_refused)
     account = Map.get(subject, :account)
     asker = Map.get(subject, :asker)
+    request = Map.get(subject, :request)
 
     if plan?(plan) and preview?(preview, plan) and decisions?(decisions, ref) and
          instant?(session_end) and sentence?(refused) and account?(account) and
-         (is_nil(asker) or asker?(asker)),
+         (is_nil(asker) or asker?(asker)) and
+         (is_nil(request) or Prima.TinctureWire.request_id?(request)),
        do:
          {:ok,
           %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}
           |> Prima.MapUtil.put_present(:session_expires_at, session_end)
           |> Prima.MapUtil.put_present(:suggestion_refused, refused)
           |> Prima.MapUtil.put_present(:account, account)
-          |> Prima.MapUtil.put_present(:asker, asker)},
+          |> Prima.MapUtil.put_present(:asker, asker)
+          |> Prima.MapUtil.put_present(:request, request)},
        else: {:error, :invalid_prompt}
   end
 
   defp subject(
          :request,
-         %{operation: operation, tool: tool, args: args, preview: preview, asker: asker} =
-           subject
+         %{
+           operation: operation,
+           tool: tool,
+           args: args,
+           preview: preview,
+           asker: asker,
+           request: request
+         } = subject
        )
-       when map_size(subject) == 5 and is_binary(tool) and is_map(args) and not is_struct(args) do
+       when map_size(subject) == 6 and is_binary(tool) and is_map(args) and not is_struct(args) do
     if Prima.Manifest.Tincture.operation_name?(operation) and
+         Prima.TinctureWire.request_id?(request) and
          tool == String.replace(operation, ".", "/", global: false) and
          match?(
            {:ok, %Prima.Confirmation.Preview{operation: ^operation}},

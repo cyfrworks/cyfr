@@ -1394,6 +1394,9 @@ defmodule PrismWeb.SystemLayer do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case socket.assigns.current do
         %{id: ^id} = prompt ->
+          # A frame's request still waiting ends here, dismissed; one
+          # decided already keeps that decision.
+          _decided = decided?(prompt.subject)
           socket = end_own_request(socket, prompt)
           if reports?(socket, prompt), do: report(id, :dismissed)
 
@@ -1419,30 +1422,32 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # A frame's request: approving runs its call as the layer's own change,
-  # once, and only while nothing has decided it; refusing ends it.
+  # A frame's request: approving runs its call as the layer's own change
+  # and refusing ends it, each only once it has decided the request at its
+  # one authority (`Cyfr.Requests.decide/2`), where whatever came first,
+  # an expiry or another decision, has already ended it. A late one acts
+  # on nothing: the request's actual end is what its frame is told.
   def handle_event("request_approve", %{"id" => id}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, [:request]) do
-        {:ok, %{subject: %{refused: _decided}}} -> {:noreply, socket}
-        {:ok, prompt} -> {:noreply, request_run(socket, prompt)}
-        :none -> {:noreply, socket}
+      with {:ok, prompt} <- open(socket, id, [:request]),
+           false <- Map.has_key?(prompt.subject, :refused),
+           false <- decided?(prompt.subject) do
+        {:noreply, request_run(socket, prompt)}
+      else
+        _decided -> {:noreply, socket}
       end
     end)
   end
 
   def handle_event("request_refuse", %{"id" => id}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, [:request]) do
-        {:ok, %{subject: %{refused: _decided}}} ->
-          {:noreply, socket}
-
-        {:ok, _prompt} ->
-          report(id, {:refused, :declined})
-          {:noreply, socket |> drop_prompt_asks(id, cancel: true) |> advance()}
-
-        :none ->
-          {:noreply, socket}
+      with {:ok, prompt} <- open(socket, id, [:request]),
+           false <- Map.has_key?(prompt.subject, :refused),
+           false <- decided?(prompt.subject) do
+        report(id, {:refused, :declined})
+        {:noreply, socket |> drop_prompt_asks(id, cancel: true) |> advance()}
+      else
+        _decided -> {:noreply, socket}
       end
     end)
   end
@@ -1591,7 +1596,15 @@ defmodule PrismWeb.SystemLayer do
             {:noreply,
              assign(socket, :error, "Nothing to grant yet: the choices are being previewed.")}
 
+          decided?(subject) ->
+            {:noreply, end_grant(socket, prompt)}
+
           true ->
+            # A frame's request is decided by this commit: a refused one
+            # leaves the grant open as the person's own, no longer the
+            # frame's.
+            prompt = %{prompt | subject: Map.delete(subject, :request)}
+
             args = %{
               "decisions" => subject.decisions,
               "plan_token" => subject.plan.plan_token,
@@ -1600,7 +1613,10 @@ defmodule PrismWeb.SystemLayer do
               "expected_consent_revision" => Map.get(subject.plan, :expected_consent_revision)
             }
 
-            {:noreply, dispatched(socket, prompt, Ops.call_tool(socket, "profile/commit", args))}
+            {:noreply,
+             socket
+             |> assign(:current, prompt)
+             |> dispatched(prompt, Ops.call_tool(socket, "profile/commit", args))}
         end
 
       :none ->
@@ -2201,6 +2217,13 @@ defmodule PrismWeb.SystemLayer do
   # ---------------------------------------------------------------------------
   # A frame's request
   # ---------------------------------------------------------------------------
+
+  # Whether a frame's request the prompt carries was decided before this
+  # decision: `false` once this one ends it at the registry, so it acts;
+  # `true` when something came first. A prompt that carries no request
+  # (a grant no frame asked for) decides nothing there.
+  defp decided?(%{request: request}), do: Cyfr.Requests.decide(request, :resolved) == :decided
+  defp decided?(_subject), do: false
 
   # The call the request names, as the person approved it. A refusal is
   # reported and said, and marks the prompt decided: it offers nothing to

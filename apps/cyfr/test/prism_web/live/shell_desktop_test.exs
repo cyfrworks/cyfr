@@ -737,6 +737,105 @@ defmodule PrismWeb.ShellDesktopTest do
       refute_push_event(view, "canvas_answer", %{verb: "decided"})
     end
 
+    # Messages the view takes in this order, queued while it is held so
+    # none is handled before the last is in: the person's events reach the
+    # system layer as its own hook events, as the browser sends them.
+    defp queued!(view, messages) do
+      :ok = :sys.suspend(view.pid)
+
+      try do
+        Enum.each(messages, &send(view.pid, &1))
+      after
+        :ok = :sys.resume(view.pid)
+      end
+    end
+
+    defp layer_event(view, event, prompt_id) do
+      [tag] = Regex.run(~r/<[^>]*\bid="system-layer-desktop"[^>]*>/, render(view))
+      [_, cid] = Regex.run(~r/\bdata-phx-component="(\d+)"/, tag)
+
+      %Phoenix.Socket.Message{
+        topic: :sys.get_state(view.pid).topic,
+        event: "event",
+        ref: nil,
+        payload: %{
+          "type" => "hook",
+          "event" => event,
+          "value" => %{"id" => prompt_id},
+          "cid" => String.to_integer(cid)
+        }
+      }
+    end
+
+    test "an approval queued behind expiry performs nothing", %{
+      conn: conn,
+      ctx: ctx,
+      digest: digest
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :request, rename(digest, "must-not-run-after-expiry", 66))
+      assert %{"request" => id} = answer!(view, home, "requested")
+      [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
+
+      queued!(view, [{:request_expired, id}, layer_event(view, "request_approve", prompt_id)])
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 66, "outcome" => "cancelled", "reason" => "expired"}
+
+      _ = render(view)
+      assert name_of(ctx, digest.id) == "digest"
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+      refute has_element?(view, prompt())
+    end
+
+    test "an approval queued behind a refusal performs nothing", %{
+      conn: conn,
+      ctx: ctx,
+      digest: digest
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :request, rename(digest, "must-not-run-after-refusal", 67))
+      assert %{"call" => 67} = answer!(view, home, "requested")
+      [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
+
+      queued!(view, [
+        layer_event(view, "request_refuse", prompt_id),
+        layer_event(view, "request_approve", prompt_id)
+      ])
+
+      assert answer!(view, home, "decided") ==
+               %{"call" => 67, "outcome" => "refused", "reason" => "declined"}
+
+      _ = render(view)
+      assert name_of(ctx, digest.id) == "digest"
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+    end
+
+    test "two approvals of one request run it once, and expiry behind them acts on nothing", %{
+      conn: conn,
+      ctx: ctx,
+      digest: digest
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+      verb!(view, home, :request, rename(digest, "approved-once", 68))
+      assert %{"request" => id} = answer!(view, home, "requested")
+      [%{prompt: prompt_id}] = Map.values(assigns(view).requests)
+
+      queued!(view, [
+        layer_event(view, "request_approve", prompt_id),
+        layer_event(view, "request_approve", prompt_id),
+        {:request_expired, id}
+      ])
+
+      assert answer!(view, home, "decided") == %{"call" => 68, "outcome" => "approved"}
+      _ = render(view)
+      assert name_of(ctx, digest.id) == "approved-once"
+      refute_push_event(view, "canvas_answer", %{verb: "decided"})
+    end
+
     test "a control that asks is a request under its press's call", %{
       conn: conn,
       ctx: ctx,

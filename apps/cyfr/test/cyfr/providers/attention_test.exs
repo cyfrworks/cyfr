@@ -196,7 +196,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
       assert {:ok, []} = Provider.waiting(other_ctx, other_ctx.user_id)
 
-      :ok = Cyfr.Requests.close(ctx, id, :resolved)
+      :ok = Cyfr.Requests.decide(id, :resolved)
       assert refreshed(ctx) == []
     end
 
@@ -489,7 +489,7 @@ defmodule Cyfr.Providers.AttentionTest do
         assert_receive %Attention{kind: :grant_request} = entered
         assert [read_as(entered)] == refreshed(ctx)
 
-        :ok = Cyfr.Requests.close(ctx, id, outcome)
+        :ok = Cyfr.Requests.decide(id, outcome)
         assert_receive %Attention{kind: :removed} = left
         assert removed?(left, id, Atom.to_string(outcome))
       end

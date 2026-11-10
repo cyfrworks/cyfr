@@ -5670,7 +5670,8 @@ defmodule PrismWeb.SystemLayerTest do
           tool: "schedule/update",
           args: %{"schedule_id" => "sch_1", "name" => "renamed"},
           preview: Prima.Confirmation.Preview.encode(preview),
-          asker: %{name: "Planner", ref: "tincture:local.planner"}
+          asker: %{name: "Planner", ref: "tincture:local.planner"},
+          request: Prima.UUID7.request_id()
         }
       }
     end
@@ -5737,7 +5738,9 @@ defmodule PrismWeb.SystemLayerTest do
             {"an asker without its reference", put_in(valid.subject.asker, %{name: "Planner"})},
             {"an asker naming a catalyst",
              put_in(valid.subject.asker.ref, "catalyst:local.markets")},
-            {"a field of its own", put_in(valid.subject[:label], "Rename it")}
+            {"a field of its own", put_in(valid.subject[:label], "Rename it")},
+            {"no request", %{valid | subject: Map.delete(valid.subject, :request)}},
+            {"a request that is no request id", put_in(valid.subject.request, "sch_1")}
           ] do
         assert Prompt.validate(broken) == {:error, :invalid_prompt}, why
       end

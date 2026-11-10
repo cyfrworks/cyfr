@@ -7,10 +7,21 @@ defmodule Cyfr.Requests do
   the system layer that they have not decided yet (`PrismWeb.ShellLive`,
   which presents each one and runs it once approved). A request is held
   by the shell that presents it: the shell's own process registers it
-  here, under its person in its athanor, and it leaves with that process
-  whatever ends it, so no request outlives the prompt that asks it.
-  Nothing is stored: a request lives on the member whose shell holds it
-  and expires with it, so a member of a cell lists only its own shells'.
+  here, under its id, and it leaves with that process whatever ends it,
+  so no request outlives the prompt that asks it. Nothing is stored: a
+  request lives on the member whose shell holds it and expires with it,
+  so a member of a cell lists only its own shells'.
+
+  This registry is the one authority on whether a request still waits.
+  Whatever decides it, the person's approval, refusal or dismissal in the
+  system layer, its expiry, or its frame's leaving, first ends it here
+  with `decide/2`, which answers `:ok` to the first decision alone and
+  `:decided` to every later one; only the decision that ended it acts,
+  and the prompt follows. Only the holding process can end a request, and
+  the system layer that presents it runs in that process, so the check
+  and the end are one step that nothing else interleaves with: an
+  approval queued behind the expiry finds the request decided and runs
+  nothing.
 
   Each opening and each end is told on the person's attention topic
   (`Cyfr.Bus.attention/2`) as an `attention.changes` item of kind
@@ -38,9 +49,9 @@ defmodule Cyfr.Requests do
           outcome: nil
         }
 
-  @doc "The registry the shells hold their requests in."
+  @doc "The registry the shells hold their requests in, one entry per request id."
   @spec child_spec(term()) :: Supervisor.child_spec()
-  def child_spec(_arg), do: Registry.child_spec(keys: :duplicate, name: @registry)
+  def child_spec(_arg), do: Registry.child_spec(keys: :unique, name: @registry)
 
   @doc """
   Request `id` waits on the context's person, labelled `label` (the
@@ -51,30 +62,38 @@ defmodule Cyfr.Requests do
   def open(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, id, label)
       when is_binary(athanor_id) and is_binary(user_id) and is_binary(id) and is_binary(label) do
     item = item(id, label, DateTime.utc_now())
-    {:ok, _owner} = Registry.register(@registry, {athanor_id, user_id}, item)
-    tell(ctx, :grant_request, Map.delete(item, :kind))
+    held = %{actor: Context.actor(ctx), user_id: user_id, item: item}
+    {:ok, _owner} = Registry.register(@registry, id, held)
+    tell(held, :grant_request, Map.delete(item, :kind))
   end
 
   @doc """
-  Request `id` stopped waiting, as `outcome` says
-  (`Cyfr.Bus.Attention.outcomes/0`): decided (`resolved`), left until it
-  expired (`expired`), or taken away with its frame (`withdrawn`). One
-  the calling process does not hold is told all the same, and changes
-  nothing here.
+  Ends request `id` as `outcome` says (`Cyfr.Bus.Attention.outcomes/0`):
+  decided by the person (`resolved`), left until it expired (`expired`),
+  or taken away with its frame (`withdrawn`). `:ok` when the calling
+  process held it waiting, which it no longer does; `:decided` when it
+  waits no longer, ended already or never held here, and nothing
+  changes. The first decision of a request is the one that acts.
   """
-  @spec close(Context.t(), String.t(), Attention.outcome()) :: :ok
-  def close(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, id, outcome)
-      when is_binary(athanor_id) and is_binary(user_id) and is_binary(id) do
-    :ok = Registry.unregister_match(@registry, {athanor_id, user_id}, %{id: id})
-    tell(ctx, :removed, %{id: id, outcome: outcome})
+  @spec decide(String.t(), Attention.outcome()) :: :ok | :decided
+  def decide(id, outcome) when is_binary(id) do
+    case Registry.lookup(@registry, id) do
+      [{owner, held}] when owner == self() ->
+        :ok = Registry.unregister(@registry, id)
+        tell(held, :removed, %{id: id, outcome: outcome})
+
+      _decided ->
+        :decided
+    end
   end
 
   @doc "The requests waiting on `user_id` in athanor `athanor_id`, oldest first."
   @spec waiting(String.t(), String.t()) :: [item()]
   def waiting(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do
     @registry
-    |> Registry.lookup({athanor_id, user_id})
-    |> Enum.map(fn {_owner, item} -> item end)
+    |> Registry.select([{{:_, :_, :"$1"}, [], [:"$1"]}])
+    |> Enum.filter(&(&1.actor.athanor_id == athanor_id and &1.user_id == user_id))
+    |> Enum.map(& &1.item)
     |> Enum.sort_by(& &1.since, DateTime)
   end
 
@@ -90,9 +109,7 @@ defmodule Cyfr.Requests do
 
   # A request is the shell's to run whatever its announcement meets: a
   # broadcast refused is logged, and the stream's next refresh tells it.
-  defp tell(%Context{user_id: user_id} = ctx, kind, fields) do
-    actor = Context.actor(ctx)
-
+  defp tell(%{actor: actor, user_id: user_id}, kind, fields) do
     case Bus.broadcast(actor, Bus.attention(actor, user_id), Attention.new(actor, kind, fields)) do
       :ok ->
         :ok
