@@ -982,10 +982,12 @@ async function stepAppOverCanvas(page, name) {
 // attention_moves: the shipped canvas moves "Needs attention" out from
 // under a window and nothing else. Its runs stream is answered with three
 // failures a grant fixes and one unrelated failure, so the card holds both
-// kinds; a window is reported covering the card. On the desk the card
-// moves to the other column and Recent runs, Apps and Schedules stand
-// exactly where they stood; in the hand every section stands in one
-// column. The answer is given on a page of its own, whose canvases' stream
+// kinds; a window is reported covering the card. The sections are read
+// once every injected run is drawn, since each arrives as a message of its
+// own and a section read between two would move by itself when the rest
+// arrive. On the desk the card moves to the other column and Recent runs,
+// Apps and Schedules stand exactly where they stood; in the hand every
+// section stands in one column. The answer is given on a page of its own, whose canvases' stream
 // connections pass through a route that answers their `runs.changes`
 // subscription and hands every other message to the endpoint; the page
 // closes with the step, since a WebSocket route outlives none of it.
@@ -1008,6 +1010,9 @@ function attentionFailures(ws) {
   });
 }
 
+// How many run rows Recent runs draws.
+const drawnRuns = (frame) => frame.evaluate(() => document.querySelectorAll("section.card .run").length).catch(() => null);
+
 const sections = (frame) =>
   frame.evaluate(() => Object.fromEntries([...document.querySelectorAll("section.card")].map((el) => {
     const b = el.getBoundingClientRect();
@@ -1021,6 +1026,7 @@ async function stepAttentionMoves(shell, name, viewport) {
     await openShell(page);
     held.clear();
     const start = await showCanvas(page, "start");
+    await until(start.frame, drawnRuns, (n) => n >= ATTENTION_RUNS.length, "every injected run drawn");
     const before = await until(start.frame, sections, (s) => s["Needs attention"] && s["Recent runs"] && s.Apps && s.Schedules, "the shipped canvas's sections with Needs attention");
     const others = ["Recent runs", "Apps", "Schedules"];
 
