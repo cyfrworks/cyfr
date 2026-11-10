@@ -213,17 +213,22 @@ defmodule CyfrWeb.ContextGuardRosterTest do
 
       def handle_info(@answer = message, socket), do: handle_info(message, socket)
 
+      def handle_info({_kind = :answer, _tag, {:done, _} = message}, socket),
+        do: handle_info(message, socket)
+
+      def handle_info({kind, _tag, result}, socket) when kind in [:answer],
+        do: {:noreply, shown(socket, result)}
+
       def handle_info({:other, result}, socket), do: {:noreply, shown(socket, result)}
     end
     """
 
     assert planted |> answer_clauses(:answer) |> Enum.map(&delivered?/1) ==
-             [true, false, false, true, false, false, false]
+             [true, false, false, true, false, false, false, false, false]
   end
 
-  # The `def` clauses in `source` whose head takes `answer`, as
-  # `{line, args, body, how}`: `how` is `:unreadable` for a head whose
-  # answer position this check cannot read, which may take it.
+  # The `def` clauses in `source` whose head may take `answer`, as
+  # `{line, args, body, how}`: `how` is `:taken`, `:open` or `:unreadable`.
   defp answer_clauses(source, answer) do
     {:ok, ast} = Code.string_to_quoted(source)
 
@@ -248,51 +253,67 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   defp call_head({name, _, args}) when is_list(args), do: {name, args}
   defp call_head(_head), do: {nil, []}
 
-  defp takes(:handle_info, [message, _socket], answer), do: taken(message, &leads?(&1, answer))
-  defp takes(:handle_async, [name, _result, _socket], answer), do: taken(name, &(&1 == answer))
-  defp takes(:update, [assigns, _socket], answer), do: taken(assigns, &keyed?(&1, answer))
+  # A scan of the source: it reads heads, not guards or clause order, so a
+  # catch-all clause (`msg`, `assigns`) is taken to follow the one that takes the answer.
+  defp takes(:handle_info, [message, _socket], answer), do: message |> strip() |> leading(answer)
+
+  defp takes(:handle_async, [name, _result, _socket], answer),
+    do: name |> strip() |> named(answer)
+
+  defp takes(:update, [assigns, _socket], answer), do: assigns |> strip() |> keyed(answer)
   defp takes(_name, _args, _answer), do: false
 
-  # Read through every alias (`a = b`): a side that takes the answer takes
-  # it; a side whose shape is not plain might.
-  defp taken(pattern, takes?) do
-    sides = sides(pattern)
+  # Every alias (`a = b`), at any depth, cut to its side that is not a variable.
+  defp strip(pattern), do: Macro.prewalk(pattern, &unalias/1)
+
+  defp unalias({:=, _, [left, right]}), do: unalias(if variable?(left), do: right, else: left)
+  defp unalias(pattern), do: pattern
+
+  defp variable?({name, _, ctx}), do: is_atom(name) and is_atom(ctx)
+  defp variable?(_pattern), do: false
+
+  # `:taken` when the answer position names `answer`; `:open` when what
+  # names it is no literal (a variable, a pin, a call), so any answer fits.
+  defp leading({:{}, _, [first | _]}, answer), do: named(first, answer)
+  defp leading({first, _}, answer), do: named(first, answer)
+  defp leading(message, _answer), do: whole(message)
+
+  defp named(answer, answer), do: :taken
+  defp named(name, _answer) when is_atom(name) or is_binary(name) or is_number(name), do: false
+  defp named({:__aliases__, _, _module}, _answer), do: false
+  defp named(_name, _answer), do: :open
+
+  defp keyed({:%{}, _, pairs}, answer) do
+    keys = Enum.map(pairs, fn {key, _value} -> key end)
 
     cond do
-      Enum.any?(sides, takes?) -> :taken
-      Enum.all?(sides, &plain?/1) -> false
-      true -> :unreadable
+      answer in keys -> :taken
+      Enum.all?(keys, &is_atom/1) -> false
+      true -> :open
     end
   end
 
-  defp sides({:=, _, [left, right]}), do: sides(left) ++ sides(right)
-  defp sides(pattern), do: [pattern]
+  defp keyed(assigns, _answer), do: whole(assigns)
 
-  defp leads?({:{}, _, [answer | _]}, answer), do: true
-  defp leads?({answer, _}, answer), do: true
-  defp leads?(_pattern, _answer), do: false
-
-  defp keyed?({:%{}, _, pairs}, answer), do: List.keymember?(pairs, answer, 0)
-  defp keyed?(_pattern, _answer), do: false
-
-  # A literal, a variable, a tuple, a map or a struct.
-  defp plain?({kind, _, _}) when kind in [:{}, :%{}, :%], do: true
-  defp plain?({name, _, ctx}) when is_atom(name) and is_atom(ctx), do: true
-  defp plain?({_, _}), do: true
-  defp plain?(term), do: is_atom(term) or is_binary(term) or is_number(term) or is_list(term)
+  # A whole pattern no answer's shape: a variable, a literal, a map or a
+  # struct; anything else (a pin, a call) is unreadable.
+  defp whole({kind, _, _}) when kind in [:%, :%{}], do: false
+  defp whole(pattern) when is_atom(pattern) or is_binary(pattern) or is_number(pattern), do: false
+  defp whole(pattern), do: if(variable?(pattern), do: false, else: :unreadable)
 
   # The clause hands the answer to `deliver/3` under a tag its head bound
   # and reads nothing its head bound outside that call, or it drops the
-  # answer: it answers the socket it was handed, unchanged.
+  # answer: it answers the socket it was handed, unchanged. A clause open
+  # to any answer passes only by dropping it.
   defp delivered?({_line, _args, _body, :unreadable}), do: false
+  defp delivered?({_line, args, body, :open}), do: dropped?(List.last(args), body)
 
   defp delivered?({_line, args, body, :taken}) do
     dropped?(List.last(args), body) or delivered?(args |> Enum.drop(-1) |> vars(), body)
   end
 
-  defp dropped?({socket, _, ctx}, {reply, {socket, _, body_ctx}})
-       when is_atom(ctx) and is_atom(body_ctx) and reply in [:noreply, :ok],
-       do: true
+  defp dropped?(socket, {reply, {name, _, ctx}}) when reply in [:noreply, :ok] and is_atom(ctx),
+    do: name in vars(socket)
 
   defp dropped?(_socket, _body), do: false
 
