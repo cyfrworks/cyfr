@@ -187,6 +187,9 @@ pub enum Event {
         subtype: String,
         usage: Value,
     },
+    /// The harness, started to resume a session, holds no transcript of
+    /// it: it says so before it reads a line, and ends.
+    NoConversation,
     /// Anything else: subagents' messages, tool results, heartbeats.
     Other,
 }
@@ -258,6 +261,7 @@ pub fn read(line: &str) -> Event {
         Some("system") if value.get("subtype").and_then(Value::as_str) == Some("init") => Event::Init {
             model: value.get("model").and_then(Value::as_str).map(str::to_string),
         },
+        Some("result") if no_conversation(&value) => Event::NoConversation,
         Some("result") => Event::Result {
             ok: value.get("subtype").and_then(Value::as_str) == Some("success")
                 && value.get("is_error").and_then(Value::as_bool) != Some(true),
@@ -266,6 +270,18 @@ pub fn read(line: &str) -> Event {
         },
         _ => Event::Other,
     }
+}
+
+/// Whether a `result` is the one a `--resume` of a session the folder holds
+/// no transcript of ends with, as Claude Code 2.1.318 wrote it: no turn
+/// ran, and its `errors` name the session in these words.
+fn no_conversation(result: &Value) -> bool {
+    result.get("num_turns").and_then(Value::as_u64) == Some(0)
+        && result["errors"].as_array().is_some_and(|errors| {
+            errors
+                .iter()
+                .any(|error| error.as_str().is_some_and(|e| e.starts_with("No conversation found with session ID")))
+        })
 }
 
 fn str_of(value: &Value) -> String {
@@ -391,6 +407,18 @@ mod tests {
         );
         assert_eq!(read("not json"), Event::Other);
         assert_eq!(read(r#"{"type":"tool_progress","heartbeat":true}"#), Event::Other);
+        // What 2.1.318 wrote when started with `--resume` of a session its
+        // folder held no transcript of, cut to the members read; it then
+        // exited 1.
+        assert_eq!(
+            read(r#"{"type":"result","subtype":"error_during_execution","duration_ms":0,"is_error":true,"num_turns":0,"session_id":"0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b","usage":{"input_tokens":0},"errors":["No conversation found with session ID: 0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b"]}"#),
+            Event::NoConversation
+        );
+        // A turn that ran and failed is a turn's end, whatever its errors say.
+        assert_eq!(
+            read(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":2,"errors":["No conversation found with session ID: x"]}"#),
+            Event::Result { ok: false, subtype: "error_during_execution".into(), usage: Value::Null }
+        );
     }
 
     #[test]

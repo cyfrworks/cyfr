@@ -10,8 +10,10 @@
 //! stays pending in the session until the next `chat` answers it), the
 //! turn's end, or an error. The harness's asks for its own tools are
 //! allowed here (its box bounds them) and shown as a `tool_call.start` and
-//! `tool_call.end` pair. `describe` and `models` read the harness's own
-//! model listing, from its `initialize` answer.
+//! `tool_call.end` pair. A session the harness holds no transcript of is
+//! refused `unknown_session`, before anything of the request is sent.
+//! `describe` and `models` read the harness's own model listing, from its
+//! `initialize` answer.
 //!
 //! The catalyst holds nothing between runs: the session is the program's,
 //! a pending ask's id rides on its `tool_call` (`provider_data`), and the
@@ -32,6 +34,9 @@ const PROVIDER: &str = "claude-code";
 
 /// The `login` need the manifest declares for the program `claude`.
 pub const NEED: &str = "claude";
+
+/// The contract's refusal type for a session the brain no longer holds.
+const UNKNOWN_SESSION: &str = "unknown_session";
 
 /// The most characters (UTF-16 code units, as the harness counts them) of
 /// one tool result the harness takes into its context: a longer result is
@@ -187,6 +192,18 @@ fn harness_error(kind: &'static str) -> Refusal {
 
 fn ended() -> Refusal {
     pipe_refusal("ended")
+}
+
+/// The refusal of a session the harness holds no transcript of
+/// (`Prima.Model`). The harness says so as it starts and ends, before this
+/// run sends it anything of the request, so nothing ran: the host forgets
+/// the session and asks again without one, which opens a new session.
+fn unknown_session() -> Refusal {
+    Refusal::new(
+        404,
+        UNKNOWN_SESSION,
+        "Claude Code no longer holds the session this message continues; the message can be sent again on a new one.",
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +717,7 @@ impl Reader {
                         pipe.send(&self.session, &[harness::unanswered(&request_id, &subtype)])
                             .map_err(|code| pipe_refusal(&code))?;
                     }
+                    Event::NoConversation => return Err(unknown_session()),
                     _ => {}
                 }
             }
@@ -805,7 +823,8 @@ pub fn carried_tools(tools: &[Tool]) -> Result<Vec<String>, Refusal> {
 }
 
 /// One `chat`: the contract response, or a refusal carrying the session
-/// it leaves (`carried`). `fresh` names a new session.
+/// it leaves (`carried`), none when the session is gone. `fresh` names a
+/// new session.
 pub fn chat<P: Pipe, S: Sink>(
     pipe: &mut P,
     deltas: &mut Deltas<S>,
@@ -815,8 +834,10 @@ pub fn chat<P: Pipe, S: Sink>(
 ) -> Result<Value, Refusal> {
     let id = request.session.clone().unwrap_or(fresh);
     let mut taken = false;
-    run(pipe, deltas, request, &id, deadline, &mut taken)
-        .map_err(|refusal| Refusal { session: carried(request, &id, taken), ..refusal })
+    run(pipe, deltas, request, &id, deadline, &mut taken).map_err(|refusal| {
+        let session = if refusal.kind == UNKNOWN_SESSION { None } else { carried(request, &id, taken) };
+        Refusal { session, ..refusal }
+    })
 }
 
 /// The session a refusal carries, which the host keeps as a response's:
@@ -824,8 +845,8 @@ pub fn chat<P: Pipe, S: Sink>(
 /// run would have answered, so a first chat interrupted at its budget is
 /// resumed by the next; before, the one the request named, unchanged. A
 /// new session the harness never showed a turn of carries none: it may
-/// hold no transcript to resume, and a session that cannot be resumed
-/// would refuse every later message.
+/// hold no transcript to resume, and the next message would be refused
+/// `unknown_session` before it opened a new one.
 fn carried(request: &Request, id: &str, taken: bool) -> Option<String> {
     if taken {
         return Some(format!("{id}.{}", fingerprint(&request.flags)));
@@ -874,6 +895,12 @@ fn run<P: Pipe, S: Sink>(
     // session: it is closed, nothing is sent again, and the next message
     // resumes it (`interrupted`).
     match converse(pipe, deltas, &mut reader, request, &id, &tools, opened.resumed, deadline, taken) {
+        // The harness that held no transcript has ended: its session on
+        // the pipe is let go, and the refusal stands as it is.
+        Err(refusal) if refusal.kind == UNKNOWN_SESSION => {
+            let _ = pipe.close(&session);
+            Err(refusal)
+        }
         Err(refusal) if refusal.code.is_some() => {
             let _ = pipe.close(&session);
             Err(interrupted())
@@ -900,7 +927,16 @@ fn converse<P: Pipe, S: Sink>(
     let session = reader.session.clone();
     let send = |pipe: &mut P, line: String| pipe.send(&session, &[line]).map_err(|code| pipe_refusal(&code));
     if !resumed {
-        send(pipe, harness::initialize(request.system.as_deref()))?;
+        match send(pipe, harness::initialize(request.system.as_deref())) {
+            // A harness started to resume a session it holds no transcript
+            // of says so and ends at once, perhaps before this line
+            // reached it: what it wrote is read all the same.
+            Err(refusal) if refusal.code.as_deref() == Some("ended") => {
+                reader.answer(pipe, harness::INIT_ID, deadline)?;
+                return Err(refusal);
+            }
+            sent => sent?,
+        }
         reader.answer(pipe, harness::INIT_ID, deadline)?;
     }
     // A turn starts with the request's tools set. The answer to a pending
@@ -1334,6 +1370,75 @@ mod tests {
         let session = started(&Flags::default());
         let named = request(json!({"model": "default", "session": session, "messages": [{"role": "user", "content": "hi"}]}));
         let refusal = chat(&mut pipe, &mut deltas, &named, "unused".into(), soon()).unwrap_err();
+        assert_eq!(refusal.session.as_deref(), Some(session.as_str()));
+    }
+
+    /// What 2.1.318 wrote when started with `--resume` of a session its
+    /// folder held no transcript of (`harness::no_conversation`).
+    fn no_conversation_line() -> String {
+        format!(
+            r#"{{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"session_id":"{ID}","errors":["No conversation found with session ID: {ID}"]}}"#
+        )
+    }
+
+    #[test]
+    fn a_session_the_harness_holds_no_transcript_of_is_refused_unknown_session_and_the_next_chat_opens_a_new_one() {
+        // The harness answers its start with the result and ends: its
+        // `initialize` is never answered.
+        let mut pipe = Scripted::new(|line| {
+            if line.contains("\"initialize\"") {
+                vec![no_conversation_line()]
+            } else {
+                Vec::new()
+            }
+        });
+        pipe.running = false;
+        let session = started(&Flags::default());
+        let hi = json!([{"role": "user", "content": "hi"}]);
+        let named = request(json!({"model": "default", "session": session, "messages": hi}));
+        let mut deltas = Deltas::new(Vec::new());
+        let refusal = chat(&mut pipe, &mut deltas, &named, "unused".into(), soon()).unwrap_err();
+        assert_eq!(refusal.kind, "unknown_session", "{refusal:?}");
+        assert_eq!(refusal.session, None, "the session is gone, so the refusal carries none");
+        let envelope: Value = serde_json::from_str(&refusal.envelope()).unwrap();
+        assert_eq!(response_session(&envelope["error"]), Ok(None), "{envelope}");
+        assert!(pipe.log[0].contains(&format!("--resume {ID}")), "{:?}", pipe.log);
+        assert_eq!(pipe.log.last().unwrap(), "close pipe-1");
+        let kinds: Vec<_> = pipe.sent.iter().map(|l| sent_type(l)).collect();
+        assert_eq!(kinds, [("control_request".into(), "initialize".into())], "nothing of the request was sent");
+
+        // The host asks again without the session: a new one opens.
+        let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+        let again = request(json!({"model": "default", "messages": hi}));
+        let new = "1c6d8d2f-3a4b-4c7f-9bac-2d3e4f5a6b7c";
+        let answer = chat(&mut pipe, &mut deltas, &again, new.into(), soon()).unwrap();
+        assert!(pipe.log[0].contains(&format!("--session-id {new}")), "{:?}", pipe.log);
+        assert!(answer["session"].as_str().unwrap().starts_with(&format!("{new}.")));
+    }
+
+    #[test]
+    fn a_harness_that_ended_before_it_was_sent_anything_is_read_for_why() {
+        let session = started(&Flags::default());
+        let named = request(json!({"model": "default", "session": session, "messages": [{"role": "user", "content": "hi"}]}));
+        let mut deltas = Deltas::new(Vec::new());
+
+        // It said it holds no transcript, and was gone before `initialize`
+        // reached it.
+        let mut pipe = Scripted::new(|_| Vec::new());
+        pipe.running = false;
+        pipe.out.push_back(no_conversation_line());
+        pipe.send_error = Some(("\"initialize\"".into(), "ended".into()));
+        let refusal = chat(&mut pipe, &mut deltas, &named, "unused".into(), soon()).unwrap_err();
+        assert_eq!(refusal.kind, "unknown_session", "{refusal:?}");
+        assert_eq!(refusal.session, None);
+
+        // It ended without those words: an interrupted session, which the
+        // next message resumes.
+        let mut pipe = Scripted::new(|_| Vec::new());
+        pipe.running = false;
+        pipe.send_error = Some(("\"initialize\"".into(), "ended".into()));
+        let refusal = chat(&mut pipe, &mut deltas, &named, "unused".into(), soon()).unwrap_err();
+        assert_eq!(refusal.kind, "provider_error", "{refusal:?}");
         assert_eq!(refusal.session.as_deref(), Some(session.as_str()));
     }
 
@@ -1810,18 +1915,29 @@ mod tests {
         }
     }
 
+    /// The session a chat answer names, a response's data or a refusal's
+    /// error, or the member that is off the contract, as
+    /// `Prima.Model.response_session/1` reads it.
+    fn response_session(answer: &Value) -> Result<Option<&str>, &'static str> {
+        match answer.get("session") {
+            None => Ok(None),
+            Some(_) if answer["type"] == UNKNOWN_SESSION => Err("session"),
+            Some(Value::String(session)) if !session.is_empty() => Ok(Some(session)),
+            Some(_) => Err("session"),
+        }
+    }
+
     #[test]
-    fn this_brain_s_responses_name_a_session_as_the_vectors_read_one() {
+    fn this_brain_s_answers_name_a_session_as_the_vectors_read_one() {
         let v = vectors();
         for case in v["valid_chat_responses"].as_array().unwrap() {
-            let session = case["response"].get("session");
-            assert_eq!(session.cloned().unwrap_or(Value::Null), case["session"], "{}", case["why"]);
+            assert_eq!(response_session(&case["response"]), Ok(case["session"].as_str()), "{}", case["why"]);
         }
         for case in v["invalid_chat_responses"].as_array().unwrap() {
-            let session = &case["response"]["session"];
-            assert!(!session.as_str().is_some_and(|s| !s.is_empty()), "{}", case["why"]);
-            assert_eq!(case["member"], "session");
+            assert_eq!(response_session(&case["response"]), Err(case["member"].as_str().unwrap()), "{}", case["why"]);
         }
+        let gone: Value = serde_json::from_str(&unknown_session().envelope()).unwrap();
+        assert_eq!(response_session(&gone["error"]), Ok(None), "{gone}");
         assert!(session_id(&uuid([7, 9])));
     }
 }

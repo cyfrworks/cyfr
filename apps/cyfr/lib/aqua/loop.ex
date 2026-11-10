@@ -101,6 +101,11 @@ defmodule Aqua.Loop do
       :turn,
       # The brain's session for the thread, as its last response named it.
       :session,
+      # The thread's session generation the turn keeps a session under: as
+      # the turn was built, so a forget since (a reset program home) keeps
+      # out what the brain answers with, or as the turn's own forget raised
+      # it (`Arca.TurnStorage`).
+      :generation,
       steps: 0,
       usage: %{input: 0, output: 0},
       activity: [],
@@ -240,6 +245,7 @@ defmodule Aqua.Loop do
           claim: claim,
           turn: turn,
           session: spec.thread.brain_session,
+          generation: spec.thread.brain_generation,
           since: now(),
           active_ms: turn.active_ms
         }
@@ -442,6 +448,7 @@ defmodule Aqua.Loop do
            claim: claim,
            turn: started,
            session: spec.thread.brain_session,
+           generation: spec.thread.brain_generation,
            since: now(),
            active_ms: started.active_ms
          }}
@@ -753,6 +760,17 @@ defmodule Aqua.Loop do
           {:error, reason} -> {:halt, {:failed, reason}, state}
         end
 
+      # The brain no longer holds the session the request named, and
+      # refused before it took anything of the request (`Prima.Model`), so
+      # asking again repeats nothing. A request that named none has nothing
+      # to forget, and its refusal ends the turn as any other does.
+      {:error, %{"type" => "unknown_session", "message" => message} = error}
+      when is_map_key(request, "session") ->
+        _ =
+          Tape.close_step(guest(state), state.turn, step, "error", refused(state, error, message))
+
+        ask_without_session(state, request, retained, retries)
+
       {:error, %{"type" => type} = error} when type in @setup ->
         _ =
           Tape.close_step(
@@ -790,22 +808,35 @@ defmodule Aqua.Loop do
   defp continued(request, nil), do: request
   defp continued(request, session), do: Map.put(request, "session", session)
 
-  # A refused model step closes with the brain's session its refusal
-  # names, kept on the thread as a response's is (`Prima.Model`), so the
-  # next request continues it, under the thread's generation the turn read
-  # (`generation/1`). A session off the contract is not kept, and the
-  # refusal ends the turn as it would.
-  defp refused(%State{} = state, error, text) do
-    case Prima.Model.response_session(error) do
-      {:ok, session} -> %{error: text, session: session, generation: generation(state)}
-      {:error, _invalid} -> %{error: text}
+  # The thread forgets the session its brain no longer holds, and the same
+  # request is asked once more without it, which opens a new session. The
+  # turn keeps that session under the generation its forget answers: the
+  # raised one, or the one it read when the thread was forgotten from
+  # outside meanwhile, under which nothing it answers with is kept
+  # (`Arca.TurnStorage.forget_session/3`).
+  defp ask_without_session(%State{} = state, request, retained, retries) do
+    with {:ok, generation} <- Tape.forget_session(guest(state), state.turn, state.generation),
+         {:ok, again, asking} <-
+           open_model_step(%{state | session: nil, generation: generation}, "chat") do
+      request = Map.delete(request, "session")
+      ask_model(asking, again, request, retained && Map.delete(retained, "session"), retries)
+    else
+      {:error, :superseded} -> {:halt, :cancelled, state}
+      {:error, reason} -> {:halt, {:failed, reason}, state}
     end
   end
 
-  # The thread's session generation as the turn was built: a session the
-  # brain answers with is kept only while the thread is still at it, so a
-  # forget since (a reset program home) keeps it out (`Arca.TurnStorage`).
-  defp generation(%State{spec: %{thread: thread}}), do: thread.brain_generation
+  # A refused model step closes with the brain's session its refusal
+  # names, kept on the thread as a response's is (`Prima.Model`), so the
+  # next request continues it, under the thread's generation the turn
+  # keeps a session under (`State`). A session off the contract is not
+  # kept, and the refusal ends the turn as it would.
+  defp refused(%State{} = state, error, text) do
+    case Prima.Model.response_session(error) do
+      {:ok, session} -> %{error: text, session: session, generation: state.generation}
+      {:error, _invalid} -> %{error: text}
+    end
+  end
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
@@ -937,7 +968,7 @@ defmodule Aqua.Loop do
              usage: usage,
              stop_reason: data["stop_reason"],
              session: session,
-             generation: generation(state),
+             generation: state.generation,
              tool_calls: tool_calls
            }) do
       state = count_usage(%{state | session: session || state.session}, usage)
@@ -2207,7 +2238,7 @@ defmodule Aqua.Loop do
                  usage: usage,
                  stop_reason: data["stop_reason"],
                  session: session,
-                 generation: generation(state),
+                 generation: state.generation,
                  tool_calls: tool_calls
                }) do
           state = count_usage(%{state | session: session || state.session}, usage)

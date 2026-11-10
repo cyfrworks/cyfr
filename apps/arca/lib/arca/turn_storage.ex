@@ -1648,6 +1648,45 @@ defmodule Arca.TurnStorage do
   def close_step(%Prima.Actor{}, _step_id, _outcome, _attrs), do: {:error, :no_athanor}
 
   @doc """
+  Forget the brain's session of the turn's thread, which its brain
+  reported it no longer holds (`Prima.Model`'s `unknown_session`):
+  `brain_session` is cleared and `brain_generation` raised in one
+  statement, as `Arca.ThreadStorage.forget_sessions/2` forgets a home's,
+  and only while the thread is at `:generation`, the one the turn read.
+  `attrs`: `:fence` (the turn's) and `:generation`, both required.
+  Answers the generation the turn keeps a session under from here: the
+  raised one, so the session its next request opens is kept, or the one
+  it read when the thread was forgotten meanwhile, under which nothing it
+  answers with is kept.
+  """
+  @spec forget_session(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def forget_session(%Prima.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.forget_session", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        turn = own!(athanor_id, turn_id, attrs)
+        generation = Map.get(attrs, :generation)
+        if not is_integer(generation), do: Arca.Repo.rollback(:generation_required)
+
+        # The comparison is the statement's own, so a forget committed
+        # after the turn read the thread still holds.
+        {forgotten, _} =
+          from(c in Thread,
+            where: c.athanor_id == ^athanor_id and c.id == ^turn.thread_id,
+            where: c.brain_generation == ^generation
+          )
+          |> Arca.Repo.update_all(set: [brain_session: nil], inc: [brain_generation: 1])
+
+        generation + forgotten
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def forget_session(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  @doc """
   Mark a dispatched step as `uncertain`: its effect may have happened and
   its result is not known. `attrs`: `:fence` (the turn's, required) and
   `:generation` (the step's, required), so a superseded runner or a stale
@@ -3285,7 +3324,9 @@ defmodule Arca.TurnStorage do
   # session was forgotten meanwhile (`Arca.ThreadStorage.forget_sessions/2`
   # raises the generation) keeps nothing it answers with afterwards, the
   # session it resumed or one it opened in the home the forget emptied. A
-  # session without a generation is refused, as a write without a fence is.
+  # turn that forgot the session itself writes under the generation that
+  # forget answered (`forget_session/3`). A session without a generation
+  # is refused, as a write without a fence is.
   # arca:db-raise-ok inside the caller's transaction
   defp keep_session!(athanor_id, %Thread{id: thread_id, brain_session: current}, attrs) do
     session = Map.get(attrs, :session)
